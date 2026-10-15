@@ -128,7 +128,7 @@ prefix `PATH` with `/usr/local/bin` on the host (an old node there breaks corepa
 
 **Goal**: a known-good baseline.
 
-- [ ] T001 Create `feat/148-catalog-order-constraints` from `origin/master`; create `specs/148-catalog-order-constraints/` with this feature's artefacts (`spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, `contracts/*.md`, `tasks.md`); run `.specify/scripts/bash/update-agent-context.sh` (what `/speckit.plan` would have run — it writes the `AGENTS.md` appendix, which `backend/test/unit/docs/agents-router.test.ts` watches) and commit the result with the spec; `pnpm install --frozen-lockfile && pnpm run build:packages`
+- [x] T001 Create `feat/148-catalog-order-constraints` from `origin/master`; create `specs/148-catalog-order-constraints/` with this feature's artefacts (`spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, `contracts/*.md`, `tasks.md`); run `.specify/scripts/bash/update-agent-context.sh` (what `/speckit.plan` would have run — it writes the `AGENTS.md` appendix, which `backend/test/unit/docs/agents-router.test.ts` watches) and commit the result with the spec; `pnpm install --frozen-lockfile && pnpm run build:packages`
 - [ ] T002 Record the baseline: `pnpm --filter @endora-commerce/mod-carts run test`, `…/mod-catalog run test`, `…/mod-quote-requests run test`, and `[PG]` each file under `test/integration/carts/` and `test/integration/returns/`, one per invocation — note any pre-existing red in the PR description
 
 **Verification** (one invocation per line):
