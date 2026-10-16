@@ -62,17 +62,35 @@ const ORDER_PRODUCT_RULES: ProductBrowserRules = {
 // position: a renamed code then fails to compile instead of remapping a reason.
 const NOT_VISIBLE_CODE: AdminOrderPreviewMessageCode = 'PRODUCT_NOT_VISIBLE_TO_CUSTOMER';
 const NOT_IN_CHANNEL_CODE: AdminOrderPreviewMessageCode = 'PRODUCT_NOT_IN_SALES_CHANNEL';
+const BELOW_MINIMUM_CODE: AdminOrderPreviewMessageCode = 'BELOW_MINIMUM_QUANTITY';
+
+/** One preview message, as `messages[]` carries it (`minimum` on `BELOW_MINIMUM_QUANTITY` only). */
+interface PreviewMessage {
+  productId: string;
+  code: string;
+  minimum?: number;
+}
 
 /**
- * The line reason for a preview message code
+ * The line reason for a preview message
  * (`contracts/order-preview-unavailability.md` § Consumer mapping): the two
- * assortment/visibility codes carry their own reason; `PRODUCT_NOT_FOUND`,
- * `QUOTE_ONLY` and any code this client does not know read **No price**.
+ * assortment/visibility codes carry their own reason; feature 148's
+ * `BELOW_MINIMUM_QUANTITY` names the minimum it missed (FR-009) — the operator
+ * can fix that one by raising the quantity, so it must not read as **No price**;
+ * `PRODUCT_NOT_FOUND`, `QUOTE_ONLY` and any code this client does not know read
+ * **No price**.
  */
-function unavailableReasonKey(code: string | undefined): string {
-  if (code === NOT_VISIBLE_CODE) return 'orderCreate.line.notVisible';
-  if (code === NOT_IN_CHANNEL_CODE) return 'orderCreate.line.notInChannel';
-  return 'orderCreate.line.unavailable';
+function unavailableReason(
+  message: PreviewMessage | undefined,
+): { key: string; params?: Record<string, number> } {
+  if (message?.code === NOT_VISIBLE_CODE) return { key: 'orderCreate.line.notVisible' };
+  if (message?.code === NOT_IN_CHANNEL_CODE) return { key: 'orderCreate.line.notInChannel' };
+  if (message?.code === BELOW_MINIMUM_CODE) {
+    return message.minimum !== undefined
+      ? { key: 'orderCreate.line.belowMinimum', params: { minimum: message.minimum } }
+      : { key: 'orderCreate.line.belowMinimumUnknown' };
+  }
+  return { key: 'orderCreate.line.unavailable' };
 }
 
 function productLine(item: ProductBrowserItem): ItemRow {
@@ -225,7 +243,7 @@ interface PreviewResponse {
     total: number;
     currency: string;
   };
-  messages: Array<{ productId: string; code: string }>;
+  messages: PreviewMessage[];
 }
 
 /**
@@ -752,11 +770,12 @@ export function OrderCreatePage(): ReactNode {
   // line whose quantity just changed shows nothing until its new price arrives).
   const lineByKey = new Map<string, PreviewLine>();
   for (const line of preview?.lines ?? []) lineByKey.set(`${line.productId}:${line.quantity}`, line);
-  const messageCodeByProduct = new Map<string, string>();
-  for (const m of preview?.messages ?? []) messageCodeByProduct.set(m.productId, m.code);
+  const messageByProduct = new Map<string, PreviewMessage>();
+  for (const m of preview?.messages ?? []) messageByProduct.set(m.productId, m);
+  const translateReason = (reason: ReturnType<typeof unavailableReason>): string => t(reason.key, reason.params);
   // Only a message about a line still on the form blocks submit: a removed
   // line's message lingers until the next preview answers.
-  const hasUnavailable = items.some((row) => messageCodeByProduct.has(row.productId));
+  const hasUnavailable = items.some((row) => messageByProduct.has(row.productId));
   const allQuantitiesValid = validItems.length === items.length;
 
   const canSubmit =
@@ -1024,7 +1043,7 @@ export function OrderCreatePage(): ReactNode {
                       quantity === null
                         ? t('orderCreate.line.quantityInvalid')
                         : line?.unavailable
-                          ? t(unavailableReasonKey(messageCodeByProduct.get(row.productId)))
+                          ? translateReason(unavailableReason(messageByProduct.get(row.productId)))
                           : null;
                     return (
                       <TableRow key={row.productId}>
