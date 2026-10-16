@@ -483,13 +483,13 @@ Verified 2026-10-16: RED first — `admin-minimum-warning.test.ts` 3 / 4 failed 
 **Goal**: placement records returnability as an explicit boolean on every new line; `returns` can read
 it.
 
-- [ ] T088 [P] RED type-level test: `OrderReturnContextLine.returnableAtPurchase: boolean | null` required — `packages/contracts/src/quote-return-shapes.test.ts` (extend)
-- [ ] T090 [P] [US6] [PG] RED integration test: checkout, one-click, admin create, API intake and an accepted-quote checkout each stamp `returnable_at_purchase` from the product's flag at that moment; changing the flag afterwards changes no line (FR-016a, US6 #6); no new row is ever `null`; a row inserted without the column reads `null` — `backend/test/integration/orders/returnable-at-purchase.test.ts`
-- [ ] T090a [P] [US6] RED unit test for the stamp mapping (`returnableAtPurchase(record)`): `true` only for a record whose `returnable === true`; an absent record, or a record whose flag is missing (a stub or an older producer), → `false`, never `null` (FR-016a fail-closed, P4, US6 #9) — `packages/modules/orders/src/backend/services/returnable-at-purchase.test.ts`
-- [ ] T092 [P] [US6] [PG] RED-then-green: with `returns` off, an order placed records `returnable_at_purchase`; after switching `returns` on, `GET /api/v1/orders/:id/returnable` answers from it (Principle XVII) — extend `backend/test/integration/returns/off-state.test.ts`
-- [ ] T093 Add `returnableAtPurchase` to `OrderReturnContextLine` — `packages/contracts/src/returns.ts`
-- [ ] T094 [US6] `returnable-at-purchase.ts` (the pure mapping); stamp in `placeOrder` from the record hoisted in T059; map in the return-context provider — `packages/modules/orders/src/backend/services/{returnable-at-purchase,order-service,order-return-context}.ts`
-- [ ] T097 Build `contracts`, `mod-orders`; checks
+- [x] T088 [P] RED type-level test: `OrderReturnContextLine.returnableAtPurchase: boolean | null` required — `packages/contracts/src/quote-return-shapes.test.ts` (extend)
+- [x] T090 [P] [US6] [PG] RED integration test: checkout, one-click, admin create, API intake and an accepted-quote checkout each stamp `returnable_at_purchase` from the product's flag at that moment; changing the flag afterwards changes no line (FR-016a, US6 #6); no new row is ever `null`; a row inserted without the column reads `null` — `backend/test/integration/orders/returnable-at-purchase.test.ts`
+- [x] T090a [P] [US6] RED unit test for the stamp mapping (`returnableAtPurchase(record)`): `true` only for a record whose `returnable === true`; an absent record, or a record whose flag is missing (a stub or an older producer), → `false`, never `null` (FR-016a fail-closed, P4, US6 #9) — `packages/modules/orders/src/backend/services/returnable-at-purchase.test.ts`
+- [x] T092 [P] [US6] [PG] RED-then-green: with `returns` off, an order placed records `returnable_at_purchase`; after switching `returns` on, `GET /api/v1/orders/:id/returnable` answers from it (Principle XVII) — extend `backend/test/integration/returns/off-state.test.ts`
+- [x] T093 Add `returnableAtPurchase` to `OrderReturnContextLine` — `packages/contracts/src/returns.ts`
+- [x] T094 [US6] `returnable-at-purchase.ts` (the pure mapping); stamp in `placeOrder` from the record hoisted in T059; map in the return-context provider — `packages/modules/orders/src/backend/services/{returnable-at-purchase,order-service,order-return-context}.ts`
+- [x] T097 Build `contracts`, `mod-orders`; checks
 
 **Verification** (one invocation per line):
 - `pnpm --filter @endora-commerce/mod-orders exec vitest run src/backend/services/returnable-at-purchase.test.ts`
