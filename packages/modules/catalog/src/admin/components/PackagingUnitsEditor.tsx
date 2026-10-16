@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import type { PackagingUnitDto } from '@endora-commerce/contracts';
+import { useCallback, useEffect, useId, useState, type ReactNode } from 'react';
+import { ORDER_MINIMUM_MAX, type PackagingUnitDto } from '@endora-commerce/contracts';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { parseOrderMinimumInput } from './ProductOrderRulesCard.js';
 
 /**
  * Feature 043 — Packaging units editor, rendered inside the product card's
@@ -9,6 +10,9 @@ import { useTranslation } from '@endora-commerce/admin-kit/i18n';
  * 480 pieces): add / edit / remove / reorder, and pick one default. Calls the
  * catalog admin packaging-unit endpoints directly via `apiClient`, mirroring
  * the rest of the Inventory tab.
+ *
+ * Feature 148 (US2, FR-002) — each unit also carries an optional minimum number of that
+ * unit per order (`minOrderUnits`), edited in its own column; empty clears it.
  */
 export function PackagingUnitsEditor({ productId }: { productId: string }): ReactNode {
   const t = useTranslation('catalog');
@@ -20,6 +24,12 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
   const [busy, setBusy] = useState(false);
   const [newName, setNewName] = useState('');
   const [newQty, setNewQty] = useState('');
+  const [newMin, setNewMin] = useState('');
+  /** The unit id (or `'new'`) whose minimum input holds the value the error refers to. */
+  const [invalidMinimum, setInvalidMinimum] = useState<string | null>(null);
+  const errorId = `${useId()}-error`;
+  const minimumMessage = (): string =>
+    t('packagingUnits.error.invalidMinimum', { max: String(ORDER_MINIMUM_MAX) });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -42,6 +52,7 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
     async (fn: () => Promise<void>) => {
       setBusy(true);
       setError(null);
+      setInvalidMinimum(null);
       try {
         await fn();
         await load();
@@ -61,10 +72,22 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
       setError(t('packagingUnits.error.invalid'));
       return;
     }
+    const minimum = parseOrderMinimumInput(newMin);
+    if (!minimum.ok) {
+      setError(minimumMessage());
+      setInvalidMinimum('new');
+      return;
+    }
     void run(async () => {
-      await apiClient.post(base, { name, baseQuantity: qty });
+      // Sent only when entered, so a unit without a minimum is created as before.
+      await apiClient.post(base, {
+        name,
+        baseQuantity: qty,
+        ...(minimum.value != null ? { minOrderUnits: minimum.value } : {}),
+      });
       setNewName('');
       setNewQty('');
+      setNewMin('');
     });
   };
 
@@ -73,6 +96,24 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
       await apiClient.patch(`${base}/${id}`, body);
     });
   };
+
+  const saveMinimum = (unit: PackagingUnitDto, raw: string): void => {
+    const parsed = parseOrderMinimumInput(raw);
+    if (!parsed.ok) {
+      setError(minimumMessage());
+      setInvalidMinimum(unit.id);
+      return;
+    }
+    if (invalidMinimum === unit.id) {
+      setError(null);
+      setInvalidMinimum(null);
+    }
+    if (parsed.value === (unit.minOrderUnits ?? null)) return;
+    patch(unit.id, { minOrderUnits: parsed.value });
+  };
+
+  const minimumA11y = (key: string): { 'aria-invalid'?: true; 'aria-describedby'?: string } =>
+    invalidMinimum === key ? { 'aria-invalid': true, 'aria-describedby': errorId } : {};
 
   const remove = (id: string): void => {
     void run(async () => {
@@ -95,7 +136,12 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
       <div className="b2b-card__head">{t('packagingUnits.title')}</div>
       <div className="b2b-card__body b2b-col" style={{ gap: 12 }}>
         <div className="b2b-help">{t('packagingUnits.help')}</div>
-        {error ? <div className="b2b-alert b2b-alert--error">{error}</div> : null}
+        <div className="b2b-help">{t('packagingUnits.minOrderUnitsHelp')}</div>
+        {error ? (
+          <div id={errorId} role="alert" className="b2b-alert b2b-alert--error">
+            {error}
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="b2b-help">{t('packagingUnits.loading')}</div>
@@ -107,6 +153,7 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
               <tr>
                 <th>{t('packagingUnits.col.name')}</th>
                 <th>{t('packagingUnits.col.baseQuantity')}</th>
+                <th>{t('packagingUnits.col.minOrderUnits')}</th>
                 <th>{t('packagingUnits.col.default')}</th>
                 <th>{t('packagingUnits.col.order')}</th>
                 <th />
@@ -142,6 +189,21 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
                           patch(u.id, { baseQuantity: v });
                         }
                       }}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      className="b2b-input"
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={ORDER_MINIMUM_MAX}
+                      step={1}
+                      defaultValue={u.minOrderUnits ?? ''}
+                      disabled={busy}
+                      aria-label={t('packagingUnits.col.minOrderUnits')}
+                      {...minimumA11y(u.id)}
+                      onBlur={(e) => saveMinimum(u, e.target.value)}
                     />
                   </td>
                   <td>
@@ -211,6 +273,20 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
             disabled={busy}
             aria-label={t('packagingUnits.col.baseQuantity')}
             onChange={(e) => setNewQty(e.target.value)}
+          />
+          <input
+            className="b2b-input"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={ORDER_MINIMUM_MAX}
+            step={1}
+            placeholder={t('packagingUnits.newMinimum')}
+            value={newMin}
+            disabled={busy}
+            aria-label={t('packagingUnits.col.minOrderUnits')}
+            {...minimumA11y('new')}
+            onChange={(e) => setNewMin(e.target.value)}
           />
           <button
             type="button"
