@@ -21,8 +21,20 @@ import {
   TEST_ORGANIZATION_ID,
 } from '../../helpers/test-actors.js';
 import { withSystemScope } from '../../../src/tenancy/escape-hatch.js';
-import { Order } from '../../helpers/package-entities.js';
-import { whenOrderCreatedSettled } from '../../helpers/quote-conversion.js';
+import { Order, Product } from '../../helpers/package-entities.js';
+import {
+  acceptedQuoteRequest,
+  convertQuoteRequestToCart,
+  whenOrderCreatedSettled,
+} from '../../helpers/quote-conversion.js';
+import { setProductMinimum } from '../../helpers/order-minimum-fixture.js';
+import { ERROR_CODES } from '@endora-commerce/contracts';
+import {
+  SEED_ADDRESS_BILLING_ID,
+  SEED_ADDRESS_DELIVERY_ID,
+  SEED_DELIVERY_METHOD_ID,
+  SEED_PAYMENT_METHOD_ID,
+} from '../../helpers/seed-commerce.js';
 import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
 
 /**
@@ -215,6 +227,77 @@ describe('quote_requests off-state, from a package (Constitution XVII)', () => {
 
     await announceOrder(orderId);
     expect(await statusOf(quoteRequestId)).toBe('Completed');
+  });
+
+  /**
+   * Feature 148 (T056b; FR-036, research R17/R19) — with `quote_requests` off,
+   * placement cannot vouch for a basket's quote source, so no line is exempt:
+   * a seeded A × 5 (A minimum 10) is flagged by the checkout preview and refused
+   * at placement — the fail-closed reading. Switched back on, the same basket's
+   * exemption is honoured again and it places.
+   */
+  it('148 — while off, a quote-seeded A × 5 below its minimum is flagged and refused; back on, it places', async () => {
+    const em = h.em();
+    const product = await em.findOneOrFail(Product, { id: SEED_PRODUCT_101_ID }, { filters: false });
+    const previousMinimum = product.minOrderQuantity ?? null;
+    await em
+      .getConnection()
+      .execute(`update "stock_levels" set "on_hand" = 100000 where "product_id" = ?`, [SEED_PRODUCT_101_ID]);
+    await em
+      .getConnection()
+      .execute(`update "carts" set "status" = 'completed' where "customer_account_id" = ? and "status" = 'active'`, [
+        TEST_CUSTOMER_ID,
+      ]);
+    try {
+      await setProductMinimum(em, SEED_PRODUCT_101_ID, null);
+      const rfq = await acceptedQuoteRequest(h, { quantity: 5, agreedUnitPrice: 11.25 });
+      await setProductMinimum(em, SEED_PRODUCT_101_ID, 10);
+      await convertQuoteRequestToCart(h, rfq.id);
+
+      const preview = () =>
+        h.app.inject({
+          method: 'POST',
+          url: '/api/v1/orders/preview-total',
+          cookies: customer,
+          payload: { deliveryMethodId: SEED_DELIVERY_METHOD_ID, paymentMethodId: SEED_PAYMENT_METHOD_ID },
+        });
+      const place = () =>
+        h.app.inject({
+          method: 'POST',
+          url: '/api/v1/orders',
+          cookies: customer,
+          payload: {
+            deliveryAddressId: SEED_ADDRESS_DELIVERY_ID,
+            billingAddressId: SEED_ADDRESS_BILLING_ID,
+            deliveryMethodId: SEED_DELIVERY_METHOD_ID,
+            paymentMethodId: SEED_PAYMENT_METHOD_ID,
+          },
+        });
+      const belowMinimumLines = async () => {
+        const res = await preview();
+        expect(res.statusCode, res.body).toBe(200);
+        return (res.json() as { data: { belowMinimumLines: Array<{ productId: string; kind: string }> } }).data
+          .belowMinimumLines;
+      };
+
+      await withModuleOff('quote_requests', 'deactivated', async () => {
+        expect(await belowMinimumLines()).toEqual([
+          expect.objectContaining({ productId: SEED_PRODUCT_101_ID, kind: 'pieces', minimum: 10 }),
+        ]);
+        const refused = await place();
+        expect(refused.statusCode, refused.body).toBe(422);
+        expect((refused.json() as { error: { code: string } }).error.code).toBe(
+          ERROR_CODES.PRODUCT_BELOW_MINIMUM_QUANTITY,
+        );
+      });
+
+      expect(await belowMinimumLines()).toEqual([]);
+      const placed = await whenOrderCreatedSettled(h, () => place());
+      expect(placed.statusCode, placed.body).toBe(201);
+      await reactor.idle();
+    } finally {
+      await setProductMinimum(em, SEED_PRODUCT_101_ID, previousMinimum);
+    }
   });
 
   /**
