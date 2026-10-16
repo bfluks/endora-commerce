@@ -634,6 +634,31 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'placement earns when the basket it is handed belongs to another sales channel. The raise ' +
       'site is `orders`\' placement; the noun is the order.',
   },
+  PRODUCT_BELOW_MINIMUM_QUANTITY: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 148 (`specs/148-catalog-order-constraints/`) for the refusal of an ' +
+      'order line whose product falls short of its minimum order quantity in pieces. D-121 T1: ' +
+      'the noun is the minimum, a column on `catalog`\'s product row, so `catalog` owns the ' +
+      'sentence although it raises nothing — the raisers are `carts` (adding and editing a ' +
+      'line), `orders` (placement, admin create, API intake) and `quote_requests` (create, ' +
+      'draft edit, resubmit), each of them reading the rule through the catalogue port.',
+  },
+  PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 148 beside `PRODUCT_BELOW_MINIMUM_QUANTITY`, for a line short of the ' +
+      'minimum number of units of its packaging unit. D-121 T1 decides it the way it decided ' +
+      '`PACKAGING_UNIT_NOT_FOUND`: a packaging unit is a row on `catalog`\'s product, and the ' +
+      'raisers — `carts`, `orders` and `quote_requests` — are callers reading that row.',
+  },
+  PACKAGING_UNIT_MISMATCH: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 148 for a quote-request line whose packaging unit is not one of its ' +
+      'product\'s units, by id or by name and base quantity. The noun is the packaging unit, ' +
+      '`catalog`\'s row (D-121 T1); the raiser is `quote_requests` on create and draft edit.',
+  },
 };
 
 /**

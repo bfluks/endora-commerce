@@ -366,10 +366,11 @@ export const manifest = defineModuleManifest({
       'different product, not a reduced one.',
   },
   /**
-   * The error codes this module owns — forty-seven from feature 090 Phase 3
+   * The error codes this module owns, fifty-six in all — forty-seven from
+   * feature 090 Phase 3
    * (`specs/090-module-owned-error-codes/contracts/error-code-declaration.md`
-   * §1.1) and six more from D-129's remaining sweep, MR 4, described at the end
-   * of this block. This is where the sentence for each is looked up from:
+   * §1.1), six more from D-129's remaining sweep, MR 4, and three minted by
+   * feature 148, both described at the end of this block. This is where the sentence for each is looked up from:
    * `errors.<CODE>` in this module's own `i18n/{en,pl}.json`. Every code with
    * no sentence there is an entry in `check-error-translations.ts`'s
    * `UNTRANSLATED_ERROR_CODES` ledger and stays one — declaring a code writes no
@@ -451,6 +452,15 @@ export const manifest = defineModuleManifest({
    * that pass a `details` object pass `{ maxBatchSize, recommendedSplitInto }`
    * and `{ total, maxSelectionSize }` — neither holds a `code`, which is the
    * only key `refusalToken` reads.
+   *
+   * **Three were minted by feature 148** (`specs/148-catalog-order-constraints/`
+   * `contracts/error-codes.md`): `PRODUCT_BELOW_MINIMUM_QUANTITY`,
+   * `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` and `PACKAGING_UNIT_MISMATCH`.
+   * D-121 T1 again: the minimums are columns on this module's products and
+   * packaging units, so the sentence lives here whichever module refuses the
+   * line — `carts`, `orders` and `quote_requests` raise them, and none of them
+   * owns the noun. Each arrives with its sentence in both bundles. No token:
+   * their `details` carry the line's product, minimum and `lines[]`, no `code`.
    */
   errorCodes: [
     { code: 'ASSET_KIND_NOT_SUPPORTED' },
@@ -479,12 +489,15 @@ export const manifest = defineModuleManifest({
     { code: 'MIN_NOT_MET' },
     { code: 'NESTED_COMPOSITE_NOT_ALLOWED' },
     { code: 'OPTION_ALREADY_EXISTS' },
+    { code: 'PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY' },
+    { code: 'PACKAGING_UNIT_MISMATCH' },
     { code: 'PACKAGING_UNIT_NAME_CONFLICT' },
     { code: 'PACKAGING_UNIT_NOT_FOUND' },
     { code: 'PACKAGING_UNIT_NOT_SUPPORTED_FOR_TYPE' },
     { code: 'PRICE_ORDERING_UNAVAILABLE' },
     { code: 'PRICE_RANGE_INVALID' },
     { code: 'PRODUCT_ARCHIVED' },
+    { code: 'PRODUCT_BELOW_MINIMUM_QUANTITY' },
     { code: 'PRODUCT_DELETE_BLOCKED' },
     { code: 'PRODUCT_FEED_CONFIRMATION_REQUIRED' },
     { code: 'PRODUCT_FEED_DISABLED' },
