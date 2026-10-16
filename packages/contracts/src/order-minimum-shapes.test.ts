@@ -4,7 +4,12 @@ import {
   cartFromQrResponseSchema,
   cartViewLineSchema,
   isQuoteSeededLineExempt,
+  type CartBatchLineInput,
+  type CartBatchLineOutcome,
+  type CartCustomerContext,
   type CartItemRecord,
+  type CartWithItems,
+  type CartWritePort,
 } from './carts.js';
 import {
   ADMIN_ORDER_MAX_ITEMS,
@@ -302,5 +307,50 @@ describe('FR-038 bounds are constants, not schema limits (R20)', () => {
     expect(
       adminOrderPreviewRequestSchema.safeParse({ customerAccountId: ID1, salesChannelId: ID2, items: items201 }).success,
     ).toBe(true);
+  });
+});
+
+describe('cart batch add — CartWritePort.addItems (contracts/cart-and-checkout-api.md §4, R8)', () => {
+  it('CartBatchLineInput has addItem\'s line fields', () => {
+    expectTypeOf<CartBatchLineInput>().toEqualTypeOf<{
+      productId: string;
+      variantId?: string;
+      quantity: number;
+      packagingUnitId?: string;
+      salesChannelId?: string;
+    }>();
+  });
+
+  it('CartBatchLineOutcome is added, below_minimum or failed, each with its index', () => {
+    expectTypeOf<CartBatchLineOutcome['status']>().toEqualTypeOf<'added' | 'below_minimum' | 'failed'>();
+    expectTypeOf<CartBatchLineOutcome['index']>().toEqualTypeOf<number>();
+    expectTypeOf<Extract<CartBatchLineOutcome, { status: 'below_minimum' }>>().toEqualTypeOf<{
+      index: number;
+      status: 'below_minimum';
+      productId: string;
+      productName: string;
+      kind: 'pieces' | 'packaging_unit';
+      minimum: number;
+      packagingUnitName?: string;
+    }>();
+    // A failed line carries the refusal it met and nothing about the product (F1).
+    expectTypeOf<Extract<CartBatchLineOutcome, { status: 'failed' }>>().toEqualTypeOf<{
+      index: number;
+      status: 'failed';
+      error: { status: number; code: string; message: string };
+    }>();
+  });
+
+  it('addItems takes the actor, the lines and the error mode, and answers the cart with outcomes', () => {
+    expectTypeOf<CartWritePort['addItems']>().parameters.toEqualTypeOf<
+      [
+        { customer?: CartCustomerContext; anonymousToken?: string },
+        readonly CartBatchLineInput[],
+        { onLineError: 'throw' | 'report'; language?: string },
+      ]
+    >();
+    expectTypeOf<CartWritePort['addItems']>().returns.toEqualTypeOf<
+      Promise<CartWithItems & { outcomes: CartBatchLineOutcome[] }>
+    >();
   });
 });
