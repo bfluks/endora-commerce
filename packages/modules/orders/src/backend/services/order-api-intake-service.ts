@@ -20,6 +20,7 @@ import { Order } from '../entities/order.entity.js';
 import { OrderPlacementIntent } from '../entities/order-placement-intent.entity.js';
 import type { OrderService } from './order-service.js';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
+import { assertBatchMeetsMinimums, assertWithinAdminOrderItemBound } from './request-minimums.js';
 
 /**
  * OrderApiIntakeService — feature 062 (research §R8, contracts/orders-api-key-intake.md §1).
@@ -83,11 +84,20 @@ const LOCK_TTL_MS = 30_000;
 export class OrderApiIntakeService {
   constructor(private readonly deps: OrderApiIntakeDeps) {}
 
+  /**
+   * `options.language` names a product refused for its minimum (the request's
+   * `Accept-Language`); absent, the product record's own fallback chain.
+   */
   async place(
     binding: ApiKeyOrderBinding,
     idempotencyKey: string | undefined,
     body: ApiPlaceOrderRequest,
+    options: { language?: string | undefined } = {},
   ): Promise<IntakeResult> {
+    // Feature 148 (FR-038, owner ruling 2026-10-16) — first, before the
+    // idempotency record, the lock or any line is resolved: a request no basket
+    // could hold is refused whole, and leaves no intent behind.
+    assertWithinAdminOrderItemBound(body.lines.length);
     // command-coverage-ignore: the domain write is delegated to
     // OrderService.placeOrder (its guards + audit apply); local mutations are
     // the intent bookkeeping rows, audited via `order.place_via_api_key`.
@@ -139,7 +149,7 @@ export class OrderApiIntakeService {
       }
 
       try {
-        const order = await this.#placeGuarded(binding, body);
+        const order = await this.#placeGuarded(binding, body, options.language);
         await this.#settleIntent(intent.id, { status: 'succeeded', orderId: order.id });
         await this.#auditPlacement(binding, order);
         return { order, replayed: false };
@@ -157,7 +167,11 @@ export class OrderApiIntakeService {
    * Line resolution + cart seed + delegation to `placeOrder` — the
    * OrderCreationAdminService pattern, including inline-address create/cleanup.
    */
-  async #placeGuarded(binding: ApiKeyOrderBinding, body: ApiPlaceOrderRequest): Promise<Order> {
+  async #placeGuarded(
+    binding: ApiKeyOrderBinding,
+    body: ApiPlaceOrderRequest,
+    language: string | undefined,
+  ): Promise<Order> {
     const em = this.deps.emFactory();
     const channel = await em.findOne(SalesChannel, { id: binding.salesChannelId });
     const organization = await this.deps.organizationDetails.findById(binding.organizationId);
@@ -291,13 +305,18 @@ export class OrderApiIntakeService {
 
       // Seed the service account's cart (single-active-cart model) with real
       // org pricing, then run the FULL placement pipeline.
+      //
+      // Feature 148 (FR-009, R8): one batch, so a product's minimum is judged
+      // on its total across the request's lines (D1). A line the Organization
+      // may not see is thrown before anything is written, as `addItem` threw
+      // it (FR-035); any line below a minimum refuses the whole request, keyed
+      // by its index in `lines`. Placement checks the basket again (FR-037).
       await this.deps.cartService.clearForCustomer(customerCtx);
-      for (const line of resolvedLines) {
-        await this.deps.cartService.addItem(
-          { customer: customerCtx },
-          { productId: line.productId, quantity: line.quantity },
-        );
-      }
+      const batch = await this.deps.cartService.addItems({ customer: customerCtx }, resolvedLines, {
+        onLineError: 'throw',
+        ...(language ? { language } : {}),
+      });
+      assertBatchMeetsMinimums(resolvedLines, batch.outcomes);
 
       order = await this.deps.orderService.placeOrder(customerCtx, {
         deliveryAddressId,

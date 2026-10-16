@@ -43,7 +43,11 @@ import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kerne
 import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import type { OrderService } from './services/order-service.js';
 import { assertMethodsOfferedInChannel } from './services/method-channel-gate.js';
-import { previewLineAvailability } from './services/preview-line-availability.js';
+import { previewBelowMinimums, previewLineAvailability } from './services/preview-line-availability.js';
+import {
+  assertWithinAdminOrderItemBound,
+  preferredLanguageOf,
+} from './services/request-minimums.js';
 import type { OrderStatusGraphService } from './services/order-status-graph-service.js';
 import type { OrderTransitionService } from './services/order-transition-service.js';
 import type { OrderListService, OrderListScope } from './services/order-list-service.js';
@@ -786,7 +790,9 @@ export async function registerOrderRoutes(
       // to read: the row this route writes carries its organization inward, and
       // an INSERT passes through no filter on the way.
       await assertCustomerInScope(request, body.customerAccountId);
-      const order = await deps.orderCreationAdminService.create(resolveAdminUserId(request), body);
+      const order = await deps.orderCreationAdminService.create(resolveAdminUserId(request), body, {
+        language: preferredLanguageOf(request.headers['accept-language']),
+      });
       reply.code(201);
       return { data: await serializeOrderForAdmin(emFactory(), order) };
     },
@@ -800,6 +806,8 @@ export async function registerOrderRoutes(
     { preHandler: requireAdmin('orders:write'), schema: { body: adminOrderPreviewRequestSchema } },
     async (request) => {
       const body = adminOrderPreviewRequestSchema.parse(request.body);
+      // Feature 148 (FR-038) — first, before any line is read or evaluated.
+      assertWithinAdminOrderItemBound(body.items.length);
       // Before any price is resolved, and before the customer read below that
       // currently refuses first. See `assertCustomerInScope`: this route quotes
       // negotiated terms and persists nothing, which makes it the cheapest read
@@ -868,7 +876,7 @@ export async function registerOrderRoutes(
         lineTotal: number;
         unavailable?: boolean;
       }> = [];
-      const messages: Array<{ productId: string; code: string }> = [];
+      const messages: Array<{ productId: string; code: string; minimum?: number }> = [];
       let subtotal = 0;
       /** Net per product tax class, so VAT resolves the way `placeOrder` resolves it. */
       const taxableByProductType = new Map<string, number>();
@@ -901,6 +909,17 @@ export async function registerOrderRoutes(
           : [],
       );
 
+      // Steps 1–4 per line, first match wins; an orderable line keeps its price.
+      type EvaluatedLine =
+        | { item: (typeof body.items)[number]; code: string; currency: string }
+        | {
+            item: (typeof body.items)[number];
+            code: null;
+            product: NonNullable<ReturnType<typeof productsById.get>>;
+            unitPrice: string;
+            currency: string;
+          };
+      const evaluated: EvaluatedLine[] = [];
       for (const it of body.items) {
         const product = productsById.get(it.productId) ?? null;
         const availability = previewLineAvailability({
@@ -911,18 +930,10 @@ export async function registerOrderRoutes(
         // `!product` is implied by `available === false` with PRODUCT_NOT_FOUND;
         // it is stated again only so the compiler narrows `product` below.
         if (!availability.available || !product) {
-          messages.push({
-            productId: it.productId,
+          evaluated.push({
+            item: it,
             code: availability.available ? 'PRODUCT_NOT_FOUND' : availability.code,
-          });
-          lines.push({
-            productId: it.productId,
-            variantId: it.variantId ?? null,
-            quantity: it.quantity,
-            unitPrice: '0',
             currency,
-            lineTotal: 0,
-            unavailable: true,
           });
           continue;
         }
@@ -942,16 +953,7 @@ export async function registerOrderRoutes(
         // Quote-only products (displayMode 'none') cannot be ordered directly —
         // CartService rejects them at add time, so the preview flags them.
         if (resolved && resolved.displayMode === 'none') {
-          messages.push({ productId: it.productId, code: 'QUOTE_ONLY' });
-          lines.push({
-            productId: it.productId,
-            variantId: it.variantId ?? null,
-            quantity: it.quantity,
-            unitPrice: '0',
-            currency: resolved.currency,
-            lineTotal: 0,
-            unavailable: true,
-          });
+          evaluated.push({ item: it, code: 'QUOTE_ONLY', currency: resolved.currency });
           continue;
         }
 
@@ -967,7 +969,40 @@ export async function registerOrderRoutes(
                 (product.attributeValues?.['price'] as number | string | undefined) ??
                 0,
             ).toFixed(2);
-        const lineCurrency = resolved?.currency ?? currency;
+        evaluated.push({ item: it, code: null, product, unitPrice, currency: resolved?.currency ?? currency });
+      }
+
+      // Step 5 (feature 148, FR-009, FR-035): the minimum, judged only over the
+      // lines that passed steps 1–4 — a line with an earlier code counts toward
+      // no total and never carries a minimum. Creating the order would refuse
+      // a marked line, so it is priced like any other unavailable line.
+      const belowMinimum = previewBelowMinimums(
+        evaluated.map((e) => (e.code === null ? { product: e.product, quantity: e.item.quantity } : null)),
+      );
+
+      const unavailableLine = (entry: EvaluatedLine) => ({
+        productId: entry.item.productId,
+        variantId: entry.item.variantId ?? null,
+        quantity: entry.item.quantity,
+        unitPrice: '0',
+        currency: entry.currency,
+        lineTotal: 0,
+        unavailable: true,
+      });
+      for (const [index, entry] of evaluated.entries()) {
+        const it = entry.item;
+        if (entry.code !== null) {
+          messages.push({ productId: it.productId, code: entry.code });
+          lines.push(unavailableLine(entry));
+          continue;
+        }
+        const minimum = belowMinimum.get(index);
+        if (minimum !== undefined) {
+          messages.push({ productId: it.productId, code: 'BELOW_MINIMUM_QUANTITY', minimum });
+          lines.push(unavailableLine(entry));
+          continue;
+        }
+        const { product, unitPrice } = entry;
         subtotal += Number(unitPrice) * it.quantity;
         taxableByProductType.set(
           product.type,
@@ -978,7 +1013,7 @@ export async function registerOrderRoutes(
           variantId: it.variantId ?? null,
           quantity: it.quantity,
           unitPrice,
-          currency: lineCurrency,
+          currency: entry.currency,
           lineTotal: Math.round(Number(unitPrice) * it.quantity * 100) / 100,
         });
       }
