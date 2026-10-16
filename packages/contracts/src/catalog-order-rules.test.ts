@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   bulkUpdateProductsRequestSchema,
+  type CatalogPackagingUnitRecord,
+  type CatalogProductReadPort,
+  type CatalogProductRecord,
   createPackagingUnitRequestSchema,
   createProductRequestSchema,
   packagingUnitSchema,
@@ -186,5 +189,85 @@ describe('packaging-unit and product DTOs', () => {
     });
     expect(parsed.minOrderQuantity).toBe(10);
     expect(parsed.packagingUnits?.map((u) => u.minOrderUnits)).toEqual([2, null, undefined]);
+  });
+});
+
+/**
+ * Feature 148 (R7, `contracts/catalog-api.md` §5) — the read-port records carry the rule
+ * data as **required** fields, and the port gains the batch packaging-unit read. These
+ * are type-level assertions: each `@ts-expect-error` is unused — and therefore a
+ * type-check failure — the moment a field or the method becomes optional or goes away.
+ */
+describe('catalogue read-port records and port (type level)', () => {
+  const productRecord: CatalogProductRecord = {
+    id: PRODUCT_ID,
+    sku: 'SKU-1',
+    slug: 'bolt',
+    type: 'simple',
+    status: 'active',
+    name: { en: 'Bolt' },
+    description: { en: '' },
+    stockMode: null,
+    visibility: 'public',
+    attributeValues: {},
+    allowedOrganizationIds: [],
+    attributeSetId: '00000000-0000-4000-8000-000000000004',
+    downloadAssetId: null,
+    downloadUrl: null,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+    archivedAt: null,
+    deletedAt: null,
+    manageStock: false,
+    backorderEnabled: false,
+    lowStockThreshold: null,
+    lowStockThresholdMode: 'cumulative',
+    fulfilmentStrategy: null,
+    fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: 10,
+    returnable: true,
+  };
+
+  const unitRecord: CatalogPackagingUnitRecord = {
+    id: UNIT_ID,
+    productId: PRODUCT_ID,
+    name: 'Pallet',
+    baseQuantity: 64,
+    position: 0,
+    isDefault: false,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+    minOrderUnits: 2,
+  };
+
+  it('CatalogProductRecord requires minOrderQuantity and returnable', () => {
+    const { minOrderQuantity: _min, ...withoutMinimum } = productRecord;
+    const { returnable: _flag, ...withoutFlag } = productRecord;
+    // @ts-expect-error — `minOrderQuantity` is required (null means "no minimum").
+    const missingMinimum: CatalogProductRecord = withoutMinimum;
+    // @ts-expect-error — `returnable` is required.
+    const missingFlag: CatalogProductRecord = withoutFlag;
+    expect([missingMinimum, missingFlag]).toHaveLength(2);
+    expectTypeOf<CatalogProductRecord['minOrderQuantity']>().toEqualTypeOf<number | null>();
+    expectTypeOf<CatalogProductRecord['returnable']>().toEqualTypeOf<boolean>();
+  });
+
+  it('CatalogPackagingUnitRecord requires minOrderUnits', () => {
+    const { minOrderUnits: _min, ...withoutMinimum } = unitRecord;
+    // @ts-expect-error — `minOrderUnits` is required (null means "no minimum").
+    const missingMinimum: CatalogPackagingUnitRecord = withoutMinimum;
+    expect(missingMinimum).toBeDefined();
+    expectTypeOf<CatalogPackagingUnitRecord['minOrderUnits']>().toEqualTypeOf<number | null>();
+  });
+
+  it('CatalogProductReadPort requires listPackagingUnitsByProductIds', () => {
+    expectTypeOf<CatalogProductReadPort['listPackagingUnitsByProductIds']>().toEqualTypeOf<
+      (productIds: readonly string[]) => Promise<CatalogPackagingUnitRecord[]>
+    >();
+    type WithoutBatchUnits = Omit<CatalogProductReadPort, 'listPackagingUnitsByProductIds'>;
+    const partial = {} as WithoutBatchUnits;
+    // @ts-expect-error — the batch packaging-unit read is a required member of the port.
+    const port: CatalogProductReadPort = partial;
+    expect(port).toBeDefined();
   });
 });
