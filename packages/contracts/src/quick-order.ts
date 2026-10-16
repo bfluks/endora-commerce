@@ -165,6 +165,8 @@ export const quickOrderBuildResponseSchema = z.object({
         reason: z.literal('below_minimum'),
         kind: z.enum(['pieces', 'packaging_unit']),
         minimum: z.number().int().positive(),
+        /** Feature 148 — on a `packaging_unit` refusal: the unit's name, so the report can say which. */
+        packagingUnitName: z.string().optional(),
       }),
     )
     .optional(),

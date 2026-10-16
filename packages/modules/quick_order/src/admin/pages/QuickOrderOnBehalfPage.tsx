@@ -30,10 +30,17 @@ export function rejectionReasonLabel(row: RejectedQuickOrderItem, t: Translate):
 
 /** Feature 148 (FR-011 (b)) — one line a cart build left out, with product and minimum. */
 export function buildRejectionLabel(line: QuickOrderBuildRejectedLine, t: Translate): string {
-  return t(line.kind === 'pieces' ? 'onBehalf.build.rejectedPieces' : 'onBehalf.build.rejectedUnits', {
+  const key =
+    line.kind === 'pieces'
+      ? 'onBehalf.build.rejectedPieces'
+      : line.packagingUnitName !== undefined
+        ? 'onBehalf.build.rejectedUnits'
+        : 'onBehalf.build.rejectedUnitsUnnamed';
+  return t(key, {
     product: line.productName,
     quantity: line.quantity,
     minimum: line.minimum,
+    ...(line.packagingUnitName !== undefined ? { unit: line.packagingUnitName } : {}),
   });
 }
 

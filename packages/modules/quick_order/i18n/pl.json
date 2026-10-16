@@ -50,6 +50,7 @@
   "onBehalf.minimum.note": "Wiersze poniżej minimum produktu: {count}. Zapytanie ofertowe przyjmie je z oznaczeniem „poniżej minimum”; koszyk ich nie przyjmie.",
   "onBehalf.build.rejectedTitle": "Nie dodano do koszyka: poniżej minimum",
   "onBehalf.build.rejectedPieces": "{product}: {quantity} szt., minimum {minimum} szt.",
-  "onBehalf.build.rejectedUnits": "{product}: {quantity} szt., minimum {minimum} jedn. opakowania",
+  "onBehalf.build.rejectedUnits": "{product}: {quantity} szt., minimum {minimum} × {unit}",
+  "onBehalf.build.rejectedUnitsUnnamed": "{product}: {quantity} szt., minimum {minimum} jedn. opakowania",
   "orderEntry.tab.quick": "Szybkie zamówienie"
 }

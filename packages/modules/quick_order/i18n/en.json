@@ -50,6 +50,7 @@
   "onBehalf.minimum.note": "Rows below the product minimum: {count}. A quote request keeps them with a below-minimum flag; a cart build leaves them out.",
   "onBehalf.build.rejectedTitle": "Not added to the cart: below the minimum",
   "onBehalf.build.rejectedPieces": "{product}: {quantity} pcs, minimum {minimum} pcs",
-  "onBehalf.build.rejectedUnits": "{product}: {quantity} pcs, minimum {minimum} packaging units",
+  "onBehalf.build.rejectedUnits": "{product}: {quantity} pcs, minimum {minimum} × {unit}",
+  "onBehalf.build.rejectedUnitsUnnamed": "{product}: {quantity} pcs, minimum {minimum} packaging units",
   "orderEntry.tab.quick": "Quick order"
 }

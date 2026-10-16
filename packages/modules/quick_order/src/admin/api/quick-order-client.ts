@@ -82,6 +82,8 @@ export interface QuickOrderBuildRejectedLine {
   reason: 'below_minimum';
   kind: 'pieces' | 'packaging_unit';
   minimum: number;
+  /** Feature 148 — on a `packaging_unit` refusal: the unit's name. */
+  packagingUnitName?: string;
 }
 
 export interface OnBehalfOf {
