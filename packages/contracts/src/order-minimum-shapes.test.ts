@@ -267,6 +267,28 @@ describe('quick-order build', () => {
   });
 });
 
+describe('quick-order build refusal — packaging unit', () => {
+  it('keeps an optional packagingUnitName on a rejected line', () => {
+    const parsed = quickOrderBuildResponseSchema.parse({
+      target: 'cart',
+      cartId: ID1,
+      rejected: [
+        {
+          productId: ID2,
+          variantId: null,
+          quantity: 64,
+          productName: 'Bolt',
+          reason: 'below_minimum',
+          kind: 'packaging_unit',
+          minimum: 2,
+          packagingUnitName: 'Pallet',
+        },
+      ],
+    });
+    expect(parsed.rejected?.[0]?.packagingUnitName).toBe('Pallet');
+  });
+});
+
 describe('shopping-list conversion skip', () => {
   it('has below_minimum with an optional minimum', () => {
     expect(

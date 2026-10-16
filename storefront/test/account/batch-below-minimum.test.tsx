@@ -1,0 +1,121 @@
+import { describe, expect, it } from 'vitest';
+import { renderToString } from 'react-dom/server';
+import { CartDroppedLinesBanner } from '../../components/CartDroppedLinesBanner';
+import {
+  decodeReport,
+  droppedBelowMinimumReason,
+  encodeReport,
+  quickOrderBuildOutcome,
+  quickOrderBuildRejectionText,
+  quickOrderRejectionLabel,
+  shoppingListSkipLabel,
+} from '../../lib/batchReport';
+
+/**
+ * Feature 148, T121 — the batch paths' reports name the minimum (FR-011, US4): the buyer's
+ * quick-order preview, the quick-order build's `rejected[]`, the shopping list's `skipped[]`
+ * and the quote → cart dropped lines. PL and EN.
+ */
+
+describe('quick-order preview row (FR-011 (a))', () => {
+  const row = { line: 2, raw: 'A,4', reason: 'below_minimum' as const, minimum: 10, productTotal: 7 };
+
+  it("states the product's total in the file and the minimum", () => {
+    expect(quickOrderRejectionLabel(row, 'en-US')).toBe("The product's total in this file is 7, minimum 10 pcs");
+    expect(quickOrderRejectionLabel(row, 'pl-PL')).toBe('Łączna ilość produktu w tym pliku to 7, minimum 10 szt.');
+  });
+
+  it('labels the existing reasons instead of printing their codes', () => {
+    const label = quickOrderRejectionLabel({ line: 3, raw: 'X,1', reason: 'product_not_found' }, 'en-US');
+    expect(label).toBe('Product not found');
+    expect(quickOrderRejectionLabel({ line: 3, raw: 'X,1', reason: 'product_not_found' }, 'pl-PL')).toBe(
+      'Nie znaleziono produktu',
+    );
+  });
+});
+
+describe('quick-order build rejected[] (FR-011 (b))', () => {
+  const pieces = {
+    productId: 'p1',
+    variantId: null,
+    quantity: 5,
+    productName: 'Anchor bolt',
+    reason: 'below_minimum' as const,
+    kind: 'pieces' as const,
+    minimum: 10,
+  };
+
+  it('names the product, the quantity and the minimum', () => {
+    expect(quickOrderBuildRejectionText(pieces, 'en-US')).toBe('Anchor bolt × 5 — Below the minimum (10 pcs)');
+    expect(quickOrderBuildRejectionText(pieces, 'pl-PL')).toBe('Anchor bolt × 5 — Poniżej minimum (10 szt.)');
+  });
+
+  it('names the packaging unit of a unit refusal', () => {
+    const unit = { ...pieces, quantity: 64, kind: 'packaging_unit' as const, minimum: 2, packagingUnitName: 'Pallet' };
+    expect(quickOrderBuildRejectionText(unit, 'en-US')).toBe('Anchor bolt × 64 — Below the minimum (2 × Pallet)');
+  });
+
+  it('summarises a partial build and a build that added nothing', () => {
+    expect(quickOrderBuildOutcome(3, 1, 'en-US')).toBe('Cart built from your import: 2 of 3 lines added.');
+    expect(quickOrderBuildOutcome(3, 1, 'pl-PL')).toBe('Koszyk utworzony z importu: dodano 2 z 3 pozycji.');
+    expect(quickOrderBuildOutcome(1, 1, 'en-US')).toBe('No lines were added to your cart.');
+    expect(quickOrderBuildOutcome(2, 0, 'en-US')).toBe('Cart built from your import: 2 of 2 lines added.');
+  });
+
+  it('round-trips through the redirect URL', () => {
+    const encoded = encodeReport([pieces]);
+    expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(decodeReport(encoded)).toEqual([pieces]);
+    expect(decodeReport('%%%')).toEqual([]);
+    expect(decodeReport(encodeReport({ not: 'an array' }))).toEqual([]);
+  });
+});
+
+describe('shopping list skipped[] (FR-011)', () => {
+  it('states the minimum of a below_minimum skip', () => {
+    expect(shoppingListSkipLabel({ reason: 'below_minimum', minimum: 10 }, 'en-US')).toBe('Below the minimum (10 pcs)');
+    expect(shoppingListSkipLabel({ reason: 'below_minimum', minimum: 10 }, 'pl-PL')).toBe('Poniżej minimum (10 szt.)');
+  });
+
+  it('labels the existing skip reasons', () => {
+    expect(shoppingListSkipLabel({ reason: 'product_archived' }, 'en-US')).toBe('Product archived');
+    expect(shoppingListSkipLabel({ reason: 'product_not_found' }, 'pl-PL')).toBe('Produkt nie jest już dostępny');
+  });
+});
+
+describe('CartDroppedLinesBanner — quote → cart (FR-011)', () => {
+  const strings = (locale: string) => ({
+    heading: 'Some lines were skipped',
+    intro: 'These products were not added because:',
+    reasonNotPurchasable: 'no longer available',
+    reasonOutOfStock: 'out of stock',
+    reasonNoPriceInCustomerList: 'no price available',
+    reasonRemovedByConversion: 'skipped during conversion',
+    reasonBelowMinimum: (minimum: number | undefined) => droppedBelowMinimumReason(minimum, locale),
+  });
+
+  it('states the minimum of a below_minimum line, distinct from no price (EN)', () => {
+    const html = renderToString(
+      <CartDroppedLinesBanner
+        droppedLines={[
+          { productId: 'p1', productName: 'Anchor bolt', reason: 'below_minimum', minimum: 10 },
+          { productId: 'p2', productName: 'Dowel', reason: 'no_price_in_customer_list' },
+        ]}
+        strings={strings('en-US')}
+      />,
+    );
+    expect(html).toContain('Anchor bolt');
+    expect(html).toContain('below the minimum order quantity (minimum 10)');
+    expect(html).toContain('no price available');
+  });
+
+  it('renders in Polish', () => {
+    const html = renderToString(
+      <CartDroppedLinesBanner
+        droppedLines={[{ productId: 'p1', productName: 'Kotwa', reason: 'below_minimum', minimum: 10 }]}
+        strings={strings('pl-PL')}
+      />,
+    );
+    expect(html).toContain('poniżej minimalnej ilości zamówienia (minimum 10)');
+  });
+});

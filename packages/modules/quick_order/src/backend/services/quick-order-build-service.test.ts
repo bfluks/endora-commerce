@@ -89,6 +89,34 @@ describe('QuickOrderBuildService — target cart', () => {
     });
   });
 
+  it('names the packaging unit of a packaging-unit refusal (packagingUnitName)', async () => {
+    const { service } = doubles([
+      {
+        index: 0,
+        status: 'below_minimum',
+        productId: A,
+        productName: 'Anchor bolt',
+        kind: 'packaging_unit',
+        minimum: 2,
+        packagingUnitName: 'Pallet',
+      },
+      { index: 1, status: 'added' },
+    ]);
+    const result = await service.build(BUYER, { target: 'cart', items: ITEMS });
+    expect(result.rejected).toEqual([
+      {
+        productId: A,
+        variantId: RED,
+        quantity: 5,
+        productName: 'Anchor bolt',
+        reason: 'below_minimum',
+        kind: 'packaging_unit',
+        minimum: 2,
+        packagingUnitName: 'Pallet',
+      },
+    ]);
+  });
+
   it('answers an empty rejected[] when every line was added', async () => {
     const { service } = doubles([{ index: 0, status: 'added' }, { index: 1, status: 'added' }]);
     const result = await service.build(BUYER, { target: 'cart', items: ITEMS });

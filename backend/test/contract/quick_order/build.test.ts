@@ -1,7 +1,7 @@
 import { Cart, CartItem } from '../../helpers/package-entities.js';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { ERROR_CODES, QUICK_ORDER_BUILD_MAX_ITEMS } from '@endora-commerce/contracts';
+import { ERROR_CODES, QUICK_ORDER_BUILD_MAX_ITEMS, quickOrderBuildResponseSchema } from '@endora-commerce/contracts';
 import {
   buyerChannelIds,
   createMinimumProduct,
@@ -255,6 +255,11 @@ describe('Quick-order Excel import + build', () => {
           minimum: 10,
         },
       ]);
+      // The wire shape is the contract's: parsing strips nothing. `packagingUnitName`
+      // is optional and set only on a `packaging_unit` refusal — a build line carries
+      // no packaging unit today, so that case is pinned by the service's unit test.
+      expect(quickOrderBuildResponseSchema.parse(body.data)).toEqual(body.data);
+      expect(body.data.rejected?.[0]).not.toHaveProperty('packagingUnitName');
       expect(await fixtureLines()).toEqual([[D.id, 1]]);
     });
 

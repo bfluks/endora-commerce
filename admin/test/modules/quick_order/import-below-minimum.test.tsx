@@ -240,3 +240,28 @@ describe.each<Language>(['en', 'pl'])('Quick order on behalf — below the minim
     );
   });
 });
+
+describe.each<Language>(['en', 'pl'])('Quick order on behalf — a packaging-unit build refusal (%s)', (language) => {
+  it('names the packaging unit in the refusal (coordinator addition to FR-011 (b))', async () => {
+    const { buildRejectionLabel } = await import(
+      '../../../../packages/modules/quick_order/src/admin/pages/QuickOrderOnBehalfPage'
+    );
+    const label = buildRejectionLabel(
+      {
+        productId: BOLT,
+        variantId: null,
+        quantity: 64,
+        productName: 'Steel bolt',
+        reason: 'below_minimum',
+        kind: 'packaging_unit',
+        minimum: 2,
+        packagingUnitName: 'Pallet',
+      },
+      (key, params) => tr(language, key, params),
+    );
+    expect(label).toBe(
+      tr(language, 'onBehalf.build.rejectedUnits', { product: 'Steel bolt', quantity: 64, minimum: 2, unit: 'Pallet' }),
+    );
+    expect(label).toContain('Pallet');
+  });
+});
