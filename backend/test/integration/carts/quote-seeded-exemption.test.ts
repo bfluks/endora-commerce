@@ -45,7 +45,7 @@ import {
  * **Only `replaceItemsForCustomer` writes `quote_seeded_quantity`** (plan I4,
  * threat F9). Checked by hand with
  *
- *     git grep -n "quoteSeededQuantity" -- 'packages/modules/*\/src/**' ':!*.test.ts'
+ *     git grep -n "quoteSeededQuantity" -- packages/modules ':!*.test.ts'
  *
  * which names the entity, the read-port seed and mapper, and readers only; and
  * below, by reading the row after every other path that creates or changes a
