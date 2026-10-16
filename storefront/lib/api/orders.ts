@@ -1,6 +1,7 @@
 import { purchaseConversionClaimResponseSchema } from '@endora-commerce/contracts';
 import { apiGetAuthed, apiMutate } from './mutations';
 import type { RequestContext } from './client';
+import type { CheckoutBelowMinimumLine } from '../cartMinimum';
 
 /*
  * Which calls in this file carry the sales channel, and why the others do not.
@@ -148,6 +149,12 @@ export interface OrderTotalPreview {
   discountTotal: number;
   total: number;
   currency: string;
+  /**
+   * Feature 148 — basket lines placement will refuse (contract §8): below a minimum, or
+   * `product_unavailable` (the product record is gone, no name or minimum). A line breaking
+   * two minima appears twice. Absent from an older backend; read as none.
+   */
+  belowMinimumLines?: CheckoutBelowMinimumLine[];
 }
 
 /**

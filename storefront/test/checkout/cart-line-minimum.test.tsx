@@ -110,7 +110,11 @@ describe('CartLine below the minimum', () => {
 
   it('offers a one-step fix to the minimum, exempt from native validation', () => {
     const html = render(below);
-    expect(html).toMatch(/<button[^>]*name="quantity"[^>]*value="10"[^>]*formNoValidate=""[^>]*>Set to 10 pcs</);
+    const button = html.match(/<button([^>]*)>Set to 10 pcs<\/button>/);
+    expect(button).not.toBeNull();
+    expect(button?.[1]).toContain('name="quantity"');
+    expect(button?.[1]).toContain('value="10"');
+    expect(button?.[1]).toContain('formNoValidate=""');
   });
 
   it('states the pallet variant (US1 #5)', () => {

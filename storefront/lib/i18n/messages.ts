@@ -48,6 +48,39 @@ export type MessageKey =
   | 'product.minimum.pieces'
   | 'product.minimum.units'
   | 'product.minimum.addToCart'
+  | 'order.minimum.below.pieces'
+  | 'order.minimum.below.units'
+  | 'order.minimum.below.unitsUnnamed'
+  | 'order.minimum.below.bare'
+  | 'cart.line.noLongerAvailable'
+  | 'cart.line.unknownProduct'
+  | 'cart.line.setToMinimum'
+  | 'cart.checkoutBlocked'
+  | 'cart.dropped.belowMinimum'
+  | 'cart.dropped.belowMinimumBare'
+  | 'checkout.belowMinimum.heading'
+  | 'checkout.belowMinimum.intro'
+  | 'checkout.belowMinimum.backToCart'
+  | 'checkout.belowMinimum.blocked'
+  | 'quickOrder.reason.sku_missing'
+  | 'quickOrder.reason.quantity_invalid'
+  | 'quickOrder.reason.product_not_found'
+  | 'quickOrder.reason.product_archived'
+  | 'quickOrder.reason.malformed_row'
+  | 'quickOrder.reason.variant_not_resolved'
+  | 'quickOrder.reason.variant_ambiguous'
+  | 'quickOrder.reason.row_limit_exceeded'
+  | 'quickOrder.reason.below_minimum'
+  | 'quickOrder.reason.below_minimumDetail'
+  | 'quickOrder.build.added'
+  | 'quickOrder.build.noneAdded'
+  | 'quickOrder.build.rejectedHeading'
+  | 'quickOrder.build.rejectedLine'
+  | 'quickOrder.build.openCart'
+  | 'shoppingList.skip.heading'
+  | 'shoppingList.skip.product_archived'
+  | 'shoppingList.skip.variant_unavailable'
+  | 'shoppingList.skip.product_not_found'
   | 'product.inStock'
   | 'product.stockBand.high'
   | 'product.stockBand.medium'
@@ -299,6 +332,39 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'product.minimum.pieces': 'Minimum order: {count} pcs',
     'product.minimum.units': 'Minimum order: {units} × {unit} = {count} pcs',
     'product.minimum.addToCart': 'Add {count} pcs to cart',
+    'order.minimum.below.pieces': 'Below the minimum ({count} pcs)',
+    'order.minimum.below.units': 'Below the minimum ({units} × {unit})',
+    'order.minimum.below.unitsUnnamed': 'Below the minimum ({units} packaging units)',
+    'order.minimum.below.bare': 'Below the minimum order quantity',
+    'cart.line.noLongerAvailable': 'No longer available',
+    'cart.line.unknownProduct': 'Product removed from the catalogue',
+    'cart.line.setToMinimum': 'Set to {count} pcs',
+    'cart.checkoutBlocked': 'Change or remove the flagged lines to continue to checkout.',
+    'cart.dropped.belowMinimum': 'below the minimum order quantity (minimum {minimum})',
+    'cart.dropped.belowMinimumBare': 'below the minimum order quantity',
+    'checkout.belowMinimum.heading': 'These lines cannot be ordered yet',
+    'checkout.belowMinimum.intro': 'Change the quantity or remove the line in your cart, then come back to place the order.',
+    'checkout.belowMinimum.backToCart': 'Fix in cart',
+    'checkout.belowMinimum.blocked': 'Some lines are below the minimum order quantity or no longer available.',
+    'quickOrder.reason.sku_missing': 'SKU missing',
+    'quickOrder.reason.quantity_invalid': 'Invalid quantity',
+    'quickOrder.reason.product_not_found': 'Product not found',
+    'quickOrder.reason.product_archived': 'Product archived',
+    'quickOrder.reason.malformed_row': 'Malformed row',
+    'quickOrder.reason.variant_not_resolved': 'Variant not recognised',
+    'quickOrder.reason.variant_ambiguous': 'Variant ambiguous',
+    'quickOrder.reason.row_limit_exceeded': 'Over the row limit',
+    'quickOrder.reason.below_minimum': 'Below the minimum order quantity',
+    'quickOrder.reason.below_minimumDetail': "The product's total in this file is {total}, minimum {count} pcs",
+    'quickOrder.build.added': 'Cart built from your import: {added} of {total} lines added.',
+    'quickOrder.build.noneAdded': 'No lines were added to your cart.',
+    'quickOrder.build.rejectedHeading': 'Not added to the cart',
+    'quickOrder.build.rejectedLine': '{product} × {quantity} — {reason}',
+    'quickOrder.build.openCart': 'Open cart',
+    'shoppingList.skip.heading': 'Not added to the cart',
+    'shoppingList.skip.product_archived': 'Product archived',
+    'shoppingList.skip.variant_unavailable': 'Variant no longer available',
+    'shoppingList.skip.product_not_found': 'Product no longer available',
     'product.inStock': 'In stock',
     'product.stockBand.high': 'In stock — plenty',
     'product.stockBand.medium': 'In stock',
@@ -533,6 +599,39 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'product.minimum.pieces': 'Minimalne zamówienie: {count} szt.',
     'product.minimum.units': 'Minimalne zamówienie: {units} × {unit} = {count} szt.',
     'product.minimum.addToCart': 'Dodaj {count} szt. do koszyka',
+    'order.minimum.below.pieces': 'Poniżej minimum ({count} szt.)',
+    'order.minimum.below.units': 'Poniżej minimum ({units} × {unit})',
+    'order.minimum.below.unitsUnnamed': 'Poniżej minimum ({units} jedn. opakowania)',
+    'order.minimum.below.bare': 'Poniżej minimalnej ilości zamówienia',
+    'cart.line.noLongerAvailable': 'Produkt nie jest już dostępny',
+    'cart.line.unknownProduct': 'Produkt usunięty z katalogu',
+    'cart.line.setToMinimum': 'Ustaw {count} szt.',
+    'cart.checkoutBlocked': 'Zmień lub usuń oznaczone pozycje, aby przejść do kasy.',
+    'cart.dropped.belowMinimum': 'poniżej minimalnej ilości zamówienia (minimum {minimum})',
+    'cart.dropped.belowMinimumBare': 'poniżej minimalnej ilości zamówienia',
+    'checkout.belowMinimum.heading': 'Tych pozycji nie można jeszcze zamówić',
+    'checkout.belowMinimum.intro': 'Zmień ilość lub usuń pozycję w koszyku, a następnie wróć, aby złożyć zamówienie.',
+    'checkout.belowMinimum.backToCart': 'Popraw w koszyku',
+    'checkout.belowMinimum.blocked': 'Niektóre pozycje są poniżej minimalnej ilości zamówienia lub nie są już dostępne.',
+    'quickOrder.reason.sku_missing': 'Brak SKU',
+    'quickOrder.reason.quantity_invalid': 'Nieprawidłowa ilość',
+    'quickOrder.reason.product_not_found': 'Nie znaleziono produktu',
+    'quickOrder.reason.product_archived': 'Produkt zarchiwizowany',
+    'quickOrder.reason.malformed_row': 'Nieprawidłowy wiersz',
+    'quickOrder.reason.variant_not_resolved': 'Nie rozpoznano wariantu',
+    'quickOrder.reason.variant_ambiguous': 'Wariant niejednoznaczny',
+    'quickOrder.reason.row_limit_exceeded': 'Przekroczono limit wierszy',
+    'quickOrder.reason.below_minimum': 'Poniżej minimalnej ilości zamówienia',
+    'quickOrder.reason.below_minimumDetail': 'Łączna ilość produktu w tym pliku to {total}, minimum {count} szt.',
+    'quickOrder.build.added': 'Koszyk utworzony z importu: dodano {added} z {total} pozycji.',
+    'quickOrder.build.noneAdded': 'Do koszyka nie dodano żadnej pozycji.',
+    'quickOrder.build.rejectedHeading': 'Nie dodano do koszyka',
+    'quickOrder.build.rejectedLine': '{product} × {quantity} — {reason}',
+    'quickOrder.build.openCart': 'Otwórz koszyk',
+    'shoppingList.skip.heading': 'Nie dodano do koszyka',
+    'shoppingList.skip.product_archived': 'Produkt zarchiwizowany',
+    'shoppingList.skip.variant_unavailable': 'Wariant nie jest już dostępny',
+    'shoppingList.skip.product_not_found': 'Produkt nie jest już dostępny',
     'product.inStock': 'Dostepny',
     'product.stockBand.high': 'Duzo w magazynie',
     'product.stockBand.medium': 'Sredni stan',

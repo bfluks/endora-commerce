@@ -16,6 +16,8 @@ import { StorefrontApiError } from '../../../../lib/api/client';
 import { getServerContext } from '../../../../lib/server-context';
 import { getProductBySlug } from '../../../../lib/api/catalog';
 import { ClearListButton } from '../../../../components/shopping-lists/ClearListButton';
+import { decodeReport, encodeReport, isConversionSkip, shoppingListSkipLabel } from '../../../../lib/batchReport';
+import { tForLocale } from '../../../../lib/i18n/messages';
 import type { Metadata } from 'next';
 
 /**
@@ -49,6 +51,8 @@ export default async function ShoppingListDetailPage({
     error?: string;
     cartAdded?: string;
     cartSkipped?: string;
+    /** Feature 148 — the conversion's `skipped[]`, carried across the redirect (base64url JSON). */
+    cartSkips?: string;
     rfqId?: string;
     rfqAdded?: string;
     rfqSkipped?: string;
@@ -77,7 +81,10 @@ export default async function ShoppingListDetailPage({
   // the product card (the item row only carries the product UUID). The detail
   // endpoint accepts an id or a slug; failures (archived / removed) fall back
   // to the raw id so the row still renders.
-  const { ctx } = await getServerContext();
+  const { ctx, locale } = await getServerContext();
+  const t = tForLocale(locale);
+  // Feature 148 (FR-011) — which rows the conversion left out, and why (a minimum included).
+  const cartSkips = sp.cartAdded !== undefined ? decodeReport(sp.cartSkips).filter(isConversionSkip) : [];
   const uniqueProductIds = [...new Set(list.items.map((it) => it.productId))];
   const resolvedEntries = await Promise.all(
     uniqueProductIds.map(async (pid): Promise<[string, ResolvedProduct | null]> => {
@@ -102,10 +109,29 @@ export default async function ShoppingListDetailPage({
         <p className="b2b-auth__success">
           Added {sp.cartAdded} item(s) to your cart
           {sp.cartSkipped && Number(sp.cartSkipped) > 0
-            ? `, skipped ${sp.cartSkipped} archived row(s)`
+            ? `, skipped ${sp.cartSkipped} row(s)`
             : ''}
           .
         </p>
+      ) : null}
+      {cartSkips.length > 0 ? (
+        <section
+          aria-labelledby="list-cart-skips"
+          className="my-[12px] rounded-md border border-warn bg-warn-soft px-[16px] py-[12px] text-fg"
+        >
+          <h3 id="list-cart-skips" className="m-0 mb-1 text-[14px] font-semibold">
+            {t('shoppingList.skip.heading')}
+          </h3>
+          <ul className="m-0 pl-5 text-[13px]">
+            {cartSkips.map((skip) => (
+              <li key={skip.itemId}>
+                <strong>{productsById.get(skip.productId)?.name ?? t('cart.line.unknownProduct')}</strong>
+                {' — '}
+                {shoppingListSkipLabel(skip, locale)}
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
       {sp.rfqAdded ? (
         <p className="b2b-auth__success">
@@ -352,9 +378,7 @@ async function convertAllToCartAction(formData: FormData): Promise<void> {
   // Flush the cart route's Router Cache so the newly added lines show on the
   // next visit instead of a stale (empty) cached page.
   revalidatePath('/cart');
-  redirect(
-    `/shopping-lists/${listId}?cartAdded=${result.added}&cartSkipped=${result.skipped.length}`,
-  );
+  redirect(cartConversionRedirect(listId, result));
 }
 
 async function convertSelectedToCartAction(formData: FormData): Promise<void> {
@@ -374,9 +398,7 @@ async function convertSelectedToCartAction(formData: FormData): Promise<void> {
     redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
   }
   revalidatePath('/cart');
-  redirect(
-    `/shopping-lists/${listId}?cartAdded=${result.added}&cartSkipped=${result.skipped.length}`,
-  );
+  redirect(cartConversionRedirect(listId, result));
 }
 
 async function convertAllToRfqAction(formData: FormData): Promise<void> {
@@ -420,4 +442,20 @@ async function convertSelectedToRfqAction(formData: FormData): Promise<void> {
   redirect(
     `/shopping-lists/${listId}?rfqId=${result.rfqId}&rfqAdded=${result.added}&rfqSkipped=${result.skipped.length}`,
   );
+}
+
+/**
+ * Feature 148 (FR-011) — where a list → cart conversion lands: the counts, and the skipped
+ * rows themselves so the page can name each with its reason and minimum.
+ */
+function cartConversionRedirect(
+  listId: string,
+  result: { added: number; skipped: ReadonlyArray<unknown> },
+): string {
+  const params = new URLSearchParams({
+    cartAdded: String(result.added),
+    cartSkipped: String(result.skipped.length),
+  });
+  if (result.skipped.length > 0) params.set('cartSkips', encodeReport(result.skipped));
+  return `/shopping-lists/${listId}?${params.toString()}`;
 }

@@ -1,6 +1,13 @@
 import type { ReactNode } from 'react';
 import type { DisplayMode } from '@endora-commerce/contracts';
 import { moneyByMode } from '../lib/i18n/money';
+import { tForLocale } from '../lib/i18n/messages';
+import {
+  belowMinimumText,
+  cartLineFixQuantity,
+  cartLineFloor,
+  type CartLineBelowMinimum,
+} from '../lib/cartMinimum';
 
 /**
  * CartLine — Industria-themed cart row (feature 027 US1).
@@ -30,6 +37,12 @@ export interface CartLineViewModel {
   sku?: string | null;
   /** Optional PDP slug — when set the name links back to the product card. */
   productSlug?: string | null;
+  /** Feature 043 — set when the line was added as a packaging unit. */
+  packagingUnitName?: string | null;
+  /** Feature 148 — the product's current pieces minimum (`null` = none). */
+  minOrderQuantity?: number | null;
+  /** Feature 148 — the server's verdict: this line is below a minimum and not exempt. */
+  belowMinimum?: CartLineBelowMinimum | null;
 }
 
 interface CartLineProps {
@@ -93,6 +106,15 @@ export function CartLine({
     line.unavailable && line.unavailableReason
       ? strings.unavailable[line.unavailableReason]
       : null;
+  const activeLocale = locale ?? 'en-US';
+  // Feature 148 (FR-037) — the product record is gone: nothing about the line can be
+  // changed or kept, so the only action left is to remove it.
+  const gone = line.unavailable === true && line.unavailableReason === 'not_purchasable';
+  // Feature 148 (FR-013) — the server's below-minimum verdict, worded beside the name.
+  const belowText = gone ? null : belowMinimumText(line, activeLocale);
+  const belowId = `cart-line-${line.id}-minimum`;
+  const floor = cartLineFloor(line);
+  const fixQuantity = gone ? null : cartLineFixQuantity(line);
   return (
     <div
       className={`cart-line grid grid-cols-[56px_1fr_130px_110px_130px_28px] items-center gap-[14px] border-b border-line px-[22px] py-[14px] last:border-b-0${
@@ -127,49 +149,104 @@ export function CartLine({
           </span>
         )}
         {unavailableLabel ? (
-          <span className="mt-[2px] text-[11px] text-muted">{unavailableLabel}</span>
+          <span className={`mt-[2px] text-[11px] ${gone ? 'font-semibold text-bad' : 'text-muted'}`}>
+            {unavailableLabel}
+          </span>
         ) : null}
-        <form action={saveToListAction} className="mt-1">
-          <input type="hidden" name="itemId" value={line.id} />
-          <button
-            type="submit"
-            className="cursor-pointer border-0 bg-transparent p-0 text-[11px] text-muted underline underline-offset-2"
-          >
-            {strings.saveToListLabel}
-          </button>
-        </form>
+        {belowText ? (
+          <div className="mt-[2px] flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span id={belowId} className="inline-flex items-center gap-1 text-[12px] font-semibold text-warn">
+              <svg
+                viewBox="0 0 24 24"
+                width={13}
+                height={13}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+                <path d="M12 9v4" />
+                <path d="M12 17h.01" />
+              </svg>
+              {belowText}
+            </span>
+            {fixQuantity !== null ? (
+              // Its own form: the stepper's input holds a value below its `min`, and a form
+              // with an invalid control refuses every native submit.
+              <form action={updateAction}>
+                <input type="hidden" name="itemId" value={line.id} />
+                <button
+                  type="submit"
+                  name="quantity"
+                  value={fixQuantity}
+                  formNoValidate
+                  aria-describedby={belowId}
+                  className="cursor-pointer rounded-sm border border-line bg-surface px-[8px] py-[2px] text-[12px] font-medium text-fg hover:border-line-strong hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-[720px]:min-h-[44px]"
+                >
+                  {tForLocale(activeLocale)('cart.line.setToMinimum').replace(
+                    '{count}',
+                    String(fixQuantity),
+                  )}
+                </button>
+              </form>
+            ) : null}
+          </div>
+        ) : null}
+        {gone ? null : (
+          <form action={saveToListAction} className="mt-1">
+            <input type="hidden" name="itemId" value={line.id} />
+            <button
+              type="submit"
+              className="cursor-pointer border-0 bg-transparent p-0 text-[11px] text-muted underline underline-offset-2"
+            >
+              {strings.saveToListLabel}
+            </button>
+          </form>
+        )}
       </div>
 
-      <form action={updateAction} className="max-[720px]:[grid-area:stepper]">
-        <input type="hidden" name="itemId" value={line.id} />
-        <div className="qty__stepper" role="group" aria-label={strings.qtyLabel}>
-          <button
-            type="submit"
-            name="quantity"
-            value={Math.max(1, line.quantity - 1)}
-            aria-label="−"
-            title="−"
-          >
-            −
-          </button>
-          <input
-            type="number"
-            name="quantity"
-            min={1}
-            defaultValue={line.quantity}
-            aria-label={strings.qtyLabel}
-          />
-          <button
-            type="submit"
-            name="quantity"
-            value={line.quantity + 1}
-            aria-label="+"
-            title="+"
-          >
-            +
-          </button>
-        </div>
-      </form>
+      {gone ? (
+        <span className="max-[720px]:[grid-area:stepper]" aria-hidden="true" />
+      ) : (
+        <form action={updateAction} className="max-[720px]:[grid-area:stepper]">
+          <input type="hidden" name="itemId" value={line.id} />
+          <div className="qty__stepper" role="group" aria-label={strings.qtyLabel}>
+            <button
+              type="submit"
+              name="quantity"
+              value={Math.max(floor, line.quantity - 1)}
+              disabled={line.quantity <= floor}
+              formNoValidate
+              aria-label="−"
+              title="−"
+            >
+              −
+            </button>
+            <input
+              type="number"
+              name="quantity"
+              min={floor}
+              defaultValue={line.quantity}
+              aria-label={strings.qtyLabel}
+              {...(belowText ? { 'aria-invalid': true, 'aria-describedby': belowId } : {})}
+            />
+            <button
+              type="submit"
+              name="quantity"
+              value={Math.max(line.quantity + 1, floor)}
+              formNoValidate
+              aria-label="+"
+              title="+"
+            >
+              +
+            </button>
+          </div>
+        </form>
+      )}
 
       <span
         className="text-right font-mono text-[13px] text-fg-soft max-[720px]:[grid-area:unit]"
@@ -189,7 +266,7 @@ export function CartLine({
         <input type="hidden" name="itemId" value={line.id} />
         <button
           type="submit"
-          className="grid h-[28px] w-[28px] cursor-pointer place-items-center rounded-sm border border-transparent bg-transparent text-muted transition hover:bg-surface-alt hover:text-[#b91c1c]"
+          className="grid h-[28px] w-[28px] cursor-pointer place-items-center rounded-sm border border-transparent bg-transparent text-muted transition hover:bg-surface-alt hover:text-bad"
           aria-label={strings.removeLabel}
           title={strings.removeLabel}
         >

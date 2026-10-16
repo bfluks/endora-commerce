@@ -7,7 +7,17 @@ import {
   importQuickOrderFile,
   searchProducts,
   type QuickOrderImportResponse,
+  type RejectedQuickOrderItem,
 } from '../../../lib/api/quick-order';
+import {
+  decodeReport,
+  encodeReport,
+  isBuildRejectedLine,
+  quickOrderBuildOutcome,
+  quickOrderBuildRejectionText,
+  quickOrderRejectionLabel,
+} from '../../../lib/batchReport';
+import { tForLocale } from '../../../lib/i18n/messages';
 import { getSessionCookie } from '../../../lib/session';
 import { getServerContext } from '../../../lib/server-context';
 import { StorefrontApiError } from '../../../lib/api/client';
@@ -44,7 +54,7 @@ interface PreviewState {
     quantity: number;
     mergedFromLines?: number[];
   }>;
-  rejected: Array<{ line: number; raw: string; reason: string }>;
+  rejected: RejectedQuickOrderItem[];
   summary: { recognizedCount: number; rejectedCount: number; mergedCount: number; truncated: boolean };
 }
 
@@ -57,6 +67,10 @@ export default async function QuickOrderPage({
     built?: string;
     rfq?: string;
     q?: string;
+    /** Feature 148 — how many lines the cart build sent. */
+    sent?: string;
+    /** Feature 148 — the build's `rejected[]`, carried across the redirect (base64url JSON). */
+    notAdded?: string;
   }>;
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
@@ -68,7 +82,11 @@ export default async function QuickOrderPage({
   // Issue #174 — the type-ahead is channel-scoped on the backend now, so the
   // page has to say which channel the buyer is shopping. Resolved the same way
   // every other storefront page resolves it.
-  const { ctx } = await getServerContext();
+  const { ctx, locale } = await getServerContext();
+  const t = tForLocale(locale);
+  // Feature 148 (FR-011 (b)) — the lines the cart build left out, below a minimum.
+  const notAdded = sp.built === 'cart' ? decodeReport(sp.notAdded).filter(isBuildRejectedLine) : [];
+  const sentCount = Math.max(Number.parseInt(sp.sent ?? '', 10) || 0, notAdded.length);
   const searchResults = searchQuery
     ? await searchProducts(session, searchQuery, ctx).catch(() => [])
     : [];
@@ -87,11 +105,32 @@ export default async function QuickOrderPage({
       </p>
 
       {sp.error ? <p className="b2b-auth__error">{sp.error}</p> : null}
-      {sp.built === 'cart' ? (
+      {sp.built === 'cart' && notAdded.length === 0 ? (
         <p className="b2b-auth__success">
           Cart built from your import. <Link href="/cart">Open cart</Link> ·{' '}
           <Link href="/checkout">Go to checkout</Link>.
         </p>
+      ) : null}
+      {notAdded.length > 0 ? (
+        // Feature 148 — a partial build is reported as one: what was added, and each line
+        // that was not, with the minimum it missed. Checkout is not offered from here — the
+        // cart is where the quantities are fixed.
+        <section
+          role="status"
+          aria-labelledby="quick-order-not-added"
+          className="my-[12px] rounded-md border border-warn bg-warn-soft px-[16px] py-[12px] text-fg"
+        >
+          <p className="m-0 mb-1 font-semibold">{quickOrderBuildOutcome(sentCount, notAdded.length, locale)}</p>
+          <h3 id="quick-order-not-added" className="m-0 mb-1 text-[14px] font-semibold">
+            {t('quickOrder.build.rejectedHeading')}
+          </h3>
+          <ul className="m-0 mb-2 pl-5 text-[13px]">
+            {notAdded.map((line, index) => (
+              <li key={`${line.productId}:${index}`}>{quickOrderBuildRejectionText(line, locale)}</li>
+            ))}
+          </ul>
+          {sentCount > notAdded.length ? <Link href="/cart">{t('quickOrder.build.openCart')}</Link> : null}
+        </section>
       ) : null}
       {sp.built === 'quote' ? (
         <p className="b2b-auth__success">
@@ -185,7 +224,7 @@ export default async function QuickOrderPage({
         </table>
       ) : null}
 
-      {preview ? <PreviewPanel preview={preview} /> : null}
+      {preview ? <PreviewPanel preview={preview} locale={locale} /> : null}
 
       {/* Feature 044 / US7 — sticky mobile bar: recognised summary + add-all.
           A spacer reserves room so it never covers the rejected-rows table. */}
@@ -217,7 +256,7 @@ export default async function QuickOrderPage({
   );
 }
 
-function PreviewPanel({ preview }: { preview: PreviewState }): ReactNode {
+function PreviewPanel({ preview, locale }: { preview: PreviewState; locale: string }): ReactNode {
   const totals = summarizeQuickOrderPreview(preview);
   return (
     <>
@@ -325,7 +364,7 @@ function PreviewPanel({ preview }: { preview: PreviewState }): ReactNode {
               {preview.rejected.map((r) => (
                 <tr key={r.line}>
                   <td>{r.line}</td>
-                  <td>{r.reason}</td>
+                  <td>{quickOrderRejectionLabel(r, locale)}</td>
                   <td>
                     <code>{r.raw}</code>
                   </td>
@@ -439,6 +478,7 @@ async function confirmAction(formData: FormData): Promise<void> {
   }
 
   let rfqRef: string | undefined;
+  let rejected: unknown[] = [];
   try {
     const result = await buildQuickOrder(
       session,
@@ -451,12 +491,23 @@ async function confirmAction(formData: FormData): Promise<void> {
     );
     // Show the customer-facing business ID in the confirmation banner.
     rfqRef = result.quoteRequestBusinessId ?? result.quoteRequestId;
+    rejected = result.rejected ?? [];
   } catch (err) {
     const message = err instanceof StorefrontApiError ? err.message : 'Build failed.';
     redirect(`/quick-order?error=${encodeURIComponent(message)}`);
   }
   if (target === 'quote_request') {
     redirect(`/quick-order?built=quote${rfqRef ? `&rfq=${encodeURIComponent(rfqRef)}` : ''}`);
+  }
+  if (rejected.length > 0) {
+    // Feature 148 (FR-011 (b)) — the build added the valid lines; the rest travel to the page
+    // so it can say which and why.
+    const params = new URLSearchParams({
+      built: 'cart',
+      sent: String(preview!.recognized.length),
+      notAdded: encodeReport(rejected),
+    });
+    redirect(`/quick-order?${params.toString()}`);
   }
   redirect('/quick-order?built=cart');
 }

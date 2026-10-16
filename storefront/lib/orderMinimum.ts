@@ -44,7 +44,8 @@ export function orderFloor(product: MinimumProduct, unit: MinimumPackagingUnit |
   return Math.max(unitMinimum, unitsForPieces, 1);
 }
 
-function formatCount(value: number, locale: string): string {
+/** A whole count in the locale's digit grouping ("1 000" in Polish). */
+export function formatCount(value: number, locale: string): string {
   try {
     return new Intl.NumberFormat(locale).format(value);
   } catch {

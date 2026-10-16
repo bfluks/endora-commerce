@@ -42,7 +42,18 @@ import type { MessageKey } from '../i18n/messages';
  * Pure and exported so the precedence can be unit-tested; the storefront test
  * harness is SSR-only, so the logic lives here rather than inside the component.
  */
-export type PlaceOrderBlock = 'moderation' | 'no-delivery-method' | 'no-payment-method' | null;
+/*
+ * Feature 148 adds `below-minimum` — a basket line placement will refuse (below an order
+ * minimum, or its product gone). It ranks after `moderation` and before the method gaps by the
+ * rule above: the basket is the most upstream thing checkout shows — the buyer fixes it in the
+ * cart, not here, and no delivery or payment choice changes the verdict.
+ */
+export type PlaceOrderBlock =
+  | 'moderation'
+  | 'below-minimum'
+  | 'no-delivery-method'
+  | 'no-payment-method'
+  | null;
 
 export function placeOrderBlock(input: {
   canTransact: boolean;
@@ -59,8 +70,14 @@ export function placeOrderBlock(input: {
    * not an option.
    */
   paymentMethodCount: number;
+  /**
+   * Feature 148 — a basket line placement will refuse: the cart view's own flags, or the
+   * checkout preview's `belowMinimumLines` (`cartBlocksCheckout`, `canPlaceOrder`).
+   */
+  belowMinimum?: boolean;
 }): PlaceOrderBlock {
   if (!input.canTransact) return 'moderation';
+  if (input.belowMinimum === true) return 'below-minimum';
   if (input.deliveryMethodCount <= 0) return 'no-delivery-method';
   if (input.paymentMethodCount <= 0) return 'no-payment-method';
   return null;
@@ -88,6 +105,8 @@ export function blockTitle(
   switch (block) {
     case null:
       return undefined;
+    case 'below-minimum':
+      return t('checkout.belowMinimum.blocked');
     case 'no-delivery-method':
       return t('checkout.delivery.none');
     case 'no-payment-method':

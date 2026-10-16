@@ -37,6 +37,9 @@ import { getMe } from '../../../lib/api/account';
 import { getProductDisplayMode, PRICING_UNAVAILABLE } from '../../../lib/api/pricing';
 import type { DisplayMode } from '@endora-commerce/contracts';
 import type { Metadata } from 'next';
+import { cartBlocksCheckout, cartLineDisplayName } from '../../../lib/cartMinimum';
+import { droppedBelowMinimumReason } from '../../../lib/batchReport';
+import { tForLocale } from '../../../lib/i18n/messages';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -207,6 +210,7 @@ export default async function CartPage({
             productId: d.productId,
             productName: d.productName,
             reason: d.reason,
+            minimum: d.minimum,
           }))}
           strings={strings.dropped}
         />
@@ -231,7 +235,7 @@ export default async function CartPage({
             {cart.items.map((it) => (
               <CartLine
                 key={it.id}
-                line={toViewModel(it)}
+                line={toViewModel(it, locale)}
                 updateAction={updateAction}
                 removeAction={removeAction}
                 saveToListAction={saveToListAction}
@@ -308,6 +312,8 @@ export default async function CartPage({
               canTransact={canTransact}
               moderationMessage={me?.organization?.moderationMessage ?? null}
               submitAction={submitForApprovalAction}
+              linesBlockCheckout={cartBlocksCheckout(cart)}
+              linesBlockedNote={tForLocale(locale)('cart.checkoutBlocked')}
               strings={strings.cta}
             />
           </div>
@@ -351,7 +357,7 @@ function Breadcrumbs({
 }
 
 /** Maps a CartItem to the view-model the CartLine component expects. */
-function toViewModel(it: CartItem): CartLineViewModel {
+function toViewModel(it: CartItem, locale: string): CartLineViewModel {
   return {
     id: it.id,
     productId: it.productId,
@@ -359,8 +365,9 @@ function toViewModel(it: CartItem): CartLineViewModel {
     // Backend resolves `productName` from Product.name against the
     // request's Accept-Language. Feature 043 — prefer `displayName`, which
     // already appends the packaging-unit name (e.g. "… (Paleta)"). When
-    // unknown (race with a deleted product) fall back to SKU then productId.
-    productName: it.displayName || it.productName || it.productSku || it.productId,
+    // unknown (a deleted product, FR-037) fall back to the SKU, then to a
+    // sentence — never to the raw product id.
+    productName: cartLineDisplayName(it, locale),
     sku: it.productSku ?? null,
     productSlug: it.productSlug ?? null,
     quantity: it.quantity,
@@ -371,6 +378,10 @@ function toViewModel(it: CartItem): CartLineViewModel {
     },
     ...(it.unavailable !== undefined ? { unavailable: it.unavailable } : {}),
     ...(it.unavailableReason !== undefined ? { unavailableReason: it.unavailableReason } : {}),
+    // Feature 148 — the input floor and the server's below-minimum verdict.
+    packagingUnitName: it.packagingUnitName ?? null,
+    minOrderQuantity: it.minOrderQuantity ?? null,
+    belowMinimum: it.belowMinimum ?? null,
   };
 }
 
@@ -387,6 +398,8 @@ function PrimaryCtaButton({
   canTransact,
   moderationMessage,
   submitAction,
+  linesBlockCheckout,
+  linesBlockedNote,
   strings,
 }: {
   cta: NonNullable<CartSummary['primaryCta']>;
@@ -396,6 +409,10 @@ function PrimaryCtaButton({
   canTransact: boolean;
   moderationMessage: string | null;
   submitAction: (formData: FormData) => Promise<void>;
+  /** Feature 148 — a line is below a minimum or its product is gone (`cartBlocksCheckout`). */
+  linesBlockCheckout: boolean;
+  /** The visible sentence explaining `linesBlockCheckout`. */
+  linesBlockedNote: string;
   strings: {
     checkout: string;
     submitForApproval: string;
@@ -444,6 +461,28 @@ function PrimaryCtaButton({
   // returning to checkout via `?next` — instead of letting /checkout bounce
   // them to login unexpectedly.
   const checkoutHref = authenticated ? '/checkout' : '/login?next=/checkout';
+  if (linesBlockCheckout) {
+    // Feature 148 (FR-013, FR-037) — placement would refuse this basket, so checkout is not
+    // offered until the flagged lines are changed or removed. The reason is on the page, next
+    // to the control, not only in a tooltip.
+    return (
+      <>
+        <button
+          type="button"
+          className="btn btn--dark btn--lg btn--block"
+          disabled
+          aria-disabled
+          aria-describedby="cart-checkout-blocked"
+          style={{ opacity: 0.55, cursor: 'not-allowed' }}
+        >
+          {strings.checkout} →
+        </button>
+        <p id="cart-checkout-blocked" className="m-0 mt-2 text-[12px] font-medium text-warn">
+          {linesBlockedNote}
+        </p>
+      </>
+    );
+  }
   return (
     <Link href={checkoutHref} className="btn btn--dark btn--lg btn--block">
       {strings.checkout} →
@@ -637,7 +676,7 @@ function STRINGS(locale: string): {
         grossSuffix: 'brutto',
         unavailable: {
           out_of_stock: 'Brak na stanie.',
-          not_purchasable: 'Niedostępny.',
+          not_purchasable: 'Produkt nie jest już dostępny.',
           no_price_in_customer_list: 'Brak ceny dla Twojego konta.',
         },
       },
@@ -685,6 +724,7 @@ function STRINGS(locale: string): {
         reasonOutOfStock: 'brak na stanie',
         reasonNoPriceInCustomerList: 'brak ceny dla Twojego konta',
         reasonRemovedByConversion: 'pominięto podczas konwersji',
+        reasonBelowMinimum: (minimum: number | undefined) => droppedBelowMinimumReason(minimum, locale),
       },
       approvalBanner: {
         pending: 'Twój koszyk oczekuje na akceptację administratora organizacji.',
@@ -788,6 +828,7 @@ function STRINGS(locale: string): {
       reasonOutOfStock: 'out of stock',
       reasonNoPriceInCustomerList: 'no price available',
       reasonRemovedByConversion: 'skipped during conversion',
+      reasonBelowMinimum: (minimum: number | undefined) => droppedBelowMinimumReason(minimum, locale),
     },
     approvalBanner: {
       pending: 'Your cart is awaiting approval by an organization administrator.',
