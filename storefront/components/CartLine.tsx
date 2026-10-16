@@ -215,9 +215,12 @@ export function CartLine({
         <form action={updateAction} className="max-[720px]:[grid-area:stepper]">
           <input type="hidden" name="itemId" value={line.id} />
           <div className="qty__stepper" role="group" aria-label={strings.qtyLabel}>
+            {/* The steppers post `step`, not `quantity`: the input posts `quantity` too and
+                sits between them, so the first `quantity` in the form data would be the
+                input's for "+" (a no-op, or a refusal on a line below its minimum). */}
             <button
               type="submit"
-              name="quantity"
+              name="step"
               value={Math.max(floor, line.quantity - 1)}
               disabled={line.quantity <= floor}
               formNoValidate
@@ -236,7 +239,7 @@ export function CartLine({
             />
             <button
               type="submit"
-              name="quantity"
+              name="step"
               value={Math.max(line.quantity + 1, floor)}
               formNoValidate
               aria-label="+"

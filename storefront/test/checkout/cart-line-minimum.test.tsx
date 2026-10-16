@@ -117,6 +117,13 @@ describe('CartLine below the minimum', () => {
     expect(button?.[1]).toContain('formNoValidate=""');
   });
 
+  it('steps "+" straight to the minimum, posted apart from the input so it is the value read', () => {
+    const plus = render(below).match(/<button([^>]*aria-label="\+"[^>]*)>/);
+    expect(plus?.[1]).toContain('name="step"');
+    expect(plus?.[1]).toContain('value="10"');
+    expect(plus?.[1]).toContain('formNoValidate=""');
+  });
+
   it('states the pallet variant (US1 #5)', () => {
     const html = render(
       line({ quantity: 64, belowMinimum: { kind: 'packaging_unit', minimum: 2, packagingUnitName: 'Pallet' } }),

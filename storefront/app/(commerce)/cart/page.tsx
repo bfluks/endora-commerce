@@ -502,7 +502,8 @@ async function readJar(): Promise<CartCookieJar> {
 async function updateAction(formData: FormData): Promise<void> {
   'use server';
   const itemId = (formData.get('itemId') as string) ?? '';
-  const quantity = Number(formData.get('quantity') ?? '0');
+  // A stepper button posts `step`; the typed input and the one-step fix post `quantity`.
+  const quantity = Number(formData.get('step') ?? formData.get('quantity') ?? '0');
   if (!Number.isFinite(quantity) || quantity < 1) redirect('/cart?error=invalid-quantity');
   try {
     const result = await updateCartItem(await readJar(), itemId, quantity);
