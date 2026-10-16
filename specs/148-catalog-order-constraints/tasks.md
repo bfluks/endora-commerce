@@ -124,17 +124,23 @@ prefix `PATH` with `/usr/local/bin` on the host (an old node there breaks corepa
 
 ---
 
-## Phase 1: Setup
+## Phase 1: Setup — done 2026-10-16
 
 **Goal**: a known-good baseline.
 
 - [x] T001 Create `feat/148-catalog-order-constraints` from `origin/master`; create `specs/148-catalog-order-constraints/` with this feature's artefacts (`spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, `contracts/*.md`, `tasks.md`); run `.specify/scripts/bash/update-agent-context.sh` (what `/speckit.plan` would have run — it writes the `AGENTS.md` appendix, which `backend/test/unit/docs/agents-router.test.ts` watches) and commit the result with the spec; `pnpm install --frozen-lockfile && pnpm run build:packages`
-- [ ] T002 Record the baseline: `pnpm --filter @endora-commerce/mod-carts run test`, `…/mod-catalog run test`, `…/mod-quote-requests run test`, and `[PG]` each file under `test/integration/carts/` and `test/integration/returns/`, one per invocation — note any pre-existing red in the PR description
+- [x] T002 Record the baseline: `pnpm --filter @endora-commerce/mod-carts run test`, `…/mod-catalog run test`, `…/mod-quote-requests run test`, and `[PG]` each file under `test/integration/carts/` and `test/integration/returns/`, one per invocation — note any pre-existing red in the PR description
+  - **Baseline recorded 2026-10-16** on `feat/148-catalog-order-constraints` at `e2cc42b8d` (code = `origin/master` `39b9b9989`), macOS host, after `pnpm install --frozen-lockfile && pnpm run build:packages`; local stack Postgres 5432, Redis 6380, Meilisearch 7700. **No pre-existing red** — neither a genuine repo red nor a macOS-host gap.
+    - `mod-carts` 2 files / 26 tests passed · `mod-catalog` 8 / 79 passed · `mod-quote-requests` 16 / 220 passed.
+    - `[PG]` `test/integration/carts/` — 22 files, one per invocation, 79 tests passed, 0 failed.
+    - `[PG]` `test/integration/returns/` — 15 test files (`helpers.ts` is not a test), one per invocation, 53 tests passed, 0 failed.
 
 **Verification** (one invocation per line):
 - `pnpm --filter @endora-commerce/contracts run test`
 - `pnpm --filter @endora-commerce/mod-carts run typecheck`
 - `pnpm --filter backend exec vitest run --config vitest.unit.config.ts test/unit/docs/agents-router.test.ts`
+
+Verified 2026-10-16: contracts 29 files / 538 tests passed; `mod-carts` typecheck clean; `agents-router.test.ts` 22 / 22 passed.
 
 ---
 
