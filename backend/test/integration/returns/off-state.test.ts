@@ -82,9 +82,9 @@ describe('returns off-state (Constitution XVII)', () => {
    * `contracts/returns-api.md` §4). `orders` records `returnable_at_purchase`
    * at placement whether `returns` is on or off — it has no edge to `returns`
    * — so an order placed while `returns` is off answers from its own stamp
-   * once `returns` is switched back on. The line-level `returnable` the
-   * endpoint derives from it is `returns`' policy (Phase 12a, T096); here the
-   * endpoint answers the order and the port reports the stamp it reads.
+   * once `returns` is switched back on: the endpoint's per-line `returnable` is
+   * derived from it (`returns`' policy, Phase 12a, T096), and the port reports
+   * the stamp it reads.
    */
   it('records returnable_at_purchase while returns is off, and answers from it once it is back on', async () => {
     const em = h.em();
@@ -139,8 +139,16 @@ describe('returns off-state (Constitution XVII)', () => {
       headers: channel,
     });
     expect(res.statusCode, res.body).toBe(200);
-    const lines = (res.json() as { data: { lines: Array<{ productId: string }> } }).data.lines;
+    const lines = (
+      res.json() as {
+        data: { lines: Array<{ productId: string; returnable: boolean; notReturnableReason?: string }> };
+      }
+    ).data.lines;
     expect(lines.map((l) => l.productId).sort()).toEqual([R.id, N.id].sort());
+    // Phase 12a (T096): the per-line verdict `returns` derives from the stamp.
+    expect(
+      Object.fromEntries(lines.map((l) => [l.productId, [l.returnable, l.notReturnableReason ?? null]])),
+    ).toEqual({ [R.id]: [true, null], [N.id]: [false, 'product_not_returnable'] });
 
     const port = (h.container.cradle as unknown as { orderReturnContextPort: OrderReturnContextPort })
       .orderReturnContextPort;
