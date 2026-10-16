@@ -264,6 +264,34 @@ export type MessageKey =
   | 'orders.paymentReturn.cancelled'
   | 'orders.paymentReturn.failed'
   | 'orders.actionFailed'
+  // Feature 148 (FR-021, FR-018) — the return form and the order's return action. A line may
+  // be not returnable, and an order with no returnable line still takes a complaint.
+  | 'returns.new.heading'
+  | 'returns.new.chooseOrder'
+  | 'returns.new.noOrders'
+  | 'returns.new.backToReturns'
+  | 'returns.new.chooseAnotherOrder'
+  | 'returns.new.freeReturnWindow'
+  | 'returns.new.kind.legend'
+  | 'returns.new.kind.return'
+  | 'returns.new.kind.complaint'
+  | 'returns.new.col.include'
+  | 'returns.new.col.product'
+  | 'returns.new.col.qty'
+  | 'returns.new.col.reason'
+  | 'returns.new.selectReason'
+  | 'returns.new.comment'
+  | 'returns.new.submit.return'
+  | 'returns.new.submit.complaint'
+  | 'returns.new.none.notCompleting'
+  | 'returns.new.none.fullyReturned'
+  | 'returns.new.none.windowPassed'
+  | 'returns.new.none.generic'
+  | 'returns.new.complaintOnly'
+  | 'returns.line.notReturnable'
+  | 'returns.line.remaining'
+  | 'orders.returnAction.return'
+  | 'orders.returnAction.complaint'
   // The validity deadline an operator sets on a quote request. !1137 made it a
   // rule — accept-revision answers 410 `RFQ_EXPIRED` and convert-to-order 410
   // `QUOTE_VALIDITY_ENDED` past it — while no storefront component rendered
@@ -543,6 +571,32 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'orders.paymentReturn.failed':
       'Your payment did not go through. Your order is placed and is still waiting for payment, so you can try again.',
     'orders.actionFailed': 'We could not complete that action.',
+    'returns.new.heading': 'Start a return or complaint',
+    'returns.new.chooseOrder': 'Choose the order the return or complaint is about:',
+    'returns.new.noOrders': 'You don\'t have any orders yet.',
+    'returns.new.backToReturns': '← Back to returns',
+    'returns.new.chooseAnotherOrder': '← Choose another order',
+    'returns.new.freeReturnWindow': 'This order is within the free-return window.',
+    'returns.new.kind.legend': 'What would you like to file?',
+    'returns.new.kind.return': 'Return',
+    'returns.new.kind.complaint': 'Complaint',
+    'returns.new.col.include': 'Include',
+    'returns.new.col.product': 'Product',
+    'returns.new.col.qty': 'Qty',
+    'returns.new.col.reason': 'Reason',
+    'returns.new.selectReason': 'Select…',
+    'returns.new.comment': 'Additional details (optional)',
+    'returns.new.submit.return': 'Submit return request',
+    'returns.new.submit.complaint': 'Submit complaint',
+    'returns.new.none.notCompleting': 'This order is not yet eligible for returns or complaints.',
+    'returns.new.none.fullyReturned': 'All items from this order have already been returned.',
+    'returns.new.none.windowPassed': 'This order can no longer be returned — the return window has ended.',
+    'returns.new.none.generic': 'This order is not eligible for returns.',
+    'returns.new.complaintOnly': 'No products in this order are returnable. You can still file a complaint about them.',
+    'returns.line.notReturnable': 'This product cannot be returned; a complaint is still possible.',
+    'returns.line.remaining': 'of {count}',
+    'orders.returnAction.return': 'Request return / complaint',
+    'orders.returnAction.complaint': 'File a complaint',
     'quoteRequests.validity.validUntil': 'Valid until ',
     'quoteRequests.validity.endedOn': 'Validity ended ',
     'quoteRequests.validity.acceptBlocked':
@@ -811,6 +865,32 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'orders.paymentReturn.failed':
       'Płatność nie doszła do skutku. Twoje zamówienie zostało złożone i nadal czeka na opłacenie, więc możesz spróbować ponownie.',
     'orders.actionFailed': 'Nie udało się wykonać tej operacji.',
+    'returns.new.heading': 'Zwrot lub reklamacja',
+    'returns.new.chooseOrder': 'Wybierz zamówienie, którego dotyczy zwrot lub reklamacja:',
+    'returns.new.noOrders': 'Nie masz jeszcze żadnych zamówień.',
+    'returns.new.backToReturns': '← Wróć do zwrotów',
+    'returns.new.chooseAnotherOrder': '← Wybierz inne zamówienie',
+    'returns.new.freeReturnWindow': 'To zamówienie mieści się w okresie bezpłatnego zwrotu.',
+    'returns.new.kind.legend': 'Co chcesz zgłosić?',
+    'returns.new.kind.return': 'Zwrot',
+    'returns.new.kind.complaint': 'Reklamacja',
+    'returns.new.col.include': 'Uwzględnij',
+    'returns.new.col.product': 'Produkt',
+    'returns.new.col.qty': 'Ilość',
+    'returns.new.col.reason': 'Powód',
+    'returns.new.selectReason': 'Wybierz…',
+    'returns.new.comment': 'Dodatkowe informacje (opcjonalnie)',
+    'returns.new.submit.return': 'Wyślij zgłoszenie zwrotu',
+    'returns.new.submit.complaint': 'Wyślij reklamację',
+    'returns.new.none.notCompleting': 'To zamówienie nie może jeszcze zostać zwrócone ani zareklamowane.',
+    'returns.new.none.fullyReturned': 'Wszystkie produkty z tego zamówienia zostały już zwrócone.',
+    'returns.new.none.windowPassed': 'Tego zamówienia nie można już zwrócić — minął termin zwrotu.',
+    'returns.new.none.generic': 'To zamówienie nie kwalifikuje się do zwrotu.',
+    'returns.new.complaintOnly': 'Żaden produkt z tego zamówienia nie podlega zwrotowi. Nadal możesz złożyć reklamację.',
+    'returns.line.notReturnable': 'Ten produkt nie podlega zwrotowi; reklamacja jest nadal możliwa.',
+    'returns.line.remaining': 'z {count}',
+    'orders.returnAction.return': 'Zgłoś zwrot / reklamację',
+    'orders.returnAction.complaint': 'Złóż reklamację',
     'quoteRequests.validity.validUntil': 'Ważne do ',
     'quoteRequests.validity.endedOn': 'Ważność zakończona ',
     'quoteRequests.validity.acceptBlocked':

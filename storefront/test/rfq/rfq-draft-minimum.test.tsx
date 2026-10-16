@@ -80,7 +80,8 @@ describe('DraftLine — a line at or above the minimum (US4 #14)', () => {
     expect(input).not.toContain('aria-invalid');
     expect(html).not.toContain('Below the minimum');
     // The "−" step is disabled at the floor.
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="−"/);
+    const minus = html.match(/<button[^>]*aria-label="−"[^>]*>/)?.[0] ?? '';
+    expect(minus).toContain('disabled=""');
     // The minimum is still stated beside the line.
     expect(html).toContain('Minimum order: 10 pcs');
   });

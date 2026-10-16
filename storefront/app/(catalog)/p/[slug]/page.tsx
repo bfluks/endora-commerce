@@ -347,6 +347,8 @@ export default async function ProductPage({
                   productName={product.name}
                   unitPrice={price ?? null}
                   variant="pdp"
+                  minOrderQuantity={product.minOrderQuantity ?? null}
+                  locale={locale}
                 />
               ) : (
                 <>

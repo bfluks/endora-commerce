@@ -145,14 +145,18 @@ export function ProductBuyActions({
     trackAddToQuoteRequest(gaItem());
     // Piece-based: when a packaging unit is selected we add the resulting
     // piece count to the draft (labelled packaging lines come from the
-    // cart → quote-request conversion instead).
-    addRfqDraftItem({
-      productId,
-      slug: productSlug,
-      name: productName,
-      unitPrice: unitPrice ?? null,
-      quantity: resultingPieces ?? qty,
-    });
+    // cart → quote-request conversion instead). Feature 148 (FR-032): the input is floored at
+    // the minimum already; passing it keeps the draft line at or above it after the add too.
+    addRfqDraftItem(
+      {
+        productId,
+        slug: productSlug,
+        name: productName,
+        unitPrice: unitPrice ?? null,
+        quantity: resultingPieces ?? qty,
+      },
+      minOrderQuantity ?? null,
+    );
     setQuoteAdded(true);
     window.setTimeout(() => setQuoteAdded(false), 1500);
   };

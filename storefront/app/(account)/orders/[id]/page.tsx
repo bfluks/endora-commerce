@@ -15,6 +15,7 @@ import { retryOrderPayment } from '../../../../lib/api/payments';
 import { offersCancellation } from '../../../../lib/order-cancel';
 import { offersPaymentRetry, paymentRetryDestination } from '../../../../lib/payment-retry';
 import { getReturnable } from '../../../../lib/api/returns';
+import { orderReturnAction, type OrderReturnAction } from '../../../../lib/returns/returnForm';
 import { listMyOrderInvoices, invoiceDownloadUrl } from '../../../../lib/api/invoices';
 import { getSessionCookie } from '../../../../lib/session';
 import { getServerContext } from '../../../../lib/server-context';
@@ -129,15 +130,15 @@ export default async function OrderConfirmationPage({
   // platform decides it and sends the answer; see `lib/order-cancel.ts`.
   const canCancel = offersCancellation(order);
 
-  // Surface a return/complaint entry point directly on the order — only when the
-  // order is actually eligible (entered a completing status, items still
-  // returnable). Falls back to hidden on any error so the page never breaks.
-  let returnEligible = false;
+  // Surface a return/complaint entry point directly on the order — a return when
+  // any line is returnable, a complaint when none is (feature 148, FR-018/FR-021:
+  // `eligible: false` with `no_returnable_lines` still takes a complaint), nothing
+  // otherwise. Falls back to hidden on any error so the page never breaks.
+  let returnAction: OrderReturnAction | null = null;
   try {
-    const returnable = await getReturnable(session, id);
-    returnEligible = returnable.eligible;
+    returnAction = orderReturnAction(await getReturnable(session, id), order.id, locale);
   } catch {
-    returnEligible = false;
+    returnAction = null;
   }
 
   // Invoices attached to this order (feature 047). Hidden when none are ready.
@@ -209,9 +210,9 @@ export default async function OrderConfirmationPage({
             Order again → quote request
           </button>
         </form>
-        {returnEligible ? (
-          <Link href={`/returns/new?orderId=${order.id}`} className="btn btn--outline btn--sm">
-            Request return / complaint
+        {returnAction ? (
+          <Link href={returnAction.href} className="btn btn--outline btn--sm">
+            {returnAction.label}
           </Link>
         ) : null}
         {(invoices ?? []).map((inv) => (

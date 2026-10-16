@@ -119,3 +119,12 @@ export function cardAddLabel(minOrderQuantity: number | null | undefined, locale
   if (minimum === null) return null;
   return tForLocale(locale)('product.minimum.addToCart').replace('{count}', formatCount(minimum, locale));
 }
+
+/**
+ * The quantity every "add to quote request" starts at (FR-032, US4 #13): the product card's
+ * one-click add, and the initial value of `AddToRfqButton`'s input — the minimum, else 1. The
+ * quote-request draft mirrors the cart, so this is the cart's answer under the draft's name.
+ */
+export function quoteAddQuantity(minOrderQuantity: number | null | undefined): number {
+  return cardAddQuantity(minOrderQuantity);
+}

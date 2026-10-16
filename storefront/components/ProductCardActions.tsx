@@ -11,7 +11,7 @@ import {
 } from '../lib/actions/shoppingList';
 import { addRfqDraftItem } from '../lib/rfqDraft';
 import { addProductToCartAction } from '../lib/actions/cart';
-import { cardAddToCartPayload } from '../lib/orderMinimum';
+import { cardAddToCartPayload, quoteAddQuantity } from '../lib/orderMinimum';
 
 /**
  * Product-card action buttons (add to cart / add to shopping list / add to
@@ -173,8 +173,9 @@ export function ProductCardActions(props: {
       slug: props.productSlug,
       name: props.productName,
       unitPrice: props.unitPrice ?? null,
-      quantity: 1,
-    });
+      // Feature 148 (FR-032, US4 #13) — one click adds the minimum, as "add to cart" does.
+      quantity: quoteAddQuantity(props.minOrderQuantity),
+    }, props.minOrderQuantity ?? null);
     setQuoteState('done');
     window.setTimeout(() => setQuoteState('idle'), 1500);
   };
