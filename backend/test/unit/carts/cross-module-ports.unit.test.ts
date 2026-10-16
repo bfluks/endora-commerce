@@ -8,7 +8,6 @@ import type {
   RfqCustomerPort,
 } from '@endora-commerce/contracts';
 import { describe, expect, it, vi } from 'vitest';
-import { HttpError } from '@endora-commerce/platform/http';
 import { ModuleDisabledError } from '../../../src/kernel/lifecycle/plugin-helpers.js';
 import { ANONYMOUS_PRODUCT_AUDIENCE, ERROR_CODES } from '@endora-commerce/contracts';
 import { Cart } from '../../../../packages/modules/carts/src/backend/entities/cart.entity.js';
