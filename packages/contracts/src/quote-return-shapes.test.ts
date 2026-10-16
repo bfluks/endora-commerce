@@ -7,7 +7,7 @@ import {
   type CreateForCustomerOptions,
   type QuoteRequestLineRecord,
 } from './quote-requests.js';
-import { returnableLineSchema, returnableResponseSchema } from './returns.js';
+import { returnableLineSchema, returnableResponseSchema, type OrderReturnContextLine } from './returns.js';
 
 /**
  * Feature 148 — quote-request, returns and comparison shapes
@@ -128,6 +128,19 @@ describe('returnable lines', () => {
         lines: [{ ...line, returnable: false, notReturnableReason: 'product_not_returnable' }],
       }).reason,
     ).toBe('no_returnable_lines');
+  });
+});
+
+describe('OrderReturnContextLine (port, contracts/returns-api.md §1)', () => {
+  it('carries a required returnableAtPurchase: boolean | null', () => {
+    // Required, not optional: an optional key would widen to `| undefined`.
+    expectTypeOf<OrderReturnContextLine['returnableAtPurchase']>().toEqualTypeOf<boolean | null>();
+    expectTypeOf<OrderReturnContextLine>().toHaveProperty('returnableAtPurchase');
+    const base = { orderItemId: ID1, productId: ID2, name: 'Bolt', purchasedQty: 1, paidUnitAmount: 1, paidLineAmount: 1 };
+    // @ts-expect-error — a line without the stamp is not an OrderReturnContextLine.
+    const missing: OrderReturnContextLine = base;
+    const legacy: OrderReturnContextLine = { ...base, returnableAtPurchase: null };
+    expect([missing.orderItemId, legacy.returnableAtPurchase]).toEqual([ID1, null]);
   });
 });
 

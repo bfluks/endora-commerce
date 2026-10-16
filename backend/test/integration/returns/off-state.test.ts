@@ -1,11 +1,17 @@
-import { afterAll, beforeAll, describe, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { OrderReturnContextPort } from '@endora-commerce/contracts';
 import { RETURNS_SETTING_CODES } from '@endora-commerce/mod-returns';
 import {
   setupBackendServer,
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { expectModuleAbsent } from '../../helpers/off-state.js';
+import { expectModuleAbsent, withModuleOff } from '../../helpers/off-state.js';
+import { OrderItem, Product } from '../../helpers/package-entities.js';
+import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { cartWritePortOf } from '../../helpers/orders-neighbour-ports.js';
+import { checkOutBasket, whenOrderCreatedSettled } from '../../helpers/quote-conversion.js';
+import { buyerChannelIds, createMinimumProduct, minimumFixtureRun } from '../../helpers/order-minimum-fixture.js';
 
 /**
  * `returns` off-state — Constitution XVII item 6.
@@ -71,4 +77,76 @@ describe('returns off-state (Constitution XVII)', () => {
       },
     });
   });
+  /**
+   * Feature 148, Phase 12 (T092; FR-016a, spec edge case *Module activation*,
+   * `contracts/returns-api.md` §4). `orders` records `returnable_at_purchase`
+   * at placement whether `returns` is on or off — it has no edge to `returns`
+   * — so an order placed while `returns` is off answers from its own stamp
+   * once `returns` is switched back on. The line-level `returnable` the
+   * endpoint derives from it is `returns`' policy (Phase 12a, T096); here the
+   * endpoint answers the order and the port reports the stamp it reads.
+   */
+  it('records returnable_at_purchase while returns is off, and answers from it once it is back on', async () => {
+    const em = h.em();
+    const RUN = minimumFixtureRun();
+    const channels = await buyerChannelIds(em);
+    const R = await createMinimumProduct(em, {
+      sku: `ROFF-R-${RUN}`,
+      nameEn: `Returnable ${RUN}`,
+      namePl: `Zwrotny ${RUN}`,
+      returnable: true,
+      channelIds: channels,
+    });
+    const N = await createMinimumProduct(em, {
+      sku: `ROFF-N-${RUN}`,
+      nameEn: `Final ${RUN}`,
+      namePl: `Bezzwrotny ${RUN}`,
+      returnable: false,
+      channelIds: channels,
+    });
+    await em.nativeUpdate(Product, { id: { $in: [R.id, N.id] } }, { manageStock: false });
+    await em
+      .getConnection()
+      .execute(`update "carts" set "status" = 'completed' where "customer_account_id" = ? and "status" = 'active'`, [
+        TEST_CUSTOMER_ID,
+      ]);
+
+    const orderId = await withModuleOff('returns', 'deactivated', async () => {
+      await cartWritePortOf(h).replaceItemsForCustomer(
+        { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID },
+        [
+          { productId: R.id, quantity: 1, unitPrice: '10.00', currency: 'PLN' },
+          { productId: N.id, quantity: 1, unitPrice: '10.00', currency: 'PLN' },
+        ],
+      );
+      const placed = await whenOrderCreatedSettled(h, () => checkOutBasket(h));
+      const lookup = h.em();
+      lookup.clear();
+      const items = await lookup.find(OrderItem, { orderId: placed.id }, { filters: false });
+      expect(Object.fromEntries(items.map((i) => [i.productId, i.returnableAtPurchase]))).toEqual({
+        [R.id]: true,
+        [N.id]: false,
+      });
+      return placed.id;
+    });
+
+    // Back on: the endpoint answers the order, and the port it reads reports
+    // the stamp recorded while `returns` was off.
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/orders/${orderId}/returnable`,
+      cookies: { b2b_session: 'stub-customer-session' },
+      headers: channel,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const lines = (res.json() as { data: { lines: Array<{ productId: string }> } }).data.lines;
+    expect(lines.map((l) => l.productId).sort()).toEqual([R.id, N.id].sort());
+
+    const port = (h.container.cradle as unknown as { orderReturnContextPort: OrderReturnContextPort })
+      .orderReturnContextPort;
+    const context = await port.getReturnContext(orderId);
+    expect(
+      Object.fromEntries((context?.lines ?? []).map((l) => [l.productId, (l as { returnableAtPurchase?: unknown }).returnableAtPurchase])),
+    ).toEqual({ [R.id]: true, [N.id]: false });
+  }, 120_000);
 });

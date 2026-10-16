@@ -40,6 +40,8 @@ export async function createMinimumProduct(
     namePl: string;
     type?: 'simple' | 'configurable';
     minOrderQuantity?: number | null;
+    /** The product's returnable flag (feature 148, FR-003); `false` when omitted, the column default. */
+    returnable?: boolean;
     /** Channels publishing the product; empty = sold nowhere (hidden from every buyer request). */
     channelIds: readonly string[];
   },
@@ -55,7 +57,7 @@ export async function createMinimumProduct(
     allowedOrganizationIds: [],
     attributeValues: { defaultPrice: 10 },
     minOrderQuantity: input.minOrderQuantity ?? null,
-    returnable: false,
+    returnable: input.returnable ?? false,
   });
   await em.persistAndFlush(product);
   for (const channelId of input.channelIds) {
