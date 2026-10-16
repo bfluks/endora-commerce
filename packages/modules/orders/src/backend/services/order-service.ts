@@ -111,6 +111,7 @@ import { releaseOrderAllocations } from './order-allocation-release.js';
 import type { OrderTransitionEffectService } from './order-transition-effect-service.js';
 import { effectsOwedByPaymentStatusChange } from '../domain/transition-effects.js';
 import { judgeQuoteRequestSource } from '../domain/quote-request-source.js';
+import { quoteSourceHonoursExemptions } from '../domain/quote-source-exemption.js';
 import type { InvoicePlacementApplyPort } from '@endora-commerce/mod-invoices/ports';
 import type { PaymentPlacementApplyPort } from '../../ports/index.js';
 import type { CreditLimitPort } from '@endora-commerce/mod-credit-limits/ports';
@@ -148,6 +149,7 @@ import type {
   PaymentMethodReadPort,
   PaymentMethodRecord,
   QuoteRequestReadPort,
+  QuoteRequestRecord,
   ShippingAdapterRegistryPort,
   TransactionalEmailSender,
 } from '@endora-commerce/contracts';
@@ -343,6 +345,24 @@ export interface OrderServiceNeighbourPorts {
    */
   readonly paymentPlacementApply: PaymentPlacementApplyPort;
 }
+
+/**
+ * What placement (and the checkout preview) concluded about the quote request a
+ * basket claims (feature 148, research R19): the source the order may name,
+ * the request as read, and whether its quote-seeded lines keep their exemption.
+ */
+interface QuoteRequestSourceAssessment {
+  sourceQuoteRequestId: string | null;
+  quoteRequest: QuoteRequestRecord | null;
+  honoursExemptions: boolean;
+}
+
+/** A basket with no claim, or a claim nothing can vouch for: no source, no exemption. */
+const NO_QUOTE_REQUEST_SOURCE: QuoteRequestSourceAssessment = Object.freeze({
+  sourceQuoteRequestId: null,
+  quoteRequest: null,
+  honoursExemptions: false,
+});
 
 export class OrderService {
   private readonly accessService: OrderAccessService;
@@ -1300,20 +1320,27 @@ export class OrderService {
   }
 
   /**
-   * The Quote Request an order may name as its source, or `null`
-   * (`specs/143-crm-sales-opportunities/`, FR-100 … FR-103).
+   * The Quote Request an order may name as its source, and whether the basket's
+   * quote-seeded lines keep their exemption from the minimums
+   * (`specs/143-crm-sales-opportunities/`, FR-100 … FR-103; feature 148,
+   * FR-036, research R19).
    *
    * The basket carries a claim, never a fact: `carts` records what the
    * converting module said and judges nothing. So the request is read again
    * here, over the port its owner publishes, and
    * {@link judgeQuoteRequestSource} decides — same Organization, still
    * convertible, an agreed line still on the basket. A refused claim is logged
-   * and dropped; it never refuses the placement, because the buyer is ordering
-   * a basket they are entitled to order and only its provenance is in doubt.
+   * and dropped; it never refuses the placement by itself, because the buyer is
+   * ordering a basket they are entitled to order and only its provenance is in
+   * doubt. What it does take away is the exemption: a seeded line below its
+   * minimum is then refused by the minimum check like any other line, and so is
+   * one whose quote's validity has lapsed ({@link quoteSourceHonoursExemptions}).
    *
    * No `catch` around the port. Presence is asked first, which is the degrade
-   * the manifest declares; a read that fails for any other reason is a failed
-   * placement, not an order silently detached from its quote.
+   * the manifest declares — and with the module off nothing can vouch for the
+   * claim, so no line is exempt (fail-closed, R17); a read that fails for any
+   * other reason is a failed placement, not an order silently detached from
+   * its quote.
    *
    * **One request, one Order — held here and not by the request's status.**
    * `quote_requests` completes a request in reaction to `order.created.v1`,
@@ -1324,36 +1351,73 @@ export class OrderService {
    * its own table whether an Order already names the request, behind a
    * transaction-scoped advisory lock on the request's id. The lock is what
    * makes two concurrent placements take turns: without it both count zero
-   * under `read committed` and both stamp. It is taken only for a basket that
-   * carries a claim, late in the transaction, and released by the commit.
+   * under `read committed`, both stamp, and both keep the exemption.
+   *
+   * **Lock order (feature 148, plan I7).** Called right after the basket and
+   * its products are read — before the minimum check, the value gate, the
+   * business id, any stock reservation and the credit reservation — so the
+   * exemption is granted under the same lock that makes "no Order names it yet"
+   * true, and the lock is held to commit. A placement therefore takes, in this
+   * order: the request's advisory lock (only for a basket that carries a mark),
+   * then the `stock_levels` row locks (`lockAvailabilityForPlacement`), then the
+   * business-id sequence and its own rows. An ordinary basket never takes the
+   * advisory lock, and no placement takes it after a row lock, so no
+   * transaction waits for the advisory lock while holding a row another one
+   * needs: there is no cycle to deadlock on. Two placements of one request
+   * simply take turns for the whole placement instead of its tail.
    */
   async #vouchedQuoteRequestSource(
     tx: EntityManager,
     organizationId: string,
     claimedQuoteRequestId: string | null,
     basketLines: ReadonlyArray<{ productId: string; variantId: string | null; unitPrice: string }>,
-  ): Promise<string | null> {
-    if (!claimedQuoteRequestId) return null;
+  ): Promise<QuoteRequestSourceAssessment> {
+    if (!claimedQuoteRequestId) return NO_QUOTE_REQUEST_SOURCE;
     const quoteRequests = this.neighbours.quoteRequestRead();
-    if (!quoteRequests) return null;
+    if (!quoteRequests) return NO_QUOTE_REQUEST_SOURCE;
     await tx.execute('select pg_advisory_xact_lock(hashtextextended(?, 0))', [
       `orders.source_quote_request_id:${claimedQuoteRequestId}`,
     ]);
-    const alreadyOrdered = (await tx.count(Order, { sourceQuoteRequestId: claimedQuoteRequestId })) > 0;
+    return this.#assessQuoteRequestSource(quoteRequests, {
+      organizationId,
+      claimedQuoteRequestId,
+      basketLines,
+      countOrdersNamingIt: () => tx.count(Order, { sourceQuoteRequestId: claimedQuoteRequestId }),
+      logRefusal: true,
+    });
+  }
+
+  async #assessQuoteRequestSource(
+    quoteRequests: QuoteRequestReadPort,
+    input: {
+      organizationId: string;
+      claimedQuoteRequestId: string;
+      basketLines: ReadonlyArray<{ productId: string; variantId: string | null; unitPrice: string }>;
+      countOrdersNamingIt: () => Promise<number>;
+      logRefusal: boolean;
+    },
+  ): Promise<QuoteRequestSourceAssessment> {
+    const { organizationId, claimedQuoteRequestId } = input;
+    const alreadyOrdered = (await input.countOrdersNamingIt()) > 0;
     const quoteRequest = await quoteRequests.findById(claimedQuoteRequestId);
     const judged = judgeQuoteRequestSource({
       orderOrganizationId: organizationId,
       quoteRequest,
       alreadyOrdered,
       quoteRequestLines: quoteRequest ? await quoteRequests.listItems(quoteRequest.id) : [],
-      basketLines,
+      basketLines: input.basketLines,
     });
-    if (judged.accepted) return claimedQuoteRequestId;
-    this.log?.warn(
-      { claimedQuoteRequestId, organizationId, reason: judged.reason },
-      '[orders] the basket names a quote request this order may not carry; placing it without a source',
-    );
-    return null;
+    const honoursExemptions = quoteSourceHonoursExemptions(judged, quoteRequest, new Date());
+    if (judged.accepted) {
+      return { sourceQuoteRequestId: claimedQuoteRequestId, quoteRequest, honoursExemptions };
+    }
+    if (input.logRefusal) {
+      this.log?.warn(
+        { claimedQuoteRequestId, organizationId, reason: judged.reason },
+        '[orders] the basket names a quote request this order may not carry; placing it without a source',
+      );
+    }
+    return { sourceQuoteRequestId: null, quoteRequest, honoursExemptions };
   }
 
   async placeOrder(
@@ -1434,6 +1498,17 @@ export class OrderService {
       if (!cart || items.length === 0) {
         throw new HttpError(409, ERROR_CODES.CART_EMPTY, 'Cart is empty.');
       }
+
+      // The quote source, vouched under its lock right after the basket read —
+      // before the value gate, the business id, any stock reservation and the
+      // credit reservation (feature 148, research R19; lock order: see
+      // `#vouchedQuoteRequestSource`). Its answer is reused for the stamp below.
+      const quoteSource = await this.#vouchedQuoteRequestSource(
+        tx,
+        ctx.organizationId,
+        cart.sourceQuoteRequestId,
+        items,
+      );
 
       // A cart line is ordered at its stored unit price — copied onto the order
       // line below, and the figure every total here is computed from. So the
@@ -1825,12 +1900,8 @@ export class OrderService {
         ? await this.businessId.generate(tx, channel.id)
         : undefined;
 
-      const sourceQuoteRequestId = await this.#vouchedQuoteRequestSource(
-        tx,
-        ctx.organizationId,
-        cart.sourceQuoteRequestId,
-        items,
-      );
+      // Vouched once, at the top of the transaction under the request's lock.
+      const { sourceQuoteRequestId } = quoteSource;
 
       const order = tx.create(Order, {
         organizationId: ctx.organizationId,
