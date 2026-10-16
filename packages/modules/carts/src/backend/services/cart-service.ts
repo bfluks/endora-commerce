@@ -3,7 +3,10 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ANONYMOUS_PRODUCT_AUDIENCE,
   ERROR_CODES,
+  isOrderMinimumEligibleType,
   isProductVisibleTo,
+  type CartBatchLineInput,
+  type CartBatchLineOutcome,
   type CartMergeOutcome,
   type ProductAudience,
 } from '@endora-commerce/contracts';
@@ -20,7 +23,7 @@ import type {
 } from '@endora-commerce/contracts';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
-import { outOfRequestChannel } from '@endora-commerce/platform/kernel';
+import { outOfRequestChannel, rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import type { CartApprovalService } from './cart-approval-service.js';
 import type { CartAuditService } from './cart-audit-service.js';
 import type { CartRecomputeCache } from './cart-recompute-cache.js';
@@ -30,7 +33,13 @@ import {
   type CartLinePriceAnswer,
   type CartPricingContext,
 } from './cart-line-pricing.js';
-import { assertCartChangeMeetsMinimums, toCartMinimumItem } from './cart-minimums.js';
+import {
+  assertCartChangeMeetsMinimums,
+  judgeCartBatch,
+  toCartMinimumItem,
+  type CartBatchRejection,
+} from './cart-minimums.js';
+import { pickLocalized } from './localized-name.js';
 
 /**
  * CartService (T125).
@@ -80,6 +89,14 @@ export interface CartLineInput {
   packagingUnitId?: string;
   /** Set only by a caller that names the channel itself (admin order creation). */
   salesChannelId?: string;
+}
+
+/** A line that has passed `addItem`'s preconditions (feature 148, R8). */
+interface ResolvedCartLine {
+  product: CatalogProductRecord;
+  packagingUnit: CatalogPackagingUnitRecord | null;
+  /** Base pieces. */
+  effectiveQuantity: number;
 }
 
 export class CartService {
@@ -231,19 +248,13 @@ export class CartService {
     options: { language?: string } = {},
   ): Promise<{ cart: Cart; items: CartItem[] }> {
     const em = this.emFactory();
+    assertCartActor(actor);
     const cart = actor.customer
       ? await this.#getOrCreateForCustomerOn(em, actor.customer)
-      : actor.anonymousToken
-        ? await this.getOrCreateForAnon(em, actor.anonymousToken)
-        : (() => {
-            throw new HttpError(
-              401,
-              ERROR_CODES.UNAUTHORIZED,
-              'Cart requires either a customer session or an anonymous cart token.',
-            );
-          })();
+      : await this.getOrCreateForAnon(em, actor.anonymousToken!);
 
-    const { product, packagingUnit, effectiveQuantity } = await this.#resolveLine(actor, input);
+    const resolved = await this.#resolveLine(actor, input);
+    const { product, packagingUnit, effectiveQuantity } = resolved;
 
     // Feature 148 (FR-006, FR-006a, FR-028) — the order minimums, judged on the
     // basket as this add would leave it. After the resolver, so a product this
@@ -266,6 +277,169 @@ export class CartService {
       language: options.language,
     });
 
+    await this.#writeLine(em, cart, actor, input, resolved);
+
+    if (this.approvalService && actor.customer) {
+      await this.approvalService.maybeReArm(cart, {
+        customerAccountId: actor.customer.customerAccountId,
+      });
+    }
+
+    await this.#recordLineAdded(cart, actor, input);
+    await this.#invalidateRecomputeCache(cart.id);
+
+    const items = await em.find(CartItem, { cartId: cart.id });
+    return { cart, items };
+  }
+
+  /**
+   * Feature 148 (research R8, `contracts/cart-and-checkout-api.md` §4) — add
+   * several lines as one batch, the road every batch path into a cart takes.
+   *
+   * 1. **Resolve every line first**, through {@link #resolveLine} — exactly
+   *    `addItem`'s preconditions. A line that fails keeps the refusal it met
+   *    (the unknown-id `404` for a product this shopper may not see), never a
+   *    name or a minimum, and takes no part in step 2 (threat F1, FR-035). With
+   *    `'throw'` the first such failure is thrown here, before the cart is even
+   *    created — nothing is written.
+   * 2. **Judge the resolved lines with the cart, once** — two linear passes
+   *    ({@link judgeCartBatch}) over one cart read and one packaging-unit read
+   *    over the vetted, eligible ids (F12). Lines below a minimum are reported
+   *    `below_minimum` and not added, in either mode; lines already in the cart
+   *    are never rejected.
+   * 3. **Add the accepted lines** through `addItem`'s own write (line cap,
+   *    quote-only and pricing refusals unchanged). With `'throw'` a refusal here
+   *    is thrown as `addItem` throws it, the earlier lines staying added; with
+   *    `'report'` it is the line's `failed` outcome.
+   *
+   * `ModuleDisabledError` is always thrown. More than {@link CART_MAX_LINES}
+   * lines can never fit a cart and are refused before anything is resolved.
+   */
+  async addItems(
+    actor: { customer?: CustomerContext; anonymousToken?: string },
+    lines: readonly CartBatchLineInput[],
+    options: { onLineError: 'throw' | 'report'; language?: string },
+  ): Promise<{ cart: Cart; items: CartItem[]; outcomes: CartBatchLineOutcome[] }> {
+    if (lines.length > CART_MAX_LINES) {
+      throw new HttpError(422, ERROR_CODES.CART_LINE_CAP_EXCEEDED, 'cart_line_cap_exceeded', {
+        maximum: CART_MAX_LINES,
+      });
+    }
+    assertCartActor(actor);
+    const outcomes = new Map<number, CartBatchLineOutcome>();
+
+    // Step 1 — resolution, before any write.
+    const resolvedLines: Array<{ index: number; input: CartBatchLineInput; resolved: ResolvedCartLine }> = [];
+    for (const [index, input] of lines.entries()) {
+      try {
+        resolvedLines.push({ index, input, resolved: await this.#resolveLine(actor, input) });
+      } catch (err) {
+        // A presence answer is about the whole batch, never one line (issue #124).
+        rethrowIfModuleDisabled(err);
+        if (options.onLineError === 'throw' || !(err instanceof HttpError)) throw err;
+        outcomes.set(index, failedOutcome(index, err));
+      }
+    }
+
+    const em = this.emFactory();
+    const cart = actor.customer
+      ? await this.#getOrCreateForCustomerOn(em, actor.customer)
+      : await this.getOrCreateForAnon(em, actor.anonymousToken!);
+
+    // Step 2 — the minimums, over the vetted records only.
+    const rejections = await this.#judgeBatch(em, cart, resolvedLines);
+
+    // Step 3 — the accepted lines, in input order.
+    let added = 0;
+    let failure: unknown = null;
+    for (const { index, input, resolved } of resolvedLines) {
+      const rejection = rejections.get(index);
+      if (rejection) {
+        outcomes.set(index, belowMinimumOutcome(index, rejection, resolved.product, options.language));
+        continue;
+      }
+      try {
+        await this.#writeLine(em, cart, actor, input, resolved);
+      } catch (err) {
+        rethrowIfModuleDisabled(err);
+        if (options.onLineError === 'throw' || !(err instanceof HttpError)) {
+          failure = err;
+          break;
+        }
+        outcomes.set(index, failedOutcome(index, err));
+        continue;
+      }
+      added += 1;
+      await this.#recordLineAdded(cart, actor, input);
+      outcomes.set(index, { index, status: 'added' });
+    }
+
+    // The lines already written stay written, so the basket's bookkeeping
+    // follows them even when a later line is about to be thrown.
+    if (added > 0) {
+      if (this.approvalService && actor.customer) {
+        await this.approvalService.maybeReArm(cart, {
+          customerAccountId: actor.customer.customerAccountId,
+        });
+      }
+      await this.#invalidateRecomputeCache(cart.id);
+    }
+    if (failure !== null) throw failure;
+
+    const items = await em.find(CartItem, { cartId: cart.id });
+    return {
+      cart,
+      items,
+      outcomes: Array.from(outcomes.values()).sort((a, b) => a.index - b.index),
+    };
+  }
+
+  /**
+   * R8 step 2 — one cart read and one packaging-unit read, over the products the
+   * resolver has already vetted and only the eligible ones among them (F12).
+   */
+  async #judgeBatch(
+    em: EntityManager,
+    cart: Cart,
+    resolvedLines: ReadonlyArray<{ index: number; input: CartBatchLineInput; resolved: ResolvedCartLine }>,
+  ): Promise<Map<number, CartBatchRejection>> {
+    if (resolvedLines.length === 0) return new Map();
+    const products = new Map(resolvedLines.map(({ resolved }) => [resolved.product.id, resolved.product]));
+    const eligibleIds = [...products.values()]
+      .filter((product) => isOrderMinimumEligibleType(product.type))
+      .map((product) => product.id);
+    const packagingUnits =
+      eligibleIds.length > 0 ? await this.catalogProducts.listPackagingUnitsByProductIds(eligibleIds) : [];
+    return judgeCartBatch(
+      { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
+      (await em.find(CartItem, { cartId: cart.id })).map(toCartMinimumItem),
+      resolvedLines.map(({ index, resolved }) => ({
+        index,
+        productId: resolved.product.id,
+        quantity: resolved.effectiveQuantity,
+        packagingUnitId: resolved.packagingUnit?.id ?? null,
+        packagingUnitBaseQuantity: resolved.packagingUnit?.baseQuantity ?? null,
+      })),
+      { products: [...products.values()], packagingUnits },
+    );
+  }
+
+  /**
+   * The write of one resolved line, the minimum already decided: bump the line
+   * matching `(product, variant, unit)` or create one behind the line cap and the
+   * quote-only refusal, priced through `price_lists`.
+   */
+  async #writeLine(
+    em: EntityManager,
+    cart: Cart,
+    actor: { customer?: CustomerContext; anonymousToken?: string },
+    input: CartLineInput,
+    resolved: ResolvedCartLine,
+  ): Promise<void> {
+    // command-coverage-ignore: the ephemeral cart's own line write; its typed
+    // `line_added` audit row is recorded by the public caller (`addItem`,
+    // `addItems`) through `#recordLineAdded` once the write has succeeded.
+    const { product, packagingUnit, effectiveQuantity } = resolved;
     // If the same product+variant+packaging-unit is already in the cart, bump
     // quantity. A packaging-unit line and a single-piece line of the same
     // product stay distinct (different `packagingUnitId`).
@@ -295,70 +469,65 @@ export class CartService {
       existing.currency = price.currency;
       cart.lastActivityAt = new Date();
       await em.flush();
-    } else {
-      // Feature 027 FR-001: enforce the 200-line cap on the 201st distinct
-      // (productId, variantId) pair. Foundation duplicate-summation above
-      // does not trigger the cap.
-      const currentLineCount = await em.count(CartItem, { cartId: cart.id });
-      if (currentLineCount >= CART_MAX_LINES) {
-        throw new HttpError(
-          422,
-          ERROR_CODES.CART_LINE_CAP_EXCEEDED,
-          'cart_line_cap_exceeded',
-        );
-      }
-      // T084 / issue #236 — a product sold on request only is refused, and since
-      // the price is what the order is placed at, so is a product nobody priced
-      // (it used to become a line at `0.00`).
-      const price = await this.#orderablePriceOrRefuse(pricingCtx, {
-        product,
-        variantId: input.variantId ?? null,
-        quantity: effectiveQuantity,
-      });
-      const item = em.create(CartItem, {
-        cartId: cart.id,
-        productId: product.id,
+      return;
+    }
+    // Feature 027 FR-001: enforce the 200-line cap on the 201st distinct
+    // (productId, variantId) pair. Foundation duplicate-summation above
+    // does not trigger the cap.
+    const currentLineCount = await em.count(CartItem, { cartId: cart.id });
+    if (currentLineCount >= CART_MAX_LINES) {
+      throw new HttpError(
+        422,
+        ERROR_CODES.CART_LINE_CAP_EXCEEDED,
+        'cart_line_cap_exceeded',
+      );
+    }
+    // T084 / issue #236 — a product sold on request only is refused, and since
+    // the price is what the order is placed at, so is a product nobody priced
+    // (it used to become a line at `0.00`).
+    const price = await this.#orderablePriceOrRefuse(pricingCtx, {
+      product,
+      variantId: input.variantId ?? null,
+      quantity: effectiveQuantity,
+    });
+    const item = em.create(CartItem, {
+      cartId: cart.id,
+      productId: product.id,
+      ...(input.variantId ? { variantId: input.variantId } : {}),
+      ...(packagingUnit
+        ? {
+            packagingUnitId: packagingUnit.id,
+            packagingUnitName: packagingUnit.name,
+            packagingUnitBaseQuantity: packagingUnit.baseQuantity,
+          }
+        : {}),
+      quantity: effectiveQuantity,
+      unitPrice: price.unitPrice,
+      currency: price.currency,
+    });
+    em.persist(item);
+    cart.lastActivityAt = new Date();
+    await em.flush();
+  }
+
+  /** The typed `line_added` audit row of one added line, when auditing is wired. */
+  async #recordLineAdded(
+    cart: Cart,
+    actor: { customer?: CustomerContext; anonymousToken?: string },
+    input: CartLineInput,
+  ): Promise<void> {
+    if (!this.auditService) return;
+    await this.auditService.record({
+      cartId: cart.id,
+      actorType: actor.customer ? 'customer' : 'system',
+      ...(actor.customer ? { actorId: actor.customer.customerAccountId } : {}),
+      action: 'line_added',
+      metadata: {
+        productId: input.productId,
         ...(input.variantId ? { variantId: input.variantId } : {}),
-        ...(packagingUnit
-          ? {
-              packagingUnitId: packagingUnit.id,
-              packagingUnitName: packagingUnit.name,
-              packagingUnitBaseQuantity: packagingUnit.baseQuantity,
-            }
-          : {}),
-        quantity: effectiveQuantity,
-        unitPrice: price.unitPrice,
-        currency: price.currency,
-      });
-      em.persist(item);
-      cart.lastActivityAt = new Date();
-      await em.flush();
-    }
-
-    if (this.approvalService && actor.customer) {
-      await this.approvalService.maybeReArm(cart, {
-        customerAccountId: actor.customer.customerAccountId,
-      });
-    }
-
-    if (this.auditService) {
-      await this.auditService.record({
-        cartId: cart.id,
-        actorType: actor.customer ? 'customer' : 'system',
-        ...(actor.customer ? { actorId: actor.customer.customerAccountId } : {}),
-        action: 'line_added',
-        metadata: {
-          productId: input.productId,
-          ...(input.variantId ? { variantId: input.variantId } : {}),
-          quantity: input.quantity,
-        },
-      });
-    }
-
-    await this.#invalidateRecomputeCache(cart.id);
-
-    const items = await em.find(CartItem, { cartId: cart.id });
-    return { cart, items };
+        quantity: input.quantity,
+      },
+    });
   }
 
   /**
@@ -372,11 +541,7 @@ export class CartService {
   async #resolveLine(
     actor: { customer?: CustomerContext; anonymousToken?: string },
     input: CartLineInput,
-  ): Promise<{
-    product: CatalogProductRecord;
-    packagingUnit: CatalogPackagingUnitRecord | null;
-    effectiveQuantity: number;
-  }> {
+  ): Promise<ResolvedCartLine> {
     // Issue #86 — a refusal of its own, not `VALIDATION_FAILED`: the envelope
     // never replaces that code's message, so the sentence below was answered in
     // English whatever the reader asked for. `details.minimum` is what both
@@ -845,4 +1010,36 @@ function cartAudience(actor: {
 }): ProductAudience {
   if (!actor.customer) return ANONYMOUS_PRODUCT_AUDIENCE;
   return { organizationId: actor.customer.organizationId, authenticated: true };
+}
+
+/** `401` for a cart operation with neither a customer session nor an anonymous token. */
+function assertCartActor(actor: { customer?: CustomerContext; anonymousToken?: string }): void {
+  if (actor.customer || actor.anonymousToken) return;
+  throw new HttpError(
+    401,
+    ERROR_CODES.UNAUTHORIZED,
+    'Cart requires either a customer session or an anonymous cart token.',
+  );
+}
+
+/** A batch line's refusal as its outcome: the status, code and message it met, nothing else (F1). */
+function failedOutcome(index: number, err: HttpError): CartBatchLineOutcome {
+  return { index, status: 'failed', error: { status: err.statusCode, code: err.code, message: err.message } };
+}
+
+function belowMinimumOutcome(
+  index: number,
+  rejection: CartBatchRejection,
+  product: CatalogProductRecord,
+  language: string | undefined,
+): CartBatchLineOutcome {
+  return {
+    index,
+    status: 'below_minimum',
+    productId: rejection.productId,
+    productName: pickLocalized(product.name, language),
+    kind: rejection.kind,
+    minimum: rejection.minimum,
+    ...(rejection.kind === 'packaging_unit' ? { packagingUnitName: rejection.packagingUnitName } : {}),
+  };
 }

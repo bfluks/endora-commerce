@@ -80,6 +80,15 @@ export function createCartWritePort(
       return { cart: toCartRecord(result.cart), items: result.items.map(toCartItemRecord) };
     },
 
+    async addItems(actor, lines, options) {
+      const result = await getService().addItems(actor, lines, options);
+      return {
+        cart: toCartRecord(result.cart),
+        items: result.items.map(toCartItemRecord),
+        outcomes: result.outcomes,
+      };
+    },
+
     clearForCustomer: (ctx) => getService().clearForCustomer(ctx),
 
     async replaceItemsForCustomer(ctx, lines, options): Promise<CartWithItems> {

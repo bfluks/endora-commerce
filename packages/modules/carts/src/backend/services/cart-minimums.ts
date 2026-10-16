@@ -207,6 +207,82 @@ export async function assertCartChangeMeetsMinimums(
   throw new HttpError(422, ERROR_CODES[refusal.code], refusal.message, details);
 }
 
+/** One resolved line of a batch add, as the batch judgement reads it. */
+export interface CartBatchMinimumLine {
+  /** The line's position in the caller's batch. */
+  index: number;
+  productId: string;
+  /** Base pieces — the units already multiplied out. */
+  quantity: number;
+  packagingUnitId: string | null;
+  packagingUnitBaseQuantity: number | null;
+}
+
+/** Why a batch line is not added: the minimum it would leave unmet. */
+export type CartBatchRejection = Exclude<OrderMinimumViolation, { kind: 'product_unavailable' }>;
+
+const batchKey = (index: number): string => `batch:${index}`;
+
+/**
+ * Judges a batch's resolved lines together with the cart (research R8 step 2,
+ * D1): the product total across every variant and every line of the batch and
+ * the basket.
+ *
+ * Each batch line is its own minimum line, never merged into a matching basket
+ * line: a violation is then hung on the batch line's own key, and a basket line
+ * — which a batch never rejects — keeps its FR-028 exemption as it stands.
+ * Only the basket lines of the batch's products are read; products never couple.
+ *
+ * Two linear passes, the fix-point's exact answer: pass 1 rejects every batch
+ * line with a `packaging_unit` violation; pass 2 re-evaluates without them and
+ * rejects every surviving batch line with a `pieces` violation. Rejecting on
+ * pieces rejects every batch line of that product, so it cannot create a new
+ * unit violation on a line that stays.
+ *
+ * `rules` must hold only records the caller has already vetted (threat F1, F12).
+ * Answers the rejected lines by batch index; an absent index is admitted.
+ */
+export function judgeCartBatch(
+  cart: CartQuoteMark,
+  items: readonly CartMinimumItem[],
+  batch: readonly CartBatchMinimumLine[],
+  rules: OrderMinimumRules,
+): Map<number, CartBatchRejection> {
+  const rejected = new Map<number, CartBatchRejection>();
+  if (batch.length === 0) return rejected;
+  const batchProductIds = new Set(batch.map((line) => line.productId));
+  const basket = items
+    .filter((item) => batchProductIds.has(item.productId))
+    .map((item) => lineOf(cart, item.id, item, item.quantity));
+  const indexByKey = new Map<string, number>();
+  const batchLines: OrderMinimumLine[] = batch.map((line) => {
+    const key = batchKey(line.index);
+    indexByKey.set(key, line.index);
+    return {
+      key,
+      productId: line.productId,
+      quantity: line.quantity,
+      packagingUnitId: line.packagingUnitId,
+      packagingUnitBaseQuantity: line.packagingUnitBaseQuantity,
+      exempt: false,
+    };
+  });
+
+  const rejectOn = (lines: OrderMinimumLine[], kind: CartBatchRejection['kind']): void => {
+    for (const violation of evaluateOrderMinimums(lines, rules)) {
+      if (violation.kind !== kind) continue;
+      const index = indexByKey.get(violation.key);
+      if (index !== undefined && !rejected.has(index)) rejected.set(index, violation);
+    }
+  };
+  rejectOn([...basket, ...batchLines], 'packaging_unit');
+  rejectOn(
+    [...basket, ...batchLines.filter((line) => !rejected.has(indexByKey.get(line.key)!))],
+    'pieces',
+  );
+  return rejected;
+}
+
 /** What the full cart view reports per line (`contracts/cart-and-checkout-api.md` §3). */
 export interface CartLineMinimumView {
   /** The product's current pieces minimum for the eligible types; `null` = none. */

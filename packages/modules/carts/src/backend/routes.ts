@@ -573,9 +573,11 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
       if (!actor.customer) {
         throw new HttpError(401, ERROR_CODES.UNAUTHORIZED, 'Sign-in required.');
       }
+      const language = parsePreferredLanguage(request.headers['accept-language']);
       const result = await deps.cartConversionService.createCartFromQuoteRequest(
         request.params.quoteRequestId,
         actor.customer,
+        language ? { language } : {},
       );
       return { data: result };
     },
