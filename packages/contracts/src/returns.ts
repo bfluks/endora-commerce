@@ -194,10 +194,10 @@ export const returnableLineSchema = z.object({
   currency: z.string().length(3),
   /**
    * Feature 148 — may this line be included in a `return` case? (complaints are never
-   * restricted). Optional only until `returns` emits it (feature 148 Phase 12a): the
-   * contract makes it always present.
+   * restricted). From the value recorded at placement; a line placed before the feature
+   * is returnable (FR-025).
    */
-  returnable: z.boolean().optional(),
+  returnable: z.boolean(),
   notReturnableReason: z.enum(['product_not_returnable']).optional(),
 });
 

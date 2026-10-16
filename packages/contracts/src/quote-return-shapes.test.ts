@@ -118,6 +118,10 @@ describe('returnable lines', () => {
     );
   });
 
+  it('requires returnable (feature 148 Phase 12a, contracts/returns-api.md §2)', () => {
+    expect(returnableLineSchema.safeParse(line).success).toBe(false);
+  });
+
   it('the response reason has no_returnable_lines', () => {
     expect(returnableResponseSchema.shape.reason.unwrap().options).toContain('no_returnable_lines');
     expect(
