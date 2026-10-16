@@ -10,6 +10,7 @@ import {
 import type { FulfilmentStrategy } from './inventory.js';
 import type { BulkImportReport } from './import-export.js';
 import type { AttributeScope } from './product-value-resolver.js';
+import { ORDER_MINIMUM_MAX } from './order-minimums.js';
 
 /**
  * Catalog module contracts — Source of truth per Principle V.
@@ -245,6 +246,12 @@ export const productSummarySchema = z.object({
    * indication (band + in-stock flag), present for bound and unbound keys.
    */
   availability: productAvailabilitySchema.optional(),
+  /**
+   * Feature 148 — the product's pieces minimum; `null` = none. Emitted only for
+   * `simple` / `configurable` products (else `null`). Optional so every producer
+   * written before it still compiles.
+   */
+  minOrderQuantity: z.number().int().positive().nullable().optional(),
 });
 export type ProductSummary = z.infer<typeof productSummarySchema>;
 
@@ -467,6 +474,8 @@ export const productDetailSchema = productSummarySchema.extend({
         baseQuantity: z.number().int().positive(),
         position: z.number().int().nonnegative(),
         isDefault: z.boolean(),
+        /** Feature 148 — minimum units of this unit per order of the product; `null` = none. */
+        minOrderUnits: z.number().int().positive().nullable().optional(),
       }),
     )
     .optional(),
@@ -646,6 +655,13 @@ const baseProductRequestObject = z.object({
     .nullable()
     .optional(),
   fulfilmentStrategyWarehouseOrder: z.array(uuidSchema).nullable().optional(),
+  /**
+   * Feature 148 — pieces minimum; `null` clears. Simple / configurable only (else
+   * 422 VALIDATION_FAILED, `details.field`, from the service).
+   */
+  minOrderQuantity: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
+  /** Feature 148 — may `return`-kind cases include this product? Every type. */
+  returnable: z.boolean().optional(),
 });
 
 export const createProductRequestSchema = baseProductRequestObject.refine(
@@ -734,6 +750,8 @@ const bulkUpdateFieldsObject = z.object({
   // selected product.
   attributeSetId: uuidSchema.nullable().optional(),
   attributeValues: z.record(z.string(), z.unknown()).optional(),
+  /** Feature 148 — set (or unset) the returnable flag on every selected product. */
+  returnable: z.boolean().optional(),
 });
 
 export const bulkUpdateProductsRequestSchema = z.object({
@@ -751,6 +769,7 @@ export const bulkUpdateProductsRequestSchema = z.object({
       f.salesChannels !== undefined ||
       f.categories !== undefined ||
       f.attributeSetId !== undefined ||
+      f.returnable !== undefined ||
       (f.attributeValues !== undefined && Object.keys(f.attributeValues).length > 0),
     { message: 'at least one field must be present' },
   ),
@@ -1563,6 +1582,11 @@ export const packagingUnitSchema = z.object({
   baseQuantity: z.number().int().positive(),
   position: z.number().int().nonnegative(),
   isDefault: z.boolean(),
+  /**
+   * Feature 148 — minimum units of this unit per order of the product; `null` = none.
+   * Always emitted by `catalog`; optional so other builders of the DTO keep compiling.
+   */
+  minOrderUnits: z.number().int().positive().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -1574,6 +1598,8 @@ export const createPackagingUnitRequestSchema = z
     baseQuantity: z.number().int().positive(),
     isDefault: z.boolean().optional(),
     position: z.number().int().nonnegative().optional(),
+    /** Feature 148 — minimum number of this unit per order of the product; `null` clears. */
+    minOrderUnits: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
   })
   .strict();
 export type CreatePackagingUnitRequest = z.infer<typeof createPackagingUnitRequestSchema>;
@@ -1584,6 +1610,8 @@ export const updatePackagingUnitRequestSchema = z
     baseQuantity: z.number().int().positive().optional(),
     isDefault: z.boolean().optional(),
     position: z.number().int().nonnegative().optional(),
+    /** Feature 148 — minimum number of this unit per order of the product; `null` clears. */
+    minOrderUnits: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
   })
   .strict();
 export type UpdatePackagingUnitRequest = z.infer<typeof updatePackagingUnitRequestSchema>;

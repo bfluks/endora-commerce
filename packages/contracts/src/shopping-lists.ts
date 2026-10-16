@@ -96,7 +96,9 @@ export type ConvertShoppingListRequest = z.infer<typeof convertShoppingListReque
 export const conversionSkipSchema = z.object({
   itemId: uuidSchema,
   productId: uuidSchema,
-  reason: z.enum(['product_archived', 'variant_unavailable', 'product_not_found']),
+  reason: z.enum(['product_archived', 'variant_unavailable', 'product_not_found', 'below_minimum']),
+  /** Feature 148 — on `below_minimum`: the minimum the line missed. */
+  minimum: z.number().int().positive().optional(),
 });
 export type ConversionSkip = z.infer<typeof conversionSkipSchema>;
 

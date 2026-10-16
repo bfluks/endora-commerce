@@ -73,6 +73,20 @@ export const quoteRequestItemSchema = z.object({
   /** Feature 043 packaging-unit snapshot, already stored on the row; both replies. */
   packagingUnitName: z.string().nullable().optional(),
   packagingUnitBaseQuantity: z.number().int().positive().nullable().optional(),
+  /** Feature 148 — the resolved catalogue unit; admin and customer replies. */
+  packagingUnitId: uuidSchema.nullable().optional(),
+  /**
+   * Feature 148 (FR-030) — **admin replies only**: set when the line is below its
+   * product's current minimum. Informs only.
+   */
+  minimumWarning: z
+    .object({
+      kind: z.enum(['pieces', 'packaging_unit']),
+      minimum: z.number().int().positive(),
+      packagingUnitName: z.string().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 export type QuoteRequestItem = z.infer<typeof quoteRequestItemSchema>;
 
@@ -452,6 +466,8 @@ export const createQuoteRequestLineSchema = z.object({
   /** Feature 043 — snapshot when the line was added as a packaging unit. */
   packagingUnitName: z.string().max(160).optional(),
   packagingUnitBaseQuantity: z.number().int().positive().optional(),
+  /** Feature 148 (FR-026) — the catalogue unit the line is ordered in. Wins over name/base quantity. */
+  packagingUnitId: uuidSchema.optional(),
 });
 export type CreateQuoteRequestLine = z.infer<typeof createQuoteRequestLineSchema>;
 
@@ -838,6 +854,14 @@ export interface CreateForCustomerOptions {
    *   most two decimals, and its `currency` matches `/^[A-Z]{3}$/`.
    */
   lineReferencePrices?: ReadonlyArray<{ amount: string; currency: string } | null>;
+  /**
+   * Feature 148 (FR-012, FR-030) — `'enforce'` (default): a buyer is writing, minimums refuse.
+   * `'warn'`: a sales representative is writing through the buyer's path (admin clone-to-quote,
+   * admin quick-order build); nothing is refused for minimums and the admin read flags the lines.
+   * In-process only: no HTTP body can carry it (`createQuoteRequestSchema` has no such key and
+   * strips it). Packaging validation (FR-026) applies either way.
+   */
+  minimums?: 'enforce' | 'warn';
 }
 
 export interface RfqCustomerPort {

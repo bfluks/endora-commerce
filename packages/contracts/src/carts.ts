@@ -124,6 +124,8 @@ export const cartDroppedLineReasonSchema = z.enum([
   'out_of_stock',
   'no_price_in_customer_list',
   'removed_by_conversion',
+  /** Feature 148 — the line would leave its product below a minimum (R8). */
+  'below_minimum',
 ]);
 export type CartDroppedLineReason = z.infer<typeof cartDroppedLineReasonSchema>;
 
@@ -159,6 +161,17 @@ export const cartViewLineSchema = z.object({
   packagingUnitName: z.string().nullable().optional(),
   packagingUnitBaseQuantity: z.number().int().positive().nullable().optional(),
   displayName: z.string().nullable().optional(),
+  /** Feature 148 — the product's current pieces minimum (null = none); the storefront's input floor. */
+  minOrderQuantity: z.number().int().positive().nullable().optional(),
+  /** Feature 148 — set when this line is below a current minimum and not exempt (FR-013, FR-028). */
+  belowMinimum: z
+    .object({
+      kind: z.enum(['pieces', 'packaging_unit']),
+      minimum: z.number().int().positive(),
+      packagingUnitName: z.string().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 export type CartViewLine = z.infer<typeof cartViewLineSchema>;
 
@@ -185,6 +198,8 @@ const cartDroppedLineSchema = z.object({
   productId: uuidSchema,
   productName: z.string(),
   reason: cartDroppedLineReasonSchema,
+  /** Feature 148 — the minimum a `below_minimum` line missed. */
+  minimum: z.number().int().positive().optional(),
 });
 
 /** Feature 045 — one applied promotion's contribution to the cart discount. */

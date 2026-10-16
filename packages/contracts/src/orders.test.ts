@@ -112,9 +112,11 @@ describe('admin order preview message codes', () => {
     'PRODUCT_NOT_VISIBLE_TO_CUSTOMER',
     'PRODUCT_NOT_IN_SALES_CHANNEL',
     'QUOTE_ONLY',
+    // Feature 148 — appended last: a line with an earlier code keeps that code.
+    'BELOW_MINIMUM_QUANTITY',
   ];
 
-  it('orders the four codes by precedence, first match wins', () => {
+  it('orders the five codes by precedence, first match wins', () => {
     expect([...ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE]).toEqual(PRECEDENCE);
   });
 

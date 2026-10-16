@@ -370,6 +370,23 @@ export const orderPreviewTotalResponseSchema = z.object({
   discountTotal: z.number(),
   total: z.number(),
   currency: z.string(),
+  /**
+   * Feature 148 — basket lines placement will refuse. Exemptions apply only when the basket's quote
+   * source is confirmed valid now (FR-036); `product_unavailable` is a line whose product record is
+   * gone (FR-037), with no name or minimum.
+   */
+  belowMinimumLines: z
+    .array(
+      z.object({
+        cartItemId: uuidSchema,
+        productId: uuidSchema,
+        productName: z.string().optional(),
+        kind: z.enum(['pieces', 'packaging_unit', 'product_unavailable']),
+        minimum: z.number().int().positive().optional(),
+        packagingUnitName: z.string().optional(),
+      }),
+    )
+    .default([]),
 });
 export type OrderPreviewTotalResponse = z.infer<typeof orderPreviewTotalResponseSchema>;
 
@@ -648,6 +665,14 @@ export const adminCreateOrderInlineAddressSchema = z.object({
 });
 export type AdminCreateOrderInlineAddress = z.infer<typeof adminCreateOrderInlineAddressSchema>;
 
+/**
+ * Feature 148 (FR-038, research R20) — the most items admin create-order and the admin
+ * preview accept. Enforced by the service / handler as its first step (`422
+ * VALIDATION_FAILED`, `details: { code: 'too_many_items', maximum }`), deliberately not by
+ * a schema `.max()`, which would answer 400.
+ */
+export const ADMIN_ORDER_MAX_ITEMS = 200;
+
 export const adminCreateOrderRequestSchema = z
   .object({
     customerAccountId: uuidSchema,
@@ -801,6 +826,8 @@ export const ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE = [
   'PRODUCT_NOT_VISIBLE_TO_CUSTOMER',
   'PRODUCT_NOT_IN_SALES_CHANNEL',
   'QUOTE_ONLY',
+  /** Feature 148 — the line is below its product's pieces or packaging-unit minimum. */
+  'BELOW_MINIMUM_QUANTITY',
 ] as const;
 export const adminOrderPreviewMessageCodeSchema = z.enum(ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE);
 export type AdminOrderPreviewMessageCode = z.infer<typeof adminOrderPreviewMessageCodeSchema>;
@@ -820,12 +847,20 @@ export const adminOrderPreviewResponseSchema = z.object({
    * One entry per unavailable line, never more: its `code` is the first of
    * {@link ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE} that applies —
    * `PRODUCT_NOT_FOUND`, `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`,
-   * `PRODUCT_NOT_IN_SALES_CHANNEL`, `QUOTE_ONLY`. `code` is deliberately a plain
+   * `PRODUCT_NOT_IN_SALES_CHANNEL`, `QUOTE_ONLY`, `BELOW_MINIMUM_QUANTITY` (feature
+   * 148, which alone carries `minimum`). `code` is deliberately a plain
    * string, not {@link adminOrderPreviewMessageCodeSchema}: a newer server may
    * add a code, and an older client must still parse the answer (treat an
    * unknown code as unavailable).
    */
-  messages: z.array(z.object({ productId: uuidSchema, code: z.string() })),
+  messages: z.array(
+    z.object({
+      productId: uuidSchema,
+      code: z.string(),
+      /** Feature 148 — the missed minimum, on a `BELOW_MINIMUM_QUANTITY` message only. */
+      minimum: z.number().int().positive().optional(),
+    }),
+  ),
 });
 export type AdminOrderPreviewResponse = z.infer<typeof adminOrderPreviewResponseSchema>;
 

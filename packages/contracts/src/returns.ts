@@ -192,11 +192,24 @@ export const returnableLineSchema = z.object({
   remainingReturnableQty: z.number().int().nonnegative(),
   paidUnitAmount: z.number().finite(),
   currency: z.string().length(3),
+  /**
+   * Feature 148 — may this line be included in a `return` case? (complaints are never
+   * restricted). Optional only until `returns` emits it (feature 148 Phase 12a): the
+   * contract makes it always present.
+   */
+  returnable: z.boolean().optional(),
+  notReturnableReason: z.enum(['product_not_returnable']).optional(),
 });
 
 export const returnableResponseSchema = z.object({
+  /**
+   * `false` = no `return`-kind case can be opened. With `reason: 'no_returnable_lines'`
+   * (feature 148) a `complaint` is still accepted.
+   */
   eligible: z.boolean(),
-  reason: z.enum(['order_not_completing', 'window_passed', 'fully_returned']).optional(),
+  reason: z
+    .enum(['order_not_completing', 'window_passed', 'fully_returned', 'no_returnable_lines'])
+    .optional(),
   freeReturnEligible: z.boolean(),
   lines: z.array(returnableLineSchema),
 });

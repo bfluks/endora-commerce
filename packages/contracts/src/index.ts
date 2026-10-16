@@ -15,6 +15,8 @@ export * from './pagination.js';
 export * from './common.js';
 export * from './scope-notice.js';
 export * from './catalog.js';
+// Feature 148 — the minimum-order rule (specs/148-catalog-order-constraints/).
+export * from './order-minimums.js';
 export * from './quote-requests.js';
 export * from './organizations.js';
 export * from './customers.js';
