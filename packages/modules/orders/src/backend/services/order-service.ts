@@ -112,6 +112,11 @@ import type { OrderTransitionEffectService } from './order-transition-effect-ser
 import { effectsOwedByPaymentStatusChange } from '../domain/transition-effects.js';
 import { judgeQuoteRequestSource } from '../domain/quote-request-source.js';
 import { quoteSourceHonoursExemptions } from '../domain/quote-source-exemption.js';
+import {
+  assertBasketMeetsMinimums,
+  evaluateBasketMinimums,
+  readBasketCatalogue,
+} from './placement-minimums.js';
 import type { InvoicePlacementApplyPort } from '@endora-commerce/mod-invoices/ports';
 import type { PaymentPlacementApplyPort } from '../../ports/index.js';
 import type { CreditLimitPort } from '@endora-commerce/mod-credit-limits/ports';
@@ -1499,15 +1504,32 @@ export class OrderService {
         throw new HttpError(409, ERROR_CODES.CART_EMPTY, 'Cart is empty.');
       }
 
-      // The quote source, vouched under its lock right after the basket read —
-      // before the value gate, the business id, any stock reservation and the
-      // credit reservation (feature 148, research R19; lock order: see
-      // `#vouchedQuoteRequestSource`). Its answer is reused for the stamp below.
+      // Feature 148 (FR-008, FR-036, FR-037; research R19; threats F2, F3) —
+      // the basket's order minimums, judged here, inside the transaction and
+      // **before the first side effect**: before the value gate, the business
+      // id, any stock reservation and the credit reservation. Every caller of
+      // this method — checkout, one-click, admin create, API intake and a
+      // direct `OrderPlacementPort` call — passes through it, so no path can
+      // place a basket another path let below a minimum.
+      //
+      // One read of the basket's products (and their packaging units), reused
+      // below for the totals and the line snapshots; then the quote source,
+      // vouched under its lock (lock order: see `#vouchedQuoteRequestSource`),
+      // whose answer is both the exemption decision here and the stamp below;
+      // then the evaluation. A line whose product record is gone refuses the
+      // placement (FR-037, fail-closed). Nothing has been written, so the
+      // rollback releases the lock and leaves the basket as it was.
+      const catalogue = await readBasketCatalogue(this.neighbours.catalogProductRead, items);
+      const productById = new Map(catalogue.products.map((p) => [p.id, p]));
       const quoteSource = await this.#vouchedQuoteRequestSource(
         tx,
         ctx.organizationId,
         cart.sourceQuoteRequestId,
         items,
+      );
+      assertBasketMeetsMinimums(
+        evaluateBasketMinimums(cart, items, catalogue, quoteSource.honoursExemptions),
+        (productId) => this.#productName(productById, productId),
       );
 
       // A cart line is ordered at its stored unit price — copied onto the order
@@ -1845,13 +1867,6 @@ export class OrderService {
           allocationPlan.push(allocationsForLine);
         }
       }
-
-      const productIds = items.map((i) => i.productId);
-      const products =
-        productIds.length > 0
-          ? await this.neighbours.catalogProductRead.findByIds(productIds)
-          : [];
-      const productById = new Map(products.map((p) => [p.id, p]));
 
       // Resolved once and used twice: the promotion engine's audience filter
       // inside the totals below, and the redemption row `finalizeUsage` writes.
@@ -2542,6 +2557,16 @@ export class OrderService {
       }
     }
     return order;
+  }
+
+  /**
+   * The name a minimum refusal gives a product: the same pick the order line's
+   * snapshot makes, since placement is told no request language (the envelope
+   * translates the sentence around it). The id when the record is gone.
+   */
+  #productName(productById: ReadonlyMap<string, { name: Record<string, string> }>, productId: string): string {
+    const product = productById.get(productId);
+    return (product ? this.anyValue(product.name) : '') || productId;
   }
 
   private anyValue(blob: Record<string, string>): string {
