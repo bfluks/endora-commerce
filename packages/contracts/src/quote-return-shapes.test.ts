@@ -5,6 +5,7 @@ import {
   createQuoteRequestSchema,
   quoteRequestItemSchema,
   type CreateForCustomerOptions,
+  type QuoteRequestLineRecord,
 } from './quote-requests.js';
 import { returnableLineSchema, returnableResponseSchema } from './returns.js';
 
@@ -85,6 +86,14 @@ describe('quote-request item', () => {
     const cleared = quoteRequestItemSchema.parse({ ...item, packagingUnitId: null, minimumWarning: null });
     expect(cleared.packagingUnitId).toBeNull();
     expect(cleared.minimumWarning).toBeNull();
+  });
+});
+
+describe('QuoteRequestLineRecord (read port, contracts/quote-requests-api.md §5)', () => {
+  it('carries an optional, nullable packagingUnitId', () => {
+    expectTypeOf<QuoteRequestLineRecord['packagingUnitId']>().toEqualTypeOf<string | null | undefined>();
+    const line: Pick<QuoteRequestLineRecord, 'packagingUnitId'> = { packagingUnitId: ID1 };
+    expect(line.packagingUnitId).toBe(ID1);
   });
 });
 
