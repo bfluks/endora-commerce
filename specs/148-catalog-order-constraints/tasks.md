@@ -344,7 +344,7 @@ placement; oversized requests are refused whole.
 - [ ] T061 [US4] Admin create and API intake build their transient basket with `addItems(…, { onLineError: 'throw' })` and refuse on any `below_minimum` with `minimumRefusal(…, 'index')`; admin create and the admin preview handler refuse more than `ADMIN_ORDER_MAX_ITEMS` items as their first step (`422 VALIDATION_FAILED`, `too_many_items`) — `packages/modules/orders/src/backend/services/order-creation-admin-service.ts`, `order-api-intake-service.ts`
 - [ ] T062 [US4] Admin preview message `BELOW_MINIMUM_QUANTITY` (after the existing four; evaluated only on lines that passed them) — `packages/modules/orders/src/backend/routes.ts` (preview handler), `services/preview-line-availability.ts` if the step belongs there
 - [ ] T063a Build `mod-orders`; checks
-- [ ] T063b [US4] **Optional — pending the owner's ruling on the API intake bound; delete this task if declined.** RED-then-green: `POST` API order intake with 201 lines → `422 VALIDATION_FAILED` `too_many_items`, `maximum: 200`, nothing resolved or added; 200 pass the bound. Implement the bound as the first statement of the intake service (`ADMIN_ORDER_MAX_ITEMS` reused, or a sibling constant in contracts); add the breaking-behaviour note to the `mod-orders` changeset — `backend/test/contract/orders/api-intake-minimums.test.ts` (extend), `packages/modules/orders/src/backend/services/order-api-intake-service.ts`
+- [ ] T063b [US4] **In scope — owner ruling 2026-10-16.** RED-then-green: `POST` API order intake with 201 lines → `422 VALIDATION_FAILED` `too_many_items`, `maximum: 200`, nothing resolved or added; 200 pass the bound. Implement the bound as the first statement of the intake service (`ADMIN_ORDER_MAX_ITEMS` reused, or a sibling constant in contracts); add the breaking-behaviour note to the `mod-orders` changeset — `backend/test/contract/orders/api-intake-minimums.test.ts` (extend), `packages/modules/orders/src/backend/services/order-api-intake-service.ts`
 
 **Verification** (one invocation per line):
 - `[PG] pnpm exec vitest run test/integration/orders/admin-create-minimums.test.ts`
@@ -660,7 +660,7 @@ assertions in T039) · FR-025 → T089, T091 · FR-026 → T050, T075, T077 · F
 FR-028 → T037, T040, T056 · FR-029 → T078 · FR-030 → T083, T084, T106 · FR-031 → T076, T078 ·
 FR-032 → T126, T127 · FR-033 → T089, T091a · FR-034 → T100, T135, T138 (docs/changeset, reviewed) ·
 FR-035 → T039, T048, T049, T057, T058, T067, T068, T077, T078 · FR-036 → T056a, T056b, T056c ·
-FR-037 → T003, T038, T039, T041, T056, T119, T120 · FR-038 → T005, T057a, T066, T067 (+ optional T063b for API intake).
+FR-037 → T003, T038, T039, T041, T056, T119, T120 · FR-038 → T005, T057a, T063b, T066, T067.
 SC-001 → T039, T040, T056, T056a, T057, T067, T068, T078 · SC-002 → T113 · SC-003 → T091 ·
 SC-004 → T003, T035, T039, T077, T078, T091, T095 · SC-005 → T028, T100 · SC-006 → T091a.
 

@@ -765,6 +765,7 @@ request schemas (`quickOrderBuildRequestSchema.items`, `quick-order.ts:115`;
 likewise unbounded and reaches the same `addItems`. The cart cap already makes 201+ lines fail; the
 same service-level bound would only change *where* it fails, but it is a public API behaviour change
 outside the requirement's text — recommended, left for the owner (plan § *Open for the owner*).
+**Ruled in scope by the owner on 2026-10-16**: FR-038 now covers the API intake; task T063b.
 
 **Alternatives rejected.** A schema `.max()` (answers 400, FR-038 says 422 — above); aligning the
 build cap with the import's 2000 (no 2000-line build can succeed into a cart; it would bound nothing

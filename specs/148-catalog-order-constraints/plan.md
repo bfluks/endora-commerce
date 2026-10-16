@@ -58,7 +58,7 @@ No new runtime dependency.
 **Project Type**: web application — monorepo (`backend/`, `admin/`, `storefront/`, `packages/`)
 **Performance Goals**: one additional `listPackagingUnitsByProductIds` read per cart add / edit / full view / placement / preview / quote write; a batch path resolves each line once and evaluates the rule twice per batch (R8), never once per line; the rule is `O(lines + products + units)`, pinned by a performance case at the import ceiling (10 000 lines); the quote-draft page fans out at most 8 product reads at a time
 **Constraints**: every rule enforced by the API, the storefront only mirrors it (spec *API vs UI*); existing 404s keep precedence over a minimum refusal and a line that fails them never discloses a name or a minimum (FR-035); a minimum or packaging refusal on a quote request writes nothing and costs no pricing call (FR-029); the placement check runs before the first side effect; `returns` off changes nothing that `orders` records
-**Scale/Scope**: 9 modules (`catalog`, `carts`, `orders`, `quote_requests`, `quick_order`, `shopping_lists`, `returns`, `comparisons`, `search`) + `contracts`, `_i18n` core bundle, admin, storefront; 0 new routes; 1 new port method + 1 new in-process write-port method; 4 migrations; 4 error codes; 3 service-level request bounds; 23 task phases, 166 tasks incl. the optional T063b (see § Hand-off)
+**Scale/Scope**: 9 modules (`catalog`, `carts`, `orders`, `quote_requests`, `quick_order`, `shopping_lists`, `returns`, `comparisons`, `search`) + `contracts`, `_i18n` core bundle, admin, storefront; 0 new routes; 1 new port method + 1 new in-process write-port method; 4 migrations; 4 error codes; 4 service-level request bounds; 23 task phases, 166 tasks incl. T063b (API intake bound, owner ruling 2026-10-16)
 
 ## Constitution Check
 
@@ -281,7 +281,7 @@ the plan's own, written before the review.
 | F1 | High | Batch paths evaluated minimums on lines that never passed `addItem`'s visibility / channel / unit checks, so a hidden product could be reported "below minimum" with its name and minimum | Fixed (FR-035) | `#resolveLine` shared by `addItem` and `addItems`; resolution before evaluation; unresolved lines get the unknown-id answer and count toward no total; quote → cart maps a 404 to `not_purchasable`, list → cart to `product_not_found` (R8, R12) | T043, T048, T049, T057, T067, T068 |
 | F2 | High | Placement honoured the basket's quote mark at face value; a cancelled, expired, already-ordered or emptied quote kept its lines exempt | Fixed (FR-036) | The vouch and its lock move to right after the basket read; exemptions honoured only when `judgeQuoteRequestSource` accepts and the validity has not lapsed; the preview uses the read-only twin (R19) | T056a, T056b, T056c, T059a, T060 |
 | F3 | Medium | The placement check's position and coverage were unspecified relative to side effects and entry points; a missing product record read as "no minimum" | Fixed (FR-037) | Check inside the transaction after the vouch, before the value gate, business id, stock and credit; fail-closed `product_unavailable`; one assertion per entry point (checkout, one-click, admin create, API intake, port) | T056, T057, T059, T067 |
-| F4 | Medium | Unbounded batch inputs and a quadratic fix-point | Fixed (FR-038) | 200-item bound refused first by the quick-order build and admin create/preview services (422); import rows clamped to 10 000; linear rule, two-pass batch; performance cases (R6.1, R8, R20). API intake flagged for the owner | T003, T005, T048, T057a, T064, T066, T067 |
+| F4 | Medium | Unbounded batch inputs and a quadratic fix-point | Fixed (FR-038) | 200-item bound refused first by the quick-order build and admin create/preview services (422); import rows clamped to 10 000; linear rule, two-pass batch; performance cases (R6.1, R8, R20). API intake covered by the same bound (owner ruling 2026-10-16) | T003, T005, T048, T057a, T063b, T064, T066, T067 |
 | F5 | Medium | No upper bound on minimums; the packaging port bypasses route validation | Fixed (FR-001, FR-002) | 1…1 000 000 in the schemas, the services (`isValidOrderMinimum`) and the column checks (R9) | T003, T004, T013, T028, T029 |
 | F6 | Low | Distinct reasons for "unknown id" and "another product's unit" form an enumeration oracle | Fixed (FR-026) | One external reason `unknown_unit`; detail logged only (R10, R13.1) | T075, T077 |
 | F7 | Medium | A return request naming one order line twice passes the per-entry remaining-quantity check | Fixed (FR-033, SC-006) | Sum per `orderItemId` before the check, both kinds; entries stored as sent (R14) | T089, T091a, T096a |
@@ -351,11 +351,9 @@ Resolved (2026-10-15, coordinator):
 - **D4, D5, D7, D8, D9, D10**, the **200 / 10 000** bounds, **FR-033 by aggregation** and the
   **validity rule for exemptions only** — confirmed.
 
-Still open:
-
-- **API intake bound** — pending the owner's ruling. Planned as the separate, droppable task
-  **T063b** (Phase 8a): the same 200-line service-level bound on `order-api-intake-service.ts`. If the
-  owner declines, delete T063b; nothing else depends on it.
+- **API intake bound** — ruled **in scope** by the owner on 2026-10-16: task **T063b** (Phase 8a)
+  puts the same 200-line service-level bound on `order-api-intake-service.ts` (422 `VALIDATION_FAILED`,
+  `too_many_items`), documented in the `mod-orders` changeset as a public API change.
 
 ## Hand-off summary for `endora-commerce-dev`
 
@@ -372,7 +370,7 @@ Still open:
   | 6 | [backend] | Cart single add / edit / view, shared resolver, quote-line exemption | T037–T046 (10) |
   | 7 | [backend] | Cart batch add, test doubles, quote → cart, cart → quote | T047–T055, T052a (10) |
   | 8 | [backend] | Placement and checkout preview: vouch, exemption validity, fail-closed | T056–T056c, T059, T059a, T060, T063 (8) |
-  | 8a | [backend] | Admin create, API intake, admin preview, request bounds | T057, T057a, T058, T061, T062, T063a, T063b† (7) |
+  | 8a | [backend] | Admin create, API intake, admin preview, request bounds | T057, T057a, T058, T061, T062, T063a, T063b (7) |
   | 9 | [backend] | Quick order (file totals, operator warning, bounds) and shopping lists | T064–T073 (10) |
   | 10 | [backend] | Quote requests: packaging resolution, buyer checks | T074–T082 (9) |
   | 11 | [backend] | Quote requests: operator actor, admin warnings | T083–T087 (5) |
@@ -388,7 +386,6 @@ Still open:
   | 20 | — | `quality.yml` gate (macOS Docker routing) | T145–T150 (6) |
   | 21 | — | Other PR workflows | T151–T154 (4) |
 
-  † T063b is optional, pending the owner's ruling on the API intake bound.
 
 - Phases 6–7 (`cart-service.ts`, `cart-read-port.ts`), 8, 8a and 12 (`order-service.ts`), 10–11
   (`rfq-service.ts`) share files: build in sequence on one checkout. Phases 13–17 may run in any order
@@ -414,4 +411,4 @@ Still open:
   `mod-comparisons`, `mod-search` — each written for the consumer (T138 lists what each names,
   including FR-034's behaviour change).
 - Rulings: D2 confirmed by the owner (P2); D1, D3–D10, the bounds and FR-033's aggregation confirmed
-  by the coordinator. Only T063b (API intake bound) waits for the owner — build it only once ruled.
+  by the coordinator; T063b (API intake bound) ruled in scope by the owner on 2026-10-16.
