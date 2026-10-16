@@ -13,6 +13,7 @@ import { CartItem } from '../entities/cart-item.entity.js';
 import type {
   CatalogPackagingUnitRecord,
   CatalogProductReadPort,
+  CatalogProductRecord,
   LinePricePort,
   ProductDisplayModePort,
   OrganizationDetailsPort,
@@ -68,6 +69,17 @@ export const CART_MAX_LINES = 200;
  * `details.minimum`, which is what both bundle sentences name (issue #86).
  */
 export const CART_LINE_MIN_QUANTITY = 1;
+
+/** One line a shopper asks to put in their cart (`addItem`'s input). */
+export interface CartLineInput {
+  productId: string;
+  variantId?: string;
+  /** Pieces, or units when `packagingUnitId` is set. */
+  quantity: number;
+  packagingUnitId?: string;
+  /** Set only by a caller that names the channel itself (admin order creation). */
+  salesChannelId?: string;
+}
 
 export class CartService {
   /**
@@ -213,13 +225,7 @@ export class CartService {
 
   async addItem(
     actor: { customer?: CustomerContext; anonymousToken?: string },
-    input: {
-      productId: string;
-      variantId?: string;
-      quantity: number;
-      packagingUnitId?: string;
-      salesChannelId?: string;
-    },
+    input: CartLineInput,
   ): Promise<{ cart: Cart; items: CartItem[] }> {
     const em = this.emFactory();
     const cart = actor.customer
@@ -234,84 +240,7 @@ export class CartService {
             );
           })();
 
-    // Issue #86 — a refusal of its own, not `VALIDATION_FAILED`: the envelope
-    // never replaces that code's message, so the sentence below was answered in
-    // English whatever the reader asked for. `details.minimum` is what both
-    // bundle sentences name. Every request schema in front of this method
-    // already requires a positive integer, so this is what an in-process caller
-    // of the cart write port meets.
-    if (input.quantity < CART_LINE_MIN_QUANTITY) {
-      throw new HttpError(
-        422,
-        ERROR_CODES.CART_QUANTITY_INVALID,
-        `Quantity must be at least ${CART_LINE_MIN_QUANTITY}.`,
-        { quantity: input.quantity, minimum: CART_LINE_MIN_QUANTITY },
-      );
-    }
-    const product = await this.catalogProducts.findById(input.productId);
-    // Issue #227 — a product this shopper may not see is a product they may not
-    // put in a cart. The read port is the row-level one and applies no policy of
-    // its own, deliberately: an order line has to resolve its product long after
-    // the operator restricted it. That makes enforcement the caller's, and this
-    // caller is holding a `productId` the buyer chose.
-    //
-    // 404 and not 403, matching the product detail: a caller who may not see the
-    // row may not learn it exists, and the two answers are indistinguishable to
-    // an honest client because they are the same answer.
-    if (!product || !isProductVisibleTo(product, cartAudience(actor))) {
-      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
-    }
-    // Issue #259 — the second filter the predicate above says it is not. The
-    // channel is a property of the request, so it is read off the request scope
-    // and never re-resolved here; outside a request there is no channel to be
-    // out of and `outOfRequestChannel` answers `false`.
-    //
-    // The same 404 as the two lines above, deliberately: "sold on another
-    // channel", "restricted to another organisation" and "does not exist" have
-    // to be one answer, or the pair of them is an enumeration oracle over an
-    // operator's private assortment — the defect issue #174 found in the
-    // type-ahead next door.
-    //
-    // The one exception is a caller that names the channel itself: an
-    // administrator creating an order on a customer's behalf chooses the
-    // order's channel in the request body, and the request scope of an admin
-    // call resolves to the system default, which is not that channel. Buyer
-    // routes never pass `salesChannelId`.
-    const outOfChannel = input.salesChannelId
-      ? !(
-          await this.channelMembership.filterEntityIdsInChannel(input.salesChannelId, 'product', [
-            product.id,
-          ])
-        ).includes(product.id)
-      : await outOfRequestChannel(this.channelMembership, product.id);
-    if (outOfChannel) {
-      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
-    }
-
-    // Feature 043 — ordering by a packaging unit (e.g. a pallet): the line is
-    // measured in base pieces (`baseQuantity × units`) and snapshots the unit
-    // name so the cart/order/RFQ can append it to the product name.
-    //
-    // `findPackagingUnitInProduct` is the two-argument form of the same read:
-    // the "does this unit belong to this product?" test was the second half of
-    // the `where` clause and stays inside one query.
-    let packagingUnit: CatalogPackagingUnitRecord | null = null;
-    if (input.packagingUnitId) {
-      packagingUnit = await this.catalogProducts.findPackagingUnitInProduct(
-        product.id,
-        input.packagingUnitId,
-      );
-      if (!packagingUnit) {
-        throw new HttpError(
-          404,
-          ERROR_CODES.PACKAGING_UNIT_NOT_FOUND,
-          'Packaging unit not found for this product.',
-        );
-      }
-    }
-    const effectiveQuantity = packagingUnit
-      ? packagingUnit.baseQuantity * input.quantity
-      : input.quantity;
+    const { product, packagingUnit, effectiveQuantity } = await this.#resolveLine(actor, input);
 
     // If the same product+variant+packaging-unit is already in the cart, bump
     // quantity. A packaging-unit line and a single-piece line of the same
@@ -406,6 +335,103 @@ export class CartService {
 
     const items = await em.find(CartItem, { cartId: cart.id });
     return { cart, items };
+  }
+
+  /**
+   * `addItem`'s preconditions, in its order (feature 148, research R8, threat F1):
+   * the quantity floor, the product's existence and visibility to this shopper,
+   * the channel's assortment, and the packaging unit belonging to the product.
+   * One private resolver so every add path — the single add and the batch — asks
+   * exactly the same questions and gives exactly the same unknown-id answers.
+   * Writes nothing.
+   */
+  async #resolveLine(
+    actor: { customer?: CustomerContext; anonymousToken?: string },
+    input: CartLineInput,
+  ): Promise<{
+    product: CatalogProductRecord;
+    packagingUnit: CatalogPackagingUnitRecord | null;
+    effectiveQuantity: number;
+  }> {
+    // Issue #86 — a refusal of its own, not `VALIDATION_FAILED`: the envelope
+    // never replaces that code's message, so the sentence below was answered in
+    // English whatever the reader asked for. `details.minimum` is what both
+    // bundle sentences name. Every request schema in front of this method
+    // already requires a positive integer, so this is what an in-process caller
+    // of the cart write port meets.
+    if (input.quantity < CART_LINE_MIN_QUANTITY) {
+      throw new HttpError(
+        422,
+        ERROR_CODES.CART_QUANTITY_INVALID,
+        `Quantity must be at least ${CART_LINE_MIN_QUANTITY}.`,
+        { quantity: input.quantity, minimum: CART_LINE_MIN_QUANTITY },
+      );
+    }
+    const product = await this.catalogProducts.findById(input.productId);
+    // Issue #227 — a product this shopper may not see is a product they may not
+    // put in a cart. The read port is the row-level one and applies no policy of
+    // its own, deliberately: an order line has to resolve its product long after
+    // the operator restricted it. That makes enforcement the caller's, and this
+    // caller is holding a `productId` the buyer chose.
+    //
+    // 404 and not 403, matching the product detail: a caller who may not see the
+    // row may not learn it exists, and the two answers are indistinguishable to
+    // an honest client because they are the same answer.
+    if (!product || !isProductVisibleTo(product, cartAudience(actor))) {
+      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    }
+    // Issue #259 — the second filter the predicate above says it is not. The
+    // channel is a property of the request, so it is read off the request scope
+    // and never re-resolved here; outside a request there is no channel to be
+    // out of and `outOfRequestChannel` answers `false`.
+    //
+    // The same 404 as the two lines above, deliberately: "sold on another
+    // channel", "restricted to another organisation" and "does not exist" have
+    // to be one answer, or the pair of them is an enumeration oracle over an
+    // operator's private assortment — the defect issue #174 found in the
+    // type-ahead next door.
+    //
+    // The one exception is a caller that names the channel itself: an
+    // administrator creating an order on a customer's behalf chooses the
+    // order's channel in the request body, and the request scope of an admin
+    // call resolves to the system default, which is not that channel. Buyer
+    // routes never pass `salesChannelId`.
+    const outOfChannel = input.salesChannelId
+      ? !(
+          await this.channelMembership.filterEntityIdsInChannel(input.salesChannelId, 'product', [
+            product.id,
+          ])
+        ).includes(product.id)
+      : await outOfRequestChannel(this.channelMembership, product.id);
+    if (outOfChannel) {
+      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    }
+
+    // Feature 043 — ordering by a packaging unit (e.g. a pallet): the line is
+    // measured in base pieces (`baseQuantity × units`) and snapshots the unit
+    // name so the cart/order/RFQ can append it to the product name.
+    //
+    // `findPackagingUnitInProduct` is the two-argument form of the same read:
+    // the "does this unit belong to this product?" test was the second half of
+    // the `where` clause and stays inside one query.
+    let packagingUnit: CatalogPackagingUnitRecord | null = null;
+    if (input.packagingUnitId) {
+      packagingUnit = await this.catalogProducts.findPackagingUnitInProduct(
+        product.id,
+        input.packagingUnitId,
+      );
+      if (!packagingUnit) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.PACKAGING_UNIT_NOT_FOUND,
+          'Packaging unit not found for this product.',
+        );
+      }
+    }
+    const effectiveQuantity = packagingUnit
+      ? packagingUnit.baseQuantity * input.quantity
+      : input.quantity;
+    return { product, packagingUnit, effectiveQuantity };
   }
 
   /**
