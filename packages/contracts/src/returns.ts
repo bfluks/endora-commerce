@@ -599,6 +599,12 @@ export interface OrderReturnContextLine {
   paidUnitAmount: number;
   /** Amount paid for the whole purchased line, including tax. */
   paidLineAmount: number;
+  /**
+   * Feature 148 (FR-016a) — the product's returnable flag recorded when the order was placed.
+   * `null`: the order was placed before the flag was recorded. `orders` reports the fact; the
+   * policy for `null` (returnable, FR-025) is `returns`'.
+   */
+  returnableAtPurchase: boolean | null;
 }
 
 export interface OrderReturnContext {

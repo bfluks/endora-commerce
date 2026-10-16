@@ -146,7 +146,7 @@ describe('returns off-state (Constitution XVII)', () => {
       .orderReturnContextPort;
     const context = await port.getReturnContext(orderId);
     expect(
-      Object.fromEntries((context?.lines ?? []).map((l) => [l.productId, (l as { returnableAtPurchase?: unknown }).returnableAtPurchase])),
+      Object.fromEntries((context?.lines ?? []).map((l) => [l.productId, l.returnableAtPurchase])),
     ).toEqual({ [R.id]: true, [N.id]: false });
   }, 120_000);
 });

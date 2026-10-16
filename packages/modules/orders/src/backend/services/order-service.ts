@@ -118,6 +118,7 @@ import {
   evaluateBasketMinimums,
   readBasketCatalogue,
 } from './placement-minimums.js';
+import { returnableAtPurchase } from './returnable-at-purchase.js';
 import type { InvoicePlacementApplyPort } from '@endora-commerce/mod-invoices/ports';
 import type { PaymentPlacementApplyPort } from '../../ports/index.js';
 import type { CreditLimitPort } from '@endora-commerce/mod-credit-limits/ports';
@@ -2111,6 +2112,11 @@ export class OrderService {
           ...(item.variantId ? { variantId: item.variantId } : {}),
           quantity: item.quantity,
           unitPrice: item.unitPrice,
+          // Feature 148 (FR-016a, D-44) — the product's returnable flag as it
+          // stands now, from the one basket read above; copied once and never
+          // updated. Always an explicit boolean (fail-closed): `null` is kept
+          // for lines placed before the feature.
+          returnableAtPurchase: returnableAtPurchase(product),
           taxRate: rateForProductId(item.productId).toFixed(4),
           lineTotal: (
             Number(item.unitPrice) *
