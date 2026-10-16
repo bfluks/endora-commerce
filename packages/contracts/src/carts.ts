@@ -724,6 +724,41 @@ export interface CartReadPort {
  * `activation` to say, not this line's: a module declaring
  * `nonDeactivatable` never enters one.
  */
+/**
+ * Feature 148 (research R8) — one line of a batch add (`CartWritePort.addItems`).
+ * The fields of `addItem`'s line.
+ */
+export interface CartBatchLineInput {
+  productId: string;
+  variantId?: string;
+  /** Pieces, or units when `packagingUnitId` is set — as `addItem`. */
+  quantity: number;
+  packagingUnitId?: string;
+  /** As `addItem`'s: set only by an operator surface that names the channel itself. */
+  salesChannelId?: string;
+}
+
+/**
+ * Feature 148 (research R8) — what became of one batch line, at its input `index`.
+ *
+ * A `failed` line carries the refusal it met and nothing about the product: a
+ * product the caller may not see fails with the unknown id's `404`, never with a
+ * name or a minimum (FR-035, threat F1).
+ */
+export type CartBatchLineOutcome =
+  | { index: number; status: 'added' }
+  | {
+      index: number;
+      status: 'below_minimum';
+      productId: string;
+      /** In the request's language (`options.language`). */
+      productName: string;
+      kind: 'pieces' | 'packaging_unit';
+      minimum: number;
+      packagingUnitName?: string;
+    }
+  | { index: number; status: 'failed'; error: { status: number; code: string; message: string } };
+
 export interface CartWritePort {
   getOrCreateForCustomer(ctx: CartCustomerContext): Promise<CartRecord>;
   addItem(
@@ -742,6 +777,29 @@ export interface CartWritePort {
       salesChannelId?: string;
     },
   ): Promise<CartWithItems>;
+  /**
+   * Feature 148 (R8) — add several lines. (1) Every line is resolved with exactly
+   * `addItem`'s preconditions (quantity, visibility, channel, packaging unit in
+   * product); a line that fails gets the unknown-id answer and takes no part in
+   * the evaluation. (2) The resolved lines are judged with the cart in two passes
+   * — unit minimums, then pieces minimums over the survivors; lines below a
+   * minimum are not added and are reported. Lines already in the cart are never
+   * rejected. (3) The accepted lines are added.
+   *
+   * `onLineError: 'throw'` — the first resolution failure is thrown before
+   * anything is written; a later add failure is thrown as `addItem` would (lines
+   * before it stay added). `'report'` — every failure is returned as `failed`.
+   * `below_minimum` is an outcome in both modes, never thrown.
+   * `ModuleDisabledError` is always thrown. At most `CART_MAX_LINES` (200) lines.
+   *
+   * `language` names a `below_minimum` line's product (the request's
+   * `Accept-Language`); absent, the record's own fallback chain.
+   */
+  addItems(
+    actor: { customer?: CartCustomerContext; anonymousToken?: string },
+    lines: readonly CartBatchLineInput[],
+    options: { onLineError: 'throw' | 'report'; language?: string },
+  ): Promise<CartWithItems & { outcomes: CartBatchLineOutcome[] }>;
   clearForCustomer(ctx: CartCustomerContext): Promise<void>;
   /**
    * Clear the customer's active cart and seed it with these lines, creating
