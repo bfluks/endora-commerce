@@ -5,7 +5,13 @@ import { randomUUID } from 'crypto';
 @GlobalEntity()
 @Entity({ tableName: 'order_items' })
 export class OrderItem {
-  [OptionalProps]?: 'id' | 'createdAt' | 'variantId' | 'variantSnapshot' | 'packagingUnitSnapshot';
+  [OptionalProps]?:
+    | 'id'
+    | 'createdAt'
+    | 'variantId'
+    | 'variantSnapshot'
+    | 'packagingUnitSnapshot'
+    | 'returnableAtPurchase';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -37,6 +43,15 @@ export class OrderItem {
    */
   @Property({ type: 'json', nullable: true })
   packagingUnitSnapshot?: { name: string; baseQuantity: number } | null;
+
+  /**
+   * Feature 148 (FR-016a) — whether the product was returnable when the line
+   * was placed, written once at placement and never updated. `null` only on
+   * lines placed before the column existed, which `returns` treats as
+   * returnable (FR-017).
+   */
+  @Property({ type: 'boolean', nullable: true })
+  returnableAtPurchase?: boolean | null;
 
   @Property({ type: 'integer' })
   quantity!: number;

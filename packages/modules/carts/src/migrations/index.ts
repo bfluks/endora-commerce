@@ -27,6 +27,7 @@ import { Migration20260611T140413CartsCartItemPackaging } from './20260611T14041
 import { Migration20260818T081253CartsCartCompletedOrderFk } from './20260818T081253_carts_cart_completed_order_fk.js';
 import { Migration20260830T112911CartsOrganizationAttributionCheck } from './20260830T112911_carts_organization_attribution_check.js';
 import { Migration20261008T061751CartsCartSourceQuoteRequest } from './20261008T061751_carts_cart_source_quote_request.js';
+import { Migration20261016T082018CartsCartItemQuoteSeededQuantity } from './20261016T082018_carts_cart_item_quote_seeded_quantity.js';
 import { Migration20261018T074021CartsCartItemAgreedPrice } from './20261018T074021_carts_cart_item_agreed_price.js';
 
 export const migrations = [
@@ -35,6 +36,7 @@ export const migrations = [
   Migration20260818T081253CartsCartCompletedOrderFk,
   Migration20260830T112911CartsOrganizationAttributionCheck,
   Migration20261008T061751CartsCartSourceQuoteRequest,
+  Migration20261016T082018CartsCartItemQuoteSeededQuantity,
   Migration20261018T074021CartsCartItemAgreedPrice,
 ];
 
@@ -44,5 +46,6 @@ export {
   Migration20260818T081253CartsCartCompletedOrderFk,
   Migration20260830T112911CartsOrganizationAttributionCheck,
   Migration20261008T061751CartsCartSourceQuoteRequest,
+  Migration20261016T082018CartsCartItemQuoteSeededQuantity,
   Migration20261018T074021CartsCartItemAgreedPrice,
 };

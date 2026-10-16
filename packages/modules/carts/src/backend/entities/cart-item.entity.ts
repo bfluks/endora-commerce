@@ -31,7 +31,8 @@ export class CartItem {
     | 'packagingUnitBaseQuantity'
     | 'agreedQuantity'
     | 'agreedUnitPrice'
-    | 'agreedCurrency';
+    | 'agreedCurrency'
+    | 'quoteSeededQuantity';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -100,6 +101,15 @@ export class CartItem {
 
   @Property({ type: 'string', length: 3, nullable: true })
   agreedCurrency?: string | null;
+
+  /**
+   * Feature 148 (FR-028) — the quantity this line was seeded with from an
+   * accepted quote request; `null` for every other line. Written only when
+   * the basket is replaced from a quote; while `quantity` still equals it the
+   * line is exempt from the catalogue's order minimums.
+   */
+  @Property({ type: 'integer', nullable: true })
+  quoteSeededQuantity?: number | null;
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

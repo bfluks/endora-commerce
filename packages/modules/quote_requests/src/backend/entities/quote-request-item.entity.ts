@@ -26,6 +26,7 @@ export class QuoteRequestItem {
     | 'discountPercent'
     | 'packagingUnitName'
     | 'packagingUnitBaseQuantity'
+    | 'packagingUnitId'
     | 'referenceUnitPrice'
     | 'referenceCurrency'
     | 'referenceCapturedAt';
@@ -64,6 +65,14 @@ export class QuoteRequestItem {
 
   @Property({ type: 'integer', nullable: true })
   packagingUnitBaseQuantity?: number | null;
+
+  /**
+   * Feature 148 (FR-026) — the catalogue packaging unit this line resolved
+   * to, beside the name / base-quantity snapshot above. No foreign key:
+   * units are hard-deleted and the snapshot outlives them.
+   */
+  @Property({ type: 'uuid', nullable: true })
+  packagingUnitId?: string | null;
 
   @Property({ type: 'text', nullable: true })
   lineNote?: string | null;

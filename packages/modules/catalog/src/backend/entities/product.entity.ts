@@ -31,7 +31,9 @@ export class Product {
     | 'lowStockThreshold'
     | 'lowStockThresholdMode'
     | 'fulfilmentStrategy'
-    | 'fulfilmentStrategyWarehouseOrder';
+    | 'fulfilmentStrategyWarehouseOrder'
+    | 'minOrderQuantity'
+    | 'returnable';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -191,4 +193,20 @@ export class Product {
    *  of warehouse UUIDs to walk. */
   @Property({ type: 'json', nullable: true })
   fulfilmentStrategyWarehouseOrder?: string[] | null;
+
+  /**
+   * Feature 148 (FR-001) — the minimum order quantity in pieces, 1…1 000 000,
+   * or `null` for none; `1` is equivalent to none. Meaningful for `simple`
+   * and `configurable` products only, and inherited by their variants.
+   */
+  @Property({ type: 'integer', nullable: true })
+  minOrderQuantity?: number | null;
+
+  /**
+   * Feature 148 (FR-003, FR-004) — whether the product may be returned.
+   * `false` unless an operator turns it on; snapshotted onto each order line
+   * at placement.
+   */
+  @Property({ type: 'boolean' })
+  returnable: boolean = false;
 }

@@ -68,6 +68,7 @@ import { Migration20260611T140413CartsCartItemPackaging } from '@endora-commerce
 import { Migration20260818T081253CartsCartCompletedOrderFk } from '@endora-commerce/mod-carts/migrations';
 import { Migration20260830T112911CartsOrganizationAttributionCheck } from '@endora-commerce/mod-carts/migrations';
 import { Migration20261008T061751CartsCartSourceQuoteRequest } from '@endora-commerce/mod-carts/migrations';
+import { Migration20261016T082018CartsCartItemQuoteSeededQuantity } from '@endora-commerce/mod-carts/migrations';
 import { Migration20261018T074021CartsCartItemAgreedPrice } from '@endora-commerce/mod-carts/migrations';
 
 // ── catalog ─────────────────────────────────────────────────────────────────
@@ -98,6 +99,7 @@ import { Migration20260925T125527CatalogInventoryColumns } from '@endora-commerc
 import { Migration20261008T080839CatalogProductAttributeIsPriceRule } from '@endora-commerce/mod-catalog/migrations';
 import { Migration20261008T092714CatalogCategoryContent } from '@endora-commerce/mod-catalog/migrations';
 import { Migration20261014T170531CatalogProductListSavedViews } from '@endora-commerce/mod-catalog/migrations';
+import { Migration20261016T082008CatalogOrderRules } from '@endora-commerce/mod-catalog/migrations';
 
 // ── cms ─────────────────────────────────────────────────────────────────────
 import { Migration20260425T162418CmsPagesInit } from '@endora-commerce/mod-cms/migrations';
@@ -241,6 +243,7 @@ import { Migration20260820T100201OrdersNewToPaidTransition } from '@endora-comme
 import { Migration20260821T131145OrdersPurchaseConversionMarker } from '@endora-commerce/mod-orders/migrations';
 import { Migration20260824T080000OrdersDeliveryPointSnapshot } from '@endora-commerce/mod-orders/migrations';
 import { Migration20261003T201537OrdersOrderTransitionEffects } from '@endora-commerce/mod-orders/migrations';
+import { Migration20261016T082022OrdersOrderItemReturnableAtPurchase } from '@endora-commerce/mod-orders/migrations';
 
 // ── organizations ───────────────────────────────────────────────────────────
 import { Migration20260424T205317OrganizationsInit } from '@endora-commerce/mod-organizations/migrations';
@@ -310,6 +313,7 @@ import { Migration20260912T125614QuoteRequestsQuoteRequestChannelAttribution } f
 import { Migration20261014T115049QuoteRequestsItemReferencePrice } from '@endora-commerce/mod-quote-requests/migrations';
 import { Migration20261014T115053QuoteRequestsNegotiationPolicies } from '@endora-commerce/mod-quote-requests/migrations';
 import { Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews } from '@endora-commerce/mod-quote-requests/migrations';
+import { Migration20261016T082027QuoteRequestsItemPackagingUnitId } from '@endora-commerce/mod-quote-requests/migrations';
 import { Migration20261017T142116QuoteRequestsQuoteRequestDocumentTemplate } from '@endora-commerce/mod-quote-requests/migrations';
 import { Migration20261017T142121QuoteRequestsQuoteRequestEventPdfSent } from '@endora-commerce/mod-quote-requests/migrations';
 
@@ -388,6 +392,7 @@ export const MIGRATION_REGISTRY: readonly MigrationRegistryEntry[] = [
   migration('carts', Migration20260818T081253CartsCartCompletedOrderFk),
   migration('carts', Migration20260830T112911CartsOrganizationAttributionCheck),
   migration('carts', Migration20261008T061751CartsCartSourceQuoteRequest),
+  migration('carts', Migration20261016T082018CartsCartItemQuoteSeededQuantity),
   migration('carts', Migration20261018T074021CartsCartItemAgreedPrice),
 
   // ── catalog ─────────────────────────────────────────────────────────────────
@@ -418,6 +423,7 @@ export const MIGRATION_REGISTRY: readonly MigrationRegistryEntry[] = [
   migration('catalog', Migration20261008T080839CatalogProductAttributeIsPriceRule),
   migration('catalog', Migration20261008T092714CatalogCategoryContent),
   migration('catalog', Migration20261014T170531CatalogProductListSavedViews),
+  migration('catalog', Migration20261016T082008CatalogOrderRules),
 
   // ── cms ─────────────────────────────────────────────────────────────────────
   migration('cms', Migration20260425T162418CmsPagesInit),
@@ -561,6 +567,7 @@ export const MIGRATION_REGISTRY: readonly MigrationRegistryEntry[] = [
   migration('orders', Migration20260821T131145OrdersPurchaseConversionMarker),
   migration('orders', Migration20260824T080000OrdersDeliveryPointSnapshot),
   migration('orders', Migration20261003T201537OrdersOrderTransitionEffects),
+  migration('orders', Migration20261016T082022OrdersOrderItemReturnableAtPurchase),
 
   // ── organizations ───────────────────────────────────────────────────────────
   migration('organizations', Migration20260424T205317OrganizationsInit),
@@ -630,6 +637,7 @@ export const MIGRATION_REGISTRY: readonly MigrationRegistryEntry[] = [
   migration('quote_requests', Migration20261014T115049QuoteRequestsItemReferencePrice),
   migration('quote_requests', Migration20261014T115053QuoteRequestsNegotiationPolicies),
   migration('quote_requests', Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews),
+  migration('quote_requests', Migration20261016T082027QuoteRequestsItemPackagingUnitId),
   migration('quote_requests', Migration20261017T142116QuoteRequestsQuoteRequestDocumentTemplate),
   migration('quote_requests', Migration20261017T142121QuoteRequestsQuoteRequestEventPdfSent),
 
