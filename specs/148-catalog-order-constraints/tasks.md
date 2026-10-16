@@ -418,6 +418,36 @@ writing nothing.
 - `pnpm --filter @endora-commerce/mod-quote-requests exec vitest run src/backend/services/packaging-resolution.test.ts src/backend/services/quote-minimums.test.ts src/backend/services/line-carry-over.test.ts`
 - `[PG] pnpm exec vitest run test/integration/quote_requests/packaging-units.test.ts`
 - `[PG] pnpm exec vitest run test/integration/quote_requests/minimums.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/admin-create-origin.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/cart-conversion-reference.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/conversion.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/created-from-admin.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/draft-edit-rate-limit.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/expiry-rules.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/expiry-schedule.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/expiry-sweep.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/expiry-worker.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/history-colleague-actor.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/history.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/line-carry-over.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/line-channel-assortment.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/list-totals-parity.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/migration.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/negotiation-enforcement.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/negotiation-loop.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/negotiation-policy-routes.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/off-state.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/packaging-unit-id-schema.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/pricing-history-schema.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/reference-price.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/rep-scope.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/rfq-packaging-snapshot.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/sales-channel-attribution.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/settings-channel.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/tax-totals.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/unpriced-acceptance.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/visibility.test.ts`
+- `[PG] pnpm exec vitest run test/integration/quote_requests/webhooks.test.ts`
 - `pnpm --filter backend run check:port-catches`
 - `pnpm --filter @endora-commerce/mod-quote-requests run typecheck`
 
