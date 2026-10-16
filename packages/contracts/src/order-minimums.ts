@@ -22,6 +22,14 @@ export function isValidOrderMinimum(value: number): boolean {
 /** Product types the minimums apply to (spec edge case *Product types*). */
 const ELIGIBLE_PRODUCT_TYPES: ReadonlySet<string> = new Set(['simple', 'configurable']);
 
+/**
+ * Whether a product of `type` may carry a pieces minimum (D5) — the one predicate the
+ * catalogue write path, the storefront projections and the rule below share.
+ */
+export function isOrderMinimumEligibleType(type: string): boolean {
+  return ELIGIBLE_PRODUCT_TYPES.has(type);
+}
+
 /** One line as the rule sees it. `quantity` is always base pieces. */
 export interface OrderMinimumLine {
   /** Caller's identity for the line: a cart item id, a request line index, a row number. */
@@ -130,7 +138,7 @@ export function evaluateOrderMinimums(
       violations.push({ key: line.key, productId: line.productId, kind: 'product_unavailable' });
       continue;
     }
-    if (line.exempt || !ELIGIBLE_PRODUCT_TYPES.has(product.type)) continue;
+    if (line.exempt || !isOrderMinimumEligibleType(product.type)) continue;
 
     const minimum = product.minOrderQuantity;
     if (minimum !== null && minimum > 1) {

@@ -1,6 +1,7 @@
 import { Meilisearch, MeilisearchApiError, type SearchResponse } from 'meilisearch';
 import {
   ERROR_CODES,
+  isOrderMinimumEligibleType,
   isProductVisibleTo,
   listingPriceChannelContext,
   listingPriceMoney,
@@ -505,6 +506,9 @@ export function searchHitSummary(
     price,
     stockIndicator: null,
     stockLevel: null,
+    // Feature 148 (FR-014) — from the hydrated record, never from the index;
+    // emitted for the types the minimum applies to only.
+    minOrderQuantity: isOrderMinimumEligibleType(product.type) ? product.minOrderQuantity : null,
   };
 }
 

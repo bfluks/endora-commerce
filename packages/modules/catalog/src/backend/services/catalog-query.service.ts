@@ -22,6 +22,7 @@ import { resolvePrimaryAssetUrls } from './primary-asset-url.js';
 import { viewerOrganizationFor } from './viewer-organization.js';
 import {
   ERROR_CODES,
+  isOrderMinimumEligibleType,
   isPriceSort,
   isProductVisibleTo,
   listingPriceChannelContext,
@@ -1616,6 +1617,8 @@ export class CatalogQueryService {
           baseQuantity: u.baseQuantity,
           position: u.position,
           isDefault: u.isDefault,
+          // Feature 148 (FR-016) — the unit's own minimum; `null` = none.
+          minOrderUnits: u.minOrderUnits ?? null,
         }));
       }
     }
@@ -2360,6 +2363,10 @@ export class CatalogQueryService {
       price,
       stockIndicator: null,
       stockLevel: null,
+      // Feature 148 (FR-014) — emitted for the types the minimum applies to only.
+      minOrderQuantity: isOrderMinimumEligibleType(product.type)
+        ? (product.minOrderQuantity ?? null)
+        : null,
     };
   }
 

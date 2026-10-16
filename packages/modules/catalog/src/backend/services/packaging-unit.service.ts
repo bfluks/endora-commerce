@@ -15,6 +15,7 @@ import { UniqueConstraintViolationException } from '@mikro-orm/core';
 
 import {
   ERROR_CODES,
+  isValidOrderMinimum,
   type CreatePackagingUnitRequest,
   type PackagingUnitDto,
   type ReorderPackagingUnitsRequest,
@@ -79,6 +80,7 @@ export class PackagingUnitService {
     productId: string,
     req: CreatePackagingUnitRequest,
   ): Promise<PackagingUnitDto> {
+    assertMinOrderUnits(req.minOrderUnits);
     const id = randomUUID();
     const unit = await this.#audited('packaging_unit.create', id, async (em) => {
       await this.#assertProductEligible(em, productId);
@@ -90,6 +92,7 @@ export class PackagingUnitService {
         baseQuantity: req.baseQuantity,
         position,
         isDefault: req.isDefault ?? false,
+        minOrderUnits: req.minOrderUnits ?? null,
       });
       try {
         await em.flush();
@@ -100,7 +103,13 @@ export class PackagingUnitService {
       return {
         result: u,
         before: null,
-        after: { productId, name: u.name, baseQuantity: u.baseQuantity, isDefault: u.isDefault },
+        after: {
+          productId,
+          name: u.name,
+          baseQuantity: u.baseQuantity,
+          isDefault: u.isDefault,
+          minOrderUnits: u.minOrderUnits ?? null,
+        },
       };
     });
     return this.#dto(unit);
@@ -111,13 +120,20 @@ export class PackagingUnitService {
     unitId: string,
     req: UpdatePackagingUnitRequest,
   ): Promise<PackagingUnitDto> {
+    assertMinOrderUnits(req.minOrderUnits);
     const unit = await this.#audited('packaging_unit.update', unitId, async (em) => {
       const u = await this.#findOwned(em, productId, unitId);
-      const before = { name: u.name, baseQuantity: u.baseQuantity, isDefault: u.isDefault };
+      const before = {
+        name: u.name,
+        baseQuantity: u.baseQuantity,
+        isDefault: u.isDefault,
+        minOrderUnits: u.minOrderUnits ?? null,
+      };
       if (req.name !== undefined) u.name = req.name.trim();
       if (req.baseQuantity !== undefined) u.baseQuantity = req.baseQuantity;
       if (req.position !== undefined) u.position = req.position;
       if (req.isDefault !== undefined) u.isDefault = req.isDefault;
+      if (req.minOrderUnits !== undefined) u.minOrderUnits = req.minOrderUnits;
       try {
         await em.flush();
       } catch (err) {
@@ -127,7 +143,12 @@ export class PackagingUnitService {
       return {
         result: u,
         before,
-        after: { name: u.name, baseQuantity: u.baseQuantity, isDefault: u.isDefault },
+        after: {
+          name: u.name,
+          baseQuantity: u.baseQuantity,
+          isDefault: u.isDefault,
+          minOrderUnits: u.minOrderUnits ?? null,
+        },
       };
     });
     return this.#dto(unit);
@@ -258,8 +279,27 @@ export class PackagingUnitService {
       baseQuantity: u.baseQuantity,
       position: u.position,
       isDefault: u.isDefault,
+      minOrderUnits: u.minOrderUnits ?? null,
       createdAt: u.createdAt.toISOString(),
       updatedAt: u.updatedAt.toISOString(),
     };
+  }
+}
+
+/**
+ * Feature 148 (FR-002, threat F5) — `minOrderUnits` is an integer in
+ * 1…1 000 000 or `null` (clear). Checked here as well as in the route schema
+ * because `CatalogPackagingPort` callers such as `pim_pimcore` reach this
+ * service with no schema in front of it.
+ */
+function assertMinOrderUnits(value: number | null | undefined): void {
+  if (value === undefined || value === null) return;
+  if (!isValidOrderMinimum(value)) {
+    throw new HttpError(
+      422,
+      ERROR_CODES.VALIDATION_FAILED,
+      'The minimum number of packaging units must be a whole number from 1 to 1000000.',
+      { field: 'minOrderUnits' },
+    );
   }
 }

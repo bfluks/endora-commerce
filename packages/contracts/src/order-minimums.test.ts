@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ORDER_MINIMUM_MAX,
   evaluateOrderMinimums,
+  isOrderMinimumEligibleType,
   isValidOrderMinimum,
   minimumRefusal,
   type OrderMinimumLine,
@@ -437,6 +438,16 @@ describe('isValidOrderMinimum', () => {
 
   it.each([0, -1, 1.5, 1_000_001, Number.NaN, Number.POSITIVE_INFINITY])('refuses %s', (n) => {
     expect(isValidOrderMinimum(n)).toBe(false);
+  });
+});
+
+describe('isOrderMinimumEligibleType (D5)', () => {
+  it.each(['simple', 'configurable'])('accepts %s', (type) => {
+    expect(isOrderMinimumEligibleType(type)).toBe(true);
+  });
+
+  it.each(['grouped', 'bundle', 'virtual', ''])('refuses %s', (type) => {
+    expect(isOrderMinimumEligibleType(type)).toBe(false);
   });
 });
 
