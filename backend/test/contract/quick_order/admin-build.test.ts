@@ -94,8 +94,9 @@ describe('Admin quick-order on behalf', () => {
   /**
    * Feature 148, Phase 9 (T067) — US4 #1d: the operator's preview keeps a row
    * below the minimum buildable and warns; the operator's build into the
-   * customer's cart still rejects it (FR-011 (b)). The quote half is Phase 10's
-   * (T084). Plus the item bound on the admin build (FR-038).
+   * customer's cart still rejects it (FR-011 (b)). The quote half (Phase 11,
+   * T084): the build to a quote request creates it and the admin read warns.
+   * Plus the item bound on the admin build (FR-038).
    */
   describe('148 — order minimums', () => {
     const RUN = minimumFixtureRun();
@@ -186,6 +187,36 @@ describe('Admin quick-order on behalf', () => {
         .filter((l) => l.productId === A.id || l.productId === D.id)
         .map((l) => [l.productId, l.quantity]);
       expect(lines).toEqual([[D.id, 1]]);
+    });
+
+    it('US4 #1d, #15 — the operator build of A × 5 into a quote request creates it and the admin read warns', async () => {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/quick-order/build',
+        cookies: ADMIN_COOKIE,
+        payload: {
+          target: 'quote_request',
+          onBehalfOf: ON_BEHALF,
+          items: [
+            { productId: A.id, quantity: 5 },
+            { productId: D.id, quantity: 1 },
+          ],
+        },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const { quoteRequestId } = (res.json() as { data: { quoteRequestId: string } }).data;
+      const read = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/quote-requests/${quoteRequestId}`,
+        cookies: ADMIN_COOKIE,
+      });
+      expect(read.statusCode, read.body).toBe(200);
+      const items = (
+        read.json() as { data: { items: Array<{ productId: string; quantity: number; minimumWarning?: unknown }> } }
+      ).data.items;
+      const byProduct = new Map(items.map((i) => [i.productId, i]));
+      expect(byProduct.get(A.id)?.minimumWarning).toEqual({ kind: 'pieces', minimum: 10 });
+      expect(byProduct.get(D.id)).toHaveProperty('minimumWarning', null);
     });
 
     it('US4 #17 — an admin build of 201 items is refused 422 too_many_items', async () => {
