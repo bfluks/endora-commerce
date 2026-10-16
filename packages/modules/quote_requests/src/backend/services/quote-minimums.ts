@@ -107,3 +107,33 @@ export function assertQuoteMeetsMinimums(
   if (refusal === null) return;
   throw new HttpError(422, ERROR_CODES[refusal.code], refusal.message, refusal.details);
 }
+
+/** Feature 148 (FR-030) — what the admin read says about one line. */
+export type QuoteLineMinimumWarning =
+  | { kind: 'pieces'; minimum: number }
+  | { kind: 'packaging_unit'; minimum: number; packagingUnitName: string };
+
+/**
+ * FR-030 (research R13.5) — the admin read's per-line warning: the request's
+ * current lines evaluated with no exemption (product totals across the
+ * request), the first violation of each line (`pieces` before
+ * `packaging_unit`). Index-aligned with `lines`; `null` = the line meets its
+ * minimums. A line whose product has no record gets `null` — the read informs
+ * and never fails (the buyer's write is where a missing product is refused).
+ */
+export function quoteMinimumWarnings(
+  lines: readonly OrderMinimumLine[],
+  rules: OrderMinimumRules,
+): Array<QuoteLineMinimumWarning | null> {
+  const byKey = new Map<string, QuoteLineMinimumWarning>();
+  for (const violation of evaluateOrderMinimums(lines, rules)) {
+    if (violation.kind === 'product_unavailable' || byKey.has(violation.key)) continue;
+    byKey.set(
+      violation.key,
+      violation.kind === 'pieces'
+        ? { kind: 'pieces', minimum: violation.minimum }
+        : { kind: 'packaging_unit', minimum: violation.minimum, packagingUnitName: violation.packagingUnitName },
+    );
+  }
+  return lines.map((line) => byKey.get(line.key) ?? null);
+}

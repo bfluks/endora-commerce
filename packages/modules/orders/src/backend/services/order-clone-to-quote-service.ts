@@ -15,6 +15,17 @@ interface CloneContext {
 }
 
 /**
+ * Feature 148 (FR-012, FR-030; `contracts/quote-requests-api.md` §3) — who is
+ * cloning. `actor: 'operator'` is set only by the admin route, as a literal
+ * (threat F10): never read from a request body or query. The request is then
+ * created with the minimums flagged on the admin read rather than refused.
+ * Absent = the buyer, whose clone is refused below a minimum (US4 #5a).
+ */
+export interface CloneOptions {
+  actor?: 'operator';
+}
+
+/**
  * OrderCloneToQuoteService — feature 038 (US7).
  *
  * Builds a new Quote Request from an existing order's line items by delegating
@@ -27,7 +38,11 @@ export class OrderCloneToQuoteService {
     private readonly getRfqService: () => RfqCustomerPort | null,
   ) {}
 
-  async clone(orderId: string, ctx: CloneContext): Promise<{ quoteRequestId: string }> {
+  async clone(
+    orderId: string,
+    ctx: CloneContext,
+    options: CloneOptions = {},
+  ): Promise<{ quoteRequestId: string }> {
     const rfq = this.getRfqService();
     if (!rfq) {
       throw new HttpError(503, ERROR_CODES.VALIDATION_FAILED, 'Quote Requests module is not available.');
@@ -56,6 +71,7 @@ export class OrderCloneToQuoteService {
         isOrgAdmin: ctx.isOrgAdmin ?? true,
       },
       input,
+      options.actor === 'operator' ? { minimums: 'warn' } : undefined,
     );
     return { quoteRequestId: created.id };
   }

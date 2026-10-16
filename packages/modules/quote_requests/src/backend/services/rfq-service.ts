@@ -73,7 +73,9 @@ import {
   assertQuoteMeetsMinimums,
   draftEditExemptions,
   quoteMinimumLines,
+  quoteMinimumWarnings,
   resubmitMinimumLines,
+  type QuoteLineMinimumWarning,
 } from './quote-minimums.js';
 
 /**
@@ -1180,6 +1182,39 @@ export class RfqService {
     return quoteCustomFieldValuesFor(this.deps.customFieldValues, rfq.customFieldValues ?? {}, forAdmin);
   }
 
+  /**
+   * Feature 148 (FR-030, research R13.5) — each stored line's warning against
+   * today's minimums: no exemption, product totals across the request. One
+   * batched catalogue read of the products (no audience or channel filter —
+   * this is the operator's view), and of the units only when a line names one.
+   */
+  async #minimumWarnings(
+    items: readonly QuoteRequestItem[],
+  ): Promise<Array<QuoteLineMinimumWarning | null>> {
+    if (items.length === 0) return [];
+    const productIds = Array.from(new Set(items.map((it) => it.productId)));
+    const unitProductIds = Array.from(
+      new Set(items.filter((it) => it.packagingUnitId != null).map((it) => it.productId)),
+    );
+    const [products, packagingUnits] = await Promise.all([
+      this.deps.catalogProducts.findByIds(productIds),
+      unitProductIds.length > 0
+        ? this.deps.catalogProducts.listPackagingUnitsByProductIds(unitProductIds)
+        : Promise.resolve([]),
+    ]);
+    return quoteMinimumWarnings(
+      quoteMinimumLines(
+        items.map((it) => ({
+          productId: it.productId,
+          quantity: it.quantity,
+          packagingUnitId: it.packagingUnitId ?? null,
+          packagingUnitBaseQuantity: it.packagingUnitBaseQuantity ?? null,
+        })),
+      ),
+      { products, packagingUnits },
+    );
+  }
+
   async serializeFull(
     em: EntityManager,
     rfq: QuoteRequest,
@@ -1196,6 +1231,9 @@ export class RfqService {
     const submittedProposals = forAdmin
       ? await submissionRecordProposals(em, items, events)
       : new Map<string, number | null>();
+    // Feature 148 (FR-030) — computed for the admin reply only; the customer
+    // path never reads the catalogue for it (threat S7).
+    const minimumWarnings = forAdmin ? await this.#minimumWarnings(items) : [];
 
     let comparison: RfqComparisonAgainstLastSeen | null = null;
     if (rfq.awaitingCustomerRevisionAcceptance) {
@@ -1250,7 +1288,7 @@ export class RfqService {
       // explicit allow-list of item, event and payload keys — a key added to
       // the admin projection, or one that reaches a stored payload, never
       // reaches the customer by default.
-      items: items.map((it) => {
+      items: items.map((it, index) => {
         const item = {
           id: it.id,
           productId: it.productId,
@@ -1283,6 +1321,7 @@ export class RfqService {
               : null,
           customerProposedUnitPrice:
             item.desiredUnitPrice ?? submittedProposals.get(it.id) ?? null,
+          minimumWarning: minimumWarnings[index] ?? null,
         };
       }),
       events: (forAdmin ? events : customerEventsOf(events)).map((e) => {

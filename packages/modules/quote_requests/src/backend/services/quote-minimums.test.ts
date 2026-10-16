@@ -6,6 +6,7 @@ import {
   assertQuoteMeetsMinimums,
   draftEditExemptions,
   quoteMinimumLines,
+  quoteMinimumWarnings,
   resubmitMinimumLines,
   type QuoteMinimumLineSource,
 } from './quote-minimums.js';
@@ -181,5 +182,47 @@ describe('assertQuoteMeetsMinimums', () => {
       expect(error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
       expect(error.details).toBeUndefined();
     }
+  });
+});
+
+describe('quoteMinimumWarnings (FR-030, Phase 11)', () => {
+  const products = [
+    { id: A, type: 'simple', minOrderQuantity: 10 },
+    { id: B, type: 'simple', minOrderQuantity: 100 },
+  ];
+  const packagingUnits = [{ id: PALLET, productId: B, name: 'Pallet', baseQuantity: 64, minOrderUnits: 2 }];
+
+  it('flags each below-minimum line over the request totals, first violation per line, null otherwise', () => {
+    const warnings = quoteMinimumWarnings(
+      quoteMinimumLines([
+        line({ productId: A, quantity: 4 }),
+        line({ productId: A, quantity: 3 }),
+        line({ productId: B, quantity: 64, packagingUnitId: PALLET, packagingUnitBaseQuantity: 64 }),
+      ]),
+      { products, packagingUnits },
+    );
+    expect(warnings).toEqual([
+      { kind: 'pieces', minimum: 10 },
+      { kind: 'pieces', minimum: 10 },
+      { kind: 'pieces', minimum: 100 },
+    ]);
+  });
+
+  it('a pallet line meeting the pieces minimum warns on the unit; a line at its minimum is null', () => {
+    const warnings = quoteMinimumWarnings(
+      quoteMinimumLines([
+        line({ productId: A, quantity: 10 }),
+        line({ productId: B, quantity: 64, packagingUnitId: PALLET, packagingUnitBaseQuantity: 64 }),
+        line({ productId: B, quantity: 40 }),
+      ]),
+      { products, packagingUnits },
+    );
+    expect(warnings).toEqual([null, { kind: 'packaging_unit', minimum: 2, packagingUnitName: 'Pallet' }, null]);
+  });
+
+  it('a line whose product has no record is null, never a failure', () => {
+    expect(quoteMinimumWarnings(quoteMinimumLines([line({ productId: 'gone', quantity: 1 })]), { products, packagingUnits })).toEqual([
+      null,
+    ]);
   });
 });

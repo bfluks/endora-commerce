@@ -1326,10 +1326,12 @@ export async function registerOrderRoutes(
     async (request) => {
       const order = await emFactory().findOne(Order, { id: request.params.id });
       if (!order) throw new HttpError(404, ERROR_CODES.ORDER_NOT_FOUND, 'Order not found.');
-      const result = await deps.orderCloneToQuoteService.clone(request.params.id, {
-        customerAccountId: order.placedByCustomerAccountId,
-        organizationId: order.organizationId,
-      });
+      // Feature 148 (FR-012, threat F10) — the actor is this route's literal.
+      const result = await deps.orderCloneToQuoteService.clone(
+        request.params.id,
+        { customerAccountId: order.placedByCustomerAccountId, organizationId: order.organizationId },
+        { actor: 'operator' },
+      );
       return { data: result };
     },
   );
@@ -1340,6 +1342,7 @@ export async function registerOrderRoutes(
     async (request) => {
       const ctx = resolveCustomerContext(request);
       await orderService.getById(request.params.id, ctx); // authorize ownership
+      // Feature 148 — the buyer's clone: no actor, so a minimum refuses it (US4 #5a).
       const result = await deps.orderCloneToQuoteService.clone(request.params.id, {
         customerAccountId: ctx.customerAccountId,
         organizationId: ctx.organizationId,
