@@ -1864,6 +1864,10 @@ export interface CatalogProductRecord {
   lowStockThresholdMode: 'cumulative' | 'per_warehouse';
   fulfilmentStrategy: FulfilmentStrategy | null;
   fulfilmentStrategyWarehouseOrder: string[] | null;
+  /** Feature 148 — pieces minimum; `null` = none. Stored for any type, applied to simple/configurable only. */
+  minOrderQuantity: number | null;
+  /** Feature 148 — the product's current flag; order lines record their own copy at placement. */
+  returnable: boolean;
 }
 
 /**
@@ -2106,6 +2110,8 @@ export interface CatalogPackagingUnitRecord {
   isDefault: boolean;
   createdAt: Date;
   updatedAt: Date;
+  /** Feature 148 — minimum units of this packaging unit per order of the product; `null` = none. */
+  minOrderUnits: number | null;
 }
 
 /** A directed product↔product relation (cross-sell, up-sell, related). */
@@ -2193,6 +2199,18 @@ export interface CatalogProductReadPort {
     productId: string,
     packagingUnitId: string,
   ): Promise<CatalogPackagingUnitRecord | null>;
+  /**
+   * Feature 148 — the packaging units of the given products, ordered by product id, then
+   * `position`, then `name`. The batch twin of `listVariantsByProductIds`. Unknown ids contribute
+   * nothing.
+   *
+   * **No policy, like every method of this port: it answers for any id.** Callers MUST pass only
+   * product ids they have already vetted — resolved through the buyer-visibility and channel checks
+   * (`isProductVisibleTo`, the request-channel filter) or taken from a document the caller owns on the
+   * buyer's behalf (their basket, quote request or order). Passing an id straight from a request body
+   * turns this method into a catalogue enumeration oracle.
+   */
+  listPackagingUnitsByProductIds(productIds: readonly string[]): Promise<CatalogPackagingUnitRecord[]>;
 
   /** Links out of the given products, optionally narrowed to one kind. */
   listLinksBySourceIds(

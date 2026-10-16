@@ -80,6 +80,8 @@ function productRecord(id: string): CatalogProductRecord {
     lowStockThresholdMode: 'cumulative',
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: null,
+    returnable: false,
   };
 }
 
@@ -171,6 +173,7 @@ describe('comparisons — catalog rows arrive over catalogProductReadPort', () =
       findVariantsBySkus: async () => [],
       findVariantInProduct: async () => null,
       findPackagingUnitInProduct: async () => null,
+      listPackagingUnitsByProductIds: async () => [],
       listLinksBySourceIds: async () => [],
       listValueOverridesByProductIds: async () => [],
       listProductIdsByAttributeValue: async () => [],
@@ -209,6 +212,7 @@ describe('comparisons — catalog rows arrive over catalogProductReadPort', () =
       findVariantsBySkus: async () => [],
       findVariantInProduct: async () => null,
       findPackagingUnitInProduct: async () => null,
+      listPackagingUnitsByProductIds: async () => [],
       listLinksBySourceIds: async () => [],
       listValueOverridesByProductIds: async () => [],
       listProductIdsByAttributeValue: async () => [],

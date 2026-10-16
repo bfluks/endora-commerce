@@ -58,6 +58,8 @@ function productRecord(
     lowStockThresholdMode: 'cumulative',
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: null,
+    returnable: false,
     ...overrides,
   };
 }
