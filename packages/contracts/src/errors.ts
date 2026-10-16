@@ -193,6 +193,11 @@ export const ERROR_CODES = {
   INVOICE_NUMBER_ALREADY_ISSUED: 'INVOICE_NUMBER_ALREADY_ISSUED',
   INVALID_TRANSITION: 'INVALID_TRANSITION',
 
+  // Returns 148 — a `return`-kind case naming an order line recorded as not
+  // returnable at purchase (owned and raised by `returns`; complaints are
+  // never refused by it).
+  RETURN_LINE_NOT_RETURNABLE: 'RETURN_LINE_NOT_RETURNABLE',
+
   // Credit Limit
   CREDIT_LIMIT_NOT_GRANTED: 'CREDIT_LIMIT_NOT_GRANTED',
   CREDIT_LIMIT_ALREADY_GRANTED: 'CREDIT_LIMIT_ALREADY_GRANTED',

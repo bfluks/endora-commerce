@@ -659,6 +659,15 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'product\'s units, by id or by name and base quantity. The noun is the packaging unit, ' +
       '`catalog`\'s row (D-121 T1); the raiser is `quote_requests` on create and draft edit.',
   },
+  RETURN_LINE_NOT_RETURNABLE: {
+    to: 'returns',
+    reason:
+      'Minted by feature 148 (`specs/148-catalog-order-constraints/`) for the refusal of a ' +
+      '`return`-kind case that names an order line recorded as not returnable at purchase. ' +
+      'The noun is the return case and the policy reading the stamp is `returns`\' own — ' +
+      '`orders` only reports the stamp through `OrderReturnContextPort` — so `returns` owns ' +
+      'the sentence, and its `createCase` is the one raise site.',
+  },
 };
 
 /**
