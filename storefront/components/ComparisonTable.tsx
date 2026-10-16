@@ -40,7 +40,11 @@ import { tForLocale } from '../lib/i18n/messages';
  * `null` are skipped client-side.
  */
 export function ComparisonTable(props: {
-  /** The storefront's language — the PDF is printed in it (`specs/152-compare-pdf-template/` FR-032). */
+  /**
+   * The storefront's language — the PDF is printed in it
+   * (`specs/152-compare-pdf-template/` FR-032), and feature 148's minimum
+   * statement under "add to cart" is rendered in it.
+   */
   readonly locale?: string;
 } = {}): ReactNode {
   const locale = props.locale ?? 'en-US';
@@ -202,6 +206,8 @@ export function ComparisonTable(props: {
                     <CompareAddToCartButton
                       productId={p.id}
                       disabled={!p.available}
+                      minOrderQuantity={p.minOrderQuantity ?? null}
+                      {...(props.locale ? { locale: props.locale } : {})}
                     />
                     <a href={`/p/${p.slug}`} className="btn btn--outline btn--sm">
                       Karta produktu

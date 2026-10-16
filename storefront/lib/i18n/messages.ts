@@ -45,6 +45,9 @@ export type MessageKey =
   | 'product.tabs.attachments'
   | 'product.packaging.singlePiece'
   | 'product.packaging.pieces'
+  | 'product.minimum.pieces'
+  | 'product.minimum.units'
+  | 'product.minimum.addToCart'
   | 'product.inStock'
   | 'product.stockBand.high'
   | 'product.stockBand.medium'
@@ -293,6 +296,9 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'product.tabs.attachments': 'Attachments',
     'product.packaging.singlePiece': 'Single piece',
     'product.packaging.pieces': 'pcs',
+    'product.minimum.pieces': 'Minimum order: {count} pcs',
+    'product.minimum.units': 'Minimum order: {units} × {unit} = {count} pcs',
+    'product.minimum.addToCart': 'Add {count} pcs to cart',
     'product.inStock': 'In stock',
     'product.stockBand.high': 'In stock — plenty',
     'product.stockBand.medium': 'In stock',
@@ -524,6 +530,9 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'product.tabs.attachments': 'Załączniki',
     'product.packaging.singlePiece': 'Pojedyncza sztuka',
     'product.packaging.pieces': 'szt.',
+    'product.minimum.pieces': 'Minimalne zamówienie: {count} szt.',
+    'product.minimum.units': 'Minimalne zamówienie: {units} × {unit} = {count} szt.',
+    'product.minimum.addToCart': 'Dodaj {count} szt. do koszyka',
     'product.inStock': 'Dostepny',
     'product.stockBand.high': 'Duzo w magazynie',
     'product.stockBand.medium': 'Sredni stan',

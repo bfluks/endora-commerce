@@ -379,6 +379,8 @@ export default async function ProductPage({
                       packagingUnits={product.packagingUnits}
                       singlePieceLabel={t('product.packaging.singlePiece')}
                       piecesLabel={t('product.packaging.pieces')}
+                      minOrderQuantity={product.minOrderQuantity ?? null}
+                      locale={locale}
                       addToCartAction={addToCartAction}
                       addToCartLabel={t('product.addToCart')}
                       // Secondary actions row, next to compare + quote.

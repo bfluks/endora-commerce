@@ -11,6 +11,7 @@ import {
 } from '../lib/actions/shoppingList';
 import { addRfqDraftItem } from '../lib/rfqDraft';
 import { addProductToCartAction } from '../lib/actions/cart';
+import { cardAddToCartPayload } from '../lib/orderMinimum';
 
 /**
  * Product-card action buttons (add to cart / add to shopping list / add to
@@ -57,6 +58,16 @@ export function ProductCardActions(props: {
   unitPrice?: { amount: number; currency: string } | null;
   /** True for a simple, directly-purchasable product (shows "add to cart"). */
   buyable: boolean;
+  /**
+   * Feature 148 (FR-016) — the product's pieces minimum; "add to cart" adds it in one action.
+   * `null`/absent = none (adds 1, as before).
+   */
+  minOrderQuantity?: number | null | undefined;
+  /**
+   * Localized accessible name for "add to cart" when it adds the minimum ("Add 10 pcs to
+   * cart"), rendered by the server card through `cardAddLabel`; `null`/absent keeps the default.
+   */
+  addToCartMinimumLabel?: string | null | undefined;
 }): ReactNode {
   const [cfg, setCfg] = useState<ButtonsConfig | null>(null);
   const [cartState, setCartState] = useState<ActionState>('idle');
@@ -101,7 +112,9 @@ export function ProductCardActions(props: {
       // cookies are httpOnly and scoped to the storefront origin, so a direct
       // call filled a cart neither the header badge's server render nor the
       // `/cart` page reads.
-      const res = await addProductToCartAction({ productId: props.productId, quantity: 1 });
+      const res = await addProductToCartAction(
+        cardAddToCartPayload(props.productId, props.minOrderQuantity),
+      );
       if (!res.ok) throw new Error('cart');
       window.dispatchEvent(new CustomEvent('b2b:cart:changed'));
       setCartState('done');
@@ -183,7 +196,7 @@ export function ProductCardActions(props: {
       ? 'Dodano do koszyka'
       : cartState === 'error'
         ? 'Nie udało się dodać'
-        : 'Dodaj do koszyka';
+        : (props.addToCartMinimumLabel ?? 'Dodaj do koszyka');
   const quoteTooltip = quoteState === 'done' ? 'Dodano do zapytania' : 'Dodaj do zapytania';
 
   return (
@@ -221,7 +234,7 @@ export function ProductCardActions(props: {
             onClick={(): void => void addToCart()}
             disabled={cartState === 'busy'}
             className="icon-btn"
-            aria-label="Dodaj do koszyka"
+            aria-label={props.addToCartMinimumLabel ?? 'Dodaj do koszyka'}
           >
             <CartIcon />
           </button>

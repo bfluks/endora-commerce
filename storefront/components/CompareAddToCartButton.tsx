@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { addProductToCartAction } from '../lib/actions/cart';
+import { cardAddToCartPayload, minimumStatement } from '../lib/orderMinimum';
 
 /**
  * `<CompareAddToCartButton>` — feature 007 / US3 / T046.
@@ -19,12 +20,26 @@ import { addProductToCartAction } from '../lib/actions/cart';
  * Mounted inside `<ComparisonTable>` only when `viewerIsOwner === true`
  * (US1 / spec FR-013, FR-015). The shared-link recipient never sees
  * this button.
+ *
+ * Feature 148 (FR-016) — for a product with a pieces minimum the button adds the minimum in one
+ * action, and the minimum is stated under it (linked by `aria-describedby`) so the buyer knows
+ * how many pieces the click adds before making it.
  */
 
 export function CompareAddToCartButton(props: {
   productId: string;
   disabled?: boolean;
+  /** Feature 148 — the product's pieces minimum; `null`/absent = none (adds 1). */
+  minOrderQuantity?: number | null | undefined;
+  /** Request locale for the minimum statement. */
+  locale?: string | undefined;
 }): ReactNode {
+  const statement = minimumStatement(
+    { minOrderQuantity: props.minOrderQuantity },
+    null,
+    props.locale ?? 'pl-PL',
+  );
+  const statementId = `compare-min-${props.productId}`;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -35,7 +50,9 @@ export function CompareAddToCartButton(props: {
     setError(null);
     setSuccess(false);
     try {
-      const res = await addProductToCartAction({ productId: props.productId, quantity: 1 });
+      const res = await addProductToCartAction(
+        cardAddToCartPayload(props.productId, props.minOrderQuantity),
+      );
       if (!res.ok) throw new Error(res.message ?? 'Could not add to cart.');
       setSuccess(true);
       // Notify the header cart counter so it refreshes if it's listening.
@@ -56,10 +73,16 @@ export function CompareAddToCartButton(props: {
         type="button"
         className="btn btn--dark btn--sm"
         disabled={busy || props.disabled}
+        {...(statement ? { 'aria-describedby': statementId } : {})}
         onClick={(): void => void onClick()}
       >
         {success ? '✓ Dodano' : busy ? 'Dodawanie…' : 'Dodaj do koszyka'}
       </button>
+      {statement ? (
+        <div id={statementId} className="mt-1 text-[12px] text-muted">
+          {statement}
+        </div>
+      ) : null}
       {error ? <div className="mt-1 text-[12px] text-bad">{error}</div> : null}
     </>
   );

@@ -4,6 +4,7 @@ import { useActionState, useEffect, useRef, useState, type ReactNode } from 'rea
 import { addRfqDraftItem } from '../lib/rfqDraft';
 import { trackAddToCart, trackAddToQuoteRequest, type GaLineItem } from '../lib/analytics/ecommerce';
 import { ADD_TO_CART_IDLE, type AddToCartResult } from '../lib/cartAddState';
+import { clampQuantity, minimumStatement, orderFloor, quantityOnUnitChange } from '../lib/orderMinimum';
 import { CartAddedPopup } from './CartAddedPopup';
 import { CartSubmitButton } from './CartSubmitButton';
 
@@ -21,6 +22,8 @@ export interface ProductPackagingUnitOption {
   name: string;
   baseQuantity: number;
   isDefault: boolean;
+  /** Feature 148 — minimum units of this unit per order of the product; `null`/absent = none. */
+  minOrderUnits?: number | null | undefined;
 }
 
 export interface ProductBuyActionsProps {
@@ -41,6 +44,14 @@ export interface ProductBuyActionsProps {
   singlePieceLabel?: string | undefined;
   /** Localized pieces unit word (e.g. "szt."). */
   piecesLabel?: string | undefined;
+  /**
+   * Feature 148 (FR-014) — the product's pieces minimum; `null`/absent = none. The quantity
+   * input starts at the applicable minimum (the selected unit's, when one is selected) and does
+   * not offer less; the minimum is stated beside it.
+   */
+  minOrderQuantity?: number | null | undefined;
+  /** Request locale — the minimum statement and the piece count are rendered in it. */
+  locale?: string | undefined;
   addToCartAction: (
     prevState: AddToCartResult,
     formData: FormData,
@@ -69,6 +80,8 @@ export function ProductBuyActions({
   packagingUnits,
   singlePieceLabel = 'szt.',
   piecesLabel = 'szt.',
+  minOrderQuantity = null,
+  locale = 'pl-PL',
   addToCartAction,
   addToCartLabel,
   leadingAction,
@@ -79,13 +92,21 @@ export function ProductBuyActions({
   // Default the selector to the operator's default unit when present, else to
   // single pieces (empty string).
   const [unitId, setUnitId] = useState<string>(defaultUnit?.id ?? '');
-  const [qty, setQty] = useState(1);
+  const product = { minOrderQuantity };
+  // Feature 148 — the input starts at the applicable minimum. `qtyText` holds what the buyer
+  // typed, unclamped, so typing "15" over a floor of 10 is not rewritten keystroke by keystroke;
+  // it is normalised on blur, and every consumer reads the clamped `qty` below.
+  const [qtyText, setQtyText] = useState<string>(() => String(orderFloor(product, defaultUnit)));
   const [quoteAdded, setQuoteAdded] = useState(false);
   // `CartSubmitButton` renders its own pending spinner via `useFormStatus`, so
   // the action's `isPending` flag isn't needed here.
   const [cartState, cartFormAction] = useActionState(addToCartAction, ADD_TO_CART_IDLE);
 
   const selectedUnit = units.find((u) => u.id === unitId) ?? null;
+  const floor = orderFloor(product, selectedUnit);
+  const qty = clampQuantity(qtyText, floor);
+  const statement = minimumStatement(product, selectedUnit, locale);
+  const statementId = `buy-min-${productId}`;
   const resultingPieces = selectedUnit ? selectedUnit.baseQuantity * qty : null;
 
   // Feature 049 — the GA line item built from the info the PDP already has.
@@ -148,7 +169,11 @@ export function ProductBuyActions({
           <select
             aria-label="Jednostka"
             value={unitId}
-            onChange={(e): void => setUnitId(e.target.value)}
+            onChange={(e): void => {
+              const next = units.find((u) => u.id === e.target.value) ?? null;
+              setQtyText(String(quantityOnUnitChange(qty, floor, orderFloor(product, next))));
+              setUnitId(e.target.value);
+            }}
             className="rounded-sm border border-line px-[8px] py-[6px] text-[13px]"
           >
             <option value="">{singlePieceLabel}</option>
@@ -166,22 +191,30 @@ export function ProductBuyActions({
         <input
           id={`buy-qty-${productId}`}
           type="number"
-          min={1}
-          max={9999}
-          value={qty}
-          onChange={(e): void => {
-            const n = Number(e.target.value);
-            setQty(Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1);
-          }}
+          min={floor}
+          max={Math.max(9999, floor)}
+          step={1}
+          inputMode="numeric"
+          value={qtyText}
+          {...(statement ? { 'aria-describedby': statementId } : {})}
+          onChange={(e): void => setQtyText(e.target.value)}
+          onBlur={(): void => setQtyText(String(qty))}
           className="w-[5rem] rounded-sm border border-line px-[8px] py-[6px]"
         />
 
         {resultingPieces !== null ? (
           <span className="text-[12px] text-muted">
-            = {resultingPieces.toLocaleString('pl-PL')} {piecesLabel}
+            = {resultingPieces.toLocaleString(locale)} {piecesLabel}
           </span>
         ) : null}
       </div>
+
+      {/* Feature 148 (FR-014) — the minimum, stated directly under the control it constrains. */}
+      {statement ? (
+        <p id={statementId} className="-mt-1 text-[12px] text-muted">
+          {statement}
+        </p>
+      ) : null}
 
       {/* Primary CTA — Add to cart. Prominent, full-width, dark (Industria
           `.btn--dark.btn--lg.btn--block` in the reference pricepanel). */}
