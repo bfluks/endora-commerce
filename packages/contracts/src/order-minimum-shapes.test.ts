@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   cartDroppedLineReasonSchema,
   cartFromQrResponseSchema,
   cartViewLineSchema,
+  isQuoteSeededLineExempt,
+  type CartItemRecord,
 } from './carts.js';
 import {
   ADMIN_ORDER_MAX_ITEMS,
@@ -71,6 +73,37 @@ describe('cart view line', () => {
     ).toEqual({ kind: 'packaging_unit', minimum: 2, packagingUnitName: 'Pallet' });
     expect(cartViewLineSchema.parse({ ...line, minOrderQuantity: null, belowMinimum: null }).belowMinimum).toBeNull();
   });
+});
+
+describe('cart item record — quote-seeded quantity (data-model §2, FR-028)', () => {
+  it('CartItemRecord carries a required quoteSeededQuantity: number | null', () => {
+    expectTypeOf<CartItemRecord['quoteSeededQuantity']>().toEqualTypeOf<number | null>();
+    // Required, not optional: a record built without it is a type error.
+    expectTypeOf<undefined>().not.toMatchTypeOf<CartItemRecord['quoteSeededQuantity']>();
+  });
+
+  // The state-based exemption (owner ruling P2): exempt while the line's quantity
+  // equals the quantity the accepted quote seeded, and only while the basket still
+  // carries its quote source.
+  it.each([
+    { source: 'qr-1', seeded: 5, quantity: 5, exempt: true },
+    { source: 'qr-1', seeded: 5, quantity: 12, exempt: false },
+    { source: 'qr-1', seeded: 5, quantity: 6, exempt: false },
+    { source: 'qr-1', seeded: 5, quantity: 4, exempt: false },
+    { source: 'qr-1', seeded: null, quantity: 5, exempt: false },
+    { source: null, seeded: 5, quantity: 5, exempt: false },
+    { source: null, seeded: null, quantity: 5, exempt: false },
+  ])(
+    'source $source, seeded $seeded, quantity $quantity → exempt $exempt',
+    ({ source, seeded, quantity, exempt }) => {
+      expect(
+        isQuoteSeededLineExempt(
+          { sourceQuoteRequestId: source },
+          { quantity, quoteSeededQuantity: seeded },
+        ),
+      ).toBe(exempt);
+    },
+  );
 });
 
 describe('cart dropped lines', () => {
