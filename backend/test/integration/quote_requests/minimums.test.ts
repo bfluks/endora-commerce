@@ -482,7 +482,8 @@ describe('148 — buyer quote-request writes refuse lines below a minimum [integ
         expect(error.details).toMatchObject({
           productName: L.nameEn,
           minimum: 10,
-          lines: [{ index: 0, productId: L.id, productName: L.nameEn, kind: 'pieces', minimum: 10 }],
+          // The resubmitted request's line order is the stored one; only L is below.
+          lines: [{ productId: L.id, productName: L.nameEn, kind: 'pieces', minimum: 10 }],
         });
         expect(asked()).toBe(0);
       });

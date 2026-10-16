@@ -748,6 +748,12 @@ export interface QuoteRequestLineRecord {
   quantity: number;
   packagingUnitName: string | null;
   packagingUnitBaseQuantity: number | null;
+  /**
+   * Feature 148 (FR-026) — the catalogue packaging unit the line resolved to;
+   * `null` for a plain-pieces line or one stored before the feature. Optional,
+   * so every structural stub of the port written before it still compiles.
+   */
+  packagingUnitId?: string | null;
   /** Present for ERP export callers; cart conversion ignores these (FR-017). */
   lineCurrency: string;
   agreedUnitPrice: string | null;

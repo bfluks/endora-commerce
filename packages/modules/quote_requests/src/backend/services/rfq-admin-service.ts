@@ -679,6 +679,9 @@ export class RfqAdminService {
               quantity: lineInput.quantity,
               packagingUnitName: row?.packagingUnitName ?? null,
               packagingUnitBaseQuantity: row?.packagingUnitBaseQuantity ?? null,
+              // Feature 148 (analyze F14) — the resolved unit travels with its
+              // snapshot; an operator never sends one, a new line has none.
+              packagingUnitId: row?.packagingUnitId ?? null,
               desiredUnitPrice: row?.desiredUnitPrice ?? null,
               agreedUnitPrice:
                 lineInput.agreedUnitPrice !== undefined && lineInput.agreedUnitPrice !== null

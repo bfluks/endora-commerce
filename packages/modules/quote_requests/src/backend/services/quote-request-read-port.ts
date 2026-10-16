@@ -77,6 +77,7 @@ export class QuoteRequestReadService implements QuoteRequestReadPort {
       quantity: item.quantity,
       packagingUnitName: item.packagingUnitName ?? null,
       packagingUnitBaseQuantity: item.packagingUnitBaseQuantity ?? null,
+      packagingUnitId: item.packagingUnitId ?? null,
       lineCurrency: item.lineCurrency,
       agreedUnitPrice: item.agreedUnitPrice ?? null,
       desiredUnitPrice: item.desiredUnitPrice ?? null,

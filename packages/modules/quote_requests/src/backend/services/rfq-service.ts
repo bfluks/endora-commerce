@@ -14,17 +14,20 @@ import {
   type AdminUserReadPort,
   type CartWritePort,
   type CatalogProductReadPort,
+  type CatalogPackagingUnitRecord,
   type CatalogProductRecord,
+  type CreateQuoteRequestLine,
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
   type SalesRepAssignmentPort,
   type BuyerLinePricePort,
   type CreateForCustomerOptions,
+  type OrderMinimumLine,
 } from '@endora-commerce/contracts';
 import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 import { HttpError } from '@endora-commerce/platform/http';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AuditPort, PlatformLogger } from '@endora-commerce/platform/kernel';
 import { QuoteRequest, type QuoteRequestStatus } from '../entities/quote-request.entity.js';
 import { QuoteRequestItem } from '../entities/quote-request-item.entity.js';
 import {
@@ -50,7 +53,7 @@ import {
   storedReferenceColumns,
   type ReferenceColumns,
 } from './reference-price.js';
-import { carriedProposal, pairLines, referenceInputsUnchanged } from './line-carry-over.js';
+import { carriedProposal, pairLines } from './line-carry-over.js';
 import type { NegotiationPolicyService } from './negotiation-policy-service.js';
 import {
   CUSTOMER_EVENT_KEYS,
@@ -60,6 +63,18 @@ import {
   pickKeys,
 } from './customer-projection.js';
 import { assertDraftOpenForCustomer, submissionRecordProposals } from './draft-guard.js';
+import {
+  carriesPackagingReference,
+  packagingMismatchError,
+  resolveLinePackaging,
+  type ResolvedPackaging,
+} from './packaging-resolution.js';
+import {
+  assertQuoteMeetsMinimums,
+  draftEditExemptions,
+  quoteMinimumLines,
+  resubmitMinimumLines,
+} from './quote-minimums.js';
 
 /**
  * Customer-facing Quote Requests service — feature 008 workflow.
@@ -164,6 +179,11 @@ export interface RfqServiceDeps {
   resolveTaxRate: (organizationId: string) => Promise<number>;
   /** Feature 054 — audits RFQ writes co-transactionally when provided. */
   auditLog?: AuditPort;
+  /**
+   * Feature 148 (threat F6) — where the server-side cause of an `unknown_unit`
+   * refusal goes; the buyer's answer never carries it. Absent: not logged.
+   */
+  log?: PlatformLogger;
 }
 
 export class RfqService {
@@ -203,6 +223,55 @@ export class RfqService {
     );
     const acquirable = publishedHere ? visible.filter((p) => publishedHere.has(p.id)) : visible;
     return new Map(acquirable.map((p) => [p.id, p]));
+  }
+
+  /**
+   * Feature 148 (FR-026, R13.1) — resolves each line's packaging against the
+   * catalogue, or refuses the whole write with `422 PACKAGING_UNIT_MISMATCH`.
+   *
+   * Runs after the product 404, so every product here passed
+   * `#acquirableProductsById`, and the units are read only for those vetted ids
+   * — and only for the lines that name a unit at all (threat F12). Which of an
+   * unknown, a deleted or another product's unit an `unknown_unit` was goes to
+   * the log, never to the buyer (threat F6).
+   */
+  async #resolvePackaging(
+    lines: readonly CreateQuoteRequestLine[],
+    productById: ReadonlyMap<string, CatalogProductRecord>,
+  ): Promise<{ packaging: ResolvedPackaging[]; units: CatalogPackagingUnitRecord[] }> {
+    const vettedIds = Array.from(
+      new Set(lines.filter(carriesPackagingReference).map((line) => line.productId)),
+    ).filter((id) => productById.has(id));
+    const units =
+      vettedIds.length > 0 ? await this.deps.catalogProducts.listPackagingUnitsByProductIds(vettedIds) : [];
+    const { lines: packaging, mismatches } = resolveLinePackaging(lines, units);
+    if (mismatches.length > 0) {
+      const causes = mismatches.filter((m) => m.cause !== undefined);
+      if (causes.length > 0) {
+        this.deps.log?.info(
+          { lines: causes.map((m) => ({ index: m.index, productId: m.productId, cause: m.cause })) },
+          'quote_requests: a packaging unit id did not resolve on a buyer write',
+        );
+      }
+      throw packagingMismatchError(mismatches, productNames(productById.values()));
+    }
+    return { packaging, units };
+  }
+
+  /**
+   * Feature 148 (FR-012, FR-029) — the minimum check of a buyer's write, after
+   * the packaging resolution and before any reference price is resolved or
+   * anything is written. `'warn'` is set only by an in-process caller acting
+   * for a representative (`CreateForCustomerOptions.minimums`).
+   */
+  #assertMinimums(
+    lines: readonly OrderMinimumLine[],
+    products: Iterable<CatalogProductRecord>,
+    packagingUnits: readonly CatalogPackagingUnitRecord[],
+    mode: 'enforce' | 'warn',
+  ): void {
+    const records = Array.from(products);
+    assertQuoteMeetsMinimums(lines, { products: records, packagingUnits }, productNames(records), mode);
   }
 
   /** Feature 054 — co-transactional RFQ audit on `em` (actor from context). */
@@ -337,6 +406,17 @@ export class RfqService {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
     }
 
+    // Feature 148 (FR-026, FR-012, FR-029) — packaging, then minimums, after
+    // the 404 above and before anything is priced, numbered or written.
+    const { packaging, units } = await this.#resolvePackaging(input.items, productById);
+    const resolvedLines = input.items.map((line, index) => withResolvedPackaging(line, packaging[index]!));
+    this.#assertMinimums(
+      quoteMinimumLines(resolvedLines),
+      productById.values(),
+      units,
+      options.minimums ?? 'enforce',
+    );
+
     // FR-001 / FR-008 — each line's reference, for the request's owner on the
     // channel it is raised on; a cart conversion supplies its own snapshot.
     // Resolved before any write: a pricing failure leaves no reference and
@@ -367,12 +447,13 @@ export class RfqService {
     const items: QuoteRequestItem[] = [];
     for (const [index, lineInput] of input.items.entries()) {
       const product = productById.get(lineInput.productId)!;
+      const unit = packaging[index]!;
       // Feature 043 — append the packaging-unit name to the snapshot name so
       // RFQ views show "<name> (Paleta)", and persist the structured snapshot.
+      // Feature 148 (FR-026) — the name and base quantity are the catalogue
+      // unit's, beside its id; a line naming no unit stores plain pieces.
       const baseName = anyLocaleValue(product.name);
-      const productName = lineInput.packagingUnitName
-        ? `${baseName} (${lineInput.packagingUnitName})`
-        : baseName;
+      const productName = unit.packagingUnitName ? `${baseName} (${unit.packagingUnitName})` : baseName;
       const item = em.create(QuoteRequestItem, {
         quoteRequestId: rfq.id,
         productId: product.id,
@@ -380,12 +461,9 @@ export class RfqService {
         productSlug: product.slug,
         variantId: lineInput.variantId ?? null,
         quantity: lineInput.quantity,
-        ...(lineInput.packagingUnitName
-          ? { packagingUnitName: lineInput.packagingUnitName }
-          : {}),
-        ...(lineInput.packagingUnitBaseQuantity != null
-          ? { packagingUnitBaseQuantity: lineInput.packagingUnitBaseQuantity }
-          : {}),
+        packagingUnitId: unit.packagingUnitId,
+        packagingUnitName: unit.packagingUnitName,
+        packagingUnitBaseQuantity: unit.packagingUnitBaseQuantity,
         desiredUnitPrice:
           lineInput.desiredUnitPrice !== undefined ? lineInput.desiredUnitPrice.toFixed(2) : null,
         lineNote: lineInput.lineNote ?? null,
@@ -490,27 +568,27 @@ export class RfqService {
         { quoteRequestId: rfq.id },
         { orderBy: { createdAt: 'asc', id: 'asc' } },
       );
+      // Feature 148 (FR-026) — packaging resolved against the catalogue
+      // before the pairing, which reads the **resolved** name: a line naming
+      // its unit by id alone pairs with the stored row of that unit.
+      const { packaging, units } = await this.#resolvePackaging(body.items, productById);
+      const resolvedLines = body.items.map((line, index) => withResolvedPackaging(line, packaging[index]!));
+
       // Research R5.3 — pair by product, variant, packaging name, position.
-      const { paired } = pairLines(
-        existing,
-        body.items.map((line) => ({
-          productId: line.productId,
-          variantId: line.variantId ?? null,
-          packagingUnitName: line.packagingUnitName ?? null,
-        })),
-        'customer',
-      );
+      const { paired } = pairLines(existing, resolvedLines, 'customer');
 
       // A paired line whose product, variant, quantity and packaging unit are
       // unchanged keeps its stored reference; every other line is priced
       // afresh — for the request's **owner**, on the channel it was raised on,
       // never for the acting user (an organization administrator editing a
       // colleague's draft prices it as the colleague would pay).
-      const keeps = body.items.map((line, index) => {
-        const row = paired[index] ?? null;
-        return row !== null && referenceInputsUnchanged(row, line);
-      });
-      const toResolve = body.items.filter((_, index) => !keeps[index]);
+      //
+      // Feature 148 (FR-031 (b)) — the same predicate exempts the line from the
+      // minimums: an unchanged line is not refused, and still counts toward its
+      // product's total. Judged before pricing (FR-029).
+      const keeps = draftEditExemptions(paired, resolvedLines);
+      this.#assertMinimums(quoteMinimumLines(resolvedLines, keeps), productById.values(), units, 'enforce');
+      const toResolve = resolvedLines.filter((_, index) => !keeps[index]);
       const resolved = await resolveReferencePrices(this.deps.buyerLinePrices, {
         owner: { customerAccountId: rfq.customerAccountId, organizationId: rfq.organizationId },
         salesChannelId: rfq.salesChannelId ?? null,
@@ -527,15 +605,14 @@ export class RfqService {
       const lines = body.items.map((lineInput, index): QuoteRequestItemDraft => {
         const product = productById.get(lineInput.productId)!;
         const row = paired[index] ?? null;
-        // FR-035 — packaging stored as sent, with the name suffix
-        // `createForCustomer` writes.
+        const unit = packaging[index]!;
+        // FR-035 — packaging stored with the name suffix `createForCustomer`
+        // writes; feature 148 (FR-026) — the catalogue unit's, beside its id.
         const baseName = anyLocaleValue(product.name);
         return {
           quoteRequestId: rfq.id,
           productId: product.id,
-          productName: lineInput.packagingUnitName
-            ? `${baseName} (${lineInput.packagingUnitName})`
-            : baseName,
+          productName: unit.packagingUnitName ? `${baseName} (${unit.packagingUnitName})` : baseName,
           productSlug: product.slug,
           variantId: lineInput.variantId ?? null,
           variantLabel:
@@ -543,8 +620,9 @@ export class RfqService {
               ? (row.variantLabel ?? null)
               : null,
           quantity: lineInput.quantity,
-          packagingUnitName: lineInput.packagingUnitName ?? null,
-          packagingUnitBaseQuantity: lineInput.packagingUnitBaseQuantity ?? null,
+          packagingUnitId: unit.packagingUnitId,
+          packagingUnitName: unit.packagingUnitName,
+          packagingUnitBaseQuantity: unit.packagingUnitBaseQuantity,
           // Threat model T5 — an omitted proposal on a paired line is kept.
           desiredUnitPrice: carriedProposal(lineInput.desiredUnitPrice, row),
           lineNote: lineInput.lineNote ?? null,
@@ -658,6 +736,15 @@ export class RfqService {
     if (publishedHere && sourceItems.some((it) => !publishedHere.has(it.productId))) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
     }
+
+    // Feature 148 (FR-031 (c), FR-029) — judged as a new submission, before
+    // pricing: pieces only (no packaging is copied below), no exemption. The
+    // records are those of the buyer's own request's products; a product with
+    // no record is the unknown-product 404 (FR-037).
+    const sourceProducts = await this.deps.catalogProducts.findByIds(
+      Array.from(new Set(sourceItems.map((it) => it.productId))),
+    );
+    this.#assertMinimums(resubmitMinimumLines(sourceItems), sourceProducts, [], 'enforce');
 
     // The resubmit is its own request, so it is raised on the channel *this*
     // request resolved to — not the one the source RFQ carries. A buyer who
@@ -1180,6 +1267,8 @@ export class RfqService {
           taxRate,
           packagingUnitName: it.packagingUnitName ?? null,
           packagingUnitBaseQuantity: it.packagingUnitBaseQuantity ?? null,
+          // Feature 148 — the resolved catalogue unit; both replies (analyze F14).
+          packagingUnitId: it.packagingUnitId ?? null,
         };
         if (!forAdmin) return pickKeys(item, CUSTOMER_ITEM_KEYS);
         return {
@@ -1238,6 +1327,36 @@ export class RfqService {
 function anyLocaleValue(blob: Record<string, string>): string {
   const k = Object.keys(blob)[0];
   return k ? (blob[k] ?? '') : '';
+}
+
+/**
+ * Feature 148 — the names a refusal gives its products: the same locale value
+ * the line's `productName` snapshot stores.
+ */
+function productNames(products: Iterable<CatalogProductRecord>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const product of products) out.set(product.id, anyLocaleValue(product.name));
+  return out;
+}
+
+/** A body line with its packaging replaced by the catalogue's resolution. */
+function withResolvedPackaging(
+  line: CreateQuoteRequestLine,
+  packaging: ResolvedPackaging,
+): {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+  packagingUnitId: string | null;
+  packagingUnitName: string | null;
+  packagingUnitBaseQuantity: number | null;
+} {
+  return {
+    productId: line.productId,
+    variantId: line.variantId ?? null,
+    quantity: line.quantity,
+    ...packaging,
+  };
 }
 
 /**
@@ -1301,6 +1420,7 @@ type QuoteRequestItemDraft = Pick<
   | 'variantId'
   | 'variantLabel'
   | 'quantity'
+  | 'packagingUnitId'
   | 'packagingUnitName'
   | 'packagingUnitBaseQuantity'
   | 'desiredUnitPrice'

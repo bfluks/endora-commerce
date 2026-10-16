@@ -208,6 +208,7 @@ export function quoteRequestsModule(options: QuoteRequestsModuleOptions): {
     resolveTaxRate: options.resolveTaxRate,
     ...(options.auditLog ? { auditLog: options.auditLog } : {}),
     ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
+    ...(options.log ? { log: options.log } : {}),
   });
 
   const adminService = new RfqAdminService({
