@@ -114,6 +114,7 @@ import { judgeQuoteRequestSource } from '../domain/quote-request-source.js';
 import { quoteSourceHonoursExemptions } from '../domain/quote-source-exemption.js';
 import {
   assertBasketMeetsMinimums,
+  belowMinimumLinesOf,
   evaluateBasketMinimums,
   readBasketCatalogue,
 } from './placement-minimums.js';
@@ -153,6 +154,7 @@ import type {
   PaymentAdapterRegistryPort,
   PaymentMethodReadPort,
   PaymentMethodRecord,
+  OrderPreviewTotalResponse,
   QuoteRequestReadPort,
   QuoteRequestRecord,
   ShippingAdapterRegistryPort,
@@ -1228,9 +1230,13 @@ export class OrderService {
     discountTotal: number;
     total: number;
     currency: string;
+    belowMinimumLines: OrderPreviewTotalResponse['belowMinimumLines'];
   }> {
-    // No `EntityManager` at all any more: the last thing this method used one
-    // for was the basket read below, and it is a port now (feature 080, T048).
+    // No `EntityManager` for anybody else's table any more: the last thing this
+    // method used one for was the basket read below, and it is a port now
+    // (feature 080, T048). The one fork it opens is for this module's own
+    // `Order` table — the "already ordered" count of the quote-source
+    // assessment (feature 148, research R19) — a read, never a write seam.
     const org = await this.neighbours.organizationDetails.findById(ctx.organizationId);
     // The **standalone** read, through `cartReadPort` — no `EntityManager`,
     // because this method opens no transaction and a read handed one is a
@@ -1281,11 +1287,21 @@ export class OrderService {
         paymentMethodId: paymentMethod.id,
       });
     }
-    const products =
-      items.length > 0
-        ? await this.neighbours.catalogProductRead.findByIds(items.map((i) => i.productId))
-        : [];
-    const productById = new Map(products.map((p) => [p.id, p]));
+    const catalogue = await readBasketCatalogue(this.neighbours.catalogProductRead, items);
+    const productById = new Map(catalogue.products.map((p) => [p.id, p]));
+
+    // Feature 148 (FR-008, FR-036, FR-037; research R19) — the lines placement
+    // will refuse, judged by the same rule with the quote source assessed by the
+    // lock-free twin of placement's vouch. Advisory: placement binds.
+    const quoteSource = await this.#previewedQuoteRequestSource(
+      ctx.organizationId,
+      cart.sourceQuoteRequestId,
+      items,
+    );
+    const belowMinimumLines = belowMinimumLinesOf(
+      evaluateBasketMinimums(cart, items, catalogue, quoteSource.honoursExemptions),
+      (productId) => this.#productName(productById, productId),
+    );
 
     // Tax country: prefer the selected billing address (matches placeOrder),
     // else the organization's registered country.
@@ -1321,6 +1337,7 @@ export class OrderService {
       discountTotal: totals.discountTotal,
       total: totals.total,
       currency: totals.currency,
+      belowMinimumLines,
     };
   }
 
@@ -1389,6 +1406,33 @@ export class OrderService {
       basketLines,
       countOrdersNamingIt: () => tx.count(Order, { sourceQuoteRequestId: claimedQuoteRequestId }),
       logRefusal: true,
+    });
+  }
+
+  /**
+   * The checkout preview's read-only twin of {@link #vouchedQuoteRequestSource}
+   * (feature 148, research R19 *Checkout preview*): the same port reads, the
+   * same judge and validity rule, and the "already ordered" count on this
+   * module's **own** `Order` table through a fresh fork — no transaction and no
+   * lock. Under a race (another basket of the same request placing between the
+   * preview and the placement) the two can disagree; placement is binding and
+   * the preview advisory, as it is for stock.
+   */
+  async #previewedQuoteRequestSource(
+    organizationId: string,
+    claimedQuoteRequestId: string | null,
+    basketLines: ReadonlyArray<{ productId: string; variantId: string | null; unitPrice: string }>,
+  ): Promise<QuoteRequestSourceAssessment> {
+    if (!claimedQuoteRequestId) return NO_QUOTE_REQUEST_SOURCE;
+    const quoteRequests = this.neighbours.quoteRequestRead();
+    if (!quoteRequests) return NO_QUOTE_REQUEST_SOURCE;
+    return this.#assessQuoteRequestSource(quoteRequests, {
+      organizationId,
+      claimedQuoteRequestId,
+      basketLines,
+      countOrdersNamingIt: () =>
+        this.emFactory().fork().count(Order, { sourceQuoteRequestId: claimedQuoteRequestId }),
+      logRefusal: false,
     });
   }
 

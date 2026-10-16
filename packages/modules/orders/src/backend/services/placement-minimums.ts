@@ -12,6 +12,7 @@ import {
   type OrderMinimumBelowViolation,
   type OrderMinimumLine,
   type OrderMinimumViolation,
+  type OrderPreviewTotalResponse,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 
@@ -106,4 +107,24 @@ export function assertBasketMeetsMinimums(
   const refusal = minimumRefusal(below, names, 'cartItemId');
   if (refusal === null) return;
   throw new HttpError(422, ERROR_CODES[refusal.code], refusal.message, refusal.details);
+}
+
+/** The preview's report of the same violations (§8): unavailable lines carry no name or minimum. */
+export function belowMinimumLinesOf(
+  violations: readonly OrderMinimumViolation[],
+  nameOf: (productId: string) => string,
+): OrderPreviewTotalResponse['belowMinimumLines'] {
+  return violations.map((v) => {
+    if (v.kind === 'product_unavailable') {
+      return { cartItemId: v.key, productId: v.productId, kind: v.kind };
+    }
+    return {
+      cartItemId: v.key,
+      productId: v.productId,
+      productName: nameOf(v.productId),
+      kind: v.kind,
+      minimum: v.minimum,
+      ...(v.kind === 'packaging_unit' ? { packagingUnitName: v.packagingUnitName } : {}),
+    };
+  });
 }
