@@ -417,8 +417,11 @@ code — the first that applies, in this order — and shows one reason:
 | `PRODUCT_NOT_VISIBLE_TO_CUSTOMER` | *The customer cannot see this product* | The product's visibility or its allowed organizations exclude the customer's Organization: change them on the product in the catalogue, choose another customer, or remove the line. |
 | `PRODUCT_NOT_IN_SALES_CHANNEL` | *Not in this sales channel's assortment* | Choose a sales channel whose assortment holds the product, add the product to this channel's assortment, or remove the line. |
 | `QUOTE_ONLY` | *No price* | The customer's price for the product is quote-only: remove the line, or create a quote request instead. |
+| `BELOW_MINIMUM_QUANTITY` | *Below the minimum of N pcs* | The product's total on the order is below its minimum order quantity: raise the quantity, or remove the line. |
 
-A code the screen does not know is shown as *No price* as well. The other lines
+`BELOW_MINIMUM_QUANTITY` carries the `minimum` and is judged only over the
+lines that passed the four checks above it, summing each product's lines. A
+code the screen does not know is shown as *No price* as well. The other lines
 keep their prices and the summary counts only the priced ones. The preview
 checks the assortment of exactly the sales channel the request names; a
 `salesChannelId` that names no channel is refused with `404 NOT_FOUND`, and the
@@ -426,6 +429,13 @@ screen shows *Could not calculate prices* without marking any line. A
 soft-deleted product is priced as before. The order created is exactly the
 lines and quantities on screen, in the unchanged `POST /api/v1/admin/orders`
 payload.
+
+**At most 200 lines.** `POST /api/v1/admin/orders` and
+`POST /api/v1/admin/orders/preview` refuse more than 200 items as their first
+step, with `422 VALIDATION_FAILED` and `details: { code: 'too_many_items',
+maximum: 200 }`, before any line is evaluated. Create order also refuses a
+request in which a product's total is below its minimum, with the minimum
+error and `details.lines[]` keyed by the item's `index`.
 
 ## Saved views
 
@@ -563,6 +573,64 @@ name a quote request.
 
 With the Quote Requests module switched off, orders are placed exactly as
 before and record no quote request.
+
+## Order minimums at placement
+
+Placement applies the catalogue's minimum order quantities to every basket
+line — the product's minimum in pieces and each packaging unit's minimum in
+units, counted over every line of the product (the Catalog module's page
+defines both). It is the last word on every path that ends in an order:
+checkout, one-click buy, a reorder, a basket filled from a quote request, the
+admin's Create order and the external order API.
+
+- **Before any side effect.** The check runs inside the placement transaction
+  right after the basket is read — before the order value and credit checks,
+  the order number, and any stock or credit reservation. A refusal writes
+  nothing.
+- **What it answers.** A line whose product record is gone →
+  `404 PRODUCT_NOT_FOUND` with `details.cartItemIds`. A line below a minimum →
+  `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]`, one entry
+  per offending line (`cartItemId`, `productId`, `productName`, `kind`,
+  `minimum`, `packagingUnitName`), in the buyer's language.
+- **The checkout preview says the same first.** `POST /api/v1/orders/preview-total`
+  answers `belowMinimumLines[]` — the lines placement would refuse, with the
+  same exemptions; a line whose product is gone has `kind: 'product_unavailable'`
+  and no name or minimum. The storefront lists them and disables **Place
+  order**. The preview takes no lock, so under a race placement decides.
+- **A basket filled from an accepted quote request.** The Carts module exempts
+  each line seeded from the quote while its quantity equals the quote's.
+  Placement and the preview honour that exemption **only while the quote
+  request is still valid at that moment**: it exists, belongs to the buyer's
+  organization, is still `Approved` — not canceled or expired, its validity not
+  ended — no order records it yet, and the basket still holds at least one of
+  its lines at the agreed price. Otherwise every line is judged like any other.
+  The check and its lock run at the start of placement, so the exemption is
+  decided before anything is written. With the Quote Requests module switched
+  off, nothing can vouch for the quote and no line is exempt.
+- **External order API** (`POST /api/v1/external/orders`) and admin Create
+  order build the basket from the request and judge each product's total over
+  the request's lines; a below-minimum request is refused whole, with
+  `details.lines[]` keyed by `index`. Neither carries a packaging unit, so only
+  the pieces minimum applies there. **Both refuse more than 200 lines** with
+  `422 VALIDATION_FAILED`, `details.code = 'too_many_items'` — on the external
+  API this is checked first, before the `Idempotency-Key` header is required,
+  and leaves no idempotency record.
+
+## Returnable at purchase
+
+Each order line records whether its product was returnable when the order was
+placed (`order_items.returnable_at_purchase`), on every placement path. Later
+changes to the product's **Returnable** flag do not change it. A line whose
+product record or flag cannot be read at placement is recorded as **not
+returnable**, never left empty. Lines of orders placed before this column
+existed hold `null`, which the Returns module treats as returnable. The value
+reaches Returns through `OrderReturnContextPort` (`returnableAtPurchase` on each
+line); Returns reads no Orders table. Placement records it whether or not the
+Returns module is switched on.
+
+Migration `20261016T082022_orders_order_item_returnable_at_purchase.ts` adds
+the column (nullable).
 
 ## Settings
 

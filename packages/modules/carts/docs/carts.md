@@ -177,13 +177,18 @@ Reactivation: any buyer activity (touch, add/remove/qty/coupon) on an
   works for a customer who may not propose prices. Sales sees the cart price as
   the line's *price at request* on the admin quote-request screen. The source
   cart's items are deleted and the cart flips to `'completed'` with
-  `converted_to_quote_request_id` set.
-- **Quote Request → Cart**: iterates the QR's items through
-  `CartService.addItem`, which already routes through `PricingService` for
-  re-pricing. The QR's `desired_unit_price` is intentionally dropped — the
+  `converted_to_quote_request_id` set. A line in a packaging unit is sent with
+  its `packagingUnitId`; a line whose unit has since been deleted is sent as
+  plain pieces, with its piece quantity unchanged.
+- **Quote Request → Cart**: adds the QR's items as one batch
+  (`CartService.addItems`, see *Order minimums* below), priced through
+  `PricingService`. The QR's `desired_unit_price` is intentionally dropped — the
   buyer's current contractual prices are the source of truth. Unavailable /
   no-price / not-purchasable lines are skipped and returned in
-  `droppedLines[]` with typed reasons.
+  `droppedLines[]` with typed reasons; a line below a product's minimum is
+  dropped with `below_minimum` and its `minimum` (it used to be reported as
+  `no_price_in_customer_list`), and a product the buyer may no longer see with
+  `not_purchasable`.
 - **Accepted Quote Request → Cart** (`POST
   /api/v1/quote-requests/:id/convert-to-order`, owned by the Quote Requests
   module): the cart is cleared and seeded with the quote's lines at the
@@ -198,6 +203,55 @@ Reactivation: any buyer activity (touch, add/remove/qty/coupon) on an
 - **Shopping List → Cart**: delegated to the existing
   `ShoppingListService.convertToCart`; the carts module
   exposes a port that composition wires to it.
+
+## Order minimums
+
+The cart applies the catalogue's minimum order quantities — the product's
+minimum in pieces and each packaging unit's minimum in units, counted over every
+line of the product in the cart (the Catalog module's page defines both).
+
+- **Add and edit** (`POST /api/v1/cart/items`, `PATCH /api/v1/cart/items/:itemId`)
+  judge the cart as the change would leave it, after the existing quantity,
+  product, channel and packaging-unit checks and before pricing. A change that
+  leaves the line below a minimum is refused with
+  `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`; the message names the product and
+  the minimum in the buyer's language, and nothing is written. An edit to `0`
+  and `DELETE` always remove the line. Editing a line whose product no longer
+  exists answers `404 PRODUCT_NOT_FOUND`.
+- **The cart view** (`GET /api/v1/cart`) gives each line `minOrderQuantity`
+  (the product's minimum in pieces, `null` for none) and `belowMinimum`
+  (`{ kind, minimum, packagingUnitName? }` when the line is below a minimum and
+  not exempt, else `null`); the storefront flags such a line and blocks
+  checkout. A line whose product record is gone is reported
+  `unavailable: true` with `unavailableReason: 'not_purchasable'`. **If the
+  catalogue cannot be read the view fails with a `5xx`** instead of answering
+  a cart without these flags. The mini view (`?view=mini`) is unchanged.
+- **Batch adds** — quote request → cart, shopping list → cart, quick order and
+  the admin's and the external API's order creation — go through
+  `CartWritePort.addItems`. It resolves every line first with the single add's
+  checks: a line whose product is unknown, hidden from the buyer or not in the
+  channel gets the unknown-product answer, with no name and no minimum. It then
+  judges the resolved lines together with the cart — a product's lines in the
+  batch are summed, so `A-red × 5 + A-blue × 5` meets a minimum of 10 — and adds
+  only the lines that pass, reporting the rest. Lines already in the cart are
+  never rejected. A caller asking for `throw` now fails **before anything is
+  added** when a line cannot be resolved; one asking for `report` receives every
+  failure as an outcome. At most 200 lines per call.
+- **A basket filled from an accepted quote request** keeps the quote's
+  negotiated quantities: each line seeded from the quote is exempt from the
+  minimums **while its quantity equals the quote's quantity** for that line
+  (`cart_items.quote_seeded_quantity`). Changing it makes the line an ordinary
+  line until it is set back to the quote's quantity, which is allowed even
+  below the minimum. Lines added afterwards are checked as usual, and an exempt
+  line's pieces still count toward the product's total when another line of
+  that product is checked. The cart takes the basket's quote mark at face
+  value; checkout and placement confirm the quote is still valid (the Orders
+  module's page). Seeding the basket again — from another quote or a reorder
+  — replaces it, and with it every earlier exemption.
+
+Migration `20261016T082018_carts_cart_item_quote_seeded_quantity.ts` adds
+`cart_items.quote_seeded_quantity` (nullable).
 
 ## Coupon application
 

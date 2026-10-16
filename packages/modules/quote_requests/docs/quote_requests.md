@@ -216,6 +216,71 @@ price stays even when the seller changes the line's quantity: a seller's
 revision never resolves it again. A line the seller adds carries the variant
 and note chosen and no packaging unit.
 
+## Order minimums and packaging units
+
+Quote requests apply the catalogue's minimum order quantities — the product's
+minimum in pieces and each packaging unit's minimum in units, counted over every
+line of the product in the request (the Catalog module's page defines both).
+**The rule follows who is writing, not the route.**
+
+**Packaging units are named by id.** A customer's line (create, draft edit,
+cart → quote request) may carry `packagingUnitId`. It must be a current unit of
+the line's product; the server stores that unit's catalogue name and base
+quantity and ignores any name or base quantity the line also sent. A line that
+sends a packaging name and base quantity without an id is accepted only when
+both match one of the product's units. Anything else is refused whole with
+`422 PACKAGING_UNIT_MISMATCH`, nothing written; `details.lines[]` gives each
+failing line's `index` and a `reason`. Every failure of an id — unknown,
+deleted, or another product's unit — has the same reason, `unknown_unit`, so
+the answer reveals nothing about other products; a name has `name_unknown` or
+`base_quantity_mismatch`. This also refuses a draft edit that sends back a
+line whose stored packaging label no longer matches a catalogue unit.
+`packagingUnitId` is returned on the admin and the customer read, and an
+administrator's revision keeps it on the lines it keeps.
+
+**A customer's write is refused below a minimum.** Create
+(`POST /api/v1/quote-requests` — directly, from the cart, from quick order,
+from a shopping list or by cloning one of their orders), draft edit
+(`PATCH /api/v1/quote-requests/:id`) and resubmit
+(`POST /api/v1/quote-requests/:id/resubmit`) answer
+`422 PRODUCT_BELOW_MINIMUM_QUANTITY` or
+`422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]` for every
+offending line, and write nothing. The order of checks: a product the customer
+may not see or the channel does not publish is refused as unknown first, so
+nothing about it is disclosed; then packaging, then minimums — all before any
+reference price is resolved.
+
+- **Draft edit.** A line the customer left unchanged — same product, variant,
+  packaging and quantity as a stored line — is not refused, even below its
+  minimum; its pieces still count toward the product's total when another line
+  of that product is checked.
+- **Resubmit** is judged as a new request, with no exemption, in pieces (it
+  carries no packaging). A request whose product no longer exists is refused
+  with `404`.
+- **Accepting or rejecting a revision** is never refused for minimums.
+
+**An administrator's write is never refused for a minimum.** Create on behalf,
+**Modify** (including negotiated quantities), cloning an order to a quote
+request from the admin and the admin's quick-order build to a quote request
+write below-minimum lines. The admin read (`GET /api/v1/admin/quote-requests/:id`)
+gives each such line a `minimumWarning` (`{ kind, minimum, packagingUnitName? }`),
+judged over the request's current lines, and the quote request screen shows it
+as a *Below minimum* badge on the line, on **Overview** and in **Modify**. The
+warning informs and blocks nothing; it never reaches the customer's read.
+The admin's clone-to-quote and quick-order build still validate packaging.
+
+**Ordering the accepted quote keeps its quantities.**
+`convert-to-order` fills the basket at the agreed quantities without checking
+minimums; in the basket each line seeded from the quote is exempt while its
+quantity equals the quote's, and checkout honours that only while this request
+is still valid (the Carts and Orders modules' pages). With this module switched
+off nothing can vouch for the quote, so such a basket loses its exemptions at
+checkout.
+
+Migration `20261016T082027_quote_requests_item_packaging_unit_id.ts` adds
+`quote_request_items.packaging_unit_id` (nullable, no foreign key — the unit's
+name and base quantity stay snapshotted on the line).
+
 ## Price negotiation lock
 
 An administrator can decide whether a customer may **propose prices** on a
