@@ -115,7 +115,8 @@ export interface CartsDeps {
   }) => Promise<{
     cartId: string;
     appendedLineCount: number;
-    droppedLines: Array<{ productId: string; productName: string; reason: string }>;
+    /** Feature 148 — `minimum` on a `below_minimum` line. */
+    droppedLines: Array<{ productId: string; productName: string; reason: string; minimum?: number }>;
   }>;
   resolveCartActor: (request: FastifyRequest) => {
     customer?: { customerAccountId: string; organizationId: string | null };

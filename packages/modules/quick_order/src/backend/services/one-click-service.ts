@@ -1,6 +1,8 @@
 import {
   ERROR_CODES,
+  isOrderMinimumEligibleType,
   type CartWritePort,
+  type CatalogProductReadPort,
   type OrderPlacementPort,
   type PlacedOrderRecord,
   type QuickOrderOneClickEligibility,
@@ -54,6 +56,11 @@ export class OneClickService {
     private readonly cartWrite: CartWritePort,
     private readonly orderPlacement: OrderPlacementPort,
     private readonly resolveOneClickEnabled: (salesChannelId: string | null) => Promise<boolean>,
+    /**
+     * Feature 148 (FR-010, R12.3) — where the default quantity comes from: the
+     * product's pieces minimum. `quick_order` already declares `catalog`.
+     */
+    private readonly catalogProducts: CatalogProductReadPort,
   ) {}
 
   async eligibility(
@@ -101,6 +108,8 @@ export class OneClickService {
       salesChannelId,
     );
     const customerCtx = { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId };
+    // Read before the basket is cleared, so a failed read leaves it as it was.
+    const quantity = input.quantity ?? (await this.#defaultQuantity(input.productId));
 
     // Clear-then-seed matches the single-active-cart model used by admin
     // order-create and RFQ-convert.
@@ -110,7 +119,7 @@ export class OneClickService {
       {
         productId: input.productId,
         ...(input.variantId ? { variantId: input.variantId } : {}),
-        quantity: input.quantity ?? 1,
+        quantity,
       },
     );
 
@@ -122,5 +131,19 @@ export class OneClickService {
       ...(salesChannelId ? { salesChannelId } : {}),
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
     });
+  }
+
+  /**
+   * Feature 148 (FR-010, R12.3, analyze F14) — the product's pieces minimum
+   * when its type carries one (`simple` / `configurable`) and it is above 1;
+   * otherwise 1. A product the read does not find gets 1, and the add path
+   * answers it with the unknown id's 404 — the minimum of a product the buyer
+   * may not see only ever sizes a line `addItem` then refuses as unknown.
+   */
+  async #defaultQuantity(productId: string): Promise<number> {
+    const product = await this.catalogProducts.findById(productId);
+    if (!product || !isOrderMinimumEligibleType(product.type)) return 1;
+    const minimum = product.minOrderQuantity;
+    return minimum !== null && minimum > 1 ? minimum : 1;
   }
 }

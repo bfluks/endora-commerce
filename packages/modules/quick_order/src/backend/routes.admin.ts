@@ -10,6 +10,7 @@ import { isOrgInScope } from '@endora-commerce/platform/tenancy';
 import type { QuickOrderImportPipeline } from './services/import-pipeline.js';
 import type { QuickOrderBuildService } from './services/quick-order-build-service.js';
 import { parseImportRequest } from './services/import-from-request.js';
+import { preferredLanguageOf } from './services/request-language.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 
 /**
@@ -116,6 +117,12 @@ export async function registerQuickOrderAdminRoutes(
             variantId: item.variantId ?? null,
             quantity: item.quantity,
           })),
+        },
+        {
+          // Feature 148 (FR-030, threat F10) — a literal: this route is the
+          // operator's, and no field of the body can say otherwise.
+          actor: 'operator',
+          language: preferredLanguageOf(request.headers['accept-language']),
         },
       );
       return { data: result };

@@ -30,7 +30,11 @@ import {
   DEFAULT_ONE_CLICK_BUY_ENABLED,
 } from '../manifest.js';
 import { CatalogPortLookup } from './services/catalog-lookup.js';
-import { QuickOrderImportPipeline } from './services/import-pipeline.js';
+import {
+  QUICK_ORDER_IMPORT_ROWS_CEILING,
+  QuickOrderImportPipeline,
+  clampImportMaxRows,
+} from './services/import-pipeline.js';
 import { QuickOrderBuildService } from './services/quick-order-build-service.js';
 import { DefaultPreferenceService } from './services/default-preference-service.js';
 import { OneClickService } from './services/one-click-service.js';
@@ -277,6 +281,9 @@ export function registerModule(ctx: ModuleContext): void {
                 throw error;
               }
             },
+            // Feature 148 (FR-010) — the default quantity is the product's
+            // minimum; a gated port, so held lazily like the two above.
+            lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
           ),
       )
       .singleton(),
@@ -316,11 +323,22 @@ export function registerModule(ctx: ModuleContext): void {
      */
     const resolveImportMaxRows = async (): Promise<number> => {
       try {
-        return await cradle().settingsReadPort.get(
+        const configured = await cradle().settingsReadPort.get(
           QUICK_ORDER_SETTING_CODES.IMPORT_MAX_ROWS,
           null,
           z.number().int().positive(),
         );
+        // Feature 148 (R20, threat F4) — the Setting declares no maximum, so
+        // the value is clamped at read and the preview's work stays bounded.
+        if (configured > QUICK_ORDER_IMPORT_ROWS_CEILING) {
+          warnOnce(
+            `out-of-range:${QUICK_ORDER_SETTING_CODES.IMPORT_MAX_ROWS}`,
+            `[quick_order] setting "${QUICK_ORDER_SETTING_CODES.IMPORT_MAX_ROWS}" is ${configured}, ` +
+              `above the ceiling of ${QUICK_ORDER_IMPORT_ROWS_CEILING} rows — clamped to the ceiling ` +
+              `(logged once per process).`,
+          );
+        }
+        return clampImportMaxRows(configured);
       } catch (error) {
         if (error instanceof SettingNotRegistered) return DEFAULT_IMPORT_MAX_ROWS;
         if (error instanceof SettingOutOfScopeForChannel) {

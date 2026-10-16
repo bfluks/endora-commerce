@@ -408,7 +408,14 @@ describe('148 — placement and the checkout preview refuse below-minimum lines 
         paymentMethodId: SEED_PAYMENT_METHOD_ID,
       }),
     };
-    const oneClick = new OneClickService(preferences, uncheckedCart, cradle().orderPlacementPort, async () => true);
+    const oneClick = new OneClickService(
+      preferences,
+      uncheckedCart,
+      cradle().orderPlacementPort,
+      async () => true,
+      // Phase 9 (T071) — the default-quantity read; unused here, the quantity is explicit.
+      (h.container.cradle as unknown as { catalogProductReadPort: unknown }).catalogProductReadPort,
+    );
     const ordersBefore = await orderCount();
     await expect(oneClick.place(CTX, { productId: A.id, quantity: 5 }, null)).rejects.toMatchObject({
       statusCode: 422,

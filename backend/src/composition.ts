@@ -250,7 +250,11 @@ interface ShoppingListBridgeService {
     ctx: { customerAccountId: string; organizationId: string },
     listId: string,
     itemIds: string[] | undefined,
-  ): Promise<{ added: number; skipped: Array<{ productId: string }> }>;
+  ): Promise<{
+    added: number;
+    /** Feature 148 — `reason` and, on `below_minimum`, the `minimum` the line missed. */
+    skipped: Array<{ productId: string; reason: string; minimum?: number }>;
+  }>;
 }
 
 /** Pick a display label from a possibly-multilingual (jsonb) name value. */
@@ -1137,11 +1141,18 @@ async function contributeReferenceDeployment(ctx: ComposedAppContext): Promise<v
         return {
           cartId: '',
           appendedLineCount: res.added,
-          droppedLines: res.skipped.map((it) => ({
-            productId: it.productId,
-            productName: it.productId,
-            reason: 'not_purchasable',
-          })),
+          droppedLines: res.skipped.map((it) =>
+            // Feature 148 (FR-011, US4 #3) — a line below a minimum says so,
+            // with the minimum; every other skip stays `not_purchasable`.
+            it.reason === 'below_minimum'
+              ? {
+                  productId: it.productId,
+                  productName: it.productId,
+                  reason: 'below_minimum',
+                  ...(it.minimum !== undefined ? { minimum: it.minimum } : {}),
+                }
+              : { productId: it.productId, productName: it.productId, reason: 'not_purchasable' },
+          ),
         };
       },
     } satisfies CartShoppingListBridge,

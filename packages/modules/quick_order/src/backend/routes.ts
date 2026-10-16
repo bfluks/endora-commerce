@@ -10,6 +10,7 @@ import { productAudienceOf } from '@endora-commerce/platform/http';
 import type { QuickOrderImportPipeline } from './services/import-pipeline.js';
 import type { QuickOrderBuildService } from './services/quick-order-build-service.js';
 import { parseImportRequest } from './services/import-from-request.js';
+import { preferredLanguageOf } from './services/request-language.js';
 
 /**
  * Quick-order routes (feature 039).
@@ -83,6 +84,9 @@ export async function registerQuickOrderRoutes(
             quantity: item.quantity,
           })),
         },
+        // Feature 148 — the buyer's build: no actor, so a quote request is
+        // judged by the buyer's rules (FR-012).
+        { language: preferredLanguageOf(request.headers['accept-language']) },
       );
       return { data: result };
     },

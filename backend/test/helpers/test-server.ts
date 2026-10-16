@@ -2344,11 +2344,18 @@ export async function setupBackendServer(
             return {
               cartId: '',
               appendedLineCount: res.added,
-              droppedLines: res.skipped.map((it) => ({
-                productId: it.productId,
-                productName: it.productId,
-                reason: 'not_purchasable',
-              })),
+              // Feature 148 — mirrors `composition.ts`: a line below a
+              // minimum says so, with the minimum.
+              droppedLines: res.skipped.map((it) =>
+                it.reason === 'below_minimum'
+                  ? {
+                      productId: it.productId,
+                      productName: it.productId,
+                      reason: 'below_minimum',
+                      ...(it.minimum !== undefined ? { minimum: it.minimum } : {}),
+                    }
+                  : { productId: it.productId, productName: it.productId, reason: 'not_purchasable' },
+              ),
             };
           },
         } satisfies CartShoppingListBridge,

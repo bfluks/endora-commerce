@@ -75,6 +75,9 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
         sku: p.sku,
         status: p.status,
         deletedAt: p.deletedAt,
+        // Feature 148 (R12.1) — what the preview's minimum evaluation reads.
+        type: p.type,
+        minOrderQuantity: p.minOrderQuantity,
       }));
   }
 
@@ -84,21 +87,31 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
   ): Promise<VariantBySku[]> {
     if (skus.length === 0) return [];
     const variants = await this.catalogProducts.findVariantsBySkus(skus);
-    if (variants.length === 0 || audience === 'unrestricted') {
-      return variants.map((v) => ({
+    if (variants.length === 0) return [];
+    // The parents are read for every audience: feature 148 (R12.1) judges a
+    // row naming a variant against its product's minimum, so the preview needs
+    // the parent's rule even where `'unrestricted'` waives the filters below.
+    const parents = await this.catalogProducts.findByIds(
+      Array.from(new Set(variants.map((v) => v.parentProductId))),
+    );
+    const ruleOf = new Map(
+      parents.map((p) => [p.id, { type: p.type, minOrderQuantity: p.minOrderQuantity }]),
+    );
+    const toVariant = (v: (typeof variants)[number]): VariantBySku => {
+      const parent = ruleOf.get(v.parentProductId);
+      return {
         id: v.id,
         sku: v.sku,
         parentProductId: v.parentProductId,
-      }));
-    }
+        ...(parent ? { parent } : {}),
+      };
+    };
+    if (audience === 'unrestricted') return variants.map(toVariant);
     // A variant carries no visibility of its own — its parent's answer is the
     // whole answer (issue #227). Without this pass a pasted *variant* SKU
     // resolved a restricted parent's id, which is the same oracle by one more
     // hop; the parents are fetched here rather than left to the pipeline
     // because only the record carries the two columns.
-    const parents = await this.catalogProducts.findByIds(
-      Array.from(new Set(variants.map((v) => v.parentProductId))),
-    );
     const visibleParents = parents.filter((p) => isProductVisibleTo(p, audience));
     // Issue #259 — and the channel answer is the parent's too. A variant SKU
     // that resolved a parent this channel does not publish is the same oracle
@@ -112,9 +125,7 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
         .filter((p) => publishedHere === null || publishedHere.has(p.id))
         .map((p) => p.id),
     );
-    return variants
-      .filter((v) => acquirableParents.has(v.parentProductId))
-      .map((v) => ({ id: v.id, sku: v.sku, parentProductId: v.parentProductId }));
+    return variants.filter((v) => acquirableParents.has(v.parentProductId)).map(toVariant);
   }
 
   async findVariantsByParent(
