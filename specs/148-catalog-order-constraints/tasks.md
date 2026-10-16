@@ -552,13 +552,13 @@ Verified 2026-10-16: RED first — `return-eligibility.test.ts` failed to import
 
 ## Phase 14: [admin UI] US4 — quote warning, order preview message, quick-order import (FR-009, FR-011, FR-030)
 
-- [ ] T106 [P] [US4] RED admin test in `<StrictMode>`: `RfqDetail` Overview and Modify show "Below minimum (10 pcs)" / the pallet variant on a line with `minimumWarning`, nothing otherwise, in `en` and `pl` — `admin/test/modules/quote_requests/RfqDetail.minimum-warning.test.tsx`
-- [ ] T107 [P] [US4] RED admin test **in `<StrictMode>`**: the create-order preview renders `BELOW_MINIMUM_QUANTITY` with the minimum in both languages; a preview answer arriving after unmount sets no state — `admin/test/modules/orders/OrderCreatePage.minimum.test.tsx`
-- [ ] T108 [P] [US4] RED admin test **in `<StrictMode>`**: the operator quick-order import shows a row with `warning` as **buildable** (selectable, included in the build) with a "below minimum (N pcs)" badge, in `en` and `pl` (P1 C, US4 #1d); a build to the cart lists `rejected[]` lines with product and minimum; a build to a quote request shows no rejection — `admin/test/modules/quick_order/import-below-minimum.test.tsx`
-- [ ] T109 [US4] Warning badge — `packages/modules/quote_requests/src/admin/pages/RfqDetail.tsx` (or `admin/reference-view.tsx` where the line cells live); keys `rfq.detail.minimum.*` in `packages/modules/_i18n/i18n/{en,pl}.json` (the `core` bundle `RfqDetail` reads)
-- [ ] T110 [US4] Preview message label — `packages/modules/orders/src/admin/pages/OrderCreatePage.tsx`, `packages/modules/orders/i18n/{en,pl}.json`
-- [ ] T111 [US4] Import warning badge, rejected-lines list, reason union and labels — `packages/modules/quick_order/src/admin/api/quick-order-client.ts`, the quick-order admin page, `packages/modules/quick_order/i18n/{en,pl}.json`
-- [ ] T112 Admin typecheck, tests, `i18n:hardcoded`, `check:bundle-pairing`
+- [x] T106 [P] [US4] RED admin test in `<StrictMode>`: `RfqDetail` Overview and Modify show "Below minimum (10 pcs)" / the pallet variant on a line with `minimumWarning`, nothing otherwise, in `en` and `pl` — `admin/test/modules/quote_requests/RfqDetail.minimum-warning.test.tsx`
+- [x] T107 [P] [US4] RED admin test **in `<StrictMode>`**: the create-order preview renders `BELOW_MINIMUM_QUANTITY` with the minimum in both languages; a preview answer arriving after unmount sets no state — `admin/test/modules/orders/OrderCreatePage.minimum.test.tsx`
+- [x] T108 [P] [US4] RED admin test **in `<StrictMode>`**: the operator quick-order import shows a row with `warning` as **buildable** (selectable, included in the build) with a "below minimum (N pcs)" badge, in `en` and `pl` (P1 C, US4 #1d); a build to the cart lists `rejected[]` lines with product and minimum; a build to a quote request shows no rejection — `admin/test/modules/quick_order/import-below-minimum.test.tsx`
+- [x] T109 [US4] Warning badge — `packages/modules/quote_requests/src/admin/pages/RfqDetail.tsx` (or `admin/reference-view.tsx` where the line cells live); keys `rfq.detail.minimum.*` in `packages/modules/_i18n/i18n/{en,pl}.json` (the `core` bundle `RfqDetail` reads)
+- [x] T110 [US4] Preview message label — `packages/modules/orders/src/admin/pages/OrderCreatePage.tsx`, `packages/modules/orders/i18n/{en,pl}.json`
+- [x] T111 [US4] Import warning badge, rejected-lines list, reason union and labels — `packages/modules/quick_order/src/admin/api/quick-order-client.ts`, the quick-order admin page, `packages/modules/quick_order/i18n/{en,pl}.json`
+- [x] T112 Admin typecheck, tests, `i18n:hardcoded`, `check:bundle-pairing`
 
 **Verification** (one invocation per line):
 - `pnpm --filter admin exec vitest run test/modules/quote_requests test/modules/orders test/modules/quick_order`
