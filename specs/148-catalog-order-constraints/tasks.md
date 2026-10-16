@@ -458,11 +458,11 @@ writing nothing.
 **Goal**: representatives are never refused; they see a warning on each below-minimum line; the
 customer never sees it.
 
-- [ ] T083 [P] [US4] [PG] RED contract test: admin create-on-behalf and modify with A × 5 succeed (US4 #9); `GET /api/v1/admin/quote-requests/:id` items carry `minimumWarning` `{ kind: 'pieces', minimum: 10 }`, a pallet line `{ kind: 'packaging_unit', … }`, a line at the minimum `null`; the customer `GET /api/v1/quote-requests/:id` and the list carry no `minimumWarning` anywhere [S7] — `backend/test/contract/quote_requests/admin-minimum-warning.test.ts`
-- [ ] T084 [P] [US4] [PG] RED contract test: buyer `POST /api/v1/orders/:id/clone-to-quote` of an order with A × 5 → 422 naming the line (US4 #5a); the admin route creates the request and the admin read shows the warning (US4 #15); an operator quick-order import of A × 5 built to a quote request creates it and warns (US4 #1d, #15) — extend `backend/test/contract/orders/clone-to-quote.test.ts`, `backend/test/contract/quick_order/admin-build.test.ts`
-- [ ] T085 [US4] Admin serialisation computes `minimumWarning` over the request's lines (no exemption, one catalogue read) — `packages/modules/quote_requests/src/backend/services/rfq-service.ts` (`serializeFull(…, true)`)
-- [ ] T086 [US4] `OrderCloneToQuoteService.clone(…, { actor })`: the admin route passes `'operator'` → `minimums: 'warn'`; the buyer route the default; `actor` is a literal in each route's own code, never read from a request body or query (threat F10) — `packages/modules/orders/src/backend/services/order-clone-to-quote-service.ts`, `src/backend/routes.ts`
-- [ ] T087 Build `mod-quote-requests`, `mod-orders`, `mod-quick-order`; checks
+- [x] T083 [P] [US4] [PG] RED contract test: admin create-on-behalf and modify with A × 5 succeed (US4 #9); `GET /api/v1/admin/quote-requests/:id` items carry `minimumWarning` `{ kind: 'pieces', minimum: 10 }`, a pallet line `{ kind: 'packaging_unit', … }`, a line at the minimum `null`; the customer `GET /api/v1/quote-requests/:id` and the list carry no `minimumWarning` anywhere [S7] — `backend/test/contract/quote_requests/admin-minimum-warning.test.ts`
+- [x] T084 [P] [US4] [PG] RED contract test: buyer `POST /api/v1/orders/:id/clone-to-quote` of an order with A × 5 → 422 naming the line (US4 #5a); the admin route creates the request and the admin read shows the warning (US4 #15); an operator quick-order import of A × 5 built to a quote request creates it and warns (US4 #1d, #15) — extend `backend/test/contract/orders/clone-to-quote.test.ts`, `backend/test/contract/quick_order/admin-build.test.ts`
+- [x] T085 [US4] Admin serialisation computes `minimumWarning` over the request's lines (no exemption, one catalogue read) — `packages/modules/quote_requests/src/backend/services/rfq-service.ts` (`serializeFull(…, true)`)
+- [x] T086 [US4] `OrderCloneToQuoteService.clone(…, { actor })`: the admin route passes `'operator'` → `minimums: 'warn'`; the buyer route the default; `actor` is a literal in each route's own code, never read from a request body or query (threat F10) — `packages/modules/orders/src/backend/services/order-clone-to-quote-service.ts`, `src/backend/routes.ts`
+- [x] T087 Build `mod-quote-requests`, `mod-orders`, `mod-quick-order`; checks
 
 **Verification** (one invocation per line):
 - `[PG] pnpm exec vitest run test/contract/quote_requests/admin-minimum-warning.test.ts`
@@ -473,6 +473,8 @@ customer never sees it.
 - `pnpm --filter @endora-commerce/mod-quote-requests run typecheck`
 - `pnpm --filter @endora-commerce/mod-orders run typecheck`
 - `pnpm --filter @endora-commerce/mod-quick-order run typecheck`
+
+Verified 2026-10-16: RED first — `admin-minimum-warning.test.ts` 3 / 4 failed on the missing `minimumWarning` (create on behalf and `modify` with A × 5 already answered 200, Phase 10 never gated them; the S7 absence test passed before and after), `clone-to-quote.test.ts` 1 / 5 failed (admin clone 422 `PRODUCT_BELOW_MINIMUM_QUANTITY`; the buyer refusal and the F10 body/query pin already held), `admin-build.test.ts` 1 / 7 failed (no warning on the admin read). Green: the four `[PG]` lines above 4 / 4, 10 / 10, 5 / 5, 7 / 7; `quote-minimums.test.ts` gains `quoteMinimumWarnings` (module unit run 39 / 39). Regression, one per invocation: `contract/quote_requests/{admin-routes,convert,expiry-enforcement,list-views}` 10 / 3 / 6 / 12; `integration/quote_requests/{admin-create-origin,created-from-admin,negotiation-loop,negotiation-enforcement,minimums,packaging-units}` 10 / 5 / 13 / 23 / 13 / 11; `openapi-baseline.test.ts` 2 / 2. `check:port-dependencies`, `check:port-catches`, `check:command-coverage -- --strict` clean; `mod-quote-requests`, `mod-orders`, `mod-quick-order`, `backend` typecheck clean; `backend`, `mod-quote-requests` lint clean (`mod-orders` lint: one pre-existing `OrderDetail.tsx` hook warning). `mod-quick-order` needed no change: its operator build already passed `actor: 'operator'` (Phase 9).
 
 ---
 
