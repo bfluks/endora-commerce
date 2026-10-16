@@ -1,5 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import {
+  ERROR_CODES,
+  type CartWritePort,
+  type CatalogProductReadPort,
+  type OrderPlacementPort,
+} from '@endora-commerce/contracts';
+import {
+  buyerChannelIds,
+  createMinimumProduct,
+  minimumFixtureRun,
+  setProductMinimum,
+  type MinimumProductFixture,
+} from '../../helpers/order-minimum-fixture.js';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -16,7 +28,7 @@ import {
 } from '../../helpers/seed-commerce.js';
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
-import { Address } from '../../helpers/package-entities.js';
+import { Address, Product } from '../../helpers/package-entities.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Order, OrderItem } from '../../helpers/package-entities.js';
 import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
@@ -285,5 +297,119 @@ describe('POST /api/v1/quick-order/one-click — placement', () => {
     } finally {
       await setOneClickEnabledForDefaultChannel(true);
     }
+  });
+
+  /**
+   * Feature 148, Phase 9 (T067) — US4 #2: one-click without a quantity orders
+   * the product's minimum; an explicit quantity below it is refused by the add
+   * path; and with the add path replaced by a double that admits the line
+   * unchecked, placement still refuses it [F3].
+   *
+   * The seeded product 101 carries the minimum only inside the case that needs
+   * a real placement (it has stock), and gets its previous value back.
+   */
+  describe('148 — order minimums', () => {
+    const RUN = minimumFixtureRun();
+    let A: MinimumProductFixture;
+    const CTX = { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID };
+
+    const cradle = () =>
+      h.container.cradle as unknown as {
+        orderPlacementPort: OrderPlacementPort;
+        cartWritePort: CartWritePort;
+        catalogProductReadPort: CatalogProductReadPort;
+        quickOrderOneClickService: object;
+      };
+
+    const orderCount = async () => {
+      const em = h.em();
+      em.clear();
+      return em.count(Order, { placedByCustomerAccountId: TEST_CUSTOMER_ID }, { filters: false });
+    };
+
+    beforeAll(async () => {
+      const em = h.em();
+      A = await createMinimumProduct(em, {
+        sku: `QOC-A-${RUN}`,
+        nameEn: `Anchor ${RUN}`,
+        namePl: `Kotwa ${RUN}`,
+        minOrderQuantity: 10,
+        channelIds: await buyerChannelIds(em),
+      });
+      await setOneClickEnabledForDefaultChannel(true);
+    }, 60_000);
+
+    it('US4 #2 — one-click without a quantity orders the minimum (10), not 1', async () => {
+      const em = h.em();
+      const previous = (await em.findOneOrFail(Product, { id: SEED_PRODUCT_101_ID }, { filters: false })).minOrderQuantity ?? null;
+      await setProductMinimum(em, SEED_PRODUCT_101_ID, 10);
+      try {
+        const res = await h.app.inject({
+          method: 'POST',
+          url: '/api/v1/quick-order/one-click',
+          cookies: COOKIE,
+          payload: { productId: SEED_PRODUCT_101_ID },
+        });
+        expect(res.statusCode, res.body).toBe(201);
+        const orderId = (res.json() as { data: { order: { id: string } } }).data.order.id;
+        const lookup = h.em();
+        lookup.clear();
+        const items = await lookup.find(OrderItem, { orderId });
+        expect(items.map((i) => [i.productId, i.quantity])).toEqual([[SEED_PRODUCT_101_ID, 10]]);
+      } finally {
+        await setProductMinimum(h.em(), SEED_PRODUCT_101_ID, previous);
+      }
+    });
+
+    it('US4 #2 — one-click with an explicit 5 is refused by the add path', async () => {
+      const before = await orderCount();
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/quick-order/one-click',
+        cookies: COOKIE,
+        payload: { productId: A.id, quantity: 5 },
+      });
+      expect(res.statusCode, res.body).toBe(422);
+      expect((res.json() as { error: { code: string } }).error.code).toBe(
+        ERROR_CODES.PRODUCT_BELOW_MINIMUM_QUANTITY,
+      );
+      expect(await orderCount()).toBe(before);
+    });
+
+    it('the placement backstop — with addItem replaced by a double that admits A × 5, placement still refuses [F3]', async () => {
+      const OneClickService = cradle().quickOrderOneClickService.constructor as new (
+        ...args: unknown[]
+      ) => { place(ctx: unknown, input: unknown, salesChannelId: string | null): Promise<unknown> };
+      const realCart = cradle().cartWritePort;
+      const uncheckedCart = {
+        ...realCart,
+        clearForCustomer: realCart.clearForCustomer.bind(realCart),
+        addItem: async (_actor: unknown, input: { productId: string; quantity?: number }) =>
+          realCart.replaceItemsForCustomer(CTX, [
+            { productId: input.productId, quantity: input.quantity ?? 1, unitPrice: '10.00', currency: 'PLN' },
+          ]),
+      };
+      const preferences = {
+        resolveForCustomer: async () => ({
+          shippingAddressId: SEED_ADDRESS_DELIVERY_ID,
+          billingAddressId: SEED_ADDRESS_BILLING_ID,
+          deliveryMethodId: SEED_DELIVERY_METHOD_ID,
+          paymentMethodId: SEED_PAYMENT_METHOD_ID,
+        }),
+      };
+      const oneClick = new OneClickService(
+        preferences,
+        uncheckedCart,
+        cradle().orderPlacementPort,
+        async () => true,
+        cradle().catalogProductReadPort,
+      );
+      const before = await orderCount();
+      await expect(oneClick.place(CTX, { productId: A.id, quantity: 5 }, null)).rejects.toMatchObject({
+        statusCode: 422,
+        code: ERROR_CODES.PRODUCT_BELOW_MINIMUM_QUANTITY,
+      });
+      expect(await orderCount()).toBe(before);
+    });
   });
 });

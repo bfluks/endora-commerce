@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
   CartWritePort,
+  CatalogProductReadPort,
   OrderPlacementPort,
   PlacedOrderRecord,
   QuickOrderResolvedDefaults,
@@ -37,6 +38,18 @@ const REFUSING_PLACEMENT: OrderPlacementPort = {
 
 const ctx = { customerAccountId: 'cust-1', organizationId: 'org-1' };
 
+/**
+ * Feature 148 (FR-010, R12.3) — the catalogue read the default quantity comes
+ * from. Answers `null` for every id unless given records.
+ */
+function catalogOf(
+  records: Array<{ id: string; type: string; minOrderQuantity: number | null }> = [],
+): CatalogProductReadPort {
+  return {
+    findById: async (id: string) => records.find((r) => r.id === id) ?? null,
+  } as unknown as CatalogProductReadPort;
+}
+
 /** A resolved request channel: an id, never a code (issue #99). */
 const CHANNEL_ID = '4b1f0a2c-8e3d-4a7b-9c11-2f6d5e8a0b34';
 
@@ -47,6 +60,7 @@ describe('OneClickService.eligibility', () => {
       {} as CartWritePort,
       REFUSING_PLACEMENT,
       async () => false,
+      catalogOf(),
     );
     expect(await svc.eligibility('cust-1', CHANNEL_ID)).toEqual({
       enabled: false,
@@ -60,6 +74,7 @@ describe('OneClickService.eligibility', () => {
       {} as CartWritePort,
       REFUSING_PLACEMENT,
       async () => true,
+      catalogOf(),
     );
     expect(await svc.eligibility('cust-1', CHANNEL_ID)).toEqual({
       enabled: false,
@@ -73,6 +88,7 @@ describe('OneClickService.eligibility', () => {
       {} as CartWritePort,
       REFUSING_PLACEMENT,
       async () => true,
+      catalogOf(),
     );
     expect(await svc.eligibility('cust-1', CHANNEL_ID)).toEqual({ enabled: true, reason: null });
   });
@@ -92,6 +108,7 @@ describe('OneClickService.eligibility', () => {
       {} as CartWritePort,
       REFUSING_PLACEMENT,
       resolveOneClickEnabled,
+      catalogOf(),
     );
 
     await svc.eligibility('cust-1', CHANNEL_ID);
@@ -109,6 +126,7 @@ describe('OneClickService.place', () => {
       {} as CartWritePort,
       REFUSING_PLACEMENT,
       async () => false,
+      catalogOf(),
     );
     await expect(svc.place(ctx, { productId: 'p-1' }, CHANNEL_ID)).rejects.toMatchObject({
       statusCode: 422,
@@ -124,7 +142,7 @@ describe('OneClickService.place', () => {
     const cart = { clearForCustomer, addItem } as unknown as CartWritePort;
     const placement = { placeOrder } as unknown as OrderPlacementPort;
 
-    const svc = new OneClickService(prefStub(FULL_DEFAULTS), cart, placement, async () => true);
+    const svc = new OneClickService(prefStub(FULL_DEFAULTS), cart, placement, async () => true, catalogOf());
     const order = await svc.place(
       ctx,
       { productId: 'p-1', quantity: 2, idempotencyKey: 'k-1' },
@@ -163,7 +181,7 @@ describe('OneClickService.place', () => {
       addItem: vi.fn(async () => ({ cart: {}, items: [] })),
     } as unknown as CartWritePort;
 
-    const svc = new OneClickService(prefStub(FULL_DEFAULTS), cart, placement, async () => true);
+    const svc = new OneClickService(prefStub(FULL_DEFAULTS), cart, placement, async () => true, catalogOf());
     const order = await svc.place(ctx, { productId: 'p-1' }, CHANNEL_ID);
 
     expect(order.nextAction).toEqual(nextAction);
@@ -181,9 +199,67 @@ describe('OneClickService.place', () => {
     } as unknown as CartWritePort;
     const placement = { placeOrder } as unknown as OrderPlacementPort;
 
-    const svc = new OneClickService(prefStub(FULL_DEFAULTS), cart, placement, async () => true);
+    const svc = new OneClickService(prefStub(FULL_DEFAULTS), cart, placement, async () => true, catalogOf());
     await svc.place(ctx, { productId: 'p-1' }, null);
 
     expect(placeOrder.mock.calls[0]![1]).not.toHaveProperty('salesChannelId');
+  });
+
+  /**
+   * Feature 148 (FR-010, R12.3, analyze F14) — without a quantity, one-click
+   * orders the product's pieces minimum, only for the types the rule applies to.
+   */
+  describe('default quantity (feature 148)', () => {
+    async function quantityPlaced(
+      product: { id: string; type: string; minOrderQuantity: number | null } | null,
+      quantity?: number,
+    ): Promise<number> {
+      const addItem = vi.fn(async () => ({ cart: {}, items: [] }));
+      const cart = {
+        clearForCustomer: vi.fn(async () => undefined),
+        addItem,
+      } as unknown as CartWritePort;
+      const placement = {
+        placeOrder: async () => ({ id: 'o-1', status: 'new', nextAction: null }) as unknown as PlacedOrderRecord,
+      } as unknown as OrderPlacementPort;
+      const svc = new OneClickService(
+        prefStub(FULL_DEFAULTS),
+        cart,
+        placement,
+        async () => true,
+        catalogOf(product ? [product] : []),
+      );
+      await svc.place(
+        ctx,
+        { productId: product?.id ?? 'p-unknown', ...(quantity !== undefined ? { quantity } : {}) },
+        CHANNEL_ID,
+      );
+      const input = (addItem.mock.calls[0] as unknown as [unknown, { quantity: number }])[1];
+      return input.quantity;
+    }
+
+    it('uses the minimum of a simple product', async () => {
+      expect(await quantityPlaced({ id: 'p-a', type: 'simple', minOrderQuantity: 10 })).toBe(10);
+    });
+
+    it('uses the minimum of a configurable product', async () => {
+      expect(await quantityPlaced({ id: 'p-c', type: 'configurable', minOrderQuantity: 6 })).toBe(6);
+    });
+
+    it('uses 1 for a bundle with a stored minimum', async () => {
+      expect(await quantityPlaced({ id: 'p-b', type: 'bundle', minOrderQuantity: 10 })).toBe(1);
+    });
+
+    it('uses 1 for a product with no minimum', async () => {
+      expect(await quantityPlaced({ id: 'p-d', type: 'simple', minOrderQuantity: null })).toBe(1);
+    });
+
+    it('uses 1 for an unknown product and leaves the refusal to the add path', async () => {
+      expect(await quantityPlaced(null)).toBe(1);
+    });
+
+    it('passes an explicit quantity through, below the minimum included', async () => {
+      expect(await quantityPlaced({ id: 'p-a', type: 'simple', minOrderQuantity: 10 }, 5)).toBe(5);
+    });
   });
 });
