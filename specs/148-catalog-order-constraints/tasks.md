@@ -576,12 +576,12 @@ Verified 2026-10-16: RED first — `return-eligibility.test.ts` failed to import
 
 ## Phase 15: [storefront] US1 / US2 / US4 — product page, card, comparison (FR-014, FR-016, SC-002)
 
-- [ ] T113 [P] [US1] [US2] RED storefront test of exported pure helpers used by `ProductBuyActions` — `orderFloor(product, unit | null)` (pieces minimum; for a unit `minOrderUnits`; 1 when none) and `minimumStatement(product, unit | null, locale)` ("minimum 10 pcs"; "min. 2 × Pallet = 128 pcs"; `null` when none) — plus a `renderToString` of `ProductBuyActions` with a minimum showing the statement and `min`/`value` = 10 (US1 #2, #6; US2 #2); PL and EN — `storefront/test/catalog/pdp-minimum.test.tsx`
-- [ ] T114 [P] [US4] RED storefront test of the exported quantity helper the card and comparison buttons call (`cardAddQuantity(minOrderQuantity)` → the minimum, 1 when none) and of the payload builder each passes to `addProductToCartAction` (US4 #12) — `storefront/test/catalog/product-card-minimum.test.tsx`, `compare-add-minimum.test.tsx`
-- [ ] T115 [US1] [US2] `ProductBuyActions.tsx` — input floor, initial value, statement (unit-aware), through the T113 helpers
-- [ ] T116 [US4] `ProductCardActions.tsx`, `CompareAddToCartButton.tsx` (new `minOrderQuantity` prop), `ComparisonTable.tsx` passes it
-- [ ] T117 Strings in `storefront/lib/i18n/messages.ts` (total `Record`: Polish is a `tsc` obligation)
-- [ ] T118 Storefront typecheck, lint, tests; `check:rsc-discipline`, `check:storefront-indexability`
+- [x] T113 [P] [US1] [US2] RED storefront test of exported pure helpers used by `ProductBuyActions` — `orderFloor(product, unit | null)` (pieces minimum; for a unit `minOrderUnits`; 1 when none) and `minimumStatement(product, unit | null, locale)` ("minimum 10 pcs"; "min. 2 × Pallet = 128 pcs"; `null` when none) — plus a `renderToString` of `ProductBuyActions` with a minimum showing the statement and `min`/`value` = 10 (US1 #2, #6; US2 #2); PL and EN — `storefront/test/catalog/pdp-minimum.test.tsx`
+- [x] T114 [P] [US4] RED storefront test of the exported quantity helper the card and comparison buttons call (`cardAddQuantity(minOrderQuantity)` → the minimum, 1 when none) and of the payload builder each passes to `addProductToCartAction` (US4 #12) — `storefront/test/catalog/product-card-minimum.test.tsx`, `compare-add-minimum.test.tsx`
+- [x] T115 [US1] [US2] `ProductBuyActions.tsx` — input floor, initial value, statement (unit-aware), through the T113 helpers
+- [x] T116 [US4] `ProductCardActions.tsx`, `CompareAddToCartButton.tsx` (new `minOrderQuantity` prop), `ComparisonTable.tsx` passes it
+- [x] T117 Strings in `storefront/lib/i18n/messages.ts` (total `Record`: Polish is a `tsc` obligation)
+- [x] T118 Storefront typecheck, lint, tests; `check:rsc-discipline`, `check:storefront-indexability`
 
 **Verification** (one invocation per line):
 - `pnpm --filter storefront exec vitest run test/catalog`
