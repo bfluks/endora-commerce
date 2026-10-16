@@ -532,14 +532,14 @@ Verified 2026-10-16: RED first — `return-eligibility.test.ts` failed to import
 
 **Goal**: the product editor, the packaging editor and the bulk edit expose the settings in PL and EN.
 
-- [ ] T098 [P] [US1] [US5] RED admin test in `<StrictMode>`: `ProductOrderRulesCard` shows "Returnable" for every type and "Minimum order quantity (pcs)" only for simple/configurable; loads current values; the input has `min=1 max=1000000`; saves via `PATCH` (empty input → `null`); shows the server's error; labels in `en` and `pl` — `admin/test/modules/catalog/ProductOrderRulesCard.test.tsx`
-- [ ] T099 [P] [US2] RED admin test in `<StrictMode>`: the packaging editor shows and edits "Minimum (units)" (same range), clears it, sends `minOrderUnits` — `admin/test/modules/catalog/PackagingUnitsEditor.min.test.tsx`
-- [ ] T100 [P] [US5] RED admin test in `<StrictMode>`: the bulk edit dialog's "Returnable" section sends `{ returnable: true }` / `false`, nothing when untouched, and shows the hint that products are not returnable until marked (FR-034), in `en` and `pl` — `admin/test/modules/catalog/ProductsBulkEditDialog.returnable.test.tsx`
-- [ ] T101 [US1] [US5] `ProductOrderRulesCard.tsx`, mounted in the Inventory tab for every type (`ProductEditor.tsx:795–802`) — `packages/modules/catalog/src/admin/components/ProductOrderRulesCard.tsx`, `src/admin/pages/ProductEditor.tsx`
-- [ ] T102 [US2] Minimum column/field — `packages/modules/catalog/src/admin/components/PackagingUnitsEditor.tsx`
-- [ ] T103 [US5] Returnable section and hint — `packages/modules/catalog/src/admin/components/ProductsBulkEditDialog.tsx`
-- [ ] T104 Catalogue bundle keys (flat, both languages) — `packages/modules/catalog/i18n/{en,pl}.json`
-- [ ] T105 Admin typecheck, the module's admin tests, `i18n:hardcoded`, `check:bundle-pairing`
+- [x] T098 [P] [US1] [US5] RED admin test in `<StrictMode>`: `ProductOrderRulesCard` shows "Returnable" for every type and "Minimum order quantity (pcs)" only for simple/configurable; loads current values; the input has `min=1 max=1000000`; saves via `PATCH` (empty input → `null`); shows the server's error; labels in `en` and `pl` — `admin/test/modules/catalog/ProductOrderRulesCard.test.tsx`
+- [x] T099 [P] [US2] RED admin test in `<StrictMode>`: the packaging editor shows and edits "Minimum (units)" (same range), clears it, sends `minOrderUnits` — `admin/test/modules/catalog/PackagingUnitsEditor.min.test.tsx`
+- [x] T100 [P] [US5] RED admin test in `<StrictMode>`: the bulk edit dialog's "Returnable" section sends `{ returnable: true }` / `false`, nothing when untouched, and shows the hint that products are not returnable until marked (FR-034), in `en` and `pl` — `admin/test/modules/catalog/ProductsBulkEditDialog.returnable.test.tsx`
+- [x] T101 [US1] [US5] `ProductOrderRulesCard.tsx`, mounted in the Inventory tab for every type (`ProductEditor.tsx:795–802`) — `packages/modules/catalog/src/admin/components/ProductOrderRulesCard.tsx`, `src/admin/pages/ProductEditor.tsx`
+- [x] T102 [US2] Minimum column/field — `packages/modules/catalog/src/admin/components/PackagingUnitsEditor.tsx`
+- [x] T103 [US5] Returnable section and hint — `packages/modules/catalog/src/admin/components/ProductsBulkEditDialog.tsx`
+- [x] T104 Catalogue bundle keys (flat, both languages) — `packages/modules/catalog/i18n/{en,pl}.json`
+- [x] T105 Admin typecheck, the module's admin tests, `i18n:hardcoded`, `check:bundle-pairing`
 
 **Verification** (one invocation per line):
 - `pnpm --filter admin exec vitest run test/modules/catalog`
