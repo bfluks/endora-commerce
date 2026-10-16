@@ -609,8 +609,34 @@ export interface CartItemRecord {
   packagingUnitId: string | null;
   packagingUnitName: string | null;
   packagingUnitBaseQuantity: number | null;
+  /**
+   * Feature 148 (FR-028) — the quantity this line was seeded with from an accepted
+   * quote request; `null` for every other line. Written only by
+   * `CartWritePort.replaceItemsForCustomer` with a `sourceQuoteRequestId`.
+   */
+  quoteSeededQuantity: number | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * Feature 148 (FR-028, owner ruling P2; data-model §2) — whether a basket line is
+ * exempt from the catalogue's order minimums: it was seeded from an accepted quote,
+ * the basket still carries that quote as its source, and the line's quantity equals
+ * the quote's. State-based, so 5 → 12 → 5 is exempt again.
+ *
+ * The per-line half only: `carts` applies it to the basket's mark at face value;
+ * `orders` first decides whether the quote source honours exemptions at all (R19).
+ */
+export function isQuoteSeededLineExempt(
+  cart: Pick<CartRecord, 'sourceQuoteRequestId'>,
+  item: Pick<CartItemRecord, 'quantity' | 'quoteSeededQuantity'>,
+): boolean {
+  return (
+    cart.sourceQuoteRequestId !== null &&
+    item.quoteSeededQuantity !== null &&
+    item.quantity === item.quoteSeededQuantity
+  );
 }
 
 /** A cart with its lines — the unit every consumer actually wants. */

@@ -8,7 +8,13 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { Cart, CartItem, Product, ProductPackagingUnit } from '../../helpers/package-entities.js';
+import {
+  Cart,
+  CartItem,
+  Product,
+  ProductPackagingUnit,
+  type CartItemRow,
+} from '../../helpers/package-entities.js';
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { cartWritePortOf } from '../../helpers/orders-neighbour-ports.js';
@@ -126,7 +132,7 @@ describe('148 — quote-seeded lines are exempt while unchanged [integration]', 
     await teardownBackendServer(h);
   });
 
-  async function basketLines(): Promise<CartItem[]> {
+  async function basketLines(): Promise<CartItemRow[]> {
     const em = h.em();
     em.clear();
     const cart = await em.findOneOrFail(
@@ -137,7 +143,7 @@ describe('148 — quote-seeded lines are exempt while unchanged [integration]', 
     return em.find(CartItem, { cartId: cart.id }, { orderBy: { createdAt: 'asc', id: 'asc' } });
   }
 
-  async function lineOf(productId: string): Promise<CartItem> {
+  async function lineOf(productId: string): Promise<CartItemRow> {
     const line = (await basketLines()).find((l) => l.productId === productId && !l.packagingUnitId);
     if (!line) throw new Error(`no line of ${productId} on the basket`);
     return line;
@@ -181,11 +187,14 @@ describe('148 — quote-seeded lines are exempt while unchanged [integration]', 
       ],
       { sourceQuoteRequestId: source },
     );
-    const lines = await basketLines();
-    expect(lines.map((l) => [l.productId, l.quantity, l.quoteSeededQuantity])).toEqual([
-      [SEED_PRODUCT_101_ID, 5, 5],
-      [B.id, 3, 3],
-    ]);
+    // One flush writes both rows, so their order is not the seed's: compare by product.
+    const byProduct = new Map((await basketLines()).map((l) => [l.productId, [l.quantity, l.quoteSeededQuantity]]));
+    expect(byProduct).toEqual(
+      new Map([
+        [SEED_PRODUCT_101_ID, [5, 5]],
+        [B.id, [3, 3]],
+      ]),
+    );
     const read = await cartWritePortOf(h).replaceItemsForCustomer(
       CTX,
       [{ productId: SEED_PRODUCT_101_ID, quantity: 5, unitPrice: '11.25', currency: 'PLN' }],

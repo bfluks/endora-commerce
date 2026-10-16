@@ -30,6 +30,7 @@ import {
   type CartLinePriceAnswer,
   type CartPricingContext,
 } from './cart-line-pricing.js';
+import { assertCartChangeMeetsMinimums, toCartMinimumItem } from './cart-minimums.js';
 
 /**
  * CartService (T125).
@@ -226,6 +227,8 @@ export class CartService {
   async addItem(
     actor: { customer?: CustomerContext; anonymousToken?: string },
     input: CartLineInput,
+    /** The request's language, which a minimum refusal names the product in (feature 148). */
+    options: { language?: string } = {},
   ): Promise<{ cart: Cart; items: CartItem[] }> {
     const em = this.emFactory();
     const cart = actor.customer
@@ -241,6 +244,27 @@ export class CartService {
           })();
 
     const { product, packagingUnit, effectiveQuantity } = await this.#resolveLine(actor, input);
+
+    // Feature 148 (FR-006, FR-006a, FR-028) — the order minimums, judged on the
+    // basket as this add would leave it. After the resolver, so a product this
+    // shopper may not see answers its unknown-id 404 and never a name or a
+    // minimum (FR-035); before the line cap and pricing, so a refusal writes
+    // nothing and costs no `price_lists` call.
+    await assertCartChangeMeetsMinimums(this.catalogProducts, {
+      cart: { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
+      items: (await em.find(CartItem, { cartId: cart.id })).map(toCartMinimumItem),
+      change: {
+        kind: 'add',
+        productId: product.id,
+        variantId: input.variantId ?? null,
+        packagingUnitId: packagingUnit?.id ?? null,
+        packagingUnitBaseQuantity: packagingUnit?.baseQuantity ?? null,
+        quantity: effectiveQuantity,
+      },
+      productId: product.id,
+      product,
+      language: options.language,
+    });
 
     // If the same product+variant+packaging-unit is already in the cart, bump
     // quantity. A packaging-unit line and a single-piece line of the same
@@ -472,6 +496,8 @@ export class CartService {
     actor: { customer?: CustomerContext; anonymousToken?: string },
     itemId: string,
     quantity: number,
+    /** The request's language, which a minimum refusal names the product in (feature 148). */
+    options: { language?: string } = {},
   ): Promise<{ cart: Cart; items: CartItem[] }> {
     const em = this.emFactory();
     const item = await em.findOne(CartItem, { id: itemId });
@@ -479,6 +505,21 @@ export class CartService {
     const cart = await em.findOne(Cart, { id: item.cartId });
     if (!cart) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Cart not found.');
     this.#assertOwnership(cart, actor);
+
+    // Feature 148 — an edit to 0 removes the line and is never refused (FR-007).
+    // Any other quantity is judged like an add, on the line's new quantity; a
+    // line whose product record is gone answers 404 (FR-037). Refused → the line
+    // is left as it was.
+    if (quantity > 0) {
+      await assertCartChangeMeetsMinimums(this.catalogProducts, {
+        cart: { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
+        items: (await em.find(CartItem, { cartId: cart.id })).map(toCartMinimumItem),
+        change: { kind: 'edit', itemId: item.id, quantity },
+        productId: item.productId,
+        product: await this.catalogProducts.findById(item.productId),
+        language: options.language,
+      });
+    }
 
     const oldQuantity = item.quantity;
     if (quantity <= 0) {

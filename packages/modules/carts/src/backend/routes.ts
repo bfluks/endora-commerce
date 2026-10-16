@@ -18,6 +18,7 @@ import {
   ERROR_CODES,
   OrganizationCannotTransactError,
   type CatalogProductReadPort,
+  type CatalogProductRecord,
   type PromotionApplication,
 } from '@endora-commerce/contracts';
 import type { CartService } from './services/cart-service.js';
@@ -26,6 +27,12 @@ import type { CartCouponService } from './services/cart-coupon-service.js';
 import type { CartConversionService } from './services/cart-conversion-service.js';
 import type { CartPricingRecompute } from './services/cart-pricing-recompute.js';
 import { derivePrimaryCta } from './services/cart-state-machine.js';
+import {
+  evaluateCartViewMinimums,
+  toCartMinimumItem,
+  type CartLineMinimumView,
+} from './services/cart-minimums.js';
+import { parsePreferredLanguage, pickLocalized } from './services/localized-name.js';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { Cart } from './entities/cart.entity.js';
 
@@ -205,21 +212,20 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
     const preferredLanguage = parsePreferredLanguage(
       request.headers['accept-language'],
     );
-    // Never block a cart read on a product-meta lookup hiccup (schema drift,
-    // a malformed product row, a since-deleted product): fall back to empty
-    // meta so lines still render with null names rather than 500ing the whole
-    // cart. Mirrors the recompute/coupon/promotion guards below.
-    let productMeta: Map<string, ProductMeta>;
-    try {
-      productMeta = await loadProductMeta(
-        deps.catalogProducts,
-        items.map((it) => it.productId),
-        preferredLanguage,
-      );
-    } catch (err) {
-      request.log.warn({ err, cartId: cart.id }, 'cart product-meta lookup failed; rendering without names');
-      productMeta = new Map();
-    }
+    // Feature 148 (R11, D7) — the same records also feed the minimum flags, so
+    // this read is no longer wrapped in a tolerant `catch`. It used to fall back
+    // to empty meta on any failure, which for the flags is the fail-open answer
+    // FR-037 rules out: a cart that hides a below-minimum line because the
+    // catalogue did not answer. A failed read now fails the view; a product row
+    // that is simply gone is not a failure — its line reads `unavailable`.
+    const products = await loadCartProducts(deps.catalogProducts, items.map((it) => it.productId));
+    const productMeta = productMetaOf(products, preferredLanguage);
+    const minimumViews = await evaluateCartViewMinimums(
+      deps.catalogProducts,
+      { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
+      items.map(toCartMinimumItem),
+      products,
+    );
 
     // Feature 027 §R5 — re-pricing on read (FR-008).
     let recomputedPrices: Map<string, { amount: number; currency: string }> | null = null;
@@ -296,7 +302,15 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
       }
     }
     return {
-      data: serializeCart(cart, items, recomputedPrices, couponDroppedThisRead, productMeta, application),
+      data: serializeCart(
+        cart,
+        items,
+        recomputedPrices,
+        couponDroppedThisRead,
+        productMeta,
+        application,
+        minimumViews,
+      ),
     };
   });
 
@@ -313,12 +327,17 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
       }
       await guardOrganizationTransact(actor);
       const body = addCartItemRequestSchema.parse(request.body);
-      const result = await cartService.addItem(actor, {
-        productId: body.productId,
-        ...(body.variantId ? { variantId: body.variantId } : {}),
-        quantity: body.quantity,
-        ...(body.packagingUnitId ? { packagingUnitId: body.packagingUnitId } : {}),
-      });
+      const language = parsePreferredLanguage(request.headers['accept-language']);
+      const result = await cartService.addItem(
+        actor,
+        {
+          productId: body.productId,
+          ...(body.variantId ? { variantId: body.variantId } : {}),
+          quantity: body.quantity,
+          ...(body.packagingUnitId ? { packagingUnitId: body.packagingUnitId } : {}),
+        },
+        language ? { language } : {},
+      );
       return { data: serializeCart(result.cart, result.items) };
     },
   );
@@ -329,7 +348,13 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
     async (request) => {
       const actor = resolveCartActor(request);
       const body = updateCartItemRequestSchema.parse(request.body);
-      const result = await cartService.updateItem(actor, request.params.itemId, body.quantity);
+      const language = parsePreferredLanguage(request.headers['accept-language']);
+      const result = await cartService.updateItem(
+        actor,
+        request.params.itemId,
+        body.quantity,
+        language ? { language } : {},
+      );
       return { data: serializeCart(result.cart, result.items) };
     },
   );
@@ -704,6 +729,8 @@ function serializeCart(
   couponDroppedThisRead: { code: string; reason: string } | null = null,
   productMeta: Map<string, ProductMeta> = new Map(),
   application: PromotionApplication | null = null,
+  /** Feature 148 — the full view's per-line minimum flags; absent on the mutation answers. */
+  minimumViews: Map<string, CartLineMinimumView> | null = null,
 ) {
   let subtotal = 0;
   let currency = items[0]?.currency ?? 'PLN';
@@ -714,6 +741,7 @@ function serializeCart(
     if (currency === 'PLN' && lineCurrency !== 'PLN') currency = lineCurrency;
     subtotal += unitPriceAmount * it.quantity;
     const meta = productMeta.get(it.productId) ?? null;
+    const minimum = minimumViews?.get(it.id) ?? null;
     // Feature 043 — append the packaging-unit name to the display name when the
     // line was added as a packaging unit (e.g. "<name> (Paleta)").
     const packagingUnitName = it.packagingUnitName ?? null;
@@ -729,8 +757,13 @@ function serializeCart(
       quantity: it.quantity,
       unitPrice: { amount: unitPriceAmount, currency: lineCurrency },
       lineTotal: { amount: unitPriceAmount * it.quantity, currency: lineCurrency },
-      unavailable: false,
-      unavailableReason: null,
+      unavailable: minimum?.unavailable ?? false,
+      // FR-037 — a line whose product record is gone, in the vocabulary the
+      // storefront already renders.
+      unavailableReason: minimum?.unavailable ? ('not_purchasable' as const) : null,
+      ...(minimum
+        ? { minOrderQuantity: minimum.minOrderQuantity, belowMinimum: minimum.belowMinimum }
+        : {}),
       productName: baseName,
       productSlug: meta?.slug ?? null,
       productSku: meta?.sku ?? null,
@@ -796,34 +829,29 @@ function resolvePrimaryCta(cart: Cart) {
 }
 
 /**
- * Resolves the storefront's preferred language from `Accept-Language`.
- * Falls back to undefined when the header is missing — the caller
- * then walks the product record's `name` locale chain in serializeCart's helper.
+ * Bulk-fetches the product records for every productId on the cart — one read
+ * the display names and the minimum flags share (feature 148, R11). Deliberately
+ * the wide read: a soft-deleted product still names the line it is on.
  */
-function parsePreferredLanguage(header: string | string[] | undefined): string | undefined {
-  const raw = Array.isArray(header) ? header[0] : header;
-  if (!raw) return undefined;
-  const first = raw.split(',')[0]?.trim();
-  return first || undefined;
+async function loadCartProducts(
+  catalogProducts: CatalogProductReadPort,
+  productIds: string[],
+): Promise<CatalogProductRecord[]> {
+  if (productIds.length === 0) return [];
+  return catalogProducts.findByIds(Array.from(new Set(productIds)));
 }
 
 /**
- * Bulk-fetches product metadata for every productId on the cart and
- * resolves a display name from the record's `name` (per-locale JSONB) using
- * the `Accept-Language` tag with a `pl` → `pl-PL` → `en-US` → first
- * available fallback chain. Empty list returns an empty map (the
- * serializer treats `null` name as "unknown" and the storefront falls
- * back to the productId).
+ * Per-product display metadata, the name resolved from the record's per-locale
+ * `name` with the `Accept-Language` tag and the `pickLocalized` fallback chain.
+ * A product without a record has no entry (the serializer treats it as an
+ * unknown name and the storefront falls back to the productId).
  */
-async function loadProductMeta(
-  catalogProducts: CatalogProductReadPort,
-  productIds: string[],
+function productMetaOf(
+  products: readonly CatalogProductRecord[],
   preferredLanguage: string | undefined,
-): Promise<Map<string, ProductMeta>> {
+): Map<string, ProductMeta> {
   const meta = new Map<string, ProductMeta>();
-  if (productIds.length === 0) return meta;
-  const unique = Array.from(new Set(productIds));
-  const products = await catalogProducts.findByIds(unique);
   for (const p of products) {
     meta.set(p.id, {
       name: pickLocalized(p.name, preferredLanguage),
@@ -832,31 +860,6 @@ async function loadProductMeta(
     });
   }
   return meta;
-}
-
-/**
- * Walks the locale-fallback chain for a per-locale JSONB field. Tries:
- *   1. exact match on the preferred language (e.g. `pl-PL`)
- *   2. language-only match (`pl` → first `pl-*` key)
- *   3. `en-US`, then `en`
- *   4. first available value
- *   5. empty string
- */
-function pickLocalized(
-  field: Record<string, string> | null | undefined,
-  preferredLanguage: string | undefined,
-): string {
-  if (!field) return '';
-  if (preferredLanguage && field[preferredLanguage]) return field[preferredLanguage];
-  const langOnly = preferredLanguage?.split('-')[0];
-  if (langOnly) {
-    const match = Object.keys(field).find((k) => k === langOnly || k.startsWith(`${langOnly}-`));
-    if (match) return field[match] ?? '';
-  }
-  if (field['en-US']) return field['en-US'];
-  if (field['en']) return field['en'];
-  const first = Object.values(field)[0];
-  return first ?? '';
 }
 
 declare const crypto: { randomUUID: () => string };
