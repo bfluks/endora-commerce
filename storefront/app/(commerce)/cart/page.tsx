@@ -15,7 +15,6 @@ import {
   saveCartItemToShoppingList,
   type CartCookieJar,
   type CartItem,
-  type CartSummary,
 } from '../../../lib/api/cart';
 import { listShoppingLists } from '../../../lib/api/shopping-lists';
 import { getServerContext } from '../../../lib/server-context';
@@ -33,6 +32,7 @@ import { CartCouponInput } from '../../../components/CartCouponInput';
 import { CartConvertButtons } from '../../../components/CartConvertButtons';
 import { CartDroppedLinesBanner } from '../../../components/CartDroppedLinesBanner';
 import { CartApprovalBanner } from '../../../components/CartApprovalBanner';
+import { CartPrimaryCta } from '../../../components/CartPrimaryCta';
 import { getMe } from '../../../lib/api/account';
 import { getProductDisplayMode, PRICING_UNAVAILABLE } from '../../../lib/api/pricing';
 import type { DisplayMode } from '@endora-commerce/contracts';
@@ -189,6 +189,7 @@ export default async function CartPage({
           policyOn={requiresApproval}
           rejectedReason={null}
           submitForApprovalAction={submitForApprovalAction}
+          linesBlockedNote={cartBlocksCheckout(cart) ? tForLocale(locale)('cart.approvalBlocked') : null}
           strings={strings.approvalBanner}
         />
       ) : null}
@@ -305,7 +306,7 @@ export default async function CartPage({
           />
 
           <div className="mt-4">
-            <PrimaryCtaButton
+            <CartPrimaryCta
               cta={primaryCta}
               authenticated={me !== null}
               submitForApprovalNeeded={submitForApprovalNeeded}
@@ -314,6 +315,7 @@ export default async function CartPage({
               submitAction={submitForApprovalAction}
               linesBlockCheckout={cartBlocksCheckout(cart)}
               linesBlockedNote={tForLocale(locale)('cart.checkoutBlocked')}
+              approvalBlockedNote={tForLocale(locale)('cart.approvalBlocked')}
               strings={strings.cta}
             />
           </div>
@@ -383,111 +385,6 @@ function toViewModel(it: CartItem, locale: string): CartLineViewModel {
     minOrderQuantity: it.minOrderQuantity ?? null,
     belowMinimum: it.belowMinimum ?? null,
   };
-}
-
-/**
- * Renders the page's primary CTA. Source of truth is the backend's
- * `cart.primaryCta` field; the fallback covers anonymous carts (the
- * backend can't compute primaryCta without an org context). Feature
- * 027 T096.
- */
-function PrimaryCtaButton({
-  cta,
-  authenticated,
-  submitForApprovalNeeded,
-  canTransact,
-  moderationMessage,
-  submitAction,
-  linesBlockCheckout,
-  linesBlockedNote,
-  strings,
-}: {
-  cta: NonNullable<CartSummary['primaryCta']>;
-  /** Whether the buyer has a valid customer session (resolved `/me`). */
-  authenticated: boolean;
-  submitForApprovalNeeded: boolean;
-  canTransact: boolean;
-  moderationMessage: string | null;
-  submitAction: (formData: FormData) => Promise<void>;
-  /** Feature 148 — a line is below a minimum or its product is gone (`cartBlocksCheckout`). */
-  linesBlockCheckout: boolean;
-  /** The visible sentence explaining `linesBlockCheckout`. */
-  linesBlockedNote: string;
-  strings: {
-    checkout: string;
-    submitForApproval: string;
-    awaitingApproval: string;
-    blockedByOrganization: string;
-  };
-}): ReactNode {
-  if (!canTransact || cta === 'blocked_by_organization') {
-    return (
-      <button
-        type="button"
-        className="btn btn--dark btn--lg btn--block"
-        disabled
-        aria-disabled
-        title={moderationMessage ?? strings.blockedByOrganization}
-        style={{ opacity: 0.55, cursor: 'not-allowed' }}
-      >
-        {strings.blockedByOrganization}
-      </button>
-    );
-  }
-  if (cta === 'awaiting_approval') {
-    return (
-      <button
-        type="button"
-        className="btn btn--ghost btn--lg btn--block"
-        disabled
-        aria-disabled
-      >
-        {strings.awaitingApproval}
-      </button>
-    );
-  }
-  if (submitForApprovalNeeded || cta === 'submit_for_approval') {
-    return (
-      <form action={submitAction}>
-        <button type="submit" className="btn btn--dark btn--lg btn--block">
-          {strings.submitForApproval}
-        </button>
-      </form>
-    );
-  }
-  // cta === 'checkout'. /checkout requires a valid customer session, so when
-  // the buyer isn't authenticated (no session, or a stale/expired session that
-  // `/me` rejected) route them through login first — preserving the cart and
-  // returning to checkout via `?next` — instead of letting /checkout bounce
-  // them to login unexpectedly.
-  const checkoutHref = authenticated ? '/checkout' : '/login?next=/checkout';
-  if (linesBlockCheckout) {
-    // Feature 148 (FR-013, FR-037) — placement would refuse this basket, so checkout is not
-    // offered until the flagged lines are changed or removed. The reason is on the page, next
-    // to the control, not only in a tooltip.
-    return (
-      <>
-        <button
-          type="button"
-          className="btn btn--dark btn--lg btn--block"
-          disabled
-          aria-disabled
-          aria-describedby="cart-checkout-blocked"
-          style={{ opacity: 0.55, cursor: 'not-allowed' }}
-        >
-          {strings.checkout} →
-        </button>
-        <p id="cart-checkout-blocked" className="m-0 mt-2 text-[12px] font-medium text-warn">
-          {linesBlockedNote}
-        </p>
-      </>
-    );
-  }
-  return (
-    <Link href={checkoutHref} className="btn btn--dark btn--lg btn--block">
-      {strings.checkout} →
-    </Link>
-  );
 }
 
 async function readJar(): Promise<CartCookieJar> {

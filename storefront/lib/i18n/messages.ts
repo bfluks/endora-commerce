@@ -56,6 +56,7 @@ export type MessageKey =
   | 'cart.line.unknownProduct'
   | 'cart.line.setToMinimum'
   | 'cart.checkoutBlocked'
+  | 'cart.approvalBlocked'
   | 'cart.dropped.belowMinimum'
   | 'cart.dropped.belowMinimumBare'
   | 'checkout.belowMinimum.heading'
@@ -368,6 +369,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'cart.line.unknownProduct': 'Product removed from the catalogue',
     'cart.line.setToMinimum': 'Set to {count} pcs',
     'cart.checkoutBlocked': 'Change or remove the flagged lines to continue to checkout.',
+    'cart.approvalBlocked': 'Change or remove the flagged lines to submit the cart for approval.',
     'cart.dropped.belowMinimum': 'below the minimum order quantity (minimum {minimum})',
     'cart.dropped.belowMinimumBare': 'below the minimum order quantity',
     'checkout.belowMinimum.heading': 'These lines cannot be ordered yet',
@@ -661,6 +663,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'cart.line.unknownProduct': 'Produkt usunięty z katalogu',
     'cart.line.setToMinimum': 'Ustaw {count} szt.',
     'cart.checkoutBlocked': 'Zmień lub usuń oznaczone pozycje, aby przejść do kasy.',
+    'cart.approvalBlocked': 'Zmień lub usuń oznaczone pozycje, aby wysłać koszyk do akceptacji.',
     'cart.dropped.belowMinimum': 'poniżej minimalnej ilości zamówienia (minimum {minimum})',
     'cart.dropped.belowMinimumBare': 'poniżej minimalnej ilości zamówienia',
     'checkout.belowMinimum.heading': 'Tych pozycji nie można jeszcze zamówić',
