@@ -77,7 +77,7 @@ policy flag.
 | `GET /api/v1/organization/carts` | List every cart in the caller's Organization |
 | `GET /api/v1/organization/carts/:id` | Detail (member-owned cart) |
 | `PATCH /api/v1/organization/policies/cart-approval` | Toggle `requires_cart_approval` for the Organization |
-| `POST /api/v1/cart/submit-for-approval` | Buyer submits cart for Org-Admin approval (no-op when policy off; refused for Org-Admins themselves) |
+| `POST /api/v1/cart/submit-for-approval` | Buyer submits cart for Org-Admin approval (no-op when policy off; refused for Org-Admins themselves, and for a basket below a minimum — see *Order minimums*) |
 | `POST /api/v1/organization/carts/:id/approve` | Approve a pending cart |
 | `POST /api/v1/organization/carts/:id/reject` | Reject a pending cart with a required reason |
 
@@ -243,8 +243,10 @@ line of the product in the cart (the Catalog module's page defines both).
   refuse the whole batch before anything is written, and — for a customer — for
   the batch to replace the basket, which is then cleared only once the batch has
   passed: that is how admin order creation and the external order API leave a
-  customer's basket untouched when they refuse a request. At most 200 lines per
-  call.
+  customer's basket untouched when they refuse a request. Before that clear, a
+  batch that throws on a failed line also prices every line it is about to
+  write, so a product with no price or one sold on request only refuses the
+  request with the basket still intact. At most 200 lines per call.
 - **A basket filled from an accepted quote request** keeps the quote's
   negotiated quantities: each line seeded from the quote is exempt from the
   minimums **while its quantity equals the quote's quantity** for that line
@@ -257,6 +259,21 @@ line of the product in the cart (the Catalog module's page defines both).
   value; checkout and placement confirm the quote is still valid (the Orders
   module's page). Seeding the basket again — from another quote or a reorder
   — replaces it, and with it every earlier exemption.
+- **Submit for approval** (`POST /api/v1/cart/submit-for-approval`) refuses a
+  basket that could not be ordered, after the endpoint's existing refusals: a
+  line whose product record is gone answers `404 PRODUCT_NOT_FOUND` with every
+  such line's `cartItemIds`; a line below a minimum answers
+  `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`, every offending line in
+  `details.lines` with its `cartItemId`, in the language the response is answered
+  in. Nothing is written and the cart stays `not_required`. Unlike the cart view,
+  submit does not take the quote mark at face value: a quote-seeded line is
+  exempt only once the Orders module confirms the quote is still valid — the
+  buyer's organization's, `Approved`, not expired, not yet ordered, an agreed line
+  still in the basket — the check the checkout preview makes. While the Quote
+  Requests module is off nothing is exempt. A basket whose quote has lapsed is
+  therefore refused at submit although the view does not flag it; the storefront
+  shows the refusal's message.
 
 ## Coupon application
 

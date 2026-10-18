@@ -96,12 +96,25 @@ export interface CartWritePort {
    * `onLineError: 'throw'` — the first resolution failure is thrown before anything is written; a
    * later add failure is thrown as `addItem` would (lines before it stay added).
    * `'report'` — every failure is returned as `failed`. `ModuleDisabledError` is always thrown.
+   * `onBelowMinimum: 'report'` (default) — a line below a minimum is a `below_minimum` outcome;
+   * `'throw'` — any such line refuses the whole batch after (2), before anything is written, with
+   * the minimum code of the first and every offending line in `details.lines` keyed by `index`.
+   * `replaceExisting` (a customer actor only) — the batch becomes the customer's whole basket: (2)
+   * judges the batch alone, and the active cart is cleared only after (1) and (2) pass — with
+   * `onLineError: 'throw'`, also after every line to be written has been priced (the write step's
+   * `CART_PRODUCT_UNPRICED` / `CART_PRODUCT_QUOTE_ONLY`), so a refused request leaves the basket as
+   * it was. `language` names a refused product (the response language).
    * At most `CART_MAX_LINES` lines.
    */
   addItems(
     actor: { customer?: CartCustomerContext; anonymousToken?: string },
     lines: readonly CartBatchLineInput[],
-    options: { onLineError: 'throw' | 'report' },
+    options: {
+      onLineError: 'throw' | 'report';
+      onBelowMinimum?: 'report' | 'throw';
+      replaceExisting?: boolean;
+      language?: string;
+    },
   ): Promise<CartWithItems & { outcomes: CartBatchLineOutcome[] }>;
 }
 ```
@@ -113,10 +126,10 @@ export interface CartWritePort {
 
 | Path | Call | Report change |
 | --- | --- | --- |
-| Quick order build, target `cart` (buyer and operator) | `addItems(…, 'throw')` | More than `QUICK_ORDER_BUILD_MAX_ITEMS` (200) items, either target → `422 VALIDATION_FAILED` `details: { code: 'too_many_items', maximum: 200 }` before anything else. `quickOrderBuildResponseSchema` gains `rejected: z.array(z.object({ productId, variantId: uuid.nullable(), quantity, productName, reason: z.literal('below_minimum'), kind, minimum }))`, always present for target `cart` |
-| Shopping list → cart (`POST /api/v1/shopping-lists/:id/convert-to-cart` and `POST /api/v1/cart/from-shopping-list/:id`, both reaching `ShoppingListService.convertToCart`) | `addItems(…, 'report')` | `conversionSkipSchema.reason` gains `'below_minimum'`; new optional `minimum: z.number().int().positive()`. A `failed` 404 becomes a `product_not_found` skip (as a deleted product today); any other `failed` is rethrown |
-| Quote request → cart (`/api/v1/cart/from-quote-request/:id`) | `addItems(…, 'report')` | `cartDroppedLineReasonSchema` gains `'below_minimum'`; `cartDroppedLineSchema` gains optional `minimum`. A `failed` 404 maps to `not_purchasable` (as an unknown product today); any other `failed` keeps `no_price_in_customer_list` |
-| Admin create order (`order-creation-admin-service.ts`) | `addItems(…, 'throw')` on the transient basket | any `below_minimum` → whole request refused with the minimum code of the first, `details.lines` per the shape above with `index` |
+| Quick order build, target `cart` (buyer and operator) | `addItems(…, { onLineError: 'throw' })` | More than `QUICK_ORDER_BUILD_MAX_ITEMS` (200) items, either target → `422 VALIDATION_FAILED` `details: { code: 'too_many_items', maximum: 200 }` before anything else. `quickOrderBuildResponseSchema` gains `rejected: z.array(z.object({ productId, variantId: uuid.nullable(), quantity, productName, reason: z.literal('below_minimum'), kind, minimum }))`, always present for target `cart` |
+| Shopping list → cart (`POST /api/v1/shopping-lists/:id/convert-to-cart` and `POST /api/v1/cart/from-shopping-list/:id`, both reaching `ShoppingListService.convertToCart`) | `addItems(…, { onLineError: 'report' })` | `conversionSkipSchema.reason` gains `'below_minimum'`; new optional `minimum: z.number().int().positive()`. A `failed` 404 becomes a `product_not_found` skip (as a deleted product today); any other `failed` is rethrown |
+| Quote request → cart (`/api/v1/cart/from-quote-request/:id`) | `addItems(…, { onLineError: 'report' })` | `cartDroppedLineReasonSchema` gains `'below_minimum'`; `cartDroppedLineSchema` gains optional `minimum`. A `failed` 404 maps to `not_purchasable` (as an unknown product today); any other `failed` keeps `no_price_in_customer_list` |
+| Admin create order (`order-creation-admin-service.ts`) | `addItems(…, { onLineError: 'throw', onBelowMinimum: 'throw', replaceExisting: true, language })` | any `below_minimum` → whole request refused with the minimum code of the first, `details.lines` per the shape above with `index`; every refusal of `addItems` (unknown product, below a minimum, unpriced, quote-only) comes before the customer's basket is replaced, so it is left as it was |
 | API order intake (`order-api-intake-service.ts`) | same | same |
 
 ## 6. Quick-order import preview — `POST /api/v1/quick-order/import` and `POST /api/v1/admin/quick-order/import`
@@ -201,4 +214,49 @@ reads.
 
 The storefront renders `belowMinimum`, `belowMinimumLines`, `rejected[]`, `skipped[].minimum` and
 `droppedLines[].minimum` with its own PL/EN strings; refusals carry the backend's translated
-`error.message` (the request's language).
+`error.message` (the request's language). "Submit for approval" is disabled under the same condition
+that blocks proceeding to checkout (a line with `belowMinimum` set or `unavailable: true`), as a
+control with no form behind it and the reason as visible text linked by `aria-describedby`
+(`cart.approvalBlocked`, PL and EN); §12 is the binding rule. The view does not confirm the quote
+source, so a basket whose quote has lapsed leaves the control enabled and the submit is refused by §12;
+the storefront shows that refusal's `error.message`.
+
+## 12. Submit for approval — `POST /api/v1/cart/submit-for-approval` (FR-039)
+
+Owner ruling 2026-10-18: a basket that cannot be ordered cannot be sent for approval either. Request
+and success response unchanged (`{ data: { ok: true, approvalStatus: 'pending' } }`). Order of
+refusals:
+
+1. no signed-in customer → `401 UNAUTHORIZED` (unchanged)
+2. empty cart → `422 CART_EMPTY`; approval already initiated, approval not required for the
+   organization, or an Org Admin submitting their own cart → `422 VALIDATION_FAILED` (unchanged)
+3. **new** — the basket is evaluated **as placement evaluates it (§9)**, owner ruling 2026-10-18:
+   one product and packaging-unit read for the basket, then — only when the basket carries a quote
+   mark — the quote-source confirmation of §8/§9 (FR-036, data-model §2). Exemptions (FR-028) are
+   honoured only when the source is confirmed valid now: the quote request belongs to the submitter's
+   organization, is `Approved`, its validity has not ended, no order already carries it, and the
+   basket still holds a line agreed in it. Otherwise — including while `quote_requests` is off —
+   every line is judged with no exemption, so a basket whose quote has lapsed gets the same refusal
+   placement gives. Unlike the view (§3), which trusts the mark, submit can therefore refuse a line
+   the view does not flag. Placement confirms the source again; submit grants nothing placement
+   relies on.
+   - any line whose product record is absent (FR-037) → `404 PRODUCT_NOT_FOUND`,
+     `details: { cartItemIds }` (every such line; no product name, no minimum). Checked first.
+   - otherwise any minimum violation → `422 PRODUCT_BELOW_MINIMUM_QUANTITY` (pieces) or
+     `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` (unit), the code following the first offending
+     line's kind. Details: the first violation at the top level, every violation in `lines` with its
+     `cartItemId` (the R10 line shape):
+
+     ```json
+     { "productId": "…", "productName": "Anchor bolt M8", "minimum": 10, "total": 3,
+       "lines": [{ "cartItemId": "…", "productId": "…", "productName": "Anchor bolt M8", "kind": "pieces", "minimum": 10 }] }
+     { "productId": "…", "productName": "Anchor bolt M8", "packagingUnitId": "…", "packagingUnitName": "Pallet", "minimum": 2, "units": 1,
+       "lines": [{ "cartItemId": "…", "productId": "…", "productName": "Anchor bolt M8", "kind": "packaging_unit", "minimum": 2, "packagingUnitName": "Pallet" }] }
+     ```
+
+     Product names and `error.message` are in the request's language (`Accept-Language`, PL or EN).
+
+Nothing written: `approvalStatus` stays `not_required`, no audit row, no e-mail. A failed catalogue
+read fails the request (no `catch`), as the view does (D7). `CartApprovalService` takes the catalogue
+read port as a constructor argument for this. Documented as a behaviour change for API clients in the
+`mod-carts` changeset.

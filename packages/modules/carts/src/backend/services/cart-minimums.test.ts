@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { OrderMinimumRules } from '@endora-commerce/contracts';
+import type { CatalogProductRecord, OrderMinimumRules } from '@endora-commerce/contracts';
+import { HttpError } from '@endora-commerce/platform/http';
 import {
   NEW_CART_LINE_KEY,
+  assertCartMeetsMinimums,
   buildProspectiveCartLines,
   judgeTouchedCartLine,
   type CartMinimumItem,
@@ -272,5 +274,61 @@ describe('judgeTouchedCartLine', () => {
       productId: 'gone',
       kind: 'product_unavailable',
     });
+  });
+});
+
+/**
+ * FR-039 (`contracts/cart-and-checkout-api.md` §12) — submit for approval judges
+ * the basket as placement does: the quote-line exemption holds only once the
+ * quote source is confirmed, and the confirmation is asked only for a basket that
+ * carries a mark, after the catalogue read.
+ */
+describe('assertCartMeetsMinimums — the quote source is confirmed, not trusted', () => {
+  const productA = { id: A, type: 'simple', minOrderQuantity: 10, name: { en: 'Anchor' } } as unknown as CatalogProductRecord;
+  const catalogue = (calls: string[]) => ({
+    findByIds: async () => {
+      calls.push('findByIds');
+      return [productA];
+    },
+    listPackagingUnitsByProductIds: async () => [],
+  });
+  const seeded = [item({ id: 'i1', productId: A, quantity: 5, quoteSeededQuantity: 5 })];
+
+  it('a confirmed source keeps the seeded line exempt', async () => {
+    const calls: string[] = [];
+    await expect(
+      assertCartMeetsMinimums(catalogue(calls), {
+        cart: QUOTE_SOURCE,
+        items: seeded,
+        confirmQuoteSource: async () => {
+          calls.push('confirm');
+          return true;
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(calls).toEqual(['findByIds', 'confirm']);
+  });
+
+  it('an unconfirmed source judges the seeded line like any line', async () => {
+    const refusal = await assertCartMeetsMinimums(catalogue([]), {
+      cart: QUOTE_SOURCE,
+      items: seeded,
+      confirmQuoteSource: async () => false,
+    }).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(HttpError);
+    expect(refusal).toMatchObject({ statusCode: 422, code: 'PRODUCT_BELOW_MINIMUM_QUANTITY' });
+  });
+
+  it('a basket without a mark never asks for a confirmation', async () => {
+    const calls: string[] = [];
+    await assertCartMeetsMinimums(catalogue(calls), {
+      cart: NO_SOURCE,
+      items: [item({ id: 'i1', productId: A, quantity: 12 })],
+      confirmQuoteSource: async () => {
+        calls.push('confirm');
+        return true;
+      },
+    });
+    expect(calls).toEqual(['findByIds']);
   });
 });

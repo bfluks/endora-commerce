@@ -62,3 +62,25 @@ describe('cartActionFailure without a readable locale', () => {
     );
   });
 });
+
+/**
+ * Feature 155 (FR-039) — the cart's submit-for-approval action answers in the
+ * shopper's language too: a refusal the backend worded (the minimum refusal of
+ * §12) passes through, anything else gets the catalogue's sentence.
+ */
+describe('the cart page submit-for-approval action', () => {
+  it('words its fallback in the request\'s language', () => {
+    const failure = new TypeError('fetch failed');
+    expect(cartActionFailure(failure, 'en-US', 'cart.submitForApprovalFailed')).toBe(
+      'Could not submit the cart for approval.',
+    );
+    expect(cartActionFailure(failure, 'pl-PL', 'cart.submitForApprovalFailed')).toBe(
+      'Nie udało się wysłać koszyka do akceptacji.',
+    );
+  });
+
+  it('carries no hard-coded English fallback', () => {
+    const source = readFileSync(resolve(import.meta.dirname, '../app/(commerce)/cart/page.tsx'), 'utf8');
+    expect(source).not.toContain('Could not submit cart for approval.');
+  });
+});

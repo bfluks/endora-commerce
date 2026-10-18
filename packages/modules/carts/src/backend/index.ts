@@ -10,6 +10,7 @@ import type {
   CatalogProductReadPort,
   CustomerAccountReadPort,
   LinePricePort,
+  OrderQuoteSourcePort,
   ProductDisplayModePort,
   OrganizationCartApprovalWritePort,
   OrganizationDetailsPort,
@@ -198,6 +199,7 @@ export function registerModule(ctx: ModuleContext): void {
             ),
             lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
             lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+            lazyPort<OrderQuoteSourcePort>(ctx, 'orderQuoteSourcePort'),
           ),
       )
       .singleton(),

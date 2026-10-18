@@ -40,6 +40,7 @@ import type { Metadata } from 'next';
 import { cartBlocksCheckout, cartLineDisplayName } from '../../../lib/cartMinimum';
 import { droppedBelowMinimumReason } from '../../../lib/batchReport';
 import { tForLocale } from '../../../lib/i18n/messages';
+import { cartActionFailure } from '../../../lib/cart-action-failure';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -506,10 +507,10 @@ async function submitForApprovalAction(): Promise<void> {
   try {
     await submitCartForApproval(await readJar());
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError
-        ? err.message
-        : 'Could not submit cart for approval.';
+    // A refusal the backend worded (FR-039's minimum refusal, in the request's
+    // language) passes through; anything else is the catalogue's sentence.
+    const { locale } = await getServerContext();
+    const message = cartActionFailure(err, locale, 'cart.submitForApprovalFailed');
     redirect(`/cart?error=${encodeURIComponent(message)}`);
   }
   redirect('/cart');

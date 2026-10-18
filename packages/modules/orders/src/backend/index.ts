@@ -22,6 +22,7 @@ import type {
   InvoiceReadPort,
   OrderListPort,
   OrderPlacementPort,
+  OrderQuoteSourcePort,
   OrderReadPort,
   OrderStatusAnnouncePort,
   OrderTransitionPort,
@@ -889,6 +890,22 @@ export function registerModule(ctx: ModuleContext): void {
           ).placeOrder(customerContext, req, options?.language ? { language: options.language } : undefined);
           return { ...toOrderRecord(order), nextAction: order.nextAction ?? null };
         },
+      }))
+      .singleton(),
+  );
+
+  /**
+   * Feature 155 (FR-039) — the checkout preview's quote-source confirmation, for
+   * `carts`' submit-for-approval. Same timing as `orderPlacementPort`: the
+   * service is built inside the plugin body, so a call before route
+   * registration answers 503 rather than a guess.
+   */
+  ctx.di.providePort<OrderQuoteSourcePort>(
+    'orderQuoteSourcePort',
+    ctx
+      .asFunction((): OrderQuoteSourcePort => ({
+        quoteSourceHonoursExemptions: (input) =>
+          requireExposed(exposed.orderService, 'quote-source confirmation').quoteSourceHonoursExemptions(input),
       }))
       .singleton(),
   );

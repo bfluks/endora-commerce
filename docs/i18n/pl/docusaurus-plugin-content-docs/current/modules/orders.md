@@ -571,12 +571,16 @@ zewnętrzne API zamówień.
   składania zamówienia, więc o zwolnieniu decyduje się, zanim cokolwiek zostanie zapisane. Gdy moduł
   Quote Requests jest wyłączony, nic nie może potwierdzić zapytania i żadna pozycja nie jest
   zwolniona.
+  Sprawdzenie podglądu jest też udostępnione jako `orderQuoteSourcePort`, o które pyta moduł Carts
+  przy przekazaniu koszyka do akceptacji, więc przekazanie ocenia pozycję wypełnioną z zapytania
+  tak jak podgląd; składanie zamówienia potwierdza zapytanie ponownie.
 - **Zewnętrzne API zamówień** (`POST /api/v1/external/orders`) i tworzenie zamówienia w panelu
   budują koszyk z żądania i oceniają łączną ilość każdego produktu ze wszystkich pozycji żądania;
   żądanie poniżej minimum jest odrzucane w całości, z `details.lines[]` kluczowanym `index`. Żądanie
   jest oceniane samodzielnie — zastępowany koszyk nie liczy się do niczego — i odrzucane, **zanim**
   koszyk klienta zostanie naruszony, więc odrzucone żądanie zostawia ten koszyk dokładnie takim,
-  jakim był. Żadne
+  jakim był. To samo dotyczy pozycji bez ceny albo sprzedawanej wyłącznie na zapytanie: jest
+  wyceniana, zanim koszyk zostanie zastąpiony. Żadne
   z nich nie przenosi jednostki opakowania, więc działa tam tylko minimum w sztukach. **Oba
   odrzucają więcej niż 200 pozycji** z kodem `422 VALIDATION_FAILED`,
   `details.code = 'too_many_items'` — w zewnętrznym API jest to sprawdzane jako pierwsze, zanim

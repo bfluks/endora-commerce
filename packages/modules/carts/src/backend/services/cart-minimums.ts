@@ -340,19 +340,25 @@ export async function evaluateCartViewMinimums(
 }
 
 /**
- * Refuses a whole basket that has a line the full cart view flags (owner ruling
- * 2026-10-18): a basket that cannot be ordered cannot be sent for approval either.
+ * Refuses a whole basket that placement would refuse (owner ruling 2026-10-18,
+ * FR-039; `contracts/cart-and-checkout-api.md` §12): a basket that cannot be
+ * ordered cannot be sent for approval either.
  *
- * Judged exactly as {@link evaluateCartViewMinimums} judges the view — the same
- * records, the same FR-028 exemption — so the refusal never disagrees with the
- * flags the buyer is looking at.
+ * Judged as placement judges it, which is **not** quite how the cart view
+ * judges it: the view takes the basket's quote mark at face value (FR-028),
+ * while here the FR-028 exemption holds only once `confirmQuoteSource` has
+ * confirmed the source valid now (FR-036) — asked after the catalogue read, and
+ * only for a basket that carries a mark. Unconfirmed, every line is judged like
+ * any basket line, so a basket whose quote has lapsed is refused here although
+ * the view does not flag it.
  *
  * - A line whose product record is gone → `404 PRODUCT_NOT_FOUND` with every such
  *   line's `cartItemIds` and no name (FR-037, fail-closed).
  * - Otherwise the first violation's minimum code, the product named in
  *   `language`, every flagged line in `details.lines` with its `cartItemId`.
  *
- * Writes nothing. No `catch`: a failed catalogue read fails the caller.
+ * Writes nothing. No `catch`: a failed catalogue read or confirmation fails the
+ * caller.
  */
 export async function assertCartMeetsMinimums(
   catalogProducts: Pick<CatalogProductReadPort, 'findByIds' | 'listPackagingUnitsByProductIds'>,
@@ -360,6 +366,12 @@ export async function assertCartMeetsMinimums(
     cart: CartQuoteMark;
     items: readonly CartMinimumItem[];
     language?: string | undefined;
+    /**
+     * Whether the basket's quote source honours exemptions now — `orders`'
+     * checkout-preview check (`OrderQuoteSourcePort`). Required, so no caller
+     * can fall back to trusting the mark.
+     */
+    confirmQuoteSource: () => Promise<boolean>;
   },
 ): Promise<void> {
   const { items } = input;
@@ -368,7 +380,9 @@ export async function assertCartMeetsMinimums(
   const eligibleIds = products.filter((p) => isOrderMinimumEligibleType(p.type)).map((p) => p.id);
   const packagingUnits: CatalogPackagingUnitRecord[] =
     eligibleIds.length > 0 ? await catalogProducts.listPackagingUnitsByProductIds(eligibleIds) : [];
-  const lines = items.map((item) => lineOf(input.cart, item.id, item, item.quantity));
+  const confirmed = input.cart.sourceQuoteRequestId !== null && (await input.confirmQuoteSource());
+  const cart: CartQuoteMark = confirmed ? input.cart : { sourceQuoteRequestId: null };
+  const lines = items.map((item) => lineOf(cart, item.id, item, item.quantity));
   const violations = evaluateOrderMinimums(lines, { products, packagingUnits });
   if (violations.length === 0) return;
   const unavailable = violations.filter((v) => v.kind === 'product_unavailable');

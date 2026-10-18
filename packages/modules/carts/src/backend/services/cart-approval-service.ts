@@ -9,6 +9,7 @@ import type {
   CustomerAccountReadPort,
   OrganizationCartApprovalWritePort,
   OrganizationDetailsPort,
+  OrderQuoteSourcePort,
   OrganizationRecord,
 } from '@endora-commerce/contracts';
 import type { CartAuditService } from './cart-audit-service.js';
@@ -86,6 +87,12 @@ export class CartApprovalService {
      * basket below a minimum is refused before it is sent for approval.
      */
     private readonly catalogProducts: Pick<CatalogProductReadPort, 'findByIds' | 'listPackagingUnitsByProductIds'>,
+    /**
+     * Feature 155 (FR-039) — `orders`' checkout-preview confirmation of the
+     * basket's quote source, so a quote-seeded line is exempt at submit only
+     * while its quote is still valid, as at placement.
+     */
+    private readonly quoteSource: OrderQuoteSourcePort,
     private readonly emailDispatch?: CartEmailDispatch,
   ) {}
 
@@ -111,8 +118,9 @@ export class CartApprovalService {
    *   - the buyer is themself an Org Admin (self-approval exemption)
    *   - approval_status is already non-`not_required`
    *   - a line is below a minimum or its product is gone (feature 155, owner
-   *     ruling 2026-10-18) — the refusal placement would give, so a basket that
-   *     cannot be ordered is never sent for approval
+   *     ruling 2026-10-18, FR-039) — the refusal placement would give, with the
+   *     quote-line exemption honoured only once `orders` confirms the quote
+   *     source, so a basket that cannot be ordered is never sent for approval
    */
   async submitForApproval(
     cart: Cart,
@@ -146,6 +154,16 @@ export class CartApprovalService {
       cart: { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
       items: items.map(toCartMinimumItem),
       language: options.language,
+      confirmQuoteSource: () =>
+        this.quoteSource.quoteSourceHonoursExemptions({
+          organizationId: actor.organizationId,
+          quoteRequestId: cart.sourceQuoteRequestId!,
+          basketLines: items.map((item) => ({
+            productId: item.productId,
+            variantId: item.variantId ?? null,
+            unitPrice: item.unitPrice,
+          })),
+        }),
     });
 
     cart.approvalStatus = 'pending';

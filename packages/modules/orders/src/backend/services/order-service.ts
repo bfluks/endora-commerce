@@ -1440,6 +1440,26 @@ export class OrderService {
     });
   }
 
+  /**
+   * The checkout preview's quote-source answer, published as
+   * `OrderQuoteSourcePort` (feature 155, FR-039; `contracts/cart-and-checkout-api.md`
+   * §12) — so `carts`' submit-for-approval judges a basket's quote-seeded lines
+   * exactly as the preview does: {@link #previewedQuoteRequestSource}, lock-free,
+   * fail-closed while `quote_requests` is off. Advisory; placement re-checks.
+   */
+  async quoteSourceHonoursExemptions(input: {
+    organizationId: string;
+    quoteRequestId: string;
+    basketLines: ReadonlyArray<{ productId: string; variantId: string | null; unitPrice: string }>;
+  }): Promise<boolean> {
+    const assessed = await this.#previewedQuoteRequestSource(
+      input.organizationId,
+      input.quoteRequestId,
+      input.basketLines,
+    );
+    return assessed.honoursExemptions;
+  }
+
   async #assessQuoteRequestSource(
     quoteRequests: QuoteRequestReadPort,
     input: {

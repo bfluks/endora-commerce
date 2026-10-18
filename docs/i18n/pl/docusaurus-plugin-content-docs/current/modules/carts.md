@@ -74,7 +74,7 @@ Brak akceptowania własnych koszyków: koszyk utworzony przez administratora org
 | `GET /api/v1/organization/carts` | Lista wszystkich koszyków w organizacji wywołującego |
 | `GET /api/v1/organization/carts/:id` | Szczegóły koszyka członka organizacji |
 | `PATCH /api/v1/organization/policies/cart-approval` | Włączenie lub wyłączenie `requires_cart_approval` dla organizacji |
-| `POST /api/v1/cart/submit-for-approval` | Kupujący przekazuje koszyk do akceptacji administratorowi organizacji (nic nie robi, gdy akceptacja jest wyłączona; odrzucane dla samych administratorów organizacji) |
+| `POST /api/v1/cart/submit-for-approval` | Kupujący przekazuje koszyk do akceptacji administratorowi organizacji (nic nie robi, gdy akceptacja jest wyłączona; odrzucane dla samych administratorów organizacji oraz dla koszyka poniżej minimum — zob. *Minimalne ilości zamówienia*) |
 | `POST /api/v1/organization/carts/:id/approve` | Akceptacja oczekującego koszyka |
 | `POST /api/v1/organization/carts/:id/reject` | Odrzucenie oczekującego koszyka z wymaganym powodem |
 
@@ -229,7 +229,10 @@ definiuje strona modułu Catalog).
   poprosić, by pozycja poniżej minimum odrzucała całą partię, zanim cokolwiek zostanie zapisane, a —
   dla klienta — by partia zastąpiła koszyk, który jest wtedy czyszczony dopiero po pozytywnej ocenie
   partii: w ten sposób tworzenie zamówienia przez administratora i zewnętrzne API zamówień zostawiają
-  koszyk klienta nienaruszony, gdy odrzucają żądanie. Najwyżej 200 pozycji na wywołanie.
+  koszyk klienta nienaruszony, gdy odrzucają żądanie. Przed tym wyczyszczeniem partia, która ma
+  zgłaszać błąd przy nieudanej pozycji, wycenia też każdą pozycję, którą zamierza zapisać, więc
+  produkt bez ceny albo sprzedawany wyłącznie na zapytanie odrzuca żądanie, a koszyk pozostaje
+  nienaruszony. Najwyżej 200 pozycji na wywołanie.
 - **Koszyk wypełniony z zaakceptowanego zapytania ofertowego** zachowuje wynegocjowane ilości
   zapytania: każda pozycja wypełniona z zapytania jest zwolniona z minimów, **dopóki jej ilość
   równa się ilości z zapytania** dla tej pozycji — ilości, przy której obowiązuje uzgodniona cena
@@ -241,6 +244,19 @@ definiuje strona modułu Catalog).
   potwierdzają, że zapytanie jest nadal ważne (strona modułu Orders). Ponowne wypełnienie koszyka —
   z innego zapytania albo przez ponowne zamówienie — zastępuje je, a wraz z nim każde wcześniejsze
   zwolnienie.
+- **Przekazanie do akceptacji** (`POST /api/v1/cart/submit-for-approval`) odrzuca koszyk, którego
+  nie dałoby się zamówić, po dotychczasowych odmowach tego punktu końcowego: pozycja, której rekord
+  produktu zniknął, kończy się `404 PRODUCT_NOT_FOUND` z `cartItemIds` każdej takiej pozycji;
+  pozycja poniżej minimum kończy się `422 PRODUCT_BELOW_MINIMUM_QUANTITY` albo
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`, z każdą naruszającą pozycją w `details.lines` wraz z
+  jej `cartItemId`, w języku odpowiedzi. Nic nie jest zapisywane, a koszyk pozostaje w stanie
+  `not_required`. Inaczej niż widok koszyka, przekazanie nie przyjmuje oznaczenia zapytania bez
+  weryfikacji: pozycja wypełniona z zapytania jest zwolniona dopiero wtedy, gdy moduł Orders
+  potwierdzi, że zapytanie jest nadal ważne — należy do organizacji kupującego, ma status
+  `Approved`, nie wygasło, nie zostało jeszcze zamówione, a w koszyku jest nadal uzgodniona
+  pozycja — tym samym sprawdzeniem, które wykonuje podgląd checkoutu. Gdy moduł Quote Requests jest
+  wyłączony, nic nie jest zwolnione. Koszyk, którego zapytanie straciło ważność, jest więc
+  odrzucany przy przekazaniu, choć widok go nie oznacza; storefront pokazuje komunikat odmowy.
 
 ## Stosowanie kuponu
 

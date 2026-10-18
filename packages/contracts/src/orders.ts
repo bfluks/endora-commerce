@@ -1297,6 +1297,42 @@ export interface OrderPlacementPort {
   ): Promise<PlacedOrderRecord>;
 }
 
+/** One basket line, as the quote-source confirmation reads it. */
+export interface QuoteSourceBasketLine {
+  productId: string;
+  variantId: string | null;
+  /** The line's stored unit price — compared with the quote's agreed price. */
+  unitPrice: string;
+}
+
+/**
+ * Container name: `orderQuoteSourcePort`. Owner: `orders`.
+ *
+ * Feature 155 (FR-036, FR-039; `contracts/cart-and-checkout-api.md` §12) —
+ * whether a basket's quote-seeded lines keep their exemption from the
+ * catalogue's order minimums, answered by the **checkout preview's** check: the
+ * Quote Request belongs to `organizationId`, is `Approved`, its validity has not
+ * ended, no Order already carries it, and `basketLines` still hold a line agreed
+ * in it. Lock-free and advisory — placement confirms the source again under its
+ * own lock, so nothing a caller grants on this answer is relied on by placement.
+ *
+ * Published for `carts`' submit-for-approval, which must judge a basket as
+ * placement does rather than take the cart's quote mark at face value. The rule
+ * stays in one place: `orders` already owns it and is the only module that can
+ * answer "no Order carries it yet".
+ *
+ * Fail-closed: `false` whenever the source cannot be confirmed, including while
+ * `quote_requests` is off. **Owner off:** resolving the port throws
+ * `ModuleDisabledError` (503), as for every `orders` port.
+ */
+export interface OrderQuoteSourcePort {
+  quoteSourceHonoursExemptions(input: {
+    organizationId: string;
+    quoteRequestId: string;
+    basketLines: readonly QuoteSourceBasketLine[];
+  }): Promise<boolean>;
+}
+
 export interface OrderStatusActor {
   kind: 'admin' | 'customer' | 'system';
   adminUserId?: string;

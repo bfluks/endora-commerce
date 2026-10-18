@@ -4,7 +4,7 @@
 **Created**: 2026-10-13 (clarified draft); revised 2026-10-15
 **Status**: Clarified — ready for plan (amended after analyze, 2026-10-15). Clarify sessions
 2026-10-13 and 2026-10-15 (two rounds, Q0–Q10, then the analyze and threat-model rulings P1–P4)
-closed; no open questions remain.
+closed; no open questions remain. Amended 2026-10-18 (FR-039, owner ruling 2026-10-18).
 **Issues**: #285, #294
 **Input**: Product owner's request, summarised in English.
 
@@ -272,8 +272,8 @@ the way of ordering it belongs to.
 ### User Story 4 - Constraints hold on every way into the basket (Priority: P2)
 
 Minimums are enforced not only on the product page but on quick order, CSV import, one-click buy,
-shopping list → cart, quote request → cart, quote requests, admin-created orders, API intake and
-checkout, so a buyer cannot route around them.
+shopping list → cart, quote request → cart, quote requests, admin-created orders, API intake,
+submit for approval and checkout, so a buyer cannot route around them.
 
 **Why this priority**: Without it, US1–US3 are UI-only and bypassable; but US1–US3 deliver visible value first.
 
@@ -313,6 +313,8 @@ valid line in the same batch is still added.
 15. **Given** A has minimum 10, **When** a sales representative clones an order with A × 5 into a quote request from the admin, or builds an operator quick order with A × 5 to a quote request, **Then** the request is created and the admin quote-request screen shows the "below minimum" warning on the A line (as scenario 9).
 16. **Given** product H is not visible to the buyer (or not published in the request's channel) and has minimum 10, **When** a batch path (quick-order import or build, shopping list → cart, quote request → cart, API intake, admin create-order preview) receives H × 5, **Then** the line is reported exactly as an unknown product id would be — never "below minimum", never H's name or minimum.
 17. **Given** a quick-order build, an admin order create or an admin order preview request with more than 200 lines (FR-038), **When** it is submitted, **Then** it is refused as a whole with HTTP 422 `VALIDATION_FAILED` and `details.code = 'too_many_items'` before any line is evaluated or added.
+18. **Given** an organization that requires cart approval and a member (not an Org Admin) whose cart holds A × 3 because A's minimum was raised to 10 after the line was added, **When** the member views the cart, **Then** "Submit for approval" is disabled with the reason shown, in PL or EN; **When** the member instead submits through the API, **Then** the submit is refused with HTTP 422 naming the A line and the minimum, and the cart is not sent for approval; **When** the member changes the line to 10 and submits, **Then** the cart is sent for approval (FR-039).
+18a. **Given** the same organization and a basket seeded from an accepted quote with an exempt line A × 5 (A minimum 10), **When** the member submits it for approval, **Then** the submit is not refused for that line, provided the quote source is confirmed valid at that moment (FR-036). **Given** the same basket, **When** its quote request has expired, been cancelled, already produced an order, or no longer belongs to the member's organization by the time the member submits, **Then** the A line is judged like any basket line: the submit is refused with HTTP 422 naming the A line and its minimum, as placement would refuse it, and the cart is not sent for approval (FR-039).
 
 ---
 
@@ -464,6 +466,12 @@ R selectable, N shown as "not returnable". Submit N directly via the API: refuse
   and `details.code = 'too_many_items'` before any line is evaluated. The API order intake
   (`apiPlaceOrderRequestSchema.lines`) is covered by the same cap (owner ruling 2026-10-16; a public API
   change, documented in the changeset).
+- **Submit for approval below a minimum** (FR-039): an organization cart with a line below its
+  minimum, or a line whose product record is gone, cannot be submitted for approval — the storefront
+  disables the control and the API refuses the submit (owner ruling 2026-10-18). A quote line is
+  exempt at submit only once its quote source is confirmed valid, as at placement (FR-036); a basket
+  whose quote has lapsed is refused at submit with placement's minimum refusal, although the cart view,
+  which trusts the quote mark (FR-028), does not flag it beforehand.
 - **Return request naming one order line more than once** (FR-033): the requested quantities are
   aggregated per order line before the remaining-quantity check, for both case kinds.
 - **Returnable flag changed after purchase**: the value recorded on the order line at placement governs.
@@ -486,7 +494,7 @@ R selectable, N shown as "not returnable". Submit N directly via the API: refuse
 
 Numbering is kept from the clarified draft, including its inserted numbers (FR-006a, FR-016a) and the
 hole left by FR-024, which was removed rather than renumbered so that clarify answers and analysis
-notes citing the draft's numbers stay valid. New requirements from the re-measurement start at FR-026; FR-028–FR-030 come from the first 2026-10-15 clarify round and FR-031–FR-032 from the second (Q6–Q10); FR-033–FR-038 come from the analyze and threat-model rulings (P1–P4, F1–F6) of 2026-10-15, which also amended FR-001, FR-002, FR-003, FR-004, FR-011, FR-016a, FR-026 and FR-028.
+notes citing the draft's numbers stay valid. New requirements from the re-measurement start at FR-026; FR-028–FR-030 come from the first 2026-10-15 clarify round and FR-031–FR-032 from the second (Q6–Q10); FR-033–FR-038 come from the analyze and threat-model rulings (P1–P4, F1–F6) of 2026-10-15, which also amended FR-001, FR-002, FR-003, FR-004, FR-011, FR-016a, FR-026 and FR-028. FR-039 comes from the owner ruling 2026-10-18 and is placed beside FR-008, the rule it parallels.
 
 ### Functional Requirements
 
@@ -504,6 +512,7 @@ notes citing the draft's numbers stay valid. New requirements from the re-measur
 - **FR-006**: The API MUST refuse to add a product line, or change a line's quantity to a value ≥ 1, so that it falls below an applicable minimum (FR-001/FR-002), returning HTTP 422 with a stable machine code (one for the pieces minimum, one for a packaging-unit minimum; names fixed in the plan and registered with the platform's error codes), the minimum and the unit in the details, plus a human message in the requester's language (PL or EN).
 - **FR-007**: Removing a cart line — including an edit to quantity 0, which removes the line today — MUST always be allowed regardless of minimums.
 - **FR-008**: Placing an order MUST re-validate every basket line against the minimums current at that moment and refuse placement, naming each offending line, if any line is below its minimum — except the lines FR-028 exempts in a basket seeded from an accepted quote request. The checkout preview (`previewTotal`) MUST report the same lines so the buyer learns before submitting.
+- **FR-039**: Submitting an organization cart for approval (`POST /api/v1/cart/submit-for-approval`) MUST be refused while any line of the basket is below its current minimum, as proceeding to checkout is (owner ruling 2026-10-18): a basket that cannot be ordered cannot be sent for approval either. The basket MUST be judged as placement judges it (FR-008): the FR-028 exemption applies only once the basket's quote source has been confirmed valid at that moment, exactly as at the checkout preview and placement (FR-036) — the quote request belongs to the submitting buyer's organization, is `Approved`, has not expired (its validity has not ended), no order already carries it, and the basket still holds a line agreed in it; when the quote source cannot be confirmed (including while `quote_requests` is off), every line is judged like any basket line, so a basket whose quote has lapsed is refused at submit with the same minimum refusal placement gives (owner ruling 2026-10-18). The cart read model keeps taking the quote mark at face value (FR-028), so for a lapsed quote the submit refusal is the first place the buyer learns of it. A violation MUST be refused with HTTP 422 and the minimum codes of FR-006 (the first offending line's kind), naming every offending line with its minimum, with a message in the requester's language (PL or EN); a line whose product record cannot be read MUST be refused as an unknown product (HTTP 404, FR-037) naming the lines, without a product name or minimum. Nothing is written and the cart's approval state stays unchanged. The check comes after the endpoint's existing refusals (empty cart, approval already initiated, approval not required for the organization, an Org Admin submitting their own cart). The storefront MUST disable "Submit for approval" under the same condition that blocks proceeding to checkout, with the reason shown as visible text (PL and EN); the API refusal is the binding rule. Because this changes the public API, the change MUST be documented in the `mod-carts` changeset.
 - **FR-009**: The minimums MUST apply on every buyer path into the cart: storefront add, cart edit, quick order (form and CSV/XLSX import), one-click buy, shopping list → cart, quote request → cart, reorder (via FR-008 at the latest), and API order intake; and on admin-created orders, where the admin create-order preview SHOULD show the below-minimum line before submit. Admin-created orders and API intake carry no packaging unit today, so only the pieces minimum is reachable there.
 - **FR-010**: One-click buy MUST order the product's minimum (pieces) when one is set, instead of 1.
 - **FR-011**: Batch paths into the cart (quick order build to the cart — form, CSV/XLSX and operator on behalf — shopping list → cart, quote request → cart) MUST add the valid lines and report each rejected line with its reason and minimum; the batch is not rolled back. Each path's reported reasons MUST gain a below-minimum value distinct from its existing ones — in particular quote request → cart MUST NOT report a minimum refusal as `no_price_in_customer_list`. For quick order the report is twofold: (a) the CSV/XLSX import preview MUST judge the pieces minimum against the **product's total across all rows of the file** — after today's duplicate-row merge (by SKU), the rows of every variant of the same product summed — never together with the buyer's cart (the preview's verdict and the build's may therefore differ); rows refused for an existing reason (FR-035) do not count toward the total. On the **buyer's** import, every row of a product whose file total is below the minimum MUST be listed as rejected with a new reason in `quickOrderRejectionReasonSchema` and the minimum, beside the existing reasons. On the **operator's** import (`POST /api/v1/admin/quick-order/import`), such a row MUST NOT be rejected: it stays among the buildable rows and carries a below-minimum warning with the minimum (PL and EN in the admin), so the operator can build it into a quote request (FR-012, FR-030); the response shape is the plan's; (b) the build response for target `cart` MUST list the rejected lines with the minimum, the valid ones having been added. A quick-order build to target `quote_request` is one quote request, not a batch: FR-012 governs it.
@@ -632,3 +641,8 @@ notes citing the draft's numbers stay valid. New requirements from the re-measur
 - (Follow-up 1, coordinator default the product owner did not object to) Q: An operator's quick-order build to a **cart** — warning (as for an operator's build to a quote request) or rejection below the minimum? → A: the cart path still rejects a below-minimum line; the warning-only treatment applies to an operator's build to a quote request (FR-011, FR-012, FR-030).
 - (Follow-up 2, coordinator default the product owner did not object to) Q: Does FR-033's per-order-line aggregation cover complaints as well as returns? → A: yes; both case kinds aggregate the requested quantities per order line before the remaining-quantity check (FR-033).
 - (Follow-up 3, coordinator default the product owner did not object to) Q: Does the cart read model re-verify that a seeded line's accepted quote is still valid before exempting it? → A: no; the cart read model trusts the line's quote mark, and the quote source's validity is confirmed at checkout preview and at placement (FR-028, FR-036).
+
+### Session 2026-10-18
+
+- Q: Must "Submit for approval" on an organization cart be refused while a line is below its minimum? → A (owner ruling 2026-10-18): yes, as proceeding to checkout is; the storefront blocks the control and the server refuses the submit (FR-039).
+- Q: At submit, is a quote-seeded line's exemption taken at face value, as the cart view does, or only once the quote source is confirmed valid, as at placement? → A (owner ruling 2026-10-18): only once confirmed valid, exactly as at the checkout preview and placement (FR-036, FR-037); a basket whose quote has lapsed is refused at submit with placement's minimum refusal (FR-039). The cart read model still trusts the mark (Follow-up 3 stands).

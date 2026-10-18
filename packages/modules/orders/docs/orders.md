@@ -611,13 +611,17 @@ admin's Create order and the external order API.
   The check and its lock run at the start of placement, so the exemption is
   decided before anything is written. With the Quote Requests module switched
   off, nothing can vouch for the quote and no line is exempt.
+  The preview's check is also published as `orderQuoteSourcePort`, which the
+  Carts module asks when a basket is submitted for approval, so submit judges a
+  quote-seeded line as the preview does; placement confirms the quote again.
 - **External order API** (`POST /api/v1/external/orders`) and admin Create
   order build the basket from the request and judge each product's total over
   the request's lines; a below-minimum request is refused whole, with
   `details.lines[]` keyed by `index`. The request is judged on its own — the
   basket it replaces counts toward nothing — and refused **before** the
   customer's basket is touched, so a refused request leaves that basket exactly
-  as it was. Neither carries a packaging unit, so only
+  as it was. The same holds for a line with no price or one sold on request
+  only: it is priced before the basket is replaced. Neither carries a packaging unit, so only
   the pieces minimum applies there. **Both refuse more than 200 lines** with
   `422 VALIDATION_FAILED`, `details.code = 'too_many_items'` — on the external
   API this is checked first, before the `Idempotency-Key` header is required,
