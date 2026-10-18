@@ -233,6 +233,9 @@ wszystko, zanim zostanie wyznaczona jakakolwiek cena referencyjna.
 - **Edycja szkicu.** Pozycja, której klient nie zmienił — ten sam produkt, wariant, jednostka
   opakowania i ilość co w zapisanej pozycji — nie jest odrzucana, nawet poniżej minimum; jej sztuki
   nadal liczą się do łącznej ilości produktu, gdy sprawdzana jest inna pozycja tego produktu.
+  Pozycja wskazuje jednostkę opakowania jej identyfikatorem, więc jednostka, której nazwę zmieniono
+  w katalogu po zapisaniu pozycji, nadal jest tą samą jednostką, a pozycja pozostaje niezmieniona
+  (i zachowuje zapisaną cenę referencyjną).
 - **Ponowne złożenie** jest oceniane jak nowe zapytanie, bez zwolnienia, w sztukach (nie przenosi
   jednostki opakowania). Zapytanie, którego produkt już nie istnieje, jest odrzucane z kodem `404`.
 - **Akceptacja albo odrzucenie rewizji** nigdy nie jest odrzucane z powodu minimów.

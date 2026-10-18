@@ -256,7 +256,10 @@ reference price is resolved.
 - **Draft edit.** A line the customer left unchanged — same product, variant,
   packaging and quantity as a stored line — is not refused, even below its
   minimum; its pieces still count toward the product's total when another line
-  of that product is checked.
+  of that product is checked. A line names its packaging unit by the unit's id,
+  so a unit renamed in the catalogue since the line was stored is still the
+  same unit, and the line stays unchanged (and keeps its stored reference
+  price).
 - **Resubmit** is judged as a new request, with no exemption, in pieces (it
   carries no packaging). A request whose product no longer exists is refused
   with `404`.

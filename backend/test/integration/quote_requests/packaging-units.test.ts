@@ -258,6 +258,45 @@ describe('155 — quote-request packaging resolution [integration]', () => {
     });
   });
 
+  describe('FR-031 (b) — a draft edit exempts an unchanged packaging line by its unit id', () => {
+    it('a line left unchanged is not refused after its unit was renamed and given a minimum', async () => {
+      const em = h.em();
+      const channels = await buyerChannelIds(em);
+      const F = await createMinimumProduct(em, { sku: `QPU-F-${RUN}`, nameEn: `Flange ${RUN}`, namePl: `Kołnierz ${RUN}`, channelIds: channels });
+      const fPallet = await createMinimumPackagingUnit(em, { productId: F.id, name: `Pallet F ${RUN}`, baseQuantity: 64 });
+      const created = await createOk([{ productId: F.id, quantity: 64, packagingUnitId: fPallet }]);
+
+      // The catalogue moves under the draft: the unit gets a minimum of 2 and a new name.
+      await em.nativeUpdate(ProductPackagingUnit, { id: fPallet }, { minOrderUnits: 2, name: `Pallet F renamed ${RUN}` });
+
+      const patch = (items: Array<Record<string, unknown>>) =>
+        h.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/quote-requests/${created.id}`,
+          cookies: customer,
+          payload: { items },
+        });
+
+      // The line changed (65 pieces) is judged: 65/64 of a pallet is below 2.
+      const changed = await patch([{ productId: F.id, quantity: 65, packagingUnitId: fPallet }]);
+      expect(changed.statusCode, changed.body).toBe(422);
+      expect(errorOf(changed).code).toBe(ERROR_CODES.PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY);
+
+      // The same line resent unchanged, beside a new one, is exempt (FR-031 (b)).
+      const unchanged = await patch([
+        { productId: F.id, quantity: 64, packagingUnitId: fPallet },
+        { productId: B.id, quantity: 3 },
+      ]);
+      expect(unchanged.statusCode, unchanged.body).toBe(200);
+      const lines = await linesOf(created.id);
+      expect(lines.find((l) => l.productId === F.id)).toMatchObject({
+        packagingUnitId: fPallet,
+        packagingUnitName: `Pallet F renamed ${RUN}`,
+        quantity: 64,
+      });
+    });
+  });
+
   describe('analyze F14 — packagingUnitId is stored, carried and exposed', () => {
     it('admin modify carries the stored packagingUnitId of a paired line', async () => {
       const created = await createOk([{ productId: B.id, quantity: 128, packagingUnitId: bPallet }]);

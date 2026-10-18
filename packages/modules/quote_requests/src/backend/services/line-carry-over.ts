@@ -16,6 +16,8 @@ export interface CarryOverRow {
   id: string;
   productId: string;
   variantId?: string | null;
+  /** Feature 155 — the catalogue unit the line was stored with; `null` for older lines. */
+  packagingUnitId?: string | null;
   packagingUnitName?: string | null;
 }
 
@@ -32,6 +34,8 @@ export interface IncomingLineKey {
   id?: string | undefined;
   productId: string;
   variantId?: string | null | undefined;
+  /** Feature 155 — the catalogue unit the line resolved to; absent or `null` = none. */
+  packagingUnitId?: string | null | undefined;
   packagingUnitName?: string | null | undefined;
 }
 
@@ -53,9 +57,9 @@ export interface LinePairing<E> {
 
 /**
  * Pair incoming lines with stored rows: by `id` (admin only), then by product
- * and variant with an equal packaging name, then by product and variant in
- * stored order (the R6 rule). Two variants of one product never pair with each
- * other. Each row pairs at most once.
+ * and variant with the same packaging unit id, then with an equal packaging
+ * name, then by product and variant in stored order (the R6 rule). Two variants
+ * of one product never pair with each other. Each row pairs at most once.
  */
 export function pairLines<E extends CarryOverRow>(
   existing: readonly E[],
@@ -87,9 +91,21 @@ export function pairLines<E extends CarryOverRow>(
     });
   }
 
-  // 2. Same product and variant, equal packaging name — run over every line
-  //    before any positional fallback, so an exact match is never stolen by an
-  //    earlier line that would have settled for position.
+  // 2a. Same product and variant, the same packaging unit id (feature 155,
+  //     FR-031 (b)) — a unit renamed in the catalogue since the line was
+  //     stored is still the same unit. Both sides must carry an id.
+  incoming.forEach((line, lineIndex) => {
+    const unitId = line.packagingUnitId ?? null;
+    if (unitId === null) return;
+    claim(
+      lineIndex,
+      (row) => row.productId === line.productId && sameVariant(row, line) && (row.packagingUnitId ?? null) === unitId,
+    );
+  });
+
+  // 2b. Same product and variant, equal packaging name — run over every line
+  //     before any positional fallback, so an exact match is never stolen by an
+  //     earlier line that would have settled for position.
   incoming.forEach((line, lineIndex) => {
     if (line.packagingUnitName === undefined) return;
     const packaging = line.packagingUnitName ?? null;
@@ -135,6 +151,8 @@ export interface ReferenceInputs {
   productId: string;
   variantId?: string | null | undefined;
   quantity: number;
+  /** Feature 155 — when both sides carry one, the unit's identity (its name may since have changed). */
+  packagingUnitId?: string | null | undefined;
   packagingUnitName?: string | null | undefined;
   packagingUnitBaseQuantity?: number | null | undefined;
 }
@@ -144,13 +162,24 @@ export interface ReferenceInputs {
  * variant, quantity and packaging unit are all unchanged — any of them can move
  * the price bracket (spec Assumption). A change of proposal or line note alone
  * keeps it.
+ *
+ * The packaging unit is the same unit when both sides carry the same unit id
+ * (feature 155, FR-031 (b) — a unit renamed in the catalogue is not a change
+ * the buyer made), otherwise when the names are equal; the base quantity must
+ * be equal either way.
  */
 export function referenceInputsUnchanged(stored: ReferenceInputs, next: ReferenceInputs): boolean {
+  const storedUnitId = stored.packagingUnitId ?? null;
+  const nextUnitId = next.packagingUnitId ?? null;
+  const sameUnit =
+    storedUnitId !== null && nextUnitId !== null
+      ? storedUnitId === nextUnitId
+      : (stored.packagingUnitName ?? null) === (next.packagingUnitName ?? null);
   return (
     stored.productId === next.productId &&
     (stored.variantId ?? null) === (next.variantId ?? null) &&
     stored.quantity === next.quantity &&
-    (stored.packagingUnitName ?? null) === (next.packagingUnitName ?? null) &&
+    sameUnit &&
     (stored.packagingUnitBaseQuantity ?? null) === (next.packagingUnitBaseQuantity ?? null)
   );
 }

@@ -114,6 +114,31 @@ describe('pairLines — customer patchDraft (no ids)', () => {
     expect(removed).toEqual([second]);
   });
 
+  it('FR-031 (b) — the stored unit id pairs a line whose unit was renamed, ahead of a name match', () => {
+    const renamed = row('renamed', { packagingUnitId: 'unit-pallet', packagingUnitName: 'Paleta' });
+    const sameName = row('same-name', { packagingUnitId: 'unit-other', packagingUnitName: 'Paleta EUR' });
+    const { paired } = pairLines(
+      [sameName, renamed],
+      [{ productId: P1, variantId: null, packagingUnitId: 'unit-pallet', packagingUnitName: 'Paleta EUR' }],
+      'customer',
+    );
+    expect(paired).toEqual([renamed]);
+  });
+
+  it('a line without a unit id still pairs by name, and an id never pairs a row without one', () => {
+    const legacy = row('legacy', { packagingUnitName: 'Paleta' });
+    expect(
+      pairLines([legacy], [{ productId: P1, variantId: null, packagingUnitName: 'Paleta' }], 'customer').paired,
+    ).toEqual([legacy]);
+    expect(
+      pairLines(
+        [legacy],
+        [{ productId: P1, variantId: null, packagingUnitId: 'unit-pallet', packagingUnitName: 'Paleta' }],
+        'customer',
+      ).paired,
+    ).toEqual([legacy]);
+  });
+
   it('an exact packaging match is not stolen by an earlier line that falls back to position', () => {
     const karton = row('karton', { packagingUnitName: 'Karton' });
     const paleta = row('paleta', { packagingUnitName: 'Paleta' });
@@ -162,6 +187,16 @@ describe('referenceInputsUnchanged — whether a paired line keeps its stored re
         { productId: P1, quantity: 10 },
       ),
     ).toBe(true);
+  });
+
+  it('FR-031 (b) — the same unit id is the same unit, whatever it is called now', () => {
+    const withId = { ...stored, packagingUnitId: 'unit-pallet' };
+    expect(referenceInputsUnchanged(withId, { ...withId, packagingUnitName: 'Paleta EUR' })).toBe(true);
+    expect(referenceInputsUnchanged(withId, { ...withId, packagingUnitId: 'unit-other' })).toBe(false);
+    expect(referenceInputsUnchanged(withId, { ...withId, packagingUnitBaseQuantity: 6 })).toBe(false);
+    // Only one side carries an id: the name decides, as before.
+    expect(referenceInputsUnchanged(stored, { ...withId, packagingUnitName: 'Paleta EUR' })).toBe(false);
+    expect(referenceInputsUnchanged(stored, { ...withId })).toBe(true);
   });
 
   it('is false when any of them changed', () => {
