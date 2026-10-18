@@ -218,6 +218,40 @@ describe('shopping_lists — conversion partitions by the port, and writes throu
     ]);
   });
 
+  it('re-raises a batch refusal other than the unknown-id answer with its code, message and details', async () => {
+    const carts = {
+      addItems: async () => ({
+        cart: {},
+        items: [],
+        outcomes: [
+          {
+            index: 0,
+            status: 'failed',
+            error: {
+              status: 400,
+              code: 'CART_PRODUCT_QUOTE_ONLY',
+              message: 'This product is sold on request only and cannot be added to the cart.',
+              details: { productId: 'prod-live' },
+            },
+          },
+        ],
+      }),
+    } as unknown as CartWritePort;
+    const service = new ShoppingListService(
+      fakeEm({ ShoppingList: LIST, ShoppingListItem: [items[0]] }),
+      carts,
+      refusingRfq,
+      catalogProducts,
+      refusingChannelMembership,
+    );
+    await expect(service.convertToCart(CTX, 'list-1', undefined)).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'CART_PRODUCT_QUOTE_ONLY',
+      message: 'This product is sold on request only and cannot be added to the cart.',
+      details: { productId: 'prod-live' },
+    });
+  });
+
   it('quotes only the live lines, over rfqCustomerPort', async () => {
     const quoted: string[] = [];
     const rfq = {

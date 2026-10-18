@@ -311,7 +311,12 @@ describe('addItems — resolution first (F1, FR-035)', () => {
       {
         index: 0,
         status: 'failed',
-        error: { status: 422, code: ERROR_CODES.CART_QUANTITY_INVALID, message: 'Quantity must be at least 1.' },
+        error: {
+          status: 422,
+          code: ERROR_CODES.CART_QUANTITY_INVALID,
+          message: 'Quantity must be at least 1.',
+          details: { quantity: 0, minimum: 1 },
+        },
       },
     ]);
   });
@@ -494,6 +499,9 @@ describe('addItems — the add step and the error modes', () => {
           status: 400,
           code: ERROR_CODES.CART_PRODUCT_QUOTE_ONLY,
           message: 'This product is sold on request only and cannot be added to the cart.',
+          // The refusal's own details travel with it, so a caller re-raising it
+          // answers exactly what `addItem` would have.
+          details: { productId: Q },
         },
       },
       { index: 2, status: 'added' },

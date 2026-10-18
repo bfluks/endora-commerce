@@ -354,11 +354,13 @@ export class ShoppingListService {
           // apart (FR-035, threat F1) — never a name, never a minimum.
           skipped.push({ itemId: item.id, productId: item.productId, reason: 'product_not_found' });
         } else {
-          // Anything else was thrown by `addItem` before the batch, and still is.
+          // Anything else was thrown by `addItem` before the batch, and still
+          // is — with its details, so the answer is the one `addItem` gave.
           throw new HttpError(
             outcome.error.status,
             outcome.error.code as ConstructorParameters<typeof HttpError>[1],
             outcome.error.message,
+            outcome.error.details as ConstructorParameters<typeof HttpError>[3],
           );
         }
       }

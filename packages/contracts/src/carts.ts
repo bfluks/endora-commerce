@@ -758,7 +758,12 @@ export type CartBatchLineOutcome =
       minimum: number;
       packagingUnitName?: string;
     }
-  | { index: number; status: 'failed'; error: { status: number; code: string; message: string } };
+  | {
+      index: number;
+      status: 'failed';
+      /** The refusal as `addItem` threw it; `details` only when it carried any. */
+      error: { status: number; code: string; message: string; details?: unknown };
+    };
 
 export interface CartWritePort {
   getOrCreateForCustomer(ctx: CartCustomerContext): Promise<CartRecord>;

@@ -359,7 +359,7 @@ describe('cart batch add — CartWritePort.addItems (contracts/cart-and-checkout
     expectTypeOf<Extract<CartBatchLineOutcome, { status: 'failed' }>>().toEqualTypeOf<{
       index: number;
       status: 'failed';
-      error: { status: number; code: string; message: string };
+      error: { status: number; code: string; message: string; details?: unknown };
     }>();
   });
 

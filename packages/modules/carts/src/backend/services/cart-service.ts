@@ -1080,9 +1080,22 @@ function assertCartActor(actor: { customer?: CustomerContext; anonymousToken?: s
   );
 }
 
-/** A batch line's refusal as its outcome: the status, code and message it met, nothing else (F1). */
+/**
+ * A batch line's refusal as its outcome: the status, code, message and details it
+ * met, nothing else (F1) — the unknown-id answer carries no details, so a line
+ * the buyer may not see still discloses nothing.
+ */
 function failedOutcome(index: number, err: HttpError): CartBatchLineOutcome {
-  return { index, status: 'failed', error: { status: err.statusCode, code: err.code, message: err.message } };
+  return {
+    index,
+    status: 'failed',
+    error: {
+      status: err.statusCode,
+      code: err.code,
+      message: err.message,
+      ...(err.details !== undefined ? { details: err.details } : {}),
+    },
+  };
 }
 
 function belowMinimumOutcome(
