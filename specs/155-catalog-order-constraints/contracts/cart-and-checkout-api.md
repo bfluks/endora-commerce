@@ -103,7 +103,10 @@ export interface CartWritePort {
    * judges the batch alone, and the active cart is cleared only after (1) and (2) pass — with
    * `onLineError: 'throw'`, also after every line to be written has been priced (the write step's
    * `CART_PRODUCT_UNPRICED` / `CART_PRODUCT_QUOTE_ONLY`), so a refused request leaves the basket as
-   * it was. `language` names a refused product (the response language).
+   * it was. `replaceExisting` requires `onLineError: 'throw'`: with `'report'` a write-step refusal
+   * would only be met after the basket is cleared, so that combination is refused (a programming
+   * error, as an anonymous actor is) before anything is read or written.
+   * `language` names a refused product (the response language).
    * At most `CART_MAX_LINES` lines.
    */
   addItems(
@@ -257,6 +260,9 @@ refusals:
      Product names and `error.message` are in the request's language (`Accept-Language`, PL or EN).
 
 Nothing written: `approvalStatus` stays `not_required`, no audit row, no e-mail. A failed catalogue
-read fails the request (no `catch`), as the view does (D7). `CartApprovalService` takes the catalogue
-read port as a constructor argument for this. Documented as a behaviour change for API clients in the
+read fails the request (no `catch`), as the view does (D7). `CartApprovalService` takes two new
+constructor arguments for this, before the optional e-mail dispatch: the catalogue read port
+(`CatalogProductReadPort`, container `catalogProductReadPort`) and, second, `mod-orders`'
+`OrderQuoteSourcePort` (container `orderQuoteSourcePort`), whose confirmation decides whether a
+quote-seeded line is exempt at submit (FR-039). Documented as a behaviour change for API clients in the
 `mod-carts` changeset.

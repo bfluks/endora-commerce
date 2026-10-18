@@ -727,6 +727,18 @@ Each RED test was written first and seen failing, then fixed — except the T166
 - [x] T165 Docs and changesets — carts, orders and returns pages EN + PL with the translation cache re-pinned; changesets `mod-carts`, `mod-orders`, `contracts`, `mod-returns` (+ `mod-i18n`), `mod-catalog`
 - [x] T166 Test gaps — jsdom (`// @vitest-environment jsdom`, no new dependency; the storefront suite is otherwise SSR-only per `.claude/skills/ux-laws/SKILL.md` §5) for `ProductCardActions` / `CompareAddToCartButton` clicks (`quantity: 10`), PDP blur normalisation, quote-draft "Set to N" and blur; `OrderCreatePage.minimum` asserts on the unmounted-update warning only; `import-below-minimum` tests the unit refusal through the page; product-browser `waitFor` after the quick-add click (both pages)
 
+## Review fix round C (U4) — re-review findings
+
+Each RED test was written first and seen failing, then fixed.
+
+- [x] T167 [PG] One-click no longer empties the basket before a refusal: the line goes through `addItems` with `onLineError: 'throw'`, `onBelowMinimum: 'throw'` and `replaceExisting`, which clears only once nothing is left to refuse the line for. A placement refusal after the seed still leaves the basket holding the one-click line — inherent to buying through the basket, out of scope. RED: `backend/test/contract/quick_order/one-click-place.test.ts` (below the minimum, unpriced — basket still K × 3; the F3 backstop double now overrides `addItems`), `one-click-service.test.ts`
+- [x] T168 `addItems` refuses `replaceExisting` with `onLineError: 'report'` before anything is read or written (a reported write-step failure would come after the clear). Port JSDoc and `contracts/cart-and-checkout-api.md` §4. RED: `cart-batch-add.test.ts`
+- [x] T169 Docs — `contracts/cart-and-checkout-api.md` §12 names both new `CartApprovalService` arguments (`catalogProductReadPort`, then `orderQuoteSourcePort`); changesets: `mod-carts` (the header-less `GET /api/v1/cart` names lines in the channel default language; `replaceExisting` needs `'throw'`), `mod-quick-order` (one-click keeps the basket on a refusal), `platform` (second envelope install)
+- [x] T170 Redirect reports held to a URL budget: names cut to 80, the encoded report ≤ 6 000 characters by dropping its last lines into `more`; the reader holds the same bounds (oversize → empty, names cut, fields projected, `more` clamped to 10 000); one `emptyReport()`. RED: `storefront/test/account/batch-below-minimum.test.tsx`
+- [x] T171 Nits — `assertCartMeetsMinimums` hands `confirmQuoteSource` the mark's quote id (no `!` in `CartApprovalService`); `installResponseLanguage` throws on a second install with a different resolver and shares the first's memo on the same one. RED: `cart-minimums.test.ts`, `packages/platform/src/http/response-language.test.ts`
+
+**Held**: the four storefront jsdom tests (`pdp-minimum`, `product-card-minimum`, `compare-add-minimum`, `rfq/rfq-draft-minimum`) — `jsdom` undeclared in `storefront/package.json` against the SSR-only rule; owner decision pending (revert to SSR + a pure `normaliseOnBlur`, or declare jsdom and amend the rule).
+
 ---
 
 ## Requirement coverage
