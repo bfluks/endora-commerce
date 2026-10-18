@@ -369,9 +369,10 @@ export async function assertCartMeetsMinimums(
     /**
      * Whether the basket's quote source honours exemptions now — `orders`'
      * checkout-preview check (`OrderQuoteSourcePort`). Required, so no caller
-     * can fall back to trusting the mark.
+     * can fall back to trusting the mark. Asked only for a marked basket, with
+     * the mark's quote id.
      */
-    confirmQuoteSource: () => Promise<boolean>;
+    confirmQuoteSource: (quoteRequestId: string) => Promise<boolean>;
   },
 ): Promise<void> {
   const { items } = input;
@@ -380,7 +381,8 @@ export async function assertCartMeetsMinimums(
   const eligibleIds = products.filter((p) => isOrderMinimumEligibleType(p.type)).map((p) => p.id);
   const packagingUnits: CatalogPackagingUnitRecord[] =
     eligibleIds.length > 0 ? await catalogProducts.listPackagingUnitsByProductIds(eligibleIds) : [];
-  const confirmed = input.cart.sourceQuoteRequestId !== null && (await input.confirmQuoteSource());
+  const quoteRequestId = input.cart.sourceQuoteRequestId;
+  const confirmed = quoteRequestId !== null && (await input.confirmQuoteSource(quoteRequestId));
   const cart: CartQuoteMark = confirmed ? input.cart : { sourceQuoteRequestId: null };
   const lines = items.map((item) => lineOf(cart, item.id, item, item.quantity));
   const violations = evaluateOrderMinimums(lines, { products, packagingUnits });

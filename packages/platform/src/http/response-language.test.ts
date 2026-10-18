@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { ERROR_CODES, LANGUAGE_FALLBACK, type SupportedLanguage } from '@endora-commerce/contracts';
 import { HttpError, registerErrorEnvelope } from './error-envelope.js';
+import { installResponseLanguage } from './response-language.js';
 
 /**
  * Feature 155 (D3/D4) — `request.responseLanguage()` is the language the error
@@ -73,5 +74,44 @@ describe('request.responseLanguage()', () => {
     expect(refused.statusCode).toBe(404);
     expect(refused.json().error.message).toBe(`named in ${LANGUAGE_FALLBACK}`);
     await probe.app.close();
+  });
+
+  /**
+   * Round C (item 6) — the decoration is installed once, so a second install
+   * with another ladder would have handed its envelope a resolution the
+   * decoration never answers: a sentence and a name in two languages. That is
+   * refused; a second install with the same ladder shares the first's memo.
+   */
+  describe('a second install on one app', () => {
+    it('with a different ladder is refused', async () => {
+      const app = Fastify();
+      installResponseLanguage(app, async () => 'pl');
+      expect(() => installResponseLanguage(app, async () => 'en')).toThrow(/responseLanguage/);
+      expect(() => installResponseLanguage(app, undefined)).toThrow(/responseLanguage/);
+      await app.close();
+    });
+
+    it('with the same ladder shares one resolution per request with the decoration', async () => {
+      const app = Fastify();
+      let calls = 0;
+      const ladder = async () => {
+        calls += 1;
+        return 'pl' as const;
+      };
+      installResponseLanguage(app, ladder);
+      const again = installResponseLanguage(app, ladder);
+      app.get('/both', async (request) => ({ decoration: await request.responseLanguage(), envelope: await again(request) }));
+      const res = await app.inject({ method: 'GET', url: '/both' });
+      expect(res.json()).toEqual({ decoration: 'pl', envelope: 'pl' });
+      expect(calls).toBe(1);
+      await app.close();
+    });
+
+    it('without a ladder, twice, is idempotent', async () => {
+      const app = Fastify();
+      installResponseLanguage(app, undefined);
+      expect(() => installResponseLanguage(app, undefined)).not.toThrow();
+      await app.close();
+    });
   });
 });

@@ -154,10 +154,10 @@ export class CartApprovalService {
       cart: { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
       items: items.map(toCartMinimumItem),
       language: options.language,
-      confirmQuoteSource: () =>
+      confirmQuoteSource: (quoteRequestId) =>
         this.quoteSource.quoteSourceHonoursExemptions({
           organizationId: actor.organizationId,
-          quoteRequestId: cart.sourceQuoteRequestId!,
+          quoteRequestId,
           basketLines: items.map((item) => ({
             productId: item.productId,
             variantId: item.variantId ?? null,

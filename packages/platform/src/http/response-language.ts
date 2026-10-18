@@ -52,15 +52,34 @@ declare module 'fastify' {
 
 type LanguageResolver = (request: FastifyRequest) => Promise<SupportedLanguage | null | undefined>;
 
+/** What each app was installed with — the decoration and its memo are per app. */
+const installs = new WeakMap<
+  FastifyInstance,
+  { resolve: LanguageResolver | undefined; resolveOnce: (request: FastifyRequest) => Promise<SupportedLanguage> }
+>();
+
 /**
  * Installs `request.responseLanguage()` over `resolve` and returns the memoised
  * raw resolution the envelope reads (which, unlike the decoration, rejects when
  * the ladder throws — the envelope has its own guard for that).
+ *
+ * Once per app. A second install with the same `resolve` returns the first
+ * install's memo, so the decoration and every envelope share one resolution per
+ * request. A second install with a different `resolve` throws: the decoration
+ * can only answer one ladder, and an envelope reading another would translate
+ * the sentence into a language the product name in it was not picked in.
  */
 export function installResponseLanguage(
   app: FastifyInstance,
   resolve: LanguageResolver | undefined,
 ): (request: FastifyRequest) => Promise<SupportedLanguage> {
+  const installed = installs.get(app);
+  if (installed !== undefined && installed.resolve === resolve) return installed.resolveOnce;
+  if (installed !== undefined || app.hasRequestDecorator('responseLanguage')) {
+    throw new Error(
+      '[http] request.responseLanguage() is already installed on this app with a different language resolver — register the error envelope once.',
+    );
+  }
   const resolved = new WeakMap<FastifyRequest, Promise<SupportedLanguage>>();
   const resolveOnce = (request: FastifyRequest): Promise<SupportedLanguage> => {
     let answer = resolved.get(request);
@@ -70,13 +89,12 @@ export function installResponseLanguage(
     }
     return answer;
   };
-  if (!app.hasRequestDecorator('responseLanguage')) {
-    app.decorateRequest('responseLanguage', function responseLanguage(this: FastifyRequest) {
-      return resolveOnce(this).catch((error: unknown) => {
-        this.log.warn({ err: error }, 'response language could not be resolved; answering the fallback');
-        return LANGUAGE_FALLBACK;
-      });
+  app.decorateRequest('responseLanguage', function responseLanguage(this: FastifyRequest) {
+    return resolveOnce(this).catch((error: unknown) => {
+      this.log.warn({ err: error }, 'response language could not be resolved; answering the fallback');
+      return LANGUAGE_FALLBACK;
     });
-  }
+  });
+  installs.set(app, { resolve, resolveOnce });
   return resolveOnce;
 }

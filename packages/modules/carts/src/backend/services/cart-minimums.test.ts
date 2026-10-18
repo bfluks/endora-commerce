@@ -300,13 +300,15 @@ describe('assertCartMeetsMinimums — the quote source is confirmed, not trusted
       assertCartMeetsMinimums(catalogue(calls), {
         cart: QUOTE_SOURCE,
         items: seeded,
-        confirmQuoteSource: async () => {
-          calls.push('confirm');
+        confirmQuoteSource: async (quoteRequestId: string) => {
+          calls.push(`confirm:${quoteRequestId}`);
           return true;
         },
       }),
     ).resolves.toBeUndefined();
-    expect(calls).toEqual(['findByIds', 'confirm']);
+    // Round C (item 6) — the closure is handed the mark's quote id, so a caller
+    // never re-reads it (or asserts it non-null) on its own.
+    expect(calls).toEqual(['findByIds', `confirm:${QUOTE_SOURCE.sourceQuoteRequestId}`]);
   });
 
   it('an unconfirmed source judges the seeded line like any line', async () => {
