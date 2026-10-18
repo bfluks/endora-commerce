@@ -702,6 +702,21 @@ invocation. This is the only phase where `pnpm -r` is allowed.
 
 ---
 
+## Review fix round A (U4) — backend defects from the review pack
+
+Each RED test was written first and seen failing; then fixed.
+
+- [x] T155 [PG] D1 — a request refused for a minimum (or an unknown product) leaves the customer's basket exactly as it was, on admin create and the API intake: `CartWritePort.addItems` gains `onBelowMinimum: 'throw'` (whole-batch refusal between the judgement and the write) and `replaceExisting` (judge the batch alone; clear the cart only after it passed). `assertBatchMeetsMinimums` deleted. RED: `backend/test/integration/orders/request-refusal-basket.test.ts` (QA's K × 3 repro, admin and intake), `cart-batch-add.test.ts` (D1 blocks)
+- [x] T156 [PG] D3/D4 — the product name is in the language of the refusal's sentence on every path: `request.responseLanguage()` (platform, the envelope's own ladder, memoised) and `pickLocalized` (contracts); the three first-tag `Accept-Language` parsers deleted. RED: `minimums-polish.test.ts` (`it.fails` → `it`, plus `en;q=0.2,pl;q=0.9`), `carts/minimums.test.ts` (`pl;q=0.9`), `place-order-minimums.test.ts` (Polish placement and preview), `request-refusal-basket.test.ts` (admin stored `en` + header `pl`; intake q-weighted), `response-language.test.ts`, `localized-name.test.ts`
+- [x] T157 D2 — packaging-unit totals compared exactly (bigint fractions). RED: `order-minimums.boundary.test.ts` (7 + 1 + 1 + 1 on base 10, minimum 1)
+- [x] T158 [PG] FR-031 (b) — a draft-edit line pairs and stays unchanged by its stored `packagingUnitId` after the unit is renamed. RED: `packaging-units.test.ts`, `line-carry-over.test.ts`
+- [x] T159 One `toCartDroppedLines` in `mod-shopping-lists/backend`, called by both roots. RED: `test/unit/shopping_lists/cart-dropped-lines.test.ts`
+- [x] T160 Nits — `cart-batch-add.test.ts` drops the wall-clock bound; a failed batch outcome carries the refusal's `details`, which `convertToCart` re-raises. RED: `cross-module-ports.test.ts`, `cart-batch-add.test.ts`
+
+**Not in this round**: UI/storefront items, the returns complaint question, quantity upper bounds, the bulk Command Bus question (owner decisions or round B). `contracts/cart-and-checkout-api.md` §4 still shows `addItems(…, { onLineError })` without `onBelowMinimum`, `replaceExisting` and `language`, and §5's admin-create row (and the API intake) predate them — left for the product owner, who holds that file this round.
+
+---
+
 ## Requirement coverage
 
 Every FR traces to a RED task:
