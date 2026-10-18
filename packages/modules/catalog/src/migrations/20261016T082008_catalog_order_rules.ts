@@ -1,8 +1,8 @@
 import { Migration } from '@mikro-orm/migrations';
 
 /**
- * Feature 154 — the catalogue's order rules
- * (`specs/154-catalog-order-constraints/data-model.md` §1).
+ * Feature 155 — the catalogue's order rules
+ * (`specs/155-catalog-order-constraints/data-model.md` §1).
  *
  * - `products.min_order_quantity` — the minimum order quantity in pieces,
  *   1…1 000 000 or `null` for none (FR-001);

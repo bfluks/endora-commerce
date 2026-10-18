@@ -51,7 +51,7 @@ export default async function ShoppingListDetailPage({
     error?: string;
     cartAdded?: string;
     cartSkipped?: string;
-    /** Feature 154 — the conversion's `skipped[]`, carried across the redirect (base64url JSON). */
+    /** Feature 155 — the conversion's `skipped[]`, carried across the redirect (base64url JSON). */
     cartSkips?: string;
     rfqId?: string;
     rfqAdded?: string;
@@ -83,7 +83,7 @@ export default async function ShoppingListDetailPage({
   // to the raw id so the row still renders.
   const { ctx, locale } = await getServerContext();
   const t = tForLocale(locale);
-  // Feature 154 (FR-011) — which rows the conversion left out, and why (a minimum included).
+  // Feature 155 (FR-011) — which rows the conversion left out, and why (a minimum included).
   const cartSkips = sp.cartAdded !== undefined ? decodeReport(sp.cartSkips).filter(isConversionSkip) : [];
   const uniqueProductIds = [...new Set(list.items.map((it) => it.productId))];
   const resolvedEntries = await Promise.all(
@@ -445,7 +445,7 @@ async function convertSelectedToRfqAction(formData: FormData): Promise<void> {
 }
 
 /**
- * Feature 154 (FR-011) — where a list → cart conversion lands: the counts, and the skipped
+ * Feature 155 (FR-011) — where a list → cart conversion lands: the counts, and the skipped
  * rows themselves so the page can name each with its reason and minimum.
  */
 function cartConversionRedirect(

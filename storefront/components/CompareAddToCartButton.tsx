@@ -21,7 +21,7 @@ import { cardAddToCartPayload, minimumStatement } from '../lib/orderMinimum';
  * (US1 / spec FR-013, FR-015). The shared-link recipient never sees
  * this button.
  *
- * Feature 154 (FR-016) — for a product with a pieces minimum the button adds the minimum in one
+ * Feature 155 (FR-016) — for a product with a pieces minimum the button adds the minimum in one
  * action, and the minimum is stated under it (linked by `aria-describedby`) so the buyer knows
  * how many pieces the click adds before making it.
  */
@@ -29,7 +29,7 @@ import { cardAddToCartPayload, minimumStatement } from '../lib/orderMinimum';
 export function CompareAddToCartButton(props: {
   productId: string;
   disabled?: boolean;
-  /** Feature 154 — the product's pieces minimum; `null`/absent = none (adds 1). */
+  /** Feature 155 — the product's pieces minimum; `null`/absent = none (adds 1). */
   minOrderQuantity?: number | null | undefined;
   /** Request locale for the minimum statement. */
   locale?: string | undefined;

@@ -8,7 +8,7 @@ import catalogEn from '../../../../packages/modules/catalog/i18n/en.json';
 import catalogPl from '../../../../packages/modules/catalog/i18n/pl.json';
 
 /**
- * Feature 154 / T098 (US1, US5; FR-001, FR-003) — the Inventory tab's order-rules card:
+ * Feature 155 / T098 (US1, US5; FR-001, FR-003) — the Inventory tab's order-rules card:
  * the "Returnable" flag for every product type, the pieces minimum only for simple and
  * configurable products (D5), saved through the product `PATCH`.
  *
@@ -62,7 +62,7 @@ function renderCard(productType: ProductType, language: 'en' | 'pl' = 'en'): voi
   );
 }
 
-describe('ProductOrderRulesCard (154)', () => {
+describe('ProductOrderRulesCard (155)', () => {
   beforeEach(() => {
     getSpy.mockReset();
     patchSpy.mockReset();

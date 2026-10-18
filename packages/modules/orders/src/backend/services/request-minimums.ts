@@ -9,7 +9,7 @@ import {
 import { HttpError } from '@endora-commerce/platform/http';
 
 /**
- * Feature 154 — the two request-level rules of the order paths that build a
+ * Feature 155 — the two request-level rules of the order paths that build a
  * transient basket from a request (admin create-order, its preview, and the API
  * order intake): the item bound (FR-038, research R20) and the refusal of a
  * batch with a line below a minimum (FR-009, research R8,

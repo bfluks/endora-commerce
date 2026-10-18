@@ -27,7 +27,7 @@ import {
 import { withSystemScope } from '../../../src/tenancy/escape-hatch.js';
 
 /**
- * Feature 154, Phase 10 (T078) — a buyer's quote-request writes refuse a line
+ * Feature 155, Phase 10 (T078) — a buyer's quote-request writes refuse a line
  * below its product's minimum, before pricing, writing nothing (FR-012, FR-029,
  * FR-031; US4 #5, #5a–#5d; threats S2, S3; SC-004, analyze F11;
  * `contracts/quote-requests-api.md` §2, §3).
@@ -46,7 +46,7 @@ interface ErrorBody {
 const CUSTOMER = { b2b_session: 'stub-customer-session' };
 const ADMIN = { b2b_session: 'stub-admin-session' };
 
-describe('154 — buyer quote-request writes refuse lines below a minimum [integration]', () => {
+describe('155 — buyer quote-request writes refuse lines below a minimum [integration]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   let A: MinimumProductFixture;
@@ -66,7 +66,7 @@ describe('154 — buyer quote-request writes refuse lines below a minimum [integ
     L = await createMinimumProduct(em, { sku: `QMIN-L-${RUN}`, nameEn: `Lintel ${RUN}`, namePl: `Nadproze ${RUN}`, channelIds: channels });
     H = await createMinimumProduct(em, { sku: `QMIN-H-${RUN}`, nameEn: `Hinge ${RUN}`, namePl: `Zawias ${RUN}`, minOrderQuantity: 10, channelIds: [] });
 
-    await withSystemScope('154 T078: seed a price-proposal-locked organization', async () => {
+    await withSystemScope('155 T078: seed a price-proposal-locked organization', async () => {
       const fork = h.orm.em.fork();
       const org = fork.create(Organization, {
         name: `148 quote minimums locked ${RUN}`,

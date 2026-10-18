@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { returnableAtPurchase } from './returnable-at-purchase.js';
 
 /**
- * Feature 154, Phase 12 (T090a) — the value placement stamps on every new order
+ * Feature 155, Phase 12 (T090a) — the value placement stamps on every new order
  * line (FR-016a, D-44): the product's returnable flag as read at purchase,
  * always an explicit boolean. Fail-closed (P4, US6 #9): only a record whose
  * flag is `true` records `true`; an absent record, or one whose flag is missing

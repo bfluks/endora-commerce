@@ -54,13 +54,13 @@ export interface SeededOrder {
   itemIds: string[];
 }
 
-/** One seeded order line — feature 154 lets a test choose the quantity and the placement stamp. */
+/** One seeded order line — feature 155 lets a test choose the quantity and the placement stamp. */
 export interface SeededOrderLine {
   quantity: number;
   name?: string;
   productId?: string;
   /**
-   * The line's `returnable_at_purchase` (feature 154, FR-016a). Omitted or
+   * The line's `returnable_at_purchase` (feature 155, FR-016a). Omitted or
    * `null` = a line placed before the feature, which `returns` treats as
    * returnable (FR-025).
    */

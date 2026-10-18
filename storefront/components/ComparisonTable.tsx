@@ -42,7 +42,7 @@ import { tForLocale } from '../lib/i18n/messages';
 export function ComparisonTable(props: {
   /**
    * The storefront's language — the PDF is printed in it
-   * (`specs/152-compare-pdf-template/` FR-032), and feature 154's minimum
+   * (`specs/152-compare-pdf-template/` FR-032), and feature 155's minimum
    * statement under "add to cart" is rendered in it.
    */
   readonly locale?: string;

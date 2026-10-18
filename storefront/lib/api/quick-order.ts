@@ -16,7 +16,7 @@ export type QuickOrderRejectionReason =
   | 'variant_not_resolved'
   | 'variant_ambiguous'
   | 'row_limit_exceeded'
-  /** Feature 154 — the product's total across the file is below its pieces minimum. */
+  /** Feature 155 — the product's total across the file is below its pieces minimum. */
   | 'below_minimum';
 
 export interface RecognizedQuickOrderItem {
@@ -33,9 +33,9 @@ export interface RejectedQuickOrderItem {
   line: number;
   raw: string;
   reason: QuickOrderRejectionReason;
-  /** Feature 154 — on `below_minimum`: the product's pieces minimum. */
+  /** Feature 155 — on `below_minimum`: the product's pieces minimum. */
   minimum?: number;
-  /** Feature 154 — on `below_minimum`: the file total the verdict used. */
+  /** Feature 155 — on `below_minimum`: the file total the verdict used. */
   productTotal?: number;
 }
 
@@ -61,13 +61,13 @@ export interface QuickOrderBuildResponse {
   quoteRequestId?: string;
   quoteRequestBusinessId?: string;
   /**
-   * Feature 154 — target `cart`: the lines not added because they would leave their product
+   * Feature 155 — target `cart`: the lines not added because they would leave their product
    * below a minimum. Always present for target `cart`.
    */
   rejected?: QuickOrderBuildRejectedLine[];
 }
 
-/** Feature 154 (FR-011 (b)) — one line a cart build left out. */
+/** Feature 155 (FR-011 (b)) — one line a cart build left out. */
 export interface QuickOrderBuildRejectedLine {
   productId: string;
   variantId: string | null;

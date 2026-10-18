@@ -112,7 +112,7 @@ describe('admin order preview message codes', () => {
     'PRODUCT_NOT_VISIBLE_TO_CUSTOMER',
     'PRODUCT_NOT_IN_SALES_CHANNEL',
     'QUOTE_ONLY',
-    // Feature 154 — appended last: a line with an earlier code keeps that code.
+    // Feature 155 — appended last: a line with an earlier code keeps that code.
     'BELOW_MINIMUM_QUANTITY',
   ];
 

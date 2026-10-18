@@ -2,7 +2,7 @@ import { ERROR_CODES } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 
 /**
- * Feature 154 (FR-026, FR-027; research R13.1; `contracts/quote-requests-api.md`
+ * Feature 155 (FR-026, FR-027; research R13.1; `contracts/quote-requests-api.md`
  * §1) — which catalogue packaging unit a buyer's quote line is ordered in.
  *
  * Pure: the caller reads the units with one `listPackagingUnitsByProductIds`

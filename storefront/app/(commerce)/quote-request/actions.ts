@@ -49,7 +49,7 @@ export async function submitQuoteRequest(input: {
 }
 
 /**
- * Feature 154 (FR-032, US4 #14) — the current pieces minimum of the draft's products, by slug,
+ * Feature 155 (FR-032, US4 #14) — the current pieces minimum of the draft's products, by slug,
  * so the draft page can floor each line and show one already below its minimum.
  *
  * Read as the buyer (the session is forwarded, so their catalogue visibility applies) in the

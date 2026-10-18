@@ -1,6 +1,6 @@
 # Research: minimum order quantities and the returnable flag
 
-**Feature**: `specs/154-catalog-order-constraints/` | **Spec**: [spec.md](./spec.md) | **Plan**: [plan.md](./plan.md)
+**Feature**: `specs/155-catalog-order-constraints/` | **Spec**: [spec.md](./spec.md) | **Plan**: [plan.md](./plan.md)
 
 Every decision below was taken against `origin/master` at `39b9b9989`. Paths are relative to the
 repository root. Each entry is **decision → rationale → alternatives rejected**. Owner decisions are

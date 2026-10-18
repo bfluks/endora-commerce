@@ -33,7 +33,7 @@ describe('146 — line data carried across rewrites [integration]', () => {
   const VARIANT_V = '00000000-0000-4000-8000-0000001460a1';
   const VARIANT_W = '00000000-0000-4000-8000-0000001460a2';
   let lists: PriceListService;
-  // Feature 154 (FR-026) — a buyer's line may only name a unit the product
+  // Feature 155 (FR-026) — a buyer's line may only name a unit the product
   // has, so the units these lines name are real catalogue units, per run.
   const RUN = minimumFixtureRun();
   const PALETA = `Paleta ${RUN}`;

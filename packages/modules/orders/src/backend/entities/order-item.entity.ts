@@ -45,7 +45,7 @@ export class OrderItem {
   packagingUnitSnapshot?: { name: string; baseQuantity: number } | null;
 
   /**
-   * Feature 154 (FR-016a) — whether the product was returnable when the line
+   * Feature 155 (FR-016a) — whether the product was returnable when the line
    * was placed, written once at placement and never updated. `null` only on
    * lines placed before the column existed, which `returns` treats as
    * returnable (FR-017).

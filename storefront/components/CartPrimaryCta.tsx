@@ -15,7 +15,7 @@ export interface CartPrimaryCtaProps {
   moderationMessage: string | null;
   submitAction: (formData: FormData) => Promise<void>;
   /**
-   * Feature 154 — a line is below a minimum or its product is gone (`cartBlocksCheckout`).
+   * Feature 155 — a line is below a minimum or its product is gone (`cartBlocksCheckout`).
    * Blocks checkout and, by the owner's ruling of 2026-10-18, submitting for approval too.
    */
   linesBlockCheckout: boolean;
@@ -59,7 +59,7 @@ function BlockedPrimary({ label, noteId, note }: { label: string; noteId: string
 /**
  * The cart page's primary CTA. Source of truth is the backend's `cart.primaryCta` field; the
  * page's fallback covers anonymous carts (the backend can't compute `primaryCta` without an org
- * context). Feature 027 T096; feature 154 blocks checkout and approval on the same verdict.
+ * context). Feature 027 T096; feature 155 blocks checkout and approval on the same verdict.
  */
 export function CartPrimaryCta({
   cta,
@@ -111,7 +111,7 @@ export function CartPrimaryCta({
     );
   }
   if (linesBlockCheckout) {
-    // Feature 154 (FR-013, FR-037) — placement would refuse this basket, so checkout is not
+    // Feature 155 (FR-013, FR-037) — placement would refuse this basket, so checkout is not
     // offered until the flagged lines are changed or removed.
     return <BlockedPrimary label={`${strings.checkout} →`} noteId={CHECKOUT_BLOCKED_ID} note={linesBlockedNote} />;
   }

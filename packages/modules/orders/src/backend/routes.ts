@@ -806,7 +806,7 @@ export async function registerOrderRoutes(
     { preHandler: requireAdmin('orders:write'), schema: { body: adminOrderPreviewRequestSchema } },
     async (request) => {
       const body = adminOrderPreviewRequestSchema.parse(request.body);
-      // Feature 154 (FR-038) — first, before any line is read or evaluated.
+      // Feature 155 (FR-038) — first, before any line is read or evaluated.
       assertWithinAdminOrderItemBound(body.items.length);
       // Before any price is resolved, and before the customer read below that
       // currently refuses first. See `assertCustomerInScope`: this route quotes
@@ -972,7 +972,7 @@ export async function registerOrderRoutes(
         evaluated.push({ item: it, code: null, product, unitPrice, currency: resolved?.currency ?? currency });
       }
 
-      // Step 5 (feature 154, FR-009, FR-035): the minimum, judged only over the
+      // Step 5 (feature 155, FR-009, FR-035): the minimum, judged only over the
       // lines that passed steps 1–4 — a line with an earlier code counts toward
       // no total and never carries a minimum. Creating the order would refuse
       // a marked line, so it is priced like any other unavailable line.
@@ -1326,7 +1326,7 @@ export async function registerOrderRoutes(
     async (request) => {
       const order = await emFactory().findOne(Order, { id: request.params.id });
       if (!order) throw new HttpError(404, ERROR_CODES.ORDER_NOT_FOUND, 'Order not found.');
-      // Feature 154 (FR-012, threat F10) — the actor is this route's literal.
+      // Feature 155 (FR-012, threat F10) — the actor is this route's literal.
       const result = await deps.orderCloneToQuoteService.clone(
         request.params.id,
         { customerAccountId: order.placedByCustomerAccountId, organizationId: order.organizationId },
@@ -1342,7 +1342,7 @@ export async function registerOrderRoutes(
     async (request) => {
       const ctx = resolveCustomerContext(request);
       await orderService.getById(request.params.id, ctx); // authorize ownership
-      // Feature 154 — the buyer's clone: no actor, so a minimum refuses it (US4 #5a).
+      // Feature 155 — the buyer's clone: no actor, so a minimum refuses it (US4 #5a).
       const result = await deps.orderCloneToQuoteService.clone(request.params.id, {
         customerAccountId: ctx.customerAccountId,
         organizationId: ctx.organizationId,

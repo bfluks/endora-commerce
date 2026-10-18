@@ -58,9 +58,9 @@ export interface CartItem {
   packagingUnitName?: string | null;
   packagingUnitBaseQuantity?: number | null;
   displayName?: string | null;
-  /** Feature 154 — the product's current pieces minimum (`null` = none); the input floor. */
+  /** Feature 155 — the product's current pieces minimum (`null` = none); the input floor. */
   minOrderQuantity?: number | null;
-  /** Feature 154 — set when this line is below a current minimum and not exempt (FR-013). */
+  /** Feature 155 — set when this line is below a current minimum and not exempt (FR-013). */
   belowMinimum?: {
     kind: 'pieces' | 'packaging_unit';
     minimum: number;
@@ -101,9 +101,9 @@ export interface CartSummary {
       | 'out_of_stock'
       | 'no_price_in_customer_list'
       | 'removed_by_conversion'
-      /** Feature 154 — the line would leave its product below a minimum. */
+      /** Feature 155 — the line would leave its product below a minimum. */
       | 'below_minimum';
-    /** Feature 154 — the minimum a `below_minimum` line missed. */
+    /** Feature 155 — the minimum a `below_minimum` line missed. */
     minimum?: number;
   }>;
   /** Feature 027 — set when GET silently dropped a previously-valid coupon. */

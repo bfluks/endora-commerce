@@ -12,7 +12,7 @@ import {
 } from './quote-minimums.js';
 
 /**
- * Feature 154, Phase 10 (T076) — the quote line builder for the minimum rule
+ * Feature 155, Phase 10 (T076) — the quote line builder for the minimum rule
  * (FR-012, FR-027, FR-031; research R13.2–R13.4).
  */
 

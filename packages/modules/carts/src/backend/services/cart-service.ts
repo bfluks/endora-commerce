@@ -91,7 +91,7 @@ export interface CartLineInput {
   salesChannelId?: string;
 }
 
-/** A line that has passed `addItem`'s preconditions (feature 154, R8). */
+/** A line that has passed `addItem`'s preconditions (feature 155, R8). */
 interface ResolvedCartLine {
   product: CatalogProductRecord;
   packagingUnit: CatalogPackagingUnitRecord | null;
@@ -244,7 +244,7 @@ export class CartService {
   async addItem(
     actor: { customer?: CustomerContext; anonymousToken?: string },
     input: CartLineInput,
-    /** The request's language, which a minimum refusal names the product in (feature 154). */
+    /** The request's language, which a minimum refusal names the product in (feature 155). */
     options: { language?: string } = {},
   ): Promise<{ cart: Cart; items: CartItem[] }> {
     const em = this.emFactory();
@@ -256,7 +256,7 @@ export class CartService {
     const resolved = await this.#resolveLine(actor, input);
     const { product, packagingUnit, effectiveQuantity } = resolved;
 
-    // Feature 154 (FR-006, FR-006a, FR-028) — the order minimums, judged on the
+    // Feature 155 (FR-006, FR-006a, FR-028) — the order minimums, judged on the
     // basket as this add would leave it. After the resolver, so a product this
     // shopper may not see answers its unknown-id 404 and never a name or a
     // minimum (FR-035); before the line cap and pricing, so a refusal writes
@@ -293,7 +293,7 @@ export class CartService {
   }
 
   /**
-   * Feature 154 (research R8, `contracts/cart-and-checkout-api.md` §4) — add
+   * Feature 155 (research R8, `contracts/cart-and-checkout-api.md` §4) — add
    * several lines as one batch, the road every batch path into a cart takes.
    *
    * 1. **Resolve every line first**, through {@link #resolveLine} — exactly
@@ -531,7 +531,7 @@ export class CartService {
   }
 
   /**
-   * `addItem`'s preconditions, in its order (feature 154, research R8, threat F1):
+   * `addItem`'s preconditions, in its order (feature 155, research R8, threat F1):
    * the quantity floor, the product's existence and visibility to this shopper,
    * the channel's assortment, and the packaging unit belonging to the product.
    * One private resolver so every add path — the single add and the batch — asks
@@ -661,7 +661,7 @@ export class CartService {
     actor: { customer?: CustomerContext; anonymousToken?: string },
     itemId: string,
     quantity: number,
-    /** The request's language, which a minimum refusal names the product in (feature 154). */
+    /** The request's language, which a minimum refusal names the product in (feature 155). */
     options: { language?: string } = {},
   ): Promise<{ cart: Cart; items: CartItem[] }> {
     const em = this.emFactory();
@@ -671,7 +671,7 @@ export class CartService {
     if (!cart) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Cart not found.');
     this.#assertOwnership(cart, actor);
 
-    // Feature 154 — an edit to 0 removes the line and is never refused (FR-007).
+    // Feature 155 — an edit to 0 removes the line and is never refused (FR-007).
     // Any other quantity is judged like an add, on the line's new quantity; a
     // line whose product record is gone answers 404 (FR-037). Refused → the line
     // is left as it was.

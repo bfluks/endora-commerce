@@ -6,7 +6,7 @@ import { addToRfqDraft, clampDraftQuantity, type RfqDraftItem } from '../../lib/
 import { quoteAddQuantity } from '../../lib/orderMinimum';
 
 /**
- * Feature 154, FR-032 (US4 #13, #14) — the storefront quote-request draft mirrors the cart
+ * Feature 155, FR-032 (US4 #13, #14) — the storefront quote-request draft mirrors the cart
  * for the pieces minimum.
  *
  * `RfqDraftView` reads its lines from `localStorage` in an effect, so a server render of the

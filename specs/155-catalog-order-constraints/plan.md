@@ -1,7 +1,7 @@
 # Implementation Plan: minimum order quantities (pieces and packaging units) and the returnable flag
 
-**Branch**: `feat/154-catalog-order-constraints` (from `origin/master`) | **Date**: 2026-10-15 | **Spec**: [spec.md](./spec.md)
-**Input**: Feature specification from `specs/154-catalog-order-constraints/spec.md` (clarified;
+**Branch**: `feat/155-catalog-order-constraints` (from `origin/master`) | **Date**: 2026-10-15 | **Spec**: [spec.md](./spec.md)
+**Input**: Feature specification from `specs/155-catalog-order-constraints/spec.md` (clarified;
 sessions 2026-10-13 and 2026-10-15: Q0–Q10, the analyze rulings P1–P4 and the threat-model line;
 issues #285, #294). Every clarification is binding. Measured against `origin/master` at `39b9b9989`.
 Revised 2026-10-15 after the analyze pass and the security threat model.
@@ -157,7 +157,7 @@ Nothing changes a requirement's text. These are technical readings; all were acc
 ### Documentation (this feature)
 
 ```text
-specs/154-catalog-order-constraints/
+specs/155-catalog-order-constraints/
 ├── spec.md
 ├── plan.md              # this file
 ├── research.md          # R1–R20
@@ -213,7 +213,7 @@ storefront/
 docs/i18n/pl/…/modules/{catalog/packaging-units, catalog, carts, orders, quote_requests,
                         quick_order, shopping_lists, returns}.md + translation-cache entries
 backend/test/fixtures/{error-code-routing/reference-ledgers.ts, openapi-baseline.json}
-.changeset/154-*.md
+.changeset/155-*.md
 ```
 
 **Structure Decision**: extend existing modules; no new module. The minimum and the flag are catalogue

@@ -1,8 +1,8 @@
 import type { ReturnKind } from '@endora-commerce/contracts';
 
 /**
- * The returns policy for feature 154's per-line returnable flag
- * (`specs/154-catalog-order-constraints/contracts/returns-api.md` §2–§3;
+ * The returns policy for feature 155's per-line returnable flag
+ * (`specs/155-catalog-order-constraints/contracts/returns-api.md` §2–§3;
  * FR-017 – FR-020, FR-025, FR-033). Pure: no entity manager and no HTTP —
  * `ReturnCaseService` reads the facts and turns a verdict into a refusal.
  */
@@ -12,7 +12,7 @@ export interface EligibilityContextLine {
   orderItemId: string;
   name: string;
   purchasedQty: number;
-  /** Recorded at placement (FR-016a); `null` = placed before feature 154. */
+  /** Recorded at placement (FR-016a); `null` = placed before feature 155. */
   returnableAtPurchase: boolean | null;
 }
 

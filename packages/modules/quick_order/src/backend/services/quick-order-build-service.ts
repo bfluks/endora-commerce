@@ -26,7 +26,7 @@ export interface QuickOrderBuildLineInput {
 }
 
 /**
- * Feature 154 — in-process options of a build, never read from a request body.
+ * Feature 155 — in-process options of a build, never read from a request body.
  *
  * `actor: 'operator'` is set only by the admin route, as a literal (threat
  * F10): a sales representative's build to `quote_request` creates the request
@@ -61,7 +61,7 @@ export class QuickOrderBuildService {
     input: { target: QuickOrderTarget; items: QuickOrderBuildLineInput[] },
     options: QuickOrderBuildOptions = {},
   ): Promise<QuickOrderBuildResponse> {
-    // Feature 154 (FR-038, R20, threat F4) — first, before any line is
+    // Feature 155 (FR-038, R20, threat F4) — first, before any line is
     // resolved, evaluated or added, for either target. Not a schema `.max()`,
     // which would answer 400.
     if (input.items.length > QUICK_ORDER_BUILD_MAX_ITEMS) {
@@ -83,7 +83,7 @@ export class QuickOrderBuildService {
   }
 
   /**
-   * Feature 154 (FR-011 (b), R8, R12.2) — one batch: every line is resolved
+   * Feature 155 (FR-011 (b), R8, R12.2) — one batch: every line is resolved
    * first (a line the buyer may not have answers the unknown id's 404 and
    * nothing is added — threat F1), the batch is judged with the cart, and the
    * lines that would leave their product below a minimum are not added and
@@ -137,7 +137,7 @@ export class QuickOrderBuildService {
         quantity: item.quantity,
       })),
     };
-    // Feature 154 (FR-030, R12.2, threat F10) — only the operator's build
+    // Feature 155 (FR-030, R12.2, threat F10) — only the operator's build
     // warns; a buyer's is judged by the request's own rules (FR-012).
     const rfq =
       options.actor === 'operator'

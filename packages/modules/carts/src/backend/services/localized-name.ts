@@ -8,7 +8,7 @@
  *   5. empty string
  *
  * Shared by the cart view, which names every line, and the minimum refusals,
- * which name the refused product in the request's language (feature 154, R10).
+ * which name the refused product in the request's language (feature 155, R10).
  */
 export function pickLocalized(
   field: Record<string, string> | null | undefined,

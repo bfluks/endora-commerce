@@ -22,7 +22,7 @@ export interface ProductPackagingUnitOption {
   name: string;
   baseQuantity: number;
   isDefault: boolean;
-  /** Feature 154 — minimum units of this unit per order of the product; `null`/absent = none. */
+  /** Feature 155 — minimum units of this unit per order of the product; `null`/absent = none. */
   minOrderUnits?: number | null | undefined;
 }
 
@@ -45,7 +45,7 @@ export interface ProductBuyActionsProps {
   /** Localized pieces unit word (e.g. "szt."). */
   piecesLabel?: string | undefined;
   /**
-   * Feature 154 (FR-014) — the product's pieces minimum; `null`/absent = none. The quantity
+   * Feature 155 (FR-014) — the product's pieces minimum; `null`/absent = none. The quantity
    * input starts at the applicable minimum (the selected unit's, when one is selected) and does
    * not offer less; the minimum is stated beside it.
    */
@@ -93,7 +93,7 @@ export function ProductBuyActions({
   // single pieces (empty string).
   const [unitId, setUnitId] = useState<string>(defaultUnit?.id ?? '');
   const product = { minOrderQuantity };
-  // Feature 154 — the input starts at the applicable minimum. `qtyText` holds what the buyer
+  // Feature 155 — the input starts at the applicable minimum. `qtyText` holds what the buyer
   // typed, unclamped, so typing "15" over a floor of 10 is not rewritten keystroke by keystroke;
   // it is normalised on blur, and every consumer reads the clamped `qty` below.
   const [qtyText, setQtyText] = useState<string>(() => String(orderFloor(product, defaultUnit)));
@@ -145,7 +145,7 @@ export function ProductBuyActions({
     trackAddToQuoteRequest(gaItem());
     // Piece-based: when a packaging unit is selected we add the resulting
     // piece count to the draft (labelled packaging lines come from the
-    // cart → quote-request conversion instead). Feature 154 (FR-032): the input is floored at
+    // cart → quote-request conversion instead). Feature 155 (FR-032): the input is floored at
     // the minimum already; passing it keeps the draft line at or above it after the add too.
     addRfqDraftItem(
       {
@@ -213,7 +213,7 @@ export function ProductBuyActions({
         ) : null}
       </div>
 
-      {/* Feature 154 (FR-014) — the minimum, stated directly under the control it constrains. */}
+      {/* Feature 155 (FR-014) — the minimum, stated directly under the control it constrains. */}
       {statement ? (
         <p id={statementId} className="-mt-1 text-[12px] text-muted">
           {statement}

@@ -135,11 +135,11 @@ describe('QuickOrderImportPipeline', () => {
   });
 
   /**
-   * Feature 154 (P1, US4 #1a–#1d, FR-011 (a)) — the preview judges each
+   * Feature 155 (P1, US4 #1a–#1d, FR-011 (a)) — the preview judges each
    * product's total across the file, all variants summed after the merge,
    * never with the cart.
    */
-  describe('order minimums (feature 154)', () => {
+  describe('order minimums (feature 155)', () => {
     const A = (minOrderQuantity: number | null = 10): ProductLike => ({
       id: 'pA',
       sku: 'A',
@@ -245,7 +245,7 @@ describe('QuickOrderImportPipeline', () => {
     });
   });
 
-  /** Feature 154 (R20, threat F4) — the resolved row cap never exceeds the ceiling. */
+  /** Feature 155 (R20, threat F4) — the resolved row cap never exceeds the ceiling. */
   it('clamps maxRows to the 10 000-row ceiling', async () => {
     expect(QUICK_ORDER_IMPORT_ROWS_CEILING).toBe(10_000);
     const pipeline = new QuickOrderImportPipeline(lookupOf({ products: [ACTIVE('p1', 'A')] }));

@@ -39,7 +39,7 @@ export class OrderReturnContextProvider implements OrderReturnContextPort {
         purchasedQty: it.quantity,
         paidUnitAmount: unitPaid,
         paidLineAmount: round2(unitPaid * it.quantity),
-        // Feature 154 (FR-016a) — the stamp placement recorded, reported as
+        // Feature 155 (FR-016a) — the stamp placement recorded, reported as
         // it is: `null` only on a line placed before the feature. What `null`
         // means for a return (FR-025) is `returns`' policy, not this port's.
         returnableAtPurchase: it.returnableAtPurchase ?? null,

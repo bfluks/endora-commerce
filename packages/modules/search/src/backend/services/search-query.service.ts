@@ -506,7 +506,7 @@ export function searchHitSummary(
     price,
     stockIndicator: null,
     stockLevel: null,
-    // Feature 154 (FR-014) — from the hydrated record, never from the index;
+    // Feature 155 (FR-014) — from the hydrated record, never from the index;
     // emitted for the types the minimum applies to only.
     minOrderQuantity: isOrderMinimumEligibleType(product.type) ? product.minOrderQuantity : null,
   };

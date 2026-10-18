@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { cardAddLabel, cardAddQuantity, cardAddToCartPayload } from '../../lib/orderMinimum';
 
 /**
- * Feature 154 / FR-016 (US4 #12) — the product card's "add to cart" adds the minimum at once.
+ * Feature 155 / FR-016 (US4 #12) — the product card's "add to cart" adds the minimum at once.
  */
 describe('cardAddQuantity', () => {
   it('is the minimum when the product has one', () => {

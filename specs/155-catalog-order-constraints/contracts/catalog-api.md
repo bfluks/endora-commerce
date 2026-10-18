@@ -18,9 +18,9 @@ and by the column `check` constraints. Out of range → `400 VALIDATION_FAILED` 
 `updateProductRequestSchema` (`catalog.ts:671`, from `baseProductRequestObject` `:593`) gains:
 
 ```ts
-/** Feature 154 — pieces; `null` clears. Simple / configurable only (else 422 VALIDATION_FAILED, details.field). */
+/** Feature 155 — pieces; `null` clears. Simple / configurable only (else 422 VALIDATION_FAILED, details.field). */
 minOrderQuantity: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
-/** Feature 154 — may `return`-kind cases include this product? Every type. */
+/** Feature 155 — may `return`-kind cases include this product? Every type. */
 returnable: z.boolean().optional(),
 ```
 
@@ -47,7 +47,7 @@ row. This path predates the Command Bus and stays on it (research R9); the queue
 `catalog.ts:1571–1589`) gain:
 
 ```ts
-/** Feature 154 — minimum number of this unit per order of the product; `null` clears. */
+/** Feature 155 — minimum number of this unit per order of the product; `null` clears. */
 minOrderUnits: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
 ```
 
@@ -76,22 +76,22 @@ storefront DTO: buyers learn returnability per order line (contracts/returns-api
 ```ts
 export interface CatalogProductRecord {
   // …existing…
-  /** Feature 154 — pieces minimum; `null` = none. Stored for any type, applied to simple/configurable only. */
+  /** Feature 155 — pieces minimum; `null` = none. Stored for any type, applied to simple/configurable only. */
   minOrderQuantity: number | null;
-  /** Feature 154 — the product's current flag; order lines record their own copy at placement. */
+  /** Feature 155 — the product's current flag; order lines record their own copy at placement. */
   returnable: boolean;
 }
 
 export interface CatalogPackagingUnitRecord {
   // …existing…
-  /** Feature 154 — minimum units of this packaging unit per order of the product; `null` = none. */
+  /** Feature 155 — minimum units of this packaging unit per order of the product; `null` = none. */
   minOrderUnits: number | null;
 }
 
 export interface CatalogProductReadPort {
   // …existing…
   /**
-   * Feature 154 — the packaging units of the given products, ordered by product id, then
+   * Feature 155 — the packaging units of the given products, ordered by product id, then
    * `position`, then `name`. The batch twin of `listVariantsByProductIds`. Unknown ids contribute
    * nothing.
    *

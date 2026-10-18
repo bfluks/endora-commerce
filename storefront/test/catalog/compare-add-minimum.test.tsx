@@ -4,7 +4,7 @@ import { CompareAddToCartButton } from '../../components/CompareAddToCartButton'
 import { cardAddToCartPayload, cardAddQuantity } from '../../lib/orderMinimum';
 
 /**
- * Feature 154 / FR-016 (US4 #12) — the comparison's "add to cart" adds the minimum at once, and
+ * Feature 155 / FR-016 (US4 #12) — the comparison's "add to cart" adds the minimum at once, and
  * says so next to the button.
  */
 describe('comparison add-to-cart quantity', () => {

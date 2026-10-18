@@ -3,8 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
 
 /**
- * Feature 154, Phase 3 (T014) — `orders`' `order_item_returnable_at_purchase`
- * migration (`specs/154-catalog-order-constraints/data-model.md` §3).
+ * Feature 155, Phase 3 (T014) — `orders`' `order_item_returnable_at_purchase`
+ * migration (`specs/155-catalog-order-constraints/data-model.md` §3).
  *
  * `order_items.returnable_at_purchase` exists as a nullable boolean with no
  * default, and a line inserted without it reads `null` — the value every line
@@ -28,7 +28,7 @@ afterEach(async () => {
   await db.rollbackTx();
 });
 
-describe('154 — order_items.returnable_at_purchase [integration]', () => {
+describe('155 — order_items.returnable_at_purchase [integration]', () => {
   it('exists as a nullable boolean with no default', async () => {
     const rows = await db.em().execute<
       { data_type: string; is_nullable: string; column_default: string | null }[]

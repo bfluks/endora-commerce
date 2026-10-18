@@ -2,7 +2,7 @@ import type { ReturnableLine, ReturnableResponse } from '../api/returns';
 import { tForLocale } from '../i18n/messages';
 
 /**
- * Feature 154 (FR-018, FR-020, FR-021) — the storefront's reading of an order's returnability
+ * Feature 155 (FR-018, FR-020, FR-021) — the storefront's reading of an order's returnability
  * (`contracts/returns-api.md` §2): what the return form offers and which action the order
  * detail shows.
  *

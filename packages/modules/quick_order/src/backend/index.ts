@@ -281,7 +281,7 @@ export function registerModule(ctx: ModuleContext): void {
                 throw error;
               }
             },
-            // Feature 154 (FR-010) — the default quantity is the product's
+            // Feature 155 (FR-010) — the default quantity is the product's
             // minimum; a gated port, so held lazily like the two above.
             lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
           ),
@@ -328,7 +328,7 @@ export function registerModule(ctx: ModuleContext): void {
           null,
           z.number().int().positive(),
         );
-        // Feature 154 (R20, threat F4) — the Setting declares no maximum, so
+        // Feature 155 (R20, threat F4) — the Setting declares no maximum, so
         // the value is clamped at read and the preview's work stays bounded.
         if (configured > QUICK_ORDER_IMPORT_ROWS_CEILING) {
           warnOnce(

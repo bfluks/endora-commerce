@@ -16,8 +16,8 @@ import {
 } from '../../helpers/order-minimum-fixture.js';
 
 /**
- * Feature 154, Phase 6 (T039) — the single add and the edit enforce the
- * catalogue's order minimums (`specs/154-catalog-order-constraints/`, US1–US3,
+ * Feature 155, Phase 6 (T039) — the single add and the edit enforce the
+ * catalogue's order minimums (`specs/155-catalog-order-constraints/`, US1–US3,
  * FR-006, FR-006a, FR-007, FR-035, FR-037; `contracts/cart-and-checkout-api.md`
  * §1–§2).
  *
@@ -47,7 +47,7 @@ interface CartBody {
 
 const CHANNEL = { 'x-sales-channel': 'pl_retail' };
 
-describe('154 — cart add and edit enforce the order minimums [integration]', () => {
+describe('155 — cart add and edit enforce the order minimums [integration]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   let A: MinimumProductFixture;

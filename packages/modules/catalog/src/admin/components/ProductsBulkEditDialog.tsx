@@ -22,7 +22,7 @@ import { useTranslation } from '@endora-commerce/admin-kit/i18n';
  * backend. Attributes flagged `mass_editable=true` are fetched once on
  * open via `/attributes/by-flag?flag=isMassEditable`.
  *
- * Feature 154 (US5; FR-003, FR-004, FR-034) — a "Returnable" group sets the flag on every
+ * Feature 155 (US5; FR-003, FR-004, FR-034) — a "Returnable" group sets the flag on every
  * selected product. Products are not returnable until marked, existing ones included, so
  * the group carries a standing hint saying so: this is where an operator fixes that.
  */

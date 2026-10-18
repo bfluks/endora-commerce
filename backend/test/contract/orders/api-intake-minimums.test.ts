@@ -28,7 +28,7 @@ import {
 } from '../../helpers/order-minimum-fixture.js';
 
 /**
- * Feature 154, Phase 8a (T057, T063b) — the API order intake
+ * Feature 155, Phase 8a (T057, T063b) — the API order intake
  * (`POST /api/v1/external/orders`) builds the service account's basket through
  * the batch (`CartWritePort.addItems`, `onLineError: 'throw'`) and refuses the
  * whole request when any line is below a minimum (FR-009), judging the
@@ -61,7 +61,7 @@ interface CatalogReadSlice {
   findBySkus(...args: unknown[]): Promise<unknown>;
 }
 
-describe('154 — API order intake: minimums through the batch, and the item bound [contract]', () => {
+describe('155 — API order intake: minimums through the batch, and the item bound [contract]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   let token = '';

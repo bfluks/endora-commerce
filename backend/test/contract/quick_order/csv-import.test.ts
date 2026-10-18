@@ -86,10 +86,10 @@ describe('Quick-order CSV import', () => {
   });
 
   /**
-   * Feature 154, Phase 9 (T067) — the buyer's preview judges each product's
+   * Feature 155, Phase 9 (T067) — the buyer's preview judges each product's
    * total across the file, every variant summed (US4 #1a, #1c; P1).
    */
-  describe('154 — order minimums in the preview', () => {
+  describe('155 — order minimums in the preview', () => {
     const RUN = minimumFixtureRun();
     let A: MinimumProductFixture;
     let C: MinimumProductFixture;

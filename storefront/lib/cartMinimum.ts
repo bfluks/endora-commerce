@@ -2,7 +2,7 @@ import { tForLocale } from './i18n/messages';
 import { formatCount } from './orderMinimum';
 
 /**
- * Feature 154 — the cart's and checkout's reading of the server's order-minimum verdicts
+ * Feature 155 — the cart's and checkout's reading of the server's order-minimum verdicts
  * (FR-013, FR-037; `contracts/cart-and-checkout-api.md` §3, §8).
  *
  * The server judges; these helpers only word its verdict and keep the interface from offering

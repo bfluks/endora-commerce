@@ -5,7 +5,7 @@ import { returnFormModel } from '../../lib/returns/returnForm';
 import { ReturnFormLines } from '../../components/returns/ReturnFormLines';
 
 /**
- * Feature 154, FR-021 (US6 #1, #3, #4) — the storefront return form reads the per-line
+ * Feature 155, FR-021 (US6 #1, #3, #4) — the storefront return form reads the per-line
  * returnability (`contracts/returns-api.md` §2).
  *
  * A non-returnable line is shown, not selectable for a return, with its reason; complaints

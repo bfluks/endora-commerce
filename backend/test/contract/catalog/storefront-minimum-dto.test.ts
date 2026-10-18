@@ -11,8 +11,8 @@ import {
 } from '../../helpers/test-server.js';
 
 /**
- * Feature 154, Phase 5 (T030) — the storefront product DTOs carry the minimums
- * (`specs/154-catalog-order-constraints/contracts/catalog-api.md` §4).
+ * Feature 155, Phase 5 (T030) — the storefront product DTOs carry the minimums
+ * (`specs/155-catalog-order-constraints/contracts/catalog-api.md` §4).
  *
  * `minOrderQuantity` on the detail, the list, a search hit and a comparison's
  * products; `packagingUnits[].minOrderUnits` on the detail. The value is
@@ -20,7 +20,7 @@ import {
  * another type (written before D5, or straight into the table) reads `null`.
  * The returnable flag is on none of them.
  */
-describe('154 — storefront DTOs carry the minimums [contract]', () => {
+describe('155 — storefront DTOs carry the minimums [contract]', () => {
   let h: BackendServerHandle;
   const CHANNEL = { 'x-sales-channel': 'pl_retail' };
   const RUN = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;

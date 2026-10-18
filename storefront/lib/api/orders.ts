@@ -150,7 +150,7 @@ export interface OrderTotalPreview {
   total: number;
   currency: string;
   /**
-   * Feature 154 — basket lines placement will refuse (contract §8): below a minimum, or
+   * Feature 155 — basket lines placement will refuse (contract §8): below a minimum, or
    * `product_unavailable` (the product record is gone, no name or minimum). A line breaking
    * two minima appears twice. Absent from an older backend; read as none.
    */

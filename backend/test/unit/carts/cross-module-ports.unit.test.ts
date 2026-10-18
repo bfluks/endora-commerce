@@ -241,7 +241,7 @@ describe('carts — quote-to-cart conversion reads quote_requests through its po
     const catalog = {
       findByIds: async () => [{ id: 'p-1' }],
     } as unknown as CatalogProductReadPort;
-    // Feature 154 (R12.5) — the batch reports the refusal as a `failed` outcome.
+    // Feature 155 (R12.5) — the batch reports the refusal as a `failed` outcome.
     const cartService = {
       addItems: async () => ({
         cart: cartRow(),
@@ -277,7 +277,7 @@ describe('carts — quote-to-cart conversion reads quote_requests through its po
   });
 });
 
-describe('carts — quote-to-cart conversion maps the batch outcomes (feature 154, R12.5)', () => {
+describe('carts — quote-to-cart conversion maps the batch outcomes (feature 155, R12.5)', () => {
   const ctx = { customerAccountId: 'cust-1', organizationId: 'org-1' };
   const qrLine = (id: string, productId: string, quantity: number) => ({
     id,
@@ -405,7 +405,7 @@ describe('carts — cart-to-quote conversion hands quote_requests the cart price
         headerNote: 'Please quote',
         items: [
           { productId: 'p-1', quantity: 2 },
-          // Feature 154 (FR-026) — the unit's id; its name and base are the catalogue's.
+          // Feature 155 (FR-026) — the unit's id; its name and base are the catalogue's.
           { productId: 'p-2', variantId: 'v-2', quantity: 200, packagingUnitId: 'u-paleta' },
         ],
       },
@@ -419,7 +419,7 @@ describe('carts — cart-to-quote conversion hands quote_requests the cart price
   });
 });
 
-describe('carts — cart-to-quote conversion sends the packaging unit by id (feature 154, FR-026, US4 #11)', () => {
+describe('carts — cart-to-quote conversion sends the packaging unit by id (feature 155, FR-026, US4 #11)', () => {
   it('sends packagingUnitId for a live unit, plain pieces for a deleted one, after one unit read over the cart', async () => {
     const createForCustomer = vi.fn(async () => ({ id: 'qr-new' }) as never);
     const rfq = { createForCustomer } as unknown as RfqCustomerPort;

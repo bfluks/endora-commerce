@@ -9,7 +9,7 @@ import catalogEn from '../../../../packages/modules/catalog/i18n/en.json';
 import catalogPl from '../../../../packages/modules/catalog/i18n/pl.json';
 
 /**
- * Feature 154 / T100 (US5; FR-003, FR-004, FR-034) — the bulk edit's "Returnable" section:
+ * Feature 155 / T100 (US5; FR-003, FR-004, FR-034) — the bulk edit's "Returnable" section:
  * `{ returnable: true }` / `false` when touched, nothing when untouched, and the hint that
  * products are not returnable until marked — which is what makes the bulk action
  * discoverable to an operator whose existing catalogue just became non-returnable.
@@ -58,7 +58,7 @@ function sectionToggle(name: string): HTMLInputElement {
   return screen.getByRole('checkbox', { name: new RegExp(`^${name}`) }) as HTMLInputElement;
 }
 
-describe('ProductsBulkEditDialog — Returnable (154)', () => {
+describe('ProductsBulkEditDialog — Returnable (155)', () => {
   beforeEach(() => {
     getSpy.mockReset();
     postSpy.mockReset();

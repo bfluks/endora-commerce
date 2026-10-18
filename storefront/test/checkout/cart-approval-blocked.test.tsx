@@ -5,7 +5,7 @@ import { CartApprovalBanner } from '../../components/CartApprovalBanner';
 import { tForLocale } from '../../lib/i18n/messages';
 
 /**
- * Feature 154, owner ruling 2026-10-18 — "Submit for approval" is blocked the way checkout is
+ * Feature 155, owner ruling 2026-10-18 — "Submit for approval" is blocked the way checkout is
  * while a cart line is below a minimum or its product is gone (`cartBlocksCheckout`): a disabled
  * control with no form behind it, and the reason as visible text linked by `aria-describedby`.
  * SSR-only: the markup is the assertion.

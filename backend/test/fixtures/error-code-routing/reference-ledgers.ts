@@ -637,7 +637,7 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
   PRODUCT_BELOW_MINIMUM_QUANTITY: {
     to: 'catalog',
     reason:
-      'Minted by feature 154 (`specs/154-catalog-order-constraints/`) for the refusal of an ' +
+      'Minted by feature 155 (`specs/155-catalog-order-constraints/`) for the refusal of an ' +
       'order line whose product falls short of its minimum order quantity in pieces. D-121 T1: ' +
       'the noun is the minimum, a column on `catalog`\'s product row, so `catalog` owns the ' +
       'sentence although it raises nothing — the raisers are `carts` (adding and editing a ' +
@@ -647,7 +647,7 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
   PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY: {
     to: 'catalog',
     reason:
-      'Minted by feature 154 beside `PRODUCT_BELOW_MINIMUM_QUANTITY`, for a line short of the ' +
+      'Minted by feature 155 beside `PRODUCT_BELOW_MINIMUM_QUANTITY`, for a line short of the ' +
       'minimum number of units of its packaging unit. D-121 T1 decides it the way it decided ' +
       '`PACKAGING_UNIT_NOT_FOUND`: a packaging unit is a row on `catalog`\'s product, and the ' +
       'raisers — `carts`, `orders` and `quote_requests` — are callers reading that row.',
@@ -655,14 +655,14 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
   PACKAGING_UNIT_MISMATCH: {
     to: 'catalog',
     reason:
-      'Minted by feature 154 for a quote-request line whose packaging unit is not one of its ' +
+      'Minted by feature 155 for a quote-request line whose packaging unit is not one of its ' +
       'product\'s units, by id or by name and base quantity. The noun is the packaging unit, ' +
       '`catalog`\'s row (D-121 T1); the raiser is `quote_requests` on create and draft edit.',
   },
   RETURN_LINE_NOT_RETURNABLE: {
     to: 'returns',
     reason:
-      'Minted by feature 154 (`specs/154-catalog-order-constraints/`) for the refusal of a ' +
+      'Minted by feature 155 (`specs/155-catalog-order-constraints/`) for the refusal of a ' +
       '`return`-kind case that names an order line recorded as not returnable at purchase. ' +
       'The noun is the return case and the policy reading the stamp is `returns`\' own — ' +
       '`orders` only reports the stamp through `OrderReturnContextPort` — so `returns` owns ' +

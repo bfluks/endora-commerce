@@ -182,7 +182,7 @@ export interface RfqServiceDeps {
   /** Feature 054 — audits RFQ writes co-transactionally when provided. */
   auditLog?: AuditPort;
   /**
-   * Feature 154 (threat F6) — where the server-side cause of an `unknown_unit`
+   * Feature 155 (threat F6) — where the server-side cause of an `unknown_unit`
    * refusal goes; the buyer's answer never carries it. Absent: not logged.
    */
   log?: PlatformLogger;
@@ -228,7 +228,7 @@ export class RfqService {
   }
 
   /**
-   * Feature 154 (FR-026, R13.1) — resolves each line's packaging against the
+   * Feature 155 (FR-026, R13.1) — resolves each line's packaging against the
    * catalogue, or refuses the whole write with `422 PACKAGING_UNIT_MISMATCH`.
    *
    * Runs after the product 404, so every product here passed
@@ -261,7 +261,7 @@ export class RfqService {
   }
 
   /**
-   * Feature 154 (FR-012, FR-029) — the minimum check of a buyer's write, after
+   * Feature 155 (FR-012, FR-029) — the minimum check of a buyer's write, after
    * the packaging resolution and before any reference price is resolved or
    * anything is written. `'warn'` is set only by an in-process caller acting
    * for a representative (`CreateForCustomerOptions.minimums`).
@@ -408,7 +408,7 @@ export class RfqService {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
     }
 
-    // Feature 154 (FR-026, FR-012, FR-029) — packaging, then minimums, after
+    // Feature 155 (FR-026, FR-012, FR-029) — packaging, then minimums, after
     // the 404 above and before anything is priced, numbered or written.
     const { packaging, units } = await this.#resolvePackaging(input.items, productById);
     const resolvedLines = input.items.map((line, index) => withResolvedPackaging(line, packaging[index]!));
@@ -452,7 +452,7 @@ export class RfqService {
       const unit = packaging[index]!;
       // Feature 043 — append the packaging-unit name to the snapshot name so
       // RFQ views show "<name> (Paleta)", and persist the structured snapshot.
-      // Feature 154 (FR-026) — the name and base quantity are the catalogue
+      // Feature 155 (FR-026) — the name and base quantity are the catalogue
       // unit's, beside its id; a line naming no unit stores plain pieces.
       const baseName = anyLocaleValue(product.name);
       const productName = unit.packagingUnitName ? `${baseName} (${unit.packagingUnitName})` : baseName;
@@ -570,7 +570,7 @@ export class RfqService {
         { quoteRequestId: rfq.id },
         { orderBy: { createdAt: 'asc', id: 'asc' } },
       );
-      // Feature 154 (FR-026) — packaging resolved against the catalogue
+      // Feature 155 (FR-026) — packaging resolved against the catalogue
       // before the pairing, which reads the **resolved** name: a line naming
       // its unit by id alone pairs with the stored row of that unit.
       const { packaging, units } = await this.#resolvePackaging(body.items, productById);
@@ -585,7 +585,7 @@ export class RfqService {
       // never for the acting user (an organization administrator editing a
       // colleague's draft prices it as the colleague would pay).
       //
-      // Feature 154 (FR-031 (b)) — the same predicate exempts the line from the
+      // Feature 155 (FR-031 (b)) — the same predicate exempts the line from the
       // minimums: an unchanged line is not refused, and still counts toward its
       // product's total. Judged before pricing (FR-029).
       const keeps = draftEditExemptions(paired, resolvedLines);
@@ -609,7 +609,7 @@ export class RfqService {
         const row = paired[index] ?? null;
         const unit = packaging[index]!;
         // FR-035 — packaging stored with the name suffix `createForCustomer`
-        // writes; feature 154 (FR-026) — the catalogue unit's, beside its id.
+        // writes; feature 155 (FR-026) — the catalogue unit's, beside its id.
         const baseName = anyLocaleValue(product.name);
         return {
           quoteRequestId: rfq.id,
@@ -739,7 +739,7 @@ export class RfqService {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
     }
 
-    // Feature 154 (FR-031 (c), FR-029) — judged as a new submission, before
+    // Feature 155 (FR-031 (c), FR-029) — judged as a new submission, before
     // pricing: pieces only (no packaging is copied below), no exemption. The
     // records are those of the buyer's own request's products; a product with
     // no record is the unknown-product 404 (FR-037).
@@ -1183,7 +1183,7 @@ export class RfqService {
   }
 
   /**
-   * Feature 154 (FR-030, research R13.5) — each stored line's warning against
+   * Feature 155 (FR-030, research R13.5) — each stored line's warning against
    * today's minimums: no exemption, product totals across the request. One
    * batched catalogue read of the products (no audience or channel filter —
    * this is the operator's view), and of the units only when a line names one.
@@ -1231,7 +1231,7 @@ export class RfqService {
     const submittedProposals = forAdmin
       ? await submissionRecordProposals(em, items, events)
       : new Map<string, number | null>();
-    // Feature 154 (FR-030) — computed for the admin reply only; the customer
+    // Feature 155 (FR-030) — computed for the admin reply only; the customer
     // path never reads the catalogue for it (threat S7).
     const minimumWarnings = forAdmin ? await this.#minimumWarnings(items) : [];
 
@@ -1305,7 +1305,7 @@ export class RfqService {
           taxRate,
           packagingUnitName: it.packagingUnitName ?? null,
           packagingUnitBaseQuantity: it.packagingUnitBaseQuantity ?? null,
-          // Feature 154 — the resolved catalogue unit; both replies (analyze F14).
+          // Feature 155 — the resolved catalogue unit; both replies (analyze F14).
           packagingUnitId: it.packagingUnitId ?? null,
         };
         if (!forAdmin) return pickKeys(item, CUSTOMER_ITEM_KEYS);
@@ -1369,7 +1369,7 @@ function anyLocaleValue(blob: Record<string, string>): string {
 }
 
 /**
- * Feature 154 — the names a refusal gives its products: the same locale value
+ * Feature 155 — the names a refusal gives its products: the same locale value
  * the line's `productName` snapshot stores.
  */
 function productNames(products: Iterable<CatalogProductRecord>): Map<string, string> {

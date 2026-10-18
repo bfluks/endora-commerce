@@ -229,8 +229,8 @@ export const manifest = defineModuleManifest({
   ],
   activation: { settingCode: 'returns.enabled', default: true },
   /**
-   * The error codes this module owns. One, minted by feature 154
-   * (`specs/154-catalog-order-constraints/contracts/error-codes.md`):
+   * The error codes this module owns. One, minted by feature 155
+   * (`specs/155-catalog-order-constraints/contracts/error-codes.md`):
    * `RETURN_LINE_NOT_RETURNABLE`, the refusal of a `return`-kind case naming an
    * order line recorded as not returnable at purchase. The policy is this
    * module's — `orders` only reports the stamp through `OrderReturnContextPort`

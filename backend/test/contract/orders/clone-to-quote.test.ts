@@ -94,13 +94,13 @@ describe('Order clone-to-quote', () => {
   });
 
   /**
-   * Feature 154, Phase 11 (T084) — the minimums follow the actor, not the code
+   * Feature 155, Phase 11 (T084) — the minimums follow the actor, not the code
    * path (FR-012, FR-030): the buyer's clone of an order holding A × 5 is
    * refused (US4 #5a); the representative's clone of it creates the request
    * and the admin read flags the line (US4 #15). The actor is a literal in each
    * route, never read from the request (threat F10).
    */
-  describe('154 — order minimums', () => {
+  describe('155 — order minimums', () => {
     const RUN = minimumFixtureRun();
     let A: MinimumProductFixture;
     let belowMinimumOrderId = '';

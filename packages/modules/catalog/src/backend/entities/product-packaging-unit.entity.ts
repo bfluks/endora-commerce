@@ -47,7 +47,7 @@ export class ProductPackagingUnit {
   isDefault: boolean = false;
 
   /**
-   * Feature 154 (FR-002) — the minimum number of units of this packaging
+   * Feature 155 (FR-002) — the minimum number of units of this packaging
    * unit per order line, 1…1 000 000, or `null` for none. Deleting the unit
    * removes the rule with it.
    */

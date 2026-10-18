@@ -39,7 +39,7 @@ const REFUSING_PLACEMENT: OrderPlacementPort = {
 const ctx = { customerAccountId: 'cust-1', organizationId: 'org-1' };
 
 /**
- * Feature 154 (FR-010, R12.3) — the catalogue read the default quantity comes
+ * Feature 155 (FR-010, R12.3) — the catalogue read the default quantity comes
  * from. Answers `null` for every id unless given records.
  */
 function catalogOf(
@@ -206,10 +206,10 @@ describe('OneClickService.place', () => {
   });
 
   /**
-   * Feature 154 (FR-010, R12.3, analyze F14) — without a quantity, one-click
+   * Feature 155 (FR-010, R12.3, analyze F14) — without a quantity, one-click
    * orders the product's pieces minimum, only for the types the rule applies to.
    */
-  describe('default quantity (feature 154)', () => {
+  describe('default quantity (feature 155)', () => {
     async function quantityPlaced(
       product: { id: string; type: string; minOrderQuantity: number | null } | null,
       quantity?: number,

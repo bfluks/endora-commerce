@@ -37,7 +37,7 @@ export interface ConversionSkip {
   itemId: string;
   productId: string;
   reason: 'product_archived' | 'variant_unavailable' | 'product_not_found' | 'below_minimum';
-  /** Feature 154 — on `below_minimum`: the minimum the line missed. */
+  /** Feature 155 — on `below_minimum`: the minimum the line missed. */
   minimum?: number;
 }
 
@@ -325,7 +325,7 @@ export class ShoppingListService {
 
     let added = 0;
     if (kept.length > 0) {
-      // Feature 154 (FR-011, R12.4) — one batch, judged with the cart as a
+      // Feature 155 (FR-011, R12.4) — one batch, judged with the cart as a
       // whole; every per-line failure is reported, never thrown mid-way.
       const { outcomes } = await this.cartService.addItems(
         { customer: ctx },

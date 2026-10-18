@@ -13,11 +13,11 @@ export type QuickOrderRejectionReason =
   | 'variant_not_resolved'
   | 'variant_ambiguous'
   | 'row_limit_exceeded'
-  /** Feature 154 — the product's total across the file is below its pieces minimum (buyer's import). */
+  /** Feature 155 — the product's total across the file is below its pieces minimum (buyer's import). */
   | 'below_minimum';
 
 /**
- * Feature 154 (FR-011 (a), P1 C) — the operator's import keeps a row whose
+ * Feature 155 (FR-011 (a), P1 C) — the operator's import keeps a row whose
  * product's file total is below the pieces minimum, and flags it instead.
  */
 export interface QuickOrderMinimumWarning {
@@ -41,9 +41,9 @@ export interface RejectedQuickOrderItem {
   line: number;
   raw: string;
   reason: QuickOrderRejectionReason;
-  /** Feature 154 — on `below_minimum`: the product's pieces minimum. */
+  /** Feature 155 — on `below_minimum`: the product's pieces minimum. */
   minimum?: number;
-  /** Feature 154 — on `below_minimum`: the file total the verdict used. */
+  /** Feature 155 — on `below_minimum`: the file total the verdict used. */
   productTotal?: number;
 }
 
@@ -55,7 +55,7 @@ export interface QuickOrderImportResponse {
     rejectedCount: number;
     mergedCount: number;
     truncated: boolean;
-    /** Feature 154 — operator's import: recognised rows carrying a `warning`. */
+    /** Feature 155 — operator's import: recognised rows carrying a `warning`. */
     warningCount?: number;
   };
 }
@@ -68,7 +68,7 @@ export interface QuickOrderBuildResponse {
   checkoutUrl?: string;
   quoteRequestId?: string;
   /**
-   * Feature 154 (FR-011 (b)) — target `cart`: the lines not added because they
+   * Feature 155 (FR-011 (b)) — target `cart`: the lines not added because they
    * would leave their product below a minimum. Absent for a quote request.
    */
   rejected?: QuickOrderBuildRejectedLine[];
@@ -82,7 +82,7 @@ export interface QuickOrderBuildRejectedLine {
   reason: 'below_minimum';
   kind: 'pieces' | 'packaging_unit';
   minimum: number;
-  /** Feature 154 — on a `packaging_unit` refusal: the unit's name. */
+  /** Feature 155 — on a `packaging_unit` refusal: the unit's name. */
   packagingUnitName?: string;
 }
 

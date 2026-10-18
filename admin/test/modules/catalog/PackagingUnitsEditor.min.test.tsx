@@ -7,7 +7,7 @@ import catalogEn from '../../../../packages/modules/catalog/i18n/en.json';
 import catalogPl from '../../../../packages/modules/catalog/i18n/pl.json';
 
 /**
- * Feature 154 / T099 (US2, FR-002) — the packaging-units editor's "Minimum (units)"
+ * Feature 155 / T099 (US2, FR-002) — the packaging-units editor's "Minimum (units)"
  * column: shown, edited, cleared to `null`, refused outside 1…1 000 000, and sent as
  * `minOrderUnits`. Rendered inside `<StrictMode>` with the real `en` / `pl` bundles.
  */
@@ -64,7 +64,7 @@ async function minimumCell(): Promise<HTMLInputElement> {
   return within(row).getByRole('spinbutton', { name: 'Minimum (units)' }) as HTMLInputElement;
 }
 
-describe('PackagingUnitsEditor — minimum units (154)', () => {
+describe('PackagingUnitsEditor — minimum units (155)', () => {
   beforeEach(() => {
     getSpy.mockReset();
     postSpy.mockReset();

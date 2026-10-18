@@ -14,7 +14,7 @@ import {
 } from './catalog.js';
 
 /**
- * Feature 154 (FR-001, FR-002, FR-016; threat F5) — the catalogue request and DTO shapes
+ * Feature 155 (FR-001, FR-002, FR-016; threat F5) — the catalogue request and DTO shapes
  * gain the pieces minimum, the packaging-unit minimum and the returnable flag, bounded
  * 1…1 000 000 (`contracts/catalog-api.md` §0–§4).
  */
@@ -193,7 +193,7 @@ describe('packaging-unit and product DTOs', () => {
 });
 
 /**
- * Feature 154 (R7, `contracts/catalog-api.md` §5) — the read-port records carry the rule
+ * Feature 155 (R7, `contracts/catalog-api.md` §5) — the read-port records carry the rule
  * data as **required** fields, and the port gains the batch packaging-unit read. These
  * are type-level assertions: each `@ts-expect-error` is unused — and therefore a
  * type-check failure — the moment a field or the method becomes optional or goes away.

@@ -34,7 +34,7 @@ interface CartApprovalBannerProps {
   /** Server action — used only when policyOn && approvalStatus === 'not_required'. */
   submitForApprovalAction: (formData: FormData) => Promise<void>;
   /**
-   * Feature 154, owner ruling 2026-10-18 — set while a cart line is below a minimum or its
+   * Feature 155, owner ruling 2026-10-18 — set while a cart line is below a minimum or its
    * product is gone (`cartBlocksCheckout`): the submit button is disabled, with no form behind
    * it, and this visible sentence is linked to it by `aria-describedby`.
    */

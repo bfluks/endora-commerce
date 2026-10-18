@@ -36,7 +36,7 @@ vi.mock('@endora-commerce/admin-kit/components', async () => {
 const { RfqDetail } = await import('../../../../packages/modules/quote_requests/src/admin/pages/RfqDetail');
 
 /**
- * Feature 154, T106 — the admin quote-request screen flags a line below its
+ * Feature 155, T106 — the admin quote-request screen flags a line below its
  * product's current minimum (FR-030, US4 #15): "Below minimum (10 pcs)", or the
  * packaging-unit variant, on the Overview and the Modify tab; nothing on a line
  * the read model does not flag. The warning informs and blocks nothing.

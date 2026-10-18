@@ -2344,7 +2344,7 @@ export async function setupBackendServer(
             return {
               cartId: '',
               appendedLineCount: res.added,
-              // Feature 154 — mirrors `composition.ts`: a line below a
+              // Feature 155 — mirrors `composition.ts`: a line below a
               // minimum says so, with the minimum.
               droppedLines: res.skipped.map((it) =>
                 it.reason === 'below_minimum'

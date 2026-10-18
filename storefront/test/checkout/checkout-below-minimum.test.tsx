@@ -6,7 +6,7 @@ import { blockTitle, placeOrderBlock } from '../../lib/checkout/place-order-gate
 import { tForLocale } from '../../lib/i18n/messages';
 
 /**
- * Feature 154, T120 — the checkout preview's `belowMinimumLines` (contract §8): placement will
+ * Feature 155, T120 — the checkout preview's `belowMinimumLines` (contract §8): placement will
  * refuse them, so the page says which lines and why before the buyer tries (FR-013, FR-037).
  */
 

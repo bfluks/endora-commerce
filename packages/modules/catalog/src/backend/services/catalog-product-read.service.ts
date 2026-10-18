@@ -137,7 +137,7 @@ export class CatalogProductReadService implements CatalogProductReadPort {
   }
 
   /**
-   * Feature 154 — one query over every given product, ordered by product id,
+   * Feature 155 — one query over every given product, ordered by product id,
    * then position, then name (`contracts/catalog-api.md` §5). No policy: the
    * caller passes ids it has already vetted (threat F12).
    */

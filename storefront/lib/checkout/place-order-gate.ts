@@ -43,7 +43,7 @@ import type { MessageKey } from '../i18n/messages';
  * harness is SSR-only, so the logic lives here rather than inside the component.
  */
 /*
- * Feature 154 adds `below-minimum` — a basket line placement will refuse (below an order
+ * Feature 155 adds `below-minimum` — a basket line placement will refuse (below an order
  * minimum, or its product gone). It ranks after `moderation` and before the method gaps by the
  * rule above: the basket is the most upstream thing checkout shows — the buyer fixes it in the
  * cart, not here, and no delivery or payment choice changes the verdict.
@@ -71,7 +71,7 @@ export function placeOrderBlock(input: {
    */
   paymentMethodCount: number;
   /**
-   * Feature 154 — a basket line placement will refuse: the cart view's own flags, or the
+   * Feature 155 — a basket line placement will refuse: the cart view's own flags, or the
    * checkout preview's `belowMinimumLines` (`cartBlocksCheckout`, `canPlaceOrder`).
    */
   belowMinimum?: boolean;

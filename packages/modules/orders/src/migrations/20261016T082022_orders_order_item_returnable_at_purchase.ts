@@ -1,8 +1,8 @@
 import { Migration } from '@mikro-orm/migrations';
 
 /**
- * Feature 154 — `order_items.returnable_at_purchase`
- * (`specs/154-catalog-order-constraints/data-model.md` §3).
+ * Feature 155 — `order_items.returnable_at_purchase`
+ * (`specs/155-catalog-order-constraints/data-model.md` §3).
  *
  * Whether the product was returnable when the line was placed, written once
  * at placement (FR-016a). `null` only on lines placed before this column

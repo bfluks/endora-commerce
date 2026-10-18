@@ -83,7 +83,7 @@ function writeRfqDraft(items: RfqDraftItem[]): void {
 export type RfqDraftAddition = Omit<RfqDraftItem, 'quantity'> & { quantity?: number };
 
 /**
- * Feature 154 (FR-032) — a draft line's quantity normalised: a whole number, never below the
+ * Feature 155 (FR-032) — a draft line's quantity normalised: a whole number, never below the
  * product's pieces minimum (`null`/absent or ≤ 1 = none, floor 1). The draft page's stepper
  * and input go through this, so a line cannot be lowered below the minimum.
  */
@@ -98,7 +98,7 @@ export function clampDraftQuantity(quantity: number, minimum: number | null | un
  * new array; the input is left untouched. Pure, so the add rule is testable without
  * `localStorage`.
  *
- * Feature 154 (FR-032, US4 #13): with the product's pieces `minimum`, the line ends at least
+ * Feature 155 (FR-032, US4 #13): with the product's pieces `minimum`, the line ends at least
  * at the minimum — a new line starts there, and an existing line still below it after the add
  * is lifted to it — mirroring the cart. The API refusal at submission stays the binding rule.
  */
@@ -135,7 +135,7 @@ export function addToRfqDraft(
 
 /**
  * Adds a line (or bumps the quantity of an existing one) and persists. `minimum` is the
- * product's pieces minimum (feature 154): the line ends at least there.
+ * product's pieces minimum (feature 155): the line ends at least there.
  */
 export function addRfqDraftItem(item: RfqDraftAddition, minimum?: number | null): RfqDraftItem[] {
   const items = addToRfqDraft(readRfqDraft(), item, minimum);
@@ -145,7 +145,7 @@ export function addRfqDraftItem(item: RfqDraftAddition, minimum?: number | null)
 
 /**
  * Sets a line's quantity and persists. `minimum` is the product's current pieces minimum, when
- * the draft page knows it (feature 154): the quantity is never set below it.
+ * the draft page knows it (feature 155): the quantity is never set below it.
  */
 export function setRfqDraftQuantity(
   productId: string,

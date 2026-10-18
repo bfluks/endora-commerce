@@ -76,7 +76,7 @@ export class OrderCreationAdminService {
     input: AdminCreateOrderInput,
     options: { language?: string | undefined } = {},
   ): Promise<Order> {
-    // Feature 154 (FR-038) — first, before anything is read or written.
+    // Feature 155 (FR-038) — first, before anything is read or written.
     assertWithinAdminOrderItemBound(input.items.length);
     // command-coverage-ignore: the order write is delegated to
     // OrderService.placeOrder (audited there); the only local mutation here is
@@ -186,7 +186,7 @@ export class OrderCreationAdminService {
       // model (same approach as RfqService.convertToOrder). The assortment is
       // judged on the order's channel, not on the admin request's.
       //
-      // Feature 154 (FR-009, R8): one batch, so a product's minimum is judged
+      // Feature 155 (FR-009, R8): one batch, so a product's minimum is judged
       // on its total across the request's lines (D1). A line the customer may
       // not see, or that the channel does not sell, is thrown before anything
       // is written, with the unknown id's answer (FR-035); any line below a

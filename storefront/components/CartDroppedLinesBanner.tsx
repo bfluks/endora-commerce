@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
  * the products that were skipped during the conversion and the typed
  * reason for each skip.
  *
- * Feature 154 (FR-011) — a line left out because it would leave its product
+ * Feature 155 (FR-011) — a line left out because it would leave its product
  * below a minimum is reported as such, with the minimum, distinct from
  * "no price available".
  *
@@ -27,7 +27,7 @@ interface DroppedLine {
   productId: string;
   productName: string;
   reason: DroppedLineReason;
-  /** Feature 154 — the minimum a `below_minimum` line missed. */
+  /** Feature 155 — the minimum a `below_minimum` line missed. */
   minimum?: number | undefined;
 }
 
@@ -41,7 +41,7 @@ interface CartDroppedLinesBannerProps {
     reasonOutOfStock: string;
     reasonNoPriceInCustomerList: string;
     reasonRemovedByConversion: string;
-    /** Feature 154 — `droppedBelowMinimumReason(minimum, locale)` from `lib/batchReport`. */
+    /** Feature 155 — `droppedBelowMinimumReason(minimum, locale)` from `lib/batchReport`. */
     reasonBelowMinimum: (minimum: number | undefined) => string;
   };
 }

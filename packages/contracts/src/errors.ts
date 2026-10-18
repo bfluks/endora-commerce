@@ -63,7 +63,7 @@ export const ERROR_CODES = {
   PACKAGING_UNIT_NAME_CONFLICT: 'PACKAGING_UNIT_NAME_CONFLICT',
   PACKAGING_UNIT_NOT_SUPPORTED_FOR_TYPE: 'PACKAGING_UNIT_NOT_SUPPORTED_FOR_TYPE',
 
-  // Catalog 154 — minimum order quantities (owned by `catalog`, raised by the
+  // Catalog 155 — minimum order quantities (owned by `catalog`, raised by the
   // modules that accept order lines: carts, orders, quote_requests)
   PRODUCT_BELOW_MINIMUM_QUANTITY: 'PRODUCT_BELOW_MINIMUM_QUANTITY',
   PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY: 'PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY',
@@ -193,7 +193,7 @@ export const ERROR_CODES = {
   INVOICE_NUMBER_ALREADY_ISSUED: 'INVOICE_NUMBER_ALREADY_ISSUED',
   INVALID_TRANSITION: 'INVALID_TRANSITION',
 
-  // Returns 154 — a `return`-kind case naming an order line recorded as not
+  // Returns 155 — a `return`-kind case naming an order line recorded as not
   // returnable at purchase (owned and raised by `returns`; complaints are
   // never refused by it).
   RETURN_LINE_NOT_RETURNABLE: 'RETURN_LINE_NOT_RETURNABLE',

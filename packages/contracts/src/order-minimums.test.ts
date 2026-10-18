@@ -11,7 +11,7 @@ import {
 } from './order-minimums.js';
 
 /**
- * Feature 154 (FR-006a, FR-028, FR-037; research R6.1) — the one implementation of the
+ * Feature 155 (FR-006a, FR-028, FR-037; research R6.1) — the one implementation of the
  * minimum-order rule. Every row of `data-model.md` §6 is a case here.
  */
 

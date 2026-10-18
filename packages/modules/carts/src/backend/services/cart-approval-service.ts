@@ -82,7 +82,7 @@ export class CartApprovalService {
     /** `customer_accounts`' read model — the submitting buyer's role. */
     private readonly customerAccounts: CustomerAccountReadPort,
     /**
-     * Feature 154 (owner ruling 2026-10-18) — the basket's products and units, so a
+     * Feature 155 (owner ruling 2026-10-18) — the basket's products and units, so a
      * basket below a minimum is refused before it is sent for approval.
      */
     private readonly catalogProducts: Pick<CatalogProductReadPort, 'findByIds' | 'listPackagingUnitsByProductIds'>,
@@ -110,7 +110,7 @@ export class CartApprovalService {
    *   - the policy is off (approval not required)
    *   - the buyer is themself an Org Admin (self-approval exemption)
    *   - approval_status is already non-`not_required`
-   *   - a line is below a minimum or its product is gone (feature 154, owner
+   *   - a line is below a minimum or its product is gone (feature 155, owner
    *     ruling 2026-10-18) — the refusal placement would give, so a basket that
    *     cannot be ordered is never sent for approval
    */

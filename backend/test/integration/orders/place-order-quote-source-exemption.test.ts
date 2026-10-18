@@ -20,7 +20,7 @@ import { acceptedQuoteRequest, whenOrderCreatedSettled } from '../../helpers/quo
 import { setProductMinimum } from '../../helpers/order-minimum-fixture.js';
 
 /**
- * Feature 154, Phase 8 (T056a) — FR-036, US4 #7e, threat F2: a quote-seeded
+ * Feature 155, Phase 8 (T056a) — FR-036, US4 #7e, threat F2: a quote-seeded
  * line is exempt from the minimums at placement only while the basket's quote
  * source is vouched **at that moment** — the request still approved, of the
  * buyer's Organization, not yet the source of an Order, its validity not lapsed,
@@ -54,7 +54,7 @@ interface ErrorBody {
 
 type QuoteKey = 'valid' | 'cancelled' | 'expired' | 'replaced' | 'twoBaskets' | 'concurrent';
 
-describe('154 — the quote-line exemption needs a vouched quote source at placement [integration]', () => {
+describe('155 — the quote-line exemption needs a vouched quote source at placement [integration]', () => {
   let h: BackendServerHandle;
   let previousMinimumOfA: number | null = null;
   const quotes = {} as Record<QuoteKey, string>;

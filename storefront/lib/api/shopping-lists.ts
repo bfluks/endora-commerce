@@ -37,7 +37,7 @@ export interface ConversionSkip {
   itemId: string;
   productId: string;
   reason: 'product_archived' | 'variant_unavailable' | 'product_not_found' | 'below_minimum';
-  /** Feature 154 — on `below_minimum`: the minimum the line missed. */
+  /** Feature 155 — on `below_minimum`: the minimum the line missed. */
   minimum?: number;
 }
 

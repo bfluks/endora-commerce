@@ -4,7 +4,7 @@ import { tForLocale } from '../../lib/i18n/messages';
 import type { CheckoutBelowMinimumRow } from '../../lib/cartMinimum';
 
 /**
- * Feature 154 (FR-013, FR-037) — the checkout's list of basket lines placement will refuse,
+ * Feature 155 (FR-013, FR-037) — the checkout's list of basket lines placement will refuse,
  * from the preview's `belowMinimumLines` (`checkoutBelowMinimumRows`) or the cart view's own
  * flags. Rendered above the Place Order button, which it describes while blocked.
  *

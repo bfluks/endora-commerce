@@ -1,6 +1,6 @@
 # Data model: minimum order quantities and the returnable flag
 
-**Feature**: `specs/154-catalog-order-constraints/` | Decisions: [research.md](./research.md) R1–R5
+**Feature**: `specs/155-catalog-order-constraints/` | Decisions: [research.md](./research.md) R1–R5
 
 No new table, no new entity class. Five nullable-or-defaulted columns on four existing tables, owned
 by three modules, in **three migrations** — one per owning module (the `carts` state reads an existing
@@ -138,7 +138,7 @@ alter table "quote_request_items" add column "packaging_unit_id" uuid null;
 ## 5. Evaluation input (not stored) — `packages/contracts/src/order-minimums.ts`
 
 ```ts
-/** Feature 154 (FR-001, FR-002) — the upper bound of both minimums. */
+/** Feature 155 (FR-001, FR-002) — the upper bound of both minimums. */
 export const ORDER_MINIMUM_MAX = 1_000_000;
 /** Integer in 1…ORDER_MINIMUM_MAX. `null` (clear) is the caller's to allow. */
 export function isValidOrderMinimum(value: number): boolean;

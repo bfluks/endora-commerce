@@ -67,9 +67,9 @@ export default async function QuickOrderPage({
     built?: string;
     rfq?: string;
     q?: string;
-    /** Feature 154 — how many lines the cart build sent. */
+    /** Feature 155 — how many lines the cart build sent. */
     sent?: string;
-    /** Feature 154 — the build's `rejected[]`, carried across the redirect (base64url JSON). */
+    /** Feature 155 — the build's `rejected[]`, carried across the redirect (base64url JSON). */
     notAdded?: string;
   }>;
 }): Promise<ReactNode> {
@@ -84,7 +84,7 @@ export default async function QuickOrderPage({
   // every other storefront page resolves it.
   const { ctx, locale } = await getServerContext();
   const t = tForLocale(locale);
-  // Feature 154 (FR-011 (b)) — the lines the cart build left out, below a minimum.
+  // Feature 155 (FR-011 (b)) — the lines the cart build left out, below a minimum.
   const notAdded = sp.built === 'cart' ? decodeReport(sp.notAdded).filter(isBuildRejectedLine) : [];
   const sentCount = Math.max(Number.parseInt(sp.sent ?? '', 10) || 0, notAdded.length);
   const searchResults = searchQuery
@@ -112,7 +112,7 @@ export default async function QuickOrderPage({
         </p>
       ) : null}
       {notAdded.length > 0 ? (
-        // Feature 154 — a partial build is reported as one: what was added, and each line
+        // Feature 155 — a partial build is reported as one: what was added, and each line
         // that was not, with the minimum it missed. Checkout is not offered from here — the
         // cart is where the quantities are fixed.
         <section
@@ -500,7 +500,7 @@ async function confirmAction(formData: FormData): Promise<void> {
     redirect(`/quick-order?built=quote${rfqRef ? `&rfq=${encodeURIComponent(rfqRef)}` : ''}`);
   }
   if (rejected.length > 0) {
-    // Feature 154 (FR-011 (b)) — the build added the valid lines; the rest travel to the page
+    // Feature 155 (FR-011 (b)) — the build added the valid lines; the rest travel to the page
     // so it can say which and why.
     const params = new URLSearchParams({
       built: 'cart',

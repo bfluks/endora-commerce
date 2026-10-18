@@ -41,9 +41,9 @@ refused → line unchanged. A line whose product record is absent → `404 PRODU
 `cartViewLineSchema` (`carts.ts:143`) gains:
 
 ```ts
-/** Feature 154 — the product's current pieces minimum (null = none); the storefront's input floor. */
+/** Feature 155 — the product's current pieces minimum (null = none); the storefront's input floor. */
 minOrderQuantity: z.number().int().positive().nullable().optional(),
-/** Feature 154 — set when this line is below a current minimum and not exempt (FR-013, FR-028). */
+/** Feature 155 — set when this line is below a current minimum and not exempt (FR-013, FR-028). */
 belowMinimum: z
   .object({
     kind: z.enum(['pieces', 'packaging_unit']),
@@ -87,7 +87,7 @@ export type CartBatchLineOutcome =
 export interface CartWritePort {
   // …existing…
   /**
-   * Feature 154 (R8) — add several lines. (1) Every line is resolved with exactly `addItem`'s
+   * Feature 155 (R8) — add several lines. (1) Every line is resolved with exactly `addItem`'s
    * preconditions (quantity, visibility, channel, packaging unit in product); a line that fails gets
    * the unknown-id answer and takes no part in the evaluation. (2) The resolved lines are judged with
    * the cart in two passes — unit minimums, then pieces minimums over the survivors; lines below a
@@ -149,7 +149,7 @@ Request/response unchanged. Default quantity becomes the product's pieces minimu
 
 ```ts
 /**
- * Feature 154 — basket lines placement will refuse. Exemptions apply only when the basket's quote
+ * Feature 155 — basket lines placement will refuse. Exemptions apply only when the basket's quote
  * source is confirmed valid now (FR-036); `product_unavailable` is a line whose product record is
  * gone (FR-037), with no name or minimum.
  */

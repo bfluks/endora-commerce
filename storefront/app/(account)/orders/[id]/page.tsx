@@ -131,7 +131,7 @@ export default async function OrderConfirmationPage({
   const canCancel = offersCancellation(order);
 
   // Surface a return/complaint entry point directly on the order — a return when
-  // any line is returnable, a complaint when none is (feature 154, FR-018/FR-021:
+  // any line is returnable, a complaint when none is (feature 155, FR-018/FR-021:
   // `eligible: false` with `no_returnable_lines` still takes a complaint), nothing
   // otherwise. Falls back to hidden on any error so the page never breaks.
   let returnAction: OrderReturnAction | null = null;

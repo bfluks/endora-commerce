@@ -3,7 +3,7 @@ import type { ReturnableResponse } from '../../lib/api/returns';
 import { orderReturnAction } from '../../lib/returns/returnForm';
 
 /**
- * Feature 154, FR-021 / FR-018 — the order detail page offers the action the order's
+ * Feature 155, FR-021 / FR-018 — the order detail page offers the action the order's
  * returnability allows: a return (with complaints) when any line is returnable, a complaint
  * only when none is (`no_returnable_lines`), nothing otherwise. Until this feature the page
  * read `eligible` alone and hid the entry for an order whose products are all non-returnable,

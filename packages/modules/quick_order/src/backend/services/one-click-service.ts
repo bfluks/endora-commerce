@@ -57,7 +57,7 @@ export class OneClickService {
     private readonly orderPlacement: OrderPlacementPort,
     private readonly resolveOneClickEnabled: (salesChannelId: string | null) => Promise<boolean>,
     /**
-     * Feature 154 (FR-010, R12.3) — where the default quantity comes from: the
+     * Feature 155 (FR-010, R12.3) — where the default quantity comes from: the
      * product's pieces minimum. `quick_order` already declares `catalog`.
      */
     private readonly catalogProducts: CatalogProductReadPort,
@@ -134,7 +134,7 @@ export class OneClickService {
   }
 
   /**
-   * Feature 154 (FR-010, R12.3, analyze F14) — the product's pieces minimum
+   * Feature 155 (FR-010, R12.3, analyze F14) — the product's pieces minimum
    * when its type carries one (`simple` / `configurable`) and it is above 1;
    * otherwise 1. A product the read does not find gets 1, and the add path
    * answers it with the unknown id's 404 — the minimum of a product the buyer

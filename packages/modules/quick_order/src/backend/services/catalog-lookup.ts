@@ -75,7 +75,7 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
         sku: p.sku,
         status: p.status,
         deletedAt: p.deletedAt,
-        // Feature 154 (R12.1) — what the preview's minimum evaluation reads.
+        // Feature 155 (R12.1) — what the preview's minimum evaluation reads.
         type: p.type,
         minOrderQuantity: p.minOrderQuantity,
       }));
@@ -88,7 +88,7 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
     if (skus.length === 0) return [];
     const variants = await this.catalogProducts.findVariantsBySkus(skus);
     if (variants.length === 0) return [];
-    // The parents are read for every audience: feature 154 (R12.1) judges a
+    // The parents are read for every audience: feature 155 (R12.1) judges a
     // row naming a variant against its product's minimum, so the preview needs
     // the parent's rule even where `'unrestricted'` waives the filters below.
     const parents = await this.catalogProducts.findByIds(

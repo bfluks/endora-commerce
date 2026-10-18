@@ -92,7 +92,7 @@ export class CartItem {
    * and returning to the agreed quantity restores the agreed price. All three
    * are null on every other line.
    *
-   * Feature 154 (FR-028) reads `agreedQuantity` too: while `quantity` equals
+   * Feature 155 (FR-028) reads `agreedQuantity` too: while `quantity` equals
    * it and the basket still carries its quote source, the line is exempt from
    * the catalogue's order minimums (`isQuoteSeededLineExempt`).
    */

@@ -10,7 +10,7 @@ import {
 } from '../../lib/orderMinimum';
 
 /**
- * Feature 154 / FR-014 (US1 #2, #6; US2 #2) — the product page states the applicable minimum,
+ * Feature 155 / FR-014 (US1 #2, #6; US2 #2) — the product page states the applicable minimum,
  * starts the quantity input at it and does not offer less.
  */
 const noop = (): AddToCartResult => ({ status: 'idle' });

@@ -98,8 +98,8 @@ describe('POST /api/v1/cart/from-shopping-list/:shoppingListId', () => {
 });
 
 /**
- * Feature 154, Phase 7 (T049) — quote request → cart goes through the cart's batch
- * (`specs/154-catalog-order-constraints/research.md` R8, R12.5;
+ * Feature 155, Phase 7 (T049) — quote request → cart goes through the cart's batch
+ * (`specs/155-catalog-order-constraints/research.md` R8, R12.5;
  * `contracts/cart-and-checkout-api.md` §5).
  *
  * The quote is created while none of its products has a minimum (and while every
@@ -114,7 +114,7 @@ describe('POST /api/v1/cart/from-shopping-list/:shoppingListId', () => {
  *   × 5) taken off every channel → `not_purchasable` exactly like an unknown
  *   product: no `minimum` (FR-035, US4 #16, threat F1).
  */
-describe('POST /api/v1/cart/from-quote-request/:id — minimums (feature 154) [contract]', () => {
+describe('POST /api/v1/cart/from-quote-request/:id — minimums (feature 155) [contract]', () => {
   const CUSTOMER = { b2b_session: 'stub-customer-session' };
   const RUN = minimumFixtureRun();
   let h: BackendServerHandle;

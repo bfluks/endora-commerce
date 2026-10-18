@@ -44,7 +44,7 @@ export interface CartDroppedLine {
   productId: string;
   productName: string;
   reason: CartDroppedLineReason;
-  /** Feature 154 — the minimum a `below_minimum` line missed. */
+  /** Feature 155 — the minimum a `below_minimum` line missed. */
   minimum?: number;
 }
 
@@ -82,7 +82,7 @@ export class CartConversionService {
      * here, before the batch, into the `not_purchasable` branch — where a line
      * whose product has gone already lands. The batch's own resolver refuses
      * such a line with the same `404`, which maps to the same reason
-     * (feature 154, R12.5).
+     * (feature 155, R12.5).
      */
     private readonly channelMembership: SalesChannelMembershipPort,
   ) {}
@@ -105,7 +105,7 @@ export class CartConversionService {
       throw new HttpError(422, ERROR_CODES.CART_EMPTY, 'cart_empty');
     }
 
-    // Feature 154 (FR-026, research R13.1) — a packaging line travels by its
+    // Feature 155 (FR-026, research R13.1) — a packaging line travels by its
     // unit's id, and only while the unit still exists: the quote request takes
     // the unit's name and base quantity from the catalogue, so the cart's
     // snapshot is no longer sent. One read over the buyer's own cart lines; a
@@ -176,7 +176,7 @@ export class CartConversionService {
    * The QR's `desiredUnitPrice` is intentionally dropped — the cart's
    * unit prices come from the customer's current price list.
    *
-   * Feature 154 (research R8, R12.5) — the lines go in as **one batch**
+   * Feature 155 (research R8, R12.5) — the lines go in as **one batch**
    * (`addItems`, `'report'`), so a product's lines are judged together with the
    * cart against its minimum, and each line's outcome is mapped:
    *   - `below_minimum` → dropped `below_minimum` with the `minimum`;
@@ -192,7 +192,7 @@ export class CartConversionService {
   async createCartFromQuoteRequest(
     qrId: string,
     ctx: CartCustomerContext,
-    /** The request's language, which the batch names a refused product in (feature 154). */
+    /** The request's language, which the batch names a refused product in (feature 155). */
     options: { language?: string } = {},
   ): Promise<CreateCartFromQrResult> {
     const qr = await this.quoteRequests.findById(qrId);

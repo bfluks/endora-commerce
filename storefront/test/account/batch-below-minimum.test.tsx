@@ -12,7 +12,7 @@ import {
 } from '../../lib/batchReport';
 
 /**
- * Feature 154, T121 — the batch paths' reports name the minimum (FR-011, US4): the buyer's
+ * Feature 155, T121 — the batch paths' reports name the minimum (FR-011, US4): the buyer's
  * quick-order preview, the quick-order build's `rejected[]`, the shopping list's `skipped[]`
  * and the quote → cart dropped lines. PL and EN.
  */

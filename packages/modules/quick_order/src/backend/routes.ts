@@ -84,7 +84,7 @@ export async function registerQuickOrderRoutes(
             quantity: item.quantity,
           })),
         },
-        // Feature 154 — the buyer's build: no actor, so a quote request is
+        // Feature 155 — the buyer's build: no actor, so a quote request is
         // judged by the buyer's rules (FR-012).
         { language: preferredLanguageOf(request.headers['accept-language']) },
       );

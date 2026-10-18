@@ -144,12 +144,12 @@ describe('Shopping list CRUD + convert-to-cart', () => {
   });
 
   /**
-   * Feature 154, Phase 9 (T068) — list → cart adds what it may and skips the
+   * Feature 155, Phase 9 (T068) — list → cart adds what it may and skips the
    * lines below a minimum with the minimum (US4 #3), on both routes that reach
    * `convertToCart`; a line whose product is now hidden from the buyer is
    * skipped exactly like a deleted product (FR-035, US4 #16, threat F1).
    */
-  describe('154 — order minimums', () => {
+  describe('155 — order minimums', () => {
     const COOKIE = { b2b_session: 'stub-customer-session' };
     const RUN = minimumFixtureRun();
     let A: MinimumProductFixture;

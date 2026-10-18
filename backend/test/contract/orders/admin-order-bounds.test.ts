@@ -22,7 +22,7 @@ import {
 } from '../../helpers/order-minimum-fixture.js';
 
 /**
- * Feature 154, Phase 8a (T057a; FR-038, US4 #17; research R20; threat F4) — admin
+ * Feature 155, Phase 8a (T057a; FR-038, US4 #17; research R20; threat F4) — admin
  * create-order and its preview refuse more than `ADMIN_ORDER_MAX_ITEMS` items whole,
  * `422 VALIDATION_FAILED` with `details: { code: 'too_many_items', maximum }`, as
  * their first step: no catalogue read and no cart write happens. The schemas stay
@@ -44,7 +44,7 @@ interface CartServiceSlice {
   clearForCustomer(...args: unknown[]): Promise<unknown>;
 }
 
-describe('154 — admin create-order and preview: the item bound [contract]', () => {
+describe('155 — admin create-order and preview: the item bound [contract]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   let channelId = '';

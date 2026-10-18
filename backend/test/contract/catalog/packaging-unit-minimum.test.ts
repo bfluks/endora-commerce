@@ -10,8 +10,8 @@ import {
 } from '../../helpers/test-server.js';
 
 /**
- * Feature 154, Phase 5 (T029) — `minOrderUnits` on packaging units
- * (`specs/154-catalog-order-constraints/contracts/catalog-api.md` §3).
+ * Feature 155, Phase 5 (T029) — `minOrderUnits` on packaging units
+ * (`specs/155-catalog-order-constraints/contracts/catalog-api.md` §3).
  *
  * The admin routes accept, clear and echo it and still refuse an unknown key;
  * the audit carries it; and `CatalogPackagingPort` — which in-process callers
@@ -19,7 +19,7 @@ import {
  * working without the key and refuses an out-of-range value in the service
  * (FR-002, threat F5).
  */
-describe('154 — packaging-unit minOrderUnits [contract]', () => {
+describe('155 — packaging-unit minOrderUnits [contract]', () => {
   let h: BackendServerHandle;
   const adminCookie = { b2b_session: 'stub-admin-session' };
   const RUN = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;

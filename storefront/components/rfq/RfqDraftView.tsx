@@ -40,7 +40,7 @@ import { tForLocale } from '../../lib/i18n/messages';
  * proposals are not sent — they stay in the browser draft, untouched (spec
  * Assumption). The API refuses a proposal sent anyway (FR-022).
  *
- * Feature 154 (FR-032): the draft mirrors the cart for the pieces minimum. The draft stores no
+ * Feature 155 (FR-032): the draft mirrors the cart for the pieces minimum. The draft stores no
  * minimum (a line may predate one, US4 #14), so after hydration the view reads each product's
  * **current** minimum through the `readDraftMinimums` server action; until it answers — or for
  * a product it cannot read — a line has no floor beyond 1, and the API refusal at submission
@@ -78,7 +78,7 @@ export function RfqDraftView(props: {
     };
   }, []);
 
-  // Feature 154 — re-read the minimums whenever the set of products changes (an add in another
+  // Feature 155 — re-read the minimums whenever the set of products changes (an add in another
   // tab included), not on every quantity edit. A stale answer is dropped on cleanup.
   const slugKey = useMemo(
     () => [...new Set(items.map((i) => i.slug).filter((s) => s !== ''))].sort().join('\n'),
@@ -329,10 +329,10 @@ export function DraftLine({
 }: {
   line: RfqDraftItem;
   t: Strings;
-  /** Request locale for the minimum's wording (feature 154). */
+  /** Request locale for the minimum's wording (feature 155). */
   locale?: string;
   /**
-   * Feature 154 (FR-032) — the product's current pieces minimum, read by the view; `null` while
+   * Feature 155 (FR-032) — the product's current pieces minimum, read by the view; `null` while
    * unknown or when there is none. The input floors at it and a line below it says so.
    */
   minimum?: number | null;
@@ -347,7 +347,7 @@ export function DraftLine({
   const effectiveUnit = effectiveUnitPrice(line, proposalsAllowed);
   const currency = line.unitPrice?.currency ?? 'PLN';
   const lineTotal = effectiveUnit !== null ? effectiveUnit * line.quantity : null;
-  // Feature 154 — the floor is the minimum itself, also for a line already below it: the input
+  // Feature 155 — the floor is the minimum itself, also for a line already below it: the input
   // then reads as invalid (`aria-invalid`), "−" is off and "+" or the fix lifts it to the floor.
   const floor = clampDraftQuantity(1, minimum);
   const below = floor > 1 && line.quantity < floor;

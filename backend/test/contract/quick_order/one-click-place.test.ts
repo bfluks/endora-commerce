@@ -300,7 +300,7 @@ describe('POST /api/v1/quick-order/one-click — placement', () => {
   });
 
   /**
-   * Feature 154, Phase 9 (T067) — US4 #2: one-click without a quantity orders
+   * Feature 155, Phase 9 (T067) — US4 #2: one-click without a quantity orders
    * the product's minimum; an explicit quantity below it is refused by the add
    * path; and with the add path replaced by a double that admits the line
    * unchecked, placement still refuses it [F3].
@@ -308,7 +308,7 @@ describe('POST /api/v1/quick-order/one-click — placement', () => {
    * The seeded product 101 carries the minimum only inside the case that needs
    * a real placement (it has stock), and gets its previous value back.
    */
-  describe('154 — order minimums', () => {
+  describe('155 — order minimums', () => {
     const RUN = minimumFixtureRun();
     let A: MinimumProductFixture;
     const CTX = { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID };

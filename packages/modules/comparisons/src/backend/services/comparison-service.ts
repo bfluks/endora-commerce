@@ -611,7 +611,7 @@ export class ComparisonService {
         price,
         available:
           p.deletedAt == null && p.archivedAt == null && p.status === 'active',
-        // Feature 154 (FR-014) — emitted for the types the minimum applies to only.
+        // Feature 155 (FR-014) — emitted for the types the minimum applies to only.
         minOrderQuantity: isOrderMinimumEligibleType(p.type) ? p.minOrderQuantity : null,
         addedAt: row.addedAt.toISOString(),
       };

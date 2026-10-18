@@ -24,7 +24,7 @@ import {
 } from '../../helpers/order-minimum-fixture.js';
 
 /**
- * Feature 154, Phase 8a (T057) — admin create-order builds its transient basket
+ * Feature 155, Phase 8a (T057) — admin create-order builds its transient basket
  * through the batch (`CartWritePort.addItems`, `onLineError: 'throw'`) and refuses
  * the whole request when any line is below a minimum (US4 #6, FR-009), judging
  * the product's total across its lines (D1). A product the customer may not see
@@ -47,7 +47,7 @@ interface CartServiceSlice {
   getOrCreateForCustomer(ctx: typeof CTX): Promise<unknown>;
 }
 
-describe('154 — admin create-order refuses below-minimum lines through the batch [integration]', () => {
+describe('155 — admin create-order refuses below-minimum lines through the batch [integration]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   let channelId = '';

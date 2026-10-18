@@ -14,7 +14,7 @@ import { clampQuantity, minimumStatement, quoteAddQuantity } from '../../lib/ord
  * confirmation. The header badge updates via the `b2b:rfq-draft:changed`
  * event the draft store dispatches.
  *
- * Feature 154 (FR-032, US4 #13): with the product's pieces minimum the input starts at it and
+ * Feature 155 (FR-032, US4 #13): with the product's pieces minimum the input starts at it and
  * does not offer less, and the add never puts fewer pieces in the draft — the draft mirrors the
  * cart. What was typed is kept as typed and normalised on blur, as on the product page.
  */
@@ -28,7 +28,7 @@ export function AddToRfqButton(props: {
   /** Locale for the button copy (defaults to Polish, matching the storefront). */
   locale?: string;
   className?: string;
-  /** Feature 154 — the product's pieces minimum; `null`/absent = none. */
+  /** Feature 155 — the product's pieces minimum; `null`/absent = none. */
   minOrderQuantity?: number | null | undefined;
 }): ReactNode {
   const pl = (props.locale ?? 'pl').startsWith('pl');

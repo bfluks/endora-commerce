@@ -33,7 +33,7 @@ import {
 } from '../../helpers/order-minimum-fixture.js';
 
 /**
- * Feature 154, Phase 8 (T056) — placement refuses a basket with a line below a
+ * Feature 155, Phase 8 (T056) — placement refuses a basket with a line below a
  * minimum, before any side effect, and the checkout preview reports the same
  * lines (FR-008, FR-037; US1 #5, US2 #7, US4 #4, US4 #7; research R19; threat F3).
  *
@@ -74,7 +74,7 @@ interface BelowMinimumLine {
   packagingUnitName?: string;
 }
 
-describe('154 — placement and the checkout preview refuse below-minimum lines [integration]', () => {
+describe('155 — placement and the checkout preview refuse below-minimum lines [integration]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   let previousMinimumOf101: number | null = null;
