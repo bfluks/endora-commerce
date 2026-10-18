@@ -593,7 +593,8 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     await user.type(quick, 'SKU-A07');
     await user.click(await screen.findByRole('option', { name: /Widget 07/ }));
 
-    expect(lineNames()).toEqual(['Widget 01', 'Widget 07']);
+    // The line is added after the click settles; asserting at once raced the render.
+    await waitFor(() => expect(lineNames()).toEqual(['Widget 01', 'Widget 07']));
     expect(within(lineRow('Widget 07')).getByText('SKU-A07')).toBeInTheDocument();
     expect(qtyInput('Widget 07')).toHaveValue('1');
     expect(screen.queryByRole('dialog')).toBeNull();

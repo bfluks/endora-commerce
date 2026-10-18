@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it } from 'vitest';
+import { act, useState, type ReactNode } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
 import { DraftLine, strings } from '../../components/rfq/RfqDraftView';
 import { AddToRfqButton } from '../../components/rfq/AddToRfqButton';
@@ -172,5 +175,77 @@ describe('AddToRfqButton — the quote CTA shown when prices are hidden (US4 #13
     const input = html.match(/<input[^>]*type="number"[^>]*>/)?.[0] ?? '';
     expect(input).toContain('min="1"');
     expect(input).toContain('value="1"');
+  });
+});
+
+/**
+ * Round B review — FR-032 interactively, on a line held by a parent the way `RfqDraftView`
+ * holds it: "Set to 10 pcs" lifts a line below the minimum to it, and a quantity typed below
+ * the floor is normalised to the floor on blur. jsdom, no testing library.
+ */
+describe('DraftLine — "Set to N" and blur normalisation (jsdom)', () => {
+  let root: Root | null = null;
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    document.body.innerHTML = '';
+  });
+
+  function Harness({ initial }: { initial: number }): ReactNode {
+    const [quantity, setQuantity] = useState(initial);
+    return (
+      <DraftLine
+        line={{ ...line, quantity }}
+        t={strings(false)}
+        locale="en-US"
+        minimum={10}
+        proposalsAllowed
+        onQty={setQuantity}
+        onProposedPrice={(): void => undefined}
+        onRemove={(): void => undefined}
+      />
+    );
+  }
+
+  async function mount(initial: number): Promise<HTMLElement> {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    await act(async () => {
+      root = createRoot(host);
+      root.render(<Harness initial={initial} />);
+    });
+    return host;
+  }
+
+  const quantityInput = (host: HTMLElement): HTMLInputElement =>
+    host.querySelector<HTMLInputElement>('input[aria-label="Quantity"]')!;
+
+  it('"Set to 10 pcs" lifts a line of 3 to 10 and clears the warning', async () => {
+    const host = await mount(3);
+    expect(quantityInput(host).getAttribute('aria-invalid')).toBe('true');
+    const fix = Array.from(host.querySelectorAll('button')).find((b) => b.textContent === 'Set to 10 pcs');
+    expect(fix).toBeDefined();
+    await act(async () => {
+      fix!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(quantityInput(host).value).toBe('10');
+    expect(quantityInput(host).hasAttribute('aria-invalid')).toBe(false);
+    expect(host.textContent).not.toContain('Below the minimum');
+  });
+
+  it('a quantity typed below the floor is kept while typing and lifted to the floor on blur', async () => {
+    const host = await mount(12);
+    const input = quantityInput(host);
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setValue.call(input, '4');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(quantityInput(host).value).toBe('4');
+    await act(async () => {
+      input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    });
+    expect(quantityInput(host).value).toBe('10');
   });
 });

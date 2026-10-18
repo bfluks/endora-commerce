@@ -465,7 +465,8 @@ describe('OrderCreatePage — Browse products and the quick search (US1)', () =>
     await user.type(quick, 'SKU-A07');
     await user.click(await screen.findByRole('option', { name: /Widget 07/ }));
 
-    expect(lineNames()).toEqual(['Widget 01', 'Widget 07']);
+    // The line is added after the click settles; asserting at once raced the render.
+    await waitFor(() => expect(lineNames()).toEqual(['Widget 01', 'Widget 07']));
     expect(within(lineRow('Widget 07')).getByText('SKU-A07')).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
     await waitFor(() =>

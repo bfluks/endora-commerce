@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it } from 'vitest';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
 import { ProductBuyActions } from '../../components/ProductBuyActions';
 import type { AddToCartResult } from '../../lib/cartAddState';
@@ -137,5 +140,76 @@ describe('ProductBuyActions — minimum (SSR)', () => {
     expect(html).toMatch(/<input[^>]*id="buy-qty-p1"[^>]*value="1"/);
     expect(html).not.toContain('Minimum order');
     expect(html).not.toContain('aria-describedby="buy-min-p1"');
+  });
+});
+
+/**
+ * Round B review — FR-014 interactively: the quantity input keeps what the buyer types and
+ * normalises it on blur — below the floor is lifted to the floor, an empty box goes back to it,
+ * a quantity above it stays — and the hidden `quantity` the cart form posts follows. jsdom, no
+ * testing library (none is a storefront dependency): React's `onChange` listens to `input`
+ * and its `onBlur` to `focusout`.
+ */
+describe('ProductBuyActions — blur normalises the quantity (jsdom)', () => {
+  let root: Root | null = null;
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    document.body.innerHTML = '';
+  });
+
+  async function mount(): Promise<HTMLElement> {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    await act(async () => {
+      root = createRoot(host);
+      root.render(
+        <ProductBuyActions
+          productId="p1"
+          productSlug="p-slug"
+          productName="Product 1"
+          showCart
+          showQuote={false}
+          minOrderQuantity={10}
+          locale="en-US"
+          addToCartAction={noop}
+          addToCartLabel="Add to cart"
+        />,
+      );
+    });
+    return host;
+  }
+
+  async function type(input: HTMLInputElement, value: string): Promise<void> {
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setValue.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  async function blur(input: HTMLInputElement): Promise<void> {
+    await act(async () => {
+      input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    });
+  }
+
+  const posted = (host: HTMLElement): string | null =>
+    host.querySelector<HTMLInputElement>('input[type="hidden"][name="quantity"]')?.value ?? null;
+
+  it.each([
+    ['3', '10', '10'],
+    ['', '10', '10'],
+    ['15', '15', '15'],
+  ])('typed %j reads %j after blur and posts %j', async (typed, shown, sent) => {
+    const host = await mount();
+    const input = host.querySelector<HTMLInputElement>('#buy-qty-p1')!;
+    expect(input.value).toBe('10');
+    await type(input, typed);
+    expect(input.value).toBe(typed);
+    await blur(input);
+    expect(input.value).toBe(shown);
+    expect(posted(host)).toBe(sent);
   });
 });

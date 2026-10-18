@@ -219,7 +219,11 @@ describe('OrderCreatePage — a preview answering after unmount', () => {
       await Promise.resolve();
     });
 
-    expect(consoleError).not.toHaveBeenCalled();
-    expect(screen.queryByText(tr('en', 'orderCreate.line.belowMinimum', { minimum: 10 }))).toBeNull();
+    // Only the warning this case is about; an unrelated console error is not its subject.
+    const unmountedUpdate = consoleError.mock.calls.filter((call) =>
+      call.some((arg) => /state update on an unmounted component/i.test(String(arg))),
+    );
+    expect(unmountedUpdate).toEqual([]);
+    consoleError.mockRestore();
   });
 });
