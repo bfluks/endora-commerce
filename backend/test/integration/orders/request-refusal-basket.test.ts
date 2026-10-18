@@ -6,7 +6,7 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { AdminUser, Product } from '../../helpers/package-entities.js';
+import { AdminUser, PriceDisplayModeOverride, Product } from '../../helpers/package-entities.js';
 import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 import {
   SEED_ADDRESS_BILLING_ID,
@@ -52,6 +52,10 @@ describe('155 — a refused order request leaves the basket alone and names the 
   let A: MinimumProductFixture;
   let D: MinimumProductFixture;
   let K: MinimumProductFixture;
+  /** Visible and sold, but with no price: refused at the write step (`CART_PRODUCT_UNPRICED`). */
+  let U: MinimumProductFixture;
+  /** Visible, sold and priced, but quote-only (`displayMode: 'none'`): refused at the write step. */
+  let Q: MinimumProductFixture;
 
   const write = () => (h.container.cradle as unknown as { cartWritePort: CartWritePort }).cartWritePort;
 
@@ -132,7 +136,12 @@ describe('155 — a refused order request leaves the basket alone and names the 
     });
     D = await createMinimumProduct(em, { sku: `RRB-D-${RUN}`, nameEn: `Dowel ${RUN}`, namePl: `Kołek ${RUN}`, channelIds: channels });
     K = await createMinimumProduct(em, { sku: `RRB-K-${RUN}`, nameEn: `Keep ${RUN}`, namePl: `Zachowaj ${RUN}`, channelIds: channels });
-    await em.nativeUpdate(Product, { id: { $in: [A.id, D.id, K.id] } }, { manageStock: false });
+    U = await createMinimumProduct(em, { sku: `RRB-U-${RUN}`, nameEn: `Unpriced ${RUN}`, namePl: `Bez ceny ${RUN}`, channelIds: channels });
+    Q = await createMinimumProduct(em, { sku: `RRB-Q-${RUN}`, nameEn: `On request ${RUN}`, namePl: `Na zapytanie ${RUN}`, channelIds: channels });
+    await em.nativeUpdate(Product, { id: { $in: [A.id, D.id, K.id, U.id, Q.id] } }, { manageStock: false });
+    await em.nativeUpdate(Product, { id: U.id }, { attributeValues: {} });
+    em.create(PriceDisplayModeOverride, { scope: 'product', targetId: Q.id, mode: 'none' });
+    await em.flush();
 
     const minted = await h.app.inject({
       method: 'POST',
@@ -185,6 +194,34 @@ describe('155 — a refused order request leaves the basket alone and names the 
       expect(res.statusCode, res.body).toBe(422);
       expect(errorOf(res).code).toBe(ERROR_CODES.PRODUCT_BELOW_MINIMUM_QUANTITY);
       expect(errorOf(res).details).toMatchObject({ productId: A.id, total: 5, lines: [{ index: 1 }] });
+      expect(await basket()).toEqual(before);
+    });
+
+    /**
+     * Round B, item 3 — a refusal raised by the write step (here: no price) used
+     * to arrive after the basket had been cleared and D written, leaving the
+     * customer a basket of D × 2. The write step's refusals are judged before
+     * the basket is replaced now.
+     */
+    it('admin create: D × 2 + an unpriced U × 1 is refused and the basket is still K × 3', async () => {
+      const before = await seedBasket();
+      const res = await adminCreate([
+        { productId: D.id, quantity: 2 },
+        { productId: U.id, quantity: 1 },
+      ]);
+      expect(res.statusCode, res.body).toBe(422);
+      expect(errorOf(res).code).toBe(ERROR_CODES.CART_PRODUCT_UNPRICED);
+      expect(await basket()).toEqual(before);
+    });
+
+    it('API intake: D × 2 + a quote-only Q × 1 is refused and the basket is still K × 3', async () => {
+      const before = await seedBasket();
+      const res = await intake([
+        { sku: D.sku, quantity: 2 },
+        { sku: Q.sku, quantity: 1 },
+      ]);
+      expect(res.statusCode, res.body).toBe(400);
+      expect(errorOf(res).code).toBe(ERROR_CODES.CART_PRODUCT_QUOTE_ONLY);
       expect(await basket()).toEqual(before);
     });
 

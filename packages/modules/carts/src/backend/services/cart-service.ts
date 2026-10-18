@@ -367,8 +367,14 @@ export class CartService {
       // Step 2 — the request alone: the basket it replaces counts toward nothing.
       rejections = await this.#judgeBatch({ sourceQuoteRequestId: null }, [], resolvedLines);
       this.#throwIfBelowMinimum(rejections, resolvedLines, options);
-      // Only now, with nothing left to refuse the request for a minimum, is the
-      // customer's basket replaced.
+      // Round B (item 3) — the write step's own refusals (no price, quote-only)
+      // are judged here too, before the basket is cleared, so a request refused
+      // for them also leaves the basket as it was.
+      if (options.onLineError === 'throw') {
+        await this.#assertBatchOrderable(em, actor, resolvedLines, rejections);
+      }
+      // Only now, with nothing left to refuse the request for, is the customer's
+      // basket replaced.
       await this.clearForCustomer(actor.customer!);
       cart = await this.#getOrCreateForCustomerOn(em, actor.customer!);
     } else {
@@ -427,6 +433,41 @@ export class CartService {
       items,
       outcomes: Array.from(outcomes.values()).sort((a, b) => a.index - b.index),
     };
+  }
+
+  /**
+   * The write step's pricing refusals, asked before a `replaceExisting` batch
+   * clears the basket (`'throw'` mode): every line to be written is priced at
+   * the quantity its write will price it at — the running total of its
+   * `(product, variant, unit)` key, as `#writeLine` merges a repeated line into
+   * the first. The basket being written is a fresh one, so there is no agreed
+   * line to price at and no line cap to meet (a batch holds at most
+   * `CART_MAX_LINES` lines). Refuses with exactly the refusal the write would
+   * raise. A price edited between this and the write can still refuse a line
+   * after the clear; placement prices the basket again either way.
+   */
+  async #assertBatchOrderable(
+    em: EntityManager,
+    actor: { customer?: CustomerContext; anonymousToken?: string },
+    resolvedLines: ReadonlyArray<{ index: number; input: CartBatchLineInput; resolved: ResolvedCartLine }>,
+    rejections: ReadonlyMap<number, CartBatchRejection>,
+  ): Promise<void> {
+    const pricingCtx = await this.#linePricing.contextFor(em, {
+      organizationId: actor.customer?.organizationId ?? null,
+      signedIn: actor.customer !== undefined,
+    });
+    const quantities = new Map<string, number>();
+    for (const { index, input, resolved } of resolvedLines) {
+      if (rejections.has(index)) continue;
+      const key = `${resolved.product.id}|${input.variantId ?? ''}|${input.packagingUnitId ?? ''}`;
+      const quantity = (quantities.get(key) ?? 0) + resolved.effectiveQuantity;
+      quantities.set(key, quantity);
+      await this.#orderablePriceOrRefuse(pricingCtx, {
+        product: resolved.product,
+        variantId: input.variantId ?? null,
+        quantity,
+      });
+    }
   }
 
   /**
