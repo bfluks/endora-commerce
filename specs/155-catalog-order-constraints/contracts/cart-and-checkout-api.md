@@ -158,6 +158,10 @@ cart (FR-011 (a), P1). Rows rejected for an existing reason count toward no tota
 
 Request/response unchanged. Default quantity becomes the product's pieces minimum when the product is
 `simple` / `configurable` and has a minimum > 1 (FR-010); otherwise 1.
+The line is seeded through §4's `addItems` with `onLineError: 'throw'`, `onBelowMinimum: 'throw'` and
+`replaceExisting` (round C), so a refused line answers §4's batch refusal — the minimum code with
+`details.lines[]` keyed by `index` (here always `0`) — and leaves the buyer's basket as it was. A
+refusal at placement, after the seed, leaves the basket holding the one-click line.
 
 ## 8. Checkout preview — `POST /api/v1/orders/preview-total`
 
