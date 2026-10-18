@@ -8,6 +8,7 @@ import {
   type CatalogProductRecord,
   type LinePricePort,
   type OrganizationDetailsPort,
+  type ProductDisplayModePort,
 } from '@endora-commerce/contracts';
 import {
   ModuleDisabledError,
@@ -174,6 +175,8 @@ function rig(
     filterEntityIdsInChannel: async (channelId: string, _kind: string, ids: string[]) =>
       ids.filter((id) => (options.channels?.[channelId] ?? []).includes(id)),
   } as unknown as SalesChannelMembershipPort;
+  // Asked only when no price list holds the product (issue #236).
+  const displayModes: ProductDisplayModePort = { resolveDisplayMode: async () => 'gross_only' };
   const audits: unknown[] = [];
   const auditService = { record: async (entry: unknown) => void audits.push(entry) };
 
@@ -183,6 +186,7 @@ function rig(
     catalog as unknown as CatalogProductReadPort,
     organizations,
     membership,
+    displayModes,
     undefined,
     auditService as never,
   );
