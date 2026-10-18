@@ -4,7 +4,8 @@
 **Created**: 2026-10-13 (clarified draft); revised 2026-10-15
 **Status**: Clarified — ready for plan (amended after analyze, 2026-10-15). Clarify sessions
 2026-10-13 and 2026-10-15 (two rounds, Q0–Q10, then the analyze and threat-model rulings P1–P4)
-closed; no open questions remain. Amended 2026-10-18 (FR-039, owner ruling 2026-10-18).
+closed; no open questions remain. Amended 2026-10-18 (FR-039, owner ruling 2026-10-18;
+FR-020 complaint refund of a line not returnable at purchase, owner ruling R1).
 **Issues**: #285, #294
 **Input**: Product owner's request, summarised in English.
 
@@ -646,3 +647,4 @@ notes citing the draft's numbers stay valid. New requirements from the re-measur
 
 - Q: Must "Submit for approval" on an organization cart be refused while a line is below its minimum? → A (owner ruling 2026-10-18): yes, as proceeding to checkout is; the storefront blocks the control and the server refuses the submit (FR-039).
 - Q: At submit, is a quote-seeded line's exemption taken at face value, as the cart view does, or only once the quote source is confirmed valid, as at placement? → A (owner ruling 2026-10-18): only once confirmed valid, exactly as at the checkout preview and placement (FR-036, FR-037); a basket whose quote has lapsed is refused at submit with placement's minimum refusal (FR-039). The cart read model still trusts the mark (Follow-up 3 stands).
+- Q: A complaint may name a line that was not returnable at purchase (FR-020); what does it refund by default? → A (owner ruling R1): A complaint line recorded as not returnable at purchase is stored with an approved refund of 0; its default refund stays the amount paid (the settlement cap); the admin case view marks it 'Not returnable at purchase'; nothing pays out automatically.
