@@ -132,6 +132,41 @@ describe('PackagingUnitsEditor — minimum units (155)', () => {
     expect(patchSpy).not.toHaveBeenCalled();
   });
 
+  /**
+   * Round B UI review — a refused value stays in the uncontrolled cell, so its
+   * invalid state must stay with it: another save on the card (here a rename)
+   * used to clear `aria-invalid` and the message while `0` was still in the box.
+   * It is cleared once the value changes.
+   */
+  it('keeps a refused minimum marked invalid across another save, until its value changes', async () => {
+    renderEditor();
+    const user = userEvent.setup();
+    const input = await minimumCell();
+    await user.clear(input);
+    await user.type(input, '0');
+    await user.tab();
+    const messageText = 'The minimum must be a whole number from 1 to 1000000, or empty for none.';
+    await screen.findByText(messageText);
+
+    const loadsBefore = getSpy.mock.calls.length;
+    const name = screen.getByDisplayValue('Paleta');
+    await user.clear(name);
+    await user.type(name, 'Pallet');
+    await user.tab();
+    await waitFor(() => expect(patchSpy).toHaveBeenCalledWith(`${BASE}/${UNIT.id}`, { name: 'Pallet' }));
+    await waitFor(() => expect(getSpy.mock.calls.length).toBeGreaterThan(loadsBefore));
+
+    const cell = input;
+    expect(cell).toHaveValue(0);
+    expect(cell).toHaveAttribute('aria-invalid', 'true');
+    const message = screen.getByText(messageText);
+    expect(cell.getAttribute('aria-describedby')).toContain(message.id);
+
+    await user.clear(cell);
+    await user.type(cell, '4');
+    expect(cell).not.toHaveAttribute('aria-invalid');
+  });
+
   it('sends minOrderUnits with a new unit only when one is entered', async () => {
     getSpy.mockResolvedValue({ data: [] });
     postSpy.mockResolvedValue({ data: UNIT });

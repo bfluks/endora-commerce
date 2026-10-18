@@ -10,9 +10,9 @@ import {
   type RejectedQuickOrderItem,
 } from '../../../lib/api/quick-order';
 import {
-  decodeReport,
-  encodeReport,
-  isBuildRejectedLine,
+  decodeBuildRejections,
+  encodeBuildRejections,
+  reportMoreText,
   quickOrderBuildOutcome,
   quickOrderBuildRejectionText,
   quickOrderRejectionLabel,
@@ -85,8 +85,11 @@ export default async function QuickOrderPage({
   const { ctx, locale } = await getServerContext();
   const t = tForLocale(locale);
   // Feature 155 (FR-011 (b)) — the lines the cart build left out, below a minimum.
-  const notAdded = sp.built === 'cart' ? decodeReport(sp.notAdded).filter(isBuildRejectedLine) : [];
-  const sentCount = Math.max(Number.parseInt(sp.sent ?? '', 10) || 0, notAdded.length);
+  // Carried capped (the first lines plus a count), so the URL stays bounded.
+  const notAddedReport = sp.built === 'cart' ? decodeBuildRejections(sp.notAdded) : { lines: [], more: 0 };
+  const notAdded = notAddedReport.lines;
+  const notAddedCount = notAdded.length + (notAdded.length > 0 ? notAddedReport.more : 0);
+  const sentCount = Math.max(Number.parseInt(sp.sent ?? '', 10) || 0, notAddedCount);
   const searchResults = searchQuery
     ? await searchProducts(session, searchQuery, ctx).catch(() => [])
     : [];
@@ -120,16 +123,17 @@ export default async function QuickOrderPage({
           aria-labelledby="quick-order-not-added"
           className="my-[12px] rounded-md border border-warn bg-warn-soft px-[16px] py-[12px] text-fg"
         >
-          <p className="m-0 mb-1 font-semibold">{quickOrderBuildOutcome(sentCount, notAdded.length, locale)}</p>
+          <p className="m-0 mb-1 font-semibold">{quickOrderBuildOutcome(sentCount, notAddedCount, locale)}</p>
           <h3 id="quick-order-not-added" className="m-0 mb-1 text-[14px] font-semibold">
             {t('quickOrder.build.rejectedHeading')}
           </h3>
           <ul className="m-0 mb-2 pl-5 text-[13px]">
             {notAdded.map((line, index) => (
-              <li key={`${line.productId}:${index}`}>{quickOrderBuildRejectionText(line, locale)}</li>
+              <li key={index}>{quickOrderBuildRejectionText(line, locale)}</li>
             ))}
+            {notAddedReport.more > 0 ? <li>{reportMoreText(notAddedReport.more, locale)}</li> : null}
           </ul>
-          {sentCount > notAdded.length ? <Link href="/cart">{t('quickOrder.build.openCart')}</Link> : null}
+          {sentCount > notAddedCount ? <Link href="/cart">{t('quickOrder.build.openCart')}</Link> : null}
         </section>
       ) : null}
       {sp.built === 'quote' ? (
@@ -505,7 +509,7 @@ async function confirmAction(formData: FormData): Promise<void> {
     const params = new URLSearchParams({
       built: 'cart',
       sent: String(preview!.recognized.length),
-      notAdded: encodeReport(rejected),
+      notAdded: encodeBuildRejections(rejected),
     });
     redirect(`/quick-order?${params.toString()}`);
   }

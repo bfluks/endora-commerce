@@ -207,7 +207,7 @@ export function ComparisonTable(props: {
                       productId={p.id}
                       disabled={!p.available}
                       minOrderQuantity={p.minOrderQuantity ?? null}
-                      {...(props.locale ? { locale: props.locale } : {})}
+                      locale={locale}
                     />
                     <a href={`/p/${p.slug}`} className="btn btn--outline btn--sm">
                       Karta produktu

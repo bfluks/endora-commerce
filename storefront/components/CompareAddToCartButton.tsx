@@ -31,13 +31,16 @@ export function CompareAddToCartButton(props: {
   disabled?: boolean;
   /** Feature 155 — the product's pieces minimum; `null`/absent = none (adds 1). */
   minOrderQuantity?: number | null | undefined;
-  /** Request locale for the minimum statement. */
-  locale?: string | undefined;
+  /**
+   * The comparison table's resolved locale, for the minimum statement. Required: the button
+   * and the table once fell back to different locales.
+   */
+  locale: string;
 }): ReactNode {
   const statement = minimumStatement(
     { minOrderQuantity: props.minOrderQuantity },
     null,
-    props.locale ?? 'pl-PL',
+    props.locale,
   );
   const statementId = `compare-min-${props.productId}`;
   const [busy, setBusy] = useState(false);

@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { CartDroppedLinesBanner } from '../../components/CartDroppedLinesBanner';
 import {
-  decodeReport,
+  REPORT_CAP,
+  decodeBuildRejections,
+  decodeConversionSkips,
   droppedBelowMinimumReason,
-  encodeReport,
+  encodeBuildRejections,
+  encodeConversionSkips,
+  reportMoreText,
   quickOrderBuildOutcome,
   quickOrderBuildRejectionText,
   quickOrderRejectionLabel,
@@ -62,16 +66,58 @@ describe('quick-order build rejected[] (FR-011 (b))', () => {
     expect(quickOrderBuildOutcome(2, 0, 'en-US')).toBe('Cart built from your import: 2 of 2 lines added.');
   });
 
-  it('round-trips through the redirect URL', () => {
-    const encoded = encodeReport([pieces]);
+  it('round-trips through the redirect URL, carrying only the five fields the page words', () => {
+    const encoded = encodeBuildRejections([pieces]);
     expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(decodeReport(encoded)).toEqual([pieces]);
-    expect(decodeReport('%%%')).toEqual([]);
-    expect(decodeReport(encodeReport({ not: 'an array' }))).toEqual([]);
+    expect(decodeBuildRejections(encoded)).toEqual({
+      lines: [{ productName: 'Anchor bolt', quantity: 5, kind: 'pieces', minimum: 10 }],
+      more: 0,
+    });
+  });
+
+  it(`caps the carried list at the first ${REPORT_CAP} lines and counts the rest`, () => {
+    const many = Array.from({ length: REPORT_CAP + 5 }, (_, i) => ({ ...pieces, productName: `Bolt ${i}` }));
+    const decoded = decodeBuildRejections(encodeBuildRejections(many));
+    expect(decoded.lines).toHaveLength(REPORT_CAP);
+    expect(decoded.lines[0]!.productName).toBe('Bolt 0');
+    expect(decoded.more).toBe(5);
+    expect(reportMoreText(5, 'en-US')).toBe('+5 more');
+    expect(reportMoreText(5, 'pl-PL')).toBe('+5 więcej');
+  });
+
+  it('keeps the URL bounded: a very long product name is cut', () => {
+    const long = { ...pieces, productName: 'x'.repeat(5000) };
+    const encoded = encodeBuildRejections(Array.from({ length: REPORT_CAP }, () => long));
+    expect(encoded.length).toBeLessThan(12_000);
+  });
+
+  it('reads a hand-edited query defensively: nothing, never an error', () => {
+    const encode = (value: unknown): string => Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+    expect(decodeBuildRejections('%%%')).toEqual({ lines: [], more: 0 });
+    expect(decodeBuildRejections(undefined)).toEqual({ lines: [], more: 0 });
+    expect(decodeBuildRejections(encode([pieces]))).toEqual({ lines: [], more: 0 });
+    expect(decodeBuildRejections(encode({ lines: 'no', more: 3 }))).toEqual({ lines: [], more: 0 });
+    expect(decodeBuildRejections(encode({ lines: [{ productName: 1 }], more: -2 }))).toEqual({ lines: [], more: 0 });
+    expect(decodeBuildRejections('A'.repeat(50_000))).toEqual({ lines: [], more: 0 });
+    // More lines than the cap, written by hand, are cut to the cap.
+    const forged = encode({ lines: Array.from({ length: 40 }, () => pieces), more: 1.5 });
+    const decoded = decodeBuildRejections(forged);
+    expect(decoded.lines).toHaveLength(REPORT_CAP);
+    expect(decoded.more).toBe(0);
   });
 });
 
 describe('shopping list skipped[] (FR-011)', () => {
+  it('carries a capped, projected skip list across the redirect', () => {
+    const skip = { itemId: 'i1', productId: 'p1', reason: 'below_minimum', minimum: 10, extra: 'dropped' };
+    const many = Array.from({ length: REPORT_CAP + 2 }, (_, i) => ({ ...skip, itemId: `i${i}` }));
+    const decoded = decodeConversionSkips(encodeConversionSkips(many));
+    expect(decoded.lines).toHaveLength(REPORT_CAP);
+    expect(decoded.lines[0]).toEqual({ itemId: 'i0', productId: 'p1', reason: 'below_minimum', minimum: 10 });
+    expect(decoded.more).toBe(2);
+    expect(decodeConversionSkips('%%%')).toEqual({ lines: [], more: 0 });
+  });
+
   it('states the minimum of a below_minimum skip', () => {
     expect(shoppingListSkipLabel({ reason: 'below_minimum', minimum: 10 }, 'en-US')).toBe('Below the minimum (10 pcs)');
     expect(shoppingListSkipLabel({ reason: 'below_minimum', minimum: 10 }, 'pl-PL')).toBe('Poniżej minimum (10 szt.)');

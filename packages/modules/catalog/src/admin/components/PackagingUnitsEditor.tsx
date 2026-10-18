@@ -52,7 +52,9 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
     async (fn: () => Promise<void>) => {
       setBusy(true);
       setError(null);
-      setInvalidMinimum(null);
+      // The invalid minimum is not cleared here: the refused value is still in
+      // its (uncontrolled) cell, so its `aria-invalid` and message stay until
+      // that value changes or is saved (round B UI review).
       try {
         await fn();
         await load();
@@ -74,7 +76,6 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
     }
     const minimum = parseOrderMinimumInput(newMin);
     if (!minimum.ok) {
-      setError(minimumMessage());
       setInvalidMinimum('new');
       return;
     }
@@ -100,14 +101,10 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
   const saveMinimum = (unit: PackagingUnitDto, raw: string): void => {
     const parsed = parseOrderMinimumInput(raw);
     if (!parsed.ok) {
-      setError(minimumMessage());
       setInvalidMinimum(unit.id);
       return;
     }
-    if (invalidMinimum === unit.id) {
-      setError(null);
-      setInvalidMinimum(null);
-    }
+    if (invalidMinimum === unit.id) setInvalidMinimum(null);
     if (parsed.value === (unit.minOrderUnits ?? null)) return;
     patch(unit.id, { minOrderUnits: parsed.value });
   };
@@ -116,6 +113,7 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
     invalidMinimum === key ? { 'aria-invalid': true, 'aria-describedby': errorId } : {};
 
   const remove = (id: string): void => {
+    if (invalidMinimum === id) setInvalidMinimum(null);
     void run(async () => {
       await apiClient.delete(`${base}/${id}`);
     });
@@ -137,8 +135,13 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
       <div className="b2b-card__body b2b-col" style={{ gap: 12 }}>
         <div className="b2b-help">{t('packagingUnits.help')}</div>
         <div className="b2b-help">{t('packagingUnits.minOrderUnitsHelp')}</div>
-        {error ? (
+        {invalidMinimum !== null ? (
           <div id={errorId} role="alert" className="b2b-alert b2b-alert--error">
+            {minimumMessage()}
+          </div>
+        ) : null}
+        {error ? (
+          <div role="alert" className="b2b-alert b2b-alert--error">
             {error}
           </div>
         ) : null}
@@ -203,6 +206,9 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
                       disabled={busy}
                       aria-label={t('packagingUnits.col.minOrderUnits')}
                       {...minimumA11y(u.id)}
+                      onChange={() => {
+                        if (invalidMinimum === u.id) setInvalidMinimum(null);
+                      }}
                       onBlur={(e) => saveMinimum(u, e.target.value)}
                     />
                   </td>
@@ -286,7 +292,10 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
             disabled={busy}
             aria-label={t('packagingUnits.col.minOrderUnits')}
             {...minimumA11y('new')}
-            onChange={(e) => setNewMin(e.target.value)}
+            onChange={(e) => {
+              setNewMin(e.target.value);
+              if (invalidMinimum === 'new') setInvalidMinimum(null);
+            }}
           />
           <button
             type="button"

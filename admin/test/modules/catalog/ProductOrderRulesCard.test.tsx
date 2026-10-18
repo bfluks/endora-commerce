@@ -221,3 +221,22 @@ describe('ProductOrderRulesCard (155)', () => {
     expect(screen.getByRole('heading', { name: 'Zasady zamawiania' })).toBeInTheDocument();
   });
 });
+
+/**
+ * Round B UI review (Constitution IX) — the card is built from the admin kit's
+ * `Checkbox`, `Input` and `Button`, not from raw elements with the legacy
+ * `b2b-*` classes, so it follows the kit's focus ring and disabled states.
+ */
+describe('ProductOrderRulesCard — kit primitives', () => {
+  it('declares no raw <input> or <button> element', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const source = readFileSync(
+      resolve(import.meta.dirname, '../../../../packages/modules/catalog/src/admin/components/ProductOrderRulesCard.tsx'),
+      'utf8',
+    );
+    expect(source).not.toMatch(/<input\b/);
+    expect(source).not.toMatch(/<button\b/);
+    expect(source).toMatch(/from '@endora-commerce\/admin-kit\/ui'/);
+  });
+});

@@ -1,5 +1,12 @@
 import type { MessageKey } from '../i18n/messages';
 
+/*
+ * Feature 155 adds `below-minimum` — a basket line placement will refuse (below an order
+ * minimum, or its product gone). It ranks after `moderation` and before the method gaps by the
+ * rule in *Why delivery outranks payment* below: the basket is the most upstream thing
+ * checkout shows — the buyer fixes it in the cart, not here, and no delivery or payment choice
+ * changes the verdict.
+ */
 /**
  * Why checkout cannot be submitted, if it cannot.
  *
@@ -41,12 +48,6 @@ import type { MessageKey } from '../i18n/messages';
  *
  * Pure and exported so the precedence can be unit-tested; the storefront test
  * harness is SSR-only, so the logic lives here rather than inside the component.
- */
-/*
- * Feature 155 adds `below-minimum` — a basket line placement will refuse (below an order
- * minimum, or its product gone). It ranks after `moderation` and before the method gaps by the
- * rule above: the basket is the most upstream thing checkout shows — the buyer fixes it in the
- * cart, not here, and no delivery or payment choice changes the verdict.
  */
 export type PlaceOrderBlock =
   | 'moderation'

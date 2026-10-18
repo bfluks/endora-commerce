@@ -57,6 +57,7 @@ export type MessageKey =
   | 'cart.line.setToMinimum'
   | 'cart.checkoutBlocked'
   | 'cart.approvalBlocked'
+  | 'batchReport.more'
   | 'cart.submitForApprovalFailed'
   | 'cart.dropped.belowMinimum'
   | 'cart.dropped.belowMinimumBare'
@@ -371,6 +372,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'cart.line.setToMinimum': 'Set to {count} pcs',
     'cart.checkoutBlocked': 'Change or remove the flagged lines to continue to checkout.',
     'cart.approvalBlocked': 'Change or remove the flagged lines to submit the cart for approval.',
+    'batchReport.more': '+{count} more',
     'cart.submitForApprovalFailed': 'Could not submit the cart for approval.',
     'cart.dropped.belowMinimum': 'below the minimum order quantity (minimum {minimum})',
     'cart.dropped.belowMinimumBare': 'below the minimum order quantity',
@@ -666,6 +668,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'cart.line.setToMinimum': 'Ustaw {count} szt.',
     'cart.checkoutBlocked': 'Zmień lub usuń oznaczone pozycje, aby przejść do kasy.',
     'cart.approvalBlocked': 'Zmień lub usuń oznaczone pozycje, aby wysłać koszyk do akceptacji.',
+    'batchReport.more': '+{count} więcej',
     'cart.submitForApprovalFailed': 'Nie udało się wysłać koszyka do akceptacji.',
     'cart.dropped.belowMinimum': 'poniżej minimalnej ilości zamówienia (minimum {minimum})',
     'cart.dropped.belowMinimumBare': 'poniżej minimalnej ilości zamówienia',

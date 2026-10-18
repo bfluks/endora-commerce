@@ -80,9 +80,10 @@ interface PreviewMessage {
  * `PRODUCT_NOT_FOUND`, `QUOTE_ONLY` and any code this client does not know read
  * **No price**.
  */
-function unavailableReason(
-  message: PreviewMessage | undefined,
-): { key: string; params?: Record<string, number> } {
+function unavailableReason(message: PreviewMessage | undefined): {
+  key: string;
+  params?: Record<string, number>;
+} {
   if (message?.code === NOT_VISIBLE_CODE) return { key: 'orderCreate.line.notVisible' };
   if (message?.code === NOT_IN_CHANNEL_CODE) return { key: 'orderCreate.line.notInChannel' };
   if (message?.code === BELOW_MINIMUM_CODE) {
@@ -772,7 +773,8 @@ export function OrderCreatePage(): ReactNode {
   for (const line of preview?.lines ?? []) lineByKey.set(`${line.productId}:${line.quantity}`, line);
   const messageByProduct = new Map<string, PreviewMessage>();
   for (const m of preview?.messages ?? []) messageByProduct.set(m.productId, m);
-  const translateReason = (reason: ReturnType<typeof unavailableReason>): string => t(reason.key, reason.params);
+  const translateReason = (reason: ReturnType<typeof unavailableReason>): string =>
+    t(reason.key, reason.params);
   // Only a message about a line still on the form blocks submit: a removed
   // line's message lingers until the next preview answers.
   const hasUnavailable = items.some((row) => messageByProduct.has(row.productId));

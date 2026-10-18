@@ -16,7 +16,12 @@ import { StorefrontApiError } from '../../../../lib/api/client';
 import { getServerContext } from '../../../../lib/server-context';
 import { getProductBySlug } from '../../../../lib/api/catalog';
 import { ClearListButton } from '../../../../components/shopping-lists/ClearListButton';
-import { decodeReport, encodeReport, isConversionSkip, shoppingListSkipLabel } from '../../../../lib/batchReport';
+import {
+  decodeConversionSkips,
+  encodeConversionSkips,
+  reportMoreText,
+  shoppingListSkipLabel,
+} from '../../../../lib/batchReport';
 import { tForLocale } from '../../../../lib/i18n/messages';
 import type { Metadata } from 'next';
 
@@ -84,7 +89,9 @@ export default async function ShoppingListDetailPage({
   const { ctx, locale } = await getServerContext();
   const t = tForLocale(locale);
   // Feature 155 (FR-011) — which rows the conversion left out, and why (a minimum included).
-  const cartSkips = sp.cartAdded !== undefined ? decodeReport(sp.cartSkips).filter(isConversionSkip) : [];
+  // Carried capped (the first rows plus a count), so the URL stays bounded.
+  const cartSkipReport = sp.cartAdded !== undefined ? decodeConversionSkips(sp.cartSkips) : { lines: [], more: 0 };
+  const cartSkips = cartSkipReport.lines;
   const uniqueProductIds = [...new Set(list.items.map((it) => it.productId))];
   const resolvedEntries = await Promise.all(
     uniqueProductIds.map(async (pid): Promise<[string, ResolvedProduct | null]> => {
@@ -130,6 +137,7 @@ export default async function ShoppingListDetailPage({
                 {shoppingListSkipLabel(skip, locale)}
               </li>
             ))}
+            {cartSkipReport.more > 0 ? <li>{reportMoreText(cartSkipReport.more, locale)}</li> : null}
           </ul>
         </section>
       ) : null}
@@ -456,6 +464,6 @@ function cartConversionRedirect(
     cartAdded: String(result.added),
     cartSkipped: String(result.skipped.length),
   });
-  if (result.skipped.length > 0) params.set('cartSkips', encodeReport(result.skipped));
+  if (result.skipped.length > 0) params.set('cartSkips', encodeConversionSkips(result.skipped));
   return `/shopping-lists/${listId}?${params.toString()}`;
 }

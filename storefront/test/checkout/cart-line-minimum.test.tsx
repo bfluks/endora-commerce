@@ -177,3 +177,31 @@ describe('cartBlocksCheckout', () => {
     expect(cartBlocksCheckout({ items: [{ unavailable: false, belowMinimum: null }, {}] })).toBe(false);
   });
 });
+
+/**
+ * Round B UI review — pressing Enter in the quantity input submits the form's
+ * default button, the first submit button in tree order. That was "−", which
+ * posts `step` instead of the typed quantity and is disabled at the floor, so
+ * Enter either stepped down or did nothing. A visually hidden submit with no
+ * `name` now comes first, so Enter posts the typed `quantity`.
+ */
+describe('CartLine — Enter in the quantity input applies the typed quantity', () => {
+  function quantityForm(markup: string): string {
+    const start = markup.lastIndexOf('<form', markup.indexOf('name="quantity"'));
+    return markup.slice(start, markup.indexOf('</form>', start));
+  }
+
+  it('the first button of the quantity form is a nameless, visually hidden submit', () => {
+    for (const quantity of [3, 10]) {
+      const form = quantityForm(render(line({ quantity, minOrderQuantity: 10 })));
+      const first = /<button\b[^>]*>/.exec(form)?.[0] ?? '';
+      expect(first).toContain('type="submit"');
+      expect(first).not.toContain('name=');
+      expect(first).not.toContain('disabled');
+      expect(first).toContain('sr-only');
+      expect(first).toContain('tabindex="-1"');
+      // It precedes the steppers.
+      expect(form.indexOf(first)).toBeLessThan(form.indexOf('name="step"'));
+    }
+  });
+});

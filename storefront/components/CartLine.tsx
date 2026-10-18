@@ -214,6 +214,12 @@ export function CartLine({
       ) : (
         <form action={updateAction} className="max-[720px]:[grid-area:stepper]">
           <input type="hidden" name="itemId" value={line.id} />
+          {/* The form's default button: Enter in the quantity input submits the first
+              submit button in tree order. Nameless, so the typed `quantity` is what
+              posts; without it Enter pressed "−" (a step down, or nothing at the floor). */}
+          <button type="submit" className="sr-only" tabIndex={-1} aria-hidden="true">
+            {strings.qtyLabel}
+          </button>
           <div className="qty__stepper" role="group" aria-label={strings.qtyLabel}>
             {/* The steppers post `step`, not `quantity`: the input posts `quantity` too and
                 sits between them, so the first `quantity` in the form data would be the

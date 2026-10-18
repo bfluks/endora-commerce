@@ -5,7 +5,7 @@ import {
   isValidOrderMinimum,
 } from '@endora-commerce/contracts';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
-import { Alert } from '@endora-commerce/admin-kit/ui';
+import { Alert, Button, Checkbox, Input } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 
 /**
@@ -182,8 +182,8 @@ export function ProductOrderRulesCard({
           <>
             <div className="b2b-col" style={{ gap: 4 }}>
               <label className="b2b-row" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
+                <Checkbox
+                  className="mt-0.5"
                   checked={returnable}
                   disabled={returnableSaving}
                   aria-describedby={
@@ -212,9 +212,8 @@ export function ProductOrderRulesCard({
                 </label>
                 <div className="b2b-row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <div style={{ minWidth: 180 }}>
-                    <input
+                    <Input
                       id={minimumInputId}
-                      className="b2b-field"
                       type="number"
                       inputMode="numeric"
                       min={1}
@@ -239,26 +238,27 @@ export function ProductOrderRulesCard({
                       }}
                     />
                   </div>
-                  <button
+                  <Button
                     type="button"
-                    className="b2b-btn b2b-btn--primary b2b-btn--sm"
+                    size="sm"
                     disabled={minimumSaving}
                     aria-busy={minimumSaving || undefined}
                     onClick={submitMinimum}
                   >
                     {minimumSaving ? t('orderRules.saving') : t('orderRules.minimum.save')}
-                  </button>
+                  </Button>
                   {savedMinimum != null ? (
-                    <button
+                    <Button
                       type="button"
-                      className="b2b-btn b2b-btn--ghost b2b-btn--sm"
+                      variant="ghost"
+                      size="sm"
                       disabled={minimumSaving}
                       onClick={(): void => {
                         void saveMinimum(null);
                       }}
                     >
                       {t('orderRules.minimum.clear')}
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
                 <div id={minimumHelpId} className="b2b-help">
