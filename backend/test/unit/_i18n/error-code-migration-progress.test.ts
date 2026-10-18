@@ -203,6 +203,11 @@ const MIGRATED_MODULES: readonly string[] = [
   'promotions',
   'prompt_actions',
   'quote_requests',
+  // Minted (`specs/155-catalog-order-constraints/`): `RETURN_LINE_NOT_RETURNABLE`
+  // is this module's first code and was created after the chain was deleted, so
+  // the frozen capture holds none and `MINTED_ERROR_CODES` is what accounts for
+  // it.
+  'returns',
   'sales_channels',
   'search',
   // Minted (`specs/144-seo-search-engine-robots/`): `SEO_CRAWLER_TEXT_TOO_LARGE`
