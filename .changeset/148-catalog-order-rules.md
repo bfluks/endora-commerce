@@ -1,0 +1,13 @@
+---
+'@endora-commerce/mod-catalog': minor
+---
+
+Products carry a minimum order quantity and a **Returnable** flag; packaging units carry a minimum number of units.
+
+- **Upgrade note (FR-034): every existing product becomes not returnable for new orders.** The new `products.returnable` column defaults to `false`, so lines of orders placed after the upgrade are not returnable until their products are marked. Mark them in bulk: select the products on the product list and use **Bulk edit → Returnable → Yes — returnable**. Orders placed before the upgrade are unaffected — their lines carry no recorded value and stay returnable.
+- **Behaviour change for API clients.** `POST`/`PATCH /api/v1/admin/catalog/products[/:id]` accept `minOrderQuantity` (integer 1–1 000 000, or `null` to clear) and `returnable`; the admin product response carries both. `minOrderQuantity` on a `grouped`, `bundle` or `virtual` product is refused with `422 VALIDATION_FAILED`; a value outside the range with `400`. `POST /api/v1/admin/catalog/products/bulk-update` accepts `returnable` and writes one audit entry per product it changes. Packaging-unit create/update accept `minOrderUnits` (same range), and the response always carries it; the in-process `CatalogPackagingPort` accepts the same optional field.
+- **Storefront reads:** product detail and product list summaries carry `minOrderQuantity` (`null` when none or when the type takes no minimum); the product detail's `packagingUnits[]` carry `minOrderUnits`.
+- **Read port:** `CatalogProductReadPort` records gain `minOrderQuantity`, `returnable` and `minOrderUnits`, and the port gains `listPackagingUnitsByProductIds(productIds)`. **Implementers of typed `CatalogProductReadPort` stubs must add it**, and its callers must pass only product ids they have already vetted for visibility.
+- **Duplicate** does not copy either rule: the copy starts with no minimum and not returnable.
+- The admin product editor gains an **Order rules** card (Inventory tab), the packaging-unit editor a **Minimum (units)** column, and the bulk edit a **Returnable** section. New error sentences in both bundles for `PRODUCT_BELOW_MINIMUM_QUANTITY`, `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` and `PACKAGING_UNIT_MISMATCH`.
+- Migration `20261016T082008_catalog_order_rules.ts` adds `products.min_order_quantity`, `products.returnable` and `product_packaging_units.min_order_units`.
