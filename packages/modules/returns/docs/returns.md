@@ -106,7 +106,14 @@ through **Bulk edit**).
   (the first such line), `details.orderItemIds[]` and `details.lines[]`
   (`orderItemId`, `productName`) naming every such line. Nothing is written.
 - **Complaints are never restricted** by the flag: a `complaint` may name any
-  line of the order.
+  line of the order. **Nothing is refunded for a non-returnable line by
+  default**: such a complaint line is stored with an approved refund of `0`,
+  while its default refund stays the amount paid — the most the operator may
+  approve. The admin case view marks the line **Not returnable at purchase**
+  and the settlement form starts from `0` for it, so a refund or credit for it
+  happens only when the operator enters an amount. The case detail gives each
+  line `returnableAtPurchase` (`true`, `false`, or `null` for a line placed
+  before the value was recorded).
 - **Duplicate lines are summed.** When a request names one order line more
   than once, the quantities are added up per order line and that total is
   checked against the line's remaining quantity, for both kinds; a total above

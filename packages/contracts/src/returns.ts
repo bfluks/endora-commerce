@@ -103,6 +103,15 @@ export const returnCaseItemSchema = z.object({
   inspectionOutcome: inspectionOutcomeSchema.nullable(),
   defaultRefundAmount: z.number().finite(),
   approvedRefundAmount: z.number().finite(),
+  /**
+   * Feature 155 (owner ruling R1) — whether the order line was returnable when
+   * it was bought, as recorded at placement (`OrderReturnContextLine`); `null`
+   * for a line placed before the record existed (treated as returnable) or one
+   * the order no longer lists. A complaint line recorded `false` starts with an
+   * approved refund of 0 and is marked in the admin case view. Optional on the
+   * wire, so an older producer still parses.
+   */
+  returnableAtPurchase: z.boolean().nullable().optional(),
 });
 export type ReturnCaseItemDto = z.infer<typeof returnCaseItemSchema>;
 

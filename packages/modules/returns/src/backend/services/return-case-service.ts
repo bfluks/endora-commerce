@@ -184,6 +184,12 @@ export class ReturnCaseService {
     for (const line of input.lines) {
       const ctxLine = byOrderItem.get(line.orderItemId)!;
       const defaultRefund = defaultRefundForQuantity(ctxLine.paidUnitAmount, line.quantity);
+      // Owner ruling R1 (feature 155, FR-020) — a complaint may name a line that
+      // was not returnable at purchase, but nothing refunds it by default: its
+      // approved amount starts at 0 for the operator to set. The default refund
+      // stays the amount paid, because it is the cap settlement lets the
+      // operator approve up to (`exceedsCap`).
+      const approvedRefund = isLineReturnable(ctxLine.returnableAtPurchase) ? defaultRefund : 0;
       em.persist(
         em.create(ReturnCaseItem, {
           returnCaseId: rc.id,
@@ -194,7 +200,7 @@ export class ReturnCaseService {
           reasonId: line.reasonId,
           description: line.description ?? null,
           defaultRefundAmount: defaultRefund.toFixed(2),
-          approvedRefundAmount: defaultRefund.toFixed(2),
+          approvedRefundAmount: approvedRefund.toFixed(2),
         }),
       );
     }
@@ -320,6 +326,13 @@ export class ReturnCaseService {
       em.findOne(Refund, { returnCaseId: id }),
     ]);
     const visibleComments = comments.filter((c) => !opts.customerView || c.isCustomerVisible);
+    // Feature 155 (owner ruling R1) — each line's returnable-at-purchase record,
+    // read through the port that already carries it, so the admin case view can
+    // mark a complaint line that was not returnable when bought.
+    const orderContext = await this.deps.orderContext.getReturnContext(rc.orderId);
+    const returnableAtPurchase = new Map(
+      (orderContext?.lines ?? []).map((l) => [l.orderItemId, l.returnableAtPurchase] as const),
+    );
     return {
       ...this.toSummary(rc, graph.get(rc.statusCode)?.defaultName ?? rc.statusCode),
       salesChannelId: rc.salesChannelId,
@@ -342,6 +355,7 @@ export class ReturnCaseService {
         inspectionOutcome: it.inspectionOutcome ?? null,
         defaultRefundAmount: Number(it.defaultRefundAmount),
         approvedRefundAmount: Number(it.approvedRefundAmount),
+        returnableAtPurchase: returnableAtPurchase.get(it.orderItemId) ?? null,
       })),
       comments: visibleComments.map((c) => ({
         id: c.id,

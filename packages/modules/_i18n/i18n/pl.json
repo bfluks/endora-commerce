@@ -1605,6 +1605,7 @@
   "returns.detail.correctiveInvoice.notRequested": "Nie zlecono wystawienia faktury korygującej dla tego rozliczenia.",
   "returns.detail.correctiveInvoice.open": "Otwórz fakturę korygującą",
   "returns.detail.correctiveInvoice.title": "Faktura korygująca",
+  "returns.detail.notReturnableAtPurchase": "Bez prawa zwrotu przy zakupie",
   "returns.detail.resolution.credit": "Środki na przyszłe zamówienia",
   "returns.detail.resolution.refund": "Zwrot pieniędzy",
   "returns.detail.resolution.repair": "Naprawa",

@@ -151,6 +151,42 @@ describe('155 — returns refuse non-returnable lines; complaints are untouched 
       expect(res.statusCode, res.body).toBe(201);
     });
 
+    /**
+     * Owner ruling R1 (round B) — a complaint may name a line that was not
+     * returnable at purchase (FR-020), but nothing refunds it by default: its
+     * approved refund is stored as 0 for the operator to set, while its default
+     * refund stays the amount paid — the cap the operator may approve up to. A
+     * returnable line in the same complaint keeps the amount paid as before.
+     */
+    it('R1 — a complaint stores an approved refund of 0 for N and the amount paid for R', async () => {
+      const res = await submit(orderId, 'complaint', [
+        { orderItemId: r, quantity: 1 },
+        { orderItemId: n, quantity: 1 },
+      ]);
+      expect(res.statusCode, res.body).toBe(201);
+      const caseId = (res.json() as { data: { id: string } }).data.id;
+
+      const rows = (await h
+        .em()
+        .getConnection()
+        .execute(
+          `select order_item_id, default_refund_amount::text as d, approved_refund_amount::text as a
+             from return_case_items where return_case_id = ?`,
+          [caseId],
+        )) as Array<{ order_item_id: string; d: string; a: string }>;
+      const stored = Object.fromEntries(rows.map((row) => [row.order_item_id, { d: row.d, a: row.a }]));
+      expect(stored[r]).toEqual({ d: '10.00', a: '10.00' });
+      expect(stored[n]).toEqual({ d: '10.00', a: '0.00' });
+
+      const detail = await h.app.inject({ method: 'GET', url: `/api/v1/admin/returns/${caseId}`, cookies: ADMIN_COOKIE });
+      expect(detail.statusCode, detail.body).toBe(200);
+      const items = (detail.json() as {
+        data: { items: Array<{ orderItemId: string; returnableAtPurchase?: boolean | null; approvedRefundAmount: number }> };
+      }).data.items;
+      expect(items.find((i) => i.orderItemId === n)).toMatchObject({ returnableAtPurchase: false, approvedRefundAmount: 0 });
+      expect(items.find((i) => i.orderItemId === r)).toMatchObject({ returnableAtPurchase: true, approvedRefundAmount: 10 });
+    });
+
     it('accepts a return of R alone', async () => {
       const res = await submit(orderId, 'return', [{ orderItemId: r, quantity: 1 }]);
       expect(res.statusCode, res.body).toBe(201);

@@ -98,7 +98,13 @@ przez **Edycję masową**).
   pozycja), `details.orderItemIds[]` i `details.lines[]` (`orderItemId`, `productName`)
   wymieniającymi każdą taką pozycję. Nic nie jest zapisywane.
 - **Reklamacje nigdy nie są ograniczane** flagą: `complaint` może wskazać dowolną pozycję
-  zamówienia.
+  zamówienia. **Za pozycję bez prawa zwrotu domyślnie nic nie jest zwracane**: taka pozycja
+  reklamacji jest zapisywana z zatwierdzoną kwotą zwrotu `0`, a jej domyślna kwota zwrotu pozostaje
+  kwotą zapłaconą — najwyższą, jaką operator może zatwierdzić. Widok sprawy w panelu oznacza pozycję
+  jako **Bez prawa zwrotu przy zakupie**, a formularz rozliczenia zaczyna dla niej od `0`, więc
+  zwrot pieniędzy lub środków następuje tylko wtedy, gdy operator wpisze kwotę. Szczegóły sprawy
+  podają dla każdej pozycji `returnableAtPurchase` (`true`, `false` albo `null` dla pozycji złożonej,
+  zanim ta wartość była zapisywana).
 - **Powtórzone pozycje są sumowane.** Gdy żądanie wskazuje jedną pozycję zamówienia więcej niż raz,
   ilości są sumowane dla każdej pozycji zamówienia, a suma jest porównywana z ilością pozostałą do
   zwrotu, dla obu rodzajów; suma powyżej niej jest odrzucana z kodem `422 VALIDATION_FAILED`,
