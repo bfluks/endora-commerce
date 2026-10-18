@@ -693,10 +693,11 @@ invocation. This is the only phase where `pnpm -r` is allowed.
 
 ## Phase 21: Final — the other pull-request workflows
 
-- [ ] T151 `pack-gate` — **in Docker `node:22.18-slim --init`**, `<CMD>` = `pnpm --filter backend run pack-gate -- --no-build`
-- [ ] T152 `boot-gate` — `bash scripts/boot-gate.sh --with-negatives` (needs Docker; say so in the PR if unavailable)
-- [ ] T153 `build:docs` — `pnpm --filter docs run build && pnpm --filter backend run verify:docs-build`
-- [ ] T154 `dco` — `node backend/scripts/dco-signoff.ts origin/master HEAD`
+- [x] T151 `pack-gate` — **in Docker `node:22.18-slim --init`**, `<CMD>` = `pnpm --filter backend run pack-gate -- --no-build`
+- [x] T152 `boot-gate` — `bash scripts/boot-gate.sh --with-negatives` (needs Docker; say so in the PR if unavailable)
+- [x] T153 `build:docs` — `pnpm --filter docs run build && pnpm --filter backend run verify:docs-build`
+- [x] T154 `dco` — `node backend/scripts/dco-signoff.ts origin/master HEAD`
+  - **2026-10-18, fork CI (PR #2) at `4fe927602`**: `pack-gate`, `boot-gate`, `build:docs` and `dco` jobs all passed.
 
 **Verification**: T151–T154 exit 0 (T152 may be "not runnable here: no Docker"); results in the PR beside T142's. Then: rebase onto the newest `origin/master`, re-run Phases 20–21, owner's manual test, PR.
 
