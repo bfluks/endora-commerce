@@ -1,7 +1,7 @@
 import { tForLocale } from './i18n/messages';
 
 /**
- * Feature 148 — the storefront's reading of a product's order minimums (FR-014, FR-016).
+ * Feature 154 — the storefront's reading of a product's order minimums (FR-014, FR-016).
  *
  * Pure and React-free so the product page, the product card and the comparison share one
  * answer, and so it is testable in the storefront's node-only test environment. The binding

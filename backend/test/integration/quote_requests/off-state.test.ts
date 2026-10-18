@@ -230,13 +230,13 @@ describe('quote_requests off-state, from a package (Constitution XVII)', () => {
   });
 
   /**
-   * Feature 148 (T056b; FR-036, research R17/R19) — with `quote_requests` off,
+   * Feature 154 (T056b; FR-036, research R17/R19) — with `quote_requests` off,
    * placement cannot vouch for a basket's quote source, so no line is exempt:
    * a seeded A × 5 (A minimum 10) is flagged by the checkout preview and refused
    * at placement — the fail-closed reading. Switched back on, the same basket's
    * exemption is honoured again and it places.
    */
-  it('148 — while off, a quote-seeded A × 5 below its minimum is flagged and refused; back on, it places', async () => {
+  it('154 — while off, a quote-seeded A × 5 below its minimum is flagged and refused; back on, it places', async () => {
     const em = h.em();
     const product = await em.findOneOrFail(Product, { id: SEED_PRODUCT_101_ID }, { filters: false });
     const previousMinimum = product.minOrderQuantity ?? null;

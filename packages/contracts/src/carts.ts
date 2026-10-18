@@ -124,7 +124,7 @@ export const cartDroppedLineReasonSchema = z.enum([
   'out_of_stock',
   'no_price_in_customer_list',
   'removed_by_conversion',
-  /** Feature 148 — the line would leave its product below a minimum (R8). */
+  /** Feature 154 — the line would leave its product below a minimum (R8). */
   'below_minimum',
 ]);
 export type CartDroppedLineReason = z.infer<typeof cartDroppedLineReasonSchema>;
@@ -161,9 +161,9 @@ export const cartViewLineSchema = z.object({
   packagingUnitName: z.string().nullable().optional(),
   packagingUnitBaseQuantity: z.number().int().positive().nullable().optional(),
   displayName: z.string().nullable().optional(),
-  /** Feature 148 — the product's current pieces minimum (null = none); the storefront's input floor. */
+  /** Feature 154 — the product's current pieces minimum (null = none); the storefront's input floor. */
   minOrderQuantity: z.number().int().positive().nullable().optional(),
-  /** Feature 148 — set when this line is below a current minimum and not exempt (FR-013, FR-028). */
+  /** Feature 154 — set when this line is below a current minimum and not exempt (FR-013, FR-028). */
   belowMinimum: z
     .object({
       kind: z.enum(['pieces', 'packaging_unit']),
@@ -198,7 +198,7 @@ const cartDroppedLineSchema = z.object({
   productId: uuidSchema,
   productName: z.string(),
   reason: cartDroppedLineReasonSchema,
-  /** Feature 148 — the minimum a `below_minimum` line missed. */
+  /** Feature 154 — the minimum a `below_minimum` line missed. */
   minimum: z.number().int().positive().optional(),
 });
 
@@ -610,7 +610,7 @@ export interface CartItemRecord {
   packagingUnitName: string | null;
   packagingUnitBaseQuantity: number | null;
   /**
-   * Feature 148 (FR-028) — the quantity this line was seeded with from an accepted
+   * Feature 154 (FR-028) — the quantity this line was seeded with from an accepted
    * quote request; `null` for every other line. Written only by
    * `CartWritePort.replaceItemsForCustomer` with a `sourceQuoteRequestId`.
    */
@@ -620,7 +620,7 @@ export interface CartItemRecord {
 }
 
 /**
- * Feature 148 (FR-028, owner ruling P2; data-model §2) — whether a basket line is
+ * Feature 154 (FR-028, owner ruling P2; data-model §2) — whether a basket line is
  * exempt from the catalogue's order minimums: it was seeded from an accepted quote,
  * the basket still carries that quote as its source, and the line's quantity equals
  * the quote's. State-based, so 5 → 12 → 5 is exempt again.
@@ -725,7 +725,7 @@ export interface CartReadPort {
  * `nonDeactivatable` never enters one.
  */
 /**
- * Feature 148 (research R8) — one line of a batch add (`CartWritePort.addItems`).
+ * Feature 154 (research R8) — one line of a batch add (`CartWritePort.addItems`).
  * The fields of `addItem`'s line.
  */
 export interface CartBatchLineInput {
@@ -739,7 +739,7 @@ export interface CartBatchLineInput {
 }
 
 /**
- * Feature 148 (research R8) — what became of one batch line, at its input `index`.
+ * Feature 154 (research R8) — what became of one batch line, at its input `index`.
  *
  * A `failed` line carries the refusal it met and nothing about the product: a
  * product the caller may not see fails with the unknown id's `404`, never with a
@@ -778,7 +778,7 @@ export interface CartWritePort {
     },
   ): Promise<CartWithItems>;
   /**
-   * Feature 148 (R8) — add several lines. (1) Every line is resolved with exactly
+   * Feature 154 (R8) — add several lines. (1) Every line is resolved with exactly
    * `addItem`'s preconditions (quantity, visibility, channel, packaging unit in
    * product); a line that fails gets the unknown-id answer and takes no part in
    * the evaluation. (2) The resolved lines are judged with the cart in two passes

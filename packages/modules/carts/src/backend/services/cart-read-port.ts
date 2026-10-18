@@ -104,7 +104,7 @@ export function createCartWritePort(
       // price holds at the quantity it was agreed for and at no other
       // (`cart-line-pricing.ts`). Any other seed — a reorder — carries none, and
       // its lines are priced like any other line, below.
-      // Feature 148 (FR-028) — the same lines also remember the quantity they
+      // Feature 154 (FR-028) — the same lines also remember the quantity they
       // were agreed at in `quoteSeededQuantity`; while the quantity still equals
       // it, the line is exempt from the catalogue's minimums. This is the only
       // writer of that column: a reorder (no source) and every other path leave

@@ -8,7 +8,7 @@ import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 
 /**
- * Feature 148 (US1, US5; FR-001, FR-003, FR-004) — the product's order rules, in the
+ * Feature 154 (US1, US5; FR-001, FR-003, FR-004) — the product's order rules, in the
  * Inventory tab: the "Returnable" flag for every product type and the pieces minimum for
  * simple and configurable products only (D5 — the server refuses it on other types, so
  * the control is not offered there; a line says why instead).

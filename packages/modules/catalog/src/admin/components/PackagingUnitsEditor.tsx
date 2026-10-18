@@ -11,7 +11,7 @@ import { parseOrderMinimumInput } from './ProductOrderRulesCard.js';
  * catalog admin packaging-unit endpoints directly via `apiClient`, mirroring
  * the rest of the Inventory tab.
  *
- * Feature 148 (US2, FR-002) — each unit also carries an optional minimum number of that
+ * Feature 154 (US2, FR-002) — each unit also carries an optional minimum number of that
  * unit per order (`minOrderUnits`), edited in its own column; empty clears it.
  */
 export function PackagingUnitsEditor({ productId }: { productId: string }): ReactNode {

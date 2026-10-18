@@ -103,7 +103,7 @@ export class CartItem {
   agreedCurrency?: string | null;
 
   /**
-   * Feature 148 (FR-028) — the quantity this line was seeded with from an
+   * Feature 154 (FR-028) — the quantity this line was seeded with from an
    * accepted quote request; `null` for every other line. Written only when
    * the basket is replaced from a quote; while `quantity` still equals it the
    * line is exempt from the catalogue's order minimums.

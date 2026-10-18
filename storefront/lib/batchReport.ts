@@ -5,7 +5,7 @@ import type { QuickOrderBuildRejectedLine, RejectedQuickOrderItem } from './api/
 import type { ConversionSkip } from './api/shopping-lists';
 
 /**
- * Feature 148 (FR-011, US4) — the buyer-facing sentences of the batch paths' reports: the
+ * Feature 154 (FR-011, US4) — the buyer-facing sentences of the batch paths' reports: the
  * quick-order import preview's rejected rows, the quick-order build's `rejected[]`, the
  * shopping list → cart `skipped[]` and the quote → cart dropped lines. Each states the minimum
  * the line missed, in PL and EN. Pure, so the report pages stay server-rendered and the

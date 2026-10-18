@@ -115,7 +115,7 @@ export interface CartsDeps {
   }) => Promise<{
     cartId: string;
     appendedLineCount: number;
-    /** Feature 148 — `minimum` on a `below_minimum` line. */
+    /** Feature 154 — `minimum` on a `below_minimum` line. */
     droppedLines: Array<{ productId: string; productName: string; reason: string; minimum?: number }>;
   }>;
   resolveCartActor: (request: FastifyRequest) => {
@@ -213,7 +213,7 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
     const preferredLanguage = parsePreferredLanguage(
       request.headers['accept-language'],
     );
-    // Feature 148 (R11, D7) — the same records also feed the minimum flags, so
+    // Feature 154 (R11, D7) — the same records also feed the minimum flags, so
     // this read is no longer wrapped in a tolerant `catch`. It used to fall back
     // to empty meta on any failure, which for the flags is the fail-open answer
     // FR-037 rules out: a cart that hides a below-minimum line because the
@@ -732,7 +732,7 @@ function serializeCart(
   couponDroppedThisRead: { code: string; reason: string } | null = null,
   productMeta: Map<string, ProductMeta> = new Map(),
   application: PromotionApplication | null = null,
-  /** Feature 148 — the full view's per-line minimum flags; absent on the mutation answers. */
+  /** Feature 154 — the full view's per-line minimum flags; absent on the mutation answers. */
   minimumViews: Map<string, CartLineMinimumView> | null = null,
 ) {
   let subtotal = 0;
@@ -833,7 +833,7 @@ function resolvePrimaryCta(cart: Cart) {
 
 /**
  * Bulk-fetches the product records for every productId on the cart — one read
- * the display names and the minimum flags share (feature 148, R11). Deliberately
+ * the display names and the minimum flags share (feature 154, R11). Deliberately
  * the wide read: a soft-deleted product still names the line it is on.
  */
 async function loadCartProducts(

@@ -9,7 +9,7 @@ import {
 } from '../../lib/cartMinimum';
 
 /**
- * Feature 148, T119 — the cart line below a minimum (US1 #4, #5; FR-013) and the line whose
+ * Feature 154, T119 — the cart line below a minimum (US1 #4, #5; FR-013) and the line whose
  * product record is gone (FR-037). SSR-only: the markup is the assertion.
  */
 

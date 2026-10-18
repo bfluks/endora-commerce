@@ -247,7 +247,7 @@ export const productSummarySchema = z.object({
    */
   availability: productAvailabilitySchema.optional(),
   /**
-   * Feature 148 — the product's pieces minimum; `null` = none. Emitted only for
+   * Feature 154 — the product's pieces minimum; `null` = none. Emitted only for
    * `simple` / `configurable` products (else `null`). Optional so every producer
    * written before it still compiles.
    */
@@ -474,7 +474,7 @@ export const productDetailSchema = productSummarySchema.extend({
         baseQuantity: z.number().int().positive(),
         position: z.number().int().nonnegative(),
         isDefault: z.boolean(),
-        /** Feature 148 — minimum units of this unit per order of the product; `null` = none. */
+        /** Feature 154 — minimum units of this unit per order of the product; `null` = none. */
         minOrderUnits: z.number().int().positive().nullable().optional(),
       }),
     )
@@ -656,11 +656,11 @@ const baseProductRequestObject = z.object({
     .optional(),
   fulfilmentStrategyWarehouseOrder: z.array(uuidSchema).nullable().optional(),
   /**
-   * Feature 148 — pieces minimum; `null` clears. Simple / configurable only (else
+   * Feature 154 — pieces minimum; `null` clears. Simple / configurable only (else
    * 422 VALIDATION_FAILED, `details.field`, from the service).
    */
   minOrderQuantity: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
-  /** Feature 148 — may `return`-kind cases include this product? Every type. */
+  /** Feature 154 — may `return`-kind cases include this product? Every type. */
   returnable: z.boolean().optional(),
 });
 
@@ -750,7 +750,7 @@ const bulkUpdateFieldsObject = z.object({
   // selected product.
   attributeSetId: uuidSchema.nullable().optional(),
   attributeValues: z.record(z.string(), z.unknown()).optional(),
-  /** Feature 148 — set (or unset) the returnable flag on every selected product. */
+  /** Feature 154 — set (or unset) the returnable flag on every selected product. */
   returnable: z.boolean().optional(),
 });
 
@@ -1583,7 +1583,7 @@ export const packagingUnitSchema = z.object({
   position: z.number().int().nonnegative(),
   isDefault: z.boolean(),
   /**
-   * Feature 148 — minimum units of this unit per order of the product; `null` = none.
+   * Feature 154 — minimum units of this unit per order of the product; `null` = none.
    * Always emitted by `catalog`; optional so other builders of the DTO keep compiling.
    */
   minOrderUnits: z.number().int().positive().nullable().optional(),
@@ -1598,7 +1598,7 @@ export const createPackagingUnitRequestSchema = z
     baseQuantity: z.number().int().positive(),
     isDefault: z.boolean().optional(),
     position: z.number().int().nonnegative().optional(),
-    /** Feature 148 — minimum number of this unit per order of the product; `null` clears. */
+    /** Feature 154 — minimum number of this unit per order of the product; `null` clears. */
     minOrderUnits: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
   })
   .strict();
@@ -1610,7 +1610,7 @@ export const updatePackagingUnitRequestSchema = z
     baseQuantity: z.number().int().positive().optional(),
     isDefault: z.boolean().optional(),
     position: z.number().int().nonnegative().optional(),
-    /** Feature 148 — minimum number of this unit per order of the product; `null` clears. */
+    /** Feature 154 — minimum number of this unit per order of the product; `null` clears. */
     minOrderUnits: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
   })
   .strict();
@@ -1864,9 +1864,9 @@ export interface CatalogProductRecord {
   lowStockThresholdMode: 'cumulative' | 'per_warehouse';
   fulfilmentStrategy: FulfilmentStrategy | null;
   fulfilmentStrategyWarehouseOrder: string[] | null;
-  /** Feature 148 — pieces minimum; `null` = none. Stored for any type, applied to simple/configurable only. */
+  /** Feature 154 — pieces minimum; `null` = none. Stored for any type, applied to simple/configurable only. */
   minOrderQuantity: number | null;
-  /** Feature 148 — the product's current flag; order lines record their own copy at placement. */
+  /** Feature 154 — the product's current flag; order lines record their own copy at placement. */
   returnable: boolean;
 }
 
@@ -2110,7 +2110,7 @@ export interface CatalogPackagingUnitRecord {
   isDefault: boolean;
   createdAt: Date;
   updatedAt: Date;
-  /** Feature 148 — minimum units of this packaging unit per order of the product; `null` = none. */
+  /** Feature 154 — minimum units of this packaging unit per order of the product; `null` = none. */
   minOrderUnits: number | null;
 }
 
@@ -2200,7 +2200,7 @@ export interface CatalogProductReadPort {
     packagingUnitId: string,
   ): Promise<CatalogPackagingUnitRecord | null>;
   /**
-   * Feature 148 — the packaging units of the given products, ordered by product id, then
+   * Feature 154 — the packaging units of the given products, ordered by product id, then
    * `position`, then `name`. The batch twin of `listVariantsByProductIds`. Unknown ids contribute
    * nothing.
    *

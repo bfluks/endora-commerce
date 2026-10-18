@@ -13,8 +13,8 @@ import { buyerChannelIds, createMinimumProduct, minimumFixtureRun } from '../../
 import { ADMIN_COOKIE, CUSTOMER_COOKIE, anyReasonId, resetReturnGraph, seedReturnableOrder } from './helpers.js';
 
 /**
- * Feature 148, Phase 12a (T091) — only returnable lines can be returned
- * (`specs/148-catalog-order-constraints/`, US6 #1 – #7 and #9; FR-017 – FR-020,
+ * Feature 154, Phase 12a (T091) — only returnable lines can be returned
+ * (`specs/154-catalog-order-constraints/`, US6 #1 – #7 and #9; FR-017 – FR-020,
  * FR-022, FR-025; `contracts/returns-api.md` §2–§3; threat S6).
  *
  * The placement stamp itself is Phase 12's (`orders/returnable-at-purchase.test.ts`);
@@ -38,7 +38,7 @@ interface ErrorBody {
   error: { code: string; message: string; details?: Record<string, unknown> };
 }
 
-describe('148 — returns refuse non-returnable lines; complaints are untouched [integration]', () => {
+describe('154 — returns refuse non-returnable lines; complaints are untouched [integration]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   let reasonId = '';

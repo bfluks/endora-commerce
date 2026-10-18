@@ -3,7 +3,7 @@ import type { QuoteRequestSourceRefusal } from './quote-request-source.js';
 import { quoteSourceHonoursExemptions } from './quote-source-exemption.js';
 
 /**
- * Feature 148 (FR-036; research R19 step 3; threat F2) — a basket's quote-seeded lines
+ * Feature 154 (FR-036; research R19 step 3; threat F2) — a basket's quote-seeded lines
  * are exempt from the minimums only while the quote source is vouched **now**: the judge
  * accepts it and the quote's validity has not lapsed.
  */

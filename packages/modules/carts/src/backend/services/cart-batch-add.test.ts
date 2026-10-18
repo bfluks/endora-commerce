@@ -20,8 +20,8 @@ import { CartItem } from '../entities/cart-item.entity.js';
 import { CART_MAX_LINES, CartService, type CustomerContext } from './cart-service.js';
 
 /**
- * Feature 148, Phase 7 (T048) — `CartService.addItems`, the one batch every batch
- * path into a cart goes through (`specs/148-catalog-order-constraints/research.md`
+ * Feature 154, Phase 7 (T048) — `CartService.addItems`, the one batch every batch
+ * path into a cart goes through (`specs/154-catalog-order-constraints/research.md`
  * R8, `contracts/cart-and-checkout-api.md` §4).
  *
  * 1. **Resolution first** (threat F1): every line meets exactly `addItem`'s

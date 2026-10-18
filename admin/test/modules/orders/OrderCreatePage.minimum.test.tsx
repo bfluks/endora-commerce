@@ -9,7 +9,7 @@ import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/T
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
 
 /**
- * Feature 148, T107 — the admin create-order preview names a line below its
+ * Feature 154, T107 — the admin create-order preview names a line below its
  * product's minimum (FR-009, contract `cart-and-checkout-api.md` §10): the
  * preview answers `BELOW_MINIMUM_QUANTITY` with the `minimum`, and the line
  * reads "Below the minimum of 10 pcs" instead of the generic **No price** it

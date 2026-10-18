@@ -80,7 +80,7 @@ interface AdminRfqItem {
   packagingUnitName?: string | null;
   packagingUnitBaseQuantity?: number | null;
   /**
-   * Feature 148 (FR-030) — set by the admin read when the line is below its
+   * Feature 154 (FR-030) — set by the admin read when the line is below its
    * product's current minimum; `null`/absent when it is fine. Informs only.
    */
   minimumWarning?: MinimumWarning | null;
@@ -820,7 +820,7 @@ function CancelDialog(props: {
 }
 
 /**
- * Feature 148 (FR-030, US4 #15) — "Below minimum (10 pcs)" / "(2 × Pallet)" on a
+ * Feature 154 (FR-030, US4 #15) — "Below minimum (10 pcs)" / "(2 × Pallet)" on a
  * line the admin read flags. Text plus icon, never colour alone (WCAG 1.4.1);
  * amber `warning`, not `destructive`, because it informs and blocks nothing —
  * a sales representative may set a line below the minimum on purpose (FR-012).

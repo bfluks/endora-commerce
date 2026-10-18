@@ -78,7 +78,7 @@ describe('returns off-state (Constitution XVII)', () => {
     });
   });
   /**
-   * Feature 148, Phase 12 (T092; FR-016a, spec edge case *Module activation*,
+   * Feature 154, Phase 12 (T092; FR-016a, spec edge case *Module activation*,
    * `contracts/returns-api.md` §4). `orders` records `returnable_at_purchase`
    * at placement whether `returns` is on or off — it has no edge to `returns`
    * — so an order placed while `returns` is off answers from its own stamp

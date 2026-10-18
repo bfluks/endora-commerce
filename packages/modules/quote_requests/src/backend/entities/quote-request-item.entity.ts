@@ -67,7 +67,7 @@ export class QuoteRequestItem {
   packagingUnitBaseQuantity?: number | null;
 
   /**
-   * Feature 148 (FR-026) — the catalogue packaging unit this line resolved
+   * Feature 154 (FR-026) — the catalogue packaging unit this line resolved
    * to, beside the name / base-quantity snapshot above. No foreign key:
    * units are hard-deleted and the snapshot outlives them.
    */

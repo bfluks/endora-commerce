@@ -1,5 +1,5 @@
 /**
- * Feature 148 (FR-016a, D-44; research R14) — the value placement stamps on
+ * Feature 154 (FR-016a, D-44; research R14) — the value placement stamps on
  * an order line's `returnable_at_purchase`: the product's returnable flag as
  * read at purchase, always an explicit boolean.
  *

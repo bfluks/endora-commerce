@@ -39,9 +39,9 @@ export interface CartLineViewModel {
   productSlug?: string | null;
   /** Feature 043 — set when the line was added as a packaging unit. */
   packagingUnitName?: string | null;
-  /** Feature 148 — the product's current pieces minimum (`null` = none). */
+  /** Feature 154 — the product's current pieces minimum (`null` = none). */
   minOrderQuantity?: number | null;
-  /** Feature 148 — the server's verdict: this line is below a minimum and not exempt. */
+  /** Feature 154 — the server's verdict: this line is below a minimum and not exempt. */
   belowMinimum?: CartLineBelowMinimum | null;
 }
 
@@ -107,10 +107,10 @@ export function CartLine({
       ? strings.unavailable[line.unavailableReason]
       : null;
   const activeLocale = locale ?? 'en-US';
-  // Feature 148 (FR-037) — the product record is gone: nothing about the line can be
+  // Feature 154 (FR-037) — the product record is gone: nothing about the line can be
   // changed or kept, so the only action left is to remove it.
   const gone = line.unavailable === true && line.unavailableReason === 'not_purchasable';
-  // Feature 148 (FR-013) — the server's below-minimum verdict, worded beside the name.
+  // Feature 154 (FR-013) — the server's below-minimum verdict, worded beside the name.
   const belowText = gone ? null : belowMinimumText(line, activeLocale);
   const belowId = `cart-line-${line.id}-minimum`;
   const floor = cartLineFloor(line);

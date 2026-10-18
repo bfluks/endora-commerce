@@ -370,7 +370,7 @@ export const manifest = defineModuleManifest({
    * feature 090 Phase 3
    * (`specs/090-module-owned-error-codes/contracts/error-code-declaration.md`
    * §1.1), six more from D-129's remaining sweep, MR 4, and three minted by
-   * feature 148, both described at the end of this block. This is where the sentence for each is looked up from:
+   * feature 154, both described at the end of this block. This is where the sentence for each is looked up from:
    * `errors.<CODE>` in this module's own `i18n/{en,pl}.json`. Every code with
    * no sentence there is an entry in `check-error-translations.ts`'s
    * `UNTRANSLATED_ERROR_CODES` ledger and stays one — declaring a code writes no
@@ -453,7 +453,7 @@ export const manifest = defineModuleManifest({
    * and `{ total, maxSelectionSize }` — neither holds a `code`, which is the
    * only key `refusalToken` reads.
    *
-   * **Three were minted by feature 148** (`specs/148-catalog-order-constraints/`
+   * **Three were minted by feature 154** (`specs/154-catalog-order-constraints/`
    * `contracts/error-codes.md`): `PRODUCT_BELOW_MINIMUM_QUANTITY`,
    * `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` and `PACKAGING_UNIT_MISMATCH`.
    * D-121 T1 again: the minimums are columns on this module's products and

@@ -193,7 +193,7 @@ export const returnableLineSchema = z.object({
   paidUnitAmount: z.number().finite(),
   currency: z.string().length(3),
   /**
-   * Feature 148 — may this line be included in a `return` case? (complaints are never
+   * Feature 154 — may this line be included in a `return` case? (complaints are never
    * restricted). From the value recorded at placement; a line placed before the feature
    * is returnable (FR-025).
    */
@@ -204,7 +204,7 @@ export const returnableLineSchema = z.object({
 export const returnableResponseSchema = z.object({
   /**
    * `false` = no `return`-kind case can be opened. With `reason: 'no_returnable_lines'`
-   * (feature 148) a `complaint` is still accepted.
+   * (feature 154) a `complaint` is still accepted.
    */
   eligible: z.boolean(),
   reason: z
@@ -600,7 +600,7 @@ export interface OrderReturnContextLine {
   /** Amount paid for the whole purchased line, including tax. */
   paidLineAmount: number;
   /**
-   * Feature 148 (FR-016a) — the product's returnable flag recorded when the order was placed.
+   * Feature 154 (FR-016a) — the product's returnable flag recorded when the order was placed.
    * `null`: the order was placed before the flag was recorded. `orders` reports the fact; the
    * policy for `null` (returnable, FR-025) is `returns`'.
    */

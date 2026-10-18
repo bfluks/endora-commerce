@@ -252,7 +252,7 @@ interface ShoppingListBridgeService {
     itemIds: string[] | undefined,
   ): Promise<{
     added: number;
-    /** Feature 148 — `reason` and, on `below_minimum`, the `minimum` the line missed. */
+    /** Feature 154 — `reason` and, on `below_minimum`, the `minimum` the line missed. */
     skipped: Array<{ productId: string; reason: string; minimum?: number }>;
   }>;
 }
@@ -1142,7 +1142,7 @@ async function contributeReferenceDeployment(ctx: ComposedAppContext): Promise<v
           cartId: '',
           appendedLineCount: res.added,
           droppedLines: res.skipped.map((it) =>
-            // Feature 148 (FR-011, US4 #3) — a line below a minimum says so,
+            // Feature 154 (FR-011, US4 #3) — a line below a minimum says so,
             // with the minimum; every other skip stays `not_purchasable`.
             it.reason === 'below_minimum'
               ? {

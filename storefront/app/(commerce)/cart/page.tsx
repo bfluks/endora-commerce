@@ -380,7 +380,7 @@ function toViewModel(it: CartItem, locale: string): CartLineViewModel {
     },
     ...(it.unavailable !== undefined ? { unavailable: it.unavailable } : {}),
     ...(it.unavailableReason !== undefined ? { unavailableReason: it.unavailableReason } : {}),
-    // Feature 148 — the input floor and the server's below-minimum verdict.
+    // Feature 154 — the input floor and the server's below-minimum verdict.
     packagingUnitName: it.packagingUnitName ?? null,
     minOrderQuantity: it.minOrderQuantity ?? null,
     belowMinimum: it.belowMinimum ?? null,

@@ -4,8 +4,8 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
 
 /**
- * Feature 148, Phase 3 (T013) — the schema `catalog`'s `order_rules`
- * migration adds (`specs/148-catalog-order-constraints/data-model.md` §1).
+ * Feature 154, Phase 3 (T013) — the schema `catalog`'s `order_rules`
+ * migration adds (`specs/154-catalog-order-constraints/data-model.md` §1).
  *
  * - `products.min_order_quantity` is null when not written and its check
  *   constraint refuses 0 and 1 000 001 (FR-001, F5);
@@ -60,7 +60,7 @@ async function expectRefused(em: EntityManager, sql: string, params: unknown[], 
   await em.execute('rollback to savepoint order_rules_check');
 }
 
-describe('148 — catalog order-rule columns [integration]', () => {
+describe('154 — catalog order-rule columns [integration]', () => {
   it('products.min_order_quantity is null and products.returnable is false on a row inserted without them', async () => {
     const em = db.em();
     const id = await insertProduct(em);

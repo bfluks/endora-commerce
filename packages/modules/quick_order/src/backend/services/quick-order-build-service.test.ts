@@ -9,7 +9,7 @@ import {
 import { QuickOrderBuildService, type QuickOrderBuildLineInput } from './quick-order-build-service.js';
 
 /**
- * Feature 148 (FR-011 (b), FR-030, FR-038; research R8, R12.2, R20; threats F1,
+ * Feature 154 (FR-011 (b), FR-030, FR-038; research R8, R12.2, R20; threats F1,
  * F4, F10) — the build adds a cart batch through `addItems`, reports the lines
  * below a minimum, forwards the operator's `minimums: 'warn'` on the quote
  * target only, and refuses an oversized request before any port call.

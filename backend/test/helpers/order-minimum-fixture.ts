@@ -3,8 +3,8 @@ import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Product, ProductPackagingUnit, ProductVariant } from './package-entities.js';
 
 /**
- * Feature 148 — per-run catalogue fixtures for the cart minimum tests
- * (`specs/148-catalog-order-constraints/`, Phase 6).
+ * Feature 154 — per-run catalogue fixtures for the cart minimum tests
+ * (`specs/154-catalog-order-constraints/`, Phase 6).
  *
  * A product carries an English and a Polish name, so a refusal can be checked
  * for naming it in the request's language, a `defaultPrice` attribute, and a
@@ -40,7 +40,7 @@ export async function createMinimumProduct(
     namePl: string;
     type?: 'simple' | 'configurable';
     minOrderQuantity?: number | null;
-    /** The product's returnable flag (feature 148, FR-003); `false` when omitted, the column default. */
+    /** The product's returnable flag (feature 154, FR-003); `false` when omitted, the column default. */
     returnable?: boolean;
     /** Channels publishing the product; empty = sold nowhere (hidden from every buyer request). */
     channelIds: readonly string[];

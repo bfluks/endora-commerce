@@ -31,7 +31,7 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
  * New return/complaint submission (feature 046, US1). Without an `orderId` the
  * customer picks an order; with one, the order's lines are shown for selection.
  *
- * Feature 148 (FR-018, FR-020, FR-021): the kind is chosen first and carried in the address
+ * Feature 154 (FR-018, FR-020, FR-021): the kind is chosen first and carried in the address
  * (`?kind=complaint`), because what a line allows depends on it and the page works without
  * JavaScript — one decision per step (Hick's Law). In a return a non-returnable line is shown
  * with its reason and cannot be selected; in a complaint every line can. An order with no

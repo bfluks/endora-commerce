@@ -356,7 +356,7 @@ export interface OrderServiceNeighbourPorts {
 
 /**
  * What placement (and the checkout preview) concluded about the quote request a
- * basket claims (feature 148, research R19): the source the order may name,
+ * basket claims (feature 154, research R19): the source the order may name,
  * the request as read, and whether its quote-seeded lines keep their exemption.
  */
 interface QuoteRequestSourceAssessment {
@@ -1237,7 +1237,7 @@ export class OrderService {
     // method used one for was the basket read below, and it is a port now
     // (feature 080, T048). The one fork it opens is for this module's own
     // `Order` table — the "already ordered" count of the quote-source
-    // assessment (feature 148, research R19) — a read, never a write seam.
+    // assessment (feature 154, research R19) — a read, never a write seam.
     const org = await this.neighbours.organizationDetails.findById(ctx.organizationId);
     // The **standalone** read, through `cartReadPort` — no `EntityManager`,
     // because this method opens no transaction and a read handed one is a
@@ -1291,7 +1291,7 @@ export class OrderService {
     const catalogue = await readBasketCatalogue(this.neighbours.catalogProductRead, items);
     const productById = new Map(catalogue.products.map((p) => [p.id, p]));
 
-    // Feature 148 (FR-008, FR-036, FR-037; research R19) — the lines placement
+    // Feature 154 (FR-008, FR-036, FR-037; research R19) — the lines placement
     // will refuse, judged by the same rule with the quote source assessed by the
     // lock-free twin of placement's vouch. Advisory: placement binds.
     const quoteSource = await this.#previewedQuoteRequestSource(
@@ -1345,7 +1345,7 @@ export class OrderService {
   /**
    * The Quote Request an order may name as its source, and whether the basket's
    * quote-seeded lines keep their exemption from the minimums
-   * (`specs/143-crm-sales-opportunities/`, FR-100 … FR-103; feature 148,
+   * (`specs/143-crm-sales-opportunities/`, FR-100 … FR-103; feature 154,
    * FR-036, research R19).
    *
    * The basket carries a claim, never a fact: `carts` records what the
@@ -1376,7 +1376,7 @@ export class OrderService {
    * makes two concurrent placements take turns: without it both count zero
    * under `read committed`, both stamp, and both keep the exemption.
    *
-   * **Lock order (feature 148, plan I7).** Called right after the basket and
+   * **Lock order (feature 154, plan I7).** Called right after the basket and
    * its products are read — before the minimum check, the value gate, the
    * business id, any stock reservation and the credit reservation — so the
    * exemption is granted under the same lock that makes "no Order names it yet"
@@ -1412,7 +1412,7 @@ export class OrderService {
 
   /**
    * The checkout preview's read-only twin of {@link #vouchedQuoteRequestSource}
-   * (feature 148, research R19 *Checkout preview*): the same port reads, the
+   * (feature 154, research R19 *Checkout preview*): the same port reads, the
    * same judge and validity rule, and the "already ordered" count on this
    * module's **own** `Order` table through a fresh fork — no transaction and no
    * lock. Under a race (another basket of the same request placing between the
@@ -1549,7 +1549,7 @@ export class OrderService {
         throw new HttpError(409, ERROR_CODES.CART_EMPTY, 'Cart is empty.');
       }
 
-      // Feature 148 (FR-008, FR-036, FR-037; research R19; threats F2, F3) —
+      // Feature 154 (FR-008, FR-036, FR-037; research R19; threats F2, F3) —
       // the basket's order minimums, judged here, inside the transaction and
       // **before the first side effect**: before the value gate, the business
       // id, any stock reservation and the credit reservation. Every caller of
@@ -2112,7 +2112,7 @@ export class OrderService {
           ...(item.variantId ? { variantId: item.variantId } : {}),
           quantity: item.quantity,
           unitPrice: item.unitPrice,
-          // Feature 148 (FR-016a, D-44) — the product's returnable flag as it
+          // Feature 154 (FR-016a, D-44) — the product's returnable flag as it
           // stands now, from the one basket read above; copied once and never
           // updated. Always an explicit boolean (fail-closed): `null` is kept
           // for lines placed before the feature.

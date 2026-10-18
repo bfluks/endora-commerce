@@ -92,13 +92,13 @@ describe('Admin quick-order on behalf', () => {
   });
 
   /**
-   * Feature 148, Phase 9 (T067) — US4 #1d: the operator's preview keeps a row
+   * Feature 154, Phase 9 (T067) — US4 #1d: the operator's preview keeps a row
    * below the minimum buildable and warns; the operator's build into the
    * customer's cart still rejects it (FR-011 (b)). The quote half (Phase 11,
    * T084): the build to a quote request creates it and the admin read warns.
    * Plus the item bound on the admin build (FR-038).
    */
-  describe('148 — order minimums', () => {
+  describe('154 — order minimums', () => {
     const RUN = minimumFixtureRun();
     let A: MinimumProductFixture;
     let D: MinimumProductFixture;

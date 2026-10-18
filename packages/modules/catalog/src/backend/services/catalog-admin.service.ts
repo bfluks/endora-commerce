@@ -283,7 +283,7 @@ export class CatalogAdminService {
       }
       throw err;
     }
-    // Feature 148 (FR-001, D5) — the range and the type rule hold for every
+    // Feature 154 (FR-001, D5) — the range and the type rule hold for every
     // caller, not only for the ones a route schema stands in front of.
     assertOrderMinimumAllowed(req.type, req.minOrderQuantity);
 
@@ -342,7 +342,7 @@ export class CatalogAdminService {
             ? { downloadAssetId: req.downloadAssetId }
             : {}),
           ...(req.downloadUrl !== undefined ? { downloadUrl: req.downloadUrl } : {}),
-          // Feature 148 (FR-001, FR-003) — the order rules, when the request names them.
+          // Feature 154 (FR-001, FR-003) — the order rules, when the request names them.
           ...(req.minOrderQuantity !== undefined ? { minOrderQuantity: req.minOrderQuantity } : {}),
           ...(req.returnable !== undefined ? { returnable: req.returnable } : {}),
         });
@@ -543,7 +543,7 @@ export class CatalogAdminService {
     if (!product) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
-    // Feature 148 (FR-001, D5) — refused before anything on the row changes.
+    // Feature 154 (FR-001, D5) — refused before anything on the row changes.
     assertOrderMinimumAllowed(product.type, req.minOrderQuantity);
     const stateBefore: Record<string, unknown> = {
       sku: product.sku,
@@ -555,7 +555,7 @@ export class CatalogAdminService {
       archivedAt: product.archivedAt ?? null,
       attributeValues: { ...product.attributeValues },
       allowedOrganizationIds: [...product.allowedOrganizationIds],
-      // Feature 148 (FR-005) — always present, so a row records the value
+      // Feature 154 (FR-005) — always present, so a row records the value
       // whether or not this write touched it.
       minOrderQuantity: product.minOrderQuantity ?? null,
       returnable: product.returnable,
@@ -692,7 +692,7 @@ export class CatalogAdminService {
       product.fulfilmentStrategyWarehouseOrder = req.fulfilmentStrategyWarehouseOrder;
       changedFields.push('fulfilmentStrategyWarehouseOrder');
     }
-    // Feature 148 (FR-001, FR-003, D5) — the pieces minimum and the returnable flag.
+    // Feature 154 (FR-001, FR-003, D5) — the pieces minimum and the returnable flag.
     if (req.minOrderQuantity !== undefined) {
       product.minOrderQuantity = req.minOrderQuantity;
       changedFields.push('minOrderQuantity');
@@ -2104,7 +2104,7 @@ export class CatalogAdminService {
 }
 
 /**
- * Feature 148 (FR-001, threat F5, D5) — a pieces minimum is an integer in
+ * Feature 154 (FR-001, threat F5, D5) — a pieces minimum is an integer in
  * 1…1 000 000 and only a `simple` or `configurable` product may carry one;
  * `null` (clear) and an absent key are always allowed. Refused
  * `422 VALIDATION_FAILED` with `details.field`, the answer an in-process caller

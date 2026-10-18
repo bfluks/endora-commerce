@@ -3,8 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
 
 /**
- * Feature 148, Phase 3 (T014) — `carts`' `cart_item_quote_seeded_quantity`
- * migration (`specs/148-catalog-order-constraints/data-model.md` §2).
+ * Feature 154, Phase 3 (T014) — `carts`' `cart_item_quote_seeded_quantity`
+ * migration (`specs/154-catalog-order-constraints/data-model.md` §2).
  *
  * `cart_items.quote_seeded_quantity` exists as a nullable integer with no
  * default, and a line inserted without it reads `null` — every line that was
@@ -28,7 +28,7 @@ afterEach(async () => {
   await db.rollbackTx();
 });
 
-describe('148 — cart_items.quote_seeded_quantity [integration]', () => {
+describe('154 — cart_items.quote_seeded_quantity [integration]', () => {
   it('exists as a nullable integer with no default', async () => {
     const rows = await db.em().execute<
       { data_type: string; is_nullable: string; column_default: string | null }[]

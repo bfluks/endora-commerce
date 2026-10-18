@@ -1,8 +1,8 @@
 import { Migration } from '@mikro-orm/migrations';
 
 /**
- * Feature 148 — `cart_items.quote_seeded_quantity`
- * (`specs/148-catalog-order-constraints/data-model.md` §2).
+ * Feature 154 — `cart_items.quote_seeded_quantity`
+ * (`specs/154-catalog-order-constraints/data-model.md` §2).
  *
  * The quantity a line was seeded with from an accepted quote request; `null`
  * for every other line. A line whose quantity still equals it is exempt from

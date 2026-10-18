@@ -10,7 +10,7 @@ import {
 import { returnableLineSchema, returnableResponseSchema, type OrderReturnContextLine } from './returns.js';
 
 /**
- * Feature 148 — quote-request, returns and comparison shapes
+ * Feature 154 — quote-request, returns and comparison shapes
  * (`contracts/quote-requests-api.md` §1, §3, §4; `contracts/returns-api.md` §2;
  * `contracts/catalog-api.md` §4).
  */
@@ -118,7 +118,7 @@ describe('returnable lines', () => {
     );
   });
 
-  it('requires returnable (feature 148 Phase 12a, contracts/returns-api.md §2)', () => {
+  it('requires returnable (feature 154 Phase 12a, contracts/returns-api.md §2)', () => {
     expect(returnableLineSchema.safeParse(line).success).toBe(false);
   });
 

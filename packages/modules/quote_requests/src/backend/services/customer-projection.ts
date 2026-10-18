@@ -22,7 +22,7 @@ export const CUSTOMER_ITEM_KEYS = [
   'taxRate',
   'packagingUnitName',
   'packagingUnitBaseQuantity',
-  // Feature 148 — the catalogue unit the line resolved to (analyze F14).
+  // Feature 154 — the catalogue unit the line resolved to (analyze F14).
   'packagingUnitId',
 ] as const;
 

@@ -10,9 +10,9 @@ import { minimumFixtureRun } from '../../helpers/order-minimum-fixture.js';
 import { CUSTOMER_COOKIE, resetReturnGraph, seedReturnableOrder } from './helpers.js';
 
 /**
- * Feature 148, Phase 12a (T091a) — a request can name one order line more than
+ * Feature 154, Phase 12a (T091a) — a request can name one order line more than
  * once, and its per-line total is what is judged against the remaining
- * quantity, for returns and complaints alike (`specs/148-catalog-order-constraints/`,
+ * quantity, for returns and complaints alike (`specs/154-catalog-order-constraints/`,
  * US6 #8, FR-033, SC-006; `contracts/returns-api.md` §3 step 1; threat F7).
  */
 
@@ -20,7 +20,7 @@ interface ErrorBody {
   error: { code: string; message: string; details?: Record<string, unknown> };
 }
 
-describe('148 — per-line totals on a case request [integration]', () => {
+describe('154 — per-line totals on a case request [integration]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   let reasonA = '';

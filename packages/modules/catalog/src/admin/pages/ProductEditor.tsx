@@ -796,7 +796,7 @@ export function ProductEditor(): ReactNode {
           {activeTab === 'inventory' && id ? (
             <div className="b2b-col" style={{ gap: 16 }}>
               <ProductInventoryTab productId={id} />
-              {/* Feature 148 — returnable for every type; the minimum gates itself (D5). */}
+              {/* Feature 154 — returnable for every type; the minimum gates itself (D5). */}
               <ProductOrderRulesCard productId={id} productType={type} />
               {type === 'simple' || type === 'configurable' ? (
                 <PackagingUnitsEditor productId={id} />

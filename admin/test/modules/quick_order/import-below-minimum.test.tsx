@@ -9,7 +9,7 @@ import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/T
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
 
 /**
- * Feature 148, T108 — the operator's quick-order import (FR-011 (a), P1 C,
+ * Feature 154, T108 — the operator's quick-order import (FR-011 (a), P1 C,
  * US4 #1d). A row whose product's file total is below the pieces minimum is
  * **not** rejected on the admin route: it stays among the buildable rows —
  * it is sent in the build — with a "below minimum (10 pcs)" badge. A build to

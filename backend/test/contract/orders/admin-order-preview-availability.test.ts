@@ -68,9 +68,9 @@ describe('Admin order preview — visibility and assortment codes (feature 145)'
   let channelB: string;
   let listedHere = false;
   const RUN = minimumFixtureRun();
-  /** Feature 148 — a product with a pieces minimum of 10, visible and on channel A. */
+  /** Feature 154 — a product with a pieces minimum of 10, visible and on channel A. */
   let M: MinimumProductFixture;
-  /** Feature 148 — the same minimum, but restricted to another Organization. */
+  /** Feature 154 — the same minimum, but restricted to another Organization. */
   let MH: MinimumProductFixture;
 
   beforeAll(async () => {
@@ -304,7 +304,7 @@ describe('Admin order preview — visibility and assortment codes (feature 145)'
       await h.em().nativeUpdate(Product, { id: PRICED }, { deletedAt: null });
     }
   });
-  describe('feature 148 — BELOW_MINIMUM_QUANTITY, last in the precedence (FR-009, FR-035)', () => {
+  describe('feature 154 — BELOW_MINIMUM_QUANTITY, last in the precedence (FR-009, FR-035)', () => {
     function messageFor(data: PreviewBody['data'], productId: string) {
       return data.messages.find((m) => m.productId === productId);
     }

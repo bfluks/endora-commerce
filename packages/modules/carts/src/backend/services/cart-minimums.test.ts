@@ -8,8 +8,8 @@ import {
 } from './cart-minimums.js';
 
 /**
- * Feature 148, Phase 6 (T038) — the cart's prospective-lines builder
- * (`specs/148-catalog-order-constraints/research.md` R11, `data-model.md` §2).
+ * Feature 154, Phase 6 (T038) — the cart's prospective-lines builder
+ * (`specs/154-catalog-order-constraints/research.md` R11, `data-model.md` §2).
  *
  * A single add or edit is judged on the basket as it *would be*: the cart's lines
  * with the change applied — a bump of the matching `(product, variant, unit)`

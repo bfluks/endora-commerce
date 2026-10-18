@@ -29,7 +29,7 @@ import {
 import { conversionSkipSchema } from './shopping-lists.js';
 
 /**
- * Feature 148 — the cart, checkout, admin order, quick-order and shopping-list shapes
+ * Feature 154 — the cart, checkout, admin order, quick-order and shopping-list shapes
  * (`contracts/cart-and-checkout-api.md` §3, §5, §6, §8, §10) and the FR-038 bounds, which
  * are the services' (422), never the schemas' (400 — research R20).
  */

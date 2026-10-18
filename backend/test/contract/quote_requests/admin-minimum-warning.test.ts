@@ -15,7 +15,7 @@ import {
 } from '../../helpers/order-minimum-fixture.js';
 
 /**
- * Feature 148, Phase 11 (T083) — a sales representative's quote-request
+ * Feature 154, Phase 11 (T083) — a sales representative's quote-request
  * writes are never refused for a minimum; the admin read flags each line
  * below its product's current minimum, and the customer never sees the flag
  * (FR-012 actor rule, FR-030; US4 #9; threat S7;
@@ -35,7 +35,7 @@ interface Item {
   minimumWarning?: unknown;
 }
 
-describe('148 — admin quote-request minimum warnings [contract]', () => {
+describe('154 — admin quote-request minimum warnings [contract]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   const PALLET_B = `Pallet B ${RUN}`;

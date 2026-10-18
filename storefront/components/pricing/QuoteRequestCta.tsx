@@ -23,7 +23,7 @@ export function QuoteRequestCta(props: {
   /** Hide the explanatory blurb shown above the form on the PDP. */
   withoutHint?: boolean;
   /**
-   * Feature 148 (FR-032) — the product's pieces minimum: the PDP variant's quantity starts at
+   * Feature 154 (FR-032) — the product's pieces minimum: the PDP variant's quantity starts at
    * it and the add never puts fewer pieces in the quote-request draft. `null`/absent = none.
    */
   minOrderQuantity?: number | null | undefined;

@@ -178,7 +178,7 @@ export default async function CheckoutPage({
     );
   }
 
-  // Feature 148 (FR-013, FR-036, FR-037) — the basket lines placement will refuse. The
+  // Feature 154 (FR-013, FR-036, FR-037) — the basket lines placement will refuse. The
   // checkout preview is the authority here: it confirms a quote source is still valid before
   // honouring a quote line's exemption, which the cart view takes at face value. It needs a
   // delivery and a payment method, so it is asked with the ones the page preselects; the lines
@@ -360,7 +360,7 @@ function preselectedId(methods: ReadonlyArray<{ id: string }>, preferredId: stri
 }
 
 /**
- * Feature 148 — the preview's `belowMinimumLines`, or the cart view's own flags when the
+ * Feature 154 — the preview's `belowMinimumLines`, or the cart view's own flags when the
  * preview cannot be asked (no method to ask it with) or does not answer.
  */
 async function readBelowMinimumLines(input: {

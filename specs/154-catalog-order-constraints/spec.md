@@ -1,6 +1,6 @@
 # Feature Specification: Minimum order quantities (pieces and packaging units) and the returnable flag
 
-**Feature Branch**: `feat/148-catalog-order-constraints` (spec directory `specs/148-catalog-order-constraints/`)
+**Feature Branch**: `feat/154-catalog-order-constraints` (spec directory `specs/154-catalog-order-constraints/`)
 **Created**: 2026-10-13 (clarified draft); revised 2026-10-15
 **Status**: Clarified — ready for plan (amended after analyze, 2026-10-15). Clarify sessions
 2026-10-13 and 2026-10-15 (two rounds, Q0–Q10, then the analyze and threat-model rulings P1–P4)

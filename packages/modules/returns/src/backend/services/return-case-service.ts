@@ -66,7 +66,7 @@ export class ReturnCaseService {
     }
     const consumed = await this.consumedQuantities(orderId);
     const lines = ctx.lines.map((l) => {
-      // Feature 148 (FR-017, FR-025) — the stamp recorded at placement governs;
+      // Feature 154 (FR-017, FR-025) — the stamp recorded at placement governs;
       // `null` (placed before the feature) is returnable.
       const returnable = isLineReturnable(l.returnableAtPurchase);
       return {
@@ -117,7 +117,7 @@ export class ReturnCaseService {
       (await this.deps.emFactory().find(ReturnReason, { isActive: true })).map((r) => [r.id, r]),
     );
 
-    // Feature 148 (FR-033, SC-006) — judged on the per-line sum, for both
+    // Feature 154 (FR-033, SC-006) — judged on the per-line sum, for both
     // kinds, so a request cannot exceed a line's remaining quantity by naming
     // it more than once. The entries are still stored as sent.
     const quantityRefusal = checkRequestedQuantities(input.lines, ctx.lines, consumed);
@@ -142,7 +142,7 @@ export class ReturnCaseService {
       }
     }
 
-    // Feature 148 (FR-019, FR-020) — a `return` case may not include a line
+    // Feature 154 (FR-019, FR-020) — a `return` case may not include a line
     // recorded as not returnable; a complaint is never checked. Existing
     // cases are never re-evaluated (FR-022).
     const notReturnable = nonReturnableRequestedLines(input.kind, input.lines, ctx.lines);

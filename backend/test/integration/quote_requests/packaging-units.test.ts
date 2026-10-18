@@ -17,7 +17,7 @@ import {
 } from '../../helpers/order-minimum-fixture.js';
 
 /**
- * Feature 148, Phase 10 (T077) — a buyer's quote line names its packaging unit
+ * Feature 154, Phase 10 (T077) — a buyer's quote line names its packaging unit
  * and is resolved against the catalogue before anything is written (FR-026,
  * FR-027, FR-029; US4 #10, #11; threats S2, S5, F6; analyze F14;
  * `contracts/quote-requests-api.md` §1, §4, §5).
@@ -47,7 +47,7 @@ interface QuoteBody {
   };
 }
 
-describe('148 — quote-request packaging resolution [integration]', () => {
+describe('154 — quote-request packaging resolution [integration]', () => {
   let h: BackendServerHandle;
   const customer = { b2b_session: 'stub-customer-session' };
   const admin = { b2b_session: 'stub-admin-session' };

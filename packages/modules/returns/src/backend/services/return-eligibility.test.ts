@@ -9,8 +9,8 @@ import {
 } from './return-eligibility.js';
 
 /**
- * Feature 148, Phase 12a (T089) — the returns policy for the line-level
- * returnable flag (`specs/148-catalog-order-constraints/contracts/returns-api.md`
+ * Feature 154, Phase 12a (T089) — the returns policy for the line-level
+ * returnable flag (`specs/154-catalog-order-constraints/contracts/returns-api.md`
  * §2–§3; FR-017 – FR-020, FR-025, FR-033).
  */
 

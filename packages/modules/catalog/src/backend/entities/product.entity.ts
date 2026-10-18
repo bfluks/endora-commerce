@@ -195,7 +195,7 @@ export class Product {
   fulfilmentStrategyWarehouseOrder?: string[] | null;
 
   /**
-   * Feature 148 (FR-001) — the minimum order quantity in pieces, 1…1 000 000,
+   * Feature 154 (FR-001) — the minimum order quantity in pieces, 1…1 000 000,
    * or `null` for none; `1` is equivalent to none. Meaningful for `simple`
    * and `configurable` products only, and inherited by their variants.
    */
@@ -203,7 +203,7 @@ export class Product {
   minOrderQuantity?: number | null;
 
   /**
-   * Feature 148 (FR-003, FR-004) — whether the product may be returned.
+   * Feature 154 (FR-003, FR-004) — whether the product may be returned.
    * `false` unless an operator turns it on; snapshotted onto each order line
    * at placement.
    */

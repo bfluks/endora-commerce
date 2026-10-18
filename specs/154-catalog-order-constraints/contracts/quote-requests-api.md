@@ -6,7 +6,7 @@ coordinator ruling M4); `patchQuoteRequestSchema` keeps its existing body-level 
 ## 1. Buyer line — `createQuoteRequestLineSchema` (`quote-requests.ts:422`)
 
 ```ts
-/** Feature 148 (FR-026) — the catalogue unit the line is ordered in. Wins over name/base quantity. */
+/** Feature 154 (FR-026) — the catalogue unit the line is ordered in. Wins over name/base quantity. */
 packagingUnitId: uuidSchema.optional(),
 ```
 
@@ -50,7 +50,7 @@ quick order, shopping list → quote, buyer clone of an order):
 export interface CreateForCustomerOptions {
   lineReferencePrices?: …;               // feature 146, unchanged
   /**
-   * Feature 148 (FR-012, FR-030) — `'enforce'` (default): a buyer is writing, minimums refuse.
+   * Feature 154 (FR-012, FR-030) — `'enforce'` (default): a buyer is writing, minimums refuse.
    * `'warn'`: a sales representative is writing through the buyer's path (admin clone-to-quote,
    * admin quick-order build); nothing is refused for minimums and the admin read flags the lines.
    * In-process only: no HTTP body can carry it (`createQuoteRequestSchema` has no such key).
@@ -70,7 +70,7 @@ from `POST /api/v1/admin/quick-order/build` (target `quote_request`). Admin `cre
 `quoteRequestItemSchema` (`quote-requests.ts:33`) gains, **admin serialisation only**:
 
 ```ts
-/** Feature 148 (FR-030) — set when the line is below its product's current minimum. Informs only. */
+/** Feature 154 (FR-030) — set when the line is below its product's current minimum. Informs only. */
 minimumWarning: z
   .object({
     kind: z.enum(['pieces', 'packaging_unit']),
@@ -79,7 +79,7 @@ minimumWarning: z
   })
   .nullable()
   .optional(),
-/** Feature 148 — the resolved catalogue unit (admin and customer). */
+/** Feature 154 — the resolved catalogue unit (admin and customer). */
 packagingUnitId: uuidSchema.nullable().optional(),
 ```
 

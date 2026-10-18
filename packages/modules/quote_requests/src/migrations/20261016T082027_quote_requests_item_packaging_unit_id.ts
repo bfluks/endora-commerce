@@ -1,8 +1,8 @@
 import { Migration } from '@mikro-orm/migrations';
 
 /**
- * Feature 148 — `quote_request_items.packaging_unit_id`
- * (`specs/148-catalog-order-constraints/data-model.md` §4).
+ * Feature 154 — `quote_request_items.packaging_unit_id`
+ * (`specs/154-catalog-order-constraints/data-model.md` §4).
  *
  * The catalogue packaging unit a line resolved to (FR-026), beside the
  * existing `packaging_unit_name` / `packaging_unit_base_quantity` snapshot.

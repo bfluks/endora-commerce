@@ -71,7 +71,7 @@ describe('previewLineAvailability', () => {
 });
 
 /**
- * Step 5 (feature 148, FR-009, FR-035): the pieces minimum, over the lines that
+ * Step 5 (feature 154, FR-009, FR-035): the pieces minimum, over the lines that
  * passed steps 1–4 only, the product's total across its lines (D1).
  */
 describe('previewBelowMinimums', () => {

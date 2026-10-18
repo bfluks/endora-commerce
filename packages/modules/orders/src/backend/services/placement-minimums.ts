@@ -17,7 +17,7 @@ import {
 import { HttpError } from '@endora-commerce/platform/http';
 
 /**
- * Feature 148 (FR-008, FR-028, FR-036, FR-037; research R19;
+ * Feature 154 (FR-008, FR-028, FR-036, FR-037; research R19;
  * `contracts/cart-and-checkout-api.md` §8–§9) — the basket's order minimums as
  * placement and the checkout preview judge them.
  *

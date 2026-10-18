@@ -147,7 +147,7 @@ describe('Quick-order Excel import + build', () => {
   });
 
   /**
-   * Feature 148, Phase 9 (T067) — the buyer's build judges the batch with the
+   * Feature 154, Phase 9 (T067) — the buyer's build judges the batch with the
    * cart and reports the lines below a minimum; the preview judges the file
    * (US4 #1, #1b, #16, #17; FR-011, FR-035, FR-038; threats F1, F4).
    *
@@ -155,7 +155,7 @@ describe('Quick-order Excel import + build', () => {
    * no channel — hidden from every buyer request. The buyer's basket is closed
    * before every case, so each one starts from an empty cart.
    */
-  describe('148 — order minimums', () => {
+  describe('154 — order minimums', () => {
     const RUN = minimumFixtureRun();
     let A: MinimumProductFixture;
     let D: MinimumProductFixture;

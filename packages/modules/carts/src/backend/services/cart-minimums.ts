@@ -17,7 +17,7 @@ import { HttpError } from '@endora-commerce/platform/http';
 import { pickLocalized } from './localized-name.js';
 
 /**
- * Feature 148 (FR-006, FR-006a, FR-007, FR-013, FR-028, FR-037; research R11) —
+ * Feature 154 (FR-006, FR-006a, FR-007, FR-013, FR-028, FR-037; research R11) —
  * the cart's side of the catalogue's order minimums.
  *
  * The rule itself is `evaluateOrderMinimums` in `@endora-commerce/contracts`; what

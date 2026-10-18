@@ -6,8 +6,8 @@ import { CatalogProductReadService } from '../../../../packages/modules/catalog/
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
 
 /**
- * Feature 148, Phase 4 (T023) — `catalogProductReadPort` carries the order-rule
- * data (`specs/148-catalog-order-constraints/contracts/catalog-api.md` §5, R7):
+ * Feature 154, Phase 4 (T023) — `catalogProductReadPort` carries the order-rule
+ * data (`specs/154-catalog-order-constraints/contracts/catalog-api.md` §5, R7):
  *
  * - `findById` / `findByIds` answer `minOrderQuantity` and `returnable`;
  * - `findPackagingUnitInProduct` answers `minOrderUnits`;
@@ -81,7 +81,7 @@ function orderedIds(): [string, string] {
   ];
 }
 
-describe('148 — catalogProductReadPort order-rule data [integration]', () => {
+describe('154 — catalogProductReadPort order-rule data [integration]', () => {
   it('findById and findByIds carry minOrderQuantity and returnable', async () => {
     const em = db.em();
     const withRules = await insertProduct(em, { minOrderQuantity: 10, returnable: true });

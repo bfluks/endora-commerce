@@ -23,8 +23,8 @@ import {
 } from '../../helpers/test-server.js';
 
 /**
- * Feature 148, Phase 5 (T028) — the catalogue writes of the order rules
- * (`specs/148-catalog-order-constraints/contracts/catalog-api.md` §1–§2).
+ * Feature 154, Phase 5 (T028) — the catalogue writes of the order rules
+ * (`specs/154-catalog-order-constraints/contracts/catalog-api.md` §1–§2).
  *
  *  - `PATCH /api/v1/admin/catalog/products/:id` sets and clears
  *    `minOrderQuantity`, refuses an out-of-range value at the route (400) and a
@@ -38,7 +38,7 @@ import {
  *  - documents already holding the product are untouched by the change
  *    (FR-005, analyze F9).
  */
-describe('148 — catalogue writes of minOrderQuantity and returnable [contract]', () => {
+describe('154 — catalogue writes of minOrderQuantity and returnable [contract]', () => {
   let h: BackendServerHandle;
   const adminCookie = { b2b_session: 'stub-admin-session' };
   const RUN = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;

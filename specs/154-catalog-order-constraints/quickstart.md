@@ -1,4 +1,4 @@
-# Quickstart: walking feature 148 by hand
+# Quickstart: walking feature 154 by hand
 
 For the builder's T144 walk and the owner's manual test. Run `pnpm run dev:infra`, then
 `pnpm run build:packages`, `pnpm --filter backend run migration:up` (four new migrations), and the dev

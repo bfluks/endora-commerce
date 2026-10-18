@@ -265,7 +265,7 @@ export type MessageKey =
   | 'orders.paymentReturn.cancelled'
   | 'orders.paymentReturn.failed'
   | 'orders.actionFailed'
-  // Feature 148 (FR-021, FR-018) — the return form and the order's return action. A line may
+  // Feature 154 (FR-021, FR-018) — the return form and the order's return action. A line may
   // be not returnable, and an order with no returnable line still takes a complaint.
   | 'returns.new.heading'
   | 'returns.new.chooseOrder'

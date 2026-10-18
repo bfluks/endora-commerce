@@ -1,5 +1,5 @@
 /**
- * Feature 148 (FR-001, FR-002, FR-006a, FR-028, FR-037; research R6, R6.1, R9, R10) — the
+ * Feature 154 (FR-001, FR-002, FR-006a, FR-028, FR-037; research R6, R6.1, R9, R10) — the
  * one implementation of the minimum-order rule: a pieces minimum per product and a
  * minimum number of units per packaging unit.
  *
@@ -11,7 +11,7 @@
  * {@link ORDER_MINIMUM_MAX}, so an import back into it would be a cycle evaluated at load.
  */
 
-/** Feature 148 (FR-001, FR-002) — the upper bound of both minimums. */
+/** Feature 154 (FR-001, FR-002) — the upper bound of both minimums. */
 export const ORDER_MINIMUM_MAX = 1_000_000;
 
 /** Integer in 1…{@link ORDER_MINIMUM_MAX}. `null` (clear) is the caller's to allow. */

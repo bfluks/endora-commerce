@@ -18,7 +18,7 @@ import {
 } from '../../helpers/order-minimum-fixture.js';
 
 /**
- * Feature 148, Phase 6 (T041) — the full cart view flags lines below a minimum
+ * Feature 154, Phase 6 (T041) — the full cart view flags lines below a minimum
  * (`contracts/cart-and-checkout-api.md` §3; FR-013, FR-028, FR-037; research
  * R11, plan deviation D7).
  *
@@ -44,7 +44,7 @@ interface ViewLine {
   belowMinimum?: { kind: string; minimum: number; packagingUnitName?: string } | null;
 }
 
-describe('148 — GET /api/v1/cart flags lines below a minimum [contract]', () => {
+describe('154 — GET /api/v1/cart flags lines below a minimum [contract]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   let raised: MinimumProductFixture;

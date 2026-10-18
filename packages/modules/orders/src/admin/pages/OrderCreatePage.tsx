@@ -74,7 +74,7 @@ interface PreviewMessage {
 /**
  * The line reason for a preview message
  * (`contracts/order-preview-unavailability.md` § Consumer mapping): the two
- * assortment/visibility codes carry their own reason; feature 148's
+ * assortment/visibility codes carry their own reason; feature 154's
  * `BELOW_MINIMUM_QUANTITY` names the minimum it missed (FR-009) — the operator
  * can fix that one by raising the quantity, so it must not read as **No price**;
  * `PRODUCT_NOT_FOUND`, `QUOTE_ONLY` and any code this client does not know read

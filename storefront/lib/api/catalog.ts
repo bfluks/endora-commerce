@@ -123,11 +123,11 @@ export async function getProductBySlug(
   return res.data;
 }
 
-/** Feature 148 — the most product reads `getProductMinimumsBySlugs` makes (the draft's 200 lines). */
+/** Feature 154 — the most product reads `getProductMinimumsBySlugs` makes (the draft's 200 lines). */
 export const DRAFT_MINIMUM_MAX_SLUGS = 200;
 
 /**
- * Feature 148 (FR-032, research R15) — the current pieces minimum of each product, by slug,
+ * Feature 154 (FR-032, research R15) — the current pieces minimum of each product, by slug,
  * read through the existing public product detail (no new route). For the quote-request
  * draft page, whose lines live in `localStorage` and may predate a minimum (US4 #14).
  *

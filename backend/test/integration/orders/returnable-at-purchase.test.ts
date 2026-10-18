@@ -31,7 +31,7 @@ import {
 } from '../../helpers/order-minimum-fixture.js';
 
 /**
- * Feature 148, Phase 12 (T090) — every placement path stamps
+ * Feature 154, Phase 12 (T090) — every placement path stamps
  * `order_items.returnable_at_purchase` from the product's returnable flag as it
  * stood at that moment (FR-016a, D-44, US6 #6): checkout, one-click, admin
  * create, API intake and an accepted-quote checkout. Changing the flag
@@ -47,7 +47,7 @@ import {
 const ADMIN = { b2b_session: 'stub-admin-session' };
 const CTX = { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID };
 
-describe('148 — placement stamps returnable_at_purchase on every path [integration]', () => {
+describe('154 — placement stamps returnable_at_purchase on every path [integration]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   let channelId = '';

@@ -37,7 +37,7 @@ export function previewLineAvailability(input: {
 }
 
 /**
- * Step 5 of the admin order preview's per-line decision (feature 148, FR-009,
+ * Step 5 of the admin order preview's per-line decision (feature 154, FR-009,
  * FR-035): `BELOW_MINIMUM_QUANTITY`, judged only over the lines that passed
  * steps 1–4 — `null` marks a line that did not, and it counts toward no
  * product's total. A product's total runs across all its lines (D1). Preview

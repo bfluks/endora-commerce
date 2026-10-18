@@ -287,7 +287,7 @@ export class PackagingUnitService {
 }
 
 /**
- * Feature 148 (FR-002, threat F5) — `minOrderUnits` is an integer in
+ * Feature 154 (FR-002, threat F5) — `minOrderUnits` is an integer in
  * 1…1 000 000 or `null` (clear). Checked here as well as in the route schema
  * because `CatalogPackagingPort` callers such as `pim_pimcore` reach this
  * service with no schema in front of it.

@@ -3,8 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
 
 /**
- * Feature 148, Phase 3 (T014) — `quote_requests`' `item_packaging_unit_id`
- * migration (`specs/148-catalog-order-constraints/data-model.md` §4).
+ * Feature 154, Phase 3 (T014) — `quote_requests`' `item_packaging_unit_id`
+ * migration (`specs/154-catalog-order-constraints/data-model.md` §4).
  *
  * `quote_request_items.packaging_unit_id` exists as a nullable uuid with no
  * default and **no foreign key** (packaging units are hard-deleted and the
@@ -28,7 +28,7 @@ afterEach(async () => {
   await db.rollbackTx();
 });
 
-describe('148 — quote_request_items.packaging_unit_id [integration]', () => {
+describe('154 — quote_request_items.packaging_unit_id [integration]', () => {
   it('exists as a nullable uuid with no default', async () => {
     const rows = await db.em().execute<
       { data_type: string; is_nullable: string; column_default: string | null }[]

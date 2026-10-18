@@ -33,7 +33,7 @@ import {
 } from '../../helpers/order-minimum-fixture.js';
 
 /**
- * Feature 148, Phase 6 (T040) — quote-seeded lines are exempt from the
+ * Feature 154, Phase 6 (T040) — quote-seeded lines are exempt from the
  * minimums while their quantity equals the quote's (FR-028, owner ruling P2;
  * `data-model.md` §2, research R4).
  *
@@ -66,7 +66,7 @@ interface CartViewLine {
   belowMinimum?: { kind: string; minimum: number } | null;
 }
 
-describe('148 — quote-seeded lines are exempt while unchanged [integration]', () => {
+describe('154 — quote-seeded lines are exempt while unchanged [integration]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   let previousMinimumOfA: number | null = null;

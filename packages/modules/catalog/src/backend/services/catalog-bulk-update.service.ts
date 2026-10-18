@@ -207,7 +207,7 @@ export class CatalogBulkUpdateService {
       partial.visibility = fields.visibility;
       touchedAny = true;
     }
-    // Feature 148 (FR-003) — "Set returnable". Audited per product by the
+    // Feature 154 (FR-003) — "Set returnable". Audited per product by the
     // legacy `updateProduct` below, whose before/after carry the flag.
     if (fields.returnable !== undefined) {
       partial.returnable = fields.returnable;

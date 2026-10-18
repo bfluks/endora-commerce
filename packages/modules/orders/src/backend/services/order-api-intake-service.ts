@@ -94,7 +94,7 @@ export class OrderApiIntakeService {
     body: ApiPlaceOrderRequest,
     options: { language?: string | undefined } = {},
   ): Promise<IntakeResult> {
-    // Feature 148 (FR-038, owner ruling 2026-10-16) — first, before the
+    // Feature 154 (FR-038, owner ruling 2026-10-16) — first, before the
     // idempotency record, the lock or any line is resolved: a request no basket
     // could hold is refused whole, and leaves no intent behind.
     assertWithinAdminOrderItemBound(body.lines.length);
@@ -306,7 +306,7 @@ export class OrderApiIntakeService {
       // Seed the service account's cart (single-active-cart model) with real
       // org pricing, then run the FULL placement pipeline.
       //
-      // Feature 148 (FR-009, R8): one batch, so a product's minimum is judged
+      // Feature 154 (FR-009, R8): one batch, so a product's minimum is judged
       // on its total across the request's lines (D1). A line the Organization
       // may not see is thrown before anything is written, as `addItem` threw
       // it (FR-035); any line below a minimum refuses the whole request, keyed

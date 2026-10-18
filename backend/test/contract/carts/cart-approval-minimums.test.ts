@@ -16,7 +16,7 @@ import {
 } from '../../helpers/order-minimum-fixture.js';
 
 /**
- * Feature 148, owner ruling 2026-10-18 — a basket that cannot be ordered cannot be
+ * Feature 154, owner ruling 2026-10-18 — a basket that cannot be ordered cannot be
  * sent for approval either.
  *
  * `POST /api/v1/cart/submit-for-approval` refuses a basket with a line below a
@@ -28,7 +28,7 @@ import {
 
 const CHANNEL = { 'x-sales-channel': 'pl_retail' };
 
-describe('148 — submit-for-approval refuses a basket below a minimum [contract]', () => {
+describe('154 — submit-for-approval refuses a basket below a minimum [contract]', () => {
   let h: BackendServerHandle;
   const RUN = minimumFixtureRun();
   const MEMBER_ID = randomUUID();

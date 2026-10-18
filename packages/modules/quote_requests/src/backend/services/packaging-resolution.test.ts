@@ -8,7 +8,7 @@ import {
 } from './packaging-resolution.js';
 
 /**
- * Feature 148, Phase 10 (T075) — a buyer's quote line names its packaging unit
+ * Feature 154, Phase 10 (T075) — a buyer's quote line names its packaging unit
  * by id, or by name and base quantity, and is resolved against the catalogue
  * before anything is written (FR-026, FR-027; `contracts/quote-requests-api.md`
  * §1; threat F6).

@@ -8,7 +8,7 @@ Research: R3, R14. All changes additive.
 export interface OrderReturnContextLine {
   // …existing…
   /**
-   * Feature 148 (FR-016a) — the product's returnable flag recorded when the order was placed.
+   * Feature 154 (FR-016a) — the product's returnable flag recorded when the order was placed.
    * `null`: the order was placed before the flag was recorded. `orders` reports the fact; the
    * policy for `null` (returnable, FR-025) is `returns`'.
    */
@@ -21,7 +21,7 @@ export interface OrderReturnContextLine {
 `returnableLineSchema` (`returns.ts:187`) gains:
 
 ```ts
-/** Feature 148 — may this line be included in a `return` case? (complaints are never restricted) */
+/** Feature 154 — may this line be included in a `return` case? (complaints are never restricted) */
 returnable: z.boolean(),
 notReturnableReason: z.enum(['product_not_returnable']).optional(),
 ```

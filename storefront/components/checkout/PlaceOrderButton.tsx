@@ -55,7 +55,7 @@ export function PlaceOrderButton({
    */
   title?: string | undefined;
   /**
-   * Feature 148 — the id of the on-page explanation of `blocked`, linked while blocked: a
+   * Feature 154 — the id of the on-page explanation of `blocked`, linked while blocked: a
    * `title` alone reaches neither a keyboard nor a screen-reader user.
    */
   describedBy?: string | undefined;

@@ -10,7 +10,7 @@ import { HttpError } from '@endora-commerce/platform/http';
 import { referenceInputsUnchanged, type ReferenceInputs } from './line-carry-over.js';
 
 /**
- * Feature 148 (FR-012, FR-027, FR-029, FR-031; research R13.2–R13.4;
+ * Feature 154 (FR-012, FR-027, FR-029, FR-031; research R13.2–R13.4;
  * `contracts/quote-requests-api.md` §2, §3) — a quote request's lines as the
  * minimum rule (`evaluateOrderMinimums`) reads them, and the refusal a buyer's
  * write gets. Pure; the caller reads the records and calls this after the
@@ -108,7 +108,7 @@ export function assertQuoteMeetsMinimums(
   throw new HttpError(422, ERROR_CODES[refusal.code], refusal.message, refusal.details);
 }
 
-/** Feature 148 (FR-030) — what the admin read says about one line. */
+/** Feature 154 (FR-030) — what the admin read says about one line. */
 export type QuoteLineMinimumWarning =
   | { kind: 'pieces'; minimum: number }
   | { kind: 'packaging_unit'; minimum: number; packagingUnitName: string };

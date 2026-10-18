@@ -1,7 +1,7 @@
 import type { QuoteRequestSourceRefusal } from './quote-request-source.js';
 
 /**
- * Feature 148 (FR-036; research R19 step 3; threat F2) — whether a basket's
+ * Feature 154 (FR-036; research R19 step 3; threat F2) — whether a basket's
  * quote-seeded lines keep their exemption from the catalogue's order minimums
  * at the checkout preview and at placement.
  *

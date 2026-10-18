@@ -59,7 +59,7 @@ export function ProductCardActions(props: {
   /** True for a simple, directly-purchasable product (shows "add to cart"). */
   buyable: boolean;
   /**
-   * Feature 148 (FR-016) — the product's pieces minimum; "add to cart" adds it in one action.
+   * Feature 154 (FR-016) — the product's pieces minimum; "add to cart" adds it in one action.
    * `null`/absent = none (adds 1, as before).
    */
   minOrderQuantity?: number | null | undefined;
@@ -173,7 +173,7 @@ export function ProductCardActions(props: {
       slug: props.productSlug,
       name: props.productName,
       unitPrice: props.unitPrice ?? null,
-      // Feature 148 (FR-032, US4 #13) — one click adds the minimum, as "add to cart" does.
+      // Feature 154 (FR-032, US4 #13) — one click adds the minimum, as "add to cart" does.
       quantity: quoteAddQuantity(props.minOrderQuantity),
     }, props.minOrderQuantity ?? null);
     setQuoteState('done');

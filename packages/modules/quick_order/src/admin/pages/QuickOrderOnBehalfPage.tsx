@@ -17,7 +17,7 @@ import {
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 
 /**
- * Feature 148 — a rejected row's reason. A buyer-style `below_minimum` row names
+ * Feature 154 — a rejected row's reason. A buyer-style `below_minimum` row names
  * the minimum and the file total the verdict used (FR-011 (a)): "below the
  * minimum" alone would leave the operator to work out by how much.
  */
@@ -28,7 +28,7 @@ export function rejectionReasonLabel(row: RejectedQuickOrderItem, t: Translate):
   return t(`onBehalf.reason.${row.reason}`);
 }
 
-/** Feature 148 (FR-011 (b)) — one line a cart build left out, with product and minimum. */
+/** Feature 154 (FR-011 (b)) — one line a cart build left out, with product and minimum. */
 export function buildRejectionLabel(line: QuickOrderBuildRejectedLine, t: Translate): string {
   const key =
     line.kind === 'pieces'
@@ -135,7 +135,7 @@ export function QuickOrderOnBehalfPage(): ReactNode {
         </Alert>
       ) : null}
 
-      {/* Feature 148 (FR-011 (b)) — the cart was built, but without these lines.
+      {/* Feature 154 (FR-011 (b)) — the cart was built, but without these lines.
           Amber, not red: the build succeeded, and the remedy is the operator's
           (raise the quantity, or build a quote request instead). */}
       {result?.rejected && result.rejected.length > 0 ? (

@@ -4,7 +4,7 @@ import { formatCount } from '../../lib/orderMinimum';
 import type { ReturnFormLine } from '../../lib/returns/returnForm';
 
 /**
- * The return form's line table (feature 046; feature 148 FR-021).
+ * The return form's line table (feature 046; feature 154 FR-021).
  *
  * A Server Component: the form posts to a server action and works without JavaScript. A line
  * that is not selectable in the form's kind (a non-returnable line in a return) stays in the

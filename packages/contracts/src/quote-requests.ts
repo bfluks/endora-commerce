@@ -73,10 +73,10 @@ export const quoteRequestItemSchema = z.object({
   /** Feature 043 packaging-unit snapshot, already stored on the row; both replies. */
   packagingUnitName: z.string().nullable().optional(),
   packagingUnitBaseQuantity: z.number().int().positive().nullable().optional(),
-  /** Feature 148 — the resolved catalogue unit; admin and customer replies. */
+  /** Feature 154 — the resolved catalogue unit; admin and customer replies. */
   packagingUnitId: uuidSchema.nullable().optional(),
   /**
-   * Feature 148 (FR-030) — **admin replies only**: set when the line is below its
+   * Feature 154 (FR-030) — **admin replies only**: set when the line is below its
    * product's current minimum. Informs only.
    */
   minimumWarning: z
@@ -466,7 +466,7 @@ export const createQuoteRequestLineSchema = z.object({
   /** Feature 043 — snapshot when the line was added as a packaging unit. */
   packagingUnitName: z.string().max(160).optional(),
   packagingUnitBaseQuantity: z.number().int().positive().optional(),
-  /** Feature 148 (FR-026) — the catalogue unit the line is ordered in. Wins over name/base quantity. */
+  /** Feature 154 (FR-026) — the catalogue unit the line is ordered in. Wins over name/base quantity. */
   packagingUnitId: uuidSchema.optional(),
 });
 export type CreateQuoteRequestLine = z.infer<typeof createQuoteRequestLineSchema>;
@@ -749,7 +749,7 @@ export interface QuoteRequestLineRecord {
   packagingUnitName: string | null;
   packagingUnitBaseQuantity: number | null;
   /**
-   * Feature 148 (FR-026) — the catalogue packaging unit the line resolved to;
+   * Feature 154 (FR-026) — the catalogue packaging unit the line resolved to;
    * `null` for a plain-pieces line or one stored before the feature. Optional,
    * so every structural stub of the port written before it still compiles.
    */
@@ -861,7 +861,7 @@ export interface CreateForCustomerOptions {
    */
   lineReferencePrices?: ReadonlyArray<{ amount: string; currency: string } | null>;
   /**
-   * Feature 148 (FR-012, FR-030) — `'enforce'` (default): a buyer is writing, minimums refuse.
+   * Feature 154 (FR-012, FR-030) — `'enforce'` (default): a buyer is writing, minimums refuse.
    * `'warn'`: a sales representative is writing through the buyer's path (admin clone-to-quote,
    * admin quick-order build); nothing is refused for minimums and the admin read flags the lines.
    * In-process only: no HTTP body can carry it (`createQuoteRequestSchema` has no such key and

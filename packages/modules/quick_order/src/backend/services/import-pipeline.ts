@@ -21,13 +21,13 @@ export interface ProductLike {
   sku: string;
   status: string;
   deletedAt?: Date | null;
-  /** Feature 148 — the product type; minimums apply to `simple` / `configurable` only. */
+  /** Feature 154 — the product type; minimums apply to `simple` / `configurable` only. */
   type?: string;
-  /** Feature 148 — the pieces minimum; `null` or absent = none. */
+  /** Feature 154 — the pieces minimum; `null` or absent = none. */
   minOrderQuantity?: number | null;
 }
 
-/** Feature 148 — the two fields of a parent product the minimum rule reads. */
+/** Feature 154 — the two fields of a parent product the minimum rule reads. */
 export interface ParentMinimumRule {
   type: string;
   minOrderQuantity: number | null;
@@ -38,14 +38,14 @@ export interface VariantBySku {
   sku: string;
   parentProductId: string;
   /**
-   * Feature 148 — the parent's minimum rule, so a row naming a variant by its
+   * Feature 154 — the parent's minimum rule, so a row naming a variant by its
    * own SKU is judged against its product's minimum. Absent = no rule known.
    */
   parent?: ParentMinimumRule;
 }
 
 /**
- * Feature 148 (research R20, threat F4) — the most rows one preview reads,
+ * Feature 154 (research R20, threat F4) — the most rows one preview reads,
  * whatever `quick_order.import_max_rows` is set to, so the evaluation is
  * bounded. A module constant, not a contract.
  */
@@ -150,7 +150,7 @@ export class QuickOrderImportPipeline {
     opts: { maxRows?: number; audience: QuickOrderImportAudience },
   ): Promise<QuickOrderImportResponse> {
     const rejected: RejectedQuickOrderItem[] = [];
-    // Feature 148 — the operator's summary always carries `warningCount`.
+    // Feature 154 — the operator's summary always carries `warningCount`.
     const noWarnings = opts.audience === 'unrestricted' ? 0 : undefined;
 
     if (!parse.headerOk) {
@@ -161,7 +161,7 @@ export class QuickOrderImportPipeline {
     }
 
     // Row cap (FR-010): overflow rows are reported, not silently dropped.
-    // Feature 148 (R20) — never above the ceiling, however the Setting is set.
+    // Feature 154 (R20) — never above the ceiling, however the Setting is set.
     let rows = parse.rows;
     let truncated = false;
     const maxRows = clampImportMaxRows(opts.maxRows);
@@ -260,7 +260,7 @@ export class QuickOrderImportPipeline {
 
     const { recognized: merged, mergedCount } = this.mergeDuplicates(resolvedLines);
 
-    // Feature 148 (P1, R12.1) — the minimum rules of every product a
+    // Feature 154 (P1, R12.1) — the minimum rules of every product a
     // recognised row resolved to, from the records already loaded above.
     const rules = new Map<string, OrderMinimumProduct>();
     for (const product of products) rules.set(product.id, ruleOf(product.id, product));
@@ -275,7 +275,7 @@ export class QuickOrderImportPipeline {
   }
 
   /**
-   * Feature 148 (FR-011 (a), P1, R12.1) — one evaluation over every recognised
+   * Feature 154 (FR-011 (a), P1, R12.1) — one evaluation over every recognised
    * row of the file after the merge, pieces only and without the cart, so a
    * product's total is the sum over all its rows and variants. Rows rejected
    * for another reason are not here and count toward nothing.
