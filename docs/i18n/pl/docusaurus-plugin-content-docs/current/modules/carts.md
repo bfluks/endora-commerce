@@ -204,8 +204,9 @@ definiuje strona modułu Catalog).
   koszyk w stanie, w jakim zostawiłaby go zmiana — po dotychczasowych sprawdzeniach ilości,
   produktu, kanału i jednostki opakowania, a przed wyceną. Zmiana, która zostawia pozycję poniżej
   minimum, jest odrzucana z kodem `422 PRODUCT_BELOW_MINIMUM_QUANTITY` albo
-  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`; komunikat w języku kupującego podaje produkt i
-  minimum, a nic nie jest zapisywane. Edycja do `0` i `DELETE` zawsze usuwają pozycję. Edycja
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`; komunikat w języku odpowiedzi (z nagłówka
+  `Accept-Language` żądania, z uwzględnieniem wag q, a w przeciwnym razie w domyślnym języku
+  kanału) podaje produkt i minimum, a nic nie jest zapisywane. Edycja do `0` i `DELETE` zawsze usuwają pozycję. Edycja
   pozycji, której produkt już nie istnieje, kończy się `404 PRODUCT_NOT_FOUND`.
 - **Widok koszyka** (`GET /api/v1/cart`) podaje dla każdej pozycji `minOrderQuantity` (minimum
   produktu w sztukach, `null`, gdy go nie ma) i `belowMinimum` (`{ kind, minimum,
@@ -224,8 +225,11 @@ definiuje strona modułu Catalog).
   `A-red × 5 + A-blue × 5` spełnia minimum 10 — i dodaje tylko te, które przechodzą, zgłaszając
   pozostałe. Pozycje już obecne w koszyku nigdy nie są odrzucane. Wywołujący, który prosi o
   `throw`, dostaje teraz błąd **zanim cokolwiek zostanie dodane**, gdy pozycji nie da się
-  rozstrzygnąć; ten, który prosi o `report`, dostaje każdą porażkę jako wynik. Najwyżej 200 pozycji
-  na wywołanie.
+  rozstrzygnąć; ten, który prosi o `report`, dostaje każdą porażkę jako wynik. Wywołujący może też
+  poprosić, by pozycja poniżej minimum odrzucała całą partię, zanim cokolwiek zostanie zapisane, a —
+  dla klienta — by partia zastąpiła koszyk, który jest wtedy czyszczony dopiero po pozytywnej ocenie
+  partii: w ten sposób tworzenie zamówienia przez administratora i zewnętrzne API zamówień zostawiają
+  koszyk klienta nienaruszony, gdy odrzucają żądanie. Najwyżej 200 pozycji na wywołanie.
 - **Koszyk wypełniony z zaakceptowanego zapytania ofertowego** zachowuje wynegocjowane ilości
   zapytania: każda pozycja wypełniona z zapytania jest zwolniona z minimów, **dopóki jej ilość
   równa się ilości z zapytania** dla tej pozycji — ilości, przy której obowiązuje uzgodniona cena

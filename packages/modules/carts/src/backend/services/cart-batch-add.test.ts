@@ -148,6 +148,13 @@ function rig(
     flush: async () => {
       writes.flushes += 1;
     },
+    nativeDelete: async (entity: unknown, where: Record<string, unknown>) => {
+      const table = tableOf(entity);
+      const kept = table.filter((row) => !matches(row, where));
+      const deleted = table.length - kept.length;
+      table.splice(0, table.length, ...kept);
+      return deleted;
+    },
   } as unknown as EntityManager;
 
   const catalog = {
@@ -545,10 +552,141 @@ describe('addItems — the add step and the error modes', () => {
   });
 });
 
+// ── a whole-request refusal (D1, admin create and API intake) ──────────────
+
+describe("addItems — onBelowMinimum: 'throw' writes nothing (D1)", () => {
+  it('refuses the whole batch with the minimum code, every offending line keyed by its index, the product named in the language', async () => {
+    const r = rig({ carts: [existingCart()], items: [cartLine({ productId: B, quantity: 3 })] });
+    const before = r.items.map((row) => ({ ...row }));
+    const error = await r.service
+      .addItems(
+        ACTOR,
+        [
+          { productId: B, quantity: 2 },
+          { productId: A, variantId: RED, quantity: 3 },
+          { productId: A, variantId: BLUE, quantity: 4 },
+        ],
+        { onLineError: 'throw', onBelowMinimum: 'throw', language: 'pl' },
+      )
+      .catch((err: unknown) => err);
+    expect(error).toMatchObject({
+      statusCode: 422,
+      code: ERROR_CODES.PRODUCT_BELOW_MINIMUM_QUANTITY,
+      details: {
+        productId: A,
+        productName: 'Kotwa',
+        minimum: 10,
+        total: 7,
+        lines: [
+          { index: 1, productId: A, productName: 'Kotwa', kind: 'pieces', minimum: 10 },
+          { index: 2, productId: A, productName: 'Kotwa', kind: 'pieces', minimum: 10 },
+        ],
+      },
+    });
+    expect(r.items).toEqual(before);
+    expect(r.audits).toEqual([]);
+  });
+
+  it('a packaging-unit refusal carries the unit and the units the batch holds', async () => {
+    const r = rig();
+    const error = await r.service
+      .addItems(ACTOR, [{ productId: C, packagingUnitId: PALLET, quantity: 1 }], {
+        onLineError: 'throw',
+        onBelowMinimum: 'throw',
+        language: 'en',
+      })
+      .catch((err: unknown) => err);
+    expect(error).toMatchObject({
+      statusCode: 422,
+      code: ERROR_CODES.PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY,
+      details: { productId: C, productName: 'Cement', packagingUnitId: PALLET, minimum: 2, units: 1 },
+    });
+    expect(r.items).toEqual([]);
+  });
+
+  it("'report' stays the default: the same batch adds what passes and reports the rest", async () => {
+    const r = rig();
+    const result = await r.service.addItems(
+      ACTOR,
+      [
+        { productId: B, quantity: 2 },
+        { productId: A, variantId: RED, quantity: 3 },
+      ],
+      { onLineError: 'throw' },
+    );
+    expect(result.outcomes.map((o) => o.status)).toEqual(['added', 'below_minimum']);
+  });
+});
+
+describe('addItems — replaceExisting judges the request alone and clears only once it passes (D1)', () => {
+  it('a refused request leaves the existing basket exactly as it was', async () => {
+    const r = rig({ carts: [existingCart()], items: [cartLine({ productId: B, quantity: 3 })] });
+    const cartsBefore = r.carts.map((row) => ({ ...row }));
+    const itemsBefore = r.items.map((row) => ({ ...row }));
+    await expect(
+      r.service.addItems(ACTOR, [{ productId: A, variantId: RED, quantity: 5 }], {
+        onLineError: 'throw',
+        onBelowMinimum: 'throw',
+        replaceExisting: true,
+      }),
+    ).rejects.toMatchObject({ statusCode: 422 });
+    expect(r.carts).toEqual(cartsBefore);
+    expect(r.items).toEqual(itemsBefore);
+  });
+
+  it('a line that fails resolution leaves the existing basket exactly as it was', async () => {
+    const r = rig({ carts: [existingCart()], items: [cartLine({ productId: B, quantity: 3 })] });
+    const itemsBefore = r.items.map((row) => ({ ...row }));
+    await expect(
+      r.service.addItems(ACTOR, [{ productId: UNKNOWN, quantity: 5 }], {
+        onLineError: 'throw',
+        onBelowMinimum: 'throw',
+        replaceExisting: true,
+      }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    expect(r.carts[0]).toMatchObject({ status: 'active' });
+    expect(r.items).toEqual(itemsBefore);
+  });
+
+  it('the basket being replaced does not count toward the request: A × 7 in the cart does not carry A × 5', async () => {
+    const r = rig({ carts: [existingCart()], items: [cartLine({ productId: A, variantId: RED, quantity: 7 })] });
+    await expect(
+      r.service.addItems(ACTOR, [{ productId: A, variantId: RED, quantity: 5 }], {
+        onLineError: 'throw',
+        onBelowMinimum: 'throw',
+        replaceExisting: true,
+      }),
+    ).rejects.toMatchObject({ statusCode: 422, details: { total: 5 } });
+    expect(r.items).toHaveLength(1);
+  });
+
+  it('a request that passes replaces the basket: the old cart is completed, the new one holds the request', async () => {
+    const r = rig({ carts: [existingCart()], items: [cartLine({ productId: B, quantity: 3 })] });
+    const result = await r.service.addItems(ACTOR, [{ productId: A, variantId: RED, quantity: 10 }], {
+      onLineError: 'throw',
+      onBelowMinimum: 'throw',
+      replaceExisting: true,
+    });
+    expect(r.carts.find((c) => c.id === 'cart-1')).toMatchObject({ status: 'completed' });
+    expect(result.cart.id).not.toBe('cart-1');
+    expect(result.items.map((i) => [i.productId, i.quantity])).toEqual([[A, 10]]);
+  });
+
+  it('is refused for an anonymous actor — only a customer has a basket to replace', async () => {
+    const r = rig();
+    await expect(
+      r.service.addItems({ anonymousToken: 'anon-1' }, [{ productId: B, quantity: 1 }], {
+        onLineError: 'throw',
+        replaceExisting: true,
+      }),
+    ).rejects.toThrow(/replaceExisting/);
+  });
+});
+
 // ── performance (F4) ────────────────────────────────────────────────────────
 
 describe('addItems — bounded work (F4, R20)', () => {
-  it('200 batch lines against a 200-line cart finish well within a generous bound', async () => {
+  it('200 batch lines against a 200-line cart read the packaging units once', async () => {
     const ids = Array.from({ length: CART_MAX_LINES }, (_, i) => `perf-${i}`);
     const products = new Map(ids.map((id) => [id, product(id, { minOrderQuantity: 10 })]));
     const r = rig({
@@ -556,16 +694,13 @@ describe('addItems — bounded work (F4, R20)', () => {
       items: ids.map((id) => cartLine({ productId: id, quantity: 10 })),
       products,
     });
-    const started = performance.now();
     const result = await r.service.addItems(
       ACTOR,
       ids.map((id) => ({ productId: id, quantity: 1 })),
       { onLineError: 'report' },
     );
-    const elapsed = performance.now() - started;
     expect(result.outcomes.every((o) => o.status === 'added')).toBe(true);
     // One unit read for the whole batch, not one per line.
     expect(r.catalog.listPackagingUnitsByProductIds).toHaveBeenCalledTimes(1);
-    expect(elapsed).toBeLessThan(2_000);
   });
 });

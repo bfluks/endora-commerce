@@ -17,6 +17,7 @@ import {
   convertCartToQrSchema,
   ERROR_CODES,
   OrganizationCannotTransactError,
+  pickLocalized,
   type CatalogProductReadPort,
   type CatalogProductRecord,
   type PromotionApplication,
@@ -32,7 +33,6 @@ import {
   toCartMinimumItem,
   type CartLineMinimumView,
 } from './services/cart-minimums.js';
-import { parsePreferredLanguage, pickLocalized } from './services/localized-name.js';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { Cart } from './entities/cart.entity.js';
 
@@ -208,11 +208,10 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
 
     // Resolve per-line display name + slug so the storefront does not
     // have to fan out one fetch per line. Bulk lookup keyed by
-    // productId; locale comes from Accept-Language (first tag wins),
-    // English/Polish are the documented fallback chain.
-    const preferredLanguage = parsePreferredLanguage(
-      request.headers['accept-language'],
-    );
+    // productId; the name is in the response's language (the same answer
+    // an error sentence is translated into), with `pickLocalized`'s fallback
+    // chain behind it.
+    const preferredLanguage = await request.responseLanguage();
     // Feature 155 (R11, D7) — the same records also feed the minimum flags, so
     // this read is no longer wrapped in a tolerant `catch`. It used to fall back
     // to empty meta on any failure, which for the flags is the fail-open answer
@@ -328,7 +327,7 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
       }
       await guardOrganizationTransact(actor);
       const body = addCartItemRequestSchema.parse(request.body);
-      const language = parsePreferredLanguage(request.headers['accept-language']);
+      const language = await request.responseLanguage();
       const result = await cartService.addItem(
         actor,
         {
@@ -337,7 +336,7 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
           quantity: body.quantity,
           ...(body.packagingUnitId ? { packagingUnitId: body.packagingUnitId } : {}),
         },
-        language ? { language } : {},
+        { language },
       );
       return { data: serializeCart(result.cart, result.items) };
     },
@@ -349,12 +348,12 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
     async (request) => {
       const actor = resolveCartActor(request);
       const body = updateCartItemRequestSchema.parse(request.body);
-      const language = parsePreferredLanguage(request.headers['accept-language']);
+      const language = await request.responseLanguage();
       const result = await cartService.updateItem(
         actor,
         request.params.itemId,
         body.quantity,
-        language ? { language } : {},
+        { language },
       );
       return { data: serializeCart(result.cart, result.items) };
     },
@@ -551,6 +550,7 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
           isOrgAdmin: false,
         },
         body.note,
+        { language: await request.responseLanguage() },
       );
       return {
         data: {
@@ -574,11 +574,11 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
       if (!actor.customer) {
         throw new HttpError(401, ERROR_CODES.UNAUTHORIZED, 'Sign-in required.');
       }
-      const language = parsePreferredLanguage(request.headers['accept-language']);
+      const language = await request.responseLanguage();
       const result = await deps.cartConversionService.createCartFromQuoteRequest(
         request.params.quoteRequestId,
         actor.customer,
-        language ? { language } : {},
+        { language },
       );
       return { data: result };
     },
@@ -846,7 +846,7 @@ async function loadCartProducts(
 
 /**
  * Per-product display metadata, the name resolved from the record's per-locale
- * `name` with the `Accept-Language` tag and the `pickLocalized` fallback chain.
+ * `name` in the response's language, through the `pickLocalized` fallback chain.
  * A product without a record has no entry (the serializer treats it as an
  * unknown name and the storefront falls back to the productId).
  */

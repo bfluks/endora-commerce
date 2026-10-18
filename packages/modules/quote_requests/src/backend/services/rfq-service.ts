@@ -4,6 +4,7 @@ import {
   type CustomFieldValuePort,
   ERROR_CODES,
   isProductVisibleTo,
+  pickLocalized,
   type ProductAudience,
   type QuoteRequest as RfqDto,
   type QuoteRequestSummary,
@@ -240,6 +241,7 @@ export class RfqService {
   async #resolvePackaging(
     lines: readonly CreateQuoteRequestLine[],
     productById: ReadonlyMap<string, CatalogProductRecord>,
+    language: string | undefined,
   ): Promise<{ packaging: ResolvedPackaging[]; units: CatalogPackagingUnitRecord[] }> {
     const vettedIds = Array.from(
       new Set(lines.filter(carriesPackagingReference).map((line) => line.productId)),
@@ -255,7 +257,7 @@ export class RfqService {
           'quote_requests: a packaging unit id did not resolve on a buyer write',
         );
       }
-      throw packagingMismatchError(mismatches, productNames(productById.values()));
+      throw packagingMismatchError(mismatches, productNames(productById.values(), language));
     }
     return { packaging, units };
   }
@@ -271,9 +273,10 @@ export class RfqService {
     products: Iterable<CatalogProductRecord>,
     packagingUnits: readonly CatalogPackagingUnitRecord[],
     mode: 'enforce' | 'warn',
+    language: string | undefined,
   ): void {
     const records = Array.from(products);
-    assertQuoteMeetsMinimums(lines, { products: records, packagingUnits }, productNames(records), mode);
+    assertQuoteMeetsMinimums(lines, { products: records, packagingUnits }, productNames(records, language), mode);
   }
 
   /** Feature 054 — co-transactional RFQ audit on `em` (actor from context). */
@@ -410,13 +413,14 @@ export class RfqService {
 
     // Feature 155 (FR-026, FR-012, FR-029) — packaging, then minimums, after
     // the 404 above and before anything is priced, numbered or written.
-    const { packaging, units } = await this.#resolvePackaging(input.items, productById);
+    const { packaging, units } = await this.#resolvePackaging(input.items, productById, options.language);
     const resolvedLines = input.items.map((line, index) => withResolvedPackaging(line, packaging[index]!));
     this.#assertMinimums(
       quoteMinimumLines(resolvedLines),
       productById.values(),
       units,
       options.minimums ?? 'enforce',
+      options.language,
     );
 
     // FR-001 / FR-008 — each line's reference, for the request's owner on the
@@ -527,6 +531,8 @@ export class RfqService {
     ctx: CustomerContext,
     body: PatchQuoteRequest,
     expectedVersion: number | null,
+    /** The language a refusal names a product in (feature 155, D3/D4). */
+    options: { language?: string | undefined } = {},
   ): Promise<RfqDto> {
     const em = this.deps.emFactory();
     const rfq = await this.findVisibleForCustomer(em, rfqId, ctx);
@@ -573,7 +579,7 @@ export class RfqService {
       // Feature 155 (FR-026) — packaging resolved against the catalogue
       // before the pairing, which reads the **resolved** name: a line naming
       // its unit by id alone pairs with the stored row of that unit.
-      const { packaging, units } = await this.#resolvePackaging(body.items, productById);
+      const { packaging, units } = await this.#resolvePackaging(body.items, productById, options.language);
       const resolvedLines = body.items.map((line, index) => withResolvedPackaging(line, packaging[index]!));
 
       // Research R5.3 — pair by product, variant, packaging name, position.
@@ -589,7 +595,13 @@ export class RfqService {
       // minimums: an unchanged line is not refused, and still counts toward its
       // product's total. Judged before pricing (FR-029).
       const keeps = draftEditExemptions(paired, resolvedLines);
-      this.#assertMinimums(quoteMinimumLines(resolvedLines, keeps), productById.values(), units, 'enforce');
+      this.#assertMinimums(
+        quoteMinimumLines(resolvedLines, keeps),
+        productById.values(),
+        units,
+        'enforce',
+        options.language,
+      );
       const toResolve = resolvedLines.filter((_, index) => !keeps[index]);
       const resolved = await resolveReferencePrices(this.deps.buyerLinePrices, {
         owner: { customerAccountId: rfq.customerAccountId, organizationId: rfq.organizationId },
@@ -712,6 +724,8 @@ export class RfqService {
     rfqId: string,
     ctx: CustomerContext,
     body: ResubmitQuoteRequest,
+    /** The language a refusal names a product in (feature 155, D3/D4). */
+    options: { language?: string | undefined } = {},
   ): Promise<RfqDto> {
     const em = this.deps.emFactory();
     const sourceRfq = await this.findVisibleForCustomer(em, rfqId, ctx);
@@ -746,7 +760,7 @@ export class RfqService {
     const sourceProducts = await this.deps.catalogProducts.findByIds(
       Array.from(new Set(sourceItems.map((it) => it.productId))),
     );
-    this.#assertMinimums(resubmitMinimumLines(sourceItems), sourceProducts, [], 'enforce');
+    this.#assertMinimums(resubmitMinimumLines(sourceItems), sourceProducts, [], 'enforce', options.language);
 
     // The resubmit is its own request, so it is raised on the channel *this*
     // request resolved to — not the one the source RFQ carries. A buyer who
@@ -1369,12 +1383,12 @@ function anyLocaleValue(blob: Record<string, string>): string {
 }
 
 /**
- * Feature 155 — the names a refusal gives its products: the same locale value
- * the line's `productName` snapshot stores.
+ * Feature 155 (D3/D4) — the names a refusal gives its products: in `language`,
+ * the language the envelope translates the refusal's sentence into.
  */
-function productNames(products: Iterable<CatalogProductRecord>): Map<string, string> {
+function productNames(products: Iterable<CatalogProductRecord>, language: string | undefined): Map<string, string> {
   const out = new Map<string, string>();
-  for (const product of products) out.set(product.id, anyLocaleValue(product.name));
+  for (const product of products) out.set(product.id, pickLocalized(product.name, language));
   return out;
 }
 

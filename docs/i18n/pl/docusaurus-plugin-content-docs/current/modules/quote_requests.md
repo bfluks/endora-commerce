@@ -223,7 +223,9 @@ bezpośrednio, z koszyka, z szybkiego zamówienia, z listy zakupów albo przez s
 jego zamówień), edycja szkicu (`PATCH /api/v1/quote-requests/:id`) i ponowne złożenie
 (`POST /api/v1/quote-requests/:id/resubmit`) odpowiadają kodem
 `422 PRODUCT_BELOW_MINIMUM_QUANTITY` albo `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` z
-`details.lines[]` dla każdej odrzuconej pozycji i niczego nie zapisują. Kolejność sprawdzeń:
+`details.lines[]` dla każdej odrzuconej pozycji i niczego nie zapisują; zdanie i nazwy produktów są
+w języku odpowiedzi (z nagłówka `Accept-Language` żądania, z uwzględnieniem wag q, a w przeciwnym
+razie w domyślnym języku kanału). Kolejność sprawdzeń:
 najpierw produkt, którego klient nie widzi albo którego kanał nie publikuje, jest odrzucany jako
 nieznany, więc nic o nim nie zostaje ujawnione; potem jednostka opakowania, potem minima —
 wszystko, zanim zostanie wyznaczona jakakolwiek cena referencyjna.

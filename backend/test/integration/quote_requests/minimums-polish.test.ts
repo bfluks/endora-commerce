@@ -77,12 +77,9 @@ describe('155 QA — the minimum refusal is worded in Polish on quote-request cr
     expect((res.json() as ErrorBody).error.message).toMatch(/has a minimum order quantity of 10 pcs\.$/);
   });
 
-  // KNOWN DEFECT (QA, Minor): the contract says the raiser names the product in the
-  // request's language (contracts/error-codes.md; research R10), but `rfq-service.ts`
-  // resolves names with `anyLocaleValue` (the first stored locale), so a Polish sentence
-  // names the English product: „Anchor …” instead of „Kotwa …”. `it.fails` keeps the gate
-  // green and turns red the moment the raiser honours the language — then drop `.fails`.
-  it.fails('names the product in Polish too (contracts/error-codes.md: names resolved in the request language)', async () => {
+  // D3/D4 — the raiser names the product in the language the sentence is written in
+  // (contracts/error-codes.md; research R10), `request.responseLanguage()`.
+  it('names the product in Polish too (contracts/error-codes.md: names resolved in the request language)', async () => {
     const res = await h.app.inject({
       method: 'POST',
       url: '/api/v1/quote-requests',
@@ -92,5 +89,20 @@ describe('155 QA — the minimum refusal is worded in Polish on quote-request cr
     });
     expect(res.statusCode, res.body).toBe(422);
     expect((res.json() as ErrorBody).error.message).toContain(A.namePl);
+    expect((res.json() as ErrorBody).error.details).toMatchObject({ productName: A.namePl });
+  });
+
+  it('a q-weighted header (`en;q=0.2,pl;q=0.9`) answers Polish with the Polish name', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/quote-requests',
+      cookies: CUSTOMER,
+      headers: { 'accept-language': 'en;q=0.2,pl;q=0.9' },
+      payload: { items: [{ productId: A.id, quantity: 5 }] },
+    });
+    expect(res.statusCode, res.body).toBe(422);
+    const { error } = res.json() as ErrorBody;
+    expect(error.message).toMatch(PL_SENTENCE);
+    expect(error.message).toContain(A.namePl);
   });
 });

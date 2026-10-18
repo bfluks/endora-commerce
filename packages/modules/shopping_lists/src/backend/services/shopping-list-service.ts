@@ -376,6 +376,8 @@ export class ShoppingListService {
     ctx: CustomerContext,
     listId: string,
     itemIds: string[] | undefined,
+    /** The language a refusal names a product in (feature 155, D3/D4). */
+    options: { language?: string } = {},
   ): Promise<ConvertToRfqResult> {
     const em = this.emFactory();
     const list = await this.#owned(em, ctx, listId);
@@ -395,6 +397,7 @@ export class ShoppingListService {
             ...(item.note ? { lineNote: item.note } : {}),
           })),
         },
+        options.language ? { language: options.language } : undefined,
       );
       rfqId = rfq.id;
       added = kept.length;

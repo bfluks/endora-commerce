@@ -4,6 +4,7 @@ import {
   isOrderMinimumEligibleType,
   isQuoteSeededLineExempt,
   minimumRefusal,
+  pickLocalized,
   type CartRecord,
   type CatalogPackagingUnitRecord,
   type CatalogProductReadPort,
@@ -14,7 +15,6 @@ import {
   type OrderMinimumViolation,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
-import { pickLocalized } from './localized-name.js';
 
 /**
  * Feature 155 (FR-006, FR-006a, FR-007, FR-013, FR-028, FR-037; research R11) —

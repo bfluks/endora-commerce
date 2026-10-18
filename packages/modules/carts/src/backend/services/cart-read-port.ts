@@ -75,8 +75,8 @@ export function createCartWritePort(
       return toCartRecord(await getService().getOrCreateForCustomer(ctx));
     },
 
-    async addItem(actor, input) {
-      const result = await getService().addItem(actor, input);
+    async addItem(actor, input, options) {
+      const result = await getService().addItem(actor, input, options);
       return { cart: toCartRecord(result.cart), items: result.items.map(toCartItemRecord) };
     },
 

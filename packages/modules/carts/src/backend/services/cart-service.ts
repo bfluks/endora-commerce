@@ -5,6 +5,8 @@ import {
   ERROR_CODES,
   isOrderMinimumEligibleType,
   isProductVisibleTo,
+  minimumRefusal,
+  pickLocalized,
   type CartBatchLineInput,
   type CartBatchLineOutcome,
   type CartMergeOutcome,
@@ -38,8 +40,8 @@ import {
   judgeCartBatch,
   toCartMinimumItem,
   type CartBatchRejection,
+  type CartMinimumItem,
 } from './cart-minimums.js';
-import { pickLocalized } from './localized-name.js';
 
 /**
  * CartService (T125).
@@ -305,12 +307,21 @@ export class CartService {
    * 2. **Judge the resolved lines with the cart, once** — two linear passes
    *    ({@link judgeCartBatch}) over one cart read and one packaging-unit read
    *    over the vetted, eligible ids (F12). Lines below a minimum are reported
-   *    `below_minimum` and not added, in either mode; lines already in the cart
-   *    are never rejected.
+   *    `below_minimum` and not added; lines already in the cart are never
+   *    rejected. With `onBelowMinimum: 'throw'` any such line refuses the whole
+   *    batch here instead — `422 PRODUCT_BELOW_MINIMUM_QUANTITY` /
+   *    `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`, every offending line in
+   *    `details.lines` by its `index` — before anything is written (D1).
    * 3. **Add the accepted lines** through `addItem`'s own write (line cap,
    *    quote-only and pricing refusals unchanged). With `'throw'` a refusal here
    *    is thrown as `addItem` throws it, the earlier lines staying added; with
    *    `'report'` it is the line's `failed` outcome.
+   *
+   * `replaceExisting` (a customer only) makes the batch the customer's whole
+   * basket — admin order creation and the API intake: step 2 judges the batch
+   * alone, and the active cart is cleared ({@link clearForCustomer}) only once
+   * steps 1 and 2 have passed, so a refused request leaves the basket exactly
+   * as it was.
    *
    * `ModuleDisabledError` is always thrown. More than {@link CART_MAX_LINES}
    * lines can never fit a cart and are refused before anything is resolved.
@@ -318,8 +329,16 @@ export class CartService {
   async addItems(
     actor: { customer?: CustomerContext; anonymousToken?: string },
     lines: readonly CartBatchLineInput[],
-    options: { onLineError: 'throw' | 'report'; language?: string },
+    options: {
+      onLineError: 'throw' | 'report';
+      onBelowMinimum?: 'report' | 'throw';
+      replaceExisting?: boolean;
+      language?: string;
+    },
   ): Promise<{ cart: Cart; items: CartItem[]; outcomes: CartBatchLineOutcome[] }> {
+    if (options.replaceExisting && !actor.customer) {
+      throw new Error('[carts] addItems: replaceExisting needs a customer — only a customer has a basket to replace.');
+    }
     if (lines.length > CART_MAX_LINES) {
       throw new HttpError(422, ERROR_CODES.CART_LINE_CAP_EXCEEDED, 'cart_line_cap_exceeded', {
         maximum: CART_MAX_LINES,
@@ -342,12 +361,28 @@ export class CartService {
     }
 
     const em = this.emFactory();
-    const cart = actor.customer
-      ? await this.#getOrCreateForCustomerOn(em, actor.customer)
-      : await this.getOrCreateForAnon(em, actor.anonymousToken!);
-
-    // Step 2 — the minimums, over the vetted records only.
-    const rejections = await this.#judgeBatch(em, cart, resolvedLines);
+    let cart: Cart;
+    let rejections: Map<number, CartBatchRejection>;
+    if (options.replaceExisting) {
+      // Step 2 — the request alone: the basket it replaces counts toward nothing.
+      rejections = await this.#judgeBatch({ sourceQuoteRequestId: null }, [], resolvedLines);
+      this.#throwIfBelowMinimum(rejections, resolvedLines, options);
+      // Only now, with nothing left to refuse the request for a minimum, is the
+      // customer's basket replaced.
+      await this.clearForCustomer(actor.customer!);
+      cart = await this.#getOrCreateForCustomerOn(em, actor.customer!);
+    } else {
+      cart = actor.customer
+        ? await this.#getOrCreateForCustomerOn(em, actor.customer)
+        : await this.getOrCreateForAnon(em, actor.anonymousToken!);
+      // Step 2 — the minimums with the cart, over the vetted records only.
+      rejections = await this.#judgeBatch(
+        cart,
+        (await em.find(CartItem, { cartId: cart.id })).map(toCartMinimumItem),
+        resolvedLines,
+      );
+      this.#throwIfBelowMinimum(rejections, resolvedLines, options);
+    }
 
     // Step 3 — the accepted lines, in input order.
     let added = 0;
@@ -399,8 +434,8 @@ export class CartService {
    * resolver has already vetted and only the eligible ones among them (F12).
    */
   async #judgeBatch(
-    em: EntityManager,
-    cart: Cart,
+    cart: Pick<Cart, 'sourceQuoteRequestId'>,
+    basket: readonly CartMinimumItem[],
     resolvedLines: ReadonlyArray<{ index: number; input: CartBatchLineInput; resolved: ResolvedCartLine }>,
   ): Promise<Map<number, CartBatchRejection>> {
     if (resolvedLines.length === 0) return new Map();
@@ -412,7 +447,7 @@ export class CartService {
       eligibleIds.length > 0 ? await this.catalogProducts.listPackagingUnitsByProductIds(eligibleIds) : [];
     return judgeCartBatch(
       { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
-      (await em.find(CartItem, { cartId: cart.id })).map(toCartMinimumItem),
+      basket,
       resolvedLines.map(({ index, resolved }) => ({
         index,
         productId: resolved.product.id,
@@ -422,6 +457,29 @@ export class CartService {
       })),
       { products: [...products.values()], packagingUnits },
     );
+  }
+
+  /**
+   * `onBelowMinimum: 'throw'` (D1) — the whole batch refused for its rejected
+   * lines, before anything is written: the first line's minimum code, every
+   * rejected line in `details.lines` by its batch `index`, each product named in
+   * `options.language`. The figures (`total`, `units`) are the judgement's own.
+   */
+  #throwIfBelowMinimum(
+    rejections: ReadonlyMap<number, CartBatchRejection>,
+    resolvedLines: ReadonlyArray<{ index: number; resolved: ResolvedCartLine }>,
+    options: { onBelowMinimum?: 'report' | 'throw'; language?: string },
+  ): void {
+    if (options.onBelowMinimum !== 'throw' || rejections.size === 0) return;
+    const violations = [...rejections.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([index, rejection]) => ({ ...rejection, key: String(index) }));
+    const names = new Map(
+      resolvedLines.map(({ resolved }) => [resolved.product.id, pickLocalized(resolved.product.name, options.language)]),
+    );
+    const refusal = minimumRefusal(violations, names, 'index');
+    if (refusal === null) return;
+    throw new HttpError(422, ERROR_CODES[refusal.code], refusal.message, refusal.details);
   }
 
   /**

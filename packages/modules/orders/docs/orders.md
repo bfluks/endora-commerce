@@ -52,9 +52,9 @@ itself resolved — a product the chosen channel does not sell is refused with
 `404 PRODUCT_NOT_FOUND`, and one it sells is accepted even when the system
 default does not sell it. Admin creation does accept a channel that exists but
 is switched off, which the storefront refuses with `422`
-`order_sales_channel_mismatch`; and a product outside the chosen channel's
-assortment is refused only after the customer's basket has been cleared, so
-that basket is not restored.
+`order_sales_channel_mismatch`. A product outside the chosen channel's
+assortment is refused before the customer's basket is touched, so the basket
+is left as it was.
 
 What is read from an order's channel:
 
@@ -592,7 +592,10 @@ admin's Create order and the external order API.
   `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or
   `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]`, one entry
   per offending line (`cartItemId`, `productId`, `productName`, `kind`,
-  `minimum`, `packagingUnitName`), in the buyer's language.
+  `minimum`, `packagingUnitName`). The sentence and the product names are in
+  the language the response is answered in: an administrator's stored
+  language, otherwise the request's `Accept-Language` (q-weights honoured),
+  otherwise the channel's default language.
 - **The checkout preview says the same first.** `POST /api/v1/orders/preview-total`
   answers `belowMinimumLines[]` — the lines placement would refuse, with the
   same exemptions; a line whose product is gone has `kind: 'product_unavailable'`
@@ -611,7 +614,10 @@ admin's Create order and the external order API.
 - **External order API** (`POST /api/v1/external/orders`) and admin Create
   order build the basket from the request and judge each product's total over
   the request's lines; a below-minimum request is refused whole, with
-  `details.lines[]` keyed by `index`. Neither carries a packaging unit, so only
+  `details.lines[]` keyed by `index`. The request is judged on its own — the
+  basket it replaces counts toward nothing — and refused **before** the
+  customer's basket is touched, so a refused request leaves that basket exactly
+  as it was. Neither carries a packaging unit, so only
   the pieces minimum applies there. **Both refuse more than 200 lines** with
   `422 VALIDATION_FAILED`, `details.code = 'too_many_items'` — on the external
   API this is checked first, before the `Idempotency-Key` header is required,

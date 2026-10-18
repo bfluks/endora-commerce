@@ -1285,7 +1285,16 @@ export interface PlacedOrderRecord extends OrderRecord {
  * `nonDeactivatable` never enters one.
  */
 export interface OrderPlacementPort {
-  placeOrder(ctx: OrderCustomerContext, req: PlaceOrderRequest): Promise<PlacedOrderRecord>;
+  /**
+   * `options.language` (feature 155, D3/D4) — the language the caller's response
+   * is answered in, which a minimum refusal names the product in. Absent, the
+   * record's own fallback chain.
+   */
+  placeOrder(
+    ctx: OrderCustomerContext,
+    req: PlaceOrderRequest,
+    options?: { language?: string },
+  ): Promise<PlacedOrderRecord>;
 }
 
 export interface OrderStatusActor {

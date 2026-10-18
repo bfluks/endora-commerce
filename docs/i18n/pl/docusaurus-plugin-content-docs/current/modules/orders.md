@@ -52,9 +52,8 @@ wybrany kanał nie sprzedaje, jest odrzucany odpowiedzią `404 PRODUCT_NOT_FOUND
 a produkt, który sprzedaje, jest przyjmowany, nawet jeśli kanał domyślny go nie
 sprzedaje. Tworzenie zamówienia w panelu przyjmuje natomiast kanał, który istnieje,
 ale jest wyłączony — sklep odrzuca taki kanał odpowiedzią `422`
-`order_sales_channel_mismatch` — a produkt spoza asortymentu wybranego kanału jest
-odrzucany dopiero po wyczyszczeniu koszyka klienta, więc koszyk ten nie zostaje
-przywrócony.
+`order_sales_channel_mismatch`. Produkt spoza asortymentu wybranego kanału jest
+odrzucany, zanim koszyk klienta zostanie naruszony, więc koszyk pozostaje bez zmian.
 
 Z kanału zamówienia odczytywane są:
 
@@ -554,7 +553,9 @@ zewnętrzne API zamówień.
   `details.cartItemIds`. Pozycja poniżej minimum → `422 PRODUCT_BELOW_MINIMUM_QUANTITY` albo
   `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` z `details.lines[]`, po jednym wpisie na każdą
   odrzuconą pozycję (`cartItemId`, `productId`, `productName`, `kind`, `minimum`,
-  `packagingUnitName`), w języku kupującego.
+  `packagingUnitName`). Zdanie i nazwy produktów są w języku, w którym udzielana jest odpowiedź:
+  zapisanym języku administratora, w przeciwnym razie w języku z nagłówka `Accept-Language` żądania
+  (z uwzględnieniem wag q), a w ostateczności w domyślnym języku kanału.
 - **Podgląd checkoutu mówi to samo wcześniej.** `POST /api/v1/orders/preview-total` zwraca
   `belowMinimumLines[]` — pozycje, które składanie zamówienia by odrzuciło, z tymi samymi
   zwolnieniami; pozycja, której produkt zniknął, ma `kind: 'product_unavailable'` i nie ma nazwy
@@ -572,7 +573,10 @@ zewnętrzne API zamówień.
   zwolniona.
 - **Zewnętrzne API zamówień** (`POST /api/v1/external/orders`) i tworzenie zamówienia w panelu
   budują koszyk z żądania i oceniają łączną ilość każdego produktu ze wszystkich pozycji żądania;
-  żądanie poniżej minimum jest odrzucane w całości, z `details.lines[]` kluczowanym `index`. Żadne
+  żądanie poniżej minimum jest odrzucane w całości, z `details.lines[]` kluczowanym `index`. Żądanie
+  jest oceniane samodzielnie — zastępowany koszyk nie liczy się do niczego — i odrzucane, **zanim**
+  koszyk klienta zostanie naruszony, więc odrzucone żądanie zostawia ten koszyk dokładnie takim,
+  jakim był. Żadne
   z nich nie przenosi jednostki opakowania, więc działa tam tylko minimum w sztukach. **Oba
   odrzucają więcej niż 200 pozycji** z kodem `422 VALIDATION_FAILED`,
   `details.code = 'too_many_items'` — w zewnętrznym API jest to sprawdzane jako pierwsze, zanim

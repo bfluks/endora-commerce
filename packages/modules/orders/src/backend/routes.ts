@@ -44,10 +44,7 @@ import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import type { OrderService } from './services/order-service.js';
 import { assertMethodsOfferedInChannel } from './services/method-channel-gate.js';
 import { previewBelowMinimums, previewLineAvailability } from './services/preview-line-availability.js';
-import {
-  assertWithinAdminOrderItemBound,
-  preferredLanguageOf,
-} from './services/request-minimums.js';
+import { assertWithinAdminOrderItemBound } from './services/request-minimums.js';
 import type { OrderStatusGraphService } from './services/order-status-graph-service.js';
 import type { OrderTransitionService } from './services/order-transition-service.js';
 import type { OrderListService, OrderListScope } from './services/order-list-service.js';
@@ -338,10 +335,11 @@ export async function registerOrderRoutes(
           },
         );
       }
-      const order = await orderService.placeOrder(ctx, {
-        ...body,
-        salesChannelId: requestChannel.id,
-      });
+      const order = await orderService.placeOrder(
+        ctx,
+        { ...body, salesChannelId: requestChannel.id },
+        { language: await request.responseLanguage() },
+      );
       reply.status(201);
       return { data: await serializeForBuyer(order, ctx.customerAccountId) };
     },
@@ -359,10 +357,11 @@ export async function registerOrderRoutes(
       const ctx = resolveCustomerContext(request);
       // The preview is for the channel the buyer is on, so it refuses a method
       // that channel does not offer — the same answer the placement will give.
-      const totals = await orderService.previewTotal(ctx, {
-        ...body,
-        salesChannelId: getResolvedChannel(request).id,
-      });
+      const totals = await orderService.previewTotal(
+        ctx,
+        { ...body, salesChannelId: getResolvedChannel(request).id },
+        { language: await request.responseLanguage() },
+      );
       return { data: totals };
     },
   );
@@ -791,7 +790,7 @@ export async function registerOrderRoutes(
       // an INSERT passes through no filter on the way.
       await assertCustomerInScope(request, body.customerAccountId);
       const order = await deps.orderCreationAdminService.create(resolveAdminUserId(request), body, {
-        language: preferredLanguageOf(request.headers['accept-language']),
+        language: await request.responseLanguage(),
       });
       reply.code(201);
       return { data: await serializeOrderForAdmin(emFactory(), order) };

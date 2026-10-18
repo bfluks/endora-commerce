@@ -752,7 +752,7 @@ export type CartBatchLineOutcome =
       index: number;
       status: 'below_minimum';
       productId: string;
-      /** In the request's language (`options.language`). */
+      /** In `options.language`, the language the response is answered in. */
       productName: string;
       kind: 'pieces' | 'packaging_unit';
       minimum: number;
@@ -777,6 +777,8 @@ export interface CartWritePort {
        */
       salesChannelId?: string;
     },
+    /** The language a minimum refusal names the product in (feature 155, D3/D4). */
+    options?: { language?: string },
   ): Promise<CartWithItems>;
   /**
    * Feature 155 (R8) — add several lines. (1) Every line is resolved with exactly
@@ -790,16 +792,32 @@ export interface CartWritePort {
    * `onLineError: 'throw'` — the first resolution failure is thrown before
    * anything is written; a later add failure is thrown as `addItem` would (lines
    * before it stay added). `'report'` — every failure is returned as `failed`.
-   * `below_minimum` is an outcome in both modes, never thrown.
+   *
+   * `onBelowMinimum: 'report'` (the default) — a line below a minimum is a
+   * `below_minimum` outcome. `'throw'` — any such line refuses the whole batch
+   * after step (2) and before anything is written: `422
+   * PRODUCT_BELOW_MINIMUM_QUANTITY` / `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`,
+   * every offending line in `details.lines` keyed by its `index`.
+   *
+   * `replaceExisting` (a customer actor only) — the batch becomes the customer's
+   * whole basket: step (2) judges the batch alone, and the active cart is cleared
+   * only after steps (1) and (2) pass, so a request refused there leaves the
+   * basket exactly as it was.
+   *
    * `ModuleDisabledError` is always thrown. At most `CART_MAX_LINES` (200) lines.
    *
-   * `language` names a `below_minimum` line's product (the request's
-   * `Accept-Language`); absent, the record's own fallback chain.
+   * `language` names a refused product — the language the response is answered
+   * in (`request.responseLanguage()`); absent, the record's own fallback chain.
    */
   addItems(
     actor: { customer?: CartCustomerContext; anonymousToken?: string },
     lines: readonly CartBatchLineInput[],
-    options: { onLineError: 'throw' | 'report'; language?: string },
+    options: {
+      onLineError: 'throw' | 'report';
+      onBelowMinimum?: 'report' | 'throw';
+      replaceExisting?: boolean;
+      language?: string;
+    },
   ): Promise<CartWithItems & { outcomes: CartBatchLineOutcome[] }>;
   clearForCustomer(ctx: CartCustomerContext): Promise<void>;
   /**

@@ -95,6 +95,8 @@ export class CartConversionService {
     cart: Cart,
     ctx: RfqCustomerContext,
     note?: string,
+    /** The language a refusal names a product in (feature 155, D3/D4). */
+    options: { language?: string } = {},
   ): Promise<ConvertToQrResult> {
     // command-coverage-ignore: the durable write is the RFQ (RfqService
     // .createForCustomer, audited as quote_request.create); this only marks the
@@ -143,6 +145,7 @@ export class CartConversionService {
         // would have cost without negotiation. `unitPrice` is the net price
         // per base piece, the basis every quote price is compared on (T12).
         lineReferencePrices: items.map((it) => ({ amount: it.unitPrice, currency: it.currency })),
+        ...(options.language ? { language: options.language } : {}),
       },
     );
 

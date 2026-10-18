@@ -147,19 +147,25 @@ describe('OneClickService.place', () => {
       ctx,
       { productId: 'p-1', quantity: 2, idempotencyKey: 'k-1' },
       CHANNEL_ID,
+      { language: 'pl' },
     );
 
     expect(order.id).toBe('o-1');
     expect(clearForCustomer).toHaveBeenCalledWith(ctx);
-    expect(addItem).toHaveBeenCalledWith({ customer: ctx }, { productId: 'p-1', quantity: 2 });
-    expect(placeOrder).toHaveBeenCalledWith(ctx, {
-      deliveryAddressId: 'ship-1',
-      billingAddressId: 'bill-1',
-      deliveryMethodId: 'del-1',
-      paymentMethodId: 'pay-1',
-      salesChannelId: CHANNEL_ID,
-      idempotencyKey: 'k-1',
-    });
+    // Feature 155 (D3/D4) — both refusals name the product in the response's language.
+    expect(addItem).toHaveBeenCalledWith({ customer: ctx }, { productId: 'p-1', quantity: 2 }, { language: 'pl' });
+    expect(placeOrder).toHaveBeenCalledWith(
+      ctx,
+      {
+        deliveryAddressId: 'ship-1',
+        billingAddressId: 'bill-1',
+        deliveryMethodId: 'del-1',
+        paymentMethodId: 'pay-1',
+        salesChannelId: CHANNEL_ID,
+        idempotencyKey: 'k-1',
+      },
+      { language: 'pl' },
+    );
   });
 
   /**

@@ -868,6 +868,12 @@ export interface CreateForCustomerOptions {
    * strips it). Packaging validation (FR-026) applies either way.
    */
   minimums?: 'enforce' | 'warn';
+  /**
+   * Feature 155 (D3/D4) — the language a refusal names a product in: the language the
+   * caller's response is answered in (`request.responseLanguage()`). Absent, the record's
+   * own fallback chain.
+   */
+  language?: string;
 }
 
 export interface RfqCustomerPort {

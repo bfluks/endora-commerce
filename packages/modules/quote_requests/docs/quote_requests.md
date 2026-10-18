@@ -245,7 +245,10 @@ from a shopping list or by cloning one of their orders), draft edit
 (`POST /api/v1/quote-requests/:id/resubmit`) answer
 `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or
 `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]` for every
-offending line, and write nothing. The order of checks: a product the customer
+offending line, and write nothing; the sentence and the product names are in
+the language the response is answered in (the request's `Accept-Language`,
+q-weights honoured, otherwise the channel's default language). The order of
+checks: a product the customer
 may not see or the channel does not publish is refused as unknown first, so
 nothing about it is disclosed; then packaging, then minimums — all before any
 reference price is resolved.

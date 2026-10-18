@@ -363,12 +363,17 @@ describe('cart batch add — CartWritePort.addItems (contracts/cart-and-checkout
     }>();
   });
 
-  it('addItems takes the actor, the lines and the error mode, and answers the cart with outcomes', () => {
+  it('addItems takes the actor, the lines and the modes, and answers the cart with outcomes', () => {
     expectTypeOf<CartWritePort['addItems']>().parameters.toEqualTypeOf<
       [
         { customer?: CartCustomerContext; anonymousToken?: string },
         readonly CartBatchLineInput[],
-        { onLineError: 'throw' | 'report'; language?: string },
+        {
+          onLineError: 'throw' | 'report';
+          onBelowMinimum?: 'report' | 'throw';
+          replaceExisting?: boolean;
+          language?: string;
+        },
       ]
     >();
     expectTypeOf<CartWritePort['addItems']>().returns.toEqualTypeOf<

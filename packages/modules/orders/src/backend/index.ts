@@ -882,11 +882,11 @@ export function registerModule(ctx: ModuleContext): void {
         // placement, and publishing `OrderRecord` alone would have dropped the
         // payment redirect from `quick_order`'s one-click response (feature
         // 075, corrected in the `quick_order` cut).
-        placeOrder: async (customerContext, req) => {
+        placeOrder: async (customerContext, req, options) => {
           const order = await requireExposed(
             exposed.orderService,
             'order placement',
-          ).placeOrder(customerContext, req);
+          ).placeOrder(customerContext, req, options?.language ? { language: options.language } : undefined);
           return { ...toOrderRecord(order), nextAction: order.nextAction ?? null };
         },
       }))

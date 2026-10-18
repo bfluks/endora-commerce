@@ -17,7 +17,7 @@ import {
   sendOrderTransactionalEmail,
 } from './transactional-email-helper.js';
 import { rethrowIfModuleDisabled, SalesChannel } from '@endora-commerce/platform/kernel';
-import { assertBatchMeetsMinimums, assertWithinAdminOrderItemBound } from './request-minimums.js';
+import { assertWithinAdminOrderItemBound } from './request-minimums.js';
 
 /** A new address typed on the create form (vs. an existing org address id). */
 export interface AdminCreateOrderInlineAddress {
@@ -190,20 +190,23 @@ export class OrderCreationAdminService {
       // on its total across the request's lines (D1). A line the customer may
       // not see, or that the channel does not sell, is thrown before anything
       // is written, with the unknown id's answer (FR-035); any line below a
-      // minimum refuses the whole request. Placement checks the basket again
-      // (FR-037) — this is the earlier, request-shaped answer, not the only one.
-      await this.cartService.clearForCustomer(customerCtx);
+      // minimum refuses the whole request, keyed by its index. Both refusals
+      // come before the basket is replaced (`replaceExisting`), so a refused
+      // request leaves the customer's own basket as it was. Placement checks the
+      // basket again (FR-037) — this is the earlier, request-shaped answer, not
+      // the only one.
       const lines = input.items.map((it) => ({
         productId: it.productId,
         ...(it.variantId ? { variantId: it.variantId } : {}),
         quantity: it.quantity,
         salesChannelId: input.salesChannelId,
       }));
-      const batch = await this.cartService.addItems({ customer: customerCtx }, lines, {
+      await this.cartService.addItems({ customer: customerCtx }, lines, {
         onLineError: 'throw',
+        onBelowMinimum: 'throw',
+        replaceExisting: true,
         ...(options.language ? { language: options.language } : {}),
       });
-      assertBatchMeetsMinimums(lines, batch.outcomes);
 
       order = await this.orderService.placeOrder(
         { customerAccountId: input.customerAccountId, organizationId, impersonatorAdminUserId: adminUserId },
@@ -215,7 +218,10 @@ export class OrderCreationAdminService {
           salesChannelId: input.salesChannelId,
           ...(input.customerNote ? { customerNote: input.customerNote } : {}),
         },
-        input.origin ? { origin: input.origin } : undefined,
+        {
+          ...(input.origin ? { origin: input.origin } : {}),
+          ...(options.language ? { language: options.language } : {}),
+        },
       );
     } catch (err) {
       await cleanupTransient();

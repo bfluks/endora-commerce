@@ -154,20 +154,21 @@ describe('155 — placement and the checkout preview refuse below-minimum lines 
     return id;
   };
 
-  const placeHttp = () =>
+  const placeHttp = (acceptLanguage = 'en') =>
     h.app.inject({
       method: 'POST',
       url: '/api/v1/orders',
       cookies: CUSTOMER,
-      headers: { 'accept-language': 'en' },
+      headers: { 'accept-language': acceptLanguage },
       payload: PLACEMENT,
     });
 
-  const preview = async (): Promise<BelowMinimumLine[]> => {
+  const preview = async (acceptLanguage?: string): Promise<BelowMinimumLine[]> => {
     const res = await h.app.inject({
       method: 'POST',
       url: '/api/v1/orders/preview-total',
       cookies: CUSTOMER,
+      ...(acceptLanguage ? { headers: { 'accept-language': acceptLanguage } } : {}),
       payload: { deliveryMethodId: SEED_DELIVERY_METHOD_ID, paymentMethodId: SEED_PAYMENT_METHOD_ID },
     });
     expect(res.statusCode, res.body).toBe(200);
@@ -298,6 +299,23 @@ describe('155 — placement and the checkout preview refuse below-minimum lines 
     expect(await reservedOf101()).toEqual(reservedBefore);
     expect(await orderCount()).toBe(ordersBefore);
     expect((await basketLines()).length).toBe(3);
+  });
+
+  it('D3/D4 — a Polish placement refusal names every product in Polish, as the preview does', async () => {
+    await seed([
+      { productId: A.id, quantity: 5 },
+      { productId: B.id, quantity: 3 },
+      { productId: SEED_PRODUCT_101_ID, quantity: 10 },
+    ]);
+    const res = await placeHttp('pl;q=0.9,en;q=0.1');
+    expect(res.statusCode, res.body).toBe(422);
+    const error = errorOf(res);
+    const named = error.details?.['productName'];
+    expect([A.namePl, B.namePl]).toContain(named);
+    expect(error.message).toBe(`Minimalna ilość zamówienia produktu „${String(named)}” to 10 szt.`);
+    const lines = (error.details?.['lines'] ?? []) as BelowMinimumLine[];
+    expect(lines.map((l) => l.productName).sort()).toEqual([A.namePl, B.namePl].sort());
+    expect((await preview('pl')).map((l) => l.productName).sort()).toEqual([A.namePl, B.namePl].sort());
   });
 
   it('the preview lists the same lines, and an empty list for a valid basket', async () => {

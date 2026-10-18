@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
+  pickLocalized,
   type CartSnapshot,
   type FulfilmentStrategy,
   type InventoryFulfilmentPlanningPort,
@@ -1223,6 +1224,8 @@ export class OrderService {
        */
       salesChannelId?: string | undefined;
     },
+    /** The language the response is answered in — names a below-minimum line's product (feature 155). */
+    options: { language?: string | undefined } = {},
   ): Promise<{
     subtotal: number;
     taxTotal: number;
@@ -1301,7 +1304,7 @@ export class OrderService {
     );
     const belowMinimumLines = belowMinimumLinesOf(
       evaluateBasketMinimums(cart, items, catalogue, quoteSource.honoursExemptions),
-      (productId) => this.#productName(productById, productId),
+      (productId) => this.#productName(productById, productId, options.language),
     );
 
     // Tax country: prefer the selected billing address (matches placeOrder),
@@ -1473,9 +1476,11 @@ export class OrderService {
   async placeOrder(
     ctx: CustomerContext,
     req: PlaceOrderRequest,
-    // Not on `OrderPlacementPort`: only this module's own admin create path
-    // hands an origin on. It is echoed on `order.created.v1` and read nowhere.
-    options?: { origin?: OriginReference },
+    // `origin` is not on `OrderPlacementPort`: only this module's own admin
+    // create path hands one on. It is echoed on `order.created.v1` and read
+    // nowhere. `language` (feature 155) is the language the response is
+    // answered in, which a minimum refusal names the product in.
+    options?: { origin?: OriginReference; language?: string | undefined },
   ): Promise<Order> {
     const em = this.emFactory();
     // What this placement announces, emitted once the transaction below has
@@ -1574,7 +1579,7 @@ export class OrderService {
       );
       assertBasketMeetsMinimums(
         evaluateBasketMinimums(cart, items, catalogue, quoteSource.honoursExemptions),
-        (productId) => this.#productName(productById, productId),
+        (productId) => this.#productName(productById, productId, options?.language),
       );
 
       // A cart line is ordered at its stored unit price — copied onto the order
@@ -2610,13 +2615,17 @@ export class OrderService {
   }
 
   /**
-   * The name a minimum refusal gives a product: the same pick the order line's
-   * snapshot makes, since placement is told no request language (the envelope
-   * translates the sentence around it). The id when the record is gone.
+   * The name a minimum refusal gives a product: in `language`, the language the
+   * envelope translates the sentence around it into (feature 155, D3/D4). The id
+   * when the record is gone.
    */
-  #productName(productById: ReadonlyMap<string, { name: Record<string, string> }>, productId: string): string {
+  #productName(
+    productById: ReadonlyMap<string, { name: Record<string, string> }>,
+    productId: string,
+    language: string | undefined,
+  ): string {
     const product = productById.get(productId);
-    return (product ? this.anyValue(product.name) : '') || productId;
+    return (product ? pickLocalized(product.name, language) : '') || productId;
   }
 
   private anyValue(blob: Record<string, string>): string {

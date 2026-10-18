@@ -216,7 +216,9 @@ line of the product in the cart (the Catalog module's page defines both).
   leaves the line below a minimum is refused with
   `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or
   `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`; the message names the product and
-  the minimum in the buyer's language, and nothing is written. An edit to `0`
+  the minimum in the language the response is answered in (the request's
+  `Accept-Language`, q-weights honoured, otherwise the channel's default
+  language), and nothing is written. An edit to `0`
   and `DELETE` always remove the line. Editing a line whose product no longer
   exists answers `404 PRODUCT_NOT_FOUND`.
 - **The cart view** (`GET /api/v1/cart`) gives each line `minOrderQuantity`
@@ -237,7 +239,12 @@ line of the product in the cart (the Catalog module's page defines both).
   only the lines that pass, reporting the rest. Lines already in the cart are
   never rejected. A caller asking for `throw` now fails **before anything is
   added** when a line cannot be resolved; one asking for `report` receives every
-  failure as an outcome. At most 200 lines per call.
+  failure as an outcome. A caller may also ask for a line below a minimum to
+  refuse the whole batch before anything is written, and — for a customer — for
+  the batch to replace the basket, which is then cleared only once the batch has
+  passed: that is how admin order creation and the external order API leave a
+  customer's basket untouched when they refuse a request. At most 200 lines per
+  call.
 - **A basket filled from an accepted quote request** keeps the quote's
   negotiated quantities: each line seeded from the quote is exempt from the
   minimums **while its quantity equals the quote's quantity** for that line

@@ -201,7 +201,9 @@ export async function registerShoppingListRoutes(
     async (request) => {
       const ctx = resolveCustomerContext(request);
       const body = convertShoppingListRequestSchema.parse(request.body ?? {});
-      const result = await service.convertToRfq(ctx, request.params.id, body.itemIds);
+      const result = await service.convertToRfq(ctx, request.params.id, body.itemIds, {
+        language: await request.responseLanguage(),
+      });
       return { data: result };
     },
   );

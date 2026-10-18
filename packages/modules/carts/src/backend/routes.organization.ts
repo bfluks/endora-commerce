@@ -13,7 +13,6 @@ import { z } from 'zod';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { CartService } from './services/cart-service.js';
 import type { CartApprovalService } from './services/cart-approval-service.js';
-import { parsePreferredLanguage } from './services/localized-name.js';
 import type { CartOrganizationVisibilityService } from './services/cart-organization-visibility-service.js';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { RequireCustomerGuard } from '@endora-commerce/platform/kernel';
@@ -193,14 +192,14 @@ export async function registerCartsOrganizationRoutes(
       );
     }
     const cart = await cartService.getOrCreateForCustomer(actor.customer);
-    const language = parsePreferredLanguage(request.headers['accept-language']);
+    const language = await request.responseLanguage();
     await cartApprovalService.submitForApproval(
       cart,
       {
         customerAccountId: actor.customer.customerAccountId,
         organizationId: actor.customer.organizationId,
       },
-      language ? { language } : {},
+      { language },
     );
     return { data: { ok: true, approvalStatus: cart.approvalStatus } };
   });

@@ -9,7 +9,6 @@ import { HttpError } from '@endora-commerce/platform/http';
 import { serializeOrderForCustomer, type CustomerCustomFieldProjection } from './order-response.js';
 import type { OrderService } from './services/order-service.js';
 import type { OrderApiIntakeService } from './services/order-api-intake-service.js';
-import { preferredLanguageOf } from './services/request-minimums.js';
 
 /**
  * Feature 062 — external orders namespace (`/api/v1/external/orders*`), per
@@ -158,7 +157,7 @@ export async function registerOrdersExternalRoutes(
           },
           idempotencyKey,
           parsed.data,
-          { language: preferredLanguageOf(request.headers['accept-language']) },
+          { language: await request.responseLanguage() },
         );
         reply.status(result.replayed ? 200 : 201);
         return { data: await serializeOrderForCustomer(emFactory(), result.order, deps.customFieldValues) };

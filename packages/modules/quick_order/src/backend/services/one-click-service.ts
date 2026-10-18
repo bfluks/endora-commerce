@@ -91,6 +91,8 @@ export class OneClickService {
     ctx: OneClickContext,
     input: OneClickPlaceInput,
     salesChannelId: string | null,
+    /** The language a minimum refusal names the product in (feature 155, D3/D4). */
+    options: { language?: string } = {},
   ): Promise<PlacedOrderRecord> {
     const eligibility = await this.eligibility(ctx.customerAccountId, salesChannelId);
     if (!eligibility.enabled) {
@@ -121,16 +123,21 @@ export class OneClickService {
         ...(input.variantId ? { variantId: input.variantId } : {}),
         quantity,
       },
+      options.language ? { language: options.language } : undefined,
     );
 
-    return this.orderPlacement.placeOrder(customerCtx, {
-      deliveryAddressId: defaults.shippingAddressId!,
-      billingAddressId: defaults.billingAddressId!,
-      deliveryMethodId: defaults.deliveryMethodId!,
-      paymentMethodId: defaults.paymentMethodId!,
-      ...(salesChannelId ? { salesChannelId } : {}),
-      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-    });
+    return this.orderPlacement.placeOrder(
+      customerCtx,
+      {
+        deliveryAddressId: defaults.shippingAddressId!,
+        billingAddressId: defaults.billingAddressId!,
+        deliveryMethodId: defaults.deliveryMethodId!,
+        paymentMethodId: defaults.paymentMethodId!,
+        ...(salesChannelId ? { salesChannelId } : {}),
+        ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      },
+      options.language ? { language: options.language } : undefined,
+    );
   }
 
   /**

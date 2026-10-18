@@ -20,7 +20,7 @@ import { Order } from '../entities/order.entity.js';
 import { OrderPlacementIntent } from '../entities/order-placement-intent.entity.js';
 import type { OrderService } from './order-service.js';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
-import { assertBatchMeetsMinimums, assertWithinAdminOrderItemBound } from './request-minimums.js';
+import { assertWithinAdminOrderItemBound } from './request-minimums.js';
 
 /**
  * OrderApiIntakeService — feature 062 (research §R8, contracts/orders-api-key-intake.md §1).
@@ -310,22 +310,28 @@ export class OrderApiIntakeService {
       // on its total across the request's lines (D1). A line the Organization
       // may not see is thrown before anything is written, as `addItem` threw
       // it (FR-035); any line below a minimum refuses the whole request, keyed
-      // by its index in `lines`. Placement checks the basket again (FR-037).
-      await this.deps.cartService.clearForCustomer(customerCtx);
-      const batch = await this.deps.cartService.addItems({ customer: customerCtx }, resolvedLines, {
+      // by its index in `lines`. Both refusals come before the basket is
+      // replaced (`replaceExisting`), so a refused request leaves it as it was.
+      // Placement checks the basket again (FR-037).
+      await this.deps.cartService.addItems({ customer: customerCtx }, resolvedLines, {
         onLineError: 'throw',
+        onBelowMinimum: 'throw',
+        replaceExisting: true,
         ...(language ? { language } : {}),
       });
-      assertBatchMeetsMinimums(resolvedLines, batch.outcomes);
 
-      order = await this.deps.orderService.placeOrder(customerCtx, {
-        deliveryAddressId,
-        billingAddressId,
-        deliveryMethodId: body.deliveryMethodId,
-        paymentMethodId: body.paymentMethodId,
-        salesChannelId: binding.salesChannelId,
-        ...(body.customerReference ? { customerNote: body.customerReference } : {}),
-      });
+      order = await this.deps.orderService.placeOrder(
+        customerCtx,
+        {
+          deliveryAddressId,
+          billingAddressId,
+          deliveryMethodId: body.deliveryMethodId,
+          paymentMethodId: body.paymentMethodId,
+          salesChannelId: binding.salesChannelId,
+          ...(body.customerReference ? { customerNote: body.customerReference } : {}),
+        },
+        language ? { language } : undefined,
+      );
     } catch (err) {
       await cleanupTransient();
       throw err;

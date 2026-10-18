@@ -176,6 +176,16 @@ describe('155 — cart add and edit enforce the order minimums [integration]', (
       expect(error.message).toBe(`Minimalna ilość zamówienia produktu „${A.namePl}” to 10 szt.`);
     });
 
+    it('D3 — a q-weighted header names the product in the sentence’s language: `pl;q=0.9` and `en;q=0.2,pl;q=0.9`', async () => {
+      for (const header of ['pl;q=0.9', 'en;q=0.2,pl;q=0.9']) {
+        const res = await add(basket(), { productId: A.id, quantity: 5 }, header);
+        expect(res.statusCode, res.body).toBe(422);
+        const error = errorOf(res);
+        expect(error.message, header).toBe(`Minimalna ilość zamówienia produktu „${A.namePl}” to 10 szt.`);
+        expect(error.details, header).toMatchObject({ productName: A.namePl });
+      }
+    });
+
     it('accepts A × 10', async () => {
       const res = await add(basket(), { productId: A.id, quantity: 10 });
       expect(res.statusCode, res.body).toBe(200);
