@@ -133,13 +133,13 @@ describe('OneClickService.place', () => {
     });
   });
 
-  it('clears the cart, adds the product, and places the order from resolved defaults', async () => {
+  it('replaces the basket with the product in one batch, and places the order from resolved defaults', async () => {
     const clearForCustomer = vi.fn(async () => undefined);
-    const addItem = vi.fn(async () => ({ cart: {}, items: [] }));
+    const addItems = vi.fn(async () => ({ cart: {}, items: [], outcomes: [] }));
     const placeOrder = vi.fn(
       async () => ({ id: 'o-1', status: 'new', nextAction: null }) as unknown as PlacedOrderRecord,
     );
-    const cart = { clearForCustomer, addItem } as unknown as CartWritePort;
+    const cart = { clearForCustomer, addItems } as unknown as CartWritePort;
     const placement = { placeOrder } as unknown as OrderPlacementPort;
 
     const svc = new OneClickService(prefStub(FULL_DEFAULTS), cart, placement, async () => true, catalogOf());
@@ -151,9 +151,16 @@ describe('OneClickService.place', () => {
     );
 
     expect(order.id).toBe('o-1');
-    expect(clearForCustomer).toHaveBeenCalledWith(ctx);
+    // Round C (item 1) — the basket is replaced by `addItems` itself, after every
+    // refusal it can raise, never cleared up front by this service.
+    expect(clearForCustomer).not.toHaveBeenCalled();
     // Feature 155 (D3/D4) — both refusals name the product in the response's language.
-    expect(addItem).toHaveBeenCalledWith({ customer: ctx }, { productId: 'p-1', quantity: 2 }, { language: 'pl' });
+    expect(addItems).toHaveBeenCalledWith({ customer: ctx }, [{ productId: 'p-1', quantity: 2 }], {
+      onLineError: 'throw',
+      onBelowMinimum: 'throw',
+      replaceExisting: true,
+      language: 'pl',
+    });
     expect(placeOrder).toHaveBeenCalledWith(
       ctx,
       {
@@ -183,8 +190,7 @@ describe('OneClickService.place', () => {
         ({ id: 'o-3', status: 'new', nextAction }) as unknown as PlacedOrderRecord,
     } as unknown as OrderPlacementPort;
     const cart = {
-      clearForCustomer: vi.fn(async () => undefined),
-      addItem: vi.fn(async () => ({ cart: {}, items: [] })),
+      addItems: vi.fn(async () => ({ cart: {}, items: [], outcomes: [] })),
     } as unknown as CartWritePort;
 
     const svc = new OneClickService(prefStub(FULL_DEFAULTS), cart, placement, async () => true, catalogOf());
@@ -200,8 +206,7 @@ describe('OneClickService.place', () => {
         ({ id: 'o-2', status: 'new', nextAction: null }) as unknown as PlacedOrderRecord,
     );
     const cart = {
-      clearForCustomer: vi.fn(async () => undefined),
-      addItem: vi.fn(async () => ({ cart: {}, items: [] })),
+      addItems: vi.fn(async () => ({ cart: {}, items: [], outcomes: [] })),
     } as unknown as CartWritePort;
     const placement = { placeOrder } as unknown as OrderPlacementPort;
 
@@ -220,11 +225,8 @@ describe('OneClickService.place', () => {
       product: { id: string; type: string; minOrderQuantity: number | null } | null,
       quantity?: number,
     ): Promise<number> {
-      const addItem = vi.fn(async () => ({ cart: {}, items: [] }));
-      const cart = {
-        clearForCustomer: vi.fn(async () => undefined),
-        addItem,
-      } as unknown as CartWritePort;
+      const addItems = vi.fn(async () => ({ cart: {}, items: [], outcomes: [] }));
+      const cart = { addItems } as unknown as CartWritePort;
       const placement = {
         placeOrder: async () => ({ id: 'o-1', status: 'new', nextAction: null }) as unknown as PlacedOrderRecord,
       } as unknown as OrderPlacementPort;
@@ -240,8 +242,8 @@ describe('OneClickService.place', () => {
         { productId: product?.id ?? 'p-unknown', ...(quantity !== undefined ? { quantity } : {}) },
         CHANNEL_ID,
       );
-      const input = (addItem.mock.calls[0] as unknown as [unknown, { quantity: number }])[1];
-      return input.quantity;
+      const lines = (addItems.mock.calls[0] as unknown as [unknown, Array<{ quantity: number }>])[1];
+      return lines[0]!.quantity;
     }
 
     it('uses the minimum of a simple product', async () => {

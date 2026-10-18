@@ -689,6 +689,25 @@ describe('addItems — replaceExisting judges the request alone and clears only 
       }),
     ).rejects.toThrow(/replaceExisting/);
   });
+
+  /**
+   * Round C (item 2) — with `'report'` a line the write step refuses is an
+   * outcome rather than a refusal, so the basket would already be cleared when
+   * it is met: the combination is refused before anything is read or written.
+   */
+  it("is refused with onLineError 'report' — a reported failure would arrive after the basket is cleared", async () => {
+    const r = rig({ carts: [existingCart()], items: [cartLine({ productId: B, quantity: 3 })] });
+    const cartsBefore = r.carts.map((row) => ({ ...row }));
+    const itemsBefore = r.items.map((row) => ({ ...row }));
+    await expect(
+      r.service.addItems(ACTOR, [{ productId: B, quantity: 1 }], {
+        onLineError: 'report',
+        replaceExisting: true,
+      }),
+    ).rejects.toThrow(/replaceExisting.*'throw'/);
+    expect(r.carts).toEqual(cartsBefore);
+    expect(r.items).toEqual(itemsBefore);
+  });
 });
 
 // ── performance (F4) ────────────────────────────────────────────────────────

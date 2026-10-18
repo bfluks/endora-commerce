@@ -807,7 +807,8 @@ export interface CartWritePort {
    * `replaceExisting` (a customer actor only) — the batch becomes the customer's
    * whole basket: step (2) judges the batch alone, and the active cart is cleared
    * only after steps (1) and (2) pass, so a request refused there leaves the
-   * basket exactly as it was.
+   * basket exactly as it was. It requires `onLineError: 'throw'`; with
+   * `'report'` the call is refused before anything is read or written.
    *
    * `ModuleDisabledError` is always thrown. At most `CART_MAX_LINES` (200) lines.
    *

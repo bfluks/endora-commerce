@@ -317,11 +317,11 @@ export class CartService {
    *    is thrown as `addItem` throws it, the earlier lines staying added; with
    *    `'report'` it is the line's `failed` outcome.
    *
-   * `replaceExisting` (a customer only) makes the batch the customer's whole
-   * basket — admin order creation and the API intake: step 2 judges the batch
-   * alone, and the active cart is cleared ({@link clearForCustomer}) only once
-   * steps 1 and 2 have passed, so a refused request leaves the basket exactly
-   * as it was.
+   * `replaceExisting` (a customer only, with `onLineError: 'throw'`) makes the
+   * batch the customer's whole basket — admin order creation, the API intake and
+   * one-click: step 2 judges the batch alone, and the active cart is cleared
+   * ({@link clearForCustomer}) only once steps 1 and 2 have passed, so a refused
+   * request leaves the basket exactly as it was.
    *
    * `ModuleDisabledError` is always thrown. More than {@link CART_MAX_LINES}
    * lines can never fit a cart and are refused before anything is resolved.
@@ -338,6 +338,12 @@ export class CartService {
   ): Promise<{ cart: Cart; items: CartItem[]; outcomes: CartBatchLineOutcome[] }> {
     if (options.replaceExisting && !actor.customer) {
       throw new Error('[carts] addItems: replaceExisting needs a customer — only a customer has a basket to replace.');
+    }
+    if (options.replaceExisting && options.onLineError !== 'throw') {
+      // With 'report' a line the write step refuses is an outcome, met only
+      // after the basket has been cleared — the request would replace the
+      // basket with part of itself.
+      throw new Error("[carts] addItems: replaceExisting needs onLineError 'throw' — a reported failure would leave a partly replaced basket.");
     }
     if (lines.length > CART_MAX_LINES) {
       throw new HttpError(422, ERROR_CODES.CART_LINE_CAP_EXCEEDED, 'cart_line_cap_exceeded', {
