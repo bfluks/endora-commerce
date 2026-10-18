@@ -17,6 +17,12 @@ raises the code.
 The first line's `productName`, `minimum` and (for a unit) `packagingUnitName` are also top-level —
 what the sentence interpolates. Built by `minimumRefusal` (data-model §5); raisers never hand-build it.
 
+**Every `productName` is in the language the sentence is translated into** — the raiser names
+products with `pickLocalized(name, language)` (`@endora-commerce/contracts`), `language` being
+`request.responseLanguage()` (`@endora-commerce/platform/http`): an admin's stored preference,
+otherwise the q-sorted `Accept-Language`, otherwise the channel's default language. No raiser parses
+the header itself (review fix round A, D3/D4).
+
 **`PACKAGING_UNIT_MISMATCH.details.lines[].reason`** ∈ `unknown_unit` (every failure of a
 `packagingUnitId` — unknown, deleted, or another product's unit: one answer, FR-026 / threat F6; which
 of the three is logged server-side only), `name_unknown`, `base_quantity_mismatch` (the name path,

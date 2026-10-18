@@ -57,8 +57,17 @@ export interface CreateForCustomerOptions {
    * Packaging validation (FR-026) applies either way.
    */
   minimums?: 'enforce' | 'warn';
+  /**
+   * Review fix round A (D3/D4) — the language a refusal names a product in: the caller's
+   * `request.responseLanguage()`. Absent, the record's own fallback chain.
+   */
+  language?: string;
 }
 ```
+
+`patchDraft` and `resubmit` take the same `{ language }` as a trailing option. Every buyer route
+passes it, and so do the in-process callers that carry a buyer's request (cart → quote request,
+shopping list → quote request, the buyer's quick-order build).
 
 Callers setting `'warn'`: `OrderCloneToQuoteService.clone(…, { actor: 'operator' })` from
 `POST /api/v1/admin/orders/:id/clone-to-quote`; `QuickOrderBuildService.build(…, { actor: 'operator' })`
