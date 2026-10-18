@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toCartDroppedLines } from '@endora-commerce/mod-shopping-lists/backend';
+import { toCartDroppedLines } from './shopping-lists.js';
 
 /**
  * Feature 155 (FR-011, US4 #3) — a list's skipped items as the carts bridge's

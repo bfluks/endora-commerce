@@ -1,8 +1,8 @@
 import type { AssetsLibraryCradle } from '@endora-commerce/mod-assets-library/backend';
 import type { CartShoppingListBridge } from '@endora-commerce/mod-carts/backend';
 // Feature 155 — the pure skipped → droppedLines mapping of the shopping-list
-// bridge below, the module's own so both roots answer an append alike.
-import { toCartDroppedLines } from '@endora-commerce/mod-shopping-lists/backend';
+// bridge below, shared so both roots answer an append alike.
+import { toCartDroppedLines } from '@endora-commerce/contracts';
 // Feature 080 (T052) — the contract types for the seven ports that replaced
 // this root's five entity-class reads. Types only: what a root resolves is a
 // container name, and the shape it resolves it against is published in
