@@ -612,7 +612,8 @@ export interface CartItemRecord {
   /**
    * Feature 154 (FR-028) — the quantity this line was seeded with from an accepted
    * quote request; `null` for every other line. Written only by
-   * `CartWritePort.replaceItemsForCustomer` with a `sourceQuoteRequestId`.
+   * `CartWritePort.replaceItemsForCustomer` with a `sourceQuoteRequestId` — it is
+   * the line's agreed quantity, the one its agreed price holds at.
    */
   quoteSeededQuantity: number | null;
   createdAt: Date;

@@ -48,17 +48,18 @@ Audit (FR-005): `#applyProductUpdate`'s `stateBefore` / `stateAfter` gain `minOr
 per-product `AuditPort` rows the bulk edit writes (R9); `PackagingUnitService` `before` / `after` gain
 `minOrderUnits`. The queued bulk edit's undo restores `returnable` through its generic column snapshot.
 
-## 2. `carts` — migration `cart_item_quote_seeded_quantity`
+## 2. `carts` — no migration: the exemption reads `cart_items.agreed_quantity`
 
-```sql
-alter table "cart_items" add column "quote_seeded_quantity" integer null;
-```
+The per-line state this feature needs is the quantity a line was seeded with from an accepted quote
+request. `carts` already stores exactly that as `agreed_quantity` (migration
+`20261018T074021_carts_cart_item_agreed_price`, the quantity a quote-seeded line's agreed price holds
+at), so this feature adds no column (research R4).
 
 ### `CartItem` (`packages/modules/carts/src/backend/entities/cart-item.entity.ts`)
 
 | Property | Column | Type | Notes |
 | --- | --- | --- | --- |
-| `quoteSeededQuantity` | `quote_seeded_quantity` | `number \| null` | The quantity `replaceItemsForCustomer` seeded from an accepted quote request (only when `options.sourceQuoteRequestId` is set); `null` for every other line. Never written by any other path. Add to `[OptionalProps]`. |
+| `agreedQuantity` (existing) | `agreed_quantity` | `number \| null` | Set by `replaceItemsForCustomer` to the line's quantity when `options.sourceQuoteRequestId` is set; `null` for every other line. Never written by any other path. Exposed on the record as `quoteSeededQuantity`. |
 
 **Derived state — quote-line exemption (FR-028).** One predicate, in `@endora-commerce/contracts`
 (`packages/contracts/src/carts.ts`):
@@ -82,12 +83,12 @@ export function isQuoteSeededLineExempt(
 | Buyer edits a seeded line's quantity | not exempt while it differs; equal to the quote's again ⇒ exempt again (FR-028, P2) |
 | `addItem` bumps a seeded line (same product + variant, no unit) | quantity changes ⇒ not exempt |
 | Login merge sums into a seeded line | quantity changes ⇒ not exempt |
-| New line added after seeding | `quoteSeededQuantity = null` ⇒ never exempt |
+| New line added after seeding | `agreedQuantity = null` ⇒ never exempt |
 | Reorder seed / another accepted quote | all rows replaced ⇒ previous exemptions gone |
 | Last line removed | `sourceQuoteRequestId` cleared (`cart-service.ts:133–138`) ⇒ nothing exempt |
 
 `CartItemRecord` (`packages/contracts`) gains `quoteSeededQuantity: number | null`;
-`toCartItemRecord` (`cart-read-port.ts:166`) maps it.
+`toCartItemRecord` (`cart-read-port.ts`) maps it from `agreedQuantity`.
 
 **The predicate is the per-line half only.** `carts` (add, edit, view) applies it to the basket's mark
 at face value (FR-028). At the checkout preview and placement `orders` first decides whether the

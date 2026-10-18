@@ -228,7 +228,8 @@ definiuje strona modułu Catalog).
   na wywołanie.
 - **Koszyk wypełniony z zaakceptowanego zapytania ofertowego** zachowuje wynegocjowane ilości
   zapytania: każda pozycja wypełniona z zapytania jest zwolniona z minimów, **dopóki jej ilość
-  równa się ilości z zapytania** dla tej pozycji (`cart_items.quote_seeded_quantity`). Zmiana ilości
+  równa się ilości z zapytania** dla tej pozycji — ilości, przy której obowiązuje uzgodniona cena
+  (`cart_items.agreed_quantity`). Zmiana ilości
   czyni ją zwykłą pozycją, dopóki ilość nie wróci do wartości z zapytania, co jest dozwolone nawet
   poniżej minimum. Pozycje dodane później są sprawdzane jak zwykle, a sztuki pozycji zwolnionej
   nadal liczą się do łącznej ilości produktu, gdy sprawdzana jest inna pozycja tego produktu.
@@ -236,9 +237,6 @@ definiuje strona modułu Catalog).
   potwierdzają, że zapytanie jest nadal ważne (strona modułu Orders). Ponowne wypełnienie koszyka —
   z innego zapytania albo przez ponowne zamówienie — zastępuje je, a wraz z nim każde wcześniejsze
   zwolnienie.
-
-Migracja `20261016T082018_carts_cart_item_quote_seeded_quantity.ts` dodaje
-`cart_items.quote_seeded_quantity` (dopuszcza `null`).
 
 ## Stosowanie kuponu
 

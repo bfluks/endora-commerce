@@ -211,7 +211,7 @@ function cartLine(overrides: Partial<Row> & { productId: string; quantity: numbe
     variantId: null,
     packagingUnitId: null,
     packagingUnitBaseQuantity: null,
-    quoteSeededQuantity: null,
+    agreedQuantity: null,
     unitPrice: '10.00',
     currency: 'PLN',
     ...overrides,
@@ -410,7 +410,7 @@ describe('addItems — two passes with the cart (D1, FR-006a)', () => {
   });
 
   it('an exempt quote-seeded line counts toward its product total', async () => {
-    const seeded = cartLine({ productId: A, quantity: 5, quoteSeededQuantity: 5 });
+    const seeded = cartLine({ productId: A, quantity: 5, agreedQuantity: 5 });
     const r = rig({ carts: [existingCart({ sourceQuoteRequestId: 'qr-1' })], items: [seeded] });
 
     const short = await r.service.addItems(ACTOR, [{ productId: A, variantId: BLUE, quantity: 3 }], {

@@ -70,7 +70,7 @@ export function toCartMinimumItem(item: {
   quantity: number;
   packagingUnitId?: string | null;
   packagingUnitBaseQuantity?: number | null;
-  quoteSeededQuantity?: number | null;
+  agreedQuantity?: number | null;
 }): CartMinimumItem {
   return {
     id: item.id,
@@ -79,7 +79,9 @@ export function toCartMinimumItem(item: {
     quantity: item.quantity,
     packagingUnitId: item.packagingUnitId ?? null,
     packagingUnitBaseQuantity: item.packagingUnitBaseQuantity ?? null,
-    quoteSeededQuantity: item.quoteSeededQuantity ?? null,
+    // FR-028 — the quantity a quote-seeded line was agreed at is the one the
+    // line carries for its agreed price (`cart_items.agreed_quantity`).
+    quoteSeededQuantity: item.agreedQuantity ?? null,
   };
 }
 

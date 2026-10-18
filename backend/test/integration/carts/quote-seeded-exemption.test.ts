@@ -42,10 +42,12 @@ import {
  * `beforeAll`, **before** A's minimum of 10 is set — a quote for 5 negotiated
  * before the minimum existed (US4 #7) — and the minimum is restored afterwards.
  *
- * **Only `replaceItemsForCustomer` writes `quote_seeded_quantity`** (plan I4,
+ * The exemption rides the line's agreement: `CartItemRecord.quoteSeededQuantity`
+ * is mapped from `cart_items.agreed_quantity`, the quantity an accepted quote's
+ * agreed price holds at. **Only `replaceItemsForCustomer` writes it** (plan I4,
  * threat F9). Checked by hand with
  *
- *     git grep -n "quoteSeededQuantity" -- packages/modules ':!*.test.ts'
+ *     git grep -n "agreedQuantity" -- packages/modules ':!*.test.ts'
  *
  * which names the entity, the read-port seed and mapper, and readers only; and
  * below, by reading the row after every other path that creates or changes a
@@ -188,7 +190,7 @@ describe('154 — quote-seeded lines are exempt while unchanged [integration]', 
       { sourceQuoteRequestId: source },
     );
     // One flush writes both rows, so their order is not the seed's: compare by product.
-    const byProduct = new Map((await basketLines()).map((l) => [l.productId, [l.quantity, l.quoteSeededQuantity]]));
+    const byProduct = new Map((await basketLines()).map((l) => [l.productId, [l.quantity, l.agreedQuantity]]));
     expect(byProduct).toEqual(
       new Map([
         [SEED_PRODUCT_101_ID, [5, 5]],
@@ -207,7 +209,7 @@ describe('154 — quote-seeded lines are exempt while unchanged [integration]', 
 
   it('#7 — the accepted quote’s A × 5 is checked out unchanged and the order is placed', async () => {
     await convertQuoteRequestToCart(h, quotes.places);
-    expect((await lineOf(SEED_PRODUCT_101_ID)).quoteSeededQuantity).toBe(5);
+    expect((await lineOf(SEED_PRODUCT_101_ID)).agreedQuantity).toBe(5);
     const placed = await checkOutBasket(h);
     expect(placed.id).toBeTruthy();
   });
@@ -261,7 +263,7 @@ describe('154 — quote-seeded lines are exempt while unchanged [integration]', 
     });
     const five = await add({ productId: SEED_PRODUCT_101_ID, packagingUnitId: unitOf5, quantity: 1 });
     expect(five.statusCode, five.body).toBe(200);
-    expect((await lineOf(SEED_PRODUCT_101_ID)).quoteSeededQuantity).toBe(5);
+    expect((await lineOf(SEED_PRODUCT_101_ID)).agreedQuantity).toBe(5);
     expect((await checkOutBasket(h)).id).toBeTruthy();
   });
 
@@ -274,7 +276,7 @@ describe('154 — quote-seeded lines are exempt while unchanged [integration]', 
     const back = await edit(a.id, 5);
     expect(back.statusCode, back.body).toBe(200);
     const line = await lineOf(SEED_PRODUCT_101_ID);
-    expect([line.quantity, line.quoteSeededQuantity]).toEqual([5, 5]);
+    expect([line.quantity, line.agreedQuantity]).toEqual([5, 5]);
     expect((await viewLines()).map((l) => l.belowMinimum ?? null)).toEqual([null]);
     expect((await checkOutBasket(h)).id).toBeTruthy();
   });
@@ -302,7 +304,7 @@ describe('154 — quote-seeded lines are exempt while unchanged [integration]', 
     const ok = await add({ productId: SEED_PRODUCT_101_ID, quantity: 5 });
     expect(ok.statusCode, ok.body).toBe(200);
     const line = await lineOf(SEED_PRODUCT_101_ID);
-    expect([line.quantity, line.quoteSeededQuantity]).toEqual([10, 5]);
+    expect([line.quantity, line.agreedQuantity]).toEqual([10, 5]);
   });
 
   it('a login merge into the seeded line ends its exemption likewise; the moved line carries no seeded quantity', async () => {
@@ -330,8 +332,8 @@ describe('154 — quote-seeded lines are exempt while unchanged [integration]', 
     await service.mergeAnonymousIntoCustomer(token, CTX);
 
     const a = await lineOf(SEED_PRODUCT_101_ID);
-    expect([a.quantity, a.quoteSeededQuantity]).toEqual([6, 5]);
-    expect((await lineOf(B.id)).quoteSeededQuantity ?? null).toBeNull();
+    expect([a.quantity, a.agreedQuantity]).toEqual([6, 5]);
+    expect((await lineOf(B.id)).agreedQuantity ?? null).toBeNull();
     const flagged = (await viewLines()).find((l) => l.productId === SEED_PRODUCT_101_ID)!;
     expect(flagged.belowMinimum).toEqual({ kind: 'pieces', minimum: 10 });
   });
@@ -340,7 +342,7 @@ describe('154 — quote-seeded lines are exempt while unchanged [integration]', 
     await cartWritePortOf(h).replaceItemsForCustomer(CTX, [
       { productId: SEED_PRODUCT_101_ID, quantity: 5, unitPrice: '11.25', currency: 'PLN' },
     ]);
-    expect((await lineOf(SEED_PRODUCT_101_ID)).quoteSeededQuantity ?? null).toBeNull();
+    expect((await lineOf(SEED_PRODUCT_101_ID)).agreedQuantity ?? null).toBeNull();
     expect((await viewLines())[0]!.belowMinimum).toEqual({ kind: 'pieces', minimum: 10 });
     const res = await edit((await lineOf(SEED_PRODUCT_101_ID)).id, 6);
     expect(res.statusCode, res.body).toBe(422);
@@ -357,22 +359,22 @@ describe('154 — quote-seeded lines are exempt while unchanged [integration]', 
       [{ productId: SEED_PRODUCT_101_ID, quantity: 7, unitPrice: '11.25', currency: 'PLN' }],
       { sourceQuoteRequestId: randomUUID() },
     );
-    expect((await basketLines()).map((l) => [l.quantity, l.quoteSeededQuantity])).toEqual([[7, 7]]);
+    expect((await basketLines()).map((l) => [l.quantity, l.agreedQuantity])).toEqual([[7, 7]]);
     await cartWritePortOf(h).replaceItemsForCustomer(CTX, [
       { productId: SEED_PRODUCT_101_ID, quantity: 7, unitPrice: '11.25', currency: 'PLN' },
     ]);
-    expect((await basketLines()).map((l) => l.quoteSeededQuantity ?? null)).toEqual([null]);
+    expect((await basketLines()).map((l) => l.agreedQuantity ?? null)).toEqual([null]);
   });
 
   it('a line the buyer adds carries no seeded quantity', async () => {
     await cartWritePortOf(h).replaceItemsForCustomer(CTX, []);
     const res = await add({ productId: B.id, quantity: 10 });
     expect(res.statusCode, res.body).toBe(200);
-    expect((await lineOf(B.id)).quoteSeededQuantity ?? null).toBeNull();
+    expect((await lineOf(B.id)).agreedQuantity ?? null).toBeNull();
   });
 
-  it('F9 — neither quoteSeededQuantity nor sourceQuoteRequestId is in any request schema', () => {
-    const forbidden = ['quoteSeededQuantity', 'sourceQuoteRequestId'];
+  it('F9 — neither the agreed quantity nor sourceQuoteRequestId is in any request schema', () => {
+    const forbidden = ['quoteSeededQuantity', 'agreedQuantity', 'sourceQuoteRequestId'];
     const requestSchemas = Object.entries(contracts).filter(
       ([name, value]) => /Request(Strict)?Schema$|BodySchema$|InputSchema$/.test(name) && value instanceof z.ZodType,
     );
@@ -396,9 +398,11 @@ describe('154 — quote-seeded lines are exempt while unchanged [integration]', 
         productId: SEED_PRODUCT_101_ID,
         quantity: 5,
         quoteSeededQuantity: 5,
+        agreedQuantity: 5,
         sourceQuoteRequestId: randomUUID(),
       }) as Record<string, unknown>;
       expect(parsed).not.toHaveProperty('quoteSeededQuantity');
+      expect(parsed).not.toHaveProperty('agreedQuantity');
       expect(parsed).not.toHaveProperty('sourceQuoteRequestId');
     }
   });

@@ -104,11 +104,11 @@ export function createCartWritePort(
       // price holds at the quantity it was agreed for and at no other
       // (`cart-line-pricing.ts`). Any other seed — a reorder — carries none, and
       // its lines are priced like any other line, below.
-      // Feature 154 (FR-028) — the same lines also remember the quantity they
-      // were agreed at in `quoteSeededQuantity`; while the quantity still equals
-      // it, the line is exempt from the catalogue's minimums. This is the only
-      // writer of that column: a reorder (no source) and every other path leave
-      // it `null`.
+      // Feature 154 (FR-028) — the agreed quantity is also what exempts the line
+      // from the catalogue's minimums while the quantity still equals it
+      // (`CartItemRecord.quoteSeededQuantity`). This is the only writer of
+      // `agreedQuantity`: a reorder (no source) and every other path leave it
+      // `null`.
       const agreed = Boolean(options?.sourceQuoteRequestId);
       const created: CartItem[] = [];
       for (const line of lines) {
@@ -126,7 +126,6 @@ export function createCartWritePort(
                 agreedCurrency: line.currency,
               }
             : {}),
-          quoteSeededQuantity: agreed ? line.quantity : null,
         });
         created.push(item);
       }
@@ -199,7 +198,7 @@ export function toCartItemRecord(item: CartItem): CartItemRecord {
     packagingUnitId: item.packagingUnitId ?? null,
     packagingUnitName: item.packagingUnitName ?? null,
     packagingUnitBaseQuantity: item.packagingUnitBaseQuantity ?? null,
-    quoteSeededQuantity: item.quoteSeededQuantity ?? null,
+    quoteSeededQuantity: item.agreedQuantity ?? null,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
   };

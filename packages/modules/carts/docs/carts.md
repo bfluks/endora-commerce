@@ -241,7 +241,8 @@ line of the product in the cart (the Catalog module's page defines both).
 - **A basket filled from an accepted quote request** keeps the quote's
   negotiated quantities: each line seeded from the quote is exempt from the
   minimums **while its quantity equals the quote's quantity** for that line
-  (`cart_items.quote_seeded_quantity`). Changing it makes the line an ordinary
+  — the quantity its agreed price holds at (`cart_items.agreed_quantity`).
+  Changing it makes the line an ordinary
   line until it is set back to the quote's quantity, which is allowed even
   below the minimum. Lines added afterwards are checked as usual, and an exempt
   line's pieces still count toward the product's total when another line of
@@ -249,9 +250,6 @@ line of the product in the cart (the Catalog module's page defines both).
   value; checkout and placement confirm the quote is still valid (the Orders
   module's page). Seeding the basket again — from another quote or a reorder
   — replaces it, and with it every earlier exemption.
-
-Migration `20261016T082018_carts_cart_item_quote_seeded_quantity.ts` adds
-`cart_items.quote_seeded_quantity` (nullable).
 
 ## Coupon application
 

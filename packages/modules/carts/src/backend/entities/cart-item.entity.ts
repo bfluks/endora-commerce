@@ -31,8 +31,7 @@ export class CartItem {
     | 'packagingUnitBaseQuantity'
     | 'agreedQuantity'
     | 'agreedUnitPrice'
-    | 'agreedCurrency'
-    | 'quoteSeededQuantity';
+    | 'agreedCurrency';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -92,6 +91,10 @@ export class CartItem {
    * `agreedQuantity`; at any other quantity it is priced like any other line,
    * and returning to the agreed quantity restores the agreed price. All three
    * are null on every other line.
+   *
+   * Feature 154 (FR-028) reads `agreedQuantity` too: while `quantity` equals
+   * it and the basket still carries its quote source, the line is exempt from
+   * the catalogue's order minimums (`isQuoteSeededLineExempt`).
    */
   @Property({ type: 'integer', nullable: true })
   agreedQuantity?: number | null;
@@ -101,15 +104,6 @@ export class CartItem {
 
   @Property({ type: 'string', length: 3, nullable: true })
   agreedCurrency?: string | null;
-
-  /**
-   * Feature 154 (FR-028) — the quantity this line was seeded with from an
-   * accepted quote request; `null` for every other line. Written only when
-   * the basket is replaced from a quote; while `quantity` still equals it the
-   * line is exempt from the catalogue's order minimums.
-   */
-  @Property({ type: 'integer', nullable: true })
-  quoteSeededQuantity?: number | null;
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

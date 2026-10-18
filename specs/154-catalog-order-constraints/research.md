@@ -89,11 +89,23 @@ product record placement loads once after the basket read (R19).
 
 ## R4 — The per-line "seeded from an accepted quote" state (FR-028)
 
-**Decision.** `cart_items.quote_seeded_quantity integer null`, owned by `carts`. Written only by
-`replaceItemsForCustomer` (`packages/modules/carts/src/backend/services/cart-read-port.ts:85–122`)
+**Decision.** The line's seeded quantity, stored once in `cart_items.agreed_quantity` (`carts`).
+Written only by `replaceItemsForCustomer` (`packages/modules/carts/src/backend/services/cart-read-port.ts`)
 when `options.sourceQuoteRequestId` is present, with the line's seeded quantity. A line is
 **exempt** iff `cart.sourceQuoteRequestId !== null && item.quoteSeededQuantity !== null &&
-item.quantity === item.quoteSeededQuantity`. One predicate, exported from `@endora-commerce/contracts`
+item.quantity === item.quoteSeededQuantity`, where the record's `quoteSeededQuantity` is mapped from
+`agreedQuantity`.
+
+*Revision (2026-10-18, rebase onto master).* This feature first added its own column,
+`cart_items.quote_seeded_quantity`. Master meanwhile added `agreed_quantity` (commit `7d2d00fcc`,
+"price cart lines for their current quantity"), which holds an identical value on every row: it is
+assigned in the same `replaceItemsForCustomer` branch from the same `line.quantity`, it is `null` on
+every other line, and no other path writes it — `addItem`'s bump, `updateItem`, the login merge and
+`repriceLinesForCustomer` change only `quantity` / `unitPrice` / `currency` and read the agreement
+through `agreementOf`, while `clearForCustomer`, placement and a re-seed delete the row. Anonymous
+baskets are never quote-seeded, so a line merged in at login carries `null` in both. Two columns that
+cannot differ would be two places to keep in step, so this feature's column and migration were
+removed and the exemption reads the agreement. One predicate, exported from `@endora-commerce/contracts`
 (`isQuoteSeededLineExempt`) so `carts` and `orders` evaluate the identical rule.
 
 **Rationale.**
