@@ -1,7 +1,7 @@
 # Quickstart: walking feature 154 by hand
 
 For the builder's T144 walk and the owner's manual test. Run `pnpm run dev:infra`, then
-`pnpm run build:packages`, `pnpm --filter backend run migration:up` (four new migrations), and the dev
+`pnpm run build:packages`, `pnpm --filter backend run migration:up` (three new migrations), and the dev
 servers (`pnpm run dev`, or backend / admin / storefront separately). Sign in to the admin as a
 platform administrator and to the storefront as a buyer of an organisation with prices.
 

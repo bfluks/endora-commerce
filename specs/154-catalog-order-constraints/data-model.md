@@ -2,8 +2,9 @@
 
 **Feature**: `specs/154-catalog-order-constraints/` | Decisions: [research.md](./research.md) R1–R5
 
-No new table, no new entity class. Six nullable-or-defaulted columns on five existing tables, owned
-by four modules, in **four migrations** — one per owning module, each scaffolded with
+No new table, no new entity class. Five nullable-or-defaulted columns on four existing tables, owned
+by three modules, in **three migrations** — one per owning module (the `carts` state reads an existing
+column, §2), each scaffolded with
 `pnpm --filter backend run migration:new -- --module <id> --name <slug>` (never numbered by hand,
 `specs/conventions/module-migrations.md`). Every table touched is already `@GlobalEntity()`; no tenant
 classification changes and no foreign key is added, so `test/unit/db/fk-dependency-drift.test.ts` and

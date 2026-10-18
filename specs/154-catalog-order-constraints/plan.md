@@ -18,9 +18,9 @@ Technical approach, with the evidence in [research.md](./research.md):
 - **Storage** — first-class columns, no new table: `products.min_order_quantity`,
   `products.returnable` (default `false`), `product_packaging_units.min_order_units` (all `catalog`,
   both minimums bounded 1…1 000 000); `order_items.returnable_at_purchase` (`orders`, `null` = before
-  this feature, otherwise always an explicit boolean); `cart_items.quote_seeded_quantity` (`carts`, the
-  per-line FR-028 state); and `quote_request_items.packaging_unit_id` (`quote_requests`). Four
-  migrations, one per owner (R1–R5).
+  this feature, otherwise always an explicit boolean); and `quote_request_items.packaging_unit_id`
+  (`quote_requests`). Three migrations, one per owner (R1–R5). The per-line FR-028 state is master's
+  existing `cart_items.agreed_quantity` (`carts`), read as is — no migration of ours on `carts` (R4).
 - **One rule** — a pure, linear `evaluateOrderMinimums` in `@endora-commerce/contracts`
   (`isProductVisibleTo` precedent) implementing FR-006a once, failing closed on a missing product record
   (FR-037). Consumers read rule data through `catalogProductReadPort`, which gains two record fields and
@@ -52,7 +52,7 @@ No new runtime dependency.
 
 **Language/Version**: TypeScript 5.x `strict`, Node.js ≥ 22.17, ESM
 **Primary Dependencies**: Fastify, MikroORM (PostgreSQL), Zod (backend); React 19 + Vite through `@endora-commerce/admin-kit` (admin); Next.js 15 App Router, server components and server actions (storefront) — **no new runtime dependency**
-**Storage**: PostgreSQL — six columns on five existing tables (`products`, `product_packaging_units`, `order_items`, `cart_items`, `quote_request_items`), four additive migrations owned by `catalog`, `orders`, `carts`, `quote_requests`; no new table, no FK, no backfill
+**Storage**: PostgreSQL — five columns on four existing tables (`products`, `product_packaging_units`, `order_items`, `quote_request_items`), three additive migrations owned by `catalog`, `orders`, `quote_requests`; the FR-028 exemption reads the existing `cart_items.agreed_quantity` (no migration on `carts`); no new table, no FK, no backfill
 **Testing**: Vitest — co-located unit tests under `packages/contracts/src` and `packages/modules/{catalog,carts,orders,quote_requests,quick_order,shopping_lists,returns,comparisons,search}/src/backend/**`; `backend/test/{contract,integration}/<module>/` against Postgres, one file per invocation; `admin/test/modules/{catalog,orders,quote_requests,quick_order}`; `storefront/test/{catalog,checkout,rfq,account}`
 **Target Platform**: Linux server; backend, admin SPA and storefront deployed separately
 **Project Type**: web application — monorepo (`backend/`, `admin/`, `storefront/`, `packages/`)
@@ -228,7 +228,8 @@ by the module graph (`specs/conventions/module-migrations.md`). No cross-module 
 1. `catalog` — `pnpm --filter backend run migration:new -- --module catalog --name order_rules` —
    `products.min_order_quantity` (+ range check), `products.returnable` (default `false`),
    `product_packaging_units.min_order_units` (+ range check).
-2. `carts` — `--module carts --name cart_item_quote_seeded_quantity`.
+2. `carts` — none: the exemption reads the existing `cart_items.agreed_quantity` (`data-model.md` §2,
+   R4).
 3. `orders` — `--module orders --name order_item_returnable_at_purchase`.
 4. `quote_requests` — `--module quote_requests --name item_packaging_unit_id`.
 
@@ -267,7 +268,7 @@ the plan's own, written before the review.
 | S1 | Client bypasses the storefront floor and posts below the minimum | Mitigated | Every check is server-side; the storefront mirrors only | T039, T078 |
 | S2 | A minimum refusal discloses a product hidden from the buyer or outside the channel | Mitigated, extended by F1 | Checks after the existing 404s on single paths; on batch paths after the shared resolver (R8) | T039, T077, T078 (+ F1) |
 | S3 | A buyer reaches `minimums: 'warn'` | Mitigated | In-process option only; the HTTP body schema has no such key and strips it | T006, T078 |
-| S4 | A buyer forges the quote-line exemption | Mitigated | `quote_seeded_quantity` is written only by `replaceItemsForCustomer` from an accepted quote; no route accepts it; at placement the source is vouched (F2) | T040, T056a |
+| S4 | A buyer forges the quote-line exemption | Mitigated | `agreed_quantity` is written only by `replaceItemsForCustomer` from an accepted quote; no route accepts it; at placement the source is vouched (F2) | T040, T056a |
 | S5 | A buyer forges a packaging label on a quote line | Mitigated | FR-026 resolution; name/base only accepted when they match a catalogue unit | T077 |
 | S6 | A buyer opens a `return` case for a non-returnable line by calling the API | Mitigated | `createCase` refuses from the recorded value read through the ownership-checked port | T091 |
 | S7 | `minimumWarning` leaks to the customer | Mitigated | Customer serialisation is an allow-list; contract test | T083 |
@@ -334,7 +335,7 @@ No constitution violation. Recorded so a reviewer does not have to ask:
 | A pure rule function in `@endora-commerce/contracts` | FR-006a must have one implementation across four modules | A `catalog` port adds a round trip and a vocabulary for others' lines; four copies drift (R6) |
 | `CatalogProductReadPort.listPackagingUnitsByProductIds` | Batch unit data for the rule and FR-026's name match | The admin packaging port is a write surface; per-id reads cannot match by name (R7) |
 | `CartWritePort.addItems` with a shared `#resolveLine` and a two-pass evaluation | Product totals across a batch (D1), the per-line reports of FR-011, FR-035's non-disclosure and FR-038's bound | Per-line `addItem` refuses valid batches; an iterate-until-stable fix-point is quadratic for the same answer (R8) |
-| `cart_items.quote_seeded_quantity` | Per-line state-based exemption (P2) that ends by construction | A boolean flag is fail-open and contradicts P2 (R4) |
+| The exemption reads `cart_items.agreed_quantity` | Per-line state-based exemption (P2) that ends by construction | A boolean flag is fail-open and contradicts P2; a column of our own would hold the same value as `agreed_quantity` on every row (R4) |
 | `quote_request_items.packaging_unit_id` | Current unit minimum for FR-030; stable identity for pairing | Name re-matching loses renamed units (R5) |
 | The vouch moved to the start of placement, lock included | FR-036 must hold at the moment the exemption is granted, before any side effect | Re-checking at the old late position decides after stock and the business id were written (R19) |
 | **New runtime dependency** | — | **None.** |
@@ -364,7 +365,7 @@ Resolved (2026-10-15, coordinator):
   | --- | --- | --- | --- |
   | 1 | — | Setup, baseline | T001–T002 (2) |
   | 2 | [backend] | Contracts — the rule, the bounds and every HTTP shape | T003–T012 (10) |
-  | 3 | [backend] | Schema — four migrations, entities, generated artefacts | T013–T021 (9) |
+  | 3 | [backend] | Schema — three migrations, entities, generated artefacts | T013–T021 (9) |
   | 4 | [backend] | Catalogue read port and records, typed stubs | T022–T027 (6) |
   | 5 | [backend] | Catalogue writes (range, audit), storefront DTOs, catalogue error codes | T028–T036 (9) |
   | 6 | [backend] | Cart single add / edit / view, shared resolver, quote-line exemption | T037–T046 (10) |
