@@ -1,5 +1,8 @@
 import type { AssetsLibraryCradle } from '@endora-commerce/mod-assets-library/backend';
 import type { CartShoppingListBridge } from '@endora-commerce/mod-carts/backend';
+// Feature 155 — the pure skipped → droppedLines mapping of the shopping-list
+// bridge below, the module's own so both roots answer an append alike.
+import { toCartDroppedLines } from '@endora-commerce/mod-shopping-lists/backend';
 // Feature 080 (T052) — the contract types for the seven ports that replaced
 // this root's five entity-class reads. Types only: what a root resolves is a
 // container name, and the shape it resolves it against is published in
@@ -1137,22 +1140,12 @@ async function contributeReferenceDeployment(ctx: ComposedAppContext): Promise<v
           undefined,
         );
         // Map ShoppingListService.convertToCart's shape onto the carts
-        // module's uniform return shape across the three conversions.
+        // module's uniform return shape across the three conversions — the
+        // module's own mapping, which the harness calls too.
         return {
           cartId: '',
           appendedLineCount: res.added,
-          droppedLines: res.skipped.map((it) =>
-            // Feature 155 (FR-011, US4 #3) — a line below a minimum says so,
-            // with the minimum; every other skip stays `not_purchasable`.
-            it.reason === 'below_minimum'
-              ? {
-                  productId: it.productId,
-                  productName: it.productId,
-                  reason: 'below_minimum',
-                  ...(it.minimum !== undefined ? { minimum: it.minimum } : {}),
-                }
-              : { productId: it.productId, productName: it.productId, reason: 'not_purchasable' },
-          ),
+          droppedLines: toCartDroppedLines(res.skipped),
         };
       },
     } satisfies CartShoppingListBridge,

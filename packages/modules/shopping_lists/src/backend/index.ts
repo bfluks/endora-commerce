@@ -165,3 +165,10 @@ export const entities = [
  * subpath.
  */
 export type { ShoppingListService } from './services/shopping-list-service.js';
+
+/**
+ * Feature 155 — the same root-side bridge maps `convertToCart`'s skipped items
+ * onto `carts`' `droppedLines`; both roots call this one pure function rather
+ * than each carrying a copy of the mapping.
+ */
+export { toCartDroppedLines, type ShoppingListDroppedLine } from './services/cart-dropped-lines.js';

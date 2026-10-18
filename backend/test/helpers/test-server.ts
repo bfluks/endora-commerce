@@ -119,6 +119,9 @@ import type {
 import type { EmailCradle } from '../../../packages/modules/email/src/backend/index.js';
 import type { AdminUsersCradle } from '@endora-commerce/mod-admin-users/backend';
 import type { ShoppingListService } from '../../../packages/modules/shopping_lists/src/backend/services/shopping-list-service.js';
+// Feature 155 — the shopping-list bridge's skipped → droppedLines mapping, the
+// same function `composition.ts` calls.
+import { toCartDroppedLines } from '@endora-commerce/mod-shopping-lists/backend';
 // `dist`, not `src`, and it is the type that matches the object (feature 080,
 // T040b, batch four). The container holds the **composed** cradle, which the
 // platform built out of `@endora-commerce/mod-invoices/backend` — i.e. out of
@@ -2344,18 +2347,8 @@ export async function setupBackendServer(
             return {
               cartId: '',
               appendedLineCount: res.added,
-              // Feature 155 — mirrors `composition.ts`: a line below a
-              // minimum says so, with the minimum.
-              droppedLines: res.skipped.map((it) =>
-                it.reason === 'below_minimum'
-                  ? {
-                      productId: it.productId,
-                      productName: it.productId,
-                      reason: 'below_minimum',
-                      ...(it.minimum !== undefined ? { minimum: it.minimum } : {}),
-                    }
-                  : { productId: it.productId, productName: it.productId, reason: 'not_purchasable' },
-              ),
+              // Feature 155 — the module's own mapping, as `composition.ts`.
+              droppedLines: toCartDroppedLines(res.skipped),
             };
           },
         } satisfies CartShoppingListBridge,
