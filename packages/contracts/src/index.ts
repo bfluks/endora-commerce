@@ -17,6 +17,7 @@ export * from './scope-notice.js';
 export * from './catalog.js';
 // Feature 155 — the minimum-order rule (specs/155-catalog-order-constraints/).
 export * from './order-minimums.js';
+export * from './localized-name.js';
 export * from './quote-requests.js';
 export * from './organizations.js';
 export * from './customers.js';
