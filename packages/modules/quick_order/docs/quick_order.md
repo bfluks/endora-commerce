@@ -103,12 +103,21 @@ lines and respecting the `orders.reorder_enabled` setting.
 When `quick_order.one_click_buy_enabled` is on for the buyer's sales channel
 **and** the buyer has all four eligible defaults, the product page shows a
 "Buy in one click" button. It skips Cart and Checkout: the order is placed from
-the defaults (`clear cart → add product → OrderService.placeOrder`) and the
-buyer is routed by the payment `nextAction` (gateway redirect, or the order /
-success page when no payment step is required). Same validations as a normal
-order (org active, minimum value, credit limit, stock, minimum order
-quantity). For a `simple` or `configurable` product with a minimum order
-quantity, one click orders that minimum instead of 1.
+the defaults and the buyer is routed by the payment `nextAction` (gateway
+redirect, or the order / success page when no payment step is required).
+
+The product becomes the buyer's whole basket through the cart's `addItems`
+with `replaceExisting: true` and `onBelowMinimum: 'throw'`, then
+`OrderService.placeOrder` places it. `addItems` empties the basket only once
+nothing is left to refuse the line for, so a line refused before the write —
+below its minimum order quantity, without a price, or quote-only — leaves the
+basket exactly as it was. A refusal at placement, after the line was written
+(stock, the organization, a payment or delivery method), leaves the basket
+holding that one one-click line.
+
+Same validations as a normal order (org active, minimum value, credit limit,
+stock, minimum order quantity). For a `simple` or `configurable` product with
+a minimum order quantity, one click orders that minimum instead of 1.
 
 ## Settings
 

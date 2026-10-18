@@ -95,13 +95,21 @@ niedostępne pozycje i respektując ustawienie `orders.reorder_enabled`.
 
 Gdy w kanale sprzedaży kupującego włączone jest `quick_order.one_click_buy_enabled` **i** kupujący
 ma wszystkie cztery dopuszczalne wartości domyślne, strona produktu pokazuje przycisk „Kup jednym
-kliknięciem”. Pomija on koszyk i checkout: zamówienie jest składane z wartości domyślnych
-(`clear cart → add product → OrderService.placeOrder`), a kupujący trafia tam, gdzie wskazuje
-`nextAction` płatności (przekierowanie do bramki albo strona zamówienia lub sukcesu, gdy krok
-płatności nie jest potrzebny). Obowiązują te same warunki co przy zwykłym zamówieniu (aktywna
-organizacja, wartość minimalna, limit kredytowy, stan magazynowy, minimalna ilość zamówienia). Dla
-produktu `simple` lub `configurable` z minimalną ilością zamówienia jedno kliknięcie zamawia to
-minimum zamiast 1.
+kliknięciem”. Pomija on koszyk i checkout: zamówienie jest składane z wartości domyślnych,
+a kupujący trafia tam, gdzie wskazuje `nextAction` płatności (przekierowanie do bramki albo strona
+zamówienia lub sukcesu, gdy krok płatności nie jest potrzebny).
+
+Produkt staje się całym koszykiem kupującego przez metodę koszyka `addItems` z
+`replaceExisting: true` i `onBelowMinimum: 'throw'`, a następnie `OrderService.placeOrder` składa
+zamówienie. `addItems` opróżnia koszyk dopiero wtedy, gdy nie ma już powodu, by odrzucić pozycję,
+więc pozycja odrzucona przed zapisem — poniżej minimalnej ilości zamówienia, bez ceny albo dostępna
+tylko przez zapytanie ofertowe — zostawia koszyk dokładnie takim, jaki był. Odmowa przy składaniu
+zamówienia, już po zapisaniu pozycji (stan magazynowy, organizacja, metoda płatności lub dostawy),
+zostawia w koszyku tę jedną pozycję z zakupu jednym kliknięciem.
+
+Obowiązują te same warunki co przy zwykłym zamówieniu (aktywna organizacja, wartość minimalna, limit
+kredytowy, stan magazynowy, minimalna ilość zamówienia). Dla produktu `simple` lub `configurable` z
+minimalną ilością zamówienia jedno kliknięcie zamawia to minimum zamiast 1.
 
 ## Ustawienia
 
