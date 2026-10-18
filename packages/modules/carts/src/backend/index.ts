@@ -197,6 +197,7 @@ export function registerModule(ctx: ModuleContext): void {
               'organizationCartApprovalWritePort',
             ),
             lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+            lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
           ),
       )
       .singleton(),

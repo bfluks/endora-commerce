@@ -5,12 +5,14 @@ import { Cart } from '../entities/cart.entity.js';
 import type { CartApprovalStatus } from '../entities/cart.entity.js';
 import { CartItem } from '../entities/cart-item.entity.js';
 import type {
+  CatalogProductReadPort,
   CustomerAccountReadPort,
   OrganizationCartApprovalWritePort,
   OrganizationDetailsPort,
   OrganizationRecord,
 } from '@endora-commerce/contracts';
 import type { CartAuditService } from './cart-audit-service.js';
+import { assertCartMeetsMinimums, toCartMinimumItem } from './cart-minimums.js';
 
 /**
  * Approval-workflow state machine (feature 027 US4).
@@ -79,6 +81,11 @@ export class CartApprovalService {
     private readonly organizationCartApproval: OrganizationCartApprovalWritePort,
     /** `customer_accounts`' read model — the submitting buyer's role. */
     private readonly customerAccounts: CustomerAccountReadPort,
+    /**
+     * Feature 148 (owner ruling 2026-10-18) — the basket's products and units, so a
+     * basket below a minimum is refused before it is sent for approval.
+     */
+    private readonly catalogProducts: Pick<CatalogProductReadPort, 'findByIds' | 'listPackagingUnitsByProductIds'>,
     private readonly emailDispatch?: CartEmailDispatch,
   ) {}
 
@@ -103,8 +110,15 @@ export class CartApprovalService {
    *   - the policy is off (approval not required)
    *   - the buyer is themself an Org Admin (self-approval exemption)
    *   - approval_status is already non-`not_required`
+   *   - a line is below a minimum or its product is gone (feature 148, owner
+   *     ruling 2026-10-18) — the refusal placement would give, so a basket that
+   *     cannot be ordered is never sent for approval
    */
-  async submitForApproval(cart: Cart, actor: ApproveActor): Promise<Cart> {
+  async submitForApproval(
+    cart: Cart,
+    actor: ApproveActor,
+    options: { language?: string | undefined } = {},
+  ): Promise<Cart> {
     const em = this.emFactory();
     if (!cart.organizationId || cart.organizationId !== actor.organizationId) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'cart_not_found');
@@ -127,6 +141,12 @@ export class CartApprovalService {
     if (buyer?.role === 'organization_admin') {
       throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'org_admin_self_submit');
     }
+
+    await assertCartMeetsMinimums(this.catalogProducts, {
+      cart: { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
+      items: items.map(toCartMinimumItem),
+      language: options.language,
+    });
 
     cart.approvalStatus = 'pending';
     cart.submittedForApprovalAt = new Date();

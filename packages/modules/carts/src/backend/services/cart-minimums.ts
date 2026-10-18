@@ -8,6 +8,7 @@ import {
   type CatalogPackagingUnitRecord,
   type CatalogProductReadPort,
   type CatalogProductRecord,
+  type OrderMinimumBelowViolation,
   type OrderMinimumLine,
   type OrderMinimumRules,
   type OrderMinimumViolation,
@@ -334,4 +335,54 @@ export async function evaluateCartViewMinimums(
     });
   }
   return views;
+}
+
+/**
+ * Refuses a whole basket that has a line the full cart view flags (owner ruling
+ * 2026-10-18): a basket that cannot be ordered cannot be sent for approval either.
+ *
+ * Judged exactly as {@link evaluateCartViewMinimums} judges the view — the same
+ * records, the same FR-028 exemption — so the refusal never disagrees with the
+ * flags the buyer is looking at.
+ *
+ * - A line whose product record is gone → `404 PRODUCT_NOT_FOUND` with every such
+ *   line's `cartItemIds` and no name (FR-037, fail-closed).
+ * - Otherwise the first violation's minimum code, the product named in
+ *   `language`, every flagged line in `details.lines` with its `cartItemId`.
+ *
+ * Writes nothing. No `catch`: a failed catalogue read fails the caller.
+ */
+export async function assertCartMeetsMinimums(
+  catalogProducts: Pick<CatalogProductReadPort, 'findByIds' | 'listPackagingUnitsByProductIds'>,
+  input: {
+    cart: CartQuoteMark;
+    items: readonly CartMinimumItem[];
+    language?: string | undefined;
+  },
+): Promise<void> {
+  const { items } = input;
+  if (items.length === 0) return;
+  const products = await catalogProducts.findByIds(Array.from(new Set(items.map((item) => item.productId))));
+  const eligibleIds = products.filter((p) => isOrderMinimumEligibleType(p.type)).map((p) => p.id);
+  const packagingUnits: CatalogPackagingUnitRecord[] =
+    eligibleIds.length > 0 ? await catalogProducts.listPackagingUnitsByProductIds(eligibleIds) : [];
+  const lines = items.map((item) => lineOf(input.cart, item.id, item, item.quantity));
+  const violations = evaluateOrderMinimums(lines, { products, packagingUnits });
+  if (violations.length === 0) return;
+  const unavailable = violations.filter((v) => v.kind === 'product_unavailable');
+  if (unavailable.length > 0) {
+    throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.', {
+      cartItemIds: unavailable.map((v) => v.key),
+    });
+  }
+  const productsById = new Map(products.map((p) => [p.id, p]));
+  const names = new Map(
+    violations.map((v) => {
+      const product = productsById.get(v.productId);
+      return [v.productId, product !== undefined ? pickLocalized(product.name, input.language) : v.productId];
+    }),
+  );
+  const refusal = minimumRefusal(violations as OrderMinimumBelowViolation[], names, 'cartItemId');
+  if (refusal === null) return;
+  throw new HttpError(422, ERROR_CODES[refusal.code], refusal.message, refusal.details);
 }
