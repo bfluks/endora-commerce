@@ -251,7 +251,7 @@ zwolniona, dopóki jej ilość równa się ilości z zapytania, a checkout honor
 to zapytanie jest nadal ważne (strony modułów Carts i Orders). Gdy ten moduł jest wyłączony, nic
 nie może potwierdzić zapytania, więc taki koszyk traci zwolnienia przy checkoucie.
 
-Migracja `20261016T082027_quote_requests_item_packaging_unit_id.ts` dodaje
+Migracja `20261018T122118_quote_requests_item_packaging_unit_id.ts` dodaje
 `quote_request_items.packaging_unit_id` (dopuszcza `null`, bez klucza obcego — nazwa i base
 quantity jednostki pozostają skopiowane w pozycji).
 

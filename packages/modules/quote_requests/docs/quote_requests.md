@@ -277,7 +277,7 @@ is still valid (the Carts and Orders modules' pages). With this module switched
 off nothing can vouch for the quote, so such a basket loses its exemptions at
 checkout.
 
-Migration `20261016T082027_quote_requests_item_packaging_unit_id.ts` adds
+Migration `20261018T122118_quote_requests_item_packaging_unit_id.ts` adds
 `quote_request_items.packaging_unit_id` (nullable, no foreign key — the unit's
 name and base quantity stay snapshotted on the line).
 

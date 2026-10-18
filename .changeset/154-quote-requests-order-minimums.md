@@ -10,4 +10,4 @@ Quote requests validate packaging units by id and apply minimum order quantities
 - **Sales-rep writes warn.** Create on behalf, Modify, the admin's order clone and the admin quick-order build write below-minimum lines; `GET /api/v1/admin/quote-requests/:id` gives each such line `minimumWarning` (`{ kind, minimum, packagingUnitName? }`), shown as a *Below minimum* badge on the quote request screen. It never reaches the customer read.
 - `RfqCustomerPort.createForCustomer` accepts `options.minimums` (`'enforce' | 'warn'`).
 - `mod-i18n`'s `core` bundle gains `rfq.detail.minimum.pieces`, `rfq.detail.minimum.packagingUnit` and `rfq.detail.minimum.packagingUnitUnnamed` in English and Polish.
-- Migration `20261016T082027_quote_requests_item_packaging_unit_id.ts` adds `quote_request_items.packaging_unit_id`.
+- Migration `20261018T122118_quote_requests_item_packaging_unit_id.ts` adds `quote_request_items.packaging_unit_id`.

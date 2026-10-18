@@ -312,9 +312,9 @@ import { Migration20260912T125614QuoteRequestsQuoteRequestChannelAttribution } f
 import { Migration20261014T115049QuoteRequestsItemReferencePrice } from '@endora-commerce/mod-quote-requests/migrations';
 import { Migration20261014T115053QuoteRequestsNegotiationPolicies } from '@endora-commerce/mod-quote-requests/migrations';
 import { Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews } from '@endora-commerce/mod-quote-requests/migrations';
-import { Migration20261016T082027QuoteRequestsItemPackagingUnitId } from '@endora-commerce/mod-quote-requests/migrations';
 import { Migration20261017T142116QuoteRequestsQuoteRequestDocumentTemplate } from '@endora-commerce/mod-quote-requests/migrations';
 import { Migration20261017T142121QuoteRequestsQuoteRequestEventPdfSent } from '@endora-commerce/mod-quote-requests/migrations';
+import { Migration20261018T122118QuoteRequestsItemPackagingUnitId } from '@endora-commerce/mod-quote-requests/migrations';
 
 // ── returns ─────────────────────────────────────────────────────────────────
 import { Migration20260625T144227ReturnsInit } from '@endora-commerce/mod-returns/migrations';
@@ -635,9 +635,9 @@ export const MIGRATION_REGISTRY: readonly MigrationRegistryEntry[] = [
   migration('quote_requests', Migration20261014T115049QuoteRequestsItemReferencePrice),
   migration('quote_requests', Migration20261014T115053QuoteRequestsNegotiationPolicies),
   migration('quote_requests', Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews),
-  migration('quote_requests', Migration20261016T082027QuoteRequestsItemPackagingUnitId),
   migration('quote_requests', Migration20261017T142116QuoteRequestsQuoteRequestDocumentTemplate),
   migration('quote_requests', Migration20261017T142121QuoteRequestsQuoteRequestEventPdfSent),
+  migration('quote_requests', Migration20261018T122118QuoteRequestsItemPackagingUnitId),
 
   // ── returns ─────────────────────────────────────────────────────────────────
   migration('returns', Migration20260625T144227ReturnsInit),

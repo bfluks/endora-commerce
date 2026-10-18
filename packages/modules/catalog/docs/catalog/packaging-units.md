@@ -103,4 +103,4 @@ name)`. Migration `20261016T082008_catalog_order_rules.ts` adds
 (`20260611T140414_orders_order_item_packaging.ts`), `quote_request_items`
 (`20260611T140415_quote_requests_qr_item_packaging.ts`; its
 `packaging_unit_id` from
-`20261016T082027_quote_requests_item_packaging_unit_id.ts`).
+`20261018T122118_quote_requests_item_packaging_unit_id.ts`).

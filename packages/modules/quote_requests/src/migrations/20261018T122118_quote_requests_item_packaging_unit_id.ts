@@ -9,7 +9,7 @@ import { Migration } from '@mikro-orm/migrations';
  * **No foreign key**: packaging units are hard-deleted and the line's
  * snapshot outlives them.
  */
-export class Migration20261016T082027QuoteRequestsItemPackagingUnitId extends Migration {
+export class Migration20261018T122118QuoteRequestsItemPackagingUnitId extends Migration {
   override async up(): Promise<void> {
     this.addSql(`alter table "quote_request_items" add column "packaging_unit_id" uuid null;`);
   }

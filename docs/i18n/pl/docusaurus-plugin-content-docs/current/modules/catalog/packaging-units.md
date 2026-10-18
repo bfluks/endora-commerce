@@ -93,4 +93,4 @@ czasu; `UNIQUE (product_id, name)`. Migracja `20261016T082008_catalog_order_rule
 `cart_items` (`20260611T140413_carts_cart_item_packaging.ts`), `order_items`
 (`20260611T140414_orders_order_item_packaging.ts`), `quote_request_items`
 (`20260611T140415_quote_requests_qr_item_packaging.ts`; kolumnę `packaging_unit_id` tej tabeli
-dodaje `20261016T082027_quote_requests_item_packaging_unit_id.ts`).
+dodaje `20261018T122118_quote_requests_item_packaging_unit_id.ts`).
