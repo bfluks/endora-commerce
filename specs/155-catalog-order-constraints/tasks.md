@@ -715,6 +715,18 @@ Each RED test was written first and seen failing; then fixed.
 
 **Not in this round**: UI/storefront items, the returns complaint question, quantity upper bounds, the bulk Command Bus question (owner decisions or round B). `contracts/cart-and-checkout-api.md` §4 still shows `addItems(…, { onLineError })` without `onBelowMinimum`, `replaceExisting` and `language`, and §5's admin-create row (and the API intake) predate them — left for the product owner, who holds that file this round.
 
+
+## Review fix round B (U4) — owner rulings R1 and R5, UI review, test gaps
+
+Each RED test was written first and seen failing, then fixed — except the T166 jsdom cases, which cover behaviour that was already right (test gaps) and were mutation-checked instead: with the blur handler removed they fail.
+
+- [x] T161 [PG] R5 / FR-039 — submit for approval judges the basket as placement does: a quote-seeded line is exempt only once the quote source is confirmed valid (same organization, `Approved`, not expired, not yet ordered, an agreed line present). `orders` publishes `OrderQuoteSourcePort` (`orderQuoteSourcePort`, the checkout preview's lock-free `#previewedQuoteRequestSource`); `carts` resolves it lazily — no new dependency edge (`carts` already declares `orders` and `quote_requests`). Fail-closed while `quote_requests` is off. Storefront submit fallback through PL/EN messages (`cart.submitForApprovalFailed`). `contracts/cart-and-checkout-api.md` §4/§5 brought up to round A's `onBelowMinimum`/`replaceExisting`. RED: `backend/test/contract/carts/cart-approval-minimums.test.ts` (18a valid; expired, cancelled, already ordered, other organization; `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`; 404 `details.cartItemIds`; Polish message; `quote_requests` off), `cart-minimums.test.ts`, `storefront/test/product-cart-action-messages.test.ts`
+- [x] T162 [PG] Round A residue — a replacing batch (`replaceExisting`, `onLineError: 'throw'`) prices every line it is about to write before clearing the basket, so `CART_PRODUCT_UNPRICED` / `CART_PRODUCT_QUOTE_ONLY` leave the basket intact on admin create and API intake. The line cap cannot trigger on the fresh basket (≤ 200 lines). Residual: a price edited between the pre-check and the write can still refuse after the clear; placement prices again. RED: `backend/test/integration/orders/request-refusal-basket.test.ts` (unpriced on admin create, quote-only on intake)
+- [x] T163 [PG] R1 — a `complaint` line recorded not returnable at purchase is stored with `approvedRefundAmount` 0; `defaultRefundAmount` stays the amount paid (it is settlement's cap — 0 there would forbid any refund). The admin settlement form pre-fills from the stored approved amount; the case view marks the line **Not returnable at purchase** (kit `Badge`, `mod-i18n` `returns.detail.notReturnableAtPurchase`, EN/PL); the case detail items carry `returnableAtPurchase` from `OrderReturnContextPort`. Nothing pays out without the operator: settlement is the one admin route. RED: `backend/test/integration/returns/returnable-lines.test.ts` (R1), `admin/test/modules/returns/ReturnDetail.notReturnable.test.tsx`
+- [x] T164 UI review — `ProductOrderRulesCard` on kit `Checkbox`/`Input`/`Button`; `PackagingUnitsEditor` keeps a refused minimum invalid until its value changes; `CartLine` hidden default submit so Enter posts the typed quantity; redirect reports capped at 20 + count, projected, parsed defensively; `CompareAddToCartButton` takes the table's locale; `place-order-gate` JSDoc; `OrderCreatePage` line width. RED: `ProductOrderRulesCard.test.tsx`, `PackagingUnitsEditor.min.test.tsx`, `cart-line-minimum.test.tsx`, `batch-below-minimum.test.tsx`, `compare-add-minimum.test.tsx` (locale)
+- [x] T165 Docs and changesets — carts, orders and returns pages EN + PL with the translation cache re-pinned; changesets `mod-carts`, `mod-orders`, `contracts`, `mod-returns` (+ `mod-i18n`), `mod-catalog`
+- [x] T166 Test gaps — jsdom (`// @vitest-environment jsdom`, no new dependency; the storefront suite is otherwise SSR-only per `.claude/skills/ux-laws/SKILL.md` §5) for `ProductCardActions` / `CompareAddToCartButton` clicks (`quantity: 10`), PDP blur normalisation, quote-draft "Set to N" and blur; `OrderCreatePage.minimum` asserts on the unmounted-update warning only; `import-below-minimum` tests the unit refusal through the page; product-browser `waitFor` after the quick-add click (both pages)
+
 ---
 
 ## Requirement coverage
@@ -722,7 +734,7 @@ Each RED test was written first and seen failing; then fixed.
 Every FR traces to a RED task:
 FR-001 → T003, T004, T013, T028, T098 · FR-002 → T004, T013, T029, T099 · FR-003 → T028, T098, T100 ·
 FR-004 → T013, T028 · FR-005 → T028, T029 · FR-006a → T003, T038, T039, T048 · FR-006 → T039 ·
-FR-007 → T039 · FR-008 → T056, T120 · FR-009 → T039, T056, T057, T058, T067 · FR-010 → T065, T067 ·
+FR-007 → T039 · FR-008 → T056, T120 · FR-039 → T161 · FR-009 → T039, T056, T057, T058, T067 · FR-010 → T065, T067 ·
 FR-011 → T048, T049, T064, T066, T067, T068, T108, T121 · FR-012 → T078, T083, T084 ·
 FR-013 → T041, T119 · FR-014 → T030, T113 · FR-015 → T119 · FR-016 → T030, T114 ·
 FR-016a → T090, T090a, T091 · FR-017 → T089, T091 · FR-018 → T089, T091, T128 · FR-019 → T091, T091a ·
