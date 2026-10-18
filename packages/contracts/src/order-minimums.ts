@@ -118,8 +118,10 @@ export function evaluateOrderMinimums(
   };
 
   // Pass 2 — accumulate per-product pieces and per-(product, unit) units.
+  // Units are summed as exact fractions (D2): `7/10 + 1/10 + 1/10 + 1/10` is one
+  // unit, where the floating-point sum is 0.9999999999999999 and would refuse it.
   const piecesByProduct = new Map<string, number>();
-  const unitsByProductUnit = new Map<string, number>();
+  const unitsByProductUnit = new Map<string, Fraction>();
   for (const line of lines) {
     if (!productsById.has(line.productId)) continue;
     piecesByProduct.set(line.productId, (piecesByProduct.get(line.productId) ?? 0) + line.quantity);
@@ -127,7 +129,10 @@ export function evaluateOrderMinimums(
     if (unit === null) continue;
     const baseQuantity = line.packagingUnitBaseQuantity ?? unit.baseQuantity;
     const unitKey = productUnitKey(line.productId, unit.id);
-    unitsByProductUnit.set(unitKey, (unitsByProductUnit.get(unitKey) ?? 0) + line.quantity / baseQuantity);
+    unitsByProductUnit.set(
+      unitKey,
+      addFractions(unitsByProductUnit.get(unitKey) ?? ZERO_FRACTION, fractionOf(line.quantity, baseQuantity)),
+    );
   }
 
   // Pass 3 — emit, in input order.
@@ -150,8 +155,8 @@ export function evaluateOrderMinimums(
 
     const unit = unitOf(line);
     if (unit !== null && unit.minOrderUnits !== null) {
-      const units = unitsByProductUnit.get(productUnitKey(product.id, unit.id)) ?? 0;
-      if (units < unit.minOrderUnits) {
+      const units = unitsByProductUnit.get(productUnitKey(product.id, unit.id)) ?? ZERO_FRACTION;
+      if (fractionBelow(units, unit.minOrderUnits)) {
         violations.push({
           key: line.key,
           productId: product.id,
@@ -159,7 +164,7 @@ export function evaluateOrderMinimums(
           packagingUnitId: unit.id,
           packagingUnitName: unit.name,
           minimum: unit.minOrderUnits,
-          units,
+          units: fractionValue(units),
         });
       }
     }
@@ -169,6 +174,57 @@ export function evaluateOrderMinimums(
 
 function productUnitKey(productId: string, unitId: string): string {
   return `${productId}\u0000${unitId}`;
+}
+
+/**
+ * A non-negative rational number of units, in lowest terms. `bigint`, because the
+ * common denominator of lines snapshotted on different bases is their product,
+ * which passes 2^53 after three bases near the {@link ORDER_MINIMUM_MAX} bound.
+ */
+interface Fraction {
+  numerator: bigint;
+  denominator: bigint;
+}
+
+const ZERO_FRACTION: Fraction = { numerator: 0n, denominator: 1n };
+
+function gcd(a: bigint, b: bigint): bigint {
+  let x = a < 0n ? -a : a;
+  let y = b < 0n ? -b : b;
+  while (y !== 0n) [x, y] = [y, x % y];
+  return x;
+}
+
+function reduce(numerator: bigint, denominator: bigint): Fraction {
+  const divisor = gcd(numerator, denominator) || 1n;
+  return { numerator: numerator / divisor, denominator: denominator / divisor };
+}
+
+/**
+ * `quantity / baseQuantity` as a fraction. Both are integers by contract (pieces and
+ * a unit's pieces); a non-integer is scaled to an integer ratio rather than refused,
+ * so a malformed snapshot is judged, never thrown.
+ */
+function fractionOf(quantity: number, baseQuantity: number): Fraction {
+  if (Number.isInteger(quantity) && Number.isInteger(baseQuantity) && baseQuantity > 0) {
+    return reduce(BigInt(quantity), BigInt(baseQuantity));
+  }
+  const scale = 1_000_000;
+  return reduce(BigInt(Math.round(quantity * scale)), BigInt(Math.max(1, Math.round(baseQuantity * scale))));
+}
+
+function addFractions(a: Fraction, b: Fraction): Fraction {
+  return reduce(a.numerator * b.denominator + b.numerator * a.denominator, a.denominator * b.denominator);
+}
+
+/** `value < minimum`, compared exactly. */
+function fractionBelow(value: Fraction, minimum: number): boolean {
+  return value.numerator < BigInt(minimum) * value.denominator;
+}
+
+/** The fraction as the real number the violation reports (`units`). */
+function fractionValue(value: Fraction): number {
+  return Number(value.numerator) / Number(value.denominator);
 }
 
 /**

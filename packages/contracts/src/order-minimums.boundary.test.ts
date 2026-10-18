@@ -81,6 +81,26 @@ describe('packaging-unit minimum — the edge', () => {
     expect(evaluateOrderMinimums(both, unitRules(2))).toEqual([]);
     expect(evaluateOrderMinimums([both[0]!], unitRules(2))).toHaveLength(1);
   });
+
+  it('D2 — lines of 7, 1, 1 and 1 pieces on a base of 10 make exactly one unit (no float drift)', () => {
+    // 0.7 + 0.1 + 0.1 + 0.1 is 0.9999999999999999 in floating point.
+    const lines = [7, 1, 1, 1].map((quantity, i) =>
+      line(`l${i}`, quantity, { packagingUnitId: U, packagingUnitBaseQuantity: 10 }),
+    );
+    expect(evaluateOrderMinimums(lines, unitRules(1, 10))).toEqual([]);
+    expect(evaluateOrderMinimums(lines.slice(0, 3), unitRules(1, 10))).toHaveLength(3);
+  });
+
+  it('D2 — lines snapshotted on different bases are summed exactly: 32/64 + 5/10 is one unit', () => {
+    const lines = [
+      line('old', 32, { packagingUnitId: U, packagingUnitBaseQuantity: 64 }),
+      line('new', 5, { packagingUnitId: U, packagingUnitBaseQuantity: 10 }),
+    ];
+    expect(evaluateOrderMinimums(lines, unitRules(1, 10))).toEqual([]);
+    const below = evaluateOrderMinimums([lines[0]!, line('new', 4, { packagingUnitId: U, packagingUnitBaseQuantity: 10 })], unitRules(1, 10));
+    expect(below).toHaveLength(2);
+    expect(below[0]).toMatchObject({ kind: 'packaging_unit', units: 0.9 });
+  });
 });
 
 describe('quote-seeded exemption — the edge (FR-028)', () => {
