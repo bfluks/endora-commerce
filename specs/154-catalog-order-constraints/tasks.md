@@ -655,12 +655,17 @@ Verified 2026-10-16: `test/checkout test/account` 26 files / 194 tests passed; f
 
 ## Phase 19: OpenAPI baseline and the `[PG]` sweep
 
-- [ ] T141 Re-record `backend/test/fixtures/openapi-baseline.json`: `UPDATE_OPENAPI_BASELINE=1 pnpm --filter backend exec vitest run test/contract/kernel/openapi-baseline.test.ts`; review the diff — **additions only** (plan I3); then run without the flag
-- [ ] T142 `[PG]` Every file this feature added or extended, **one `vitest run <file>` per invocation**, from `backend/` with the `[PG]` environment: the `[PG]` files of Phases 3–12a and 18, plus `test/contract/admin_users/permission-inventory.test.ts`, `test/contract/kernel/harness-parity.test.ts`, `test/integration/carts/cart-pricing-recompute.integration.test.ts`, `test/integration/orders/place-order-from-quote-request.test.ts`, `test/contract/quote_requests/customer-routes.test.ts` — paste the summary into the PR (D-198)
-- [ ] T143 Deleted or moved anything? `git diff --name-status --diff-filter=DR origin/master...HEAD`; grep each old path under `backend/test/`; `composer:check`, `manifests:check`, `overlay:check`; `git status --porcelain` clean
-- [ ] T144 Walk `quickstart.md` §1–§7 on `pnpm run dev` and note any divergence in the PR (the owner's manual test follows)
+- [x] T141 Re-record `backend/test/fixtures/openapi-baseline.json`: `UPDATE_OPENAPI_BASELINE=1 pnpm --filter backend exec vitest run test/contract/kernel/openapi-baseline.test.ts`; review the diff — **additions only** (plan I3); then run without the flag
+- [x] T142 `[PG]` Every file this feature added or extended, **one `vitest run <file>` per invocation**, from `backend/` with the `[PG]` environment: the `[PG]` files of Phases 3–12a and 18, plus `test/contract/admin_users/permission-inventory.test.ts`, `test/contract/kernel/harness-parity.test.ts`, `test/integration/carts/cart-pricing-recompute.integration.test.ts`, `test/integration/orders/place-order-from-quote-request.test.ts`, `test/contract/quote_requests/customer-routes.test.ts` — paste the summary into the PR (D-198)
+- [x] T143 Deleted or moved anything? `git diff --name-status --diff-filter=DR origin/master...HEAD`; grep each old path under `backend/test/`; `composer:check`, `manifests:check`, `overlay:check`; `git status --porcelain` clean
+- [ ] T144 Walk `quickstart.md` §1–§7 on `pnpm run dev` and note any divergence in the PR (the owner's manual test follows) — **deferred to the owner's manual test** (2026-10-18)
 
 **Verification**: T141–T143 exit 0; T144 notes recorded.
+
+Verified 2026-10-18, after rebasing onto `origin/master` (`dcf1de310`):
+- **T141** — re-recorded with `UPDATE_OPENAPI_BASELINE=1` (`[PG]` env); the fixture did not move (byte-identical to `origin/master`'s). Expected: this feature adds no route path (every endpoint in `contracts/*.md` already exists in the fixture), and the harness document carries paths without request or response bodies, so new response fields and error codes do not render there. Re-run without the flag: 2 / 2 green.
+- **T142** — 84 `[PG]` files, one `vitest run` per invocation, all green, 623 tests: the `[PG]` files of every Verification block in Phases 3–12a and 18, every contract/integration file this branch adds or modifies (incl. `cart-approval-minimums`), the five files named above, and master's `cart-line-repricing`, `cart-line-refusal-codes`, `place-order-line-price-current`, `place-order-from-quote-request` and `price-matrix-*` (one contract, four integration).
+- **T143** — `--diff-filter=DR` against `origin/master` is empty (the `148-` spec directory, the dropped `carts` migration and its schema test were added and removed inside the branch); no reference to `148-catalog-order-constraints`, `quote_seeded_quantity`, `cart_item_quote_seeded_quantity` or `quote-seeded-quantity-schema` remains under `backend/`, `admin/test`, `docs/`, `packages/`, `storefront/` or `.changeset/`; `composer:check`, `manifests:check`, `overlay:check` all clean; tree clean.
 
 ---
 
