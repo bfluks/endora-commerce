@@ -5,6 +5,7 @@ import {
   isValidOrderMinimum,
 } from '@endora-commerce/contracts';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
+import { Alert } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 
 /**
@@ -176,9 +177,7 @@ export function ProductOrderRulesCard({
             {t('orderRules.loading')}
           </div>
         ) : loadError ? (
-          <div className="b2b-alert b2b-alert--error" role="alert">
-            {loadError}
-          </div>
+          <Alert variant="destructive">{loadError}</Alert>
         ) : (
           <>
             <div className="b2b-col" style={{ gap: 4 }}>
@@ -200,14 +199,9 @@ export function ProductOrderRulesCard({
                 {t('orderRules.returnable.help')}
               </div>
               {returnableError ? (
-                <div
-                  id={returnableErrorId}
-                  role="alert"
-                  className="b2b-alert b2b-alert--error"
-                  style={{ marginLeft: 24 }}
-                >
+                <Alert id={returnableErrorId} variant="destructive" style={{ marginLeft: 24 }}>
                   {returnableError}
-                </div>
+                </Alert>
               ) : null}
             </div>
 
@@ -271,9 +265,9 @@ export function ProductOrderRulesCard({
                   {t('orderRules.minimum.help')}
                 </div>
                 {minimumError ? (
-                  <div id={minimumErrorId} role="alert" className="b2b-alert b2b-alert--error">
+                  <Alert id={minimumErrorId} variant="destructive">
                     {minimumError}
-                  </div>
+                  </Alert>
                 ) : null}
               </div>
             ) : (
