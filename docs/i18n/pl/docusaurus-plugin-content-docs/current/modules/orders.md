@@ -398,13 +398,21 @@ jeden kod — pierwszy pasujący, w tej kolejności — i pokazuje jeden powód:
 | `PRODUCT_NOT_VISIBLE_TO_CUSTOMER` | *Klient nie widzi tego produktu* | Widoczność produktu albo jego lista dozwolonych organizacji wyklucza organizację klienta: zmień je przy produkcie w katalogu, wybierz innego klienta albo usuń pozycję. |
 | `PRODUCT_NOT_IN_SALES_CHANNEL` | *Poza asortymentem tego kanału sprzedaży* | Wybierz kanał sprzedaży, którego asortyment zawiera produkt, dodaj produkt do asortymentu tego kanału albo usuń pozycję. |
 | `QUOTE_ONLY` | *Brak ceny* | Cena produktu dla tego klienta jest dostępna tylko w ofercie: usuń pozycję albo utwórz zapytanie ofertowe. |
+| `BELOW_MINIMUM_QUANTITY` | *Poniżej minimum N szt.* | Łączna ilość produktu w zamówieniu jest poniżej jego minimalnej ilości zamówienia: zwiększ ilość albo usuń pozycję. |
 
-Kod, którego ekran nie zna, też jest pokazywany jako *Brak ceny*. Pozostałe pozycje zachowują
+`BELOW_MINIMUM_QUANTITY` niesie `minimum` i jest oceniany tylko na pozycjach, które przeszły cztery
+sprawdzenia powyżej, z sumowaniem pozycji każdego produktu. Kod, którego ekran nie zna, też jest pokazywany jako *Brak ceny*. Pozostałe pozycje zachowują
 ceny, a podsumowanie liczy tylko wycenione. Wycena sprawdza asortyment dokładnie tego kanału
 sprzedaży, który wskazuje żądanie; `salesChannelId`, który nie wskazuje żadnego kanału, jest
 odrzucany z `404 NOT_FOUND`, a ekran pokazuje *Nie udało się przeliczyć cen*, nie oznaczając żadnej
 pozycji. Produkt usunięty miękko jest wyceniany jak dotąd. Utworzone zamówienie zawiera dokładnie
 pozycje i ilości widoczne na ekranie, w niezmienionym kształcie żądania `POST /api/v1/admin/orders`.
+
+**Najwyżej 200 pozycji.** `POST /api/v1/admin/orders` i `POST /api/v1/admin/orders/preview` w
+pierwszym kroku odrzucają więcej niż 200 pozycji, z kodem `422 VALIDATION_FAILED` i `details: {
+code: 'too_many_items', maximum: 200 }`, zanim oceniona zostanie którakolwiek pozycja. Tworzenie
+zamówienia odrzuca też żądanie, w którym łączna ilość produktu jest poniżej jego minimum, z błędem
+minimum i `details.lines[]` kluczowanym `index` pozycji.
 
 ## Zapisane widoki
 
@@ -529,6 +537,60 @@ zapytania ofertowego.
 
 Gdy moduł zapytań ofertowych jest wyłączony, zamówienia są składane dokładnie tak jak dotąd i nie
 zapisują żadnego zapytania.
+
+## Minimalne ilości zamówienia przy składaniu zamówienia
+
+Składanie zamówienia stosuje minimalne ilości zamówienia z katalogu do każdej pozycji koszyka —
+minimum produktu w sztukach i minimum każdej jednostki opakowania w jednostkach, liczone ze
+wszystkich pozycji produktu (oba definiuje strona modułu Catalog). To ostatnie słowo na każdej
+ścieżce, która kończy się zamówieniem: checkout, zakup jednym kliknięciem, ponowne zamówienie,
+koszyk wypełniony z zapytania ofertowego, tworzenie zamówienia w panelu administracyjnym i
+zewnętrzne API zamówień.
+
+- **Przed jakimkolwiek skutkiem ubocznym.** Sprawdzenie działa w transakcji składania zamówienia
+  zaraz po odczytaniu koszyka — przed sprawdzeniem wartości zamówienia i limitu kredytowego,
+  numerem zamówienia oraz jakąkolwiek rezerwacją stanu lub kredytu. Odmowa niczego nie zapisuje.
+- **Co odpowiada.** Pozycja, której rekord produktu zniknął → `404 PRODUCT_NOT_FOUND` z
+  `details.cartItemIds`. Pozycja poniżej minimum → `422 PRODUCT_BELOW_MINIMUM_QUANTITY` albo
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` z `details.lines[]`, po jednym wpisie na każdą
+  odrzuconą pozycję (`cartItemId`, `productId`, `productName`, `kind`, `minimum`,
+  `packagingUnitName`), w języku kupującego.
+- **Podgląd checkoutu mówi to samo wcześniej.** `POST /api/v1/orders/preview-total` zwraca
+  `belowMinimumLines[]` — pozycje, które składanie zamówienia by odrzuciło, z tymi samymi
+  zwolnieniami; pozycja, której produkt zniknął, ma `kind: 'product_unavailable'` i nie ma nazwy
+  ani minimum. Storefront je wymienia i wyłącza **Place order**. Podgląd nie zakłada blokady, więc
+  przy wyścigu rozstrzyga składanie zamówienia.
+- **Koszyk wypełniony z zaakceptowanego zapytania ofertowego.** Moduł Carts zwalnia każdą pozycję
+  wypełnioną z zapytania, dopóki jej ilość równa się ilości z zapytania. Składanie zamówienia i
+  podgląd honorują to zwolnienie **tylko wtedy, gdy zapytanie ofertowe jest w tej chwili nadal
+  ważne**: istnieje, należy do organizacji kupującego, ma nadal status `Approved` — nie jest
+  anulowane ani wygasłe, a jego ważność się nie skończyła — żadne zamówienie go jeszcze nie
+  zapisuje, a koszyk wciąż zawiera co najmniej jedną jego pozycję w uzgodnionej cenie. W przeciwnym
+  razie każda pozycja jest oceniana jak każda inna. Sprawdzenie i jego blokada działają na początku
+  składania zamówienia, więc o zwolnieniu decyduje się, zanim cokolwiek zostanie zapisane. Gdy moduł
+  Quote Requests jest wyłączony, nic nie może potwierdzić zapytania i żadna pozycja nie jest
+  zwolniona.
+- **Zewnętrzne API zamówień** (`POST /api/v1/external/orders`) i tworzenie zamówienia w panelu
+  budują koszyk z żądania i oceniają łączną ilość każdego produktu ze wszystkich pozycji żądania;
+  żądanie poniżej minimum jest odrzucane w całości, z `details.lines[]` kluczowanym `index`. Żadne
+  z nich nie przenosi jednostki opakowania, więc działa tam tylko minimum w sztukach. **Oba
+  odrzucają więcej niż 200 pozycji** z kodem `422 VALIDATION_FAILED`,
+  `details.code = 'too_many_items'` — w zewnętrznym API jest to sprawdzane jako pierwsze, zanim
+  wymagany będzie nagłówek `Idempotency-Key`, i nie zostawia żadnego rekordu idempotencji.
+
+## Podleganie zwrotowi w chwili zakupu
+
+Każda pozycja zamówienia zapisuje, czy jej produkt podlegał zwrotowi w chwili złożenia zamówienia
+(`order_items.returnable_at_purchase`), na każdej ścieżce składania zamówienia. Późniejsze zmiany
+flagi **Podlega zwrotowi** produktu jej nie zmieniają. Pozycja, której rekordu produktu albo flagi
+nie dało się odczytać przy składaniu zamówienia, jest zapisywana jako **niepodlegająca zwrotowi**,
+nigdy pusta. Pozycje zamówień złożonych przed powstaniem tej kolumny mają `null`, co moduł Returns
+traktuje jako podleganie zwrotowi. Wartość trafia do modułu Returns przez `OrderReturnContextPort`
+(`returnableAtPurchase` na każdej pozycji); Returns nie odczytuje żadnej tabeli modułu Orders.
+Składanie zamówienia zapisuje ją niezależnie od tego, czy moduł Returns jest włączony.
+
+Migracja `20261016T082022_orders_order_item_returnable_at_purchase.ts` dodaje tę kolumnę
+(dopuszcza `null`).
 
 ## Ustawienia
 

@@ -169,12 +169,17 @@ porzucenia mógł ponownie wysłać powiadomienie.
   `desired_unit_price = null`, więc zamiana działa także dla klienta, który nie może proponować cen.
   Dział sprzedaży widzi cenę z koszyka jako *cenę z dnia zapytania* pozycji na ekranie zapytania
   ofertowego w panelu administracyjnym. Pozycje koszyka źródłowego są usuwane, a koszyk przechodzi
-  w stan `'completed'` z ustawionym `converted_to_quote_request_id`.
-- **Zapytanie ofertowe → koszyk**: przechodzi przez pozycje zapytania i wywołuje
-  `CartService.addItem`, które już wyznacza ceny przez `PricingService`. `desired_unit_price` z
-  zapytania jest celowo pomijane — źródłem prawdy są bieżące ceny kontraktowe kupującego. Pozycje
-  niedostępne, bez ceny albo niemożliwe do kupienia są pomijane i zwracane w `droppedLines[]` z
-  typowanym powodem.
+  w stan `'completed'` z ustawionym `converted_to_quote_request_id`. Pozycja w jednostce opakowania
+  jest wysyłana z jej `packagingUnitId`; pozycja, której jednostkę w międzyczasie usunięto, jest
+  wysyłana jako zwykłe sztuki, z niezmienioną liczbą sztuk.
+- **Zapytanie ofertowe → koszyk**: dodaje pozycje zapytania jedną partią
+  (`CartService.addItems`, zob. *Minimalne ilości zamówienia* niżej), z cenami wyznaczanymi przez
+  `PricingService`. `desired_unit_price` z zapytania jest celowo pomijane — źródłem prawdy są
+  bieżące ceny kontraktowe kupującego. Pozycje niedostępne, bez ceny albo niemożliwe do kupienia są
+  pomijane i zwracane w `droppedLines[]` z typowanym powodem; pozycja poniżej minimum produktu jest
+  pomijana z powodem `below_minimum` i swoim `minimum` (wcześniej zgłaszano ją jako
+  `no_price_in_customer_list`), a produkt, którego kupujący już nie widzi — z powodem
+  `not_purchasable`.
 - **Zaakceptowane zapytanie ofertowe → koszyk** (`POST
   /api/v1/quote-requests/:id/convert-to-order`, należy do modułu zapytań ofertowych): koszyk jest
   czyszczony i wypełniany pozycjami zapytania w **uzgodnionych** cenach jednostkowych przez
@@ -188,6 +193,52 @@ porzucenia mógł ponownie wysłać powiadomienie.
   ustawia oznaczenia.
 - **Lista zakupów → koszyk**: przekazywane do istniejącego `ShoppingListService.convertToCart`; moduł
   koszyków udostępnia port, który kompozycja do niego podłącza.
+
+## Minimalne ilości zamówienia
+
+Koszyk stosuje minimalne ilości zamówienia z katalogu — minimum produktu w sztukach i minimum
+każdej jednostki opakowania w jednostkach, liczone ze wszystkich pozycji produktu w koszyku (oba
+definiuje strona modułu Catalog).
+
+- **Dodanie i edycja** (`POST /api/v1/cart/items`, `PATCH /api/v1/cart/items/:itemId`) oceniają
+  koszyk w stanie, w jakim zostawiłaby go zmiana — po dotychczasowych sprawdzeniach ilości,
+  produktu, kanału i jednostki opakowania, a przed wyceną. Zmiana, która zostawia pozycję poniżej
+  minimum, jest odrzucana z kodem `422 PRODUCT_BELOW_MINIMUM_QUANTITY` albo
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`; komunikat w języku kupującego podaje produkt i
+  minimum, a nic nie jest zapisywane. Edycja do `0` i `DELETE` zawsze usuwają pozycję. Edycja
+  pozycji, której produkt już nie istnieje, kończy się `404 PRODUCT_NOT_FOUND`.
+- **Widok koszyka** (`GET /api/v1/cart`) podaje dla każdej pozycji `minOrderQuantity` (minimum
+  produktu w sztukach, `null`, gdy go nie ma) i `belowMinimum` (`{ kind, minimum,
+  packagingUnitName? }`, gdy pozycja jest poniżej minimum i nie jest z niego zwolniona, w
+  przeciwnym razie `null`); storefront oznacza taką pozycję i blokuje checkout. Pozycja, której
+  rekord produktu zniknął, jest zgłaszana jako `unavailable: true` z
+  `unavailableReason: 'not_purchasable'`. **Jeśli katalogu nie da się odczytać, widok kończy się
+  błędem `5xx`**, zamiast zwrócić koszyk bez tych oznaczeń. Widok skrócony (`?view=mini`) się nie
+  zmienia.
+- **Dodawanie partiami** — zapytanie ofertowe → koszyk, lista zakupów → koszyk, szybkie zamówienie
+  oraz tworzenie zamówienia przez administratora i przez zewnętrzne API — przechodzi przez
+  `CartWritePort.addItems`. Najpierw rozstrzyga każdą pozycję tymi samymi sprawdzeniami co
+  pojedyncze dodanie: pozycja, której produkt jest nieznany, ukryty przed kupującym albo spoza
+  kanału, dostaje odpowiedź „nieznany produkt”, bez nazwy i bez minimum. Potem ocenia rozstrzygnięte
+  pozycje razem z koszykiem — pozycje jednego produktu w partii są sumowane, więc
+  `A-red × 5 + A-blue × 5` spełnia minimum 10 — i dodaje tylko te, które przechodzą, zgłaszając
+  pozostałe. Pozycje już obecne w koszyku nigdy nie są odrzucane. Wywołujący, który prosi o
+  `throw`, dostaje teraz błąd **zanim cokolwiek zostanie dodane**, gdy pozycji nie da się
+  rozstrzygnąć; ten, który prosi o `report`, dostaje każdą porażkę jako wynik. Najwyżej 200 pozycji
+  na wywołanie.
+- **Koszyk wypełniony z zaakceptowanego zapytania ofertowego** zachowuje wynegocjowane ilości
+  zapytania: każda pozycja wypełniona z zapytania jest zwolniona z minimów, **dopóki jej ilość
+  równa się ilości z zapytania** dla tej pozycji (`cart_items.quote_seeded_quantity`). Zmiana ilości
+  czyni ją zwykłą pozycją, dopóki ilość nie wróci do wartości z zapytania, co jest dozwolone nawet
+  poniżej minimum. Pozycje dodane później są sprawdzane jak zwykle, a sztuki pozycji zwolnionej
+  nadal liczą się do łącznej ilości produktu, gdy sprawdzana jest inna pozycja tego produktu.
+  Koszyk przyjmuje oznaczenie zapytania na koszyku bez weryfikacji; checkout i składanie zamówienia
+  potwierdzają, że zapytanie jest nadal ważne (strona modułu Orders). Ponowne wypełnienie koszyka —
+  z innego zapytania albo przez ponowne zamówienie — zastępuje je, a wraz z nim każde wcześniejsze
+  zwolnienie.
+
+Migracja `20261016T082018_carts_cart_item_quote_seeded_quantity.ts` dodaje
+`cart_items.quote_seeded_quantity` (dopuszcza `null`).
 
 ## Stosowanie kuponu
 

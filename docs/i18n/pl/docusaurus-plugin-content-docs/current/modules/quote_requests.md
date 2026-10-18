@@ -197,6 +197,64 @@ pozycji, o ile sprzedawca ich nie zmienił. Zapisana cena referencyjna zostaje t
 sprzedawca zmienia ilość pozycji: rewizja sprzedawcy nigdy nie ustala jej ponownie. Pozycja dodana
 przez sprzedawcę ma wybrany przez niego wariant i notatkę, a jednostki opakowania nie ma.
 
+## Minimalne ilości zamówienia i jednostki opakowania
+
+Zapytania ofertowe stosują minimalne ilości zamówienia z katalogu — minimum produktu w sztukach i
+minimum każdej jednostki opakowania w jednostkach, liczone ze wszystkich pozycji produktu w
+zapytaniu (oba definiuje strona modułu Catalog). **Reguła zależy od tego, kto zapisuje, a nie od
+trasy.**
+
+**Jednostki opakowania wskazuje się identyfikatorem.** Pozycja klienta (utworzenie, edycja szkicu,
+koszyk → zapytanie ofertowe) może nieść `packagingUnitId`. Musi to być bieżąca jednostka produktu
+z tej pozycji; serwer zapisuje jej nazwę i base quantity z katalogu i ignoruje nazwę ani base
+quantity przesłane w pozycji. Pozycja, która przesyła nazwę jednostki i base quantity bez
+identyfikatora, jest przyjmowana tylko wtedy, gdy oba pasują do jednej z jednostek produktu.
+Wszystko inne jest odrzucane w całości z kodem `422 PACKAGING_UNIT_MISMATCH`, bez zapisu;
+`details.lines[]` podaje `index` i `reason` każdej błędnej pozycji. Każdy błąd identyfikatora —
+nieznany, usunięty albo jednostka innego produktu — ma ten sam powód, `unknown_unit`, więc
+odpowiedź nie zdradza niczego o innych produktach; nazwa dostaje `name_unknown` albo
+`base_quantity_mismatch`. Odrzucana jest też edycja szkicu, która odsyła pozycję z zapisaną nazwą
+jednostki niepasującą już do żadnej jednostki w katalogu. `packagingUnitId` jest zwracane w
+odczycie dla panelu i dla klienta, a rewizja administratora zachowuje je na pozycjach, które
+zostawia.
+
+**Zapis klienta poniżej minimum jest odrzucany.** Utworzenie (`POST /api/v1/quote-requests` —
+bezpośrednio, z koszyka, z szybkiego zamówienia, z listy zakupów albo przez sklonowanie jednego z
+jego zamówień), edycja szkicu (`PATCH /api/v1/quote-requests/:id`) i ponowne złożenie
+(`POST /api/v1/quote-requests/:id/resubmit`) odpowiadają kodem
+`422 PRODUCT_BELOW_MINIMUM_QUANTITY` albo `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` z
+`details.lines[]` dla każdej odrzuconej pozycji i niczego nie zapisują. Kolejność sprawdzeń:
+najpierw produkt, którego klient nie widzi albo którego kanał nie publikuje, jest odrzucany jako
+nieznany, więc nic o nim nie zostaje ujawnione; potem jednostka opakowania, potem minima —
+wszystko, zanim zostanie wyznaczona jakakolwiek cena referencyjna.
+
+- **Edycja szkicu.** Pozycja, której klient nie zmienił — ten sam produkt, wariant, jednostka
+  opakowania i ilość co w zapisanej pozycji — nie jest odrzucana, nawet poniżej minimum; jej sztuki
+  nadal liczą się do łącznej ilości produktu, gdy sprawdzana jest inna pozycja tego produktu.
+- **Ponowne złożenie** jest oceniane jak nowe zapytanie, bez zwolnienia, w sztukach (nie przenosi
+  jednostki opakowania). Zapytanie, którego produkt już nie istnieje, jest odrzucane z kodem `404`.
+- **Akceptacja albo odrzucenie rewizji** nigdy nie jest odrzucane z powodu minimów.
+
+**Zapis administratora nigdy nie jest odrzucany z powodu minimum.** Utworzenie w imieniu klienta,
+**Modyfikacja** (łącznie z wynegocjowanymi ilościami), sklonowanie zamówienia do zapytania
+ofertowego z panelu i zbudowanie zapytania ofertowego z szybkiego zamówienia w panelu zapisują
+pozycje poniżej minimum. Odczyt w panelu (`GET /api/v1/admin/quote-requests/:id`) daje każdej takiej
+pozycji `minimumWarning` (`{ kind, minimum, packagingUnitName? }`), ocenione na bieżących pozycjach
+zapytania, a ekran zapytania ofertowego pokazuje je jako plakietkę *Poniżej minimum* na pozycji, na
+zakładkach **Przegląd** i **Modyfikacja**. Ostrzeżenie informuje i niczego nie blokuje; nigdy nie
+trafia do odczytu klienta. Klonowanie do zapytania i budowanie z szybkiego zamówienia w panelu
+nadal sprawdzają jednostkę opakowania.
+
+**Zamówienie zaakceptowanego zapytania zachowuje jego ilości.** `convert-to-order` wypełnia koszyk
+uzgodnionymi ilościami bez sprawdzania minimów; w koszyku każda pozycja wypełniona z zapytania jest
+zwolniona, dopóki jej ilość równa się ilości z zapytania, a checkout honoruje to tylko wtedy, gdy
+to zapytanie jest nadal ważne (strony modułów Carts i Orders). Gdy ten moduł jest wyłączony, nic
+nie może potwierdzić zapytania, więc taki koszyk traci zwolnienia przy checkoucie.
+
+Migracja `20261016T082027_quote_requests_item_packaging_unit_id.ts` dodaje
+`quote_request_items.packaging_unit_id` (dopuszcza `null`, bez klucza obcego — nazwa i base
+quantity jednostki pozostają skopiowane w pozycji).
+
 ## Blokada negocjacji cen
 
 Administrator decyduje, czy klient może **proponować ceny** w zapytaniu ofertowym:
