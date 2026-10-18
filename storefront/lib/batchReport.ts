@@ -95,16 +95,29 @@ export function droppedBelowMinimumReason(minimum: number | undefined, locale: s
 
 /**
  * A report carried across a server action's redirect, as the quick-order preview already is:
- * JSON in base64url (round B UI review). Bounded: only the first {@link REPORT_CAP} lines
- * travel, each projected to the fields the page words and with its names cut to
- * {@link REPORT_NAME_MAX} characters, and the rest travel as a count (`more`). The query is the
- * buyer's to edit, so the reader is defensive: an oversized, malformed or hand-made value decodes
- * to an empty report — never an error page — and every line is checked before it is rendered.
+ * JSON in base64url (round B UI review). Bounded by a URL budget (round C): only the first
+ * {@link REPORT_CAP} lines travel, each projected to the fields the page words and with its names
+ * cut to {@link REPORT_NAME_MAX} characters, and if the encoded report is still longer than
+ * {@link REPORT_ENCODED_MAX} its last lines are dropped until it fits. Every line left out travels
+ * as a count (`more`). The query is the buyer's to edit, so the reader is defensive and holds the
+ * same bounds the writer does: an oversized, malformed or hand-made value decodes to an empty
+ * report — never an error page — every line is checked before it is rendered, names are cut and
+ * `more` is clamped.
  */
 export const REPORT_CAP = 20;
-const REPORT_NAME_MAX = 200;
-/** Longer than anything {@link encodeBuildRejections} or {@link encodeConversionSkips} writes. */
-const REPORT_ENCODED_MAX = 16_000;
+/** A name's longest carried form, in UTF-16 units, the ellipsis included. */
+export const REPORT_NAME_MAX = 80;
+/**
+ * The URL budget: the longest value {@link encodeCarried} writes and the longest
+ * {@link decodeCarried} reads. ~6 KB keeps the redirect's whole URL well inside what browsers,
+ * proxies and Next.js accept (8 KB is the common header-line ceiling).
+ */
+export const REPORT_ENCODED_MAX = 6_000;
+/**
+ * The largest `more` a report can honestly carry: the largest batch behind any of these reports
+ * is a quick-order import, capped at 10 000 rows (`quick_order.import_max_rows`).
+ */
+export const REPORT_MORE_MAX = 10_000;
 
 export interface CarriedReport<T> {
   lines: T[];
@@ -112,7 +125,13 @@ export interface CarriedReport<T> {
   more: number;
 }
 
-const EMPTY_REPORT = { lines: [], more: 0 } as const;
+/** A fresh empty report — its own array, so a caller appending to it touches nothing shared. */
+function emptyReport<T>(): CarriedReport<T> {
+  return { lines: [], more: 0 };
+}
+
+const toBase64Url = (payload: CarriedReport<unknown>): string =>
+  Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 
 function encodeCarried<T>(lines: readonly unknown[], project: (line: unknown) => T | null): string {
   const kept: T[] = [];
@@ -120,23 +139,34 @@ function encodeCarried<T>(lines: readonly unknown[], project: (line: unknown) =>
     const projected = project(line);
     if (projected !== null) kept.push(projected);
   }
-  const payload = { lines: kept, more: Math.max(0, lines.length - REPORT_CAP) };
-  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  let more = Math.max(0, lines.length - REPORT_CAP);
+  let encoded = toBase64Url({ lines: kept, more });
+  // Over the budget: the last carried lines become part of the count until the report fits.
+  while (encoded.length > REPORT_ENCODED_MAX && kept.length > 0) {
+    kept.pop();
+    more += 1;
+    encoded = toBase64Url({ lines: kept, more });
+  }
+  return encoded;
 }
 
-function decodeCarried<T>(value: string | undefined | null, guard: (line: unknown) => line is T): CarriedReport<T> {
-  if (!value || value.length > REPORT_ENCODED_MAX) return { ...EMPTY_REPORT, lines: [] };
+function decodeCarried<T>(
+  value: string | undefined | null,
+  guard: (line: unknown) => line is T,
+  normalise: (line: T) => T = (line) => line,
+): CarriedReport<T> {
+  if (!value || value.length > REPORT_ENCODED_MAX) return emptyReport();
   try {
     const parsed: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { ...EMPTY_REPORT, lines: [] };
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return emptyReport();
     const { lines, more } = parsed as { lines?: unknown; more?: unknown };
-    if (!Array.isArray(lines)) return { ...EMPTY_REPORT, lines: [] };
+    if (!Array.isArray(lines)) return emptyReport();
     return {
-      lines: lines.slice(0, REPORT_CAP).filter(guard),
-      more: Number.isInteger(more) && (more as number) > 0 ? (more as number) : 0,
+      lines: lines.slice(0, REPORT_CAP).filter(guard).map(normalise),
+      more: Number.isInteger(more) && (more as number) > 0 ? Math.min(more as number, REPORT_MORE_MAX) : 0,
     };
   } catch {
-    return { ...EMPTY_REPORT, lines: [] };
+    return emptyReport();
   }
 }
 
@@ -162,7 +192,13 @@ export function encodeBuildRejections(lines: readonly unknown[]): string {
 }
 
 export function decodeBuildRejections(value: string | undefined | null): CarriedReport<CarriedBuildRejection> {
-  return decodeCarried(value, isBuildRejectedLine);
+  return decodeCarried(value, isBuildRejectedLine, (line) => ({
+    productName: cut(line.productName),
+    quantity: line.quantity,
+    kind: line.kind,
+    minimum: line.minimum,
+    ...(line.packagingUnitName !== undefined ? { packagingUnitName: cut(line.packagingUnitName) } : {}),
+  }));
 }
 
 /** A shopping list → cart skip, as it travels. */
@@ -181,7 +217,12 @@ export function encodeConversionSkips(skips: readonly unknown[]): string {
 }
 
 export function decodeConversionSkips(value: string | undefined | null): CarriedReport<CarriedConversionSkip> {
-  return decodeCarried(value, isConversionSkip);
+  return decodeCarried(value, isConversionSkip, (skip) => ({
+    itemId: skip.itemId,
+    productId: skip.productId,
+    reason: skip.reason,
+    ...(skip.minimum !== undefined ? { minimum: skip.minimum } : {}),
+  }));
 }
 
 /** "+5 more" — the lines a carried report left out. */
