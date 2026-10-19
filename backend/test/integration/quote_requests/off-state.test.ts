@@ -71,6 +71,8 @@ describe('quote_requests off-state, from a package (Constitution XVII)', () => {
       routes: [
         { url: '/api/v1/admin/quote-requests', cookies: admin },
         { url: '/api/v1/admin/quote-requests/list-views', cookies: admin },
+        // `specs/157-custom-fields-list-filters/` — the list's offered custom-field filters.
+        { url: '/api/v1/admin/quote-requests/custom-field-filters', cookies: admin },
         { url: '/api/v1/quote-requests', cookies: customer },
         '/api/v1/storefront/settings/quote-requests',
       ],

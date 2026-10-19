@@ -16,6 +16,7 @@ import type {
   CatalogAttributeReadPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
+  CustomFieldListFilterPort,
   CustomFieldDefinitionReadPort,
   DocumentRenderPort,
   DocumentTypeRegistryPort,
@@ -440,6 +441,8 @@ export function registerModule(ctx: ModuleContext): void {
             ctx,
             'customFieldValueService',
           ),
+          // Feature 157 — the admin list's custom-field filters.
+          customFieldListFilter: lazyPort<CustomFieldListFilterPort>(ctx, 'customFieldListFilterPort'),
           requireAdmin: (permission) => async (req, reply) =>
             ctx.cradle<QuoteRequestsCradle>().requireAdmin(permission)(req, reply),
           requireAdminAny: (permissions) => async (req, reply) =>

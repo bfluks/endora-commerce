@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import type { EntityManager, Knex } from '@mikro-orm/postgresql';
+import { raw, type EntityManager, type Knex } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
   QUOTE_REQUEST_HISTORY_EVENT_WINDOW,
@@ -14,6 +14,10 @@ import {
   type CatalogProductReadPort,
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
+  type CustomFieldFilterUnavailableFailure,
+  type CustomFieldFilters,
+  type CustomFieldListFilterField,
+  type CustomFieldListFilterPort,
   type CustomFieldValuePort,
   type OrganizationDetailsPort,
   type RfqCreatedByAdminEventPayload,
@@ -86,6 +90,8 @@ export interface AdminListFilter {
   scope?: AdminAssignmentScope;
   status?: QuoteRequestStatus | QuoteRequestStatus[];
   organizationId?: string;
+  /** `specs/157-custom-fields-list-filters/` — filters on the list-filter Quote Request custom fields. */
+  customFieldFilters?: CustomFieldFilters;
 }
 
 /**
@@ -109,6 +115,11 @@ export interface RfqAdminServiceDeps {
   auditLog?: AuditPort;
   /** Feature 055 — validates + merges custom-field values on RFQ edit. */
   customFieldValues?: CustomFieldValuePort;
+  /**
+   * Feature 157 — `customFieldListFilterPort`: the custom fields the admin list
+   * offers as filters, and a request's filters as one condition.
+   */
+  customFieldListFilter?: CustomFieldListFilterPort;
   /**
    * Feature 075, Phase C — the three rows the admin list and detail read and
    * none of which this module owns. They were `em.find` calls against
@@ -147,11 +158,39 @@ export class RfqAdminService {
   // Read paths
   // -------------------------------------------------------------------------
 
+  /** The Quote Request custom fields the admin list offers as filters (feature 157). */
+  async customFieldFilterFields(): Promise<CustomFieldListFilterField[]> {
+    return (await this.deps.customFieldListFilter?.listFilterable('quote_request')) ?? [];
+  }
+
+  private async customFieldCondition(filters: CustomFieldFilters | undefined) {
+    if (filters === undefined || Object.keys(filters).length === 0) return null;
+    if (!this.deps.customFieldListFilter) {
+      // A list asked to filter on custom fields it cannot read refuses rather
+      // than answering unfiltered.
+      const failure = Object.assign(new Error('Custom-field filters are not available on this list.'), {
+        name: 'CustomFieldFilterUnavailableError' as const,
+        keys: Object.keys(filters),
+      }) satisfies CustomFieldFilterUnavailableFailure;
+      throw failure;
+    }
+    return this.deps.customFieldListFilter.condition('quote_request', filters);
+  }
+
   async listAll(ctx: AdminContext, filter: AdminListFilter = {}): Promise<QuoteRequestSummary[]> {
     const em = this.deps.emFactory();
     const where: Record<string, unknown> = {};
     if (filter.organizationId) where['organizationId'] = filter.organizationId;
     if (filter.status) where['status'] = filter.status;
+    // Feature 157 — one condition, a member of `$and`: it narrows the
+    // organization and status conditions above and never replaces them, and
+    // the visibility and scope passes below still run over what it leaves.
+    const customFieldCondition = await this.customFieldCondition(filter.customFieldFilters);
+    if (customFieldCondition !== null) {
+      where['$and'] = [
+        { id: { $in: raw(`(${customFieldCondition.sql})`, [...customFieldCondition.params]) } },
+      ];
+    }
 
     let rfqs: QuoteRequest[] = await em.find(QuoteRequest, where, {
       orderBy: { createdAt: 'desc' },
