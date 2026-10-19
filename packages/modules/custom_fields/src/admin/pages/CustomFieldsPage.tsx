@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Trash2 } from 'lucide-react';
-import { ApiError } from '@endora-commerce/admin-kit/lib';
+import { Pencil, Trash2 } from 'lucide-react';
+import { ApiError, useAuth } from '@endora-commerce/admin-kit/lib';
 import { customFieldsClient } from '../api/custom-fields-client.js';
+import { DefinitionBehaviourFields } from '../components/DefinitionBehaviourFields.js';
+import { DefinitionEditorDialog } from '../components/DefinitionEditorDialog.js';
 import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardHeader, CardTitle, Label, PageHeader, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import type {
@@ -38,7 +40,25 @@ const VALUE_TYPES: CustomFieldValueType[] = [
 const AUDIENCES: CustomFieldAudience[] = ['internal', 'customer'];
 const SELECT_TYPES = new Set<CustomFieldValueType>(['select', 'multiselect']);
 
-/** Custom-field definition management (feature 055). List + create per entity type. */
+/** The create form's comma-separated options as option drafts; none for a type without options. */
+function draftOptions(
+  valueType: CustomFieldValueType,
+  raw: string,
+): Array<{ value: string; label: Record<string, string>; labelDefault: string; isDefault: boolean; sortOrder: number }> {
+  if (!SELECT_TYPES.has(valueType)) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((value, i) => ({ value, label: {}, labelDefault: value, isDefault: false, sortOrder: i }));
+}
+
+/**
+ * Custom-field definition management (feature 055). List + create per entity
+ * type; an existing definition is edited in `DefinitionEditorDialog` (feature
+ * 157). Every write control — create, edit, delete, audience — is offered only
+ * to an operator holding `custom_fields:write`; a reader sees the table.
+ */
 export function CustomFieldsPage(): ReactNode {
   // One namespace, this module's own (feature 091, R8). The screen used to
   // read `customFields.title` and `customFields.description` out of the shared
@@ -49,6 +69,7 @@ export function CustomFieldsPage(): ReactNode {
   // `@endora-commerce/admin-kit`'s `CustomFieldValuesPanel` renders them, and a
   // kit component reads the shared namespace by construction.
   const t = useTranslation('custom_fields');
+  const canWrite = useAuth().hasPermission('custom_fields:write');
   const [entityTypes, setEntityTypes] = useState<CustomFieldEntityTypeInfo[]>(
     FALLBACK_ENTITY_TYPES,
   );
@@ -58,7 +79,10 @@ export function CustomFieldsPage(): ReactNode {
 
   // Host-managed marker for the selected type (feature 061): definitions are
   // rendered read-only with a link to the owning module's surface.
-  const managedBy = entityTypes.find((i) => i.entityType === entityType)?.managedBy;
+  const entityTypeInfo = entityTypes.find((i) => i.entityType === entityType);
+  const managedBy = entityTypeInfo?.managedBy;
+  const editable = canWrite && !managedBy;
+  const [editing, setEditing] = useState<CustomFieldDefinitionDto | null>(null);
 
   // New-definition form state.
   const [key, setKey] = useState('');
@@ -69,15 +93,16 @@ export function CustomFieldsPage(): ReactNode {
   // a customer only as a decision, never as the form's resting state.
   const [audience, setAudience] = useState<CustomFieldAudience>('internal');
   const [options, setOptions] = useState('');
+  const [listFilter, setListFilter] = useState(false);
 
   const refresh = useCallback(async (): Promise<void> => {
     setError(null);
     try {
       setRows(await customFieldsClient.list(entityType));
     } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : 'Failed to load.');
+      setError(err instanceof ApiError ? err.envelope.error.message : t('customFields.error.load'));
     }
-  }, [entityType]);
+  }, [entityType, t]);
 
   useEffect(() => {
     void refresh();
@@ -100,26 +125,14 @@ export function CustomFieldsPage(): ReactNode {
         await fn();
         await refresh();
       } catch (err) {
-        setError(err instanceof ApiError ? err.envelope.error.message : 'Action failed.');
+        setError(err instanceof ApiError ? err.envelope.error.message : t('customFields.error.action'));
       }
     },
-    [refresh],
+    [refresh, t],
   );
 
   const submit = (): void => {
-    const opts = SELECT_TYPES.has(valueType)
-      ? options
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean)
-          .map((value, i) => ({
-            value,
-            label: {},
-            labelDefault: value,
-            isDefault: false,
-            sortOrder: i,
-          }))
-      : [];
+    const opts = draftOptions(valueType, options);
     void run(async () => {
       await customFieldsClient.create({
         entityType,
@@ -132,11 +145,14 @@ export function CustomFieldsPage(): ReactNode {
         sortOrder: rows.length,
         config: {},
         options: opts,
+        // Sent only where the entity type offers the option.
+        ...(entityTypeInfo?.listFilter ? { listFilter } : {}),
       });
       setKey('');
       setLabel('');
       setOptions('');
       setAudience('internal');
+      setListFilter(false);
     });
   };
 
@@ -151,7 +167,7 @@ export function CustomFieldsPage(): ReactNode {
 
       <div className="flex items-end gap-2">
         <div className="space-y-1">
-          <Label htmlFor="entity">Entity</Label>
+          <Label htmlFor="entity">{t('customFields.form.entity')}</Label>
           <Select
             id="entity"
             value={entityType}
@@ -179,19 +195,22 @@ export function CustomFieldsPage(): ReactNode {
 
       <Card>
         <CardHeader>
-          <CardTitle>Fields</CardTitle>
+          <CardTitle>{t('customFields.table.title')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Key</TableHead>
-                <TableHead>Label</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Required</TableHead>
+                <TableHead>{t('customFields.table.key')}</TableHead>
+                <TableHead>{t('customFields.table.label')}</TableHead>
+                <TableHead>{t('customFields.table.type')}</TableHead>
+                <TableHead>{t('customFields.table.required')}</TableHead>
                 <TableHead>{t('customFields.audience.column')}</TableHead>
-                <TableHead>Options</TableHead>
-                <TableHead />
+                <TableHead>{t('customFields.table.options')}</TableHead>
+                <TableHead>{t('customFields.table.listFilter')}</TableHead>
+                <TableHead>
+                  <span className="sr-only">{t('customFields.table.actions')}</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -199,15 +218,17 @@ export function CustomFieldsPage(): ReactNode {
                 <TableRow key={d.id}>
                   <TableCell className="font-mono text-xs">{d.key}</TableCell>
                   <TableCell>{d.label['en'] ?? d.labelDefault}</TableCell>
-                  <TableCell>{d.valueType}</TableCell>
+                  <TableCell>{t(`customFields.valueType.${d.valueType}`)}</TableCell>
                   <TableCell>
                     <Badge variant={d.required ? 'default' : 'secondary'}>
-                      {d.required ? 'required' : 'optional'}
+                      {d.required ? t('customFields.required.yes') : t('customFields.required.no')}
                     </Badge>
                   </TableCell>
                   <TableCell>
                     {managedBy ? (
                       '—'
+                    ) : !canWrite ? (
+                      t(`customFields.audience.${d.audience}`)
                     ) : (
                       <Select
                         aria-label={t('customFields.audience.rowLabel', { key: d.key })}
@@ -231,15 +252,27 @@ export function CustomFieldsPage(): ReactNode {
                   <TableCell className="text-xs">
                     {d.options.map((o) => o.value).join(', ') || '—'}
                   </TableCell>
+                  <TableCell>{d.listFilter ? t('customFields.listFilter.yes') : '—'}</TableCell>
                   <TableCell>
-                    {!managedBy && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void run(() => customFieldsClient.remove(d.id))}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
+                    {editable && (
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={t('customFields.editor.title', { key: d.key })}
+                          onClick={() => setEditing(d)}
+                        >
+                          <Pencil className="size-4" aria-hidden="true" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={t('customFields.table.delete', { key: d.key })}
+                          onClick={() => void run(() => customFieldsClient.remove(d.id))}
+                        >
+                          <Trash2 className="size-4" aria-hidden="true" />
+                        </Button>
+                      </div>
                     )}
                   </TableCell>
                 </TableRow>
@@ -247,20 +280,20 @@ export function CustomFieldsPage(): ReactNode {
             </TableBody>
           </Table>
 
-          {!managedBy && (
+          {editable && (
           <div className="flex flex-wrap items-end gap-2">
             <div className="space-y-1">
-              <Label htmlFor="key">Key</Label>
+              <Label htmlFor="key">{t('customFields.form.key')}</Label>
               <input
                 id="key"
                 className="h-9 rounded-md border border-input bg-background px-3 text-sm"
                 value={key}
                 onChange={(e) => setKey(e.target.value)}
-                placeholder="po_number"
+                placeholder={t('customFields.form.keyPlaceholder')}
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="label">Label (EN)</Label>
+              <Label htmlFor="label">{t('customFields.form.label')}</Label>
               <input
                 id="label"
                 className="h-9 rounded-md border border-input bg-background px-3 text-sm"
@@ -269,7 +302,7 @@ export function CustomFieldsPage(): ReactNode {
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="vt">Type</Label>
+              <Label htmlFor="vt">{t('customFields.form.valueType')}</Label>
               <Select
                 id="vt"
                 value={valueType}
@@ -277,20 +310,20 @@ export function CustomFieldsPage(): ReactNode {
               >
                 {VALUE_TYPES.map((vt) => (
                   <option key={vt} value={vt}>
-                    {vt}
+                    {t(`customFields.valueType.${vt}`)}
                   </option>
                 ))}
               </Select>
             </div>
             {SELECT_TYPES.has(valueType) && (
               <div className="space-y-1">
-                <Label htmlFor="opts">Options (comma-separated)</Label>
+                <Label htmlFor="opts">{t('customFields.form.options')}</Label>
                 <input
                   id="opts"
                   className="h-9 rounded-md border border-input bg-background px-3 text-sm"
                   value={options}
                   onChange={(e) => setOptions(e.target.value)}
-                  placeholder="gold, silver"
+                  placeholder={t('customFields.form.optionsPlaceholder')}
                 />
               </div>
             )}
@@ -311,10 +344,18 @@ export function CustomFieldsPage(): ReactNode {
             </div>
             <label className="flex items-center gap-1 text-sm">
               <input type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} />
-              Required
+              {t('customFields.form.required')}
             </label>
+            {entityTypeInfo ? (
+              <DefinitionBehaviourFields
+                definition={{ key: key.trim(), valueType, options: draftOptions(valueType, options), audience }}
+                entityTypeInfo={entityTypeInfo}
+                value={{ listFilter }}
+                onChange={(next) => setListFilter(next.listFilter)}
+              />
+            ) : null}
             <Button size="sm" disabled={!key.trim()} onClick={submit}>
-              Add field
+              {t('customFields.form.submit')}
             </Button>
             <p id="audience-help" className="basis-full text-sm text-muted-foreground">
               {t('customFields.audience.help')}
@@ -323,6 +364,22 @@ export function CustomFieldsPage(): ReactNode {
           )}
         </CardContent>
       </Card>
+
+      {editing && entityTypeInfo ? (
+        <DefinitionEditorDialog
+          definition={editing}
+          entityTypeInfo={entityTypeInfo}
+          onClose={() => {
+            setEditing(null);
+            // Option actions apply at once, so a cancelled dialog may still have changed the row.
+            void refresh();
+          }}
+          onSaved={() => {
+            setEditing(null);
+            void refresh();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
