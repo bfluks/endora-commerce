@@ -1,16 +1,9 @@
-// @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import { describe, expect, it } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { CompareAddToCartButton } from '../../components/CompareAddToCartButton';
 import { cardAddToCartPayload, cardAddQuantity } from '../../lib/orderMinimum';
-
-const addProductToCartAction = vi.fn(async (_input: { productId: string; quantity: number }) => ({ ok: true }));
-vi.mock('../../lib/actions/cart', () => ({ addProductToCartAction }));
-
-const { CompareAddToCartButton } = await import('../../components/CompareAddToCartButton');
 
 /**
  * Feature 155 / FR-016 (US4 #12) — the comparison's "add to cart" adds the minimum at once, and
@@ -41,41 +34,17 @@ describe('CompareAddToCartButton — minimum (SSR)', () => {
 });
 
 /**
- * Round B review — the rendered button: a click on a product with a minimum of 10 calls
- * `addProductToCartAction` with `quantity: 10`. jsdom, the server action mocked.
+ * Round B review — the rendered button: a click on a product with a minimum of 10 must send
+ * `quantity: 10`. The storefront suite renders on the server only, so the button is held to
+ * passing `cardAddToCartPayload` — tested above — straight to `addProductToCartAction`.
  */
-describe('CompareAddToCartButton — clicking adds the minimum (jsdom)', () => {
-  let root: Root | null = null;
-  afterEach(() => {
-    act(() => root?.unmount());
-    root = null;
-    document.body.innerHTML = '';
-    addProductToCartAction.mockClear();
-  });
-
-  async function clickFor(minOrderQuantity: number | null): Promise<void> {
-    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    const host = document.createElement('div');
-    document.body.appendChild(host);
-    await act(async () => {
-      root = createRoot(host);
-      root.render(<CompareAddToCartButton productId="p2" minOrderQuantity={minOrderQuantity} locale="en-US" />);
-    });
-    const button = host.querySelector('button');
-    expect(button).not.toBeNull();
-    await act(async () => {
-      button!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-  }
-
-  it('sends quantity 10 for a product with a minimum of 10', async () => {
-    await clickFor(10);
-    expect(addProductToCartAction).toHaveBeenCalledWith({ productId: 'p2', quantity: 10 });
-  });
-
-  it('sends quantity 1 for a product without one', async () => {
-    await clickFor(null);
-    expect(addProductToCartAction).toHaveBeenCalledWith({ productId: 'p2', quantity: 1 });
+describe('CompareAddToCartButton — wiring', () => {
+  it('adds to cart with cardAddToCartPayload of the product and its minimum', () => {
+    const source = readFileSync(resolve(import.meta.dirname, '../../components/CompareAddToCartButton.tsx'), 'utf8');
+    expect(source).toMatch(
+      /addProductToCartAction\(\s*cardAddToCartPayload\(props\.productId, props\.minOrderQuantity\),?\s*\)/,
+    );
+    expect(source.match(/addProductToCartAction\(/g)).toHaveLength(1);
   });
 });
 

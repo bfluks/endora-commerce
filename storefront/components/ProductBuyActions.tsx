@@ -4,7 +4,13 @@ import { useActionState, useEffect, useRef, useState, type ReactNode } from 'rea
 import { addRfqDraftItem } from '../lib/rfqDraft';
 import { trackAddToCart, trackAddToQuoteRequest, type GaLineItem } from '../lib/analytics/ecommerce';
 import { ADD_TO_CART_IDLE, type AddToCartResult } from '../lib/cartAddState';
-import { clampQuantity, minimumStatement, orderFloor, quantityOnUnitChange } from '../lib/orderMinimum';
+import {
+  clampQuantity,
+  minimumStatement,
+  normaliseOnBlur,
+  orderFloor,
+  quantityOnUnitChange,
+} from '../lib/orderMinimum';
 import { CartAddedPopup } from './CartAddedPopup';
 import { CartSubmitButton } from './CartSubmitButton';
 
@@ -202,7 +208,7 @@ export function ProductBuyActions({
           value={qtyText}
           {...(statement ? { 'aria-describedby': statementId } : {})}
           onChange={(e): void => setQtyText(e.target.value)}
-          onBlur={(): void => setQtyText(String(qty))}
+          onBlur={(): void => setQtyText(normaliseOnBlur(qtyText, floor))}
           className="w-[5rem] rounded-sm border border-line px-[8px] py-[6px]"
         />
 

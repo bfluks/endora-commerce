@@ -7,6 +7,9 @@ import { formatMoney as formatMoneyShared } from '../../lib/i18n/money';
 import {
   clampDraftQuantity,
   clearRfqDraft,
+  draftQuantityFloor,
+  draftQuantityOnBlur,
+  draftQuantityOnType,
   readRfqDraft,
   removeRfqDraftItem,
   setRfqDraftProposedPrice,
@@ -349,7 +352,7 @@ export function DraftLine({
   const lineTotal = effectiveUnit !== null ? effectiveUnit * line.quantity : null;
   // Feature 155 — the floor is the minimum itself, also for a line already below it: the input
   // then reads as invalid (`aria-invalid`), "−" is off and "+" or the fix lifts it to the floor.
-  const floor = clampDraftQuantity(1, minimum);
+  const floor = draftQuantityFloor(minimum);
   const below = floor > 1 && line.quantity < floor;
   const belowText = below ? belowMinimumText({ belowMinimum: { kind: 'pieces', minimum: floor } }, locale) : null;
   const statement = !below ? minimumStatement({ minOrderQuantity: minimum }, null, locale) : null;
@@ -441,13 +444,12 @@ export function DraftLine({
             // "1" — and saved as soon as it is a whole quantity at or above the floor; anything
             // else is normalised on blur (Postel's Law).
             setQtyText(e.target.value);
-            const n = Number(e.target.value);
-            if (e.target.value.trim() !== '' && Number.isFinite(n) && n >= floor) {
-              onQty(clampDraftQuantity(n, minimum));
-            }
+            const typed = draftQuantityOnType(e.target.value, minimum);
+            if (typed !== null) onQty(typed);
           }}
           onBlur={(e): void => {
-            if (qtyText !== null) onQty(clampDraftQuantity(Number(e.target.value), minimum));
+            const settled = draftQuantityOnBlur(e.target.value, minimum, qtyText !== null);
+            if (settled !== null) onQty(settled);
             setQtyText(null);
           }}
         />

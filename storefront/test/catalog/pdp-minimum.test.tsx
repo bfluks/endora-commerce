@@ -1,13 +1,13 @@
-// @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { renderToString } from 'react-dom/server';
 import { ProductBuyActions } from '../../components/ProductBuyActions';
 import type { AddToCartResult } from '../../lib/cartAddState';
 import {
   clampQuantity,
   minimumStatement,
+  normaliseOnBlur,
   orderFloor,
   quantityOnUnitChange,
 } from '../../lib/orderMinimum';
@@ -146,70 +146,34 @@ describe('ProductBuyActions — minimum (SSR)', () => {
 /**
  * Round B review — FR-014 interactively: the quantity input keeps what the buyer types and
  * normalises it on blur — below the floor is lifted to the floor, an empty box goes back to it,
- * a quantity above it stays — and the hidden `quantity` the cart form posts follows. jsdom, no
- * testing library (none is a storefront dependency): React's `onChange` listens to `input`
- * and its `onBlur` to `focusout`.
+ * a quantity above it stays — and the hidden `quantity` the cart form posts follows (it reads
+ * `clampQuantity` of the same text). The storefront suite renders on the server only, so the
+ * blur rule is a pure helper tested here, and the input is held to calling it.
  */
-describe('ProductBuyActions — blur normalises the quantity (jsdom)', () => {
-  let root: Root | null = null;
-  afterEach(() => {
-    act(() => root?.unmount());
-    root = null;
-    document.body.innerHTML = '';
+describe('normaliseOnBlur — what the PDP quantity reads after blur', () => {
+  it.each([
+    ['3', 10, '10'],
+    ['', 10, '10'],
+    ['   ', 10, '10'],
+    ['abc', 10, '10'],
+    ['15', 10, '15'],
+    ['12.7', 10, '12'],
+    ['0', 1, '1'],
+  ])('typed %j over a floor of %i reads %j, and the form posts the same', (typed, floor, shown) => {
+    expect(normaliseOnBlur(typed, floor)).toBe(shown);
+    expect(String(clampQuantity(typed, floor))).toBe(shown);
+  });
+});
+
+describe('ProductBuyActions — wiring', () => {
+  const source = readFileSync(resolve(import.meta.dirname, '../../components/ProductBuyActions.tsx'), 'utf8');
+
+  it('normalises the input on blur through normaliseOnBlur', () => {
+    expect(source).toContain('onBlur={(): void => setQtyText(normaliseOnBlur(qtyText, floor))}');
   });
 
-  async function mount(): Promise<HTMLElement> {
-    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    const host = document.createElement('div');
-    document.body.appendChild(host);
-    await act(async () => {
-      root = createRoot(host);
-      root.render(
-        <ProductBuyActions
-          productId="p1"
-          productSlug="p-slug"
-          productName="Product 1"
-          showCart
-          showQuote={false}
-          minOrderQuantity={10}
-          locale="en-US"
-          addToCartAction={noop}
-          addToCartLabel="Add to cart"
-        />,
-      );
-    });
-    return host;
-  }
-
-  async function type(input: HTMLInputElement, value: string): Promise<void> {
-    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
-    await act(async () => {
-      setValue.call(input, value);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-  }
-
-  async function blur(input: HTMLInputElement): Promise<void> {
-    await act(async () => {
-      input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-    });
-  }
-
-  const posted = (host: HTMLElement): string | null =>
-    host.querySelector<HTMLInputElement>('input[type="hidden"][name="quantity"]')?.value ?? null;
-
-  it.each([
-    ['3', '10', '10'],
-    ['', '10', '10'],
-    ['15', '15', '15'],
-  ])('typed %j reads %j after blur and posts %j', async (typed, shown, sent) => {
-    const host = await mount();
-    const input = host.querySelector<HTMLInputElement>('#buy-qty-p1')!;
-    expect(input.value).toBe('10');
-    await type(input, typed);
-    expect(input.value).toBe(typed);
-    await blur(input);
-    expect(input.value).toBe(shown);
-    expect(posted(host)).toBe(sent);
+  it('posts the clamped quantity of the same text', () => {
+    expect(source).toContain('const qty = clampQuantity(qtyText, floor);');
+    expect(source).toContain('<input type="hidden" name="quantity" value={qty} />');
   });
 });

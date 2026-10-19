@@ -1,11 +1,17 @@
-// @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
-import { act, useState, type ReactNode } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { renderToString } from 'react-dom/server';
 import { DraftLine, strings } from '../../components/rfq/RfqDraftView';
 import { AddToRfqButton } from '../../components/rfq/AddToRfqButton';
-import { addToRfqDraft, clampDraftQuantity, type RfqDraftItem } from '../../lib/rfqDraft';
+import {
+  addToRfqDraft,
+  clampDraftQuantity,
+  draftQuantityFloor,
+  draftQuantityOnBlur,
+  draftQuantityOnType,
+  type RfqDraftItem,
+} from '../../lib/rfqDraft';
 import { quoteAddQuantity } from '../../lib/orderMinimum';
 
 /**
@@ -179,73 +185,78 @@ describe('AddToRfqButton — the quote CTA shown when prices are hidden (US4 #13
 });
 
 /**
- * Round B review — FR-032 interactively, on a line held by a parent the way `RfqDraftView`
- * holds it: "Set to 10 pcs" lifts a line below the minimum to it, and a quantity typed below
- * the floor is normalised to the floor on blur. jsdom, no testing library.
+ * Round B review — FR-032 interactively: "Set to 10 pcs" lifts a line below the minimum to it,
+ * a quantity typed below the floor is kept while typing and lifted to the floor on blur, and a
+ * valid quantity is saved as typed. The storefront suite renders on the server only, so these
+ * rules are pure helpers tested here, and `DraftLine` is held to calling them.
  */
-describe('DraftLine — "Set to N" and blur normalisation (jsdom)', () => {
-  let root: Root | null = null;
-  afterEach(() => {
-    act(() => root?.unmount());
-    root = null;
-    document.body.innerHTML = '';
+describe('draftQuantityFloor — the "Set to N" value', () => {
+  it('is the minimum, or 1 without one', () => {
+    expect(draftQuantityFloor(10)).toBe(10);
+    expect(draftQuantityFloor(null)).toBe(1);
+    expect(draftQuantityFloor(undefined)).toBe(1);
+    expect(draftQuantityFloor(1)).toBe(1);
   });
 
-  function Harness({ initial }: { initial: number }): ReactNode {
-    const [quantity, setQuantity] = useState(initial);
-    return (
-      <DraftLine
-        line={{ ...line, quantity }}
-        t={strings(false)}
-        locale="en-US"
-        minimum={10}
-        proposalsAllowed
-        onQty={setQuantity}
-        onProposedPrice={(): void => undefined}
-        onRemove={(): void => undefined}
-      />
-    );
-  }
+  it('is what the fix button renders and what makes the warning go away', () => {
+    const fixed = draftQuantityFloor(10);
+    const html = renderLine({ quantity: fixed, minimum: 10, locale: 'en-US' });
+    expect(qtyInput(html, 'Quantity')).toContain(`value="${fixed}"`);
+    expect(qtyInput(html, 'Quantity')).not.toContain('aria-invalid');
+    expect(html).not.toContain('Below the minimum');
+  });
+});
 
-  async function mount(initial: number): Promise<HTMLElement> {
-    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    const host = document.createElement('div');
-    document.body.appendChild(host);
-    await act(async () => {
-      root = createRoot(host);
-      root.render(<Harness initial={initial} />);
-    });
-    return host;
-  }
-
-  const quantityInput = (host: HTMLElement): HTMLInputElement =>
-    host.querySelector<HTMLInputElement>('input[aria-label="Quantity"]')!;
-
-  it('"Set to 10 pcs" lifts a line of 3 to 10 and clears the warning', async () => {
-    const host = await mount(3);
-    expect(quantityInput(host).getAttribute('aria-invalid')).toBe('true');
-    const fix = Array.from(host.querySelectorAll('button')).find((b) => b.textContent === 'Set to 10 pcs');
-    expect(fix).toBeDefined();
-    await act(async () => {
-      fix!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    expect(quantityInput(host).value).toBe('10');
-    expect(quantityInput(host).hasAttribute('aria-invalid')).toBe(false);
-    expect(host.textContent).not.toContain('Below the minimum');
+describe('draftQuantityOnType — what is saved while typing', () => {
+  it('keeps a quantity below the floor unsaved (blur settles it)', () => {
+    expect(draftQuantityOnType('4', 10)).toBeNull();
+    expect(draftQuantityOnType('1', 10)).toBeNull();
   });
 
-  it('a quantity typed below the floor is kept while typing and lifted to the floor on blur', async () => {
-    const host = await mount(12);
-    const input = quantityInput(host);
-    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
-    await act(async () => {
-      setValue.call(input, '4');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    expect(quantityInput(host).value).toBe('4');
-    await act(async () => {
-      input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-    });
-    expect(quantityInput(host).value).toBe('10');
+  it('keeps an empty or non-numeric box unsaved', () => {
+    expect(draftQuantityOnType('', 10)).toBeNull();
+    expect(draftQuantityOnType('  ', null)).toBeNull();
+    expect(draftQuantityOnType('abc', 10)).toBeNull();
+  });
+
+  it('saves a whole quantity at or above the floor', () => {
+    expect(draftQuantityOnType('10', 10)).toBe(10);
+    expect(draftQuantityOnType('15', 10)).toBe(15);
+    expect(draftQuantityOnType('12.7', 10)).toBe(12);
+    expect(draftQuantityOnType('3', null)).toBe(3);
+  });
+});
+
+describe('draftQuantityOnBlur — what is saved when the input loses focus', () => {
+  it('lifts a quantity typed below the floor to the floor', () => {
+    expect(draftQuantityOnBlur('4', 10, true)).toBe(10);
+  });
+
+  it('puts an empty or non-numeric box back at the floor', () => {
+    expect(draftQuantityOnBlur('', 10, true)).toBe(10);
+    expect(draftQuantityOnBlur('abc', 10, true)).toBe(10);
+    expect(draftQuantityOnBlur('', null, true)).toBe(1);
+  });
+
+  it('keeps a valid quantity', () => {
+    expect(draftQuantityOnBlur('15', 10, true)).toBe(15);
+  });
+
+  it('saves nothing when nothing was typed', () => {
+    expect(draftQuantityOnBlur('3', 10, false)).toBeNull();
+  });
+});
+
+describe('DraftLine — wiring', () => {
+  const source = readFileSync(resolve(import.meta.dirname, '../../components/rfq/RfqDraftView.tsx'), 'utf8');
+
+  it('floors the line, and its "Set to N" fix, at draftQuantityFloor', () => {
+    expect(source).toContain('const floor = draftQuantityFloor(minimum);');
+    expect(source).toContain('onClick={(): void => onQty(floor)}');
+  });
+
+  it('saves typed quantities through draftQuantityOnType and settles on blur through draftQuantityOnBlur', () => {
+    expect(source).toContain('const typed = draftQuantityOnType(e.target.value, minimum);');
+    expect(source).toContain('const settled = draftQuantityOnBlur(e.target.value, minimum, qtyText !== null);');
   });
 });

@@ -88,6 +88,15 @@ export function clampQuantity(raw: string | number, floor: number, max = 9999): 
 }
 
 /**
+ * Feature 155 (FR-014) — what the product page's quantity input reads once it loses focus:
+ * the typed text normalised by `clampQuantity` (below the floor or empty → the floor, a valid
+ * quantity kept). The input keeps what is typed until then.
+ */
+export function normaliseOnBlur(text: string, floor: number): string {
+  return String(clampQuantity(text, floor));
+}
+
+/**
  * The quantity after the buyer switches packaging unit: a quantity still sitting at the old
  * floor follows to the new one (the buyer never chose it); any other quantity is kept, lifted
  * to the new floor when below it.

@@ -94,6 +94,39 @@ export function clampDraftQuantity(quantity: number, minimum: number | null | un
 }
 
 /**
+ * Feature 155 (FR-032) — the draft line's floor, which is also the quantity its "Set to N"
+ * fix writes: the pieces minimum when above 1, else 1.
+ */
+export function draftQuantityFloor(minimum: number | null | undefined): number {
+  return clampDraftQuantity(1, minimum);
+}
+
+/**
+ * Feature 155 (FR-032) — the quantity a draft line saves while the buyer types, or `null` to
+ * keep the text unsaved until blur: only a whole quantity at or above the floor is saved, so
+ * "15" over a floor of 10 is not rewritten on its "1".
+ */
+export function draftQuantityOnType(text: string, minimum: number | null | undefined): number | null {
+  const n = Number(text);
+  if (text.trim() === '' || !Number.isFinite(n) || n < draftQuantityFloor(minimum)) return null;
+  return clampDraftQuantity(n, minimum);
+}
+
+/**
+ * Feature 155 (FR-032) — the quantity a draft line saves when its input loses focus, or `null`
+ * when nothing was typed since the last save: what was typed, lifted to the floor (empty or
+ * not a number → the floor).
+ */
+export function draftQuantityOnBlur(
+  text: string,
+  minimum: number | null | undefined,
+  edited: boolean,
+): number | null {
+  if (!edited) return null;
+  return clampDraftQuantity(Number(text), minimum);
+}
+
+/**
  * Adds a line (or bumps the quantity of an existing one) on the passed-in draft and returns a
  * new array; the input is left untouched. Pure, so the add rule is testable without
  * `localStorage`.

@@ -1,22 +1,7 @@
-// @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { cardAddLabel, cardAddQuantity, cardAddToCartPayload } from '../../lib/orderMinimum';
-
-const addProductToCartAction = vi.fn(async (_input: { productId: string; quantity: number }) => ({ ok: true }));
-vi.mock('../../lib/actions/cart', () => ({ addProductToCartAction }));
-vi.mock('../../lib/actions/shoppingList', () => ({
-  addToDefaultListAction: vi.fn(),
-  removeFromDefaultListAction: vi.fn(),
-}));
-vi.mock('../../lib/shoppingListMembership', () => ({
-  loadShoppingListMembership: vi.fn(async () => ({ listId: null, byProduct: new Map() })),
-  invalidateShoppingListMembership: vi.fn(),
-}));
-vi.mock('../../lib/rfqDraft', () => ({ addRfqDraftItem: vi.fn() }));
-
-const { ProductCardActions } = await import('../../components/ProductCardActions');
 
 /**
  * Feature 155 / FR-016 (US4 #12) — the product card's "add to cart" adds the minimum at once.
@@ -54,67 +39,17 @@ describe('cardAddLabel', () => {
 
 /**
  * Round B review — the rendered card, not only its helpers: clicking "add to cart" on a
- * product with a minimum of 10 calls `addProductToCartAction` with `quantity: 10`. jsdom
- * (no testing library: none is a storefront dependency), the server action mocked.
+ * product with a minimum of 10 must send `quantity: 10`. The storefront suite renders on the
+ * server only, so the card is held to passing `cardAddToCartPayload` — tested above — straight
+ * to `addProductToCartAction`.
  */
-describe('ProductCardActions — clicking "add to cart" adds the minimum (jsdom)', () => {
-  let root: Root | null = null;
-  afterEach(() => {
-    act(() => root?.unmount());
-    root = null;
-    document.body.innerHTML = '';
-    addProductToCartAction.mockClear();
-    vi.unstubAllGlobals();
-  });
+describe('ProductCardActions — wiring', () => {
+  const source = readFileSync(resolve(import.meta.dirname, '../../components/ProductCardActions.tsx'), 'utf8');
 
-  async function mount(minOrderQuantity: number | null, label: string | null): Promise<HTMLElement> {
-    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({ data: { showAddToCart: true, showAddToShoppingList: true, showAddToQuote: true } }),
-      })),
+  it('adds to cart with cardAddToCartPayload of the product and its minimum', () => {
+    expect(source).toMatch(
+      /addProductToCartAction\(\s*cardAddToCartPayload\(props\.productId, props\.minOrderQuantity\),?\s*\)/,
     );
-    const host = document.createElement('div');
-    document.body.appendChild(host);
-    await act(async () => {
-      root = createRoot(host);
-      root.render(
-        <ProductCardActions
-          apiBase="http://api.test"
-          productId="p1"
-          productSlug="anchor"
-          productName="Anchor"
-          buyable
-          minOrderQuantity={minOrderQuantity}
-          addToCartMinimumLabel={label}
-        />,
-      );
-    });
-    // The buttons config resolves on a microtask after mount.
-    await act(async () => undefined);
-    return host;
-  }
-
-  async function clickAdd(host: HTMLElement, label: string): Promise<void> {
-    const button = host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-    expect(button, label).not.toBeNull();
-    await act(async () => {
-      button!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-  }
-
-  it('sends quantity 10 for a product with a minimum of 10', async () => {
-    const host = await mount(10, 'Add 10 pcs to cart');
-    await clickAdd(host, 'Add 10 pcs to cart');
-    expect(addProductToCartAction).toHaveBeenCalledTimes(1);
-    expect(addProductToCartAction).toHaveBeenCalledWith({ productId: 'p1', quantity: 10 });
-  });
-
-  it('sends quantity 1 for a product without one', async () => {
-    const host = await mount(null, null);
-    await clickAdd(host, 'Dodaj do koszyka');
-    expect(addProductToCartAction).toHaveBeenCalledWith({ productId: 'p1', quantity: 1 });
+    expect(source.match(/addProductToCartAction\(/g)).toHaveLength(1);
   });
 });

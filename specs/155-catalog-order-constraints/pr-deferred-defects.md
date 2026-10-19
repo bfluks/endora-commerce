@@ -37,5 +37,9 @@ Logged here (no `specs/deferred-defects.md` in this repository); carried into th
   refusal at `placeOrder` (stock, the organization, a payment or delivery method) comes after the
   write, so the basket holds the one one-click line. Inherent to one-click buying through the
   basket.
-- **Storefront jsdom tests** (`pdp-minimum`, `product-card-minimum`, `compare-add-minimum`,
-  `rfq/rfq-draft-minimum`) — pending.
+- **Storefront client interactions are not exercised in a DOM** — the storefront convention allows
+  server-render tests only (owner ruling), so the blur normalisation, the quote draft's "Set to N"
+  and the product card and comparison clicks are covered by tests of the pure helpers the
+  components call (`normaliseOnBlur`, `draftQuantityFloor`, `draftQuantityOnType`,
+  `draftQuantityOnBlur`, `cardAddToCartPayload`), source-wiring assertions and the owner's manual
+  test. A proposal to permit jsdom for client components is raised separately in issue #355.
