@@ -6,6 +6,7 @@ import { ApiError } from '@endora-commerce/admin-kit/lib';
 import type { CustomFieldListFilterField } from '@endora-commerce/contracts';
 import { setMobileViewport } from '../../setup';
 import { WORKFLOW, crmLookupResponse, renderCrm, summary } from './crm-fixtures';
+import { expectNoAxeViolations } from '../../helpers/axe';
 
 /**
  * Feature 157 (T051, US2) — custom-field filters on the Opportunities list
@@ -220,5 +221,108 @@ describe('OpportunitiesList — custom-field filters', () => {
     expect(await screen.findByText(`The filter “${shown}” is no longer available on this list.`)).toBeInTheDocument();
     expect(document.querySelector('img')).toBeNull();
     expect((window as { __xss?: unknown }).__xss).toBeUndefined();
+  });
+
+  describe('review round', () => {
+    const refuseSegment = async (query: URLSearchParams): Promise<unknown> => {
+      if (query.has('fieldFilters')) {
+        throw new ApiError(400, {
+          error: { code: 'CUSTOM_FIELD_FILTER_UNAVAILABLE' as never, message: 'refused', details: { key: 'segment', keys: ['segment'] } },
+        });
+      }
+      return page(null);
+    };
+
+    it('clears a refusal once a later request succeeds', async () => {
+      listAnswer = refuseSegment;
+      renderCrm(
+        <StrictMode>
+          <OpportunitiesList />
+        </StrictMode>,
+        { path: '/crm/opportunities?cf.segment.in=smb' },
+      );
+      await screen.findByText('The filter “Segment” is no longer available on this list.');
+      listAnswer = async () => page(null);
+      fireEvent.change(screen.getByLabelText(/search/i), { target: { value: 'fleet' } });
+      await waitFor(() =>
+        expect(screen.queryByText('The filter “Segment” is no longer available on this list.')).toBeNull(),
+      );
+    });
+
+    it('drops an option the field no longer has from the address', async () => {
+      await renderList('/crm/opportunities?cf.segment.in=smb&cf.segment.in=removed');
+      await waitFor(() => expect(address().getAll('cf.segment.in')).toEqual(['smb']));
+      expect(fieldFiltersOf(lastQuery())).toEqual({ 'custom:segment': { in: ['smb'] } });
+    });
+
+    it('reads the list once under StrictMode when the address carries a filter', async () => {
+      await renderList('/crm/opportunities?cf.segment.in=smb');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(listQueries()).toHaveLength(1);
+    });
+
+    it('shows the server’s sentence, never its code, for an inverted range in the address', async () => {
+      getSpy.mockImplementation((path: string) => {
+        if (path === OFFERED_PATH) {
+          return Promise.resolve({
+            data: [SEGMENT, { key: 'amount', valueType: 'number', label: { en: 'Amount' }, labelDefault: 'Amount', options: [] }],
+          });
+        }
+        if (path.startsWith(`${LIST_PATH}?`) && decodeURIComponent(path).includes('custom:amount')) {
+          return Promise.reject(new ApiError(400, { error: { code: 'VALIDATION_FAILED' as never, message: 'Request failed validation.' } }));
+        }
+        if (path === LIST_PATH || path.startsWith(`${LIST_PATH}?`)) return Promise.resolve(page(null));
+        if (path === '/api/v1/admin/crm/workflow') return Promise.resolve({ data: WORKFLOW });
+        const lookup = crmLookupResponse(path);
+        if (lookup) return lookup;
+        return Promise.reject(new Error(`unexpected GET ${path}`));
+      });
+      renderCrm(
+        <StrictMode>
+          <OpportunitiesList />
+        </StrictMode>,
+        { path: '/crm/opportunities?cf.amount.min=10&cf.amount.max=1' },
+      );
+      expect(await screen.findByText(/Request failed validation\./)).toBeInTheDocument();
+      expect(screen.queryByText(/VALIDATION_FAILED/)).toBeNull();
+    });
+
+    it('moves focus to the results once a refused filter is removed', async () => {
+      listAnswer = refuseSegment;
+      renderCrm(
+        <StrictMode>
+          <OpportunitiesList />
+        </StrictMode>,
+        { path: '/crm/opportunities?cf.segment.in=smb' },
+      );
+      await screen.findByText('The filter “Segment” is no longer available on this list.');
+      listAnswer = async () => page(null);
+      fireEvent.click(screen.getByRole('button', { name: 'Remove this filter' }));
+      expect(document.activeElement?.getAttribute('tabindex')).toBe('-1');
+    });
+
+    it('has no axe violations with a refusal on screen', async () => {
+      listAnswer = refuseSegment;
+      const { container } = renderCrm(
+        <StrictMode>
+          <OpportunitiesList />
+        </StrictMode>,
+        { path: '/crm/opportunities?cf.segment.in=smb' },
+      );
+      await screen.findByText('The filter “Segment” is no longer available on this list.');
+      await expectNoAxeViolations(container);
+    });
+
+    it('speaks Polish: the refusal and its remove action', async () => {
+      listAnswer = refuseSegment;
+      renderCrm(
+        <StrictMode>
+          <OpportunitiesList />
+        </StrictMode>,
+        { path: '/crm/opportunities?cf.segment.in=smb', language: 'pl' },
+      );
+      expect(await screen.findByText('Filtr „Segment” nie jest już dostępny na tej liście.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Usuń ten filtr' })).toBeInTheDocument();
+    });
   });
 });

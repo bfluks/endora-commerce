@@ -10,7 +10,9 @@ import type {
   PropagationOutcome,
 } from '@endora-commerce/contracts';
 import { AppLanguageContext } from '@endora-commerce/admin-kit/i18n';
+import { render } from '@testing-library/react';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
+import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/TranslationProvider';
 import { readReferenceText, selectOffsets } from '../../../../packages/modules/crm/src/admin/lib/reference-editor-dom';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
 
@@ -36,6 +38,8 @@ const CRM_BUNDLE = shippedBundle('../packages/modules/crm/i18n/en.json');
 /** The shipped English bundle, for a test that mounts a zone rather than a screen. */
 export const CRM_BUNDLE_EN = CRM_BUNDLE;
 const CORE_BUNDLE = shippedBundle('../packages/modules/_i18n/i18n/en.json');
+const CRM_BUNDLE_PL = shippedBundle('../packages/modules/crm/i18n/pl.json');
+const CORE_BUNDLE_PL = shippedBundle('../packages/modules/_i18n/i18n/pl.json');
 
 function sentence(
   bundle: Record<string, string>,
@@ -78,13 +82,16 @@ export function renderCrm(
     readonly alsoPresent?: readonly string[];
     /** The navigation state the screen is arrived at with, if any. */
     readonly state?: unknown;
+    /** The operator's language; English unless a test reads the Polish copy. */
+    readonly language?: 'en' | 'pl';
   } = {},
 ): RenderResult {
   const path = options.path ?? '/';
   const [pathname = '/', search = ''] = path.split('?');
-  return renderWithI18n(
+  const language = options.language ?? 'en';
+  const tree = (
     withSession(
-      <AppLanguageContext.Provider value={{ language: 'en', setLanguage: (): void => {} }}>
+      <AppLanguageContext.Provider value={{ language, setLanguage: (): void => {} }}>
         <MemoryRouter
           initialEntries={[
             options.state === undefined
@@ -104,9 +111,16 @@ export function renderCrm(
         }),
         registry: [],
       },
-    ),
-    { core: CORE_BUNDLE, crm: CRM_BUNDLE },
+    )
   );
+  if (language === 'pl') {
+    return render(
+      <TranslationProvider language="pl" initialBundle={{ core: CORE_BUNDLE_PL, crm: CRM_BUNDLE_PL }}>
+        {tree}
+      </TranslationProvider>,
+    );
+  }
+  return renderWithI18n(tree, { core: CORE_BUNDLE, crm: CRM_BUNDLE });
 }
 
 export const ORGANIZATION_ID = '00000000-0000-4000-8000-0000000000a1';

@@ -1,10 +1,11 @@
 import { StrictMode, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { CustomFieldListFilterField, SavedListView } from '@endora-commerce/contracts';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
+import { expectNoAxeViolations } from '../../helpers/axe';
 import { installOffsetParentShim } from '../../helpers/layout-shim';
 import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/TranslationProvider';
 import en from '../../../../packages/modules/_i18n/i18n/en.json';
@@ -76,6 +77,11 @@ const HOSTILE_KEY = `<img src=x onerror="window.__xss=1">${'a'.repeat(80)}`;
 
 let offered: CustomFieldListFilterField[] = [SOURCE];
 let refuse: string | null = null;
+/** How the offered-fields GET answers; a test may leave it pending or reject it. */
+let fieldsAnswer: () => Promise<unknown> = async () => ({ data: offered });
+let listTotal = 1;
+/** A filter key the server refuses as a validation failure (an inverted range). */
+let invalidKey: string | null = null;
 let currentSearch = '';
 
 function LocationProbe(): ReactNode {
@@ -112,17 +118,23 @@ function refusal(key: string): InstanceType<typeof ApiError> {
 beforeEach(() => {
   offered = [SOURCE];
   refuse = null;
+  fieldsAnswer = async () => ({ data: offered });
+  listTotal = 1;
+  invalidKey = null;
   currentSearch = '';
   for (const fn of Object.values(api)) fn.mockReset();
   api.get.mockImplementation(async (path: string) => {
-    if (path.startsWith(FIELDS_ENDPOINT)) return { data: offered };
+    if (path.startsWith(FIELDS_ENDPOINT)) return fieldsAnswer();
     if (path.startsWith('/api/v1/admin/orders/statuses')) {
       return { data: { statuses: [{ code: 'new', name: { en: 'New' } }] } };
     }
     if (path.startsWith(VIEWS_ENDPOINT)) return { data: [WITH_SOURCE, WITH_RETIRED] };
     if (path.startsWith('/api/v1/admin/orders?')) {
       if (refuse !== null && path.includes('customFieldFilters')) throw refusal(refuse);
-      return { data: [row('o1', 'ORD-1')], pagination: { page: 1, pageSize: 20, total: 1 }, counts: { new: 1 } };
+      if (invalidKey !== null && decodeURIComponent(path).includes(invalidKey)) {
+        throw new ApiError(400, { error: { code: 'VALIDATION_FAILED', message: 'Request failed validation.' } } as never);
+      }
+      return { data: [row('o1', 'ORD-1')], pagination: { page: 1, pageSize: 20, total: listTotal }, counts: { new: 1 } };
     }
     return { data: [] };
   });
@@ -314,5 +326,126 @@ describe('OrdersList — custom-field filters', () => {
     const link = await screen.findByRole('link', { name: /Export CSV/ });
     const exported = new URLSearchParams((link.getAttribute('href') ?? '').split('?')[1]);
     expect(JSON.parse(exported.get('customFieldFilters') ?? 'null')).toEqual({ source: { in: ['web'] } });
+  });
+
+  describe('review round', () => {
+    const NOTE: CustomFieldListFilterField = { key: 'note', valueType: 'text', label: { en: 'Note' }, labelDefault: 'Note', options: [] };
+    const AMOUNT: CustomFieldListFilterField = { key: 'amount', valueType: 'number', label: { en: 'Amount' }, labelDefault: 'Amount', options: [] };
+    const DUE: CustomFieldListFilterField = { key: 'due', valueType: 'date', label: { en: 'Due' }, labelDefault: 'Due', options: [] };
+    const VIP: CustomFieldListFilterField = { key: 'vip', valueType: 'boolean', label: { en: 'VIP' }, labelDefault: 'VIP', options: [] };
+
+    it.each([
+      ['pending', () => new Promise<unknown>(() => undefined)],
+      ['rejected', () => Promise.reject(new Error('down'))],
+    ])('keeps a saved view’s filters as saved, with no notice, while the fields are %s', async (_name, answer) => {
+      fieldsAnswer = answer;
+      const user = await renderList();
+      await screen.findByRole('option', { name: WITH_RETIRED.name });
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Saved views' }), WITH_RETIRED.id);
+      await waitFor(() =>
+        expect(sentFilters().at(-1)).toEqual({ retired_field: { in: ['x'] }, source: { in: ['shop'] } }),
+      );
+      expect(screen.queryByText(/no longer available and were removed/)).toBeNull();
+    });
+
+    it('never sends a changed custom filter with a page other than the first', async () => {
+      listTotal = 50;
+      const user = await renderList();
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await waitFor(() => expect(lastListParams().get('page')).toBe('2'));
+      await openFilters(user);
+      await pickOptions(user, 'Web');
+      await waitFor(() => expect(sentFilters().at(-1)).toEqual({ source: { in: ['web'] } }));
+      const paths = api.get.mock.calls
+        .map(([path]) => path)
+        .filter((path): path is string => typeof path === 'string' && path.startsWith('/api/v1/admin/orders?'));
+      for (const path of paths) {
+        const params = new URLSearchParams(path.split('?')[1]);
+        if (params.has('customFieldFilters')) expect(params.get('page')).toBe('1');
+      }
+    });
+
+    it('names each chip’s remove action', async () => {
+      await renderList('/orders?cf.source.in=web');
+      expect(await screen.findByRole('button', { name: 'Remove filter Source: Web' })).toBeInTheDocument();
+    });
+
+    it('shows a refusal in place of the results, and moves focus to them once it is removed', async () => {
+      refuse = 'source';
+      const user = await renderList('/orders?cf.source.in=web', false);
+      await screen.findByText('The filter “Source” is no longer available on this list.');
+      expect(screen.queryByText(/Showing|No results/)).toBeNull();
+      refuse = null;
+      await user.click(screen.getByRole('button', { name: 'Remove this filter' }));
+      expect(document.activeElement?.getAttribute('tabindex')).toBe('-1');
+      expect(document.activeElement?.getAttribute('aria-busy')).not.toBeNull();
+    });
+
+    it('clears the dropped-filters notice on Clear all and on a custom-filter change', async () => {
+      const user = await renderList();
+      await screen.findByRole('option', { name: WITH_RETIRED.name });
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Saved views' }), WITH_RETIRED.id);
+      expect(await screen.findByText(/no longer available and were removed/)).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /Source: Shop/ }));
+      await waitFor(() => expect(screen.queryByText(/no longer available and were removed/)).toBeNull());
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Saved views' }), WITH_SOURCE.id);
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Saved views' }), WITH_RETIRED.id);
+      expect(await screen.findByText(/no longer available and were removed/)).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Clear all' }));
+      await waitFor(() => expect(screen.queryByText(/no longer available and were removed/)).toBeNull());
+    });
+
+    it('has no axe violations with chips, a refusal and a dropped-filters notice on screen', async () => {
+      refuse = 'source';
+      const user = await renderList();
+      await screen.findByRole('option', { name: WITH_RETIRED.name });
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Saved views' }), WITH_RETIRED.id);
+      await screen.findByText(/no longer available and were removed/);
+      await screen.findByText('The filter “Source” is no longer available on this list.');
+      expect(screen.getByRole('button', { name: /Source: Shop/ })).toBeInTheDocument();
+      await expectNoAxeViolations(document.body);
+    });
+
+    it('shows the server’s sentence, never its code, for an inverted range in the address', async () => {
+      offered = [SOURCE, AMOUNT];
+      invalidKey = '"amount"';
+      await renderList('/orders?cf.amount.min=10&cf.amount.max=1', false);
+      expect(await screen.findByText('Request failed validation.')).toBeInTheDocument();
+      expect(screen.queryByText(/VALIDATION_FAILED/)).toBeNull();
+    });
+
+    it.each([
+      ['text', NOTE, 'cf.note.contains=acme', { note: { contains: 'acme' } }, 'Note: contains “acme”'],
+      ['number', AMOUNT, 'cf.amount.min=1&cf.amount.max=9.5', { amount: { min: '1', max: '9.5' } }, 'Amount: 1 – 9.5'],
+      ['date', DUE, 'cf.due.from=2026-01-01&cf.due.to=2026-01-31', { due: { from: '2026-01-01', to: '2026-01-31' } }, 'Due: 2026-01-01 – 2026-01-31'],
+      ['boolean', VIP, 'cf.vip.is=true', { vip: { is: true } }, 'VIP: Yes'],
+    ])('a %s field: from the address to the request and a chip, and its control back to the address', async (_type, field, query, payload, chip) => {
+      offered = [field];
+      const user = await renderList(`/orders?${query}`);
+      expect(sentFilters()[0]).toEqual(payload);
+      expect(await screen.findByRole('button', { name: new RegExp(chip.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) })).toBeInTheDocument();
+      await openFilters(user);
+      if (field.valueType === 'boolean') {
+        await user.selectOptions(screen.getByLabelText('VIP'), 'No');
+        await waitFor(() => expect(new URLSearchParams(currentSearch).get('cf.vip.is')).toBe('false'));
+        await waitFor(() => expect(sentFilters().at(-1)).toEqual({ vip: { is: false } }));
+      } else if (field.valueType === 'text') {
+        const input = screen.getByLabelText('Note');
+        await user.clear(input);
+        await user.type(input, 'beta');
+        await waitFor(() => expect(new URLSearchParams(currentSearch).get('cf.note.contains')).toBe('beta'));
+        await waitFor(() => expect(sentFilters().at(-1)).toEqual({ note: { contains: 'beta' } }));
+      } else if (field.valueType === 'number') {
+        const max = screen.getByLabelText('Amount: Maximum');
+        await user.clear(max);
+        await user.type(max, '20');
+        await waitFor(() => expect(new URLSearchParams(currentSearch).get('cf.amount.max')).toBe('20'));
+        await waitFor(() => expect(sentFilters().at(-1)).toEqual({ amount: { min: '1', max: '20' } }));
+      } else {
+        fireEvent.change(screen.getByLabelText('Due: To'), { target: { value: '2026-02-28' } });
+        await waitFor(() => expect(new URLSearchParams(currentSearch).get('cf.due.to')).toBe('2026-02-28'));
+        await waitFor(() => expect(sentFilters().at(-1)).toEqual({ due: { from: '2026-01-01', to: '2026-02-28' } }));
+      }
+    });
   });
 });
