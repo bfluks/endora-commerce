@@ -1,10 +1,13 @@
 import { StrictMode, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { CustomFieldListFilterField, SavedListView } from '@endora-commerce/contracts';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
+import { expectNoAxeViolations } from '../../helpers/axe';
+import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/TranslationProvider';
+import pl from '../../../../packages/modules/_i18n/i18n/pl.json';
 import { installOffsetParentShim } from '../../helpers/layout-shim';
 import en from '../../../../packages/modules/_i18n/i18n/en.json';
 
@@ -106,6 +109,8 @@ const NARROWED = ALL_ROWS.slice(0, 23);
 
 let offered: CustomFieldListFilterField[] = [SOURCE];
 let refuse: string | null = null;
+let fieldsAnswer: () => Promise<unknown> = async () => ({ data: offered });
+let invalidKey: string | null = null;
 let currentSearch = '';
 
 function LocationProbe(): ReactNode {
@@ -126,14 +131,19 @@ function refusal(key: string): InstanceType<typeof ApiError> {
 beforeEach(() => {
   offered = [SOURCE];
   refuse = null;
+  fieldsAnswer = async () => ({ data: offered });
+  invalidKey = null;
   currentSearch = '';
   for (const fn of Object.values(api)) fn.mockReset();
   api.get.mockImplementation(async (path: string) => {
-    if (path.startsWith(FIELDS_ENDPOINT)) return { data: offered };
+    if (path.startsWith(FIELDS_ENDPOINT)) return fieldsAnswer();
     if (path.startsWith(VIEWS_ENDPOINT)) return { data: [WITH_SOURCE, WITH_RETIRED] };
     if (path.startsWith(LIST)) {
       const filtered = new URLSearchParams(path.split('?')[1]).has('customFieldFilters');
       if (refuse !== null && filtered) throw refusal(refuse);
+      if (invalidKey !== null && decodeURIComponent(path).includes(invalidKey)) {
+        throw new ApiError(400, { error: { code: 'VALIDATION_FAILED', message: 'Request failed validation.' } } as never);
+      }
       return { data: filtered ? NARROWED : ALL_ROWS };
     }
     return { data: [] };
@@ -272,5 +282,77 @@ describe('RfqList — custom-field filters', () => {
     expect(await screen.findByText(`The filter “${expected}” is no longer available on this list.`)).toBeInTheDocument();
     expect(document.querySelector('img')).toBeNull();
     expect((window as { __xss?: unknown }).__xss).toBeUndefined();
+  });
+
+  describe('review round', () => {
+    it.each([
+      ['pending', () => new Promise<unknown>(() => undefined)],
+      ['rejected', () => Promise.reject(new Error('down'))],
+    ])('keeps a saved view’s filters as saved, with no notice, while the fields are %s', async (_name, answer) => {
+      fieldsAnswer = answer;
+      const user = await renderList();
+      await screen.findByRole('option', { name: WITH_RETIRED.name });
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Saved views' }), WITH_RETIRED.id);
+      await waitFor(() =>
+        expect(sentFilters().at(-1)).toEqual({ retired_field: { in: ['x'] }, source: { in: ['shop'] } }),
+      );
+      expect(screen.queryByText(/no longer available and were removed/)).toBeNull();
+    });
+
+    it('reads the list once under StrictMode when the address carries a filter', async () => {
+      await renderList('/quote-requests?scope=all&cf.source.in=web');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(listParams()).toHaveLength(1);
+    });
+
+    it('shows a refusal in place of the results, and moves focus to them once it is removed', async () => {
+      refuse = 'source';
+      const user = await renderList('/quote-requests?scope=all&cf.source.in=web', false);
+      await screen.findByText('The filter “Source” is no longer available on this list.');
+      expect(screen.queryByText(/Showing|No results/)).toBeNull();
+      refuse = null;
+      await user.click(screen.getByRole('button', { name: 'Remove this filter' }));
+      expect(document.activeElement?.getAttribute('tabindex')).toBe('-1');
+    });
+
+    it('shows the server’s sentence, never its code, for an inverted range in the address', async () => {
+      offered = [SOURCE, { key: 'amount', valueType: 'number', label: { en: 'Amount' }, labelDefault: 'Amount', options: [] }];
+      invalidKey = '"amount"';
+      await renderList('/quote-requests?scope=all&cf.amount.min=10&cf.amount.max=1', false);
+      expect(await screen.findByText('Request failed validation.')).toBeInTheDocument();
+      expect(screen.queryByText(/VALIDATION_FAILED/)).toBeNull();
+    });
+
+    it('has no axe violations with chips, a refusal and a dropped-filters notice on screen', async () => {
+      refuse = 'source';
+      const user = await renderList();
+      await screen.findByRole('option', { name: WITH_RETIRED.name });
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Saved views' }), WITH_RETIRED.id);
+      await screen.findByText(/no longer available and were removed/);
+      await screen.findByText('The filter “Source” is no longer available on this list.');
+      await expectNoAxeViolations(document.body);
+    });
+
+    it('speaks Polish: the chip, the refusal and the dropped-filters notice', async () => {
+      refuse = 'source';
+      const user = userEvent.setup();
+      render(
+        <StrictMode>
+          <TranslationProvider language="pl" initialBundle={{ core: pl as Record<string, string> }}>
+            <MemoryRouter>
+              <RfqList />
+            </MemoryRouter>
+          </TranslationProvider>
+        </StrictMode>,
+      );
+      await screen.findByRole('option', { name: WITH_RETIRED.name });
+      await user.selectOptions(screen.getByRole('combobox', { name: /widok/i }), WITH_RETIRED.id);
+      expect(
+        await screen.findByText('Niektóre filtry tego widoku nie są już dostępne i zostały usunięte: retired_field.'),
+      ).toBeInTheDocument();
+      expect(await screen.findByText('Filtr „Źródło klienta” nie jest już dostępny na tej liście.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Usuń filtr Źródło klienta: Shop' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Usuń ten filtr' })).toBeInTheDocument();
+    });
   });
 });
