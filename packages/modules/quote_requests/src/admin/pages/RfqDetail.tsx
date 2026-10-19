@@ -1170,7 +1170,9 @@ function ModifyCard({
                 // A new or switched line has no stored name yet; it is still a
                 // named group, by its position (review fix N7).
                 aria-label={orig?.productName ?? t('rfq.detail.modify.lineGroup', { number: i + 1 })}
-                className={cn('grid grid-cols-1 items-center gap-3', gridCols)}
+                // Top-aligned, every cell at least one control tall (h-9) and centred in it: the
+                // minimum badge hangs under the quantity input without moving any cell (U4).
+                className={cn('grid grid-cols-1 items-start gap-3', gridCols)}
               >
                 <ProductPicker
                   mode="select"
@@ -1215,25 +1217,26 @@ function ModifyCard({
                   onChange={(e): void => updateLine(i, { agreedUnitPrice: e.target.value })}
                   className="tabular-nums"
                 />
-                <div className="self-center text-sm">
+                <div className="flex min-h-9 items-center text-sm">
                   <ReferenceCell view={reference} perBaseUnit={Boolean(orig?.packagingUnitName)} />
                 </div>
-                <span className="self-center text-sm tabular-nums text-muted-foreground">
+                <span className="flex min-h-9 items-center text-sm tabular-nums text-muted-foreground">
                   {desired !== null ? format.money(desired, currency) : '—'}
                 </span>
-                <div className="self-center text-sm">
+                <div className="flex min-h-9 items-center text-sm">
                   <DifferenceCell
                     price={typedAgreed}
                     currency={orig?.lineCurrency ?? currency}
                     reference={referencePriceOf(reference)}
                   />
                 </div>
-                <span className="self-center text-sm font-medium tabular-nums">
+                <span className="flex min-h-9 items-center text-sm font-medium tabular-nums">
                   {lineTotal !== null ? format.money(lineTotal, currency) : '—'}
                 </span>
                 <Button
                   variant="ghost"
                   size="sm"
+                  className="md:mt-0.5"
                   onClick={(): void => setLines((prev) => prev.filter((_, j) => j !== i))}
                 >
                   {t('rfq.detail.modify.remove')}

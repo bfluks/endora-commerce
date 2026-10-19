@@ -173,3 +173,27 @@ describe.each<Language>(['en', 'pl'])('RfqDetail — below-minimum warning (%s)'
     expect(line.textContent ?? '').not.toContain(minimumText);
   });
 });
+
+/**
+ * U4 (owner's manual test, step 9) — the badge under the Modify tab's quantity input made that
+ * cell the tallest in a centre-aligned row, which pushed the input up out of line with the other
+ * cells. The row aligns its cells to the top; every cell is at least one control (h-9) tall and
+ * centres its own content in that first line, so the badge hangs below without moving anything.
+ */
+describe('RfqDetail — the Modify row stays aligned under a minimum warning', () => {
+  it('top-aligns the row and keeps every cell on the controls’ first line', async () => {
+    installDetail(payloadWith({ kind: 'pieces', minimum: 10 }));
+    renderDetail('en');
+    const line = await modifyLine('en');
+    expect(line.className).toMatch(/(^|\s)items-start(\s|$)/);
+    expect(line.className).not.toMatch(/(^|\s)items-center(\s|$)/);
+    for (const cell of Array.from(line.children) as HTMLElement[]) {
+      expect(cell.className, cell.outerHTML.slice(0, 120)).not.toContain('self-center');
+    }
+    const quantity = within(line).getByRole('spinbutton', { name: tr('en', 'rfq.detail.modify.quantity') });
+    expect(quantity.getAttribute('aria-describedby')).toBe('rfq-line-0-minimum');
+    expect(document.getElementById('rfq-line-0-minimum')?.textContent).toBe(
+      tr('en', 'rfq.detail.minimum.pieces', { minimum: 10 }),
+    );
+  });
+});
