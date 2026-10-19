@@ -1,7 +1,12 @@
 import type { CartMergeOutcomePublic } from '@endora-commerce/contracts';
 import { apiMutate } from './mutations';
 import type { RequestContext } from './client';
-import { knownDeviceCookieHeader, rememberKnownDevice, signInCookieHeader } from '../session';
+import {
+  clearConsumedAnonCart,
+  knownDeviceCookieHeader,
+  rememberKnownDevice,
+  signInCookieHeader,
+} from '../session';
 
 /**
  * Anonymous storefront auth flows (register / verify / login / logout /
@@ -122,11 +127,15 @@ export async function loginCustomer(
   if (data.status === 'mfaSetupRequired') {
     return { status: 'mfaSetupRequired', setupTicket: data.setupTicket! };
   }
+  const cartMerge = data.cartMerge ?? null;
+  // The basket the merge consumed is gone; every caller of the sign-in
+  // (the login page, invitation acceptance) drops its cookie here.
+  await clearConsumedAnonCart(cartMerge?.outcome ?? null, result.setCookie);
   // The session cookie comes back in Set-Cookie; persisted via setSessionCookie.
   return {
     status: 'authenticated',
     sessionCookieValue: pickSessionCookie(result.setCookie),
-    cartMerge: data.cartMerge ?? null,
+    cartMerge,
   };
 }
 

@@ -2,6 +2,7 @@ import { apiMutate, extractSessionCookieValue } from './mutations';
 import { StorefrontApiError, type RequestContext } from './client';
 import { withModuleAbsence } from './module-absence';
 import { backendBaseUrl } from '../env.mjs';
+import { anonBasketTokenForForwarding } from '../session';
 
 /**
  * The backend's origin, read per call.
@@ -509,13 +510,15 @@ export async function listOrganizationCarts(
 
 /**
  * `apiMutate.sessionCookie` only carries one cookie pair, so combine
- * both candidates into the Cookie header verbatim. This keeps the
+ * both candidates into the Cookie header verbatim — the basket token only
+ * when it is well formed (`anonBasketTokenForForwarding`). This keeps the
  * helper signature stable while supporting authenticated + anon paths.
  */
 function combineCookies(jar: CartCookieJar): string {
   const parts: string[] = [];
   if (jar.session) parts.push(`b2b_session=${jar.session}`);
-  if (jar.anon) parts.push(`b2b_cart_anon=${jar.anon}`);
+  const anon = anonBasketTokenForForwarding(jar.anon);
+  if (anon) parts.push(`b2b_cart_anon=${anon}`);
   return parts.join('; ');
 }
 

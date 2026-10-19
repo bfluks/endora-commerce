@@ -279,9 +279,48 @@ export async function signInCookieHeader(): Promise<string | null> {
   const parts: string[] = [];
   const device = await knownDeviceCookieHeader();
   if (device) parts.push(device);
-  const anon = await getAnonCartCookie();
+  const anon = anonBasketTokenForForwarding(await getAnonCartCookie());
   if (anon) parts.push(`${ANON_CART_COOKIE}=${anon}`);
   return parts.length > 0 ? parts.join('; ') : null;
+}
+
+/**
+ * The basket token minted by the backend (`anon-<uuid>`) when it is well formed,
+ * otherwise `null` — the one rule for every call that forwards `b2b_cart_anon`
+ * to the backend (the sign-in above and the cart calls in `lib/api/cart.ts`).
+ * Next answers cookie values percent-decoded, so a value outside this alphabet
+ * is not a token the backend minted and is treated as absent. Forwarded as is,
+ * never re-encoded.
+ */
+export function anonBasketTokenForForwarding(value: string | null | undefined): string | null {
+  return value && WELL_FORMED_BASKET_TOKEN.test(value) ? value : null;
+}
+
+const WELL_FORMED_BASKET_TOKEN = /^[A-Za-z0-9._~-]+$/;
+
+/**
+ * Mirror into the browser jar the backend's clearing of the anonymous basket
+ * cookie on a completed sign-in. The backend clears it whenever the merge
+ * consumed the basket — adopted, merged, or empty — and keeps it only when no
+ * basket matched the token; the public outcome folds the last two into one
+ * `noop`, so its own `Set-Cookie` is what tells them apart.
+ */
+export async function clearConsumedAnonCart(
+  outcome: 'adopted' | 'merged' | 'noop' | null,
+  setCookie: string[],
+): Promise<void> {
+  if (outcome === null) return;
+  if (outcome === 'adopted' || outcome === 'merged' || backendClearedAnonCart(setCookie)) {
+    await clearAnonCartCookie();
+  }
+}
+
+function backendClearedAnonCart(setCookie: string[]): boolean {
+  const prefix = `${ANON_CART_COOKIE}=`;
+  return setCookie.some((header) => {
+    const pair = (header.split(';')[0] ?? '').trim();
+    return pair.startsWith(prefix) && pair.slice(prefix.length) === '';
+  });
 }
 
 /**

@@ -11,22 +11,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * used on, and is held to the account-wide budget a stranger can fill.
  */
 
-const jar = new Map<string, string>();
-const setCalls: Array<{ name: string; value: string; options: Record<string, unknown> }> = [];
+vi.mock('next/headers', async () => (await import('./cookie-jar-harness')).nextHeaders);
 
-vi.mock('next/headers', () => ({
-  cookies: async () => ({
-    get: (name: string) => (jar.has(name) ? { name, value: jar.get(name)! } : undefined),
-    set: (name: string, value: string, options: Record<string, unknown> = {}) => {
-      setCalls.push({ name, value, options });
-      jar.set(name, value);
-    },
-    delete: (name: string) => {
-      jar.delete(name);
-    },
-  }),
-}));
-
+const { jar, setCalls, resetJar } = await import('./cookie-jar-harness');
 const { loginCustomer, verifyCustomerMfa, requestPasswordReset } = await import(
   '../../lib/api/auth'
 );
@@ -58,8 +45,7 @@ function stubFetch(answer: { status?: number; body: unknown; setCookie?: string[
 }
 
 beforeEach(() => {
-  jar.clear();
-  setCalls.length = 0;
+  resetJar();
 });
 afterEach(() => {
   globalThis.fetch = originalFetch;

@@ -5,7 +5,6 @@ import { loginCustomer } from '../../../lib/api/auth';
 import { beginMfaSetupTicket } from '../../../lib/api/mfa';
 import { StorefrontApiError } from '../../../lib/api/client';
 import {
-  clearAnonCartCookie,
   setCartMergeFlash,
   setMfaChallengeCookie,
   setMfaSetupTicketCookie,
@@ -160,11 +159,7 @@ async function loginAction(formData: FormData): Promise<void> {
     result.cartMerge?.outcome === 'adopted' ||
     result.cartMerge?.outcome === 'merged'
   ) {
-    // The anon cart was drained into the customer cart and marked completed
-    // backend-side; drop the now-stale anon cookie so later reads (e.g. after
-    // a session expiry) don't fall back to that emptied cart and make the cart
-    // appear to vanish.
-    await clearAnonCartCookie();
+    // `loginCustomer` has already dropped the consumed anon-cart cookie.
     await setCartMergeFlash(result.cartMerge.outcome);
   }
   redirect(next);
