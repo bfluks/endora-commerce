@@ -1,6 +1,7 @@
 import { StrictMode, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { ApiError, AuthProvider } from '@endora-commerce/admin-kit/lib';
 import type { CustomFieldDefinitionDto, CustomFieldEntityTypeInfo } from '@endora-commerce/contracts';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
@@ -8,6 +9,8 @@ import { adminSession } from '../../helpers/render-with-session';
 import { expectNoAxeViolations } from '../../helpers/axe';
 import en from '../../../../packages/modules/custom_fields/i18n/en.json';
 import coreEn from '../../../../packages/modules/_i18n/i18n/en.json';
+import pl from '../../../../packages/modules/custom_fields/i18n/pl.json';
+import corePl from '../../../../packages/modules/_i18n/i18n/pl.json';
 
 /**
  * Feature 157 (T055, US3) — an existing definition is edited on
@@ -99,6 +102,9 @@ const { CustomFieldsPage } = await import(
 );
 
 const BUNDLE = { custom_fields: en, core: coreEn as Record<string, string> };
+const PL_BUNDLE = { custom_fields: pl as Record<string, string>, core: corePl as Record<string, string> };
+const plText = (key: string, params: Record<string, string> = {}): string =>
+  (pl as Record<string, string>)[key]!.replace(/\{(\w+)\}/g, (_m, name: string) => params[name] ?? '');
 
 let nativeDialogs: Array<ReturnType<typeof vi.spyOn>>;
 
@@ -122,21 +128,30 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function openEditor(entityType: 'order' | 'customer' = 'order', key = 'region'): Promise<HTMLElement> {
+async function openEditor(
+  entityType: 'order' | 'customer' = 'order',
+  key = 'region',
+  language: 'en' | 'pl' = 'en',
+): Promise<HTMLElement> {
+  const text = language === 'pl' ? plText : (k: string, p: Record<string, string> = {}): string =>
+    (en as Record<string, string>)[k]!.replace(/\{(\w+)\}/g, (_m, name: string) => p[name] ?? '');
   renderWithI18n(
     <StrictMode>
       <AuthProvider initial={adminSession({ permissions: ['custom_fields:read', 'custom_fields:write'] })}>
         <CustomFieldsPage />
       </AuthProvider>
     </StrictMode>,
-    BUNDLE,
+    language === 'pl' ? PL_BUNDLE : BUNDLE,
   );
+  const recordType = text('customFields.form.entity');
+  const orderLabel = text('customFields.entity.order');
   await waitFor(() =>
-    expect(within(screen.getByLabelText('Entity')).getAllByRole('option').map((o) => o.textContent)).toContain('Order'),
+    expect(within(screen.getByLabelText(recordType)).getAllByRole('option').map((o) => o.textContent)).toContain(orderLabel),
   );
-  fireEvent.change(screen.getByLabelText('Entity'), { target: { value: entityType } });
-  fireEvent.click(await screen.findByRole('button', { name: `Edit ${key}` }));
-  return screen.findByRole('dialog', { name: `Edit ${key}` });
+  fireEvent.change(screen.getByLabelText(recordType), { target: { value: entityType } });
+  const title = text('customFields.editor.title', { key });
+  fireEvent.click(await screen.findByRole('button', { name: title }));
+  return screen.findByRole('dialog', { name: title });
 }
 
 function save(dialog: HTMLElement): void {
@@ -189,9 +204,11 @@ describe('CustomFieldsPage — the definition editor', () => {
 
   it('shows the required notice before saving and sends { required: true } (US3-7, FR-003b)', async () => {
     const dialog = await openEditor();
-    expect(within(dialog).queryByText(/Records that already exist keep their values/)).toBeNull();
-    fireEvent.click(within(dialog).getByLabelText('Required'));
-    expect(within(dialog).getByText(/Records that already exist keep their values/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Existing records keep loading/)).toBeNull();
+    const required = within(dialog).getByLabelText('Required');
+    fireEvent.click(required);
+    expect(within(dialog).getByText(/Existing records keep loading/)).toBeInTheDocument();
+    expect(required).toHaveAccessibleDescription(/Existing records keep loading/);
     expect(client.update).not.toHaveBeenCalled();
     save(dialog);
     await waitFor(() => expect(client.update).toHaveBeenCalledWith(REGION.id, { required: true }));
@@ -253,8 +270,157 @@ describe('CustomFieldsPage — the definition editor', () => {
     expect(client.updateOption).toHaveBeenCalledWith(REGION.id, SOUTH_ID, { sortOrder: 0 });
     expect(client.updateOption).toHaveBeenCalledWith(REGION.id, NORTH_ID, { sortOrder: 1 });
     await waitFor(() =>
-      expect(within(dialog).getByRole('status')).toHaveTextContent('“South” moved up to position 1 of 2.'),
+      expect(within(dialog).getByText('“South” moved up to position 1 of 2.')).toHaveAttribute('role', 'status'),
     );
+  });
+
+  it('puts focus back on the moved row after a reorder, on the button still enabled', async () => {
+    const reordered = definition({
+      options: [
+        { ...REGION.options[1]!, sortOrder: 0 },
+        { ...REGION.options[0]!, sortOrder: 1 },
+      ],
+    });
+    client.get.mockResolvedValue(reordered);
+    const dialog = await openEditor();
+    const south = optionRow(dialog, 'South');
+    const moveUp = within(south).getByRole('button', { name: 'Move up' });
+    moveUp.focus();
+    fireEvent.click(moveUp);
+    await waitFor(() => expect(client.get).toHaveBeenCalled());
+    // South is first now, so its Move up is disabled and focus lands on its Move down.
+    await waitFor(() =>
+      expect(within(optionRow(dialog, 'South')).getByRole('button', { name: 'Move down' })).toHaveFocus(),
+    );
+  });
+
+  it('keeps focus and typed text when a label save lands while the operator types on (B1)', async () => {
+    let finish!: (value: unknown) => void;
+    client.updateOption.mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+    const saved = definition({
+      options: [{ ...REGION.options[0]!, labelDefault: 'Northern' }, REGION.options[1]!],
+    });
+    client.get.mockResolvedValue(saved);
+    const user = userEvent.setup();
+    const dialog = await openEditor();
+    const row = optionRow(dialog, 'North');
+    const defaultLabel = within(row).getByLabelText('Default label');
+    const english = within(row).getByLabelText('English label');
+    await user.click(defaultLabel);
+    await user.clear(defaultLabel);
+    await user.type(defaultLabel, 'Northern');
+    await user.tab();
+    expect(english).toHaveFocus();
+    await waitFor(() => expect(client.updateOption).toHaveBeenCalledTimes(1));
+    expect(client.updateOption).toHaveBeenCalledWith(REGION.id, NORTH_ID, { labelDefault: 'Northern' });
+    expect(row).toHaveAttribute('aria-busy', 'true');
+    expect(english).toBeEnabled();
+    await user.type(english, ' area');
+    await act(async () => {
+      finish({ id: NORTH_ID, value: 'north' });
+    });
+    await waitFor(() => expect(client.get).toHaveBeenCalled());
+    await waitFor(() => expect(within(dialog).getByRole('group', { name: 'Northern' })).toHaveAttribute('aria-busy', 'false'));
+    const rowAfter = within(dialog).getByRole('group', { name: 'Northern' });
+    expect(within(rowAfter).getByLabelText('English label')).toBe(english);
+    expect(english).toHaveFocus();
+    expect(english).toHaveValue('North area');
+    expect(defaultLabel).toHaveValue('Northern');
+    expect(within(rowAfter).getByText('Saved')).toHaveAttribute('role', 'status');
+  });
+
+  it('keeps focus in the dialog, on the next control, when Tab leaves a Polish label (G1)', async () => {
+    let finish!: (value: unknown) => void;
+    client.updateOption.mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+    const user = userEvent.setup();
+    const dialog = await openEditor();
+    const row = optionRow(dialog, 'North');
+    await user.type(within(row).getByLabelText('Polish label'), 'Północ');
+    await user.tab();
+    const isDefault = within(row).getByLabelText('Default');
+    expect(isDefault).toHaveFocus();
+    await act(async () => {
+      finish({ id: NORTH_ID, value: 'north' });
+    });
+    await waitFor(() => expect(client.get).toHaveBeenCalled());
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    expect(isDefault).toHaveFocus();
+  });
+
+  it('re-reads the definition and shows the real order when a reorder is refused halfway (G2)', async () => {
+    client.updateOption
+      .mockResolvedValueOnce({ id: SOUTH_ID, value: 'south' })
+      .mockRejectedValueOnce(new ApiError(500, { error: { code: 'INTERNAL', message: 'boom' } }));
+    // What the server holds after the first patch only: both options at 0, north first by its id.
+    const stored = definition({
+      options: [
+        { ...REGION.options[0]!, sortOrder: 0 },
+        { ...REGION.options[1]!, sortOrder: 0 },
+      ],
+    });
+    client.get.mockResolvedValue(stored);
+    const dialog = await openEditor();
+    fireEvent.click(within(optionRow(dialog, 'South')).getByRole('button', { name: 'Move up' }));
+    await waitFor(() => expect(client.get).toHaveBeenCalledWith(REGION.id));
+    await waitFor(() =>
+      expect(
+        within(optionRow(dialog, 'South')).getByText('The option could not be changed.'),
+      ).toBeInTheDocument(),
+    );
+    const order = within(dialog)
+      .getAllByRole('group')
+      .map((group) => group.getAttribute('aria-label'))
+      .filter((name) => name === 'North' || name === 'South');
+    expect(order).toEqual(['North', 'South']);
+  });
+
+  it('announces the required notice through a live region mounted before it has text (G7)', async () => {
+    const dialog = await openEditor();
+    const region = within(dialog).getByTestId('required-notice');
+    expect(region).toHaveAttribute('role', 'status');
+    expect(region).toBeEmptyDOMElement();
+    fireEvent.click(within(dialog).getByLabelText('Required'));
+    expect(region).toHaveTextContent(/Existing records keep loading/);
+    expect(within(dialog).getByLabelText('Required')).toHaveAttribute('aria-describedby', region.id);
+  });
+
+  it('renders the editor in Polish — option rows, notices, refusal — with text that wraps (G9)', async () => {
+    client.removeOption.mockRejectedValue(
+      new ApiError(409, { error: { code: 'CUSTOM_FIELD_OPTION_IN_USE' as never, message: 'in use', details: { value: 'north' } } }),
+    );
+    const dialog = await openEditor('order', 'region', 'pl');
+    expect(within(dialog).getByText(plText('customFields.editor.optionsNote'))).toHaveClass('break-words');
+    const row = optionRow(dialog, 'North');
+    expect(within(row).getByLabelText(plText('customFields.editor.labelPl'))).toHaveClass('min-w-0');
+    fireEvent.click(within(dialog).getByLabelText(plText('customFields.form.required')));
+    expect(within(dialog).getByTestId('required-notice')).toHaveTextContent(plText('customFields.editor.requiredNotice'));
+    expect(within(dialog).getByTestId('required-notice')).toHaveClass('break-words');
+    const remove = plText('customFields.editor.option.remove');
+    fireEvent.click(within(row).getByRole('button', { name: remove }));
+    fireEvent.click(within(optionRow(dialog, 'North')).getByRole('button', { name: remove }));
+    const refusal = await within(optionRow(dialog, 'North')).findByText(
+      plText('customFields.editor.option.inUse', { label: 'North' }),
+    );
+    expect(refusal).toHaveClass('break-words');
+  });
+
+  it('saves an option label on Enter', async () => {
+    const user = userEvent.setup();
+    const dialog = await openEditor();
+    const polish = within(optionRow(dialog, 'South')).getByLabelText('Polish label');
+    await user.type(polish, 'Południe{Enter}');
+    await waitFor(() =>
+      expect(client.updateOption).toHaveBeenCalledWith(REGION.id, SOUTH_ID, { label: { en: 'South', pl: 'Południe' } }),
+    );
+  });
+
+  it('says option changes apply at once, and Cancel becomes Close after one', async () => {
+    const dialog = await openEditor();
+    expect(within(dialog).getByText('Option changes are saved as soon as you make them.')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    fireEvent.click(within(optionRow(dialog, 'North')).getByLabelText('Default'));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Close' })).toBeInTheDocument());
+    expect(within(dialog).queryByRole('button', { name: 'Cancel' })).toBeNull();
   });
 
   it('removes an unused option after an in-dialog confirmation', async () => {
@@ -263,20 +429,46 @@ describe('CustomFieldsPage — the definition editor', () => {
     expect(client.removeOption).not.toHaveBeenCalled();
     const row = optionRow(dialog, 'South');
     expect(within(row).getByText('Remove the option “South”?')).toBeInTheDocument();
+    // Keep takes the trigger's place and the focus.
+    expect(within(row).getByRole('button', { name: 'Keep' })).toHaveFocus();
     fireEvent.click(within(row).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(client.removeOption).toHaveBeenCalledWith(REGION.id, SOUTH_ID));
   });
 
-  it('shows the server sentence at an option in use (US3-6)', async () => {
-    client.removeOption.mockRejectedValue(
-      new ApiError(409, { error: { code: 'CUSTOM_FIELD_DEFINITION_INVALID', message: 'This option is still used by 3 records.' } }),
-    );
+  it('returns focus to Remove when the confirmation is kept', async () => {
     const dialog = await openEditor();
-    fireEvent.click(within(optionRow(dialog, 'North')).getByRole('button', { name: 'Remove' }));
-    fireEvent.click(within(optionRow(dialog, 'North')).getByRole('button', { name: 'Remove' }));
-    expect(await within(optionRow(dialog, 'North')).findByText('This option is still used by 3 records.')).toBeInTheDocument();
-    expect(within(dialog).queryByText(/CUSTOM_FIELD_DEFINITION_INVALID/)).toBeNull();
+    fireEvent.click(within(optionRow(dialog, 'South')).getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(optionRow(dialog, 'South')).getByRole('button', { name: 'Keep' }));
+    expect(within(optionRow(dialog, 'South')).getByRole('button', { name: 'Remove' })).toHaveFocus();
+    expect(client.removeOption).not.toHaveBeenCalled();
   });
+
+  for (const [shape, error] of [
+    [
+      'the option-in-use code',
+      new ApiError(409, {
+        error: { code: 'CUSTOM_FIELD_OPTION_IN_USE' as never, message: 'Option north is in use.', details: { value: 'north' } },
+      }),
+    ],
+    [
+      'the generic 409 the server answers before that code',
+      new ApiError(409, { error: { code: 'CUSTOM_FIELD_DEFINITION_INVALID', message: 'Option north is in use.' } }),
+    ],
+  ] as const) {
+    it(`names an option in use by its label, in its own sentence — ${shape} (US3-6)`, async () => {
+      client.removeOption.mockRejectedValue(error);
+      const dialog = await openEditor();
+      fireEvent.click(within(optionRow(dialog, 'North')).getByRole('button', { name: 'Remove' }));
+      fireEvent.click(within(optionRow(dialog, 'North')).getByRole('button', { name: 'Remove' }));
+      expect(
+        await within(optionRow(dialog, 'North')).findByText(
+          "The option “North” can't be removed because some records still use it. Change their value first.",
+        ),
+      ).toBeInTheDocument();
+      expect(within(dialog).queryByText(/Option north is in use/)).toBeNull();
+      expect(within(dialog).queryByText(/CUSTOM_FIELD_/)).toBeNull();
+    });
+  }
 
   it('keeps the dialog open with the server sentence when the save is refused', async () => {
     client.update.mockRejectedValue(
