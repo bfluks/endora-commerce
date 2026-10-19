@@ -146,6 +146,9 @@ jobs:
           LIST: ${{ steps.select.outputs.list }}
           SOURCE: ${{ steps.select.outputs.source }}
         run: |
+          # GitHub's default shell is `bash -e`; this loop handles each rc
+          # itself and must keep going after a red file.
+          set +e
           set -uo pipefail
           logs="$RUNNER_TEMP/pg-logs"; mkdir -p "$logs"
           {
@@ -167,7 +170,7 @@ jobs:
             if [ ! -f "$file" ]; then
               echo "missing: $file" | tee "$log"; rc=127
             else
-              pnpm exec vitest run "$file" 2>&1 | tee "$log"; rc=${PIPESTATUS[0]}
+              pnpm exec vitest run "$file" < /dev/null 2>&1 | tee "$log"; rc=${PIPESTATUS[0]}
             fi
             secs=$(( $(date +%s) - start ))
             echo "::endgroup::"
@@ -185,7 +188,7 @@ jobs:
             printf '%s' "$table"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "files=$total failed=$failed tests=$tests_total"
-          [ "$failed" -eq 0 ]
+          if [ "$failed" -ne 0 ]; then exit 1; fi
 
       - name: Upload per-file logs
         if: always()
