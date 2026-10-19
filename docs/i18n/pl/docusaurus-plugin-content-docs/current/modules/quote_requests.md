@@ -273,6 +273,29 @@ odpowiadała `403`, co zdradzało, że zapytanie istnieje).
 Klient z rolą `org_admin` we własnej organizacji widzi każde zapytanie ofertowe tej organizacji, a
 nie tylko własne.
 
+## Pola niestandardowe
+
+Zapytania ofertowe przyjmują pola niestandardowe, definiowane na ekranie **Pola niestandardowe**.
+Pola te podążają za tym modułem: gdy `quote_requests` jest wyłączony, nie są tam wyświetlane, nie
+można ich tworzyć ani edytować i nie zwraca ich API definicji; pola, ich opcje i zapisane wartości
+są zachowane i wracają bez zmian po ponownym włączeniu modułu.
+
+### Filtry pól niestandardowych na liście
+
+Pole zapytania ofertowego z włączoną opcją **Używaj jako filtra listy** jest dostępne jako filtr na
+liście zapytań ofertowych, opisany w twoim języku: tekst, który zawiera, zakres liczb lub dat, tak
+lub nie albo jedna lub więcej opcji. Zapytanie bez wartości tego pola nigdy nie pasuje. Filtr
+stosuje serwer, więc zawęża całą listę — sumę i każdą stronę — a nie tylko już wczytane zapytania;
+status, wyszukiwanie, sortowanie i stronicowanie działają obok niego. Każdy filtr jest pokazany jako
+usuwalna etykieta, zapisuje się w adresie strony i w zapisanych widokach, a jego zmiana wraca do
+pierwszej strony listy.
+
+Jeśli adres zawiera filtr, który nie jest już dostępny, lista mówi o tym, podając nazwę pola, i
+oferuje **Usuń ten filtr**. Zapisany widok z takim filtrem pomija go przy wczytaniu, z komunikatem,
+który go nazywa. Wywołujący API przesyłają filtry jako `customFieldFilters` w
+`GET /api/v1/admin/quote-requests`, a dostępne pola odczytują z
+`GET /api/v1/admin/quote-requests/custom-field-filters` (`rfqs:handle`).
+
 ## Zapisane widoki
 
 Zapisany widok to nazwane ustawienie listy zapytań ofertowych — jej filtrów, sortowania i kolumn —
@@ -283,11 +306,13 @@ które administrator może ponownie zastosować jednym wyborem.
 Na pasku narzędzi listy zapytań ofertowych jest lista wyboru **Zapisane widoki**, której pierwsza
 pozycja to **— Wybierz widok —**, a obok niej dwa przyciski: **Zapisz widok** i **Usuń widok**.
 
-- **Co zapamiętuje widok.** Sześć rzeczy: zakres **Widoczność**, organizację, wybrane statusy,
-  wyszukiwany tekst, sortowanie i widoczne kolumny. Wybranie widoku zastępuje wszystkie sześć
-  wartościami z widoku, odrzuca to, co zmieniono i nie zapisano, i wraca na pierwszą stronę.
-  Status lub kolumna, których lista już nie zna, są pomijane; widok bez kolumn pokazuje kolumny
-  domyślne; widok bez poprawnego zakresu otwiera się w twoim domyślnym zakresie.
+- **Co zapamiętuje widok.** Siedem rzeczy: zakres **Widoczność**, organizację, wybrane statusy,
+  wyszukiwany tekst, filtry pól niestandardowych, sortowanie i widoczne kolumny. Wybranie widoku
+  zastępuje wszystkie siedem wartościami z widoku, odrzuca to, co zmieniono i nie zapisano, i wraca
+  na pierwszą stronę. Status lub kolumna, których lista już nie zna, są pomijane; filtr pola
+  niestandardowego, który nie jest już dostępny, jest pomijany z komunikatem, który go nazywa;
+  widok bez kolumn pokazuje kolumny domyślne; widok bez poprawnego zakresu otwiera się w twoim
+  domyślnym zakresie.
 - **Widok nigdy nie poszerza tego, co widzisz.** Przechowuje wartości filtrów, nigdy wyniki. Po
   wczytaniu widoku lista jest odczytywana z *twoimi* uprawnieniami i *twoimi* organizacjami,
   niezależnie od tego, kto widok zapisał. *Moje organizacje* oznacza organizacje przypisane do

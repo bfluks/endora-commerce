@@ -13,7 +13,11 @@ czegokolwiek specyficznego dla encji, do której pola należą.
 ## Obsługiwane encje
 
 Pola niestandardowe są dostępne dla encji **Category, Order, Organization, CustomerAccount,
-QuoteRequest i Product**. Każda z tych encji ma dodatkowy zbiór wartości w JSONB
+QuoteRequest, Opportunity i Product**. Dwie z nich **podążają za modułem właścicielskim**:
+QuoteRequest za `quote_requests`, a Opportunity za `crm`. Gdy właściciela nie ma, typ znika z
+panelu administracyjnego i z API definicji całkowicie — nie jest wyświetlany, tworzony ani
+edytowany — a jego definicje, opcje i zapisane wartości są zachowane i wracają bez zmian razem z
+modułem. Każda z tych encji ma dodatkowy zbiór wartości w JSONB
 (`{ [definitionKey]: value }`); właścicielem tej kolumny i zapisów do niej jest moduł encji. W
 większości encji jest to kolumna `customFieldValues`; produkt korzysta zamiast tego z istniejącej
 już kolumny `products.attribute_values` (zobacz *Powiązanie sprawdzania wartości* niżej). Atrybuty
@@ -157,6 +161,48 @@ kategorii korzysta z flagi `filterable`; możliwości produktu pozostają w `pro
 temu sprawy dotyczące wyłącznie katalogu nie trafiają do ogólnego rdzenia — to dokładnie ten rozrost,
 przed którym chroni ten podział: `product_attributes` obrastało w `isVariantAxis` / `isPromoRule` /
 `filterPosition`, aż przestało nadawać się do ponownego użycia.
+
+## Filtry list (`listFilter`)
+
+`listFilter` to jedyny atrybut definicji, który ogólny rdzeń **interpretuje** — dlatego jest
+kolumną obok `required`, a nie flagą w `config`. Definicja z włączonym atrybutem jest dostępna jako
+filtr na liście swojej encji w panelu, a to ogólna warstwa zamienia filtry żądania na SQL — inaczej
+każda lista encji miałaby własną kopię tych samych sześciu predykatów.
+
+- **To rejestr decyduje, które typy mogą go mieć.** Wpis każdego typu encji w rejestrze deklaruje
+  `listFilter`; dziś robią to `order`, `quote_request` i `opportunity`. Ustawienie go dla innego
+  typu jest odrzucane, a punkt końcowy `entity-types` publikuje tę flagę, żeby panel oferował opcję
+  tylko tam, gdzie ma ona zastosowanie. Włączenie lub wyłączenie nie zmienia żadnej zapisanej
+  wartości.
+- **Port.** `custom_fields` publikuje `CustomFieldListFilterPort`: `listFilterable(entityType)`
+  zwraca definicje oferowane przez listę, a `condition(entityType, filters)` zamienia wszystkie
+  filtry żądania na **jeden** warunek — `select t."id" from "<tabela encji>" t where …`, z każdym
+  kluczem i wartością jako parametrem — albo zgłasza błąd, wymieniając każdy klucz, który nie jest
+  oferowany. Lista encji opakowuje ten warunek jako `id in (…)` w każdej wykonywanej instrukcji
+  (wiersze, suma, liczniki), więc filtr zawęża cały wynik, a nie stronę, i działa w obrębie
+  własnego zakresu tenanta i widoczności tej encji.
+- **Korzysta z powiązania przechowywania.** Warunek sprawdza to samo powiązanie `{ table, column }`
+  encji co opisane wyżej zabezpieczenia zmian, więc encję można filtrować bez kodu specyficznego
+  dla niej w ogólnym module.
+- **Semantyka.** `contains` (bez względu na wielkość liter), `in` (którakolwiek z opcji; dla
+  wielokrotnego wyboru — którakolwiek z posiadanych), `is` oraz zakresy `min`/`max` i `from`/`to` z
+  oboma końcami. Rekord bez wartości nigdy nie pasuje. Wartości jednego pola łączy OR; pola oraz
+  własne filtry listy łączy AND. Najwyżej 10 pól i 100 wartości `in` na żądanie.
+- **Odmowa nigdy nie jest cicha.** Klucz nieznany, innego typu albo nieoferowany jest odrzucany z
+  `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE` i nazwany, a nie pomijany — pominięty filtr pokazuje
+  operatorowi więcej rekordów, niż chciał, i nic o tym nie mówi.
+- **Brak w sklepie.** Żaden filtr pola niestandardowego nie trafia do sklepu ani do punktów
+  końcowych dla kluczy API.
+
+### Dlaczego tablica CRM zachowuje własne predykaty
+
+Tablica szans sprzedażowych filtruje po tym, co pokazują jej **karty** — polach wbudowanych i
+niestandardowych, łącznie z osobą kontaktową — i pomija pole, którego karta już nie pokazuje, żeby
+stary link nadal się otwierał. Ta reguła należy do tablicy, nie do definicji, i obejmuje pola, o
+których ogólna warstwa nic nie wie. Dlatego tablica zachowuje własne predykaty, a `listFilter`
+stosuje tylko **lista** szans: jej odwołania `custom:` przechodzą przez port i są odrzucane, gdy
+nie są oferowane, a tablica — i żądanie listy kontynuujące jedną z jej kolumn (`cardValues=true`)
+— zachowują regułę karty.
 
 ## Przechowywanie danych
 

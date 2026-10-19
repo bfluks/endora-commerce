@@ -45,7 +45,7 @@ grupę — tylko wtedy, gdy widoczna jest przynajmniej jedna z nich.
 
 | Ekran | Gdzie | Uprawnienie | Do czego służy |
 | --- | --- | --- | --- |
-| Szanse sprzedażowe | **CRM → Szanse sprzedażowe** (`/crm/opportunities`) | `crm:read` | Wszystkie szanse, które możesz zobaczyć, z wyszukiwaniem i filtrami: stan, status, organizacja, handlowiec, etykiety, kanał sprzedaży i data utworzenia. |
+| Szanse sprzedażowe | **CRM → Szanse sprzedażowe** (`/crm/opportunities`) | `crm:read` | Wszystkie szanse, które możesz zobaczyć, z wyszukiwaniem i filtrami: stan, status, organizacja, handlowiec, etykiety, kanał sprzedaży, data utworzenia i pola niestandardowe oznaczone jako filtry listy. |
 | Nowa szansa | przycisk **Nowa szansa** (`/crm/opportunities/new`) | `crm:write` | Ręczne utworzenie szansy: tytuł, organizacja i waluta są wymagane; osoba kontaktowa, kanał sprzedaży, szacowana wartość, planowana data zamknięcia i opis — opcjonalne. |
 | Szansa sprzedażowa | wiersz listy (`/crm/opportunities/:id`) | `crm:read` | Nagłówek, pasek etapów z obecnym statusem i dozwolonymi z niego zmianami — wstecz i dalej — panel informacji po prawej oraz karty: *Przegląd*, **Powiązania** (zamówienia i zapytania ofertowe szansy), **Wydarzenia** (to, co dla niej zaplanowano, z przypomnieniami), *Notatki*, *Wiadomości*, *Załączniki* i **Historia zmian**. Zobacz *Ekran szansy sprzedażowej*. |
 | Tablica | **CRM → Tablica** (`/crm/board`) | `crm:read` | Te same szanse jako karty, w kolumnie dla każdego statusu. Posiadacz uprawnienia `crm:write` przenosi kartę do innego statusu. |
@@ -365,6 +365,20 @@ albo wyślij link współpracownikowi — zostaną zastosowane te same filtry.
 Przycisk **Wyczyść filtry** usuwa wszystkie. Link zapisany przed zmianą karty
 nadal się otwiera: filtr po polu, którego nie ma już na karcie, jest pomijany.
 
+### Filtry pól niestandardowych na liście
+
+**Lista szans sprzedażowych** nie kieruje się kartą. Oferuje filtr dla każdego pola
+niestandardowego szansy z włączoną opcją **Używaj jako filtra listy** (ustawianą na ekranie **Pola
+niestandardowe**), niezależnie od tego, czy karta pokazuje to pole, obok pozostałych filtrów.
+Filtry działają jak filtry tablicy dla pól tego samego rodzaju, z tą różnicą, że szansa bez
+wartości nigdy nie pasuje — także do *Nie*. Są zapisane w adresie strony, a ich zmiana wraca do
+pierwszej strony listy.
+
+Te dwie reguły są niezależne: pole może być filtrem tablicy, bo pokazuje je karta, a nie być
+filtrem listy — albo odwrotnie. **Pole karty, które nie jest filtrem listy, nie filtruje listy**:
+link, który filtrował nim listę, dostaje błąd z nazwą pola i przyciskiem **Usuń ten filtr**, dopóki
+opcja nie zostanie włączona. Tablica — łącznie z *Pokaż więcej* — działa bez zmian.
+
 ### Dla integratorów
 
 | Metoda + ścieżka | Uprawnienie | Cel |
@@ -395,8 +409,21 @@ kluczach będących odwołaniami: `{"custom:lead_source":{"in":["referral"]},"bu
 Operatory to `contains` (tekst), `min` / `max` (liczby i kwoty, jako napisy
 dziesiętne), `from` / `to` (daty, `YYYY-MM-DD`, oba dni włącznie), `is` (tak /
 nie) oraz `in` (opcje oraz identyfikator konta klienta osoby kontaktowej).
-Odwołanie do pola, którego nie ma na karcie, jest pomijane; parametr, który
-nie jest poprawnym obiektem JSON tej postaci, kończy się odpowiedzią `400`.
+Parametr, który nie jest poprawnym obiektem JSON tej postaci, kończy się
+odpowiedzią `400`.
+
+To, które odwołania się liczą, zależy od żądania:
+
+- **Tablica** oraz **lista z `cardValues=true`** (kolumna tablicy kontynuowana przez *Pokaż
+  więcej*): odwołanie do pola, którego nie ma na karcie, jest pomijane.
+- **Lista w pozostałych przypadkach**: odwołanie `custom:` filtruje, gdy opcja filtra listy pola
+  jest włączona, niezależnie od tego, czy karta pokazuje pole, a gdy nie jest — kończy się
+  odpowiedzią `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE` (klucz w `details.key`); odwołania `builtin:`
+  zachowują regułę karty. Dostępne pola zwraca
+  `GET /api/v1/admin/crm/opportunities/custom-field-filters` (`crm:read`).
+
+`cardValues` wybiera regułę, nigdy zakres widoczności: obie działają w obrębie szans, które możesz
+zobaczyć.
 
 ## Wiązanie zamówień
 

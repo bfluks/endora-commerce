@@ -406,6 +406,23 @@ odrzucany z `404 NOT_FOUND`, a ekran pokazuje *Nie udało się przeliczyć cen*,
 pozycji. Produkt usunięty miękko jest wyceniany jak dotąd. Utworzone zamówienie zawiera dokładnie
 pozycje i ilości widoczne na ekranie, w niezmienionym kształcie żądania `POST /api/v1/admin/orders`.
 
+## Filtry pól niestandardowych
+
+Pole niestandardowe zamówienia z włączoną opcją **Używaj jako filtra listy** (ustawianą na ekranie
+**Pola niestandardowe**) jest dostępne jako filtr wśród filtrów zaawansowanych listy zamówień,
+opisany w twoim języku: tekst, który zawiera, zakres liczb lub dat, tak lub nie albo jedna lub
+więcej opcji. Zamówienie bez wartości tego pola nigdy nie pasuje. Każdy filtr pola
+niestandardowego jest pokazany jako usuwalna etykieta obok pozostałych aktywnych filtrów, zawęża
+sumę i każdą stronę, a jego zmiana wraca do pierwszej strony listy. Filtry są w adresie strony,
+więc przefiltrowaną listę można dodać do zakładek lub udostępnić, a **eksport CSV** eksportuje te
+same zamówienia.
+
+Jeśli adres zawiera filtr, który nie jest już dostępny — jego opcję wyłączono albo pole usunięto —
+lista mówi o tym, podając nazwę pola, i oferuje **Usuń ten filtr**; eksport CSV nie jest dostępny,
+dopóki filtr nie zostanie usunięty. Wywołujący API przesyłają filtry jako `customFieldFilters` w
+`GET /api/v1/admin/orders` i `GET /api/v1/admin/orders/export`, a dostępne pola odczytują z
+`GET /api/v1/admin/orders/custom-field-filters` (`orders:read`).
+
 ## Zapisane widoki
 
 Zapisany widok to nazwany zestaw filtrów listy zamówień, który administrator może ponownie
@@ -418,7 +435,9 @@ Na pasku narzędzi listy zamówień jest lista wyboru **Zapisane widoki**, któr
 
 - **Co zapamiętuje widok.** Wszystkie filtry listy zamówień — status, status płatności, kanał
   sprzedaży, metodę płatności, metodę dostawy, zakres dat, wyszukiwany tekst, nazwy organizacji i
-  klienta oraz zakres kwoty — a także sortowanie i widoczne kolumny. Wybranie widoku zastępuje je
+  klienta, zakres kwoty oraz filtry pól niestandardowych — a także sortowanie i widoczne kolumny.
+  Filtr pola niestandardowego, który przy wczytaniu widoku nie jest już dostępny, zostaje pominięty
+  z komunikatem, który go nazywa, a reszta widoku się wczytuje. Wybranie widoku zastępuje je
   wszystkie wartościami z widoku: filtr, którego widok nie zawiera, zostaje wyczyszczony, to, co
   zmieniono i nie zapisano, przepada, a lista wraca na pierwszą stronę.
 - **Zapisywanie.** **Zapisz widok** otwiera jedno okno z polem **Nazwa** i polem wyboru
