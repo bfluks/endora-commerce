@@ -12,6 +12,7 @@ import type {
   CatalogProductReadPort,
   CustomerAccountReadPort,
   CustomFieldDefinitionReadPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
   EmailDefaultsRegistryPort,
   OpportunityReadPort,
@@ -475,6 +476,8 @@ export function registerModule(ctx: ModuleContext): void {
             // Commands write. The owner is non-deactivatable, so this is a
             // plain binding edge with no off state to degrade into.
             customFields: lazyPort<CustomFieldValuePort>(ctx, 'customFieldValueService'),
+            // Feature 157 — the list's custom-field filters.
+            customFieldListFilter: lazyPort<CustomFieldListFilterPort>(ctx, 'customFieldListFilterPort'),
             // --- end of Custom fields ----------------------------------------
             recalculateValue: (opportunityId) => crmOpportunityValueService.recalculate(opportunityId),
             liveFigure: (opportunity) => crmOpportunityValueService.liveFigure(opportunity),
