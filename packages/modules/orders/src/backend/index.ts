@@ -14,6 +14,7 @@ import type {
   CatalogProductReadPort,
   CreditLimitReadPort,
   CustomerAccountReadPort,
+  CustomFieldListFilterPort,
   DeliveryMethodReadPort,
   EmailDefaultsRegistryPort,
   InventoryFulfilmentPlanningPort,
@@ -662,6 +663,8 @@ export function registerModule(ctx: ModuleContext): void {
               ctx,
               'customFieldValueService',
             ),
+            // Feature 157 — the admin list's custom-field filters.
+            customFieldListFilter: lazyPort<CustomFieldListFilterPort>(ctx, 'customFieldListFilterPort'),
             creditLimit: lazyPort<CreditLimitPort>(ctx, 'creditLimitService'),
             pricingService: lazyPort<OrdersCradle['pricingService']>(ctx, 'pricingService'),
             promotionService: lazyPort<OrdersCradle['promotionService']>(ctx, 'promotionService'),

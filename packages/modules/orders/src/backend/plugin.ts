@@ -38,6 +38,7 @@ import type {
   AddressReadPort,
   AddressServicePort,
   AssetReadPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
   CartReadPort,
   CartWritePort,
@@ -90,6 +91,8 @@ export interface OrdersModuleOptions {
   auditLogService?: AuditPort;
   /** Feature 055 — validates + persists Order custom-field values on the admin edit path. */
   customFieldValues?: CustomFieldValuePort;
+  /** Feature 157 — the admin list's custom-field filters (offered fields and one condition). */
+  customFieldListFilter?: CustomFieldListFilterPort;
   /** Feature 034 — mailer for the order-confirmation e-mail (best-effort, post-commit). */
   mailer?: EmailMailerPort;
   /**
@@ -563,6 +566,7 @@ export function commerceModule(options: OrdersModuleOptions) {
       orderStatusGraphService,
       options.organizationDetails,
       options.customerAccountRead,
+      options.customFieldListFilter ?? null,
     );
     if (options.exposeOrderListService) options.exposeOrderListService(orderListService);
     const orderListViewService = new OrderListViewService(options.emFactory, options.log);
@@ -637,6 +641,7 @@ export function commerceModule(options: OrdersModuleOptions) {
         ? { resolveAdminOrdersScope: options.resolveAdminOrdersScope }
         : {}),
       ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
+      ...(options.customFieldListFilter ? { customFieldListFilter: options.customFieldListFilter } : {}),
       ...(options.commandBus ? { commandBus: options.commandBus } : {}),
     });
 
