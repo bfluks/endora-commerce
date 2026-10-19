@@ -18,5 +18,6 @@
   "customFields.audience.help": "Wartości pól wewnętrznych widzą wyłącznie administratorzy. Wartości pól widocznych dla klienta są także zwracane klientowi w sklepie oraz integracjom korzystającym z zewnętrznego API. Nowe pola są wewnętrzne, dopóki nie wybierzesz inaczej.",
   "actions.openCustomFields.label": "Pola niestandardowe",
   "actions.openCustomFields.description": "Definiuj pola na kluczowych encjach.",
-  "nav.customFields.label": "Pola niestandardowe"
+  "nav.customFields.label": "Pola niestandardowe",
+  "errors.CUSTOM_FIELD_FILTER_UNAVAILABLE": "Filtr po polu niestandardowym „{key}” nie jest dostępny na tej liście. Usuń go i spróbuj ponownie."
 }

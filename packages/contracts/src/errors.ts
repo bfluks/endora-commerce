@@ -495,6 +495,10 @@ export const ERROR_CODES = {
   // definitions are mutated only through the owning host module's surface
   // (generic admin mutations refuse with 409 "host_managed").
   CUSTOM_FIELD_HOST_MANAGED: 'CUSTOM_FIELD_HOST_MANAGED',
+  // Feature 157 — an admin list was asked to filter on a custom field it does
+  // not offer as a list filter (the definition's list-filter option is off,
+  // the definition is gone, or its entity type is not served).
+  CUSTOM_FIELD_FILTER_UNAVAILABLE: 'CUSTOM_FIELD_FILTER_UNAVAILABLE',
 
   // Feature 058 — Credentials (reusable credential configurations).
   CREDENTIAL_NOT_FOUND: 'CREDENTIAL_NOT_FOUND',
