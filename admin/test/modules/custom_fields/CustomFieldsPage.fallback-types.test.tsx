@@ -1,7 +1,9 @@
 import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
+import { AuthProvider } from '@endora-commerce/admin-kit/lib';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
+import { adminSession } from '../../helpers/render-with-session';
 import en from '../../../../packages/modules/custom_fields/i18n/en.json';
 
 /**
@@ -41,7 +43,9 @@ describe('CustomFieldsPage — the entity types offered before the server answer
   it('offers no Quote request until entity-types answers with it, and Order throughout', async () => {
     renderWithI18n(
       <StrictMode>
-        <CustomFieldsPage />
+        <AuthProvider initial={adminSession({ permissions: ['custom_fields:read', 'custom_fields:write'] })}>
+          <CustomFieldsPage />
+        </AuthProvider>
       </StrictMode>,
       BUNDLE,
     );
