@@ -683,6 +683,15 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'the refusal of a permalink that breaks the shared permalink rule, the broken rule named by the `details.code` token. ' +
       'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
   },
+  CUSTOM_FIELD_FILTER_UNAVAILABLE: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`, FR-011) for the refusal ' +
+      'an admin list earns when it is asked to filter on a custom field it does not offer. The ' +
+      'noun is the definition and its list-filter attribute, and the deciding seam is ' +
+      '`custom_fields`\' list-filter port (D-121 T1). `orders`, `quote_requests` and `crm` raise ' +
+      'it from what that port answers, as the hosts raise `CUSTOM_FIELD_VALUE_INVALID`.',
+  },
 };
 
 /**

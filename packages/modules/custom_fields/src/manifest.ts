@@ -55,9 +55,17 @@ export const manifest = defineModuleManifest({
    * `{ path, issue }[]` array, which `refusalToken` reads as no token at all
    * (`packages/platform/src/http/error-envelope.ts`); the other four are bare
    * `HttpError(status, code, message)`.
+   *
+   * **`CUSTOM_FIELD_FILTER_UNAVAILABLE`** (feature 157) is the family's sixth
+   * and the first with a sentence: an admin list refuses a filter on a custom
+   * field this module's list-filter port does not offer. `orders`,
+   * `quote_requests` and `crm` raise it from the port's answer, so it is
+   * declared here for the same reason `CUSTOM_FIELD_VALUE_INVALID` is. Its
+   * `details` are `{ key, keys }` with no `code`, so it declares no tokens.
    */
   errorCodes: [
     { code: 'CUSTOM_FIELD_DEFINITION_INVALID' },
+    { code: 'CUSTOM_FIELD_FILTER_UNAVAILABLE' },
     { code: 'CUSTOM_FIELD_HOST_MANAGED' },
     { code: 'CUSTOM_FIELD_KEY_CONFLICT' },
     { code: 'CUSTOM_FIELD_NOT_FOUND' },
