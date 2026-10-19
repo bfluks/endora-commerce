@@ -13,9 +13,23 @@ import {
 import { ApiError, apiBaseUrl, apiClient, formatDateTime, formatMoney, statusBadgeStyle, usePageSizePreference } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Badge, Button, Card, CardContent, Label, PageHeader, Select, MultiSelect } from '@endora-commerce/admin-kit/ui';
 import type { MultiSelectOption } from '@endora-commerce/admin-kit/ui';
-import { ResponsiveTable, PaginationFooter, SavedViewsControl } from '@endora-commerce/admin-kit/components';
+import {
+  CustomFieldListFilters,
+  customFieldFilterChips,
+  customFieldFilterRefusal,
+  pruneRemovedOptions,
+  readCustomFieldFilterParams,
+  ResponsiveTable,
+  PaginationFooter,
+  SavedViewsControl,
+  sanitizeCustomFieldFilters,
+  toCustomFieldFiltersParam,
+  useCustomFieldListFilterFields,
+  writeCustomFieldFilterParams,
+} from '@endora-commerce/admin-kit/components';
 import type { ResponsiveColumn, SavedViewState } from '@endora-commerce/admin-kit/components';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import type { CustomFieldFilter, CustomFieldFilters, CustomFieldListFilterField } from '@endora-commerce/contracts';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { DISPLAYABLE_PAYMENT_STATUSES, paymentStatusLabelKey } from '../lib/paymentStatus.js';
 import { OrdersBulkStatusDialog } from '../components/OrdersBulkStatusDialog.js';
 
@@ -126,10 +140,47 @@ const EMPTY_TEXT = { q: '', orgName: '', customerName: '', totalMin: '', totalMa
 /** The list's sort before anything is chosen, and what a view saved without one loads. */
 const DEFAULT_SORT = 'placedAt:desc';
 
+/** The endpoint naming the Order custom fields this list offers as filters (feature 157). */
+const CUSTOM_FIELD_FILTERS_ENDPOINT = '/api/v1/admin/orders/custom-field-filters';
+
+/**
+ * A custom field as the operator reads it: its label in their language, or —
+ * for a key the list does not offer, which may have come from anywhere — the
+ * key, cut to 64 characters. Always rendered as text.
+ */
+function customFieldName(fields: readonly CustomFieldListFilterField[], key: string, language: string): string {
+  const field = fields.find((candidate) => candidate.key === key);
+  if (field) {
+    const base = language.split('-')[0] ?? language;
+    for (const candidate of [language, base]) {
+      const value = Object.hasOwn(field.label, candidate) ? field.label[candidate] : undefined;
+      if (typeof value === 'string' && value !== '') return value;
+    }
+    return field.labelDefault;
+  }
+  return key.length > 64 ? `${key.slice(0, 64)}…` : key;
+}
+
+/** `filters` with `key` set to `filter` (or removed when `null`), as a new prototype-free record. */
+function withCustomFieldFilter(
+  filters: CustomFieldFilters,
+  key: string,
+  filter: CustomFieldFilter | null,
+): CustomFieldFilters {
+  const next = Object.create(null) as CustomFieldFilters;
+  for (const existing of Object.keys(filters)) {
+    const value = filters[existing];
+    if (existing !== key && value !== undefined) next[existing] = value;
+  }
+  if (filter !== null) next[key] = filter;
+  return next;
+}
+
 export function OrdersList(): ReactNode {
   const t = useTranslation('core');
+  const { language } = useTranslationContext();
   const { pageSize, setPageSize } = usePageSizePreference('orders');
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [rows, setRows] = useState<AdminOrderRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -155,6 +206,15 @@ export function OrdersList(): ReactNode {
   const [dateTo, setDateTo] = useState('');
   const [textFilters, setTextFilters] = useState(EMPTY_TEXT);
   const [debouncedText, setDebouncedText] = useState(EMPTY_TEXT);
+  // Feature 157 — custom-field filters, deep-linkable as `cf.<key>.<op>`.
+  const customFieldFields = useCustomFieldListFilterFields(CUSTOM_FIELD_FILTERS_ENDPOINT);
+  const [customFieldFilters, setCustomFieldFilters] = useState<CustomFieldFilters>(() =>
+    readCustomFieldFilterParams(searchParams),
+  );
+  /** The key the server refused, until the operator removes it. */
+  const [refusedCustomField, setRefusedCustomField] = useState<string | null>(null);
+  /** The keys a loaded view carried that the list no longer offers. */
+  const [droppedCustomFields, setDroppedCustomFields] = useState<string[]>([]);
 
   const [sort, setSort] = useState(DEFAULT_SORT);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -211,8 +271,11 @@ export function OrdersList(): ReactNode {
     if (customerName.trim()) params.set('customerName', customerName.trim());
     if (totalMin.trim()) params.set('totalMin', totalMin.trim());
     if (totalMax.trim()) params.set('totalMax', totalMax.trim());
+    const customFieldParam = toCustomFieldFiltersParam(customFieldFilters);
+    if (customFieldParam !== null) params.set('customFieldFilters', customFieldParam);
     return params.toString();
   }, [
+    customFieldFilters,
     page,
     pageSize,
     sort,
@@ -229,6 +292,7 @@ export function OrdersList(): ReactNode {
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true);
     setError(null);
+    setRefusedCustomField(null);
     try {
       const res = await apiClient.get<ListResponse>(`/api/v1/admin/orders?${queryString}`);
       setRows(res.data);
@@ -237,11 +301,34 @@ export function OrdersList(): ReactNode {
       setPaymentStatusCounts(res.paymentStatusCounts ?? {});
       setSelected(new Set());
     } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : t('orders.error.load'));
+      const refused = customFieldFilterRefusal(err);
+      if (refused !== null) setRefusedCustomField(refused);
+      else setError(err instanceof ApiError ? err.envelope.error.message : t('orders.error.load'));
     } finally {
       setLoading(false);
     }
   }, [queryString, t]);
+
+  // Once the offered fields are known, options removed since a link was made
+  // are dropped from it; an unknown key stays, for the server to refuse.
+  useEffect(() => {
+    if (customFieldFields.status !== 'ready') return;
+    setCustomFieldFilters((current) => {
+      const pruned = pruneRemovedOptions(current, customFieldFields.fields);
+      return toCustomFieldFiltersParam(pruned) === toCustomFieldFiltersParam(current) ? current : pruned;
+    });
+  }, [customFieldFields]);
+
+  // The address follows the custom-field filters; every other parameter stays.
+  useEffect(() => {
+    setSearchParams(
+      (current) => {
+        const next = writeCustomFieldFilterParams(current, customFieldFilters);
+        return next.toString() === current.toString() ? current : next;
+      },
+      { replace: true },
+    );
+  }, [customFieldFilters, setSearchParams]);
 
   useEffect(() => {
     void refresh();
@@ -259,6 +346,7 @@ export function OrdersList(): ReactNode {
     dateFrom,
     dateTo,
     debouncedText,
+    customFieldFilters,
     sort,
     pageSize,
   ]);
@@ -316,6 +404,11 @@ export function OrdersList(): ReactNode {
     setDeliveryMethodIds(asStringArray(f['deliveryMethodId']));
     setDateFrom(asString(f['dateFrom']));
     setDateTo(asString(f['dateTo']));
+    // FR-014: a saved custom-field filter the list no longer offers is dropped,
+    // and the operator is told which.
+    const { kept, dropped } = sanitizeCustomFieldFilters(f['customFields'], customFieldFields.fields);
+    setCustomFieldFilters(kept);
+    setDroppedCustomFields(dropped);
     setTextFilters({
       q: asString(f['q']),
       orgName: asString(f['orgName']),
@@ -346,6 +439,7 @@ export function OrdersList(): ReactNode {
       ...(debouncedText.customerName ? { customerName: debouncedText.customerName } : {}),
       ...(debouncedText.totalMin ? { totalMin: debouncedText.totalMin } : {}),
       ...(debouncedText.totalMax ? { totalMax: debouncedText.totalMax } : {}),
+      ...(Object.keys(customFieldFilters).length > 0 ? { customFields: { ...customFieldFilters } } : {}),
     },
     sort: { field: sort.split(':')[0] ?? 'placedAt', dir: sort.endsWith(':asc') ? 'asc' : 'desc' },
     visibleColumns: visibleColumnIds,
@@ -392,7 +486,8 @@ export function OrdersList(): ReactNode {
     (textFilters.orgName.trim() ? 1 : 0) +
     (textFilters.customerName.trim() ? 1 : 0) +
     (textFilters.totalMin.trim() ? 1 : 0) +
-    (textFilters.totalMax.trim() ? 1 : 0);
+    (textFilters.totalMax.trim() ? 1 : 0) +
+    Object.keys(customFieldFilters).length;
 
   // Removable summary chips for every applied filter (search box excluded — it
   // is always visible). Operates on the live (un-debounced) text state so a
@@ -444,6 +539,11 @@ export function OrdersList(): ReactNode {
     ...(textFilters.totalMax.trim()
       ? [{ key: 'tmax', label: `≤ ${textFilters.totalMax.trim()}`, onRemove: (): void => setText('totalMax', '') }]
       : []),
+    ...customFieldFilterChips(customFieldFields.fields, customFieldFilters, language, t).map((chip) => ({
+      key: chip.id,
+      label: chip.label,
+      onRemove: (): void => setCustomFieldFilters(chip.remove()),
+    })),
   ];
 
   const clearAllFilters = (): void => {
@@ -455,6 +555,13 @@ export function OrdersList(): ReactNode {
     setDateFrom('');
     setDateTo('');
     setTextFilters(EMPTY_TEXT);
+    setCustomFieldFilters(Object.create(null) as CustomFieldFilters);
+  };
+
+  const removeRefusedCustomField = (): void => {
+    if (refusedCustomField === null) return;
+    setCustomFieldFilters((current) => withCustomFieldFilter(current, refusedCustomField, null));
+    setRefusedCustomField(null);
   };
 
   // Build the visible columns in canonical order.
@@ -564,14 +671,44 @@ export function OrdersList(): ReactNode {
         title={t('orders.page.title')}
         description={t('orders.page.description')}
         actions={
-          <Button asChild variant="outline">
-            <a href={`${API_BASE}/api/v1/admin/orders/export?${queryString}`}>
-              <Download />
-              {t('orders.action.exportCsv')}
-            </a>
-          </Button>
+          // Not offered while a custom-field filter stands refused: the export
+          // would be refused for the same reason.
+          refusedCustomField === null ? (
+            <Button asChild variant="outline">
+              <a href={`${API_BASE}/api/v1/admin/orders/export?${queryString}`}>
+                <Download />
+                {t('orders.action.exportCsv')}
+              </a>
+            </Button>
+          ) : null
         }
       />
+
+      {refusedCustomField !== null ? (
+        <Alert variant="destructive" className="mb-4">
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>
+              {t('customFieldFilters.error.unavailable', {
+                field: customFieldName(customFieldFields.fields, refusedCustomField, language),
+              })}
+            </span>
+            <Button type="button" size="sm" variant="outline" onClick={removeRefusedCustomField}>
+              {t('customFieldFilters.error.remove')}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {droppedCustomFields.length > 0 ? (
+        <Alert className="mb-4">
+          <AlertDescription>
+            {t('customFieldFilters.notice.dropped', {
+              fields: droppedCustomFields
+                .map((key) => customFieldName(customFieldFields.fields, key, language))
+                .join(', '),
+            })}
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {error ? (
         <Alert variant="destructive" className="mb-4">
@@ -781,6 +918,18 @@ export function OrdersList(): ReactNode {
                   onChange={(e): void => setText('totalMax', e.target.value)}
                 />
               </div>
+              <CustomFieldListFilters
+                idPrefix="orders"
+                fields={customFieldFields.fields}
+                value={customFieldFilters}
+                language={language}
+                onChange={(key, filter): void =>
+                  setCustomFieldFilters((current) => withCustomFieldFilter(current, key, filter))
+                }
+              />
+              {customFieldFields.status === 'error' ? (
+                <p className="col-span-full text-sm text-muted-foreground">{t('customFieldFilters.loadFailed')}</p>
+              ) : null}
             </div>
           ) : null}
         </CardContent>

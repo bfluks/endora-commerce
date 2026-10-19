@@ -68,6 +68,7 @@ beforeEach(() => {
       });
     }
     if (path.startsWith('/api/v1/admin/orders/list-views')) return Promise.resolve({ data: [] });
+    if (path.startsWith('/api/v1/admin/orders/custom-field-filters')) return Promise.resolve({ data: [] });
     return Promise.resolve({
       data: [row('o1', 'ORD-1'), row('o2', 'ORD-2')],
       pagination: { page: 1, pageSize: 20, total: 2 },
