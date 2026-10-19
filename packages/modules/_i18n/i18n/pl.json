@@ -1740,7 +1740,7 @@
   "rfq.detail.meta.submitted": "zgłoszono {date}",
   "rfq.detail.meta.validityEnded": "ważność zakończona {date}",
   "rfq.detail.minimum.packagingUnit": "Poniżej minimum ({minimum} × {packagingUnitName})",
-  "rfq.detail.minimum.packagingUnitUnnamed": "Poniżej minimum ({minimum} jedn. opakowania)",
+  "rfq.detail.minimum.packagingUnitUnnamed": "Poniżej minimum (jednostki opakowania: {minimum})",
   "rfq.detail.minimum.pieces": "Poniżej minimum ({minimum} szt.)",
   "rfq.detail.modify.addLine": "+ Dodaj pozycję",
   "rfq.detail.modify.agreedUnitPrice": "Uzgodniona cena jednostkowa",

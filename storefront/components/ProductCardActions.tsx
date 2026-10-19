@@ -64,8 +64,8 @@ export function ProductCardActions(props: {
    */
   minOrderQuantity?: number | null | undefined;
   /**
-   * Localized accessible name for "add to cart" when it adds the minimum ("Add 10 pcs to
-   * cart"), rendered by the server card through `cardAddLabel`; `null`/absent keeps the default.
+   * Localized accessible name for "add to cart" — "Add 10 pcs to cart" when it adds the
+   * minimum, else the plain label — rendered by the server card through `cardAddToCartLabel`.
    */
   addToCartMinimumLabel?: string | null | undefined;
 }): ReactNode {

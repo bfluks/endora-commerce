@@ -669,7 +669,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'product.minimum.addToCart': 'Dodaj {count} szt. do koszyka',
     'order.minimum.below.pieces': 'Poniżej minimum ({count} szt.)',
     'order.minimum.below.units': 'Poniżej minimum ({units} × {unit})',
-    'order.minimum.below.unitsUnnamed': 'Poniżej minimum ({units} jedn. opakowania)',
+    'order.minimum.below.unitsUnnamed': 'Poniżej minimum (jednostki opakowania: {units})',
     'order.minimum.below.bare': 'Poniżej minimalnej ilości zamówienia',
     'cart.line.noLongerAvailable': 'Produkt nie jest już dostępny',
     'cart.line.unknownProduct': 'Produkt usunięty z katalogu',

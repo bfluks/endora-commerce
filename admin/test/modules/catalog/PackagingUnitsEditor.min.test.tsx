@@ -190,7 +190,7 @@ describe('PackagingUnitsEditor — minimum units (155)', () => {
   it('renders the column in Polish', async () => {
     renderEditor('pl');
     expect(
-      await screen.findByRole('columnheader', { name: 'Minimum (jednostek)' }),
+      await screen.findByRole('columnheader', { name: 'Minimum (w jednostkach)' }),
     ).toBeInTheDocument();
   });
 });

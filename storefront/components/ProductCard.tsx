@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { ProductSummary, StorefrontProductStock } from '@endora-commerce/contracts';
 import { tForLocale } from '../lib/i18n/messages';
-import { cardAddLabel } from '../lib/orderMinimum';
+import { cardAddToCartLabel } from '../lib/orderMinimum';
 import { DEFAULT_VAT_RATE, grossFromNet } from '../lib/i18n/money';
 import { CompareToggle } from './CompareToggle';
 import { BaseSalePriceBlock } from './pricing/BaseSalePriceBlock';
@@ -125,7 +125,7 @@ export function ProductCard(props: {
           unitPrice={product.price ?? null}
           buyable={resolved ? resolved.displayMode !== 'none' : product.price != null}
           minOrderQuantity={product.minOrderQuantity ?? null}
-          addToCartMinimumLabel={cardAddLabel(product.minOrderQuantity, locale)}
+          addToCartMinimumLabel={cardAddToCartLabel(product.minOrderQuantity, locale)}
         />
       </div>
     </article>

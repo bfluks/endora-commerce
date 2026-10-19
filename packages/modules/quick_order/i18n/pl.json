@@ -51,6 +51,6 @@
   "onBehalf.build.rejectedTitle": "Nie dodano do koszyka: poniżej minimum",
   "onBehalf.build.rejectedPieces": "{product}: {quantity} szt., minimum {minimum} szt.",
   "onBehalf.build.rejectedUnits": "{product}: {quantity} szt., minimum {minimum} × {unit}",
-  "onBehalf.build.rejectedUnitsUnnamed": "{product}: {quantity} szt., minimum {minimum} jedn. opakowania",
+  "onBehalf.build.rejectedUnitsUnnamed": "{product}: {quantity} szt., minimum w jednostkach opakowania: {minimum}",
   "orderEntry.tab.quick": "Szybkie zamówienie"
 }

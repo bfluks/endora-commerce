@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { cardAddLabel, cardAddQuantity, cardAddToCartPayload } from '../../lib/orderMinimum';
+import { cardAddLabel, cardAddQuantity, cardAddToCartLabel, cardAddToCartPayload } from '../../lib/orderMinimum';
 
 /**
  * Feature 155 / FR-016 (US4 #12) — the product card's "add to cart" adds the minimum at once.
@@ -34,6 +34,26 @@ describe('cardAddLabel', () => {
   it('is null without a minimum, so the existing label stays', () => {
     expect(cardAddLabel(null, 'en-US')).toBeNull();
     expect(cardAddLabel(1, 'pl-PL')).toBeNull();
+  });
+});
+
+/**
+ * U4 translation sweep — the card's icon button was labelled in the storefront's language only
+ * when the product had a minimum; without one it fell back to a Polish literal.
+ */
+describe('cardAddToCartLabel', () => {
+  it('is the minimum label when the product has one', () => {
+    expect(cardAddToCartLabel(10, 'en-US')).toBe('Add 10 pcs to cart');
+  });
+
+  it("is the catalogue's add-to-cart label otherwise, in the request's language", () => {
+    expect(cardAddToCartLabel(null, 'en-US')).toBe('Add to cart');
+    expect(cardAddToCartLabel(1, 'pl-PL')).toBe('Dodaj do koszyka');
+  });
+
+  it('is what the card passes to its actions', () => {
+    const card = readFileSync(resolve(import.meta.dirname, '../../components/ProductCard.tsx'), 'utf8');
+    expect(card).toContain('addToCartMinimumLabel={cardAddToCartLabel(product.minOrderQuantity, locale)}');
   });
 });
 
