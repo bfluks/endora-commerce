@@ -81,6 +81,7 @@ describe('CustomFieldDefinitionReadPort.getById', () => {
       required: true,
       sortOrder: 3,
       config: { filterable: true },
+      listFilter: false,
       createdAt: NOW,
       updatedAt: NOW,
     });
