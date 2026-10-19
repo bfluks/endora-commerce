@@ -450,10 +450,6 @@ describe('CustomFieldsPage — the definition editor', () => {
         error: { code: 'CUSTOM_FIELD_OPTION_IN_USE' as never, message: 'Option north is in use.', details: { value: 'north' } },
       }),
     ],
-    [
-      'the generic 409 the server answers before that code',
-      new ApiError(409, { error: { code: 'CUSTOM_FIELD_DEFINITION_INVALID', message: 'Option north is in use.' } }),
-    ],
   ] as const) {
     it(`names an option in use by its label, in its own sentence — ${shape} (US3-6)`, async () => {
       client.removeOption.mockRejectedValue(error);

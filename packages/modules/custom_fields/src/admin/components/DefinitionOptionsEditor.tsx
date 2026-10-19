@@ -12,11 +12,11 @@ import {
 import { Trash2 } from 'lucide-react';
 import { ApiError } from '@endora-commerce/admin-kit/lib';
 import { Button, Checkbox, Input, Label } from '@endora-commerce/admin-kit/ui';
-import { ReorderAnnouncer, TouchReorderButtons } from '@endora-commerce/admin-kit/components';
+import { ReorderAnnouncer, TouchReorderButtons, resolveCustomFieldLabel } from '@endora-commerce/admin-kit/components';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
-import type { CustomFieldDefinitionDto, CustomFieldOptionDto, LocalizedLabel } from '@endora-commerce/contracts';
+import { ERROR_CODES, type CustomFieldDefinitionDto, type CustomFieldOptionDto, type LocalizedLabel } from '@endora-commerce/contracts';
 import { customFieldsClient } from '../api/custom-fields-client.js';
-import { resolveLabel, sameLabel, withLanguages } from './localized-label.js';
+import { sameLabel, withLanguages } from './localized-label.js';
 
 export interface DefinitionOptionsEditorProps {
   definition: CustomFieldDefinitionDto;
@@ -27,17 +27,9 @@ export interface DefinitionOptionsEditorProps {
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 
-/**
- * The code the server refuses the removal of an option some record still holds
- * with. Until it ships, that refusal is the definition module's generic `409`,
- * which is the only `409` the option `DELETE` route answers — so both count.
- */
-const OPTION_IN_USE_CODE = 'CUSTOM_FIELD_OPTION_IN_USE';
-
+/** The server's refusal to remove an option some record still holds. */
 function isOptionInUse(error: unknown): boolean {
-  if (!(error instanceof ApiError)) return false;
-  const { code } = error.envelope.error;
-  return code === OPTION_IN_USE_CODE || (error.status === 409 && code === 'CUSTOM_FIELD_DEFINITION_INVALID');
+  return error instanceof ApiError && error.envelope.error.code === ERROR_CODES.CUSTOM_FIELD_OPTION_IN_USE;
 }
 
 /** The server's sentence for a refusal — never its code — else the generic one. */
@@ -309,7 +301,7 @@ function OptionRow({ definitionId, option, error, setError, onChanged, disabled,
     </div>
   );
 
-  const shownLabel = resolveLabel(option.label, option.labelDefault, language);
+  const shownLabel = resolveCustomFieldLabel(option.label, option.labelDefault, language);
   const errorId = `${id}-error`;
   return (
     <div role="group" aria-label={option.labelDefault} aria-busy={busy} className="space-y-2 rounded-md border p-3">
