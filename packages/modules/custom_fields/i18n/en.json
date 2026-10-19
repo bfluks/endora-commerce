@@ -58,7 +58,7 @@
   "customFields.editor.key": "Key",
   "customFields.editor.entityType": "Record type",
   "customFields.editor.valueType": "Type",
-  "customFields.editor.keyReadOnly": "The key, the entity and the type cannot be changed once a field exists.",
+  "customFields.editor.keyReadOnly": "The key, the record type and the type cannot be changed once a field exists.",
   "customFields.editor.labelDefault": "Default label",
   "customFields.editor.labelEn": "English label",
   "customFields.editor.labelPl": "Polish label",

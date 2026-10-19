@@ -63,7 +63,8 @@ record type and the type as fixed text, and edits the rest:
   - **Default**, the option preselected for a new record;
   - **Move up** / **Move down**, which changes the order the option is offered in;
   - **Remove**, after a confirmation inside the dialog. An option that any record still holds
-    cannot be removed: the refusal is shown at the option, in the server's words;
+    cannot be removed: the dialog says so at the option, naming it by its label, and asks you to
+    change those records' value first;
   - **Add option**, with its stored value and labels.
   An option's **stored value** never changes — it is what records hold — so relabelling an option
   keeps every record and every filter on it working.
@@ -133,6 +134,15 @@ There is no custom-field filter on the storefront or on any API-key endpoint. Fi
 | `PATCH /api/v1/admin/custom-fields/definitions/:id` | `custom_fields:write` | Change `labelDefault`, `label`, `required`, `audience` or `listFilter`; absent members are left as they are. |
 | `POST`, `PATCH`, `DELETE …/definitions/:id/options[/:optionId]` | `custom_fields:write` | Add, change (labels, `isDefault`, `sortOrder` — never `value`) or remove an option. `409` for an option in use. |
 
+The definition and option routes refuse with these codes:
+
+| Status | Code | When | `details` |
+| --- | --- | --- | --- |
+| `409` | `CUSTOM_FIELD_OPTION_IN_USE` | removing an option that a record still holds | `value`, `label` — the option's stored value and default label |
+| `409` | `CUSTOM_FIELD_VALUE_TYPE_LOCKED` | changing the value type of a field while records hold values | `key` |
+| `409` | `CUSTOM_FIELD_STORED_VALUES_EXIST` | creating a *Customer*-visible field under a key whose values a deleted field left on records — create it as internal first | `key` |
+| `422` | `CUSTOM_FIELD_DEFINITION_INVALID` | an invalid definition, among them `listFilter` on a record type that does not offer it (`list_filter_unsupported`) | — |
+
 The three lists take the filters as a request parameter:
 
 - `GET /api/v1/admin/orders`, `GET /api/v1/admin/orders/export` and
@@ -147,4 +157,6 @@ The three lists take the filters as a request parameter:
 The operators are `contains`, `in`, `is`, `min` / `max` (decimal strings) and `from` / `to`
 (`YYYY-MM-DD`). At most 10 fields and 100 `in` values in all per request. A field that is not a list
 filter of that list answers `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE`, with the refused key in
-`details.key`.
+`details.key`. An inverted range — `min` above `max`, `from` after `to` — and an operator that does
+not apply to the field's type (`contains` on a number, say) answer `400` `VALIDATION_FAILED`
+naming the field and operator: neither is ignored.

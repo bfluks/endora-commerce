@@ -58,7 +58,7 @@
   "customFields.editor.key": "Klucz",
   "customFields.editor.entityType": "Typ rekordu",
   "customFields.editor.valueType": "Typ",
-  "customFields.editor.keyReadOnly": "Klucza, encji i typu nie można zmienić, gdy pole już istnieje.",
+  "customFields.editor.keyReadOnly": "Klucza, typu rekordu i typu nie można zmienić, gdy pole już istnieje.",
   "customFields.editor.labelDefault": "Etykieta domyślna",
   "customFields.editor.labelEn": "Etykieta angielska",
   "customFields.editor.labelPl": "Etykieta polska",

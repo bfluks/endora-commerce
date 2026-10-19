@@ -441,7 +441,7 @@ If the address names a filter that is no longer available — its option was swi
 field deleted — the list says so by the field's name and offers **Remove this filter**; the CSV
 export is not offered until it is removed. API callers send the filters as `customFieldFilters` on
 `GET /api/v1/admin/orders` and `GET /api/v1/admin/orders/export`, and read the offered fields
-from `GET /api/v1/admin/orders/custom-field-filters` (`orders:read`).
+from `GET /api/v1/admin/orders/custom-field-filters` (`orders:read`). An inverted range (`min` above `max`, `from` after `to`) or an operator that does not apply to the field's type answers `400` `VALIDATION_FAILED`.
 
 ## Saved views
 

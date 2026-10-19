@@ -320,7 +320,7 @@ If the address names a filter that is no longer available, the list says so by t
 and offers **Remove this filter**. A saved view holding such a filter drops it on load, with a
 notice naming it. API callers send the filters as `customFieldFilters` on
 `GET /api/v1/admin/quote-requests` and read the offered fields from
-`GET /api/v1/admin/quote-requests/custom-field-filters` (`rfqs:handle`).
+`GET /api/v1/admin/quote-requests/custom-field-filters` (`rfqs:handle`). An inverted range (`min` above `max`, `from` after `to`) or an operator that does not apply to the field's type answers `400` `VALIDATION_FAILED`.
 
 ## Saved views
 

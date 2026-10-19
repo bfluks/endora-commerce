@@ -421,7 +421,7 @@ Jeśli adres zawiera filtr, który nie jest już dostępny — jego opcję wył�
 lista mówi o tym, podając nazwę pola, i oferuje **Usuń ten filtr**; eksport CSV nie jest dostępny,
 dopóki filtr nie zostanie usunięty. Wywołujący API przesyłają filtry jako `customFieldFilters` w
 `GET /api/v1/admin/orders` i `GET /api/v1/admin/orders/export`, a dostępne pola odczytują z
-`GET /api/v1/admin/orders/custom-field-filters` (`orders:read`).
+`GET /api/v1/admin/orders/custom-field-filters` (`orders:read`). Odwrócony zakres (`min` większe niż `max`, `from` późniejsze niż `to`) lub operator niepasujący do typu pola daje `400` `VALIDATION_FAILED`.
 
 ## Zapisane widoki
 
