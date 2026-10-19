@@ -405,7 +405,7 @@ Which references count depends on the request:
 - **The list otherwise**: a `custom:` reference is filtered when the field's list-filter option is
   on, whether or not the card shows it, and answered with `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE`
   (the key in `details.key`) when it is not; `builtin:` references keep the card rule. The offered
-  fields are at `GET /api/v1/admin/crm/opportunities/custom-field-filters` (`crm:read`).
+  fields are at `GET /api/v1/admin/crm/opportunities/custom-field-filters` (`crm:read`). An inverted range (`min` above `max`, `from` after `to`) or an operator that does not apply to the field's type answers `400` `VALIDATION_FAILED`.
 
 `cardValues` chooses the rule, never what may be seen: both run within the opportunities you may
 see.

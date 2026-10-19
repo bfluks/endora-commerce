@@ -420,7 +420,7 @@ To, które odwołania się liczą, zależy od żądania:
   jest włączona, niezależnie od tego, czy karta pokazuje pole, a gdy nie jest — kończy się
   odpowiedzią `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE` (klucz w `details.key`); odwołania `builtin:`
   zachowują regułę karty. Dostępne pola zwraca
-  `GET /api/v1/admin/crm/opportunities/custom-field-filters` (`crm:read`).
+  `GET /api/v1/admin/crm/opportunities/custom-field-filters` (`crm:read`). Odwrócony zakres (`min` większe niż `max`, `from` późniejsze niż `to`) lub operator niepasujący do typu pola daje `400` `VALIDATION_FAILED`.
 
 `cardValues` wybiera regułę, nigdy zakres widoczności: obie działają w obrębie szans, które możesz
 zobaczyć.

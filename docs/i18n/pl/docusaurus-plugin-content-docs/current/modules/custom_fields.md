@@ -64,7 +64,8 @@ stały tekst, a resztę pozwala zmienić:
   - **Domyślna** — opcja wstępnie wybrana dla nowego rekordu;
   - **Przesuń w górę** / **Przesuń w dół** — zmienia kolejność, w jakiej opcja jest oferowana;
   - **Usuń** — po potwierdzeniu w oknie. Opcji, którą ma jeszcze którykolwiek rekord, nie można
-    usunąć: odmowa jest pokazana przy opcji, słowami serwera;
+    usunąć: okno mówi o tym przy opcji, podając jej etykietę, i prosi, by najpierw zmienić wartość
+    tych rekordów;
   - **Dodaj opcję** — z zapisaną wartością i etykietami.
   **Zapisana wartość** opcji nigdy się nie zmienia — to ją przechowują rekordy — więc zmiana
   etykiety opcji nie psuje żadnego rekordu ani filtra.
@@ -135,6 +136,15 @@ i tak nie pokazywała.
 | `PATCH /api/v1/admin/custom-fields/definitions/:id` | `custom_fields:write` | Zmienia `labelDefault`, `label`, `required`, `audience` lub `listFilter`; nieobecne pola zostają bez zmian. |
 | `POST`, `PATCH`, `DELETE …/definitions/:id/options[/:optionId]` | `custom_fields:write` | Dodaje, zmienia (etykiety, `isDefault`, `sortOrder` — nigdy `value`) lub usuwa opcję. `409` dla opcji w użyciu. |
 
+Ścieżki definicji i opcji odmawiają z tymi kodami:
+
+| Status | Kod | Kiedy | `details` |
+| --- | --- | --- | --- |
+| `409` | `CUSTOM_FIELD_OPTION_IN_USE` | usunięcie opcji, którą ma jeszcze któryś rekord | `value`, `label` — zapisana wartość i domyślna etykieta opcji |
+| `409` | `CUSTOM_FIELD_VALUE_TYPE_LOCKED` | zmiana typu wartości pola, gdy rekordy mają wartości | `key` |
+| `409` | `CUSTOM_FIELD_STORED_VALUES_EXIST` | utworzenie pola widocznego dla *Klienta* pod kluczem, którego wartości zostawiło na rekordach usunięte pole — najpierw utwórz je jako wewnętrzne | `key` |
+| `422` | `CUSTOM_FIELD_DEFINITION_INVALID` | niepoprawna definicja, w tym `listFilter` dla typu rekordu, który go nie obsługuje (`list_filter_unsupported`) | — |
+
 Trzy listy przyjmują filtry jako parametr żądania:
 
 - `GET /api/v1/admin/orders`, `GET /api/v1/admin/orders/export` i
@@ -149,3 +159,6 @@ Trzy listy przyjmują filtry jako parametr żądania:
 Operatory to `contains`, `in`, `is`, `min` / `max` (liczby dziesiętne jako tekst) oraz `from` / `to`
 (`YYYY-MM-DD`). Najwyżej 10 pól i łącznie 100 wartości `in` na żądanie. Pole, które nie jest filtrem
 danej listy, daje `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE` z odrzuconym kluczem w `details.key`.
+Odwrócony zakres — `min` większe niż `max`, `from` późniejsze niż `to` — oraz operator, który nie
+pasuje do typu pola (na przykład `contains` dla liczby), dają `400` `VALIDATION_FAILED` z nazwą pola
+i operatora: żadne z nich nie jest pomijane.

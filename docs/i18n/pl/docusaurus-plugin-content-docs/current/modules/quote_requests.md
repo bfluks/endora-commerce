@@ -294,7 +294,7 @@ Jeśli adres zawiera filtr, który nie jest już dostępny, lista mówi o tym, p
 oferuje **Usuń ten filtr**. Zapisany widok z takim filtrem pomija go przy wczytaniu, z komunikatem,
 który go nazywa. Wywołujący API przesyłają filtry jako `customFieldFilters` w
 `GET /api/v1/admin/quote-requests`, a dostępne pola odczytują z
-`GET /api/v1/admin/quote-requests/custom-field-filters` (`rfqs:handle`).
+`GET /api/v1/admin/quote-requests/custom-field-filters` (`rfqs:handle`). Odwrócony zakres (`min` większe niż `max`, `from` późniejsze niż `to`) lub operator niepasujący do typu pola daje `400` `VALIDATION_FAILED`.
 
 ## Zapisane widoki
 
