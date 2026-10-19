@@ -266,6 +266,25 @@ export async function knownDeviceCookieHeader(): Promise<string | null> {
 }
 
 /**
+ * The `Cookie` header value for the customer sign-in call, or `null`.
+ *
+ * Carries the known-device cookie (above) and the anonymous basket cookie — the
+ * backend merges the basket the shopper built while signed out into their
+ * customer basket inside the sign-in (issue #358), and it can only see that
+ * basket if the server action forwards the cookie. The basket token is
+ * forwarded verbatim, exactly as every cart call forwards it
+ * (`lib/api/cart.ts`). No other cookie of the browser is forwarded.
+ */
+export async function signInCookieHeader(): Promise<string | null> {
+  const parts: string[] = [];
+  const device = await knownDeviceCookieHeader();
+  if (device) parts.push(device);
+  const anon = await getAnonCartCookie();
+  if (anon) parts.push(`${ANON_CART_COOKIE}=${anon}`);
+  return parts.length > 0 ? parts.join('; ') : null;
+}
+
+/**
  * Store the known-device cookie the backend set on a completed sign-in, with
  * the lifetime the backend gave it. Does nothing when the response set none.
  */
