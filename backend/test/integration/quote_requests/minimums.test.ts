@@ -25,6 +25,7 @@ import {
   type MinimumProductFixture,
 } from '../../helpers/order-minimum-fixture.js';
 import { withSystemScope } from '../../../src/tenancy/escape-hatch.js';
+import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
 
 /**
  * Feature 155, Phase 10 (T078) — a buyer's quote-request writes refuse a line
@@ -86,6 +87,8 @@ describe('155 — buyer quote-request writes refuse lines below a minimum [integ
       });
       await fork.persistAndFlush(account);
       await fork.persistAndFlush(fork.create(QuoteRequestOrgPolicy, { organizationId: org.id, priceProposalsAllowed: false }));
+      // Feature 154 — the tenant shops on the stores the harness seeds.
+      await bindOrganizationsToFixtureChannelsSql(fork, [org.id]);
       lockedOrg = org.id;
       lockedBuyer = account.id;
     });
