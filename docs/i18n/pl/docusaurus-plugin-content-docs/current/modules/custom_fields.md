@@ -32,12 +32,12 @@ modułu.
 
 ## Tworzenie pola
 
-Wybierz encję na ekranie **Pola niestandardowe** i wypełnij formularz pod tabelą:
+Wybierz typ rekordu na ekranie **Pola niestandardowe** i wypełnij formularz pod tabelą:
 
 - **Klucz** — identyfikator pola: małe litery, cyfry i podkreślenia, zaczyna się od litery
   (`po_number`). Po utworzeniu pola nigdy się nie zmienia.
 - **Etykieta (EN)** — etykieta angielska; gdy zostanie pusta, używany jest klucz.
-- **Typ** — *Tekst*, *Liczba*, *Tak / Nie*, *Data*, *Jednokrotny wybór* lub *Wielokrotny wybór*.
+- **Typ** — *Tekst*, *Liczba*, *Tak / Nie*, *Data*, *Pojedynczy wybór* lub *Wielokrotny wybór*.
   Pole wyboru przyjmuje opcje jako listę oddzieloną przecinkami.
 - **Kto widzi wartość** — *Wewnętrzne* (tylko administratorzy, domyślnie) albo *Klient* (wartość
   trafia też do klienta w sklepie oraz do integracji korzystających z zewnętrznego API).
@@ -45,13 +45,14 @@ Wybierz encję na ekranie **Pola niestandardowe** i wypełnij formularz pod tabe
 - **Używaj jako filtra listy** — dostępne tylko dla zamówień, zapytań ofertowych i szans
   sprzedażowych. Zob. [Filtry list](#filtry-list).
 
-Przycisk **Dodaj pole** tworzy pole. Tworzenie, edycja i usuwanie pól wymaga uprawnienia
+Przycisk **Dodaj pole** tworzy pole. **Usuń** (kosz) prosi o potwierdzenie w miejscu, zanim pole
+zostanie usunięte. Tworzenie, edycja i usuwanie pól wymaga uprawnienia
 `custom_fields:write`; administrator z samym `custom_fields:read` widzi tylko tabelę, bez
 żadnych kontrolek, które ją zmieniają.
 
 ## Edycja pola
 
-Każdy wiersz tabeli ma przycisk **Edytuj** (ołówek). Otwarte okno pokazuje klucz, encję i typ jako
+Każdy wiersz tabeli ma przycisk **Edytuj** (ołówek). Otwarte okno pokazuje klucz, typ rekordu i typ jako
 stały tekst, a resztę pozwala zmienić:
 
 - **Etykiety** — domyślną (wymaganą), angielską i polską.
@@ -59,7 +60,7 @@ stały tekst, a resztę pozwala zmienić:
   a rekord bez wartości tego pola będzie jej wymagał przy następnej edycji jego pól
   niestandardowych. Nic nie jest uzupełniane automatycznie.
 - **Opcje** pola wyboru — każdą opcję zmienia się osobno, od razu, bez naciskania **Zapisz**:
-  - jej etykiety domyślną, angielską i polską, zapisywane po opuszczeniu pola;
+  - jej etykiety domyślną, angielską i polską, zapisywane po opuszczeniu pola lub naciśnięciu Enter;
   - **Domyślna** — opcja wstępnie wybrana dla nowego rekordu;
   - **Przesuń w górę** / **Przesuń w dół** — zmienia kolejność, w jakiej opcja jest oferowana;
   - **Usuń** — po potwierdzeniu w oknie. Opcji, którą ma jeszcze którykolwiek rekord, nie można
@@ -67,13 +68,14 @@ stały tekst, a resztę pozwala zmienić:
   - **Dodaj opcję** — z zapisaną wartością i etykietami.
   **Zapisana wartość** opcji nigdy się nie zmienia — to ją przechowują rekordy — więc zmiana
   etykiety opcji nie psuje żadnego rekordu ani filtra.
-- **Używaj jako filtra listy**, tam gdzie encja na to pozwala.
+- **Używaj jako filtra listy**, tam gdzie typ rekordu na to pozwala.
 
-**Zapisz** wysyła tylko to, co zmieniono, a gdy nic się nie zmieniło — nic. Jeśli zmiana zostanie
+Zmiany opcji zapisują się od razu, więc po pierwszej z nich przycisk **Anuluj** w oknie zmienia się
+w **Zamknij**. **Zapisz** wysyła tylko to, co zmieniono, a gdy nic się nie zmieniło — nic. Jeśli zmiana zostanie
 odrzucona, okno pozostaje otwarte z podanym powodem. Każda zmiana trafia do dziennika audytu jako
 zmiana pola.
 
-**Czego nie da się zmienić.** Klucz, encja i typ są stałe po utworzeniu pola; żeby je zmienić,
+**Czego nie da się zmienić.** Klucz, typ rekordu i typ są stałe po utworzeniu pola; żeby je zmienić,
 utwórz nowe pole. Opcji w użyciu nie można usunąć. Żadna edycja nie zmienia wartości, którą rekord
 już ma.
 
@@ -94,7 +96,7 @@ działa zależnie od typu:
 | Liczba | najmniejsza i największa wartość, obie opcjonalne | jego wartość mieści się w zakresie, z oboma końcami |
 | Data | od dnia, do dnia, oba opcjonalne | jego data mieści się w zakresie, z oboma dniami |
 | Tak / Nie | *Dowolnie*, *Tak* lub *Nie* | *Tak* pasuje do tak, *Nie* do nie |
-| Jednokrotny wybór | jedna lub więcej opcji | ma którąkolwiek z nich |
+| Pojedynczy wybór | jedna lub więcej opcji | ma którąkolwiek z nich |
 | Wielokrotny wybór | jedna lub więcej opcji | ma którąkolwiek z nich |
 
 **Rekord bez wartości nigdy nie pasuje** do filtra pola niestandardowego — nawet do *Nie* w polu
