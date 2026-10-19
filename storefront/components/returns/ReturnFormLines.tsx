@@ -50,6 +50,7 @@ export function ReturnFormLines({
         {lines.map((l) => {
           const checkboxId = `include_${l.orderItemId}`;
           const reasonId = `not-returnable-${l.orderItemId}`;
+          const boundId = `qty-bound-${l.orderItemId}`;
           const disabled = !l.selectable;
           return (
             <tr key={l.orderItemId}>
@@ -81,9 +82,10 @@ export function ReturnFormLines({
                   defaultValue={1}
                   disabled={disabled}
                   aria-label={`${t('returns.new.col.qty')}: ${l.name}`}
+                  aria-describedby={boundId}
                   style={{ width: '4rem' }}
                 />
-                <span className="muted">
+                <span id={boundId} className="muted">
                   {' '}
                   {t('returns.line.remaining').replace('{count}', formatCount(l.remainingQty, locale))}
                 </span>

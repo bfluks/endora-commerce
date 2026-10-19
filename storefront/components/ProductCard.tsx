@@ -126,6 +126,7 @@ export function ProductCard(props: {
           buyable={resolved ? resolved.displayMode !== 'none' : product.price != null}
           minOrderQuantity={product.minOrderQuantity ?? null}
           addToCartMinimumLabel={cardAddToCartLabel(product.minOrderQuantity, locale)}
+          locale={locale}
         />
       </div>
     </article>

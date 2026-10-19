@@ -163,7 +163,10 @@ export default async function NewReturnPage({
       {kind === 'return' && returnable.freeReturnEligible ? (
         <p className="muted">{t('returns.new.freeReturnWindow')}</p>
       ) : null}
-      <form action={submit} className="b2b-auth__form">
+      {/* `noValidate`: the quantity inputs' native `min`/`max` bubble speaks the browser's
+          language and refuses the whole form. `submit` brings each quantity into
+          1 … remaining instead, the bound stated beside each input (U4). */}
+      <form action={submit} noValidate className="b2b-auth__form">
         <ReturnFormLines lines={model.lines} reasons={reasons} locale={locale} />
 
         <label htmlFor="comment">{t('returns.new.comment')}</label>

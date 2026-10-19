@@ -48,6 +48,69 @@ export type MessageKey =
   | 'product.minimum.pieces'
   | 'product.minimum.units'
   | 'product.minimum.addToCart'
+  // Feature 155, U4 — the buy controls, the quick-order page and the shopping-list quantity.
+  | 'common.quantity'
+  | 'product.buy.unit'
+  | 'product.quote.add'
+  | 'product.quote.added'
+  | 'product.cartPopup.added'
+  | 'product.cartPopup.goToCart'
+  | 'product.cartPopup.continue'
+  | 'product.cartPopup.close'
+  | 'card.list.add'
+  | 'card.list.remove'
+  | 'card.list.failed'
+  | 'card.cart.added'
+  | 'card.cart.failed'
+  | 'card.quote.added'
+  | 'compare.cart.adding'
+  | 'compare.cart.added'
+  | 'quickOrder.page.heading'
+  | 'quickOrder.page.introPrefix'
+  | 'quickOrder.page.introSuffix'
+  | 'quickOrder.page.template'
+  | 'quickOrder.page.dropzone'
+  | 'quickOrder.page.pasteLabel'
+  | 'quickOrder.page.preview'
+  | 'quickOrder.built.cart'
+  | 'quickOrder.built.goToCheckout'
+  | 'quickOrder.built.quote'
+  | 'quickOrder.built.viewQuotes'
+  | 'quickOrder.search.heading'
+  | 'quickOrder.search.hint'
+  | 'quickOrder.search.placeholder'
+  | 'quickOrder.search.none'
+  | 'quickOrder.search.add'
+  | 'quickOrder.col.sku'
+  | 'quickOrder.col.name'
+  | 'quickOrder.col.qty'
+  | 'quickOrder.col.line'
+  | 'quickOrder.col.variant'
+  | 'quickOrder.col.reason'
+  | 'quickOrder.col.raw'
+  | 'quickOrder.qtyFor'
+  | 'quickOrder.bar.recognised'
+  | 'quickOrder.bar.addToCart'
+  | 'quickOrder.preview.heading'
+  | 'quickOrder.preview.recognised'
+  | 'quickOrder.preview.invalid'
+  | 'quickOrder.preview.units'
+  | 'quickOrder.preview.truncated'
+  | 'quickOrder.preview.merged'
+  | 'quickOrder.preview.recognisedRows'
+  | 'quickOrder.preview.update'
+  | 'quickOrder.preview.remove'
+  | 'quickOrder.preview.addAll'
+  | 'quickOrder.preview.sendAsQuote'
+  | 'quickOrder.preview.noneMatched'
+  | 'quickOrder.preview.rejectedHeading'
+  | 'quickOrder.problem.no_input'
+  | 'quickOrder.problem.nothing_to_update'
+  | 'quickOrder.problem.nothing_to_remove'
+  | 'quickOrder.problem.nothing_to_build'
+  | 'quickOrder.problem.import_failed'
+  | 'quickOrder.problem.build_failed'
+  | 'shoppingList.qty.invalid'
   | 'order.minimum.below.pieces'
   | 'order.minimum.below.units'
   | 'order.minimum.below.unitsUnnamed'
@@ -367,6 +430,69 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'product.minimum.pieces': 'Minimum order: {count} pcs',
     'product.minimum.units': 'Minimum order: {units} × {unit} = {count} pcs',
     'product.minimum.addToCart': 'Add {count} pcs to cart',
+    'common.quantity': 'Quantity',
+    'product.buy.unit': 'Packaging unit',
+    'product.quote.add': 'Add to quote',
+    'product.quote.added': 'Added ✓',
+    'product.cartPopup.added': 'Product added to the cart.',
+    'product.cartPopup.goToCart': 'Go to cart',
+    'product.cartPopup.continue': 'Continue shopping',
+    'product.cartPopup.close': 'Close',
+    'card.list.add': 'Add to shopping list',
+    'card.list.remove': 'Remove from shopping list',
+    'card.list.failed': 'Could not change the list',
+    'card.cart.added': 'Added to cart',
+    'card.cart.failed': 'Could not add',
+    'card.quote.added': 'Added to quote',
+    'compare.cart.adding': 'Adding…',
+    'compare.cart.added': '✓ Added',
+    'quickOrder.page.heading': 'Quick order',
+    'quickOrder.page.introPrefix': 'Paste a CSV with ',
+    'quickOrder.page.introSuffix':
+      " headers (extra columns set variant attributes), or drag-drop a CSV / Excel file. We'll show you which rows match a real product before anything is added.",
+    'quickOrder.page.template': 'Download CSV template',
+    'quickOrder.page.dropzone': 'Drag a CSV or Excel file here, or click to choose',
+    'quickOrder.page.pasteLabel': '…or paste CSV',
+    'quickOrder.page.preview': 'Preview',
+    'quickOrder.built.cart': 'Cart built from your import.',
+    'quickOrder.built.goToCheckout': 'Go to checkout',
+    'quickOrder.built.quote': 'Quote request created',
+    'quickOrder.built.viewQuotes': 'View quote requests',
+    'quickOrder.search.heading': 'Find products',
+    'quickOrder.search.hint': 'Search by SKU, name, or a quick-searchable attribute and add items to your order.',
+    'quickOrder.search.placeholder': 'Search products…',
+    'quickOrder.search.none': 'No products matched "{query}".',
+    'quickOrder.search.add': 'Add',
+    'quickOrder.col.sku': 'SKU',
+    'quickOrder.col.name': 'Name',
+    'quickOrder.col.qty': 'Qty',
+    'quickOrder.col.line': 'Line',
+    'quickOrder.col.variant': 'Variant',
+    'quickOrder.col.reason': 'Reason',
+    'quickOrder.col.raw': 'Raw',
+    'quickOrder.qtyFor': 'Quantity for {sku}',
+    'quickOrder.bar.recognised': 'Recognised',
+    'quickOrder.bar.addToCart': 'Add {count} to cart',
+    'quickOrder.preview.heading': 'Preview',
+    'quickOrder.preview.recognised': 'recognised',
+    'quickOrder.preview.invalid': 'invalid',
+    'quickOrder.preview.units': 'units',
+    'quickOrder.preview.truncated': 'The file exceeded the import row limit — extra rows were rejected.',
+    'quickOrder.preview.merged': '{count} duplicate row(s) merged (quantities summed).',
+    'quickOrder.preview.recognisedRows': '{count} row(s) recognised — choose how to proceed.',
+    'quickOrder.preview.update': 'Update',
+    'quickOrder.preview.remove': 'Remove',
+    'quickOrder.preview.addAll': 'Add all to cart',
+    'quickOrder.preview.sendAsQuote': 'Send as quote request',
+    'quickOrder.preview.noneMatched': 'No rows matched the catalog.',
+    'quickOrder.preview.rejectedHeading': 'Rejected rows',
+    'quickOrder.problem.no_input': 'Provide a file or paste CSV.',
+    'quickOrder.problem.nothing_to_update': 'Nothing to update.',
+    'quickOrder.problem.nothing_to_remove': 'Nothing to remove.',
+    'quickOrder.problem.nothing_to_build': 'Nothing to build.',
+    'quickOrder.problem.import_failed': 'Import failed.',
+    'quickOrder.problem.build_failed': 'Could not build the cart or quote request.',
+    'shoppingList.qty.invalid': 'Enter a whole number from 1 to 9999.',
     'order.minimum.below.pieces': 'Below the minimum ({count} pcs)',
     'order.minimum.below.units': 'Below the minimum ({units} × {unit})',
     'order.minimum.below.unitsUnnamed': 'Below the minimum ({units} packaging units)',
@@ -667,6 +793,68 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'product.minimum.pieces': 'Minimalne zamówienie: {count} szt.',
     'product.minimum.units': 'Minimalne zamówienie: {units} × {unit} = {count} szt.',
     'product.minimum.addToCart': 'Dodaj {count} szt. do koszyka',
+    'common.quantity': 'Ilość',
+    'product.buy.unit': 'Jednostka',
+    'product.quote.add': 'Dodaj do zapytania',
+    'product.quote.added': 'Dodano ✓',
+    'product.cartPopup.added': 'Produkt został dodany do koszyka.',
+    'product.cartPopup.goToCart': 'Przejdź do koszyka',
+    'product.cartPopup.continue': 'Kontynuuj zakupy',
+    'product.cartPopup.close': 'Zamknij',
+    'card.list.add': 'Dodaj do listy zakupowej',
+    'card.list.remove': 'Usuń z listy zakupowej',
+    'card.list.failed': 'Nie udało się zmienić listy',
+    'card.cart.added': 'Dodano do koszyka',
+    'card.cart.failed': 'Nie udało się dodać',
+    'card.quote.added': 'Dodano do zapytania',
+    'compare.cart.adding': 'Dodawanie…',
+    'compare.cart.added': '✓ Dodano',
+    'quickOrder.page.heading': 'Szybkie zamówienie',
+    'quickOrder.page.introPrefix': 'Wklej CSV z nagłówkami ',
+    'quickOrder.page.introSuffix': ' (dodatkowe kolumny ustawiają atrybuty wariantu) albo przeciągnij plik CSV / Excel. Zanim cokolwiek dodamy, pokażemy, które wiersze odpowiadają istniejącym produktom.',
+    'quickOrder.page.template': 'Pobierz szablon CSV',
+    'quickOrder.page.dropzone': 'Przeciągnij tutaj plik CSV lub Excel albo kliknij, aby go wybrać',
+    'quickOrder.page.pasteLabel': '…albo wklej CSV',
+    'quickOrder.page.preview': 'Pokaż podgląd',
+    'quickOrder.built.cart': 'Koszyk utworzony z importu.',
+    'quickOrder.built.goToCheckout': 'Przejdź do kasy',
+    'quickOrder.built.quote': 'Utworzono zapytanie ofertowe',
+    'quickOrder.built.viewQuotes': 'Zobacz zapytania ofertowe',
+    'quickOrder.search.heading': 'Znajdź produkty',
+    'quickOrder.search.hint': 'Szukaj po SKU, nazwie lub atrybucie szybkiego wyszukiwania i dodawaj pozycje do zamówienia.',
+    'quickOrder.search.placeholder': 'Szukaj produktów…',
+    'quickOrder.search.none': 'Żaden produkt nie pasuje do „{query}”.',
+    'quickOrder.search.add': 'Dodaj',
+    'quickOrder.col.sku': 'SKU',
+    'quickOrder.col.name': 'Nazwa',
+    'quickOrder.col.qty': 'Ilość',
+    'quickOrder.col.line': 'Wiersz',
+    'quickOrder.col.variant': 'Wariant',
+    'quickOrder.col.reason': 'Powód',
+    'quickOrder.col.raw': 'Dane z pliku',
+    'quickOrder.qtyFor': 'Ilość dla {sku}',
+    'quickOrder.bar.recognised': 'Rozpoznane',
+    'quickOrder.bar.addToCart': 'Dodaj do koszyka ({count})',
+    'quickOrder.preview.heading': 'Podgląd',
+    'quickOrder.preview.recognised': 'rozpoznane',
+    'quickOrder.preview.invalid': 'błędne',
+    'quickOrder.preview.units': 'szt.',
+    'quickOrder.preview.truncated': 'Plik przekroczył limit wierszy importu — nadmiarowe wiersze odrzucono.',
+    'quickOrder.preview.merged': 'Scalone powtórzone wiersze: {count} (ilości zsumowano).',
+    'quickOrder.preview.recognisedRows': 'Rozpoznane wiersze: {count} — wybierz, co dalej.',
+    'quickOrder.preview.update': 'Zmień',
+    'quickOrder.preview.remove': 'Usuń',
+    'quickOrder.preview.addAll': 'Dodaj wszystko do koszyka',
+    'quickOrder.preview.sendAsQuote': 'Wyślij jako zapytanie ofertowe',
+    'quickOrder.preview.noneMatched': 'Żaden wiersz nie pasuje do katalogu.',
+    'quickOrder.preview.rejectedHeading': 'Odrzucone wiersze',
+    'quickOrder.problem.no_input': 'Dodaj plik albo wklej CSV.',
+    'quickOrder.problem.nothing_to_update': 'Nie ma czego zmienić.',
+    'quickOrder.problem.nothing_to_remove': 'Nie ma czego usunąć.',
+    'quickOrder.problem.nothing_to_build': 'Nie ma z czego utworzyć koszyka ani zapytania.',
+    'quickOrder.problem.import_failed': 'Import nie powiódł się.',
+    'quickOrder.problem.build_failed': 'Nie udało się utworzyć koszyka ani zapytania ofertowego.',
+    'shoppingList.qty.invalid': 'Wpisz liczbę całkowitą od 1 do 9999.',
     'order.minimum.below.pieces': 'Poniżej minimum ({count} szt.)',
     'order.minimum.below.units': 'Poniżej minimum ({units} × {unit})',
     'order.minimum.below.unitsUnnamed': 'Poniżej minimum (jednostki opakowania: {units})',

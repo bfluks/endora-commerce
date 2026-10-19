@@ -17,7 +17,7 @@ import {
   quickOrderBuildRejectionText,
   quickOrderRejectionLabel,
 } from '../../../lib/batchReport';
-import { tForLocale } from '../../../lib/i18n/messages';
+import { tForLocale, type MessageKey } from '../../../lib/i18n/messages';
 import { getSessionCookie } from '../../../lib/session';
 import { getServerContext } from '../../../lib/server-context';
 import { StorefrontApiError } from '../../../lib/api/client';
@@ -63,7 +63,10 @@ export default async function QuickOrderPage({
 }: {
   searchParams: Promise<{
     preview?: string;
+    /** A refusal the backend worded (its `detail`), shown as given. */
     error?: string;
+    /** A refusal of this page's own actions, as a code the page words in its language. */
+    problem?: string;
     built?: string;
     rfq?: string;
     q?: string;
@@ -84,6 +87,7 @@ export default async function QuickOrderPage({
   // every other storefront page resolves it.
   const { ctx, locale } = await getServerContext();
   const t = tForLocale(locale);
+  const problemKey = quickOrderProblemKey(sp.problem);
   // Feature 155 (FR-011 (b)) — the lines the cart build left out, below a minimum.
   // Carried capped (the first lines plus a count), so the URL stays bounded.
   const notAddedReport = sp.built === 'cart' ? decodeBuildRejections(sp.notAdded) : { lines: [], more: 0 };
@@ -96,22 +100,23 @@ export default async function QuickOrderPage({
 
   return (
     <>
-      <h2>Quick order</h2>
+      <h2>{t('quickOrder.page.heading')}</h2>
       <p className="b2b-auth__hint">
-        Paste a CSV with <code>sku,quantity</code> headers (extra columns set variant attributes),
-        or drag-drop a CSV / Excel file. We&apos;ll show you which rows match a real product before
-        anything is added.{' '}
+        {t('quickOrder.page.introPrefix')}
+        <code>sku,quantity</code>
+        {t('quickOrder.page.introSuffix')}{' '}
         <a href="/quick-order-template.csv" download>
-          Download CSV template
+          {t('quickOrder.page.template')}
         </a>
         .
       </p>
 
       {sp.error ? <p className="b2b-auth__error">{sp.error}</p> : null}
+      {problemKey ? <p className="b2b-auth__error">{t(problemKey)}</p> : null}
       {sp.built === 'cart' && notAdded.length === 0 ? (
         <p className="b2b-auth__success">
-          Cart built from your import. <Link href="/cart">Open cart</Link> ·{' '}
-          <Link href="/checkout">Go to checkout</Link>.
+          {t('quickOrder.built.cart')} <Link href="/cart">{t('quickOrder.build.openCart')}</Link> ·{' '}
+          <Link href="/checkout">{t('quickOrder.built.goToCheckout')}</Link>.
         </p>
       ) : null}
       {notAdded.length > 0 ? (
@@ -138,18 +143,23 @@ export default async function QuickOrderPage({
       ) : null}
       {sp.built === 'quote' ? (
         <p className="b2b-auth__success">
-          Quote request created{sp.rfq ? ` (#${sp.rfq})` : ''}.{' '}
-          <Link href="/quote-requests">View quote requests</Link>.
+          {t('quickOrder.built.quote')}
+          {sp.rfq ? ` (#${sp.rfq})` : ''}.{' '}
+          <Link href="/quote-requests">{t('quickOrder.built.viewQuotes')}</Link>.
         </p>
       ) : null}
 
       <form action={importAction} className="b2b-auth__form">
-        <FileDropzone filenameField="quickOrderFilename" contentField="quickOrderFileContent" />
+        <FileDropzone
+          filenameField="quickOrderFilename"
+          contentField="quickOrderFileContent"
+          label={t('quickOrder.page.dropzone')}
+        />
       </form>
 
       <form action={importAction} className="b2b-auth__form">
         <div className="b2b-auth__field">
-          <label htmlFor="csv">…or paste CSV</label>
+          <label htmlFor="csv">{t('quickOrder.page.pasteLabel')}</label>
           <textarea
             id="csv"
             name="csv"
@@ -159,21 +169,19 @@ export default async function QuickOrderPage({
           />
         </div>
         <div className="b2b-auth__actions">
-          <button type="submit">Preview</button>
+          <button type="submit">{t('quickOrder.page.preview')}</button>
         </div>
       </form>
 
-      <h3>Find products</h3>
-      <p className="b2b-auth__hint">
-        Search by SKU, name, or a quick-searchable attribute and add items to your order.
-      </p>
+      <h3>{t('quickOrder.search.heading')}</h3>
+      <p className="b2b-auth__hint">{t('quickOrder.search.hint')}</p>
       <form action={searchAction} className="b2b-auth__form">
         {preview ? <input type="hidden" name="preview" value={encodePreview(preview)} /> : null}
         <div className="b2b-auth__field">
-          <input type="search" name="q" defaultValue={searchQuery} placeholder="Search products…" />
+          <input type="search" name="q" defaultValue={searchQuery} placeholder={t('quickOrder.search.placeholder')} />
         </div>
         <div className="b2b-auth__actions">
-          <button type="submit">Search</button>
+          <button type="submit">{t('common.searchAction')}</button>
         </div>
       </form>
 
@@ -181,9 +189,9 @@ export default async function QuickOrderPage({
         <table className="b2b-account__table">
           <thead>
             <tr>
-              <th>SKU</th>
-              <th>Name</th>
-              <th>Qty</th>
+              <th>{t('quickOrder.col.sku')}</th>
+              <th>{t('quickOrder.col.name')}</th>
+              <th>{t('quickOrder.col.qty')}</th>
               <th />
             </tr>
           </thead>
@@ -191,7 +199,7 @@ export default async function QuickOrderPage({
             {searchResults.length === 0 ? (
               <tr>
                 <td colSpan={4} className="muted">
-                  No products matched &quot;{searchQuery}&quot;.
+                  {t('quickOrder.search.none').replace('{query}', () => searchQuery)}
                 </td>
               </tr>
             ) : (
@@ -213,12 +221,13 @@ export default async function QuickOrderPage({
                         min={1}
                         defaultValue={1}
                         style={{ width: 64 }}
+                        aria-label={t('quickOrder.qtyFor').replace('{sku}', () => r.sku)}
                       />
                     </form>
                   </td>
                   <td>
                     <button type="submit" form={`add-${r.productId}`}>
-                      Add
+                      {t('quickOrder.search.add')}
                     </button>
                   </td>
                 </tr>
@@ -238,10 +247,10 @@ export default async function QuickOrderPage({
           <form action={confirmAction} className="m-actionbar">
             <input type="hidden" name="preview" value={encodePreview(preview)} />
             <div className="mr-auto flex flex-col leading-tight">
-              <span className="text-[11px] text-muted">Recognised</span>
+              <span className="text-[11px] text-muted">{t('quickOrder.bar.recognised')}</span>
               <span className="font-mono text-[15px] font-semibold text-fg">
                 {summarizeQuickOrderPreview(preview).recognised} ·{' '}
-                {summarizeQuickOrderPreview(preview).units} units
+                {summarizeQuickOrderPreview(preview).units} {t('quickOrder.preview.units')}
               </span>
             </div>
             <button
@@ -251,7 +260,7 @@ export default async function QuickOrderPage({
               className="btn btn--dark"
               style={{ flex: '0 0 auto', height: 44 }}
             >
-              Add {preview.recognized.length} to cart
+              {t('quickOrder.bar.addToCart').replace('{count}', String(preview.recognized.length))}
             </button>
           </form>
         </>
@@ -262,42 +271,43 @@ export default async function QuickOrderPage({
 
 function PreviewPanel({ preview, locale }: { preview: PreviewState; locale: string }): ReactNode {
   const totals = summarizeQuickOrderPreview(preview);
+  const t = tForLocale(locale);
   return (
     <>
-      <h3>Preview</h3>
+      <h3>{t('quickOrder.preview.heading')}</h3>
       {/* Feature 044 / US7 — at-a-glance recognised / invalid / units pills. */}
       <div className="mb-3 flex flex-wrap gap-2">
         <span className="inline-flex items-center gap-1 rounded-full border border-ok-soft bg-ok-soft px-[10px] py-[4px] text-[12px] font-medium text-ok">
-          <strong className="font-mono">{totals.recognised}</strong> recognised
+          <strong className="font-mono">{totals.recognised}</strong> {t('quickOrder.preview.recognised')}
         </span>
         <span className="inline-flex items-center gap-1 rounded-full border border-bad-soft bg-bad-soft px-[10px] py-[4px] text-[12px] font-medium text-bad">
-          <strong className="font-mono">{totals.invalid}</strong> invalid
+          <strong className="font-mono">{totals.invalid}</strong> {t('quickOrder.preview.invalid')}
         </span>
         <span className="inline-flex items-center gap-1 rounded-full border border-line bg-surface-alt px-[10px] py-[4px] text-[12px] font-medium text-fg-soft">
-          <strong className="font-mono">{totals.units}</strong> units
+          <strong className="font-mono">{totals.units}</strong> {t('quickOrder.preview.units')}
         </span>
       </div>
       {preview.summary.truncated ? (
-        <p className="b2b-auth__error">
-          The file exceeded the import row limit — extra rows were rejected.
-        </p>
+        <p className="b2b-auth__error">{t('quickOrder.preview.truncated')}</p>
       ) : null}
       {preview.summary.mergedCount > 0 ? (
-        <p className="muted">{preview.summary.mergedCount} duplicate row(s) merged (quantities summed).</p>
+        <p className="muted">
+          {t('quickOrder.preview.merged').replace('{count}', String(preview.summary.mergedCount))}
+        </p>
       ) : null}
 
       {preview.recognized.length > 0 ? (
         <>
           <p className="b2b-auth__success">
-            {preview.recognized.length} row(s) recognised — choose how to proceed.
+            {t('quickOrder.preview.recognisedRows').replace('{count}', String(preview.recognized.length))}
           </p>
           <table className="b2b-account__table">
             <thead>
               <tr>
-                <th>Line</th>
-                <th>SKU</th>
-                <th>Variant</th>
-                <th>Quantity</th>
+                <th>{t('quickOrder.col.line')}</th>
+                <th>{t('quickOrder.col.sku')}</th>
+                <th>{t('quickOrder.col.variant')}</th>
+                <th>{t('common.quantity')}</th>
                 <th />
               </tr>
             </thead>
@@ -317,20 +327,16 @@ function PreviewPanel({ preview, locale }: { preview: PreviewState; locale: stri
                         min={1}
                         defaultValue={r.quantity}
                         style={{ width: 72 }}
-                        aria-label={`Quantity for ${r.sku}`}
+                        aria-label={t('quickOrder.qtyFor').replace('{sku}', () => r.sku)}
                       />
-                      <button type="submit">
-                        Update
-                      </button>
+                      <button type="submit">{t('quickOrder.preview.update')}</button>
                     </form>
                   </td>
                   <td>
                     <form action={removeRecognizedAction}>
                       <input type="hidden" name="preview" value={encodePreview(preview)} />
                       <input type="hidden" name="line" value={r.line} />
-                      <button type="submit">
-                        Remove
-                      </button>
+                      <button type="submit">{t('quickOrder.preview.remove')}</button>
                     </form>
                   </td>
                 </tr>
@@ -341,27 +347,27 @@ function PreviewPanel({ preview, locale }: { preview: PreviewState; locale: stri
             <input type="hidden" name="preview" value={encodePreview(preview)} />
             <div className="b2b-auth__actions">
               <button type="submit" name="target" value="cart">
-                Add all to cart
+                {t('quickOrder.preview.addAll')}
               </button>
               <button type="submit" name="target" value="quote_request">
-                Send as quote request
+                {t('quickOrder.preview.sendAsQuote')}
               </button>
             </div>
           </form>
         </>
       ) : (
-        <p className="muted">No rows matched the catalog.</p>
+        <p className="muted">{t('quickOrder.preview.noneMatched')}</p>
       )}
 
       {preview.rejected.length > 0 ? (
         <>
-          <h4>Rejected rows</h4>
+          <h4>{t('quickOrder.preview.rejectedHeading')}</h4>
           <table className="b2b-account__table">
             <thead>
               <tr>
-                <th>Line</th>
-                <th>Reason</th>
-                <th>Raw</th>
+                <th>{t('quickOrder.col.line')}</th>
+                <th>{t('quickOrder.col.reason')}</th>
+                <th>{t('quickOrder.col.raw')}</th>
               </tr>
             </thead>
             <tbody>
@@ -429,7 +435,7 @@ async function updateQuantityAction(formData: FormData): Promise<void> {
   const preview = decodePreview((formData.get('preview') as string) ?? '');
   const line = Number.parseInt((formData.get('line') as string) ?? '', 10);
   const quantity = Math.max(1, Number.parseInt((formData.get('quantity') as string) ?? '1', 10) || 1);
-  if (!preview) redirect('/quick-order?error=Nothing+to+update.');
+  if (!preview) redirect('/quick-order?problem=nothing_to_update');
 
   const row = preview!.recognized.find((r) => r.line === line);
   if (row) row.quantity = quantity;
@@ -440,7 +446,7 @@ async function removeRecognizedAction(formData: FormData): Promise<void> {
   'use server';
   const preview = decodePreview((formData.get('preview') as string) ?? '');
   const line = Number.parseInt((formData.get('line') as string) ?? '', 10);
-  if (!preview) redirect('/quick-order?error=Nothing+to+remove.');
+  if (!preview) redirect('/quick-order?problem=nothing_to_remove');
 
   preview!.recognized = preview!.recognized.filter((r) => r.line !== line);
   preview!.summary = { ...preview!.summary, recognizedCount: preview!.recognized.length };
@@ -456,7 +462,7 @@ async function importAction(formData: FormData): Promise<void> {
   const filename = ((formData.get('quickOrderFilename') as string) ?? '').trim();
   const fileContent = ((formData.get('quickOrderFileContent') as string) ?? '').trim();
 
-  if (!csv && !fileContent) redirect('/quick-order?error=Provide+a+file+or+paste+CSV.');
+  if (!csv && !fileContent) redirect('/quick-order?problem=no_input');
 
   let preview: QuickOrderImportResponse;
   try {
@@ -464,8 +470,11 @@ async function importAction(formData: FormData): Promise<void> {
       ? await importQuickOrderFile(session, filename || 'upload.csv', fileContent)
       : await importQuickOrderCsv(session, csv);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.detail : 'Import failed.';
-    redirect(`/quick-order?error=${encodeURIComponent(message)}`);
+    redirect(
+      err instanceof StorefrontApiError
+        ? `/quick-order?error=${encodeURIComponent(err.detail)}`
+        : '/quick-order?problem=import_failed',
+    );
   }
   redirect(`/quick-order?preview=${encodePreview(preview!)}`);
 }
@@ -478,7 +487,7 @@ async function confirmAction(formData: FormData): Promise<void> {
   const target = (formData.get('target') as string) === 'quote_request' ? 'quote_request' : 'cart';
   const preview = decodePreview((formData.get('preview') as string) ?? '');
   if (!preview || preview.recognized.length === 0) {
-    redirect('/quick-order?error=Nothing+to+build.');
+    redirect('/quick-order?problem=nothing_to_build');
   }
 
   let rfqRef: string | undefined;
@@ -497,8 +506,11 @@ async function confirmAction(formData: FormData): Promise<void> {
     rfqRef = result.quoteRequestBusinessId ?? result.quoteRequestId;
     rejected = result.rejected ?? [];
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.detail : 'Build failed.';
-    redirect(`/quick-order?error=${encodeURIComponent(message)}`);
+    redirect(
+      err instanceof StorefrontApiError
+        ? `/quick-order?error=${encodeURIComponent(err.detail)}`
+        : '/quick-order?problem=build_failed',
+    );
   }
   if (target === 'quote_request') {
     redirect(`/quick-order?built=quote${rfqRef ? `&rfq=${encodeURIComponent(rfqRef)}` : ''}`);
@@ -514,6 +526,24 @@ async function confirmAction(formData: FormData): Promise<void> {
     redirect(`/quick-order?${params.toString()}`);
   }
   redirect('/quick-order?built=cart');
+}
+
+/**
+ * The page's own refusals travel as a code and are worded here, in the page's language — a
+ * sentence carried in the address would be in whatever language the action wrote it in. An
+ * unknown code shows nothing: the address is the buyer's to edit.
+ */
+const PROBLEM_KEYS: Readonly<Record<string, MessageKey>> = {
+  no_input: 'quickOrder.problem.no_input',
+  nothing_to_update: 'quickOrder.problem.nothing_to_update',
+  nothing_to_remove: 'quickOrder.problem.nothing_to_remove',
+  nothing_to_build: 'quickOrder.problem.nothing_to_build',
+  import_failed: 'quickOrder.problem.import_failed',
+  build_failed: 'quickOrder.problem.build_failed',
+};
+
+function quickOrderProblemKey(code: string | undefined): MessageKey | null {
+  return code && Object.hasOwn(PROBLEM_KEYS, code) ? PROBLEM_KEYS[code]! : null;
 }
 
 function encodePreview(preview: PreviewState): string {

@@ -12,6 +12,7 @@ import {
 import { addRfqDraftItem } from '../lib/rfqDraft';
 import { addProductToCartAction } from '../lib/actions/cart';
 import { cardAddToCartPayload, quoteAddQuantity } from '../lib/orderMinimum';
+import { productCardActionLabels, type CardActionState } from '../lib/buyActionLabels';
 
 /**
  * Product-card action buttons (add to cart / add to shopping list / add to
@@ -46,7 +47,7 @@ function loadConfig(apiBase: string): Promise<ButtonsConfig> {
   return cachedConfig;
 }
 
-type ActionState = 'idle' | 'busy' | 'done' | 'error';
+type ActionState = CardActionState;
 
 export function ProductCardActions(props: {
   apiBase: string;
@@ -68,6 +69,11 @@ export function ProductCardActions(props: {
    * minimum, else the plain label — rendered by the server card through `cardAddToCartLabel`.
    */
   addToCartMinimumLabel?: string | null | undefined;
+  /**
+   * The server card's request locale; every tooltip and accessible name is worded in it (U4 —
+   * they were Polish literals whatever the page's language). Polish when absent, as before.
+   */
+  locale?: string | undefined;
 }): ReactNode {
   const [cfg, setCfg] = useState<ButtonsConfig | null>(null);
   const [cartState, setCartState] = useState<ActionState>('idle');
@@ -186,56 +192,51 @@ export function ProductCardActions(props: {
 
   // Order: shopping list → quote → cart. Each action is an icon button (icons
   // consistent with the header) and reveals its label as a tooltip on hover.
-  const listTooltip =
-    listState === 'error'
-      ? 'Nie udało się zmienić listy'
-      : inList
-        ? 'Usuń z listy zakupowej'
-        : 'Dodaj do listy zakupowej';
-  const cartTooltip =
-    cartState === 'done'
-      ? 'Dodano do koszyka'
-      : cartState === 'error'
-        ? 'Nie udało się dodać'
-        : (props.addToCartMinimumLabel ?? 'Dodaj do koszyka');
-  const quoteTooltip = quoteState === 'done' ? 'Dodano do zapytania' : 'Dodaj do zapytania';
+  const labels = productCardActionLabels({
+    locale: props.locale ?? 'pl-PL',
+    cartState,
+    listState,
+    quoteState,
+    inList,
+    addToCartLabel: props.addToCartMinimumLabel,
+  });
 
   return (
     <div className="mt-[10px] flex flex-wrap gap-[6px]">
       {cfg.showAddToShoppingList ? (
-        <WithTooltip label={listTooltip}>
+        <WithTooltip label={labels.list}>
           <button
             type="button"
             onClick={(): void => void toggleList()}
             disabled={listState === 'busy'}
             aria-pressed={inList}
             className="icon-btn"
-            aria-label={listTooltip}
+            aria-label={labels.list}
           >
             <HeartIcon filled={inList} />
           </button>
         </WithTooltip>
       ) : null}
       {cfg.showAddToQuote ? (
-        <WithTooltip label={quoteTooltip}>
+        <WithTooltip label={labels.quote}>
           <button
             type="button"
             onClick={addToQuote}
             className="icon-btn"
-            aria-label="Dodaj do zapytania"
+            aria-label={labels.quoteName}
           >
             <QuoteIcon filled={quoteState === 'done'} />
           </button>
         </WithTooltip>
       ) : null}
       {cfg.showAddToCart && props.buyable ? (
-        <WithTooltip label={cartTooltip}>
+        <WithTooltip label={labels.cart}>
           <button
             type="button"
             onClick={(): void => void addToCart()}
             disabled={cartState === 'busy'}
             className="icon-btn"
-            aria-label={props.addToCartMinimumLabel ?? 'Dodaj do koszyka'}
+            aria-label={labels.cartName}
           >
             <CartIcon />
           </button>

@@ -3,6 +3,8 @@
 import { useState, type ReactNode } from 'react';
 import { addRfqDraftItem } from '../../lib/rfqDraft';
 import { clampQuantity, minimumStatement, quoteAddQuantity } from '../../lib/orderMinimum';
+import { quoteAddButtonLabel } from '../../lib/buyActionLabels';
+import { tForLocale } from '../../lib/i18n/messages';
 
 /**
  * "Add to quote request" button — pushes the product into the client-side RFQ
@@ -31,19 +33,17 @@ export function AddToRfqButton(props: {
   /** Feature 155 — the product's pieces minimum; `null`/absent = none. */
   minOrderQuantity?: number | null | undefined;
 }): ReactNode {
-  const pl = (props.locale ?? 'pl').startsWith('pl');
-  const labels = pl
-    ? { add: 'Dodaj do zapytania', added: 'Dodano ✓', qty: 'Ilość' }
-    : { add: 'Add to quote', added: 'Added ✓', qty: 'Quantity' };
+  // The catalogue needs a full tag, so the Polish default is spelled out.
+  const locale = props.locale ?? 'pl-PL';
 
   const floor = quoteAddQuantity(props.minOrderQuantity);
   const [qtyText, setQtyText] = useState<string>(() => String(floor));
   const qty = clampQuantity(qtyText, floor);
   const [added, setAdded] = useState(false);
   // The minimum is stated beside the input it constrains (Law of Proximity), in the request
-  // locale — `tForLocale` needs a full tag, so the Polish default is spelled out.
+  // locale.
   const statement = props.withQuantity
-    ? minimumStatement({ minOrderQuantity: props.minOrderQuantity }, null, props.locale ?? 'pl-PL')
+    ? minimumStatement({ minOrderQuantity: props.minOrderQuantity }, null, locale)
     : null;
   const statementId = `rfq-min-${props.productId}`;
 
@@ -64,7 +64,7 @@ export function AddToRfqButton(props: {
       {props.withQuantity ? (
         <>
           <label htmlFor={`rfq-qty-${props.productId}`} className="text-[12px]">
-            {labels.qty}
+            {tForLocale(locale)('common.quantity')}
           </label>
           <input
             id={`rfq-qty-${props.productId}`}
@@ -80,7 +80,7 @@ export function AddToRfqButton(props: {
         </>
       ) : null}
       <button type="button" onClick={onAdd} className="btn btn--outline btn--sm">
-        {added ? labels.added : labels.add}
+        {quoteAddButtonLabel(added, locale)}
       </button>
       {statement ? (
         <p id={statementId} className="m-0 basis-full text-[12px] text-muted">

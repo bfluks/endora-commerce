@@ -4,6 +4,8 @@ import { useActionState, useEffect, useRef, useState, type ReactNode } from 'rea
 import { addRfqDraftItem } from '../lib/rfqDraft';
 import { trackAddToCart, trackAddToQuoteRequest, type GaLineItem } from '../lib/analytics/ecommerce';
 import { ADD_TO_CART_IDLE, type AddToCartResult } from '../lib/cartAddState';
+import { quoteAddButtonLabel } from '../lib/buyActionLabels';
+import { tForLocale } from '../lib/i18n/messages';
 import {
   clampQuantity,
   minimumStatement,
@@ -46,9 +48,9 @@ export interface ProductBuyActionsProps {
   showQuote: boolean;
   /** Feature 043 — packaging units available for this product (may be empty). */
   packagingUnits?: ProductPackagingUnitOption[] | undefined;
-  /** Localized "single piece" option label for the packaging selector. */
+  /** Localized "single piece" option label for the packaging selector; defaults to the catalogue's in `locale`. */
   singlePieceLabel?: string | undefined;
-  /** Localized pieces unit word (e.g. "szt."). */
+  /** Localized pieces unit word (e.g. "szt."); defaults to the catalogue's in `locale`. */
   piecesLabel?: string | undefined;
   /**
    * Feature 155 (FR-014) — the product's pieces minimum; `null`/absent = none. The quantity
@@ -56,7 +58,10 @@ export interface ProductBuyActionsProps {
    * not offer less; the minimum is stated beside it.
    */
   minOrderQuantity?: number | null | undefined;
-  /** Request locale — the minimum statement and the piece count are rendered in it. */
+  /**
+   * Request locale — every label, the minimum statement and the piece count are rendered in it
+   * (U4: the controls' own copy was a Polish literal whatever the page's language).
+   */
   locale?: string | undefined;
   addToCartAction: (
     prevState: AddToCartResult,
@@ -84,8 +89,8 @@ export function ProductBuyActions({
   showCart,
   showQuote,
   packagingUnits,
-  singlePieceLabel = 'szt.',
-  piecesLabel = 'szt.',
+  singlePieceLabel,
+  piecesLabel,
   minOrderQuantity = null,
   locale = 'pl-PL',
   addToCartAction,
@@ -93,6 +98,9 @@ export function ProductBuyActions({
   leadingAction,
   compareAction,
 }: ProductBuyActionsProps): ReactNode {
+  const t = tForLocale(locale);
+  const singlePiece = singlePieceLabel ?? t('product.packaging.singlePiece');
+  const pieces = piecesLabel ?? t('product.packaging.pieces');
   const units = packagingUnits ?? [];
   const defaultUnit = units.find((u) => u.isDefault) ?? null;
   // Default the selector to the operator's default unit when present, else to
@@ -177,7 +185,7 @@ export function ProductBuyActions({
       <div className="flex flex-wrap items-center gap-2">
         {units.length > 0 ? (
           <select
-            aria-label="Jednostka"
+            aria-label={t('product.buy.unit')}
             value={unitId}
             onChange={(e): void => {
               const next = units.find((u) => u.id === e.target.value) ?? null;
@@ -186,17 +194,17 @@ export function ProductBuyActions({
             }}
             className="rounded-sm border border-line px-[8px] py-[6px] text-[13px]"
           >
-            <option value="">{singlePieceLabel}</option>
+            <option value="">{singlePiece}</option>
             {units.map((u) => (
               <option key={u.id} value={u.id}>
-                {u.name} ({u.baseQuantity} {piecesLabel})
+                {u.name} ({u.baseQuantity} {pieces})
               </option>
             ))}
           </select>
         ) : null}
 
         <label htmlFor={`buy-qty-${productId}`} className="text-[12px]">
-          Ilość
+          {t('common.quantity')}
         </label>
         <input
           id={`buy-qty-${productId}`}
@@ -214,7 +222,7 @@ export function ProductBuyActions({
 
         {resultingPieces !== null ? (
           <span className="text-[12px] text-muted">
-            = {resultingPieces.toLocaleString(locale)} {piecesLabel}
+            = {resultingPieces.toLocaleString(locale)} {pieces}
           </span>
         ) : null}
       </div>
@@ -256,13 +264,21 @@ export function ProductBuyActions({
               onClick={addToQuote}
               className="btn btn--outline h-[40px] w-full justify-center md:w-auto"
             >
-              {quoteAdded ? 'Dodano ✓' : 'Dodaj do zapytania'}
+              {quoteAddButtonLabel(quoteAdded, locale)}
             </button>
           ) : null}
         </div>
       ) : null}
 
-      {showCart ? <CartAddedPopup state={cartState} /> : null}
+      {showCart ? (
+        <CartAddedPopup
+          state={cartState}
+          addedLabel={t('product.cartPopup.added')}
+          goToCartLabel={t('product.cartPopup.goToCart')}
+          continueLabel={t('product.cartPopup.continue')}
+          closeLabel={t('product.cartPopup.close')}
+        />
+      ) : null}
     </div>
   );
 }

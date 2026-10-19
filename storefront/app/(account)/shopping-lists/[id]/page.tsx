@@ -23,6 +23,7 @@ import {
   shoppingListSkipLabel,
 } from '../../../../lib/batchReport';
 import { tForLocale } from '../../../../lib/i18n/messages';
+import { LIST_QUANTITY_MAX, parseListQuantity } from '../../../../lib/shoppingListQuantity';
 import type { Metadata } from 'next';
 
 /**
@@ -61,6 +62,8 @@ export default async function ShoppingListDetailPage({
     rfqId?: string;
     rfqAdded?: string;
     rfqSkipped?: string;
+    /** U4 — the row whose quantity edit was refused; the page words why beside its input. */
+    qtyError?: string;
   }>;
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
@@ -191,7 +194,9 @@ export default async function ShoppingListDetailPage({
         </form>
         {list.items.map((it) => (
           <Fragment key={`forms-${it.id}`}>
-            <form id={`sl-qty-${it.id}`} action={updateQtyAction}>
+            {/* `noValidate`: the browser's own `min` bubble speaks the browser's language. The
+                action validates and the row says what is wrong beside the field (U4). */}
+            <form id={`sl-qty-${it.id}`} action={updateQtyAction} noValidate>
               <input type="hidden" name="listId" value={list.id} />
               <input type="hidden" name="itemId" value={it.id} />
             </form>
@@ -239,7 +244,12 @@ export default async function ShoppingListDetailPage({
                     ) : null}
                   </td>
                   <td>
-                    <UpdateQtyForm itemId={it.id} qty={it.quantity} />
+                    <UpdateQtyForm
+                      itemId={it.id}
+                      qty={it.quantity}
+                      label={t('common.quantity')}
+                      error={sp.qtyError === it.id ? t('shoppingList.qty.invalid') : null}
+                    />
                   </td>
                   <td>{it.note ?? ''}</td>
                   <td>
@@ -277,23 +287,45 @@ export default async function ShoppingListDetailPage({
  * to the standalone `sl-qty-<itemId>` form (declared as a table sibling) via
  * the HTML `form` attribute, so it submits independently of the convert form.
  */
-function UpdateQtyForm({ itemId, qty }: { itemId: string; qty: number }): ReactNode {
+function UpdateQtyForm({
+  itemId,
+  qty,
+  label,
+  error,
+}: {
+  itemId: string;
+  qty: number;
+  /** The input's accessible name, in the page's language. */
+  label: string;
+  /** The refusal of this row's last edit, in the page's language; `null` = none. */
+  error: string | null;
+}): ReactNode {
   const formId = `sl-qty-${itemId}`;
+  const errorId = `sl-qty-error-${itemId}`;
   return (
-    <span style={{ display: 'inline-flex', gap: '0.25rem' }}>
-      <input
-        type="number"
-        name="quantity"
-        form={formId}
-        min={1}
-        max={9999}
-        defaultValue={qty}
-        className="rounded-md border border-line px-2 py-1 text-sm"
-        style={{ width: '4rem' }}
-      />
-      <button type="submit" form={formId} className="btn btn--outline btn--sm">
-        Save
-      </button>
+    <span className="inline-flex flex-col gap-1">
+      <span style={{ display: 'inline-flex', gap: '0.25rem' }}>
+        <input
+          type="number"
+          name="quantity"
+          form={formId}
+          min={1}
+          max={LIST_QUANTITY_MAX}
+          defaultValue={qty}
+          aria-label={label}
+          {...(error ? { 'aria-invalid': true, 'aria-describedby': errorId } : {})}
+          className="rounded-md border border-line px-2 py-1 text-sm"
+          style={{ width: '4rem' }}
+        />
+        <button type="submit" form={formId} className="btn btn--outline btn--sm">
+          Save
+        </button>
+      </span>
+      {/* Mounted empty on every row so the polite live region exists before it carries text
+          (WCAG 4.1.3), as on the cart line. */}
+      <p id={errorId} role="status" className="m-0 text-[12px] font-semibold text-bad">
+        {error ?? ''}
+      </p>
     </span>
   );
 }
@@ -328,7 +360,10 @@ async function updateQtyAction(formData: FormData): Promise<void> {
   if (!session) redirect('/login');
   const listId = (formData.get('listId') as string) ?? '';
   const itemId = (formData.get('itemId') as string) ?? '';
-  const quantity = Number(formData.get('quantity') ?? '1');
+  const quantity = parseListQuantity(formData.get('quantity'));
+  if (quantity === null) {
+    redirect(`/shopping-lists/${listId}?qtyError=${encodeURIComponent(itemId)}`);
+  }
   try {
     await updateShoppingListItem(session, listId, itemId, { quantity });
   } catch (err) {

@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from 'react';
 import { addProductToCartAction } from '../lib/actions/cart';
 import { cardAddToCartPayload, minimumStatement } from '../lib/orderMinimum';
+import { compareAddButtonLabel, compareAddFailure } from '../lib/buyActionLabels';
 
 /**
  * `<CompareAddToCartButton>` — feature 007 / US3 / T046.
@@ -32,7 +33,7 @@ export function CompareAddToCartButton(props: {
   /** Feature 155 — the product's pieces minimum; `null`/absent = none (adds 1). */
   minOrderQuantity?: number | null | undefined;
   /**
-   * The comparison table's resolved locale, for the minimum statement. Required: the button
+   * The comparison table's resolved locale, for the button's copy and the minimum statement. Required: the button
    * and the table once fell back to different locales.
    */
   locale: string;
@@ -56,15 +57,18 @@ export function CompareAddToCartButton(props: {
       const res = await addProductToCartAction(
         cardAddToCartPayload(props.productId, props.minOrderQuantity),
       );
-      if (!res.ok) throw new Error(res.message ?? 'Could not add to cart.');
+      if (!res.ok) {
+        setError(compareAddFailure(res.message, props.locale));
+        return;
+      }
       setSuccess(true);
       // Notify the header cart counter so it refreshes if it's listening.
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('b2b:cart:changed'));
       }
       setTimeout(() => setSuccess(false), 1500);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not add to cart.');
+    } catch {
+      setError(compareAddFailure(null, props.locale));
     } finally {
       setBusy(false);
     }
@@ -79,7 +83,7 @@ export function CompareAddToCartButton(props: {
         {...(statement ? { 'aria-describedby': statementId } : {})}
         onClick={(): void => void onClick()}
       >
-        {success ? '✓ Dodano' : busy ? 'Dodawanie…' : 'Dodaj do koszyka'}
+        {compareAddButtonLabel(success ? 'done' : busy ? 'busy' : 'idle', props.locale)}
       </button>
       {statement ? (
         <div id={statementId} className="mt-1 text-[12px] text-muted">
