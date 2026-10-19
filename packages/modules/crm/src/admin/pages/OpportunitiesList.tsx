@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { CircleDollarSign, Plus, SearchX, X } from 'lucide-react';
-import type {
-  OpportunityStatusKind,
-  OpportunitySummary,
-  OpportunityWorkflowStatus,
+import {
+  opportunityBoardCustomFieldRef,
+  type CustomFieldFilter,
+  type CustomFieldFilters,
+  type OpportunityFieldFilters,
+  type OpportunityStatusKind,
+  type OpportunitySummary,
+  type OpportunityWorkflowStatus,
 } from '@endora-commerce/contracts';
 import {
   formatDateTime,
@@ -23,7 +27,17 @@ import {
   PageHeader,
   Select,
 } from '@endora-commerce/admin-kit/ui';
-import { ResponsiveTable, type ResponsiveColumn } from '@endora-commerce/admin-kit/components';
+import {
+  CustomFieldListFilters,
+  ResponsiveTable,
+  customFieldFilterRefusal,
+  pruneRemovedOptions,
+  readCustomFieldFilterParams,
+  toCustomFieldFiltersParam,
+  useCustomFieldListFilterFields,
+  writeCustomFieldFilterParams,
+  type ResponsiveColumn,
+} from '@endora-commerce/admin-kit/components';
 import { useAppLanguage, useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { crmApi, type OpportunityListParams, type OpportunitySort } from '../api.js';
 import { AssigneeName } from '../components/AssigneeName.js';
@@ -57,6 +71,49 @@ type SortOption = (typeof SORTS)[number];
 
 const SEARCH_DEBOUNCE_MS = 300;
 
+/** The custom fields this list offers as filters (feature 157). */
+const CUSTOM_FIELD_FILTERS_ENDPOINT = '/api/v1/admin/crm/opportunities/custom-field-filters';
+/** A refused key shown in the UI is cut here: one that did not come from this client may be any length. */
+const SHOWN_KEY_MAX = 64;
+
+/**
+ * The custom-field filters as the list's `fieldFilters`: one `custom:<key>`
+ * reference each. Sent without `cardValues`, so the server applies the
+ * list-filter option, not the board card's rule (FR-011a).
+ */
+function customFieldReferences(filters: CustomFieldFilters): OpportunityFieldFilters | undefined {
+  const keys = Object.keys(filters);
+  if (keys.length === 0) return undefined;
+  const references: OpportunityFieldFilters = {};
+  for (const key of keys) {
+    const filter = filters[key];
+    if (filter !== undefined) references[opportunityBoardCustomFieldRef(key)] = filter;
+  }
+  return references;
+}
+
+/**
+ * `filters` with `key` set to `filter` (`null` removes it), as a new
+ * prototype-free record — a key such as `constructor` stays an ordinary key.
+ */
+function withCustomFilter(
+  filters: CustomFieldFilters,
+  key: string,
+  filter: CustomFieldFilter | null,
+): CustomFieldFilters {
+  const next = Object.create(null) as CustomFieldFilters;
+  for (const existing of Object.keys(filters)) {
+    const value = filters[existing];
+    if (existing !== key && value !== undefined) next[existing] = value;
+  }
+  if (filter !== null) next[key] = filter;
+  return next;
+}
+
+function shownKey(key: string): string {
+  return key.length > SHOWN_KEY_MAX ? `${key.slice(0, SHOWN_KEY_MAX)}…` : key;
+}
+
 /** The filters shared with the board, plus the two only a list has. */
 interface Filters extends SharedOpportunityFilters {
   state: OpportunityStatusKind | '';
@@ -77,6 +134,12 @@ function hasFilters(filters: Filters): boolean {
  * The fields the board has too are one component, `OpportunityFilterFields`;
  * the state and the status are the list's alone, because the board's columns
  * *are* the statuses.
+ *
+ * Custom-field filters (feature 157) are the definitions whose list-filter
+ * option is on, whatever the board card shows. They live in the address as
+ * `cf.<key>.<op>` and reach the server as `custom:<key>` references in
+ * `fieldFilters`; a filter the server refuses is reported by name with a way
+ * to remove it. The board and its card-field filters are untouched.
  */
 export function OpportunitiesList(): ReactNode {
   const t = useTranslation('crm');
@@ -98,6 +161,35 @@ export function OpportunitiesList(): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<OpportunityWorkflowStatus[]>([]);
   const sequence = useRef(0);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [customFilters, setCustomFilters] = useState<CustomFieldFilters>(() =>
+    readCustomFieldFilterParams(searchParams),
+  );
+  /** The key of a custom-field filter the server refused, until it is removed. */
+  const [refusedKey, setRefusedKey] = useState<string | null>(null);
+  const { fields: customFields, status: customFieldsStatus } =
+    useCustomFieldListFilterFields(CUSTOM_FIELD_FILTERS_ENDPOINT);
+
+  /** The custom-field filters changed: into the address, and back to the first page. */
+  const changeCustom = useCallback(
+    (next: CustomFieldFilters): void => {
+      setCustomFilters(next);
+      setRefusedKey(null);
+      setTrail([]);
+      setSearchParams((previous) => writeCustomFieldFilterParams(previous, next), { replace: true });
+    },
+    [setSearchParams],
+  );
+
+  // Options removed since the address was written are dropped once the fields
+  // are known; an unknown key stays for the server to refuse.
+  useEffect(() => {
+    if (customFieldsStatus !== 'ready') return;
+    setCustomFilters((previous) => {
+      const pruned = pruneRemovedOptions(previous, customFields);
+      return toCustomFieldFiltersParam(pruned) === toCustomFieldFiltersParam(previous) ? previous : pruned;
+    });
+  }, [customFields, customFieldsStatus]);
 
   // The status filter offers the configured workflow. Without it the list is
   // still usable — the filter simply has nothing to offer.
@@ -128,8 +220,10 @@ export function OpportunitiesList(): ReactNode {
   const params = useMemo<OpportunityListParams>(() => {
     const [field, order] = sort.split(':') as [OpportunitySort, 'asc' | 'desc'];
     const cursor = trail[trail.length - 1];
+    const fieldFilters = customFieldReferences(customFilters);
     return {
       ...sharedFilterParams(filters),
+      ...(fieldFilters ? { fieldFilters } : {}),
       ...(filters.state ? { state: filters.state } : {}),
       ...(filters.statusCode ? { statusCode: [filters.statusCode] } : {}),
       sort: field,
@@ -137,7 +231,7 @@ export function OpportunitiesList(): ReactNode {
       ...(cursor ? { cursor } : {}),
       limit: Math.min(pageSize, MAX_PAGE_LIMIT),
     };
-  }, [filters, sort, trail, pageSize]);
+  }, [filters, customFilters, sort, trail, pageSize]);
 
   const load = useCallback(async (): Promise<void> => {
     const current = ++sequence.current;
@@ -152,7 +246,9 @@ export function OpportunitiesList(): ReactNode {
       setLoaded(true);
     } catch (failure) {
       if (current !== sequence.current) return;
-      setError(errorMessage(failure, t('opportunity.list.error')));
+      const refused = customFieldFilterRefusal(failure);
+      setRefusedKey(refused);
+      setError(refused === null ? errorMessage(failure, t('opportunity.list.error')) : null);
     } finally {
       if (current === sequence.current) setLoading(false);
     }
@@ -172,9 +268,23 @@ export function OpportunitiesList(): ReactNode {
     setSearch('');
     setFilters(NO_FILTERS);
     setTrail([]);
+    if (Object.keys(customFilters).length > 0) changeCustom(Object.create(null) as CustomFieldFilters);
   };
 
-  const filtered = hasFilters(filters) || search.trim() !== '';
+  const removeRefused = (): void => {
+    if (refusedKey !== null) changeCustom(withCustomFilter(customFilters, refusedKey, null));
+  };
+
+  const refusedField = refusedKey === null ? undefined : customFields.find((field) => field.key === refusedKey);
+  const refusedName =
+    refusedKey === null
+      ? ''
+      : refusedField
+        ? (refusedField.label[language] ?? refusedField.labelDefault)
+        : shownKey(refusedKey);
+
+  const filtered =
+    hasFilters(filters) || search.trim() !== '' || Object.keys(customFilters).length > 0;
 
   const columns: ResponsiveColumn<OpportunitySummary>[] = [
     {
@@ -329,6 +439,16 @@ export function OpportunitiesList(): ReactNode {
                 </Select>
               </div>
             </OpportunityFilterFields>
+            <CustomFieldListFilters
+              idPrefix="crm-opportunity"
+              fields={customFields}
+              value={customFilters}
+              onChange={(key, filter): void => changeCustom(withCustomFilter(customFilters, key, filter))}
+              language={language}
+            />
+            {customFieldsStatus === 'error' ? (
+              <p className="self-end text-sm text-muted-foreground">{tCore('customFieldFilters.loadFailed')}</p>
+            ) : null}
           </div>
           <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
             <div className="space-y-1">
@@ -361,7 +481,16 @@ export function OpportunitiesList(): ReactNode {
 
       <Card>
         <CardContent className="pt-6" aria-busy={loading}>
-          {error ? (
+          {refusedKey !== null ? (
+            <Alert variant="destructive">
+              <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+                <span>{tCore('customFieldFilters.error.unavailable', { field: refusedName })}</span>
+                <Button className="min-h-11 sm:min-h-8" variant="outline" size="sm" onClick={removeRefused}>
+                  {tCore('customFieldFilters.error.remove')}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : error ? (
             <Alert variant="destructive">
               <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
                 <span>{error}</span>
