@@ -1,0 +1,197 @@
+# fork-pg-tests: service-backed backend tests for one feature branch, on a fork.
+#
+# FORK-ONLY TRIAL. This file lives on the fork's `ci/fork-pg-tests` branch and
+# on throwaway `ci-pg/**` branches. It is never merged to `master` and never
+# carried on a branch that becomes an upstream pull request. The job guard
+# below also keeps it from running anywhere except `bfluks/endora-commerce`.
+#
+# Why: merge-request CI does not run the contract and integration suites
+# (D-198). This runs a chosen set of them against Postgres, Redis and
+# Meilisearch before the branch goes upstream.
+#
+# How to use it, for a feature branch X:
+#   1. `ci-pg/X` = X's tip + one cherry-picked commit carrying this file
+#      (and, optionally, `ci-pg-files.txt` at the repository root).
+#   2. Push `ci-pg/X` to the fork. The push triggers this workflow.
+#   3. Delete `ci-pg/X` when done.
+#
+# Which files run:
+#   - `ci-pg-files.txt` at the repository root, one path per line relative to
+#     `backend/` (blank lines and `#` comments ignored), if present;
+#   - otherwise every contract or integration test file the branch adds or
+#     modifies against upstream `master` (the fork's `master` if that fetch fails).
+# Files run one invocation each, so one failure does not stop the rest; the
+# per-file table lands in the run summary and any failure fails the job.
+#
+# `workflow_dispatch` is deliberately absent: GitHub only offers it when the
+# workflow file is on the default branch, and this file must not reach the
+# fork's `master` (a push there triggers the other workflows).
+
+name: fork-pg-tests
+
+on:
+  push:
+    branches: ['ci-pg/**']
+
+concurrency:
+  group: fork-pg-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pg-tests:
+    if: github.repository == 'bfluks/endora-commerce'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    services:
+      # Images match `docker-compose.yml` and `.gitlab-ci.yml` test jobs.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: b2b
+          POSTGRES_PASSWORD: b2b
+          POSTGRES_DB: b2b
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U b2b -d b2b"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ['6380:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      meilisearch:
+        image: getmeili/meilisearch:v1.11
+        env:
+          MEILI_MASTER_KEY: devMasterKeyChangeMe
+          MEILI_ENV: development
+          MEILI_NO_ANALYTICS: 'true'
+        ports: ['7700:7700']
+        options: >-
+          --health-cmd "wget --quiet --spider http://127.0.0.1:7700/health"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql://b2b:b2b@localhost:5432/b2b_test
+      REDIS_URL: redis://localhost:6380
+      MEILISEARCH_URL: http://localhost:7700
+      MEILISEARCH_API_KEY: devMasterKeyChangeMe
+      # Same heap cap as `.gitlab-ci.yml`'s `test:backend` shards.
+      NODE_OPTIONS: --max-old-space-size=2048
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18'
+
+      - name: Activate pnpm 9.15.0
+        run: corepack enable && corepack prepare pnpm@9.15.0 --activate
+
+      - name: pnpm store cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm run build:packages
+
+      # The suite leases its own `<base>_tpl_*` and `<base>_r_*` databases
+      # through the `postgres` maintenance database (issue #189), so the base
+      # need not exist. It is created anyway so `BACKEND_TEST_ISOLATION=shared`
+      # and a hand-run `psql` work the same as on a developer machine.
+      - name: Create b2b_test
+        env:
+          PGPASSWORD: b2b
+        run: |
+          set -euo pipefail
+          exists=$(psql -h localhost -U b2b -d postgres -tAc "select 1 from pg_database where datname='b2b_test'")
+          [ "$exists" = "1" ] || psql -h localhost -U b2b -d postgres -c 'create database b2b_test'
+
+      - name: Select test files
+        id: select
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/ci-pg-files.resolved"
+          if [ -f ci-pg-files.txt ]; then
+            echo "source=ci-pg-files.txt" >> "$GITHUB_OUTPUT"
+            sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' ci-pg-files.txt | grep -v '^$' > "$out" || true
+          else
+            # The fork's own `master` lags upstream, so diff against upstream's
+            # (a read-only fetch of a public repository); fork master if that fails.
+            base=origin/master
+            if git fetch --no-tags --quiet https://github.com/endora-commerce/endora-commerce.git master:refs/remotes/upstream/master; then
+              base=upstream/master
+            fi
+            echo "source=diff against ${base}" >> "$GITHUB_OUTPUT"
+            git diff --name-only --diff-filter=AM "${base}...HEAD" -- backend/test/contract backend/test/integration \
+              | grep -E '\.test\.ts$' | sed 's|^backend/||' > "$out" || true
+          fi
+          echo "count=$(wc -l < "$out" | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          echo "list=$out" >> "$GITHUB_OUTPUT"
+          cat "$out"
+
+      - name: Run test files one at a time
+        working-directory: backend
+        env:
+          LIST: ${{ steps.select.outputs.list }}
+          SOURCE: ${{ steps.select.outputs.source }}
+        run: |
+          set -uo pipefail
+          logs="$RUNNER_TEMP/pg-logs"; mkdir -p "$logs"
+          {
+            echo "## fork-pg-tests: \`${GITHUB_REF_NAME}\` @ \`${GITHUB_SHA::9}\`"
+            echo
+            echo "File list: ${SOURCE}"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          total=0; failed=0; tests_total=0; table=""
+          if [ ! -s "$LIST" ]; then
+            echo "No contract or integration test files selected." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          while IFS= read -r file; do
+            total=$((total + 1))
+            log="$logs/$(echo "$file" | tr '/' '_').log"
+            echo "::group::$file"
+            start=$(date +%s)
+            if [ ! -f "$file" ]; then
+              echo "missing: $file" | tee "$log"; rc=127
+            else
+              pnpm exec vitest run "$file" 2>&1 | tee "$log"; rc=${PIPESTATUS[0]}
+            fi
+            secs=$(( $(date +%s) - start ))
+            echo "::endgroup::"
+            tests=$(sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -E '^[[:space:]]*Tests[[:space:]]' | tail -1 | sed 's/^[[:space:]]*Tests[[:space:]]*//')
+            n=$(echo "$tests" | grep -oE '\(([0-9]+)\)' | tr -d '()' | tail -1)
+            tests_total=$((tests_total + ${n:-0}))
+            if [ "$rc" -ne 0 ]; then failed=$((failed + 1)); mark="FAIL"; echo "::error file=backend/$file::rc=$rc"; else mark="ok"; fi
+            table+="| \`$file\` | $mark | $rc | ${secs}s | ${tests:-n/a} |"$'\n'
+          done < "$LIST"
+          {
+            echo "**${total} files, ${failed} failed, ${tests_total} tests.**"
+            echo
+            echo "| File | Result | rc | Time | Tests |"
+            echo "| --- | --- | --- | --- | --- |"
+            printf '%s' "$table"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "files=$total failed=$failed tests=$tests_total"
+          [ "$failed" -eq 0 ]
+
+      - name: Upload per-file logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg-test-logs
+          path: ${{ runner.temp }}/pg-logs
+          retention-days: 7
+          if-no-files-found: ignore
