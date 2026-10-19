@@ -50,7 +50,7 @@ const FIELDS: CustomFieldListFilterField[] = [
 type Calls = Array<[string, CustomFieldFilter | null]>;
 
 /** A host that keeps the value, as a list page does, and records every change. */
-function Host({ calls, language, initial }: { calls: Calls; language: string; initial?: CustomFieldFilters }): ReactElement {
+function Host({ calls, language, initial }: { calls: Calls; language: string; initial?: CustomFieldFilters | undefined }): ReactElement {
   const [value, setValue] = useState<CustomFieldFilters>(initial ?? (Object.create(null) as CustomFieldFilters));
   return (
     <div className="grid">
@@ -110,13 +110,20 @@ describe('CustomFieldListFilters', () => {
 
   it('commits text once, after the 300 ms pause', async () => {
     vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const { calls } = renderFilters();
-    await user.type(screen.getByLabelText('Note'), 'acme');
+    const note = screen.getByLabelText('Note');
+    for (const text of ['a', 'ac', 'acm', 'acme']) {
+      fireEvent.change(note, { target: { value: text } });
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+    }
+    // 100 ms since the last keystroke; the commit is due 200 ms later.
     expect(calls).toEqual([]);
     act(() => {
-      vi.advanceTimersByTime(299);
+      vi.advanceTimersByTime(199);
     });
+    expect(calls).toEqual([]);
     expect(calls).toEqual([]);
     act(() => {
       vi.advanceTimersByTime(1);
@@ -126,7 +133,7 @@ describe('CustomFieldListFilters', () => {
       vi.advanceTimersByTime(1000);
     });
     expect(calls).toHaveLength(1);
-    await user.clear(screen.getByLabelText('Note'));
+    fireEvent.change(note, { target: { value: '  ' } });
     act(() => {
       vi.advanceTimersByTime(300);
     });
@@ -135,22 +142,28 @@ describe('CustomFieldListFilters', () => {
 
   it('accepts a decimal comma for a number, and clearing both bounds sends null', async () => {
     vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const { calls } = renderFilters();
     const group = screen.getByRole('group', { name: 'Weight' });
     const [min, max] = within(group).getAllByRole('textbox');
-    await user.type(min!, '1,5');
+    fireEvent.change(min!, { target: { value: '1,5' } });
     act(() => {
       vi.advanceTimersByTime(300);
     });
     expect(calls.at(-1)).toEqual(['weight', { min: '1.5' }]);
-    await user.type(max!, '9');
+    fireEvent.change(max!, { target: { value: '9' } });
     act(() => {
       vi.advanceTimersByTime(300);
     });
     expect(calls.at(-1)).toEqual(['weight', { min: '1.5', max: '9' }]);
-    await user.clear(min!);
-    await user.clear(max!);
+    fireEvent.change(max!, { target: { value: 'ten' } });
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    // A bound that is not a number yet is not sent; the last filter stands.
+    expect(calls.at(-1)).toEqual(['weight', { min: '1.5', max: '9' }]);
+    expect(max).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.change(min!, { target: { value: '' } });
+    fireEvent.change(max!, { target: { value: '' } });
     act(() => {
       vi.advanceTimersByTime(300);
     });
