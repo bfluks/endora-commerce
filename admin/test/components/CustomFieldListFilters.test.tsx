@@ -241,6 +241,95 @@ describe('CustomFieldListFilters', () => {
     expect(calls).toEqual([]);
   });
 
+  it('lays a range out as a column on narrow screens, with a visible label on each bound', () => {
+    renderFilters();
+    const weight = screen.getByRole('group', { name: 'Weight' });
+    expect(weight.className).toContain('flex-col');
+    expect(weight.className).toContain('sm:flex-row');
+    expect(within(weight).getByText('Min')).toBeVisible();
+    expect(within(weight).getByText('Max')).toBeVisible();
+    const due = screen.getByRole('group', { name: 'Due' });
+    expect(within(due).getByText('From')).toBeVisible();
+    expect(within(due).getByText('To')).toBeVisible();
+  });
+
+  it('explains a bound that is not a number, linked to the input', () => {
+    renderFilters();
+    const max = screen.getByLabelText('Weight: Maximum');
+    fireEvent.change(max, { target: { value: 'ten' } });
+    const message = screen.getByText('Enter a number, e.g. 12.5');
+    expect(max).toHaveAttribute('aria-invalid', 'true');
+    expect(max.getAttribute('aria-describedby')).toContain(message.id);
+  });
+
+  it('refuses an inverted range in place, sending nothing for it', () => {
+    vi.useFakeTimers();
+    const { calls } = renderFilters();
+    fireEvent.change(screen.getByLabelText('Weight: Minimum'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('Weight: Maximum'), { target: { value: '1' } });
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(screen.getByText("The minimum can't be greater than the maximum.")).toBeInTheDocument();
+    expect(calls.filter(([key]) => key === 'weight')).toEqual([]);
+    fireEvent.change(screen.getByLabelText('Due: From'), { target: { value: '2026-03-01' } });
+    fireEvent.change(screen.getByLabelText('Due: To'), { target: { value: '2026-02-01' } });
+    expect(screen.getByText("The start date can't be after the end date.")).toBeInTheDocument();
+    expect(calls.filter(([key]) => key === 'due')).toEqual([['due', { from: '2026-03-01' }]]);
+  });
+
+  it('drops a pending commit when the value changes from outside', () => {
+    vi.useFakeTimers();
+    const calls: Calls = [];
+    const props = (value: CustomFieldFilters) => ({
+      idPrefix: 't',
+      fields: FIELDS,
+      value,
+      language: 'en',
+      onChange: (k: string, f: CustomFieldFilter | null): void => void calls.push([k, f]),
+    });
+    const view = renderWithI18n(
+      <StrictMode>
+        <CustomFieldListFilters {...props(Object.create(null) as CustomFieldFilters)} />
+      </StrictMode>,
+      EN_BUNDLE,
+    );
+    fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'abc' } });
+    view.rerender(
+      <StrictMode>
+        <CustomFieldListFilters
+          {...props(Object.assign(Object.create(null) as CustomFieldFilters, { note: { contains: 'zzz' } }))}
+        />
+      </StrictMode>,
+    );
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(calls).toEqual([]);
+    expect(screen.getByLabelText('Note')).toHaveValue('zzz');
+  });
+
+  it('shows a placeholder while the fields load, and on failure a sentence with a retry', async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    const base = { idPrefix: 't', fields: [], value: Object.create(null) as CustomFieldFilters, language: 'en', onChange: vi.fn() };
+    const view = renderWithI18n(<CustomFieldListFilters {...base} status="loading" onRetry={onRetry} />, EN_BUNDLE);
+    expect(view.container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    view.rerender(<CustomFieldListFilters {...base} status="error" onRetry={onRetry} />);
+    const message = screen.getByText('Custom-field filters could not be loaded.');
+    expect(message.className).toContain('text-destructive');
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads “Wszystkie”, “Min.” and “Maks.” in Polish', () => {
+    renderFilters('pl');
+    expect(within(screen.getByLabelText('VIP default')).getAllByRole('option')[0]).toHaveTextContent('Wszystkie');
+    const weight = screen.getByRole('group', { name: 'Weight default' });
+    expect(within(weight).getByText('Min.')).toBeVisible();
+    expect(within(weight).getByText('Maks.')).toBeVisible();
+  });
+
   it('is reachable by keyboard', async () => {
     const user = userEvent.setup();
     renderFilters();

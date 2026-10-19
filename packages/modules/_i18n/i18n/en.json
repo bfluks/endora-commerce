@@ -2108,5 +2108,13 @@
   "customFieldFilters.notice.dropped": "Some filters of this view are no longer available and were removed: {fields}.",
   "customFieldFilters.error.unavailable": "The filter “{field}” is no longer available on this list.",
   "customFieldFilters.error.remove": "Remove this filter",
-  "customFieldFilters.loadFailed": "Custom-field filters could not be loaded."
+  "customFieldFilters.loadFailed": "Custom-field filters could not be loaded.",
+  "customFieldFilters.minLabel": "Min",
+  "customFieldFilters.maxLabel": "Max",
+  "customFieldFilters.numberInvalid": "Enter a number, e.g. 12.5",
+  "customFieldFilters.rangeInverted": "The minimum can't be greater than the maximum.",
+  "customFieldFilters.dateRangeInverted": "The start date can't be after the end date.",
+  "customFieldFilters.retry": "Try again",
+  "customFieldFilters.removeChip": "Remove filter {label}",
+  "customFieldFilters.loading": "Loading filters…"
 }

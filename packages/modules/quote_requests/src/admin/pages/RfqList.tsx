@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowRight, Columns3, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
 import { apiClient, ApiError, formatDateTime, normalize, useAuth, usePageSizePreference } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Badge, Button, Card, CardContent, Label, MultiSelect, PageHeader, Select, type MultiSelectOption } from '@endora-commerce/admin-kit/ui';
 import {
   CustomFieldListFilters,
+  customFieldDisplayName,
   customFieldFilterChips,
   customFieldFilterRefusal,
+  emptyCustomFieldFilters,
   OrganizationPicker,
   PaginationFooter,
   pruneRemovedOptions,
@@ -16,11 +18,12 @@ import {
   sanitizeCustomFieldFilters,
   toCustomFieldFiltersParam,
   useCustomFieldListFilterFields,
+  withCustomFieldFilter,
   writeCustomFieldFilterParams,
   type ResponsiveColumn,
   type SavedViewState,
 } from '@endora-commerce/admin-kit/components';
-import type { CustomFieldFilter, CustomFieldFilters, CustomFieldListFilterField } from '@endora-commerce/contracts';
+import type { CustomFieldFilters } from '@endora-commerce/contracts';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 /**
  * Admin Quote Requests list (feature 008 / T042). Restructured to mirror the
@@ -111,36 +114,16 @@ const DEFAULT_SORT = SORT_OPTIONS[0].value;
 const CUSTOM_FIELD_FILTERS_ENDPOINT = '/api/v1/admin/quote-requests/custom-field-filters';
 
 /**
- * A custom field as the operator reads it: its label in their language, or —
- * for a key the list does not offer, which may have come from anywhere — the
- * key, cut to 64 characters. Always rendered as text.
+ * A saved view's custom-field filters kept as saved, for when the offered
+ * fields are not known (still loading, or failed): written to and read back
+ * from the address form, which re-applies the key grammar, each filter's
+ * schema and the caps — nothing more is judged until the fields are known.
  */
-function customFieldName(fields: readonly CustomFieldListFilterField[], key: string, language: string): string {
-  const field = fields.find((candidate) => candidate.key === key);
-  if (field) {
-    const base = language.split('-')[0] ?? language;
-    for (const candidate of [language, base]) {
-      const value = Object.hasOwn(field.label, candidate) ? field.label[candidate] : undefined;
-      if (typeof value === 'string' && value !== '') return value;
-    }
-    return field.labelDefault;
-  }
-  return key.length > 64 ? `${key.slice(0, 64)}…` : key;
-}
-
-/** `filters` with `key` set to `filter` (or removed when `null`), as a new prototype-free record. */
-function withCustomFieldFilter(
-  filters: CustomFieldFilters,
-  key: string,
-  filter: CustomFieldFilter | null,
-): CustomFieldFilters {
-  const next = Object.create(null) as CustomFieldFilters;
-  for (const existing of Object.keys(filters)) {
-    const value = filters[existing];
-    if (existing !== key && value !== undefined) next[existing] = value;
-  }
-  if (filter !== null) next[key] = filter;
-  return next;
+function savedCustomFieldFilters(saved: unknown): CustomFieldFilters {
+  if (typeof saved !== 'object' || saved === null || Array.isArray(saved)) return emptyCustomFieldFilters();
+  return readCustomFieldFilterParams(
+    writeCustomFieldFilterParams(new URLSearchParams(), saved as CustomFieldFilters),
+  );
 }
 
 function rowTotal(r: AdminRfqRow): number | null {
@@ -187,6 +170,21 @@ export function RfqList(): ReactNode {
   /** The keys a loaded view carried that the list no longer offers. */
   const [droppedCustomFields, setDroppedCustomFields] = useState<string[]>([]);
   const customFieldParam = toCustomFieldFiltersParam(customFieldFilters);
+  /** The results region, focused once a refused filter is removed. */
+  const resultsRef = useRef<HTMLDivElement | null>(null);
+  /** Numbers each list request, so a slower, older answer cannot land last. */
+  const requestSequence = useRef(0);
+  /**
+   * The request last sent. StrictMode mounts effects twice in development, and
+   * an unchanged request is not sent again.
+   */
+  const lastRequest = useRef<string | null>(null);
+
+  /** The custom-field filters changed: a notice about the previous state is no longer news. */
+  const changeCustomFieldFilters = useCallback((next: CustomFieldFilters): void => {
+    setCustomFieldFilters(next);
+    setDroppedCustomFields([]);
+  }, []);
 
   // Client-side filters.
   const [statusCodes, setStatusCodes] = useState<string[]>(() => {
@@ -199,19 +197,24 @@ export function RfqList(): ReactNode {
   const [visibleColumnIds, setVisibleColumnIds] = useState<ColumnId[]>(DEFAULT_VISIBLE);
 
   const refresh = useCallback(async (): Promise<void> => {
+    const params = new URLSearchParams();
+    if (scope) params.set('assignmentScope', scope);
+    if (organizationId) params.set('organizationId', organizationId);
+    if (customFieldParam !== null) params.set('customFieldFilters', customFieldParam);
+    const path =
+      '/api/v1/admin/quote-requests' + (params.toString() ? `?${params.toString()}` : '');
+    if (path === lastRequest.current) return;
+    lastRequest.current = path;
+    const current = ++requestSequence.current;
     setLoading(true);
     setError(null);
     setRefusedCustomField(null);
     try {
-      const params = new URLSearchParams();
-      if (scope) params.set('assignmentScope', scope);
-      if (organizationId) params.set('organizationId', organizationId);
-      if (customFieldParam !== null) params.set('customFieldFilters', customFieldParam);
-      const path =
-        '/api/v1/admin/quote-requests' + (params.toString() ? `?${params.toString()}` : '');
       const res = await apiClient.get<AdminRfqListResponse>(path);
+      if (current !== requestSequence.current) return;
       setRows(res.data);
     } catch (err) {
+      if (current !== requestSequence.current) return;
       const refused = customFieldFilterRefusal(err);
       if (refused !== null) {
         setRows([]);
@@ -220,7 +223,7 @@ export function RfqList(): ReactNode {
         setError(err instanceof ApiError ? err.envelope.error.message : t('rfq.list.error.load'));
       }
     } finally {
-      setLoading(false);
+      if (current === requestSequence.current) setLoading(false);
     }
   }, [scope, organizationId, customFieldParam, t]);
 
@@ -228,11 +231,11 @@ export function RfqList(): ReactNode {
   // are dropped from it; an unknown key stays, for the server to refuse.
   useEffect(() => {
     if (customFieldFields.status !== 'ready') return;
-    setCustomFieldFilters((current) => {
-      const pruned = pruneRemovedOptions(current, customFieldFields.fields);
-      return toCustomFieldFiltersParam(pruned) === toCustomFieldFiltersParam(current) ? current : pruned;
-    });
-  }, [customFieldFields]);
+    const pruned = pruneRemovedOptions(customFieldFilters, customFieldFields.fields);
+    if (toCustomFieldFiltersParam(pruned) !== toCustomFieldFiltersParam(customFieldFilters)) {
+      changeCustomFieldFilters(pruned);
+    }
+  }, [customFieldFields, customFieldFilters, changeCustomFieldFilters]);
 
   // The address follows the custom-field filters; every other parameter stays.
   useEffect(() => {
@@ -297,7 +300,7 @@ export function RfqList(): ReactNode {
   const advancedActiveCount =
     (scope !== 'mine' ? 1 : 0) + (organizationId ? 1 : 0) + Object.keys(customFieldFilters).length;
 
-  type FilterChip = { key: string; label: string; onRemove: () => void };
+  type FilterChip = { key: string; label: string; onRemove: () => void; removeLabel?: string };
   const filterChips: FilterChip[] = [
     ...statusCodes.map((code) => ({
       key: `status:${code}`,
@@ -328,7 +331,8 @@ export function RfqList(): ReactNode {
     ...customFieldFilterChips(customFieldFields.fields, customFieldFilters, language, t).map((chip) => ({
       key: chip.id,
       label: chip.label,
-      onRemove: (): void => setCustomFieldFilters(chip.remove()),
+      removeLabel: chip.removeLabel,
+      onRemove: (): void => changeCustomFieldFilters(chip.remove()),
     })),
   ];
 
@@ -374,10 +378,17 @@ export function RfqList(): ReactNode {
     );
     setQ(typeof f['q'] === 'string' ? f['q'] : '');
     // FR-014: a saved custom-field filter the list no longer offers is dropped,
-    // and the operator is told which.
-    const { kept, dropped } = sanitizeCustomFieldFilters(f['customFields'], customFieldFields.fields);
-    setCustomFieldFilters(kept);
-    setDroppedCustomFields(dropped);
+    // and the operator is told which — but only against fields that are known.
+    // While they load, or after they failed to, the saved filters are kept as
+    // saved, with no notice: nothing is known to be gone.
+    if (customFieldFields.status === 'ready') {
+      const { kept, dropped } = sanitizeCustomFieldFilters(f['customFields'], customFieldFields.fields);
+      setCustomFieldFilters(kept);
+      setDroppedCustomFields(dropped);
+    } else {
+      setCustomFieldFilters(savedCustomFieldFilters(f['customFields']));
+      setDroppedCustomFields([]);
+    }
     const nextSort = state.sort ? `${state.sort.field}:${state.sort.dir}` : '';
     setSort(SORT_VALUES.includes(nextSort) ? nextSort : DEFAULT_SORT);
     const columns = (state.visibleColumns ?? []).filter((c): c is ColumnId =>
@@ -392,13 +403,15 @@ export function RfqList(): ReactNode {
     setOrganizationId('');
     setScope('mine');
     setQ('');
-    setCustomFieldFilters(Object.create(null) as CustomFieldFilters);
+    changeCustomFieldFilters(emptyCustomFieldFilters());
   };
 
   const removeRefusedCustomField = (): void => {
     if (refusedCustomField === null) return;
-    setCustomFieldFilters((current) => withCustomFieldFilter(current, refusedCustomField, null));
+    changeCustomFieldFilters(withCustomFieldFilter(customFieldFilters, refusedCustomField, null));
     setRefusedCustomField(null);
+    // Focus follows the operator to what they are waiting for: the results.
+    resultsRef.current?.focus();
   };
 
   const columnDefs: Record<ColumnId, ResponsiveColumn<AdminRfqRow>> = {
@@ -480,26 +493,12 @@ export function RfqList(): ReactNode {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
-      {refusedCustomField !== null ? (
-        <Alert variant="destructive" className="mb-4">
-          <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>
-              {t('customFieldFilters.error.unavailable', {
-                field: customFieldName(customFieldFields.fields, refusedCustomField, language),
-              })}
-            </span>
-            <Button type="button" size="sm" variant="outline" onClick={removeRefusedCustomField}>
-              {t('customFieldFilters.error.remove')}
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : null}
       {droppedCustomFields.length > 0 ? (
-        <Alert className="mb-4">
+        <Alert variant="warning" className="mb-4">
           <AlertDescription>
             {t('customFieldFilters.notice.dropped', {
               fields: droppedCustomFields
-                .map((key) => customFieldName(customFieldFields.fields, key, language))
+                .map((key) => customFieldDisplayName(customFieldFields.fields, key, language))
                 .join(', '),
             })}
           </AlertDescription>
@@ -581,6 +580,7 @@ export function RfqList(): ReactNode {
                 <button
                   key={chip.key}
                   type="button"
+                  aria-label={chip.removeLabel}
                   onClick={chip.onRemove}
                   className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2.5 py-1 text-xs hover:bg-muted"
                 >
@@ -625,21 +625,43 @@ export function RfqList(): ReactNode {
                 fields={customFieldFields.fields}
                 value={customFieldFilters}
                 language={language}
+                status={customFieldFields.status}
+                onRetry={customFieldFields.reload}
                 onChange={(key, filter): void =>
-                  setCustomFieldFilters((current) => withCustomFieldFilter(current, key, filter))
+                  changeCustomFieldFilters(withCustomFieldFilter(customFieldFilters, key, filter))
                 }
               />
-              {customFieldFields.status === 'error' ? (
-                <p className="col-span-full text-sm text-muted-foreground">{t('customFieldFilters.loadFailed')}</p>
-              ) : null}
             </div>
           ) : null}
         </CardContent>
       </Card>
 
       <Card>
-        <CardContent className="pt-6">
-          {loading ? (
+        <CardContent ref={resultsRef} tabIndex={-1} className="pt-6 focus:outline-none" aria-busy={loading}>
+          {/* Mounted before it has text, so a reload is announced (WCAG 4.1.3). */}
+          <p role="status" className="sr-only">
+            {loading ? t('rfq.list.loading') : ''}
+          </p>
+          {refusedCustomField !== null ? (
+            <Alert variant="destructive">
+              <AlertDescription className="flex flex-wrap items-center gap-3">
+                <span>
+                  {t('customFieldFilters.error.unavailable', {
+                    field: customFieldDisplayName(customFieldFields.fields, refusedCustomField, language),
+                  })}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="min-h-11 sm:min-h-8"
+                  onClick={removeRefusedCustomField}
+                >
+                  {t('customFieldFilters.error.remove')}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : loading ? (
             <p className="text-sm text-muted-foreground">{t('rfq.list.loading')}</p>
           ) : total === 0 ? (
             <p className="text-sm text-muted-foreground">{t('rfq.list.empty')}</p>
@@ -658,14 +680,16 @@ export function RfqList(): ReactNode {
               )}
             />
           )}
-          <PaginationFooter
-            page={page}
-            pageSize={pageSize}
-            total={total}
-            onPageSizeChange={setPageSize}
-            onPrev={(): void => setPage((p) => Math.max(0, p - 1))}
-            onNext={(): void => setPage((p) => p + 1)}
-          />
+          {refusedCustomField === null ? (
+            <PaginationFooter
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageSizeChange={setPageSize}
+              onPrev={(): void => setPage((p) => Math.max(0, p - 1))}
+              onNext={(): void => setPage((p) => p + 1)}
+            />
+          ) : null}
         </CardContent>
       </Card>
     </>

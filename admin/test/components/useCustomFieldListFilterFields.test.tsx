@@ -68,4 +68,13 @@ describe('useCustomFieldListFilterFields', () => {
     expect(result.current.status).toBe('ready');
     expect(result.current.fields).toEqual(FIELDS);
   });
+
+  it('reads again on reload, after a failure', async () => {
+    api.get.mockRejectedValueOnce(new ApiError(500, { error: { code: 'INTERNAL', message: 'boom' } })).mockResolvedValue({ data: FIELDS });
+    const { result } = renderHook(() => useCustomFieldListFilterFields(ENDPOINT), { wrapper: strict });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    result.current.reload();
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(result.current.fields).toEqual(FIELDS);
+  });
 });

@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApiError } from '@endora-commerce/admin-kit/lib';
 import {
+  customFieldDisplayName,
   customFieldFilterChips,
   customFieldFilterRefusal,
+  emptyCustomFieldFilters,
+  resolveCustomFieldLabel,
+  withCustomFieldFilter,
+  withoutCustomFieldFilter,
   pruneRemovedOptions,
   readCustomFieldFilterParams,
   sanitizeCustomFieldFilters,
@@ -256,5 +261,39 @@ describe('toCustomFieldFiltersParam', () => {
     expect(toCustomFieldFiltersParam(filters({ vip: { is: true }, region: { in: ['north'] } }))).toBe(
       '{"region":{"in":["north"]},"vip":{"is":true}}',
     );
+  });
+});
+
+describe('the record and label helpers the list pages share', () => {
+  it('resolves a label in the language, then its base language, then labelDefault, skipping empty labels', () => {
+    expect(resolveCustomFieldLabel({ pl: 'Region PL' }, 'Default', 'pl-PL')).toBe('Region PL');
+    expect(resolveCustomFieldLabel({ pl: '' }, 'Default', 'pl')).toBe('Default');
+  });
+
+  it('names a field by its label, and a key the list does not offer by the key, cut to 64 characters', () => {
+    expect(customFieldDisplayName(FIELDS, 'region', 'pl')).toBe('Region PL');
+    expect(customFieldDisplayName(FIELDS, 'gone_field', 'en')).toBe('gone_field');
+    const long = `<img src=x>${'a'.repeat(80)}`;
+    expect(customFieldDisplayName(FIELDS, long, 'en')).toBe(`${long.slice(0, 64)}…`);
+  });
+
+  it('sets and removes one key, always into a new prototype-free record', () => {
+    const start = emptyCustomFieldFilters();
+    expect(Object.getPrototypeOf(start)).toBeNull();
+    const set = withCustomFieldFilter(start, 'region', { in: ['north'] });
+    expect(Object.getPrototypeOf(set)).toBeNull();
+    expect(set).not.toBe(start);
+    expect({ ...set }).toEqual({ region: { in: ['north'] } });
+    const constructorKey = withCustomFieldFilter(set, 'constructor', { is: true });
+    expect(Object.keys(constructorKey)).toEqual(['region', 'constructor']);
+    expect({ ...withCustomFieldFilter(constructorKey, 'region', null) }).toEqual({ constructor: { is: true } });
+    expect({ ...withoutCustomFieldFilter(constructorKey, 'constructor') }).toEqual({ region: { in: ['north'] } });
+  });
+
+  it('gives each chip an accessible name for its remove action', () => {
+    const [chip] = customFieldFilterChips(FIELDS, filters({ region: { in: ['north'] } }), 'en', tEn);
+    expect(chip?.removeLabel).toBe('Remove filter Region: North');
+    const [plChip] = customFieldFilterChips(FIELDS, filters({ region: { in: ['north'] } }), 'pl', tPl);
+    expect(plChip?.removeLabel).toBe('Usuń filtr Region PL: Północ');
   });
 });
