@@ -13,6 +13,7 @@ import {
   customFieldValuesSchema,
   customerAddOrderCommentRequestSchema,
   ERROR_CODES,
+  isCustomFieldFilterUnavailableFailure,
   isCustomFieldValidationFailure,
   OrganizationCannotTransactError,
   orderPreviewTotalRequestSchema,
@@ -28,6 +29,7 @@ import type {
   AssetReadPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
   DeliveryMethodReadPort,
   InvoicePdfPort,
@@ -173,6 +175,11 @@ export interface OrdersDeps {
   assetRead: AssetReadPort;
   /** Feature 055 — validates + persists Order custom-field values (via the Command Bus). */
   customFieldValues?: CustomFieldValuePort;
+  /**
+   * Feature 157 — `customFieldListFilterPort`: the Order custom fields the
+   * admin list offers as filters. Absent ⇒ the list offers none.
+   */
+  customFieldListFilter?: CustomFieldListFilterPort;
   /** Feature 055 — audits the custom-field write co-transactionally when provided. */
   commandBus?: CommandBus;
 }
@@ -597,13 +604,35 @@ export async function registerOrderRoutes(
     }
   };
 
+  /**
+   * A custom-field filter the list does not offer is the caller's mistake:
+   * 400, naming the first refused key (the sentence interpolates it) and all of
+   * them. Everything else is rethrown untouched.
+   */
+  const refuseUnavailableCustomFieldFilter = (error: unknown): never => {
+    if (isCustomFieldFilterUnavailableFailure(error)) {
+      throw new HttpError(400, ERROR_CODES.CUSTOM_FIELD_FILTER_UNAVAILABLE, error.message, {
+        key: error.keys[0] ?? '',
+        keys: [...error.keys],
+      });
+    }
+    throw error;
+  };
+
+  // Feature 157 — the Order custom fields the list offers as filters.
+  app.get(
+    '/api/v1/admin/orders/custom-field-filters',
+    { preHandler: requireAdmin('orders:read') },
+    async () => ({ data: (await deps.customFieldListFilter?.listFilterable('order')) ?? [] }),
+  );
+
   app.get(
     '/api/v1/admin/orders',
     { preHandler: requireAdmin('orders:read'), schema: { querystring: adminOrdersListQuerySchema } },
     async (request) => {
       const query = adminOrdersListQuerySchema.parse(request.query);
       const scope = await resolveListScope(request);
-      const result = await deps.orderListService.list(query, scope);
+      const result = await deps.orderListService.list(query, scope).catch(refuseUnavailableCustomFieldFilter);
       return {
         data: result.rows,
         pagination: { page: query.page, pageSize: query.pageSize, total: result.total },
@@ -626,7 +655,9 @@ export async function registerOrderRoutes(
     async (request, reply) => {
       const query = adminOrdersListQuerySchema.parse(request.query);
       const scope = await resolveListScope(request);
-      const { csv, rowCount, truncated } = await deps.orderExportService.exportCsv(query, scope);
+      const { csv, rowCount, truncated } = await deps.orderExportService
+        .exportCsv(query, scope)
+        .catch(refuseUnavailableCustomFieldFilter);
       reply.header('content-type', 'text/csv; charset=utf-8');
       reply.header('content-disposition', 'attachment; filename="orders.csv"');
       reply.header('x-export-row-count', String(rowCount));
