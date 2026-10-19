@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as crm from './crm.js';
+import { customFieldFilterSchema } from './custom-fields.js';
 import type { OpportunityTransitionOutcome } from './crm.js';
 
 /**
@@ -695,6 +696,10 @@ describe('board card fields and field filters (§12c, US19)', () => {
       rejects(schema, { fieldFilters: JSON.stringify({ 'custom:a': { from: '2026-02-30' } }) });
       rejects(schema, { fieldFilters: JSON.stringify(['custom:a']) });
     }
+  });
+
+  it('the field filter is the shared custom-field filter object (specs/157-custom-fields-list-filters/)', () => {
+    expect(crm.OpportunityFieldFilterSchema).toBe(customFieldFilterSchema);
   });
 
   it('a refused field filter is located once: fieldFilters, the field, the operator (N-BFR6)', () => {

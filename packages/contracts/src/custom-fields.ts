@@ -84,6 +84,12 @@ export const customFieldDefinitionSchema = z.object({
   // Opaque host-capability flags (FR-006). The generic core stores but never
   // interprets `config`; a host module reads its own flags from here.
   config: z.record(z.string(), z.unknown()).default({}),
+  /**
+   * Whether the admin lists of the definition's entity type offer it as a
+   * filter (feature 157). Settable only where the entity type's registry entry
+   * offers the option ({@link customFieldEntityTypeInfoSchema}).
+   */
+  listFilter: z.boolean(),
   options: z.array(customFieldOptionSchema).default([]),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
@@ -95,7 +101,12 @@ export const createCustomFieldDefinitionSchema = customFieldDefinitionSchema
   .omit({ id: true, createdAt: true, updatedAt: true })
   // A definition created without an audience is `internal`: values reach a
   // customer only where an administrator has said they may.
-  .extend({ audience: customFieldAudienceSchema.default('internal') });
+  // A definition created without `listFilter` is not a list filter; the
+  // server reads the absence as `false` rather than the schema defaulting it.
+  .extend({
+    audience: customFieldAudienceSchema.default('internal'),
+    listFilter: z.boolean().optional(),
+  });
 export type CreateCustomFieldDefinitionRequest = z.infer<typeof createCustomFieldDefinitionSchema>;
 
 /** Patch a definition. `entityType` and `key` cannot change once records may hold values. */
@@ -110,6 +121,7 @@ export const updateCustomFieldDefinitionSchema = createCustomFieldDefinitionSche
   .extend({
     audience: customFieldAudienceSchema.optional(),
     config: z.record(z.string(), z.unknown()).optional(),
+    listFilter: z.boolean().optional(),
   });
 export type UpdateCustomFieldDefinitionRequest = z.infer<typeof updateCustomFieldDefinitionSchema>;
 
@@ -130,6 +142,8 @@ export const customFieldEntityTypeInfoSchema = z.object({
       route: z.string(),
     })
     .optional(),
+  /** Whether definitions of this type may be marked as list filters (feature 157). */
+  listFilter: z.boolean(),
 });
 export type CustomFieldEntityTypeInfo = z.infer<typeof customFieldEntityTypeInfoSchema>;
 
@@ -150,6 +164,138 @@ export const customFieldValidationErrorSchema = z.object({
   message: z.string(),
 });
 export type CustomFieldValidationError = z.infer<typeof customFieldValidationErrorSchema>;
+
+// ---------------------------------------------------------------------------
+// --- list filters (specs/157-custom-fields-list-filters/) -----------------
+// ---------------------------------------------------------------------------
+
+/** Whether `YYYY-MM-DD` names a day the calendar has: `2026-02-31` and `2026-13-01` do not. */
+function isCalendarDate(value: string): boolean {
+  const [year = 0, month = 0, day = 0] = value.split('-').map(Number);
+  if (year < 1) return false;
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+const filterDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
+  .refine(isCalendarDate, 'Not a date of the calendar');
+
+/** A bound of a number, as a decimal string. */
+const filterDecimalBoundSchema = z.string().regex(/^-?\d{1,12}(\.\d{1,4})?$/, 'Not a decimal number');
+
+/**
+ * One custom field's filter: the operators of every value type in one object.
+ * Which of them apply is the definition's value type to say; the others are
+ * ignored by the server. The CRM board's field filter is this same object.
+ */
+export const customFieldFilterSchema = z
+  .object({
+    contains: z.string().trim().min(1).max(200).optional(),
+    in: z.array(z.string().min(1).max(200)).min(1).max(50).optional(),
+    is: z.boolean().optional(),
+    min: filterDecimalBoundSchema.optional(),
+    max: filterDecimalBoundSchema.optional(),
+    from: filterDateSchema.optional(),
+    to: filterDateSchema.optional(),
+  })
+  .strict();
+export type CustomFieldFilter = z.infer<typeof customFieldFilterSchema>;
+
+/** Bounds the work one list request can ask of the database (keys per request). */
+export const CUSTOM_FIELD_FILTERS_MAX_KEYS = 10;
+/** Bounds the work one list request can ask of the database (`in` values summed over every key). */
+export const CUSTOM_FIELD_FILTERS_MAX_IN_VALUES = 100;
+
+/**
+ * A list request's custom-field filters, keyed by definition key. The key
+ * grammar is the definition's, so `__proto__` and anything with a dot, a colon
+ * or markup is refused here. `constructor` matches it: a consumer looks keys up
+ * through a `Map` or `Object.hasOwn`, never a plain-object index.
+ */
+const customFieldFiltersRecordSchema = z
+  .record(customFieldDefinitionSchema.shape.key, customFieldFilterSchema)
+  .refine(
+    (filters) => Object.keys(filters).length <= CUSTOM_FIELD_FILTERS_MAX_KEYS,
+    'Too many custom-field filters',
+  )
+  .refine(
+    (filters) =>
+      Object.values(filters).reduce((count, filter) => count + (filter.in?.length ?? 0), 0) <=
+      CUSTOM_FIELD_FILTERS_MAX_IN_VALUES,
+    'Too many custom-field filter values',
+  );
+
+export const customFieldFiltersSchema = z
+  .unknown()
+  .superRefine((value, ctx) => {
+    // Zod's record skips an own `__proto__` key without a word; refuse it, so
+    // the request reads as refused rather than as a filter quietly dropped.
+    if (typeof value === 'object' && value !== null && Object.hasOwn(value, '__proto__')) {
+      ctx.addIssue({ code: 'custom', message: 'Invalid custom-field key', path: ['__proto__'] });
+    }
+  })
+  .pipe(customFieldFiltersRecordSchema);
+export type CustomFieldFilters = z.infer<typeof customFieldFiltersSchema>;
+
+/**
+ * The `customFieldFilters` query parameter: {@link customFieldFiltersSchema}
+ * as JSON, at most 8000 characters.
+ *
+ * **Idempotent.** The route validator replaces `request.query` with its parsed
+ * output and a handler may parse it again with the same query schema, so an
+ * already-parsed object is validated rather than refused. A repeated parameter
+ * (an array) matches neither branch and is refused.
+ */
+export const customFieldFiltersQueryParamSchema = z
+  .union([z.string().max(8000), customFieldFiltersSchema])
+  .optional()
+  .transform((raw, ctx): CustomFieldFilters | undefined => {
+    if (raw === undefined || raw === '') return undefined;
+    if (typeof raw !== 'string') return raw;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      ctx.addIssue({ code: 'custom', message: 'customFieldFilters is not JSON' });
+      return z.NEVER;
+    }
+    const result = customFieldFiltersSchema.safeParse(parsed);
+    if (!result.success) {
+      for (const issue of result.error.issues) {
+        // Relative to this parameter: the query schema names it already.
+        ctx.addIssue({ code: 'custom', message: issue.message, path: [...issue.path] });
+      }
+      return z.NEVER;
+    }
+    return result.data;
+  });
+
+/**
+ * One custom field an admin list offers as a filter. Deliberately narrow: no
+ * `audience`, `required`, `config`, `listFilter`, `id` or `sortOrder`.
+ */
+export const customFieldListFilterFieldSchema = z
+  .object({
+    key: customFieldDefinitionSchema.shape.key,
+    valueType: customFieldValueTypeSchema,
+    label: localizedLabelSchema,
+    labelDefault: z.string(),
+    options: z.array(
+      z.object({ value: z.string(), label: localizedLabelSchema, labelDefault: z.string() }),
+    ),
+  })
+  .strict();
+export type CustomFieldListFilterField = z.infer<typeof customFieldListFilterFieldSchema>;
+
+export const customFieldListFilterFieldsResponseSchema = z.object({
+  data: z.array(customFieldListFilterFieldSchema),
+});
+export type CustomFieldListFilterFieldsResponse = z.infer<
+  typeof customFieldListFilterFieldsResponseSchema
+>;
 
 /**
  * What `CustomFieldValuePort.validateAndMerge` throws, as a **shape** rather
@@ -234,6 +380,8 @@ export const CUSTOM_FIELD_DEFINITION_ERROR_CODES = [
   'entity_type_unknown',
   'value_type_locked',
   'option_in_use',
+  // Feature 157 — `listFilter` set on a definition whose entity type does not offer it.
+  'list_filter_unsupported',
 ] as const;
 export type CustomFieldDefinitionErrorCode =
   (typeof CUSTOM_FIELD_DEFINITION_ERROR_CODES)[number];
@@ -277,6 +425,7 @@ export interface CustomFieldDefinitionRecord {
   audience: CustomFieldAudience;
   sortOrder: number;
   config: Record<string, unknown>;
+  listFilter: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -422,3 +571,53 @@ export interface CustomFieldValuePort {
 // Error'` test rather than re-parsing every entry: it is the check that still
 // works once each module is its own npm package (F4), which is the reason the
 // guard exists, and it costs nothing on an error path.
+
+/**
+ * Container name: `customFieldListFilterPort`. Owner: `custom_fields`
+ * (feature 157).
+ *
+ * The admin lists of `orders`, `quote_requests` and `crm` ask it which custom
+ * fields they offer as filters, and turn a request's filters into one
+ * server-side condition.
+ */
+export interface CustomFieldListFilterPort {
+  /** The served definitions of the type with `listFilter` on; `[]` when the type offers none. */
+  listFilterable(entityType: SupportedEntityType): Promise<CustomFieldListFilterField[]>;
+  /**
+   * The whole request's filters as **one** condition — one scan of the bound
+   * host table, every predicate of every key ANDed in its WHERE — or `null`
+   * when nothing applies. Throws a {@link CustomFieldFilterUnavailableFailure}
+   * naming every key that is not offered.
+   */
+  condition(
+    entityType: SupportedEntityType,
+    filters: CustomFieldFilters | undefined,
+  ): Promise<CustomFieldListFilterCondition | null>;
+}
+
+/**
+ * `select t."id" from "<bound table>" t where (<p1>) and (<p2>) …` — every key
+ * and value bound. A caller wraps it in a fresh raw fragment for every
+ * statement it runs; a raw fragment is not reused.
+ */
+export interface CustomFieldListFilterCondition {
+  readonly sql: string;
+  readonly params: readonly unknown[];
+}
+
+/** What {@link CustomFieldListFilterPort.condition} throws for filters a list does not offer. */
+export interface CustomFieldFilterUnavailableFailure extends Error {
+  readonly name: 'CustomFieldFilterUnavailableError';
+  readonly keys: readonly string[];
+}
+
+/** Whether `error` is a refused list filter, narrowed by shape (as the sibling guards above). */
+export function isCustomFieldFilterUnavailableFailure(
+  error: unknown,
+): error is CustomFieldFilterUnavailableFailure {
+  return (
+    error instanceof Error &&
+    error.name === 'CustomFieldFilterUnavailableError' &&
+    Array.isArray((error as { keys?: unknown }).keys)
+  );
+}
