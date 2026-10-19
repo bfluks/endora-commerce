@@ -5669,6 +5669,15 @@
         }
       }
     },
+    "/api/v1/admin/quote-requests/custom-field-filters": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/admin/quote-requests/list-views": {
       "get": {
         "responses": {

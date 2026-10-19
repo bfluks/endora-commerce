@@ -6,6 +6,9 @@ import {
   adminCreateQuoteRequestSchema,
   adminPatchQuoteRequestSchema,
   createQuoteRequestSavedViewRequestSchema,
+  customFieldFiltersQueryParamSchema,
+  ERROR_CODES,
+  isCustomFieldFilterUnavailableFailure,
   rfqStatusSchema,
   updateQuoteRequestSavedViewRequestSchema,
 } from '@endora-commerce/contracts';
@@ -13,6 +16,7 @@ import { savedViewActor } from './saved-view-actor.js';
 import type { RfqAdminService, AdminContext, AdminAssignmentScope } from './services/rfq-admin-service.js';
 import type { QuoteRequestListViewService } from './services/quote-request-list-view-service.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import { HttpError } from '@endora-commerce/platform/http';
 
 export interface AdminContextResolver {
   (request: FastifyRequest): Promise<AdminContext>;
@@ -45,9 +49,23 @@ export async function registerQuoteRequestsAdminRoutes(
   const { adminService, requireAdmin, resolveAdminContext, listViewService } = deps;
   const guard = requireAdmin('rfqs:handle');
 
+  // `specs/157-custom-fields-list-filters/` — the custom fields the list offers as filters.
+  app.get('/api/v1/admin/quote-requests/custom-field-filters', { preHandler: guard }, async () => ({
+    data: await adminService.customFieldFilterFields(),
+  }));
+
   app.get('/api/v1/admin/quote-requests', { preHandler: guard }, async (request) => {
     const ctx = await resolveAdminContext(request);
-    const q = (request.query ?? {}) as Record<string, string | undefined>;
+    const rawQuery = (request.query ?? {}) as Record<string, unknown>;
+    // The list has no route-level query schema, so the custom-field filters are
+    // read here: a repeated parameter arrives as an array and is refused rather
+    // than one of its copies silently applied.
+    const rawFilters = rawQuery['customFieldFilters'];
+    if (rawFilters !== undefined && typeof rawFilters !== 'string') {
+      throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, 'customFieldFilters must be given once.');
+    }
+    const customFieldFilters = customFieldFiltersQueryParamSchema.parse(rawFilters);
+    const q = rawQuery as Record<string, string | undefined>;
 
     const status = q['status']
       ? q['status']
@@ -61,6 +79,15 @@ export async function registerQuoteRequestsAdminRoutes(
       ...(q['organizationId'] ? { organizationId: q['organizationId']! } : {}),
       ...(status && status.length > 0 ? { status: status as never } : {}),
       ...(scope ? { scope } : {}),
+      ...(customFieldFilters ? { customFieldFilters } : {}),
+    }).catch((error: unknown) => {
+      if (isCustomFieldFilterUnavailableFailure(error)) {
+        throw new HttpError(400, ERROR_CODES.CUSTOM_FIELD_FILTER_UNAVAILABLE, error.message, {
+          key: error.keys[0] ?? '',
+          keys: [...error.keys],
+        });
+      }
+      throw error;
     });
     return {
       data,

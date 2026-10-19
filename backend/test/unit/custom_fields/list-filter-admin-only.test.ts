@@ -21,6 +21,11 @@ const NAMES = ['customFieldListFilterPort', 'customFieldFiltersQueryParamSchema'
 const ALLOWED: Record<string, readonly string[]> = {
   custom_fields: ['*'],
   orders: ['src/backend/index.ts', 'src/backend/routes.ts', 'src/backend/services/order-list-service.ts'],
+  quote_requests: [
+    'src/backend/index.ts',
+    'src/backend/routes.admin.ts',
+    'src/backend/services/rfq-admin-service.ts',
+  ],
 };
 
 /** A file serving a buyer or an integration, by its path. */
