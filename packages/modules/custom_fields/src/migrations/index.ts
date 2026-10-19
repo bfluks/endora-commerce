@@ -24,13 +24,16 @@
 
 import { Migration20260718T200338CustomFieldsInit } from './20260718T200338_custom_fields_init.js';
 import { Migration20261010T090000CustomFieldsDefinitionAudience } from './20261010T090000_custom_fields_definition_audience.js';
+import { Migration20261019T103522CustomFieldsDefinitionListFilter } from './20261019T103522_custom_fields_definition_list_filter.js';
 
 export const migrations = [
   Migration20260718T200338CustomFieldsInit,
   Migration20261010T090000CustomFieldsDefinitionAudience,
+  Migration20261019T103522CustomFieldsDefinitionListFilter,
 ];
 
 export {
   Migration20260718T200338CustomFieldsInit,
   Migration20261010T090000CustomFieldsDefinitionAudience,
+  Migration20261019T103522CustomFieldsDefinitionListFilter,
 };

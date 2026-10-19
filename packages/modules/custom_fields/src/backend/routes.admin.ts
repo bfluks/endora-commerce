@@ -15,11 +15,12 @@ import {
   type CustomFieldDefinitionService,
 } from './services/custom-field-definition.service.js';
 import {
+  isEntityTypeServed,
   isSupportedEntityType,
   SUPPORTED_ENTITIES,
   type SupportedEntityMeta,
 } from './services/custom-field-registry.js';
-import { effectiveState, type RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 
 export interface CustomFieldsAdminDeps {
   definitionService: CustomFieldDefinitionService;
@@ -64,25 +65,13 @@ function assertNotHostManaged(entityType: string): void {
 }
 
 /**
- * Feature 143 — a host type follows its owner module. When an entity type's
- * registry entry declares `ownerModuleId`, the type exists for the operator
- * only while that module is effectively present (Constitution XVII). Generic:
- * the one question asked is whether the named module is present.
- */
-function isOwnerPresent(meta: SupportedEntityMeta | undefined): boolean {
-  return !meta?.ownerModuleId || effectiveState.isPresent(meta.ownerModuleId);
-}
-
-/**
  * Whether a stored definition is served: one of a type whose owner module is
  * not present is not — "off behaves as if never installed" covers what an
  * operator defined for the module's entity as well as the entity. The rows
  * stay, and are served again with the owner.
  */
 function isDefinitionServed({ definition }: CachedDefinition): boolean {
-  return isOwnerPresent(
-    isSupportedEntityType(definition.entityType) ? SUPPORTED_ENTITIES[definition.entityType] : undefined,
-  );
+  return isEntityTypeServed(definition.entityType);
 }
 
 /**
@@ -93,8 +82,7 @@ function isDefinitionServed({ definition }: CachedDefinition): boolean {
  * with it.
  */
 function assertOwnerPresent(entityType: string): void {
-  const meta = isSupportedEntityType(entityType) ? SUPPORTED_ENTITIES[entityType] : undefined;
-  if (!isOwnerPresent(meta)) {
+  if (!isEntityTypeServed(entityType)) {
     throw new HttpError(
       409,
       ERROR_CODES.CUSTOM_FIELD_HOST_MANAGED,
@@ -115,9 +103,7 @@ function serialize({ definition, options }: CachedDefinition): Record<string, un
     audience: definition.audience,
     sortOrder: definition.sortOrder,
     config: definition.config,
-    // Not stored yet: no definition is a list filter until the attribute is
-    // (specs/157-custom-fields-list-filters/, data-model §1).
-    listFilter: false,
+    listFilter: definition.listFilter,
     options: options.map((o) => ({
       id: o.id,
       value: o.value,
@@ -161,13 +147,12 @@ export async function registerCustomFieldsAdminRoutes(
         Object.entries(SUPPORTED_ENTITIES) as Array<[SupportedEntityType, SupportedEntityMeta]>
       )
         // A type whose owner module is off is not offered (feature 143).
-        .filter(([, meta]) => isOwnerPresent(meta))
+        .filter(([entityType]) => isEntityTypeServed(entityType))
         .map(([entityType, meta]) => ({
         entityType,
         labelKey: meta.labelKey,
-        // No entity type offers the list-filter option until the registry
-        // declares it (specs/157-custom-fields-list-filters/, data-model §2).
-        listFilter: false,
+        // Whether the type's definitions may be list filters (feature 157).
+        listFilter: meta.listFilter === true,
         ...(meta.managedBy
           ? {
               managedBy: {

@@ -8,7 +8,7 @@ import {
 } from '@endora-commerce/contracts';
 import { CustomFieldDefinition } from '../entities/custom-field-definition.entity.js';
 import { CustomFieldOption } from '../entities/custom-field-option.entity.js';
-import { isSupportedEntityType } from './custom-field-registry.js';
+import { isSupportedEntityType, offersListFilter } from './custom-field-registry.js';
 
 /**
  * Transactional apply functions for custom-field definition/option writes
@@ -36,7 +36,8 @@ export class CustomFieldDefinitionError extends Error {
       | 'stored_values_exist'
       | 'option_in_use'
       | 'key_changed'
-      | 'invalid_key',
+      | 'invalid_key'
+      | 'list_filter_unsupported',
     message: string,
   ) {
     super(message);
@@ -73,6 +74,19 @@ export function assertOptionsRule(valueType: string, options: CustomFieldOptionD
   }
 }
 
+/**
+ * `listFilter: true` only where the entity type's registry entry offers the
+ * option (feature 157); `false` and absence are always accepted.
+ */
+export function assertListFilterSupported(entityType: string, listFilter: boolean | undefined): void {
+  if (listFilter === true && !offersListFilter(entityType)) {
+    throw new CustomFieldDefinitionError(
+      'list_filter_unsupported',
+      `Fields of entity type "${entityType}" cannot be used as list filters.`,
+    );
+  }
+}
+
 /** Create a definition (+ its options for select types) on the caller's EM. */
 export async function applyCreateDefinition(
   em: EntityManager,
@@ -86,6 +100,7 @@ export async function applyCreateDefinition(
     throw new CustomFieldDefinitionError('entity_type_unknown', `Unknown entity type "${input.entityType}".`);
   }
   assertOptionsRule(input.valueType, input.options);
+  assertListFilterSupported(input.entityType, input.listFilter);
   const existing = await em.findOne(CustomFieldDefinition, {
     entityType: input.entityType,
     key: input.key,
@@ -106,6 +121,7 @@ export async function applyCreateDefinition(
     audience: input.audience,
     sortOrder: input.sortOrder,
     config: input.config,
+    listFilter: input.listFilter ?? false,
   });
   if (SELECT_TYPES.has(input.valueType)) {
     // Flush the definition first: options reference it by id (no ORM relation),
@@ -125,6 +141,7 @@ export async function applyUpdateDefinition(
 ): Promise<CustomFieldDefinition> {
   const def = await em.findOne(CustomFieldDefinition, { id });
   if (!def) throw new CustomFieldDefinitionError('not_found', `Custom field ${id} not found.`);
+  assertListFilterSupported(def.entityType, patch.listFilter);
   // FR-010: changing valueType while values exist is rejected (probe binding).
   if (patch.valueType !== undefined && patch.valueType !== def.valueType && probes) {
     const inUse = await probes.hasStoredValues(em, def.entityType, def.key);
@@ -142,6 +159,7 @@ export async function applyUpdateDefinition(
   if (patch.audience !== undefined) def.audience = patch.audience;
   if (patch.sortOrder !== undefined) def.sortOrder = patch.sortOrder;
   if (patch.config !== undefined) def.config = patch.config;
+  if (patch.listFilter !== undefined) def.listFilter = patch.listFilter;
   return def;
 }
 
