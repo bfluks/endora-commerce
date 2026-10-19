@@ -46,8 +46,9 @@ committed after a 300 ms pause; `number` — min/max inputs (decimal comma accep
 | `customFieldFilterRefusal(error: unknown): string \| null` | the refused key from an `ApiError` whose code is `CUSTOM_FIELD_FILTER_UNAVAILABLE` (`details.key`), else `null` |
 | `toCustomFieldFiltersParam(filters): string \| null` | the JSON for `customFieldFilters`, keys sorted, empty ⇒ `null` |
 
-**Key-indexed state is prototype-free** (threat model F-4). `constructor`, `toString` and
-`hasOwnProperty` pass the key regex, so every helper builds its records with
+**Key-indexed state is prototype-free** (threat model F-4). `constructor` passes the key regex
+(`toString` and `hasOwnProperty` do not — the regex refuses capitals — and are dropped like any
+malformed key), so every helper builds its records with
 `Object.create(null)` (or a `Map`) and tests membership with `Object.hasOwn` — never `key in
 obj` and never a bracket lookup on a plain object. `cf.constructor.in=x` reads as an ordinary
 unknown key, is sent, and is refused by the server like any other.

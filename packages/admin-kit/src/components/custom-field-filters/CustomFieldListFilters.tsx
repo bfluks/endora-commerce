@@ -105,8 +105,6 @@ function usePausedDraft<T>(
 ): [T, (next: T) => void] {
   const [draft, setDraft] = useState<T>(committed);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
   const commitRef = useRef(onCommit);
   commitRef.current = onCommit;
 
