@@ -197,3 +197,12 @@ describe('RfqDetail — the Modify row stays aligned under a minimum warning', (
     );
   });
 });
+
+describe('RfqDetail — the Overview row stays aligned under a minimum warning', () => {
+  it('top-aligns every cell, so the quantity is level with the other cells’ first line', async () => {
+    installDetail(payloadWith({ kind: 'pieces', minimum: 10 }));
+    renderDetail('en');
+    const row = await overviewRow();
+    expect(row.className).toContain('[&>td]:align-top');
+  });
+});

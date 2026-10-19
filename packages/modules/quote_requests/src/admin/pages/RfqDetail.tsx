@@ -643,7 +643,9 @@ export function RfqDetail(): ReactNode {
                       const reference = referenceViewOf(it, currentPrices);
                       const proposal = proposalOf(it);
                       return (
-                        <TableRow key={it.id}>
+                        // Top-aligned: the minimum badge under the quantity must not lift it
+                        // above the other cells' first line (U4).
+                        <TableRow key={it.id} className="[&>td]:align-top">
                           <TableCell>
                             <strong>{it.productName}</strong>
                             {it.variantLabel ? <small> ({it.variantLabel})</small> : null}
