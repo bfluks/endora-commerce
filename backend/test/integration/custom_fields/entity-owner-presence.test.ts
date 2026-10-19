@@ -73,6 +73,7 @@ describe('custom_fields — a host type follows its owner module', () => {
     expect(rows.find((row) => row.entityType === 'opportunity')).toEqual({
       entityType: 'opportunity',
       labelKey: 'customFields.entity.opportunity',
+      listFilter: false,
     });
   });
 
