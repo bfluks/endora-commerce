@@ -8,7 +8,7 @@ import {
   uuidSchema,
   type OriginReference,
 } from './common.js';
-import { customFieldValuesSchema } from './custom-fields.js';
+import { customFieldFiltersQueryParamSchema, customFieldValuesSchema } from './custom-fields.js';
 import { vatStatusSchema } from './organizations.js';
 import {
   savedListViewColumnsSchema,
@@ -519,6 +519,12 @@ export const adminOrdersListQuerySchema = z.object({
   // Order-total range (inclusive).
   totalMin: z.coerce.number().nonnegative().optional(),
   totalMax: z.coerce.number().nonnegative().optional(),
+  /**
+   * Filters on the Order custom fields marked as list filters, as JSON
+   * (`specs/157-custom-fields-list-filters/`). A key the list does not offer
+   * is refused with 400 `CUSTOM_FIELD_FILTER_UNAVAILABLE`.
+   */
+  customFieldFilters: customFieldFiltersQueryParamSchema,
   sort: z.string().optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(200).default(25),

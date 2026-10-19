@@ -4,6 +4,7 @@ import {
   adminOrderDetailSchema,
   adminOrderPreviewMessageCodeSchema,
   adminOrderPreviewResponseSchema,
+  adminOrdersListQuerySchema,
   createOrderSavedViewRequestSchema,
   orderSavedViewSchema,
   orderSchema,
@@ -244,4 +245,37 @@ describe('order saved views (FR-003, R-8, S-05, S-06)', () => {
       });
     });
   }
+});
+
+describe('adminOrdersListQuerySchema customFieldFilters (specs/157-custom-fields-list-filters/)', () => {
+  it('parses the JSON parameter to the filter record', () => {
+    const parsed = adminOrdersListQuerySchema.parse({
+      customFieldFilters: '{"src":{"in":["a","b"]}}',
+    });
+    expect(parsed.customFieldFilters).toEqual({ src: { in: ['a', 'b'] } });
+  });
+
+  it('leaves it undefined when absent', () => {
+    expect(adminOrdersListQuerySchema.parse({}).customFieldFilters).toBeUndefined();
+  });
+
+  it('locates a malformed bound under the parameter, the key and the operator', () => {
+    const result = adminOrdersListQuerySchema.safeParse({
+      customFieldFilters: JSON.stringify({ src: { min: 'ten' } }),
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.path)).toEqual([
+      ['customFieldFilters', 'src', 'min'],
+    ]);
+  });
+
+  it('survives the second parse the handlers perform after the route validator', () => {
+    const query = {
+      customFieldFilters: JSON.stringify({ src: { in: ['a'] }, amount: { min: '-12.5' } }),
+      status: ['pending', 'shipped'],
+      pageSize: '50',
+    };
+    const once = adminOrdersListQuerySchema.parse(query);
+    expect(adminOrdersListQuerySchema.parse(once)).toEqual(once);
+  });
 });

@@ -115,6 +115,9 @@ function serialize({ definition, options }: CachedDefinition): Record<string, un
     audience: definition.audience,
     sortOrder: definition.sortOrder,
     config: definition.config,
+    // Not stored yet: no definition is a list filter until the attribute is
+    // (specs/157-custom-fields-list-filters/, data-model §1).
+    listFilter: false,
     options: options.map((o) => ({
       id: o.id,
       value: o.value,
@@ -162,6 +165,9 @@ export async function registerCustomFieldsAdminRoutes(
         .map(([entityType, meta]) => ({
         entityType,
         labelKey: meta.labelKey,
+        // No entity type offers the list-filter option until the registry
+        // declares it (specs/157-custom-fields-list-filters/, data-model §2).
+        listFilter: false,
         ...(meta.managedBy
           ? {
               managedBy: {

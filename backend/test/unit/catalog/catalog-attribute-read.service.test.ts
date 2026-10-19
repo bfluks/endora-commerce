@@ -6,9 +6,7 @@ import {
   CatalogAttributeReadService,
 } from '../../../../packages/modules/catalog/src/backend/services/catalog-attribute-read.service.js';
 import type { ProductAttributeRow } from '../../helpers/package-entities.js';
-import type {
-  CachedDefinition,
-} from '../../../../packages/modules/custom_fields/src/backend/services/custom-field-definitions-cache.js';
+import type { CustomFieldDefinitionWithOptions } from '@endora-commerce/contracts';
 
 /**
  * T014 (feature 061) — unit tests for the composed attribute read model
@@ -58,7 +56,7 @@ interface StubExt {
 
 const NOW = new Date('2026-01-01T00:00:00Z');
 
-function makeDefinition(def: StubDef): CachedDefinition {
+function makeDefinition(def: StubDef): CustomFieldDefinitionWithOptions {
   return {
     definition: {
       id: def.id,
@@ -70,6 +68,7 @@ function makeDefinition(def: StubDef): CachedDefinition {
       required: def.required,
       sortOrder: def.sortOrder,
       config: {},
+      listFilter: false,
       createdAt: NOW,
       updatedAt: NOW,
     },
@@ -84,7 +83,7 @@ function makeDefinition(def: StubDef): CachedDefinition {
       createdAt: NOW,
       updatedAt: NOW,
     })),
-  } as unknown as CachedDefinition;
+  } as unknown as CustomFieldDefinitionWithOptions;
 }
 
 function makeExtension(ext: StubExt): ProductAttributeRow {

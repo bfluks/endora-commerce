@@ -19,6 +19,8 @@ const FALLBACK_ENTITY_TYPES: CustomFieldEntityTypeInfo[] = (
 ).map((entityType) => ({
   entityType,
   labelKey: `customFields.entity.${entityType === 'quote_request' ? 'quoteRequest' : entityType}`,
+  // The list-filter option is offered only once the server says the type has it.
+  listFilter: false,
 }));
 const VALUE_TYPES: CustomFieldValueType[] = [
   'text',

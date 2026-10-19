@@ -100,6 +100,9 @@ export function toCustomFieldDefinitionRecord(
     audience: definition.audience,
     sortOrder: definition.sortOrder,
     config: definition.config ?? {},
+    // Not stored yet: no definition is a list filter until the attribute is
+    // (specs/157-custom-fields-list-filters/, data-model §1).
+    listFilter: false,
     createdAt: definition.createdAt,
     updatedAt: definition.updatedAt,
   };

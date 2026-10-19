@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { isoDateTimeSchema } from './common.js';
 import { collectionEnvelope, dataEnvelope } from './envelopes.js';
-import { customFieldValuesSchema } from './custom-fields.js';
+import { customFieldFilterSchema, customFieldValuesSchema } from './custom-fields.js';
 import type { QuoteRequestStatus } from './quote-requests.js';
 
 /**
@@ -357,24 +357,15 @@ export type OpportunityBoardCardConfig = z.infer<typeof OpportunityBoardCardConf
 
 export const OpportunityBoardCardConfigResponseSchema = dataEnvelope(OpportunityBoardCardConfigSchema);
 
-/** A bound of a number or an amount, as a decimal string. */
-const fieldFilterNumberSchema = z.string().regex(/^-?\d{1,12}(\.\d{1,4})?$/, 'Not a decimal number');
-
 /**
  * One field's filter: the operators of every kind in one object. Which of them
  * apply is the field's kind to say; the others are ignored by the server.
+ *
+ * The same object as the admin lists' custom-field filter
+ * (`specs/157-custom-fields-list-filters/`), so a board filter and a list
+ * filter read one grammar.
  */
-export const OpportunityFieldFilterSchema = z
-  .object({
-    contains: z.string().trim().min(1).max(200).optional(),
-    in: z.array(z.string().min(1).max(200)).min(1).max(50).optional(),
-    is: z.boolean().optional(),
-    min: fieldFilterNumberSchema.optional(),
-    max: fieldFilterNumberSchema.optional(),
-    from: calendarDateSchema.optional(),
-    to: calendarDateSchema.optional(),
-  })
-  .strict();
+export const OpportunityFieldFilterSchema = customFieldFilterSchema;
 export type OpportunityFieldFilter = z.infer<typeof OpportunityFieldFilterSchema>;
 
 export const OpportunityFieldFiltersSchema = z
@@ -417,7 +408,20 @@ const opportunityFilterShape = {
   tagId: repeatable(z.string().uuid()),
   createdFrom: calendarDateSchema.optional(),
   createdTo: calendarDateSchema.optional(),
-  /** §12c — filters on the fields the board card shows; a field that is not shown is ignored. */
+  /**
+   * §12c — filters on fields, in one of two modes.
+   *
+   * - On the board, and on the list with `cardValues=true` (a board lane's
+   *   continuation): the card rule — a field the card does not show is ignored.
+   * - On the list otherwise: a `custom:` reference is governed by the
+   *   definition's list-filter option — filtered when it is on, whether or not
+   *   the card shows the field, and refused with 400
+   *   `CUSTOM_FIELD_FILTER_UNAVAILABLE` when it is off; `builtin:` references
+   *   keep the card rule.
+   *
+   * `cardValues` is a mode switch, never a security boundary: both modes run in
+   * the same tenant-scoped, assignment-scoped statement.
+   */
   fieldFilters: fieldFiltersParamSchema,
 };
 
