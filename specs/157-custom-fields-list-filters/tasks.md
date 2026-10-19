@@ -429,7 +429,7 @@ pnpm --filter backend run check:bundle-pairing
 - [x] T061 Changeset `.changeset/157-custom-fields-definition-editor.md` — `'@endora-commerce/mod-custom-fields': minor`: an existing definition is editable on `/custom-fields` (labels, required, options, list filter); the table shows list filters; the page is translated; write controls are offered only with `custom_fields:write`
 
 **Phase 10 notes** (stream B):
-- Option labels commit on blur (no separate *Apply*); a move patches every option whose `sortOrder` differs from its new position — the two that swapped when the stored order is dense.
+- Option labels commit on blur (no separate *Apply*); a move patches every option whose `sortOrder` differs from its new index; with a dense stored order that is the two that swapped (the only case T055 exercises), with a gappy one it can be more.
 - *Save* with nothing changed closes the dialog without a request. Closing the dialog, saved or not, re-reads the table, because option actions apply at once.
 - Added keys beyond §3.2: `customFields.form.keyPlaceholder`, `.form.optionsPlaceholder`, `.table.actions` (an sr-only header), `.table.delete` (the icon button's name), `.error.load`, `.error.action`, `.editor.key/entityType/valueType/labelDefault/labelEn/labelPl/labelDefaultRequired/saveFailed`, `.editor.option.addRequired/keep/failed`. The Edit button's name reuses `customFields.editor.title` (`Edit {key}`).
 - The definition label helpers are shared by the dialog and the options editor in `src/admin/components/localized-label.ts`.
