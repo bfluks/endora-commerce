@@ -331,6 +331,14 @@ pnpm --filter backend run check:port-catches
 
 ---
 
+**Review and QA round on Phases 2–6 (2026-10-19)** — done:
+- `isCalendarDate` / `calendarDateSchema` moved to `contracts/src/common.ts`, used by `crm.ts` and `custom-fields.ts`.
+- Date bounds compare only a stored `YYYY-MM-DD` string (`jsonb_typeof` = `'string'` and a shape check); T018 and T019 cover a drifted number and a non-date string.
+- An operator that does not apply to the field's type is **refused with 400 `VALIDATION_FAILED`** (not `CUSTOM_FIELD_FILTER_UNAVAILABLE`: the key is available) through `assertCustomFieldFilterOperators`; contract §1.4, research R-6 and the architecture page (en + pl, cache re-pinned) amended. The board keeps ignoring it (FR-016).
+- `customFieldFilterUnavailable(keys)` in contracts replaces the hosts' hand-built failures; no-port refusal unit tests for Orders (`order-list-service.custom-field-filters.test.ts`) and Quote Requests (`rfq-admin-list-custom-field-filters.test.ts`); CRM's port stays required, with a comment saying why.
+- `rfq-admin-service.ts` pushes into `$and`; the Quote Request list locates a malformed filter at `customFieldFilters.<key>.<op>`; T024's doc names what a path scan cannot tell.
+- QA cases adopted: Orders "No" over HTTP, hostile keys and caps over HTTP, option switched off mid-session (list and export 400, then 200 again), the buyer's Orders list ignores the parameter, mismatched operator (Orders 34/34); Quote Requests scope + status + organization + filter (25/25); CRM `is:false` on the list vs the card rule with `cardValues=true`, mismatched operator (22/22); T019 10/10.
+
 ## Phase 7: Kit composite, helpers and `core` keys **[admin UI]**
 
 **Goal**: [contracts/admin-surfaces.md](./contracts/admin-surfaces.md) §1 (research R-13, R-14).

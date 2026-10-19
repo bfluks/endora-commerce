@@ -177,8 +177,10 @@ model F-1; CRM's own record keeps its 20 references for the board) and `customFi
 `[key, operator]`). `crm.ts` re-exports `OpportunityFieldFilterSchema` **as** the shared schema
 (same object), so CRM's types and tests are unchanged and the operator set has one statement.
 
-Operators per value type (FR-008) — an operator not of the type is ignored, as CRM documents for
-its own schema (`crm.ts:363-366`):
+Operators per value type (FR-008) — on the lists an operator not of the type is refused with 400
+`VALIDATION_FAILED` (contract §1.4, amended after the backend QA: FR-011 says a filter is never
+ignored silently); the board keeps ignoring it, as CRM documents for its own schema
+(`crm.ts:363-366`):
 
 | Value type | Operators | Match |
 | --- | --- | --- |

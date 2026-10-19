@@ -1,4 +1,5 @@
 import {
+  assertCustomFieldFilterOperators,
   customFieldFiltersSchema,
   type CustomFieldFilter,
   type CustomFieldFilterUnavailableFailure,
@@ -42,9 +43,10 @@ const likePattern = (text: string): string => `%${text.replace(/[\\%_]/g, (match
  * never spliced; there is no jsonb `?` operator (it collides with the
  * placeholder) and no `::date` cast (dates compare as `YYYY-MM-DD` text).
  *
- * Adapted from the CRM board's field predicates, with one deliberate
- * difference: `is: false` matches a stored `false` only, not "false or never
- * set" (`specs/157-custom-fields-list-filters/research.md` R-5).
+ * Adapted from the CRM board's field predicates, with two deliberate
+ * differences: `is: false` matches a stored `false` only, not "false or never
+ * set" (`specs/157-custom-fields-list-filters/research.md` R-5), and a date
+ * bound compares only a stored string.
  */
 function predicates(column: string, definition: CachedDefinition['definition'], filter: CustomFieldFilter): Predicate[] {
   const key = definition.key;
@@ -69,9 +71,16 @@ function predicates(column: string, definition: CachedDefinition['definition'], 
       if (filter.is === undefined) return [];
       return [[`${json} = ${filter.is ? `'true'` : `'false'`}::jsonb`, [key]]];
     case 'date': {
+      // Compared as `YYYY-MM-DD` text, and only where such a date is stored: a
+      // value that drifted to another type or shape neither matches nor fails
+      // the read.
+      const bound = (operator: '>=' | '<=', value: string): Predicate => [
+        `case when jsonb_typeof(${json}) = 'string' and ${text} ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' then ${text} ${operator} ? end`,
+        [key, key, key, value],
+      ];
       const result: Predicate[] = [];
-      if (filter.from !== undefined) result.push([`${text} >= ?`, [key, filter.from]]);
-      if (filter.to !== undefined) result.push([`${text} <= ?`, [key, filter.to]]);
+      if (filter.from !== undefined) result.push(bound('>=', filter.from));
+      if (filter.to !== undefined) result.push(bound('<=', filter.to));
       return result;
     }
     case 'select':
@@ -138,6 +147,9 @@ export class CustomFieldListFilterService implements CustomFieldListFilterPort {
     const offered = await this.offered(entityType);
     const unavailable = keys.filter((key) => !offered.has(key));
     if (unavailable.length > 0) throw new CustomFieldFilterUnavailableError(unavailable);
+    // An operator that does not apply to its field is refused, never ignored
+    // (FR-011): a ZodError, answered 400 `VALIDATION_FAILED`.
+    assertCustomFieldFilterOperators(parsed, (key) => offered.get(key)?.definition.valueType);
 
     const { table, column } = hostStorageBinding(entityType);
     const built: Predicate[] = [];

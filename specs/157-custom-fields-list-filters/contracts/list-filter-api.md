@@ -159,10 +159,17 @@ Semantics:
   3. **Availability** — every key is looked up in a `Map` of the type's served, `listFilter`-on
      definitions (never a plain-object index: `constructor` is a valid key). If any key has no
      entry, one failure names **all** such keys (in request order) and nothing is built.
-  4. **One condition** — the predicates of every key, each an operator of the definition's value
-     type (research R-6; an operator not of the type is ignored; `min`+`max` and `from`+`to` on
-     one key are two predicates of the same scan), ANDed in one `where`. `null` when no key has
-     an applicable operator. OR within a key is inside its predicate.
+  4. **Operators** — an operator that does not apply to its definition's value type
+     (`CUSTOM_FIELD_FILTER_OPERATORS`) is **refused, not ignored** (FR-011: a filter is never
+     dropped silently): `assertCustomFieldFilterOperators` throws one `ZodError` naming every such
+     operator at `[key, operator]`, answered 400 `VALIDATION_FAILED`, and nothing is built. The key
+     *is* available, so `CUSTOM_FIELD_FILTER_UNAVAILABLE` would misname the problem. (Amended after
+     the backend QA, owner ruling 2026-10-19; it was "ignored".)
+  5. **One condition** — the predicates of every key (`min`+`max` and `from`+`to` on one key are
+     two predicates of the same scan), ANDed in one `where`. `null` when no key names an
+     operator. OR within a key is inside its predicate. A number bound compares only a stored
+     JSON number and a date bound only a stored string, so a value that drifted to another type
+     neither matches nor fails the read.
 - **SQL rules** (threat model F-9): the table and column come from the storage binding, never
   from the caller; every key and value is a `?` parameter; no jsonb `?`/`?|`/`?&` operator (they
   collide with the placeholder — `->`, `->>`, `jsonb_typeof`, `jsonb_array_elements_text` only);

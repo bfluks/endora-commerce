@@ -127,9 +127,28 @@ describe('CustomFieldListFilterService.condition — shape', () => {
     expect(count(condition!.sql, ') and (')).toBe(11);
   });
 
-  it('answers null when no operator applies to its key’s type', async () => {
+  it('refuses an operator that does not apply to its key’s type, naming each, rather than ignoring it', async () => {
     const { port } = service(EVERY_TYPE);
-    expect(await port.condition('order', { amount: { contains: 'ten' }, flag: { in: ['x'] } })).toBeNull();
+    const error = await port
+      .condition('order', { amount: { contains: 'ten' }, flag: { in: ['x'] }, note: { contains: 'ok' } })
+      .catch((caught: unknown) => caught);
+    expect((error as { name?: string }).name).toBe('ZodError');
+    expect((error as { issues: Array<{ path: unknown[] }> }).issues.map((issue) => issue.path)).toEqual([
+      ['amount', 'contains'],
+      ['flag', 'in'],
+    ]);
+  });
+
+  it('answers null for a key whose filter names no operator', async () => {
+    const { port } = service(EVERY_TYPE);
+    expect(await port.condition('order', { note: {} })).toBeNull();
+  });
+
+  it('compares a date bound only where a YYYY-MM-DD string is stored', async () => {
+    const { port } = service(EVERY_TYPE);
+    const condition = await port.condition('order', { due: { from: '2026-01-01' } });
+    expect(condition!.sql).toContain(`case when jsonb_typeof(t."custom_field_values"->?) = 'string' and t."custom_field_values"->>? ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' then`);
+    expect(condition!.params).toEqual(['due', 'due', 'due', '2026-01-01']);
   });
 
   it('builds one predicate for `in`, the OR inside it', async () => {

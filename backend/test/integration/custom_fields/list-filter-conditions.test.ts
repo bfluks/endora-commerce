@@ -119,6 +119,9 @@ describe('custom_fields — the list-filter condition over stored values', () =>
     });
     await seed('gamma', { [TEXT]: '1000 a_b', [NUMBER]: '30', [MULTI]: 'a' });
     await seed('empty', {});
+    // Values that drifted under the date key: another type, and a string that is no date.
+    await seed('drift-number', { [DATE]: 20260401 });
+    await seed('drift-text', { [DATE]: 'soon' });
   });
 
   afterAll(async () => {
@@ -153,7 +156,9 @@ describe('custom_fields — the list-filter condition over stored values', () =>
     expect(await matching({ [BOOLEAN]: { is: false } })).toEqual(['beta']);
   });
 
-  it('date: inclusive bounds, either alone', async () => {
+  it('date: inclusive bounds, either alone; a drifted value neither matches nor fails', async () => {
+    expect(await matching({ [DATE]: { from: '2000-01-01' } })).toEqual(['alpha', 'beta']);
+    expect(await matching({ [DATE]: { to: '9999-12-31' } })).toEqual(['alpha', 'beta']);
     expect(await matching({ [DATE]: { from: '2026-03-15', to: '2026-06-01' } })).toEqual(['alpha', 'beta']);
     expect(await matching({ [DATE]: { from: '2026-03-16' } })).toEqual(['beta']);
     expect(await matching({ [DATE]: { to: '2026-03-15' } })).toEqual(['alpha']);
@@ -173,6 +178,13 @@ describe('custom_fields — the list-filter condition over stored values', () =>
     expect(await matching({ [SELECT]: { in: ['web'] }, [NUMBER]: { min: '15' } })).toEqual([]);
     expect(await matching({ [SELECT]: { in: ['shop'] }, [NUMBER]: { min: '15' } })).toEqual(['beta']);
     expect(await matching({ [TEXT]: { contains: 'e' } })).toEqual(['alpha']);
+  });
+
+  it('refuses an operator that does not apply to the field rather than ignoring it', async () => {
+    const error = await port
+      .condition('order', { [BOOLEAN]: { contains: 'x' } })
+      .catch((caught: unknown) => caught);
+    expect((error as { name?: string }).name).toBe('ZodError');
   });
 
   it('offers the six fields of the list', async () => {

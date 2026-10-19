@@ -158,7 +158,7 @@ describe('crm Opportunities list — custom-field filters', () => {
     await define(BOOLEAN, 'boolean', true);
     await define(DATE, 'date', true);
     await define(MULTI, 'multiselect', true, { options: options('m', 'n') });
-    await setCard(['builtin:value', `custom:${B}`, `custom:${C}`]);
+    await setCard(['builtin:value', `custom:${B}`, `custom:${C}`, `custom:${BOOLEAN}`]);
 
     for (let i = 0; i < 7; i += 1) {
       await make(`ax${i}`, { [A]: 'x', [B]: 'y', [C]: i < 2 ? 'needle' : 'hay' });
@@ -239,6 +239,13 @@ describe('crm Opportunities list — custom-field filters', () => {
       expect(names).not.toContain(`${name}-miss`);
     });
 
+    it('matches only a stored "no" for No, and refuses an operator that does not apply', async () => {
+      expect(await listed({ [`custom:${BOOLEAN}`]: { is: false } })).toEqual(['boolean-miss']);
+      const response = await request('opportunities', { [`custom:${BOOLEAN}`]: { contains: 'x' } });
+      expect(response.statusCode, response.body).toBe(400);
+      expect((response.json() as ErrorBody).error.code).toBe('VALIDATION_FAILED');
+    });
+
     it('refuses more than ten custom references as a validation failure', async () => {
       const eleven = Object.fromEntries(
         Array.from({ length: 11 }, (_, i) => [`custom:${key(`k${i}`)}`, { is: true }]),
@@ -273,6 +280,12 @@ describe('crm Opportunities list — custom-field filters', () => {
       const without = await listed(null, '&cardValues=true', rep.cookies);
       const withD = await listed({ [`custom:${D}`]: { contains: 'x' } }, '&cardValues=true', rep.cookies);
       expect(withD).toEqual(without);
+    });
+
+    it('keeps the card rule for No — false or never set — when a board lane is continued', async () => {
+      const all = await listed(null, '&cardValues=true');
+      const no = await listed({ [`custom:${BOOLEAN}`]: { is: false } }, '&cardValues=true');
+      expect(no).toEqual(all.filter((name) => name !== 'boolean-match'));
     });
 
     it('keeps the board filtering an on-card, option-off field as before', async () => {

@@ -9,12 +9,12 @@ import {
   type QuoteRequest as RfqDto,
   type QuoteRequestHistory,
   type QuoteRequestSummary,
+  customFieldFilterUnavailable,
   isCustomFieldValidationFailure,
   type AdminUserReadPort,
   type CatalogProductReadPort,
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
-  type CustomFieldFilterUnavailableFailure,
   type CustomFieldFilters,
   type CustomFieldListFilterField,
   type CustomFieldListFilterPort,
@@ -165,15 +165,9 @@ export class RfqAdminService {
 
   private async customFieldCondition(filters: CustomFieldFilters | undefined) {
     if (filters === undefined || Object.keys(filters).length === 0) return null;
-    if (!this.deps.customFieldListFilter) {
-      // A list asked to filter on custom fields it cannot read refuses rather
-      // than answering unfiltered.
-      const failure = Object.assign(new Error('Custom-field filters are not available on this list.'), {
-        name: 'CustomFieldFilterUnavailableError' as const,
-        keys: Object.keys(filters),
-      }) satisfies CustomFieldFilterUnavailableFailure;
-      throw failure;
-    }
+    // A list asked to filter on custom fields it cannot read refuses rather
+    // than answering unfiltered.
+    if (!this.deps.customFieldListFilter) throw customFieldFilterUnavailable(Object.keys(filters));
     return this.deps.customFieldListFilter.condition('quote_request', filters);
   }
 
@@ -187,9 +181,9 @@ export class RfqAdminService {
     // the visibility and scope passes below still run over what it leaves.
     const customFieldCondition = await this.customFieldCondition(filter.customFieldFilters);
     if (customFieldCondition !== null) {
-      where['$and'] = [
-        { id: { $in: raw(`(${customFieldCondition.sql})`, [...customFieldCondition.params]) } },
-      ];
+      ((where['$and'] ??= []) as unknown[]).push({
+        id: { $in: raw(`(${customFieldCondition.sql})`, [...customFieldCondition.params]) },
+      });
     }
 
     let rfqs: QuoteRequest[] = await em.find(QuoteRequest, where, {

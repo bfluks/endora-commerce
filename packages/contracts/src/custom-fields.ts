@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { isoDateTimeSchema, uuidSchema } from './common.js';
+import { calendarDateSchema, isoDateTimeSchema, uuidSchema } from './common.js';
 
 /**
  * Custom Fields Layer (feature 055) — entity-agnostic runtime custom fields
@@ -169,20 +169,6 @@ export type CustomFieldValidationError = z.infer<typeof customFieldValidationErr
 // --- list filters (specs/157-custom-fields-list-filters/) -----------------
 // ---------------------------------------------------------------------------
 
-/** Whether `YYYY-MM-DD` names a day the calendar has: `2026-02-31` and `2026-13-01` do not. */
-function isCalendarDate(value: string): boolean {
-  const [year = 0, month = 0, day = 0] = value.split('-').map(Number);
-  if (year < 1) return false;
-  const date = new Date(0);
-  date.setUTCFullYear(year, month - 1, day);
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-}
-
-const filterDateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
-  .refine(isCalendarDate, 'Not a date of the calendar');
-
 /** A bound of a number, as a decimal string. */
 const filterDecimalBoundSchema = z.string().regex(/^-?\d{1,12}(\.\d{1,4})?$/, 'Not a decimal number');
 
@@ -198,11 +184,56 @@ export const customFieldFilterSchema = z
     is: z.boolean().optional(),
     min: filterDecimalBoundSchema.optional(),
     max: filterDecimalBoundSchema.optional(),
-    from: filterDateSchema.optional(),
-    to: filterDateSchema.optional(),
+    from: calendarDateSchema.optional(),
+    to: calendarDateSchema.optional(),
   })
   .strict();
 export type CustomFieldFilter = z.infer<typeof customFieldFilterSchema>;
+
+/**
+ * The operators each value type applies (FR-008). A filter carrying another
+ * operator for its field is refused rather than ignored: a filter is never
+ * silently dropped (FR-011).
+ */
+export const CUSTOM_FIELD_FILTER_OPERATORS: Readonly<
+  Record<CustomFieldValueType, readonly (keyof CustomFieldFilter)[]>
+> = {
+  text: ['contains'],
+  number: ['min', 'max'],
+  boolean: ['is'],
+  date: ['from', 'to'],
+  select: ['in'],
+  multiselect: ['in'],
+};
+
+/**
+ * Throws the `ZodError` naming every operator of `filters` that does not apply
+ * to its field's value type, each at `[key, operator]` — answered 400
+ * `VALIDATION_FAILED`, as any other malformed filter. A key `valueTypeOf`
+ * does not know is not this check's to judge.
+ */
+export function assertCustomFieldFilterOperators(
+  filters: CustomFieldFilters,
+  valueTypeOf: (key: string) => CustomFieldValueType | undefined,
+): void {
+  const issues: Array<{ code: 'custom'; path: string[]; message: string; input: unknown }> = [];
+  for (const key of Object.keys(filters)) {
+    const filter = filters[key];
+    const valueType = valueTypeOf(key);
+    if (filter === undefined || valueType === undefined) continue;
+    const allowed: readonly string[] = CUSTOM_FIELD_FILTER_OPERATORS[valueType];
+    for (const operator of Object.keys(filter)) {
+      if (filter[operator as keyof CustomFieldFilter] === undefined || allowed.includes(operator)) continue;
+      issues.push({
+        code: 'custom',
+        path: [key, operator],
+        message: `"${operator}" does not apply to a ${valueType} field`,
+        input: filter[operator as keyof CustomFieldFilter],
+      });
+    }
+  }
+  if (issues.length > 0) throw new z.ZodError(issues as never);
+}
 
 /** Bounds the work one list request can ask of the database (keys per request). */
 export const CUSTOM_FIELD_FILTERS_MAX_KEYS = 10;
@@ -609,6 +640,17 @@ export interface CustomFieldListFilterCondition {
 export interface CustomFieldFilterUnavailableFailure extends Error {
   readonly name: 'CustomFieldFilterUnavailableError';
   readonly keys: readonly string[];
+}
+
+/** A refused list filter naming `keys`, in the shape {@link isCustomFieldFilterUnavailableFailure} narrows. */
+export function customFieldFilterUnavailable(
+  keys: readonly string[],
+  message = 'Custom-field filters are not available on this list.',
+): CustomFieldFilterUnavailableFailure {
+  return Object.assign(new Error(message), {
+    name: 'CustomFieldFilterUnavailableError' as const,
+    keys: [...keys],
+  });
 }
 
 /** Whether `error` is a refused list filter, narrowed by shape (as the sibling guards above). */

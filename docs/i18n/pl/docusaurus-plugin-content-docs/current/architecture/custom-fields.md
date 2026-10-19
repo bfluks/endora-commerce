@@ -190,7 +190,10 @@ każda lista encji miałaby własną kopię tych samych sześciu predykatów.
   własne filtry listy łączy AND. Najwyżej 10 pól i 100 wartości `in` na żądanie.
 - **Odmowa nigdy nie jest cicha.** Klucz nieznany, innego typu albo nieoferowany jest odrzucany z
   `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE` i nazwany, a nie pomijany — pominięty filtr pokazuje
-  operatorowi więcej rekordów, niż chciał, i nic o tym nie mówi.
+  operatorowi więcej rekordów, niż chciał, i nic o tym nie mówi. Z tego samego powodu operator,
+  który nie pasuje do typu pola (np. `contains` na polu Tak/Nie), jest odrzucany z `400`
+  `VALIDATION_FAILED`, a zakres dat lub liczb porównuje tylko zapisaną datę lub liczbę, więc
+  wartość zapisana pod wcześniejszym typem ani nie pasuje, ani nie psuje listy.
 - **Brak w sklepie.** Żaden filtr pola niestandardowego nie trafia do sklepu ani do punktów
   końcowych dla kluczy API.
 

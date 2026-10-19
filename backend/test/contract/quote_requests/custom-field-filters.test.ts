@@ -202,6 +202,14 @@ describe('admin Quote Request list — custom-field filters', () => {
       }
     });
 
+    it('combines scope, status, organization and a custom filter, all as AND', async () => {
+      const filters = param({ [M]: { in: ['x'] } });
+      const mine = await ids(`${filters}&assignmentScope=mine&status=Pending&organizationId=${organizationA}`, rep.cookies);
+      expect([...mine].sort()).toEqual([...inA.x, ...inA.yesX, ...inA.noX].sort());
+      expect(await ids(`${filters}&assignmentScope=mine&status=Approved&organizationId=${organizationA}`, rep.cookies)).toEqual([]);
+      expect(await ids(`${filters}&assignmentScope=mine&organizationId=${organizationB}`, rep.cookies)).toEqual([]);
+    });
+
     it('answers as before without the parameter', async () => {
       const found = await ids(`organizationId=${organizationA}`);
       expect([...found].sort()).toEqual(
@@ -225,6 +233,21 @@ describe('admin Quote Request list — custom-field filters', () => {
   });
 
   describe('refusals', () => {
+    it('refuses an operator that does not apply to the field, naming the key and the operator', async () => {
+      const response = await get(`${LIST}?${param({ [Y]: { contains: 'x' } })}`);
+      expect(response.statusCode, response.body).toBe(400);
+      const body = response.json() as { error: { code: string; details?: Array<{ path: string }> } };
+      expect(body.error.code).toBe('VALIDATION_FAILED');
+      expect(body.error.details?.map((detail) => detail.path)).toEqual([`${Y}.contains`]);
+    });
+
+    it('locates a malformed filter under the parameter', async () => {
+      const response = await get(`${LIST}?${param({ [Y]: { from: '2026-02-30' } })}`);
+      expect(response.statusCode, response.body).toBe(400);
+      const body = response.json() as { error: { details?: Array<{ path: string }> } };
+      expect(body.error.details?.map((detail) => detail.path)).toEqual([`customFieldFilters.${Y}.from`]);
+    });
+
     it.each([
       ['an unknown key', key('unknown')],
       ['an Order key', ORDER_KEY],

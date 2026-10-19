@@ -211,7 +211,11 @@ otherwise grow its own copy of the same six predicates.
 - **A refusal is never silent.** A key that is unknown, of another type or not
   offered is refused with `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE` naming it,
   rather than ignored — an ignored filter shows an operator more records than
-  they asked for, without saying so.
+  they asked for, without saying so. For the same reason an operator that does
+  not apply to the field's type (`contains` on a Yes/No field, say) is refused
+  with `400` `VALIDATION_FAILED`, and a date or number range compares only a
+  stored date or number, so a value stored under an earlier type neither
+  matches nor fails the list.
 - **No storefront surface.** No custom-field filter reaches a storefront or
   API-key endpoint.
 
