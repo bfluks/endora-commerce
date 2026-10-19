@@ -164,7 +164,9 @@ Semantics:
      dropped silently): `assertCustomFieldFilterOperators` throws one `ZodError` naming every such
      operator at `[key, operator]`, answered 400 `VALIDATION_FAILED`, and nothing is built. The key
      *is* available, so `CUSTOM_FIELD_FILTER_UNAVAILABLE` would misname the problem. (Amended after
-     the backend QA, owner ruling 2026-10-19; it was "ignored".)
+     the backend QA, owner ruling 2026-10-19; it was "ignored".) An inverted range — `min` above
+     `max`, `from` after `to` — is refused the same way (`assertCustomFieldFilterRanges`), since it
+     could only match nothing.
   5. **One condition** — the predicates of every key (`min`+`max` and `from`+`to` on one key are
      two predicates of the same scan), ANDed in one `where`. `null` when no key names an
      operator. OR within a key is inside its predicate. A number bound compares only a stored

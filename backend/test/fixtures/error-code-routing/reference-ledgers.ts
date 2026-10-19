@@ -692,6 +692,28 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       '`custom_fields`\' list-filter port (D-121 T1). `orders`, `quote_requests` and `crm` raise ' +
       'it from what that port answers, as the hosts raise `CUSTOM_FIELD_VALUE_INVALID`.',
   },
+  CUSTOM_FIELD_OPTION_IN_USE: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`) for the refusal removing a ' +
+      'select option earns while records still hold it. It shared `CUSTOM_FIELD_DEFINITION_INVALID` ' +
+      'and an English message naming the raw value; the noun is the option, `custom_fields`\' own ' +
+      'row, and its admin routes are the raise site (D-121 T1).',
+  },
+  CUSTOM_FIELD_VALUE_TYPE_LOCKED: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`) for the refusal changing a ' +
+      'definition\'s value type earns while records hold values under its key. The noun is the ' +
+      'definition, raised from `custom_fields`\' admin routes (D-121 T1).',
+  },
+  CUSTOM_FIELD_STORED_VALUES_EXIST: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`) for the refusal a ' +
+      'customer-visible definition earns over values a deleted field left under its key. The noun ' +
+      'is the definition, raised from `custom_fields`\' admin routes (D-121 T1).',
+  },
 };
 
 /**

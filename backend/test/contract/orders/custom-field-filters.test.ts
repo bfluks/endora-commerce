@@ -393,6 +393,16 @@ describe('admin Orders list — custom-field filters', () => {
       expect((await get(`${ORDERS}/export?${filters}`)).statusCode).toBe(200);
     });
 
+    it('refuses an inverted number or date range as a validation failure, in a sentence', async () => {
+      for (const filters of [{ [NUMBER]: { min: '10', max: '1' } }, { [DATE]: { from: '2026-03-01', to: '2026-02-01' } }]) {
+        const response = await get(`${ORDERS}?${param(filters)}`);
+        expect(response.statusCode, response.body).toBe(400);
+        const { error } = response.json() as ErrorBody;
+        expect(error.code).toBe('VALIDATION_FAILED');
+        expect(error.message).toBe('Request failed validation.');
+      }
+    });
+
     it('refuses a malformed bound as a validation failure', async () => {
       const response = await get(`${ORDERS}?${param({ [NUMBER]: { min: 'ten' } })}`);
       expect(response.statusCode, response.body).toBe(400);

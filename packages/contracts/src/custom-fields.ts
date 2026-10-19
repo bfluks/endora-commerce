@@ -642,6 +642,27 @@ export interface CustomFieldFilterUnavailableFailure extends Error {
   readonly keys: readonly string[];
 }
 
+/**
+ * Throws the `ZodError` naming every inverted range of `filters` — a minimum
+ * above its maximum, a start date after its end — each at `[key, 'min']` or
+ * `[key, 'from']`, answered 400 `VALIDATION_FAILED`. Such a filter could only
+ * ever match nothing; refusing it says so instead of showing an empty list.
+ */
+export function assertCustomFieldFilterRanges(filters: CustomFieldFilters): void {
+  const issues: Array<{ code: 'custom'; path: string[]; message: string; input: unknown }> = [];
+  for (const key of Object.keys(filters)) {
+    const filter = filters[key];
+    if (filter === undefined) continue;
+    if (filter.min !== undefined && filter.max !== undefined && Number(filter.min) > Number(filter.max)) {
+      issues.push({ code: 'custom', path: [key, 'min'], message: 'The minimum is above the maximum', input: filter.min });
+    }
+    if (filter.from !== undefined && filter.to !== undefined && filter.from > filter.to) {
+      issues.push({ code: 'custom', path: [key, 'from'], message: 'The start date is after the end date', input: filter.from });
+    }
+  }
+  if (issues.length > 0) throw new z.ZodError(issues as never);
+}
+
 /** A refused list filter naming `keys`, in the shape {@link isCustomFieldFilterUnavailableFailure} narrows. */
 export function customFieldFilterUnavailable(
   keys: readonly string[],

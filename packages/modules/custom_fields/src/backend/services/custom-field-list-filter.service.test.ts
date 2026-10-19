@@ -139,6 +139,18 @@ describe('CustomFieldListFilterService.condition — shape', () => {
     ]);
   });
 
+  it('refuses an inverted range rather than answering an empty list', async () => {
+    const { port } = service(EVERY_TYPE);
+    const error = await port
+      .condition('order', { amount: { min: '10', max: '1' }, due: { from: '2026-02-01', to: '2026-01-01' } })
+      .catch((caught: unknown) => caught);
+    expect((error as { name?: string }).name).toBe('ZodError');
+    expect((error as { issues: Array<{ path: unknown[] }> }).issues.map((issue) => issue.path)).toEqual([
+      ['amount', 'min'],
+      ['due', 'from'],
+    ]);
+  });
+
   it('answers null for a key whose filter names no operator', async () => {
     const { port } = service(EVERY_TYPE);
     expect(await port.condition('order', { note: {} })).toBeNull();

@@ -1,5 +1,6 @@
 import {
   assertCustomFieldFilterOperators,
+  assertCustomFieldFilterRanges,
   customFieldFiltersSchema,
   type CustomFieldFilter,
   type CustomFieldFilterUnavailableFailure,
@@ -150,6 +151,8 @@ export class CustomFieldListFilterService implements CustomFieldListFilterPort {
     // An operator that does not apply to its field is refused, never ignored
     // (FR-011): a ZodError, answered 400 `VALIDATION_FAILED`.
     assertCustomFieldFilterOperators(parsed, (key) => offered.get(key)?.definition.valueType);
+    // An inverted range could only match nothing: refused, not answered empty.
+    assertCustomFieldFilterRanges(parsed);
 
     const { table, column } = hostStorageBinding(entityType);
     const built: Predicate[] = [];

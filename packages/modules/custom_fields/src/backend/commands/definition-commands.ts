@@ -68,6 +68,7 @@ export function createDefinitionCommand(
           'stored_values_exist',
           `Records already hold values under "${input.key}", left by a field that was deleted. ` +
             'Create the field as internal, review those values, then change who can see it.',
+          { key: input.key },
         );
       }
       const def = await applyCreateDefinition(em, input);

@@ -77,5 +77,8 @@
   "customFields.editor.option.keep": "Zostaw",
   "customFields.editor.option.moveUp": "„{label}” przesunięto w górę na pozycję {position} z {count}.",
   "customFields.editor.option.moveDown": "„{label}” przesunięto w dół na pozycję {position} z {count}.",
-  "customFields.editor.option.failed": "Nie udało się zmienić opcji."
+  "customFields.editor.option.failed": "Nie udało się zmienić opcji.",
+  "errors.CUSTOM_FIELD_OPTION_IN_USE": "Nie można usunąć opcji „{label}”, bo używają jej niektóre rekordy. Najpierw zmień ich wartość.",
+  "errors.CUSTOM_FIELD_VALUE_TYPE_LOCKED": "Nie można zmienić typu pola „{key}”, dopóki rekordy mają w nim wartości. Najpierw usuń te wartości.",
+  "errors.CUSTOM_FIELD_STORED_VALUES_EXIST": "Rekordy mają już wartości pod kluczem „{key}”, pozostawione przez usunięte pole. Utwórz pole jako wewnętrzne, przejrzyj te wartości, a potem zmień, kto je widzi."
 }

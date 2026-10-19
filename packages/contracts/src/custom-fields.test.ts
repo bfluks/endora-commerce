@@ -297,3 +297,28 @@ describe('§1.4 customFieldFilterUnavailable', () => {
     expect(failure.keys).toEqual(['a', 'b']);
   });
 });
+
+describe('§1.4 ranges', () => {
+  it('refuses a minimum above the maximum and a start after the end, at the key', () => {
+    let caught: unknown;
+    try {
+      cf.assertCustomFieldFilterRanges({
+        amount: { min: '10', max: '9.5' },
+        due: { from: '2026-03-01', to: '2026-02-01' },
+        ok: { min: '-1', max: '1' },
+        same: { from: '2026-01-01', to: '2026-01-01' },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as { name?: string }).name).toBe('ZodError');
+    expect((caught as { issues: Array<{ path: unknown[] }> }).issues.map((issue) => issue.path)).toEqual([
+      ['amount', 'min'],
+      ['due', 'from'],
+    ]);
+  });
+
+  it('accepts open and ordered ranges', () => {
+    expect(() => cf.assertCustomFieldFilterRanges({ a: { min: '1' }, b: { to: '2026-01-01' } })).not.toThrow();
+  });
+});

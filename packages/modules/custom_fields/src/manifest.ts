@@ -63,6 +63,12 @@ export const manifest = defineModuleManifest({
    * `quote_requests` and `crm` raise it from the port's answer, so it is
    * declared here for the same reason `CUSTOM_FIELD_VALUE_INVALID` is. Its
    * `details` are `{ key, keys }` with no `code`, so it declares no tokens.
+   *
+   * **`CUSTOM_FIELD_OPTION_IN_USE`, `CUSTOM_FIELD_VALUE_TYPE_LOCKED` and
+   * `CUSTOM_FIELD_STORED_VALUES_EXIST`** (feature 157) are the three 409
+   * refusals of a definition change that shared `CUSTOM_FIELD_DEFINITION_INVALID`
+   * and an English message; each now has a sentence naming what it refuses
+   * (`details.label` / `details.value`, or `details.key`) and no tokens.
    */
   errorCodes: [
     { code: 'CUSTOM_FIELD_DEFINITION_INVALID' },
@@ -70,7 +76,10 @@ export const manifest = defineModuleManifest({
     { code: 'CUSTOM_FIELD_HOST_MANAGED' },
     { code: 'CUSTOM_FIELD_KEY_CONFLICT' },
     { code: 'CUSTOM_FIELD_NOT_FOUND' },
+    { code: 'CUSTOM_FIELD_OPTION_IN_USE' },
+    { code: 'CUSTOM_FIELD_STORED_VALUES_EXIST' },
     { code: 'CUSTOM_FIELD_VALUE_INVALID' },
+    { code: 'CUSTOM_FIELD_VALUE_TYPE_LOCKED' },
   ],
   permissions: [
     { code: 'custom_fields:read', label: 'View custom fields' },

@@ -196,6 +196,7 @@ export class CustomFieldDefinitionService implements DefinitionSource, CustomFie
         throw new CustomFieldDefinitionError(
           'value_type_locked',
           `Cannot change the value type of "${current.key}" while records hold values. Clear them first.`,
+          { key: current.key },
         );
       }
     }
@@ -251,6 +252,7 @@ export class CustomFieldDefinitionService implements DefinitionSource, CustomFie
         throw new CustomFieldDefinitionError(
           'option_in_use',
           `Option "${option.value}" is in use and cannot be removed.`,
+          { value: option.value, label: option.labelDefault },
         );
       }
     }
