@@ -658,7 +658,7 @@ Verified 2026-10-16: `test/checkout test/account` 26 files / 194 tests passed; f
 - [x] T141 Re-record `backend/test/fixtures/openapi-baseline.json`: `UPDATE_OPENAPI_BASELINE=1 pnpm --filter backend exec vitest run test/contract/kernel/openapi-baseline.test.ts`; review the diff — **additions only** (plan I3); then run without the flag
 - [x] T142 `[PG]` Every file this feature added or extended, **one `vitest run <file>` per invocation**, from `backend/` with the `[PG]` environment: the `[PG]` files of Phases 3–12a and 18, plus `test/contract/admin_users/permission-inventory.test.ts`, `test/contract/kernel/harness-parity.test.ts`, `test/integration/carts/cart-pricing-recompute.integration.test.ts`, `test/integration/orders/place-order-from-quote-request.test.ts`, `test/contract/quote_requests/customer-routes.test.ts` — paste the summary into the PR (D-198)
 - [x] T143 Deleted or moved anything? `git diff --name-status --diff-filter=DR origin/master...HEAD`; grep each old path under `backend/test/`; `composer:check`, `manifests:check`, `overlay:check`; `git status --porcelain` clean
-- [ ] T144 Walk `quickstart.md` §1–§7 on `pnpm run dev` and note any divergence in the PR (the owner's manual test follows) — **deferred to the owner's manual test** (2026-10-18)
+- [x] T144 Walk `quickstart.md` §1–§7 on `pnpm run dev` and note any divergence in the PR (the owner's manual test follows) — **done as the owner's manual test, 2026-10-19: passed after fix rounds**
 
 **Verification**: T141–T143 exit 0; T144 notes recorded.
 
@@ -750,6 +750,31 @@ below goes through the storefront catalogue (`lib/i18n/messages.ts`, `en-US` + `
 - [x] T173 Buy controls — `ProductBuyActions` (unit selector name, quantity label, quote button and its confirmation, the "single piece"/"pcs" defaults, the four `CartAddedPopup` labels it now passes), `AddToRfqButton` (inline pl/en map replaced by catalogue keys), `CompareAddToCartButton` (idle/adding/added label, the refusal fallback — the backend's sentence when it gave one), `ProductCardActions` (every tooltip and accessible name; takes `locale` from `ProductCard`). Transient states through pure helpers in `lib/buyActionLabels.ts`. RED: `storefront/test/catalog/buy-actions-locale.test.tsx`
 - [x] T174 Quick-order page — headings, intro, template link, dropzone label, paste label, search, both tables' columns, the quantity inputs' accessible names (`Quantity for {sku}`), preview pills and notices, row actions, build confirmations, the mobile bar. The actions' own refusals travel as a `?problem=` code the page words (an unknown code shows nothing); a backend refusal stays `?error=` with its `detail`. RED: `storefront/test/account/quick-order-locale.test.tsx` (page awaited and server-rendered, EN and PL)
 - [x] T175 Native `min` bubbles — the shopping-list row quantity form is `noValidate`; `updateQtyAction` validates through `parseListQuantity` (`lib/shoppingListQuantity.ts`, 1–9999) and a refusal is worded beside the input (`?qtyError=<itemId>`, `aria-invalid`, a polite live region mounted on every row, as on the cart line); the input gains an accessible name and its `Save` button a catalogue label (it sits in the same `UpdateQtyForm`). The return form is `noValidate`; `submit` already clamps to `1 … remaining`, and the input is linked to the "of N" bound. No minimum hint on either: a list holds any positive quantity (the minimum binds at list → cart, FR-011) and a return has none. RED: `storefront/test/account/shopping-list-quantity.test.tsx`, `storefront/test/account/returns-quantity-validation.test.tsx`
+
+
+## Final gate (U4) — 2026-10-19
+
+- Rebased onto `origin/master` `3d9ca98cd` (six commits: feature 154 PR A, the sales-channel access
+  rule). Conflicts kept both sides: `reference-ledgers.ts` (154's and 155's minted codes),
+  `quote_requests/off-state.test.ts` and `quick_order/one-click-place.test.ts` (imports),
+  `platform/src/http/index.ts` (both side-effect imports). No migration re-stamp (master added none
+  to `catalog`, `orders`, `carts`, `quote_requests` or `returns`); the `AGENTS.md` appendix merged
+  clean; `composer:generate`, `manifests:generate` and `pnpm install --lockfile-only` left no diff.
+- `[PG]` run on the fork (`fork-pg-tests`, one `vitest run` per file):
+  <https://github.com/bfluks/endora-commerce/actions/runs/39222850146> at `f49d9d990` — **88 files,
+  0 failed, 657 tests**: every contract/integration file this branch adds or modifies, the `[PG]`
+  files of every Verification block, T142's five cross-cutting files, `openapi-baseline` and master's
+  `cart-line-repricing`, `cart-line-refusal-codes`, `place-order-line-price-current` and
+  `price-matrix-*`. The first run (`39218234925`, at `637c6a3a1`) had two branch reds, both test
+  fixtures, fixed in `7b1ab3ae0` (the locked quote-request buyer's Organization bound to the fixture
+  channels — 154's access rule answered 403) and `f49d9d990` (the one-click placement backstop
+  doubles `addItems`, the write path since T167), plus a non-test path in the list.
+- Fork PR #2 green at `f49d9d990`: `quality`, `quality:static`, `test:backend:unit`,
+  `test:frontend`, `release:changeset`, `pack-gate`, `boot-gate`, `build:docs`, `dco`
+  (<https://github.com/bfluks/endora-commerce/pull/2>). This record is the only change after that
+  tip (`specs/` only).
+- `node backend/scripts/dco-signoff.ts origin/master HEAD`: 0 findings.
+- Upstream PR: _(to be filled)_
 
 ---
 
