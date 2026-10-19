@@ -77,6 +77,9 @@
   "sidebar.main.category.currencies": {
     "message": "currencies"
   },
+  "sidebar.main.category.custom_fields": {
+    "message": "custom_fields"
+  },
   "sidebar.main.category.customer_accounts": {
     "message": "customer_accounts"
   },

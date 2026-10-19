@@ -17,6 +17,7 @@ export const manifest = defineModuleManifest({
   // `auth` owns the `requireAdmin` port the admin routes are gated by.
   dependencies: ['auth'],
   i18n: { bundlesDir: 'i18n' },
+  docs: { dir: 'docs' },
   /**
    * The `CUSTOM_FIELD_*` family — D-129's remaining sweep, Tier A
    * (`specs/090-module-owned-error-codes/d129-sweep.md` §5.2, Appendix A;

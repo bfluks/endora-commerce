@@ -40,7 +40,7 @@ of the platform, not of what happens to be written.
 | [credit_limits](./credit_limits.md) | Credit-limit grant + atomic reservation | @endora-commerce/mod-credit-limits |
 | [crm](./crm.md) | Sales opportunities with a configurable status workflow that linked orders follow | @endora-commerce/mod-crm |
 | [currencies](./currencies.md) | Pool of accepted ISO 4217 currencies + default | @endora-commerce/mod-currencies |
-| `custom_fields` | _no page yet_ | @endora-commerce/mod-custom-fields |
+| [custom_fields](./custom_fields.md) | Typed fields an operator adds to orders, quote requests, opportunities and other records without a code change, edited on one screen and offered as filters on the admin lists. | @endora-commerce/mod-custom-fields |
 | [customer_accounts](./customer_accounts.md) | Customer login, password reset, 2FA, role assignment | @endora-commerce/mod-customer-accounts |
 | [customers](./customers.md) | Customer lifecycle over `customer_accounts` — company and personal Organizations, sales-rep assignment and the admin customer surface | @endora-commerce/mod-customers |
 | [delivery_methods](./delivery_methods.md) | Configured delivery options | @endora-commerce/mod-delivery-methods |

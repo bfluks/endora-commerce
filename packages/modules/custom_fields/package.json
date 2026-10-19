@@ -44,6 +44,7 @@
   "files": [
     "dist",
     "i18n",
+    "docs",
     "tailwind.css"
   ],
   "engines": {
