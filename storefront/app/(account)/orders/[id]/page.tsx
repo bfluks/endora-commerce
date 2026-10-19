@@ -383,7 +383,7 @@ async function addCommentAction(formData: FormData): Promise<void> {
     try {
       await addOrderComment(session, id, body);
     } catch (err) {
-      const message = err instanceof StorefrontApiError ? err.message : 'Could not add comment.';
+      const message = err instanceof StorefrontApiError ? err.detail : 'Could not add comment.';
       redirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
     }
   }
@@ -400,7 +400,7 @@ async function reorderAction(formData: FormData): Promise<void> {
     const result = await reorderOrder(session, id);
     target = result.checkoutUrl || '/cart';
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not reorder.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Could not reorder.';
     redirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
   }
   redirect(target);
@@ -431,7 +431,7 @@ async function retryPaymentAction(formData: FormData): Promise<void> {
       )}`;
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : t('order.payment.retry.failed');
+      err instanceof StorefrontApiError ? err.detail : t('order.payment.retry.failed');
     target = `/orders/${id}?error=${encodeURIComponent(message)}`;
   }
   redirect(target);
@@ -456,7 +456,7 @@ async function cancelOrderAction(formData: FormData): Promise<void> {
   try {
     await cancelMyOrder(session, id);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : t('order.cancel.failed');
+    const message = err instanceof StorefrontApiError ? err.detail : t('order.cancel.failed');
     redirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
   }
   redirect(`/orders/${id}`);
@@ -471,7 +471,7 @@ async function reorderToQuoteAction(formData: FormData): Promise<void> {
     const { ctx } = await getServerContext();
     await cloneOrderToQuote(session, id, ctx);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not create quote request.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Could not create quote request.';
     redirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
   }
   redirect('/quote-requests');

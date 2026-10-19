@@ -17,7 +17,7 @@ export function cartActionFailure(
   locale: string | undefined,
   key: 'product.addToCartFailed' | 'product.oneClickFailed' | 'cart.submitForApprovalFailed',
 ): string {
-  if (err instanceof StorefrontApiError) return err.message;
+  if (err instanceof StorefrontApiError) return err.detail;
   // `tForLocale` answers an unknown locale in the catalogue's default.
   return tForLocale(locale ?? '')(key);
 }

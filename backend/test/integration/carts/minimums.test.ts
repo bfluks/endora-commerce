@@ -202,7 +202,22 @@ describe('155 — cart add and edit enforce the order minimums [integration]', (
         code: ERROR_CODES.PRODUCT_BELOW_MINIMUM_QUANTITY,
         details: { productId: A.id, productName: A.nameEn, minimum: 10, total: 4 },
       });
+      // U4 — the buyer reads this sentence; it is the envelope's message, never the code.
+      expect(errorOf(res).message).toBe(`"${A.nameEn}" has a minimum order quantity of 10 pcs.`);
       expect((await view(cookies)).items.map((i) => i.quantity)).toEqual([10]);
+    });
+
+    it('U4 — the refused edit answers with the full Polish sentence under Accept-Language: pl, never the code', async () => {
+      const cookies = basket();
+      const added = await add(cookies, { productId: A.id, quantity: 10 }, 'pl');
+      expect(added.statusCode, added.body).toBe(200);
+      const line = (added.json() as CartBody).data.items[0]!;
+      const res = await edit(cookies, line.id, 4, 'pl');
+      expect(res.statusCode, res.body).toBe(422);
+      const error = errorOf(res);
+      expect(error.code).toBe(ERROR_CODES.PRODUCT_BELOW_MINIMUM_QUANTITY);
+      expect(error.message).toBe(`Minimalna ilość zamówienia produktu „${A.namePl}” to 10 szt.`);
+      expect(error.message).not.toContain(ERROR_CODES.PRODUCT_BELOW_MINIMUM_QUANTITY);
     });
 
     it('FR-007 — an edit to 0 and a DELETE always succeed', async () => {

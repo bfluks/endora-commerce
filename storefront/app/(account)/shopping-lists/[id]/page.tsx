@@ -316,7 +316,7 @@ async function renameAction(formData: FormData): Promise<void> {
   try {
     await renameShoppingList(session, listId, name);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Rename failed.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Rename failed.';
     redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
   }
   redirect(`/shopping-lists/${listId}`);
@@ -332,7 +332,7 @@ async function updateQtyAction(formData: FormData): Promise<void> {
   try {
     await updateShoppingListItem(session, listId, itemId, { quantity });
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Update failed.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Update failed.';
     redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
   }
   redirect(`/shopping-lists/${listId}`);
@@ -347,7 +347,7 @@ async function removeAction(formData: FormData): Promise<void> {
   try {
     await removeShoppingListItem(session, listId, itemId);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Remove failed.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Remove failed.';
     redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
   }
   redirect(`/shopping-lists/${listId}`);
@@ -361,7 +361,7 @@ async function clearListAction(formData: FormData): Promise<void> {
   try {
     await clearShoppingListItems(session, listId);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Clear failed.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Clear failed.';
     redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
   }
   redirect(`/shopping-lists/${listId}`);
@@ -380,7 +380,7 @@ async function convertAllToCartAction(formData: FormData): Promise<void> {
   try {
     result = await convertShoppingListToCart(session, listId);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Convert failed.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Convert failed.';
     redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
   }
   // Flush the cart route's Router Cache so the newly added lines show on the
@@ -402,7 +402,7 @@ async function convertSelectedToCartAction(formData: FormData): Promise<void> {
   try {
     result = await convertShoppingListToCart(session, listId, itemIds);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Convert failed.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Convert failed.';
     redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
   }
   revalidatePath('/cart');
@@ -418,7 +418,7 @@ async function convertAllToRfqAction(formData: FormData): Promise<void> {
   try {
     result = await convertShoppingListToRfq(session, listId);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Convert failed.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Convert failed.';
     redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
   }
   // Without this, Next's Router Cache keeps serving the previously cached
@@ -443,7 +443,7 @@ async function convertSelectedToRfqAction(formData: FormData): Promise<void> {
   try {
     result = await convertShoppingListToRfq(session, listId, itemIds);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Convert failed.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Convert failed.';
     redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
   }
   revalidatePath('/quote-requests');

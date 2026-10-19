@@ -161,7 +161,7 @@ async function registerAction(formData: FormData): Promise<void> {
     });
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Registration failed. Please try again.';
+      err instanceof StorefrontApiError ? err.detail : 'Registration failed. Please try again.';
     redirect(`/register?error=${encodeURIComponent(message)}`);
   }
   redirect(`/register?status=pending&email=${encodeURIComponent(email)}`);

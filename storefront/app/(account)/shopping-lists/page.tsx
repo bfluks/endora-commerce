@@ -129,7 +129,7 @@ async function createAction(formData: FormData): Promise<void> {
     const created = await createShoppingList(session, name);
     id = created.id;
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not create list.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Could not create list.';
     redirect(`/shopping-lists?error=${encodeURIComponent(message)}`);
   }
   redirect(`/shopping-lists/${id}`);
@@ -143,7 +143,7 @@ async function deleteAction(formData: FormData): Promise<void> {
   try {
     await deleteShoppingList(session, id);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not delete list.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Could not delete list.';
     redirect(`/shopping-lists?error=${encodeURIComponent(message)}`);
   }
   redirect(`/shopping-lists`);
@@ -158,7 +158,7 @@ async function setDefaultAction(formData: FormData): Promise<void> {
     await setDefaultShoppingList(session, id);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not set the default list.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not set the default list.';
     redirect(`/shopping-lists?error=${encodeURIComponent(message)}`);
   }
   redirect('/shopping-lists');

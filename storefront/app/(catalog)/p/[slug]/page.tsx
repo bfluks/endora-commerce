@@ -594,6 +594,8 @@ async function addGroupedToCartAction(formData: FormData): Promise<void> {
   if (entries.length === 0) redirect('/cart?error=missing-product');
   const jar = await readCartJar();
   let anon: string | null = jar.anon ?? null;
+  // `ctx` carries the storefront's language and channel, so a refusal reads in the page's language.
+  const { ctx } = await getServerContext();
   try {
     for (const entry of entries) {
       const [productId, qtyRaw] = entry.split(':');
@@ -603,6 +605,7 @@ async function addGroupedToCartAction(formData: FormData): Promise<void> {
       const result = await addCartItem(
         { ...jar, anon },
         { productId, quantity: qty },
+        ctx,
       );
       // Reuse the freshly-minted anon cart for the remaining children so every
       // line lands in the same cart.
@@ -636,11 +639,13 @@ async function addBundleToCartAction(formData: FormData): Promise<void> {
   if (selections.length === 0) redirect('/cart?error=missing-product');
   const jar = await readCartJar();
   let anon: string | null = jar.anon ?? null;
+  const { ctx } = await getServerContext();
   try {
     for (const sel of selections) {
       const result = await addCartItem(
         { ...jar, anon },
         { productId: sel.productId, quantity: sel.quantity },
+        ctx,
       );
       // Reuse the freshly-minted anon cart for the remaining slots so every
       // line lands in the same cart.
@@ -674,12 +679,18 @@ async function addToCartAction(
   }
   const qty = Number.isFinite(quantity) && quantity >= 1 ? Math.floor(quantity) : 1;
   try {
-    const result = await addCartItem(await readCartJar(), {
-      productId,
-      ...(variantId ? { variantId } : {}),
-      ...(packagingUnitId ? { packagingUnitId } : {}),
-      quantity: qty,
-    });
+    // `ctx` carries the storefront's language: the minimum refusal (FR-008) is worded in it.
+    const { ctx } = await getServerContext();
+    const result = await addCartItem(
+      await readCartJar(),
+      {
+        productId,
+        ...(variantId ? { variantId } : {}),
+        ...(packagingUnitId ? { packagingUnitId } : {}),
+        quantity: qty,
+      },
+      ctx,
+    );
     if (result.newAnonCookie) await setAnonCartCookie(result.newAnonCookie);
   } catch (err) {
     return {

@@ -104,7 +104,7 @@ async function registerCustomerAction(formData: FormData): Promise<void> {
       redirect('/register-customer?orgRequired=1');
     }
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Registration failed. Please try again.';
+      err instanceof StorefrontApiError ? err.detail : 'Registration failed. Please try again.';
     redirect(`/register-customer?error=${encodeURIComponent(message)}`);
   }
   // Newsletter consent (feature 048): subscribe the new account's email when the

@@ -464,7 +464,7 @@ async function importAction(formData: FormData): Promise<void> {
       ? await importQuickOrderFile(session, filename || 'upload.csv', fileContent)
       : await importQuickOrderCsv(session, csv);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Import failed.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Import failed.';
     redirect(`/quick-order?error=${encodeURIComponent(message)}`);
   }
   redirect(`/quick-order?preview=${encodePreview(preview!)}`);
@@ -497,7 +497,7 @@ async function confirmAction(formData: FormData): Promise<void> {
     rfqRef = result.quoteRequestBusinessId ?? result.quoteRequestId;
     rejected = result.rejected ?? [];
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Build failed.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Build failed.';
     redirect(`/quick-order?error=${encodeURIComponent(message)}`);
   }
   if (target === 'quote_request') {

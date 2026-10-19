@@ -173,7 +173,7 @@ async function createAction(formData: FormData): Promise<void> {
       ...(formData.get('isDefault') ? { isDefault: true } : {}),
     });
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not save address.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Could not save address.';
     redirect(`/addresses?error=${encodeURIComponent(message)}`);
   }
   redirect('/addresses?status=created');
@@ -186,7 +186,7 @@ async function removeAction(formData: FormData): Promise<void> {
   try {
     await deleteMyAddress(session, (formData.get('addressId') as string) ?? '');
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not remove address.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Could not remove address.';
     redirect(`/addresses?error=${encodeURIComponent(message)}`);
   }
   redirect('/addresses?status=removed');
@@ -199,7 +199,7 @@ async function setDefaultAction(formData: FormData): Promise<void> {
   try {
     await setMyDefaultAddress(session, (formData.get('addressId') as string) ?? '');
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not set default.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Could not set default.';
     redirect(`/addresses?error=${encodeURIComponent(message)}`);
   }
   redirect('/addresses?status=default');

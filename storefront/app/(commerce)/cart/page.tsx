@@ -429,7 +429,7 @@ async function updateAction(formData: FormData): Promise<void> {
     const result = await updateCartItem(await readJar(), itemId, quantity, ctx);
     if (result.newAnonCookie) await setAnonCartCookie(result.newAnonCookie);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : t('cart.line.updateFailed');
+    const message = err instanceof StorefrontApiError ? err.detail : t('cart.line.updateFailed');
     redirect(cartLineEditErrorHref(itemId, message, typedValue));
   }
   redirect('/cart');
@@ -444,7 +444,7 @@ async function removeAction(formData: FormData): Promise<void> {
     if (result.newAnonCookie) await setAnonCartCookie(result.newAnonCookie);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : tForLocale(locale)('cart.line.removeFailed');
+      err instanceof StorefrontApiError ? err.detail : tForLocale(locale)('cart.line.removeFailed');
     redirect(`/cart?error=${encodeURIComponent(message)}`);
   }
   redirect('/cart');
@@ -472,7 +472,7 @@ async function saveToListAction(formData: FormData): Promise<void> {
     redirect(`/cart?listAdded=${encodeURIComponent(target.name)}`);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not save line to list.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not save line to list.';
     redirect(`/cart?error=${encodeURIComponent(message)}`);
   }
 }
@@ -493,7 +493,7 @@ async function applyCouponAction(formData: FormData): Promise<void> {
     }
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not apply coupon.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not apply coupon.';
     redirect(`/cart?error=${encodeURIComponent(message)}`);
   }
   redirect('/cart');
@@ -518,7 +518,7 @@ async function convertToQrAction(formData: FormData): Promise<void> {
   } catch (err) {
     const message =
       err instanceof StorefrontApiError
-        ? err.message
+        ? err.detail
         : 'Could not convert cart to a quote request.';
     redirect(`/cart?error=${encodeURIComponent(message)}`);
   }

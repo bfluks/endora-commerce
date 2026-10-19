@@ -398,7 +398,7 @@ async function acceptAction(formData: FormData): Promise<void> {
   try {
     await acceptRevision(session, rfqId, expectedRevisionNumber);
   } catch (err) {
-    const msg = err instanceof StorefrontApiError ? err.message : 'Nie udało się zaakceptować zmian.';
+    const msg = err instanceof StorefrontApiError ? err.detail : 'Nie udało się zaakceptować zmian.';
     redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(msg)}`);
   }
   redirect(`/quote-requests/${rfqId}`);
@@ -414,7 +414,7 @@ async function rejectAction(formData: FormData): Promise<void> {
   try {
     await rejectRevision(session, rfqId, expectedRevisionNumber, reason || undefined);
   } catch (err) {
-    const msg = err instanceof StorefrontApiError ? err.message : 'Nie udało się odrzucić zmian.';
+    const msg = err instanceof StorefrontApiError ? err.detail : 'Nie udało się odrzucić zmian.';
     redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(msg)}`);
   }
   redirect(`/quote-requests/${rfqId}`);
@@ -430,7 +430,7 @@ async function convertAction(formData: FormData): Promise<void> {
     redirect(checkoutUrl);
   } catch (err) {
     if (err instanceof StorefrontApiError) {
-      redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(err.message)}`);
+      redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(err.detail)}`);
     }
     throw err;
   }
@@ -445,7 +445,7 @@ async function resubmitAction(formData: FormData): Promise<void> {
     const created = await resubmitRfq(session, rfqId);
     redirect(`/quote-requests/${created.id}`);
   } catch (err) {
-    const msg = err instanceof StorefrontApiError ? err.message : 'Nie udało się złożyć ponownie.';
+    const msg = err instanceof StorefrontApiError ? err.detail : 'Nie udało się złożyć ponownie.';
     redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(msg)}`);
   }
 }

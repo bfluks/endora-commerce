@@ -76,7 +76,7 @@ async function changePasswordAction(formData: FormData): Promise<void> {
     await changePassword(session, currentPassword, newPassword);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not update your password.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not update your password.';
     redirect(`/account/password?error=${encodeURIComponent(message)}`);
   }
   redirect(`/account/password?status=updated`);
