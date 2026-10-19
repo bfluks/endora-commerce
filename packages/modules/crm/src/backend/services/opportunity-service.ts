@@ -12,6 +12,9 @@ import {
   type AdminUserReadPort,
   type CreateOpportunityRequest,
   type CustomerAccountReadPort,
+  type CustomFieldFilters,
+  type CustomFieldListFilterField,
+  type CustomFieldListFilterPort,
   type CustomFieldValuePort,
   type OpportunityCreatedEvent,
   type OpportunityBoardCardField,
@@ -81,6 +84,12 @@ export interface OpportunityServiceDeps {
   unresolvedPropagations: (opportunityId: string) => Promise<PropagationOutcome[]>;
   /** Operator-defined fields (US15): `custom_fields` validates, this service writes. */
   customFields: CustomFieldValuePort;
+  /**
+   * The list's custom-field filters (`specs/157-custom-fields-list-filters/`):
+   * `custom_fields`' `customFieldListFilterPort`, which offers the fields and
+   * turns them into one condition.
+   */
+  customFieldListFilter: CustomFieldListFilterPort;
   /** Recalculates a computed Opportunity's value — asked when its mode becomes `computed`. */
   recalculateValue: (opportunityId: string) => Promise<unknown>;
   /**
@@ -600,7 +609,28 @@ export class OpportunityService {
       end.setUTCDate(end.getUTCDate() + 1);
       conditions.push({ createdAt: { $lt: end } });
     }
-    if (cardFields) conditions.push(...boardFieldFilterConditions(cardFields, query.fieldFilters));
+    // `cardValues` (or a card handed in by the board) is a **mode switch, never
+    // a security boundary**: both modes narrow the same tenant-scoped,
+    // assignment-scoped statement, so choosing the board's rule only ever
+    // chooses its narrower set of filters, never a wider result.
+    if (card !== undefined || query.cardValues) {
+      // The board, and a board lane continued in the list: the card rule.
+      if (cardFields) conditions.push(...boardFieldFilterConditions(cardFields, query.fieldFilters));
+    } else if (query.fieldFilters) {
+      // The list (FR-011a): built-in references keep the card rule; a `custom:`
+      // reference follows the definition's list-filter option, all of them as
+      // one record through the port — refused when a field is not offered.
+      const builtin = (cardFields ?? []).filter((field) => field.source === 'builtin');
+      conditions.push(...boardFieldFilterConditions(builtin, query.fieldFilters));
+      const custom = Object.create(null) as CustomFieldFilters;
+      for (const [ref, filter] of Object.entries(query.fieldFilters)) {
+        if (ref.startsWith('custom:')) custom[ref.slice('custom:'.length)] = filter;
+      }
+      const condition = await this.deps.customFieldListFilter.condition('opportunity', custom);
+      if (condition !== null) {
+        conditions.push({ id: { $in: raw(`(${condition.sql})`, [...condition.params]) } });
+      }
+    }
 
     const direction = (query.order ?? 'desc') === 'asc' ? QueryOrder.ASC_NULLS_LAST : QueryOrder.DESC_NULLS_LAST;
     const sort = query.sort ?? 'createdAt';
@@ -639,6 +669,11 @@ export class OpportunityService {
   async summarize(rows: readonly CrmOpportunity[]): Promise<OpportunitySummary[]> {
     if (rows.length === 0) return [];
     return this.#summaries(rows, await this.deps.workflowRead.loadGraph(this.deps.emFactory()));
+  }
+
+  /** The Opportunity custom fields the list offers as filters (feature 157). */
+  async customFieldFilterFields(): Promise<CustomFieldListFilterField[]> {
+    return this.deps.customFieldListFilter.listFilterable('opportunity');
   }
 
   async get(id: string): Promise<OpportunityDetail> {
