@@ -13,12 +13,17 @@ import type {
   SupportedEntityType,
 } from '@endora-commerce/contracts';
 
-/** Pre-API fallback so the page renders before the entity-types fetch resolves. */
+/**
+ * Pre-API fallback so the page renders before the entity-types fetch resolves.
+ * Only types that declare no owner module: a type that follows a module (a
+ * Quote Request follows `quote_requests`, an Opportunity `crm`) is offered once
+ * the server says it is, never before.
+ */
 const FALLBACK_ENTITY_TYPES: CustomFieldEntityTypeInfo[] = (
-  ['category', 'order', 'organization', 'customer', 'quote_request'] as SupportedEntityType[]
+  ['category', 'order', 'organization', 'customer'] as SupportedEntityType[]
 ).map((entityType) => ({
   entityType,
-  labelKey: `customFields.entity.${entityType === 'quote_request' ? 'quoteRequest' : entityType}`,
+  labelKey: `customFields.entity.${entityType}`,
   // The list-filter option is offered only once the server says the type has it.
   listFilter: false,
 }));

@@ -32,7 +32,8 @@ export class CustomFieldDefinition {
     | 'audience'
     | 'sortOrder'
     | 'label'
-    | 'config';
+    | 'config'
+    | 'listFilter';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -73,6 +74,14 @@ export class CustomFieldDefinition {
   /** Opaque host-capability flags (FR-006). The core stores but never reads this for meaning. */
   @Property({ type: 'json' })
   config: Record<string, unknown> = {};
+
+  /**
+   * Whether the admin list of the entity type offers the field as a filter
+   * (`specs/157-custom-fields-list-filters/`). Settable only where the
+   * registry entry carries the `listFilter` marker.
+   */
+  @Property({ type: 'boolean' })
+  listFilter: boolean = false;
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

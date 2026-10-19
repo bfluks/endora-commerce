@@ -40,6 +40,7 @@ function snapshotDefinition(def: CustomFieldDefinition): Record<string, unknown>
     audience: def.audience,
     sortOrder: def.sortOrder,
     config: def.config,
+    listFilter: def.listFilter,
   };
 }
 
