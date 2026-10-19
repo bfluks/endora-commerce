@@ -177,3 +177,31 @@ describe('ProductBuyActions — wiring', () => {
     expect(source).toContain('<input type="hidden" name="quantity" value={qty} />');
   });
 });
+
+/**
+ * U4 (owner's manual test) — a `min` on a number input inside a submitting form makes the
+ * browser refuse it with its own bubble, in the browser's language. The PDP's visible quantity
+ * sits outside the cart form (which posts the clamped hidden `quantity`), so no bubble can fire;
+ * this keeps it that way.
+ */
+describe('ProductBuyActions — no native validation bubble', () => {
+  it('keeps the visible quantity input outside every form', () => {
+    const html = renderToString(
+      <ProductBuyActions
+        productId="p1"
+        productSlug="p-slug"
+        productName="Product 1"
+        showCart
+        showQuote={false}
+        minOrderQuantity={10}
+        locale="en-US"
+        addToCartAction={noop}
+        addToCartLabel="Add to cart"
+      />,
+    );
+    const at = html.indexOf('id="buy-qty-p1"');
+    expect(at).toBeGreaterThan(-1);
+    const before = html.slice(0, at);
+    expect((before.match(/<form\b/g) ?? []).length).toBe((before.match(/<\/form>/g) ?? []).length);
+  });
+});

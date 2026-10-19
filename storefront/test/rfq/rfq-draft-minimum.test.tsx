@@ -260,3 +260,29 @@ describe('DraftLine — wiring', () => {
     expect(source).toContain('const settled = draftQuantityOnBlur(e.target.value, minimum, qtyText !== null);');
   });
 });
+
+/**
+ * U4 (owner's manual test) — the browser's own `min` bubble fires only for a control of a
+ * submitting form. The draft line and the quote CTA are client controls outside any form, so
+ * typing below the floor is normalised on blur instead; this keeps it that way.
+ */
+describe('RFQ quantity inputs — no native validation bubble', () => {
+  function outsideEveryForm(html: string, marker: string): boolean {
+    const at = html.indexOf(marker);
+    expect(at).toBeGreaterThan(-1);
+    const before = html.slice(0, at);
+    return (before.match(/<form\b/g) ?? []).length === (before.match(/<\/form>/g) ?? []).length;
+  }
+
+  it('the draft line quantity is outside every form', () => {
+    const html = renderLine({ quantity: 3, minimum: 10, locale: 'en-US' });
+    expect(outsideEveryForm(html, 'type="number"')).toBe(true);
+  });
+
+  it('the quote CTA quantity is outside every form', () => {
+    const html = renderToString(
+      <AddToRfqButton productId="prod-1" productSlug="widget" productName="Widget" withQuantity minOrderQuantity={10} locale="en-US" />,
+    );
+    expect(outsideEveryForm(html, 'type="number"')).toBe(true);
+  });
+});

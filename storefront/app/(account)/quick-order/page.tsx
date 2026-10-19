@@ -200,7 +200,7 @@ export default async function QuickOrderPage({
                   <td>{r.sku}</td>
                   <td>{r.name}</td>
                   <td>
-                    <form action={addSearchResultAction} id={`add-${r.productId}`}>
+                    <form action={addSearchResultAction} id={`add-${r.productId}`} noValidate>
                       {preview ? (
                         <input type="hidden" name="preview" value={encodePreview(preview)} />
                       ) : null}
@@ -308,7 +308,7 @@ function PreviewPanel({ preview, locale }: { preview: PreviewState; locale: stri
                   <td>{r.sku}</td>
                   <td>{r.resolvedVariantSku ?? '—'}</td>
                   <td>
-                    <form action={updateQuantityAction} id={`qty-${r.line}`}>
+                    <form action={updateQuantityAction} id={`qty-${r.line}`} noValidate>
                       <input type="hidden" name="preview" value={encodePreview(preview)} />
                       <input type="hidden" name="line" value={r.line} />
                       <input
