@@ -228,6 +228,15 @@ describe('custom_fields — the list-filter option of a definition', () => {
     expect(reorder.statusCode, reorder.body).toBe(200);
     expect(await audit('custom_fields.option.updated', optionId)).toHaveLength(2);
 
+    const makeDefault = await h.app.inject({
+      method: 'PATCH',
+      url: `${API}/definitions/${definition.id}/options/${optionId}`,
+      ...ADMIN,
+      payload: { isDefault: true },
+    });
+    expect(makeDefault.statusCode, makeDefault.body).toBe(200);
+    expect(await audit('custom_fields.option.updated', optionId)).toHaveLength(3);
+
     const remove = await h.app.inject({
       method: 'DELETE',
       url: `${API}/definitions/${definition.id}/options/${optionId}`,

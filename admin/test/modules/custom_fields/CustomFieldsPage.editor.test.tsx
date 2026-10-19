@@ -404,6 +404,13 @@ describe('CustomFieldsPage — the definition editor', () => {
     expect(refusal).toHaveClass('break-words');
   });
 
+  it('marks an option as the default with one patch holding only isDefault', async () => {
+    const dialog = await openEditor();
+    fireEvent.click(within(optionRow(dialog, 'South')).getByLabelText('Default'));
+    await waitFor(() => expect(client.updateOption).toHaveBeenCalledTimes(1));
+    expect(client.updateOption).toHaveBeenCalledWith(REGION.id, SOUTH_ID, { isDefault: true });
+  });
+
   it('saves an option label on Enter', async () => {
     const user = userEvent.setup();
     const dialog = await openEditor();
