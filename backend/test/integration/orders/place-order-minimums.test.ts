@@ -404,19 +404,21 @@ describe('155 — placement and the checkout preview refuse below-minimum lines 
   });
 
   it('the one-click entry point — with the add path replaced by a double that admits A × 5, placement still refuses [F3]', async () => {
-    // The composed one-click service, rebuilt around a cart double whose `addItem`
-    // writes the line without any check, and the real placement port.
+    // The composed one-click service, rebuilt around a cart double whose
+    // `addItems` (the one-click write path since round C, T167) writes the line
+    // without any check, and the real placement port.
     const OneClickService = cradle().quickOrderOneClickService.constructor as new (
       ...args: unknown[]
     ) => { place(ctx: unknown, input: unknown, salesChannelId: string | null): Promise<unknown> };
     const realCart = cradle().cartWritePort;
     const uncheckedCart = {
-      ...realCart,
-      clearForCustomer: realCart.clearForCustomer.bind(realCart),
-      addItem: async (_actor: unknown, input: { productId: string; quantity?: number }) =>
-        realCart.replaceItemsForCustomer(CTX, [
-          { productId: input.productId, quantity: input.quantity ?? 1, unitPrice: '10.00', currency: 'PLN' },
-        ]),
+      addItems: async (_actor: unknown, lines: Array<{ productId: string; quantity: number }>) => ({
+        ...(await realCart.replaceItemsForCustomer(
+          CTX,
+          lines.map((line) => ({ productId: line.productId, quantity: line.quantity, unitPrice: '10.00', currency: 'PLN' })),
+        )),
+        outcomes: [],
+      }),
     };
     const preferences = {
       resolveForCustomer: async () => ({
