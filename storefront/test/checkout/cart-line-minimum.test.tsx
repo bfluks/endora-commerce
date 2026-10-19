@@ -5,7 +5,10 @@ import {
   belowMinimumText,
   cartBlocksCheckout,
   cartLineDisplayName,
+  cartLineEditError,
+  cartLineEditErrorHref,
   cartLineFloor,
+  parseCartQuantityEdit,
 } from '../../lib/cartMinimum';
 
 /**
@@ -203,5 +206,100 @@ describe('CartLine — Enter in the quantity input applies the typed quantity', 
       // It precedes the steppers.
       expect(form.indexOf(first)).toBeLessThan(form.indexOf('name="step"'));
     }
+  });
+});
+
+/**
+ * U4 (owner's manual test, step 4) — the browser's own `min` validation bubble spoke the
+ * browser's language, not the storefront's, and refused 0, which removes the line (FR-007).
+ * The stepper form no longer asks the browser to validate; the buyer reads our sentence.
+ */
+describe('parseCartQuantityEdit', () => {
+  it('reads 0 as removing the line (FR-007)', () => {
+    expect(parseCartQuantityEdit({ quantity: '0' })).toEqual({ kind: 'remove' });
+    expect(parseCartQuantityEdit({ quantity: ' 0 ' })).toEqual({ kind: 'remove' });
+  });
+
+  it('reads a whole number as the new quantity, a stepper step first', () => {
+    expect(parseCartQuantityEdit({ quantity: '4' })).toEqual({ kind: 'set', quantity: 4 });
+    expect(parseCartQuantityEdit({ step: '11', quantity: '4' })).toEqual({ kind: 'set', quantity: 11 });
+  });
+
+  it('never reads an empty or garbled field as 0 — clearing the field must not delete the line', () => {
+    for (const quantity of ['', '   ', 'abc', '-1', '2.5', null]) {
+      expect(parseCartQuantityEdit({ quantity })).toEqual({ kind: 'invalid' });
+    }
+    expect(parseCartQuantityEdit({})).toEqual({ kind: 'invalid' });
+  });
+});
+
+describe('cartLineEditErrorHref / cartLineEditError', () => {
+  it('round-trips the line, the sentence and the typed quantity through the query', () => {
+    const href = cartLineEditErrorHref('item-1', '"Bolts 0001" has a minimum order quantity of 10 pcs.', '4');
+    const params = Object.fromEntries(new URL(href, 'http://x').searchParams);
+    expect(cartLineEditError(params, 'item-1')).toEqual({
+      message: '"Bolts 0001" has a minimum order quantity of 10 pcs.',
+      typed: '4',
+    });
+    expect(cartLineEditError(params, 'item-2')).toBeNull();
+  });
+
+  it('carries no typed value when there was none', () => {
+    const params = Object.fromEntries(new URL(cartLineEditErrorHref('item-1', 'x', null), 'http://x').searchParams);
+    expect(cartLineEditError(params, 'item-1')).toEqual({ message: 'x', typed: null });
+  });
+});
+
+describe('CartLine — our own quantity messages, never the browser bubble', () => {
+  function stepperForm(markup: string): string {
+    const start = markup.lastIndexOf('<form', markup.indexOf('name="step"'));
+    return markup.slice(start, markup.indexOf('</form>', start) + 7);
+  }
+
+  it('asks the browser not to validate the stepper form', () => {
+    expect(stepperForm(render(line({ quantity: 10, minOrderQuantity: 10 })))).toMatch(/^<form[^>]*noValidate=""/);
+  });
+
+  it('explains a disabled "−" at the floor with a visible minimum hint (EN and PL)', () => {
+    for (const [locale, hint] of [
+      ['en-US', 'Minimum 10 pcs'],
+      ['pl-PL', 'Minimum 10 szt.'],
+    ] as const) {
+      const html = render(line({ quantity: 10, minOrderQuantity: 10 }), locale);
+      const minus = html.match(/<button([^>]*aria-label="−"[^>]*)>/)?.[1] ?? '';
+      expect(minus).toContain('disabled');
+      expect(minus).toContain('aria-describedby="cart-line-item-1-floor"');
+      expect(html).toMatch(new RegExp(`<p[^>]*id="cart-line-item-1-floor"[^>]*>${hint}</p>`));
+    }
+  });
+
+  it('shows no minimum hint for a product without one', () => {
+    const html = render(line({ quantity: 1, minOrderQuantity: null }));
+    expect(html).not.toContain('cart-line-item-1-floor');
+  });
+
+  it('mounts an empty polite live region for the quantity message before there is one', () => {
+    const html = render(line({ quantity: 10, minOrderQuantity: 10 }));
+    expect(html).toMatch(/<p[^>]*id="cart-line-item-1-qty-error"[^>]*role="status"[^>]*><\/p>/);
+  });
+
+  it('shows the refused edit beside the field, links it, and keeps the typed value', () => {
+    const sentence = '"Bolts 0001" has a minimum order quantity of 10 pcs.';
+    const html = renderToString(
+      <CartLine
+        line={line({ quantity: 10, minOrderQuantity: 10 })}
+        updateAction={noop}
+        removeAction={noop}
+        saveToListAction={noop}
+        locale="en-US"
+        strings={STRINGS}
+        editError={{ message: sentence, typed: '4' }}
+      />,
+    );
+    expect(html).toMatch(/<p[^>]*id="cart-line-item-1-qty-error"[^>]*role="status"[^>]*>&quot;Bolts 0001&quot; has a minimum/);
+    const input = html.match(/<input([^>]*name="quantity"[^>]*)>/)?.[1] ?? '';
+    expect(input).toContain('aria-invalid="true"');
+    expect(input).toContain('cart-line-item-1-qty-error');
+    expect(input).toContain('value="4"');
   });
 });

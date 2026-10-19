@@ -175,3 +175,48 @@ export function checkoutBelowMinimumRows(
   }
   return [...rows.values()];
 }
+
+/** What a cart line's quantity form asks for. */
+export type CartQuantityEdit = { kind: 'remove' } | { kind: 'set'; quantity: number } | { kind: 'invalid' };
+
+/**
+ * Reads the cart line's quantity form: a stepper's `step` first, else the typed `quantity`.
+ *
+ * The form is `noValidate` (the browser's own bubble speaks the browser's language and refused
+ * the 0 that removes a line), so this is the validation: `0` removes the line (FR-007), a whole
+ * number sets it, and anything else — including an empty field, which `Number('')` would read
+ * as 0 and so delete the line — is invalid.
+ */
+export function parseCartQuantityEdit(fields: {
+  step?: string | null | undefined;
+  quantity?: string | null | undefined;
+}): CartQuantityEdit {
+  const raw = (fields.step ?? fields.quantity ?? '').trim();
+  if (!/^\d+$/.test(raw)) return { kind: 'invalid' };
+  const quantity = Number(raw);
+  if (!Number.isSafeInteger(quantity)) return { kind: 'invalid' };
+  return quantity === 0 ? { kind: 'remove' } : { kind: 'set', quantity };
+}
+
+/** A refused quantity edit, shown beside the line's field rather than at the top of the page. */
+export interface CartLineEditError {
+  message: string;
+  /** What the buyer typed, kept in the field so the message and the value agree. */
+  typed: string | null;
+}
+
+/** The cart URL that reports a refused edit of one line. */
+export function cartLineEditErrorHref(itemId: string, message: string, typed: string | null): string {
+  const qs = new URLSearchParams({ errorItem: itemId, error: message });
+  if (typed !== null && typed !== '') qs.set('typed', typed);
+  return `/cart?${qs.toString()}`;
+}
+
+/** The refused edit the cart URL reports for this line, or `null`. */
+export function cartLineEditError(
+  params: { errorItem?: string | undefined; error?: string | undefined; typed?: string | undefined },
+  itemId: string,
+): CartLineEditError | null {
+  if (params.errorItem !== itemId || !params.error) return null;
+  return { message: params.error, typed: params.typed ?? null };
+}

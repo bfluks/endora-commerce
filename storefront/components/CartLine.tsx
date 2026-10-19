@@ -7,7 +7,9 @@ import {
   cartLineFixQuantity,
   cartLineFloor,
   type CartLineBelowMinimum,
+  type CartLineEditError,
 } from '../lib/cartMinimum';
+import { formatCount } from '../lib/orderMinimum';
 
 /**
  * CartLine — Industria-themed cart row (feature 027 US1).
@@ -55,6 +57,11 @@ interface CartLineProps {
   /** Settings-resolved price display mode — drives net/gross rendering so the
    *  cart matches the PDP and product cards. Defaults to `net_only`. */
   displayMode?: DisplayMode;
+  /**
+   * U4 — the server refused this line's last quantity edit: its sentence (in the request's
+   * language) shown beside the field, and the value the buyer typed kept in it.
+   */
+  editError?: CartLineEditError | null;
   strings: {
     qtyLabel: string;
     unitPriceLabel: string;
@@ -79,6 +86,7 @@ export function CartLine({
   saveToListAction,
   locale,
   displayMode = 'net_only',
+  editError = null,
   strings,
 }: CartLineProps): ReactNode {
   const suffixFor = (kind: 'net' | 'gross' | null): string =>
@@ -115,6 +123,21 @@ export function CartLine({
   const belowId = `cart-line-${line.id}-minimum`;
   const floor = cartLineFloor(line);
   const fixQuantity = gone ? null : cartLineFixQuantity(line);
+  // U4 — the product's minimum, stated under the stepper so a disabled "−" at the floor says
+  // why. The product's minimum, not the floor: a quote-exempt line floors at its own quantity.
+  const minimumHint =
+    typeof line.minOrderQuantity === 'number' && line.minOrderQuantity > 1
+      ? tForLocale(activeLocale)('cart.line.minimumHint').replace(
+          '{count}',
+          formatCount(line.minOrderQuantity, activeLocale),
+        )
+      : null;
+  const floorId = `cart-line-${line.id}-floor`;
+  const qtyErrorId = `cart-line-${line.id}-qty-error`;
+  const inputDescribedBy = [editError ? qtyErrorId : null, belowText ? belowId : null]
+    .filter((id): id is string => id !== null)
+    .join(' ');
+  const minusDisabled = line.quantity <= floor;
   return (
     <div
       className={`cart-line grid grid-cols-[56px_1fr_130px_110px_130px_28px] items-center gap-[14px] border-b border-line px-[22px] py-[14px] last:border-b-0${
@@ -197,6 +220,13 @@ export function CartLine({
           </div>
         ) : null}
         {gone ? null : (
+          // U4 — the refused edit's sentence. Mounted empty on every line so the polite live
+          // region exists before it carries text (WCAG 4.1.3); the input points at it.
+          <p id={qtyErrorId} role="status" className="m-0 text-[12px] font-semibold text-bad">
+            {editError?.message ?? ''}
+          </p>
+        )}
+        {gone ? null : (
           <form action={saveToListAction} className="mt-1">
             <input type="hidden" name="itemId" value={line.id} />
             <button
@@ -212,7 +242,10 @@ export function CartLine({
       {gone ? (
         <span className="max-[720px]:[grid-area:stepper]" aria-hidden="true" />
       ) : (
-        <form action={updateAction} className="max-[720px]:[grid-area:stepper]">
+        // `noValidate`: the browser's own `min` bubble speaks the browser's language and refuses
+        // the 0 that removes the line (FR-007). The server action validates and the buyer reads
+        // our sentence beside the field instead (U4).
+        <form action={updateAction} noValidate className="max-[720px]:[grid-area:stepper]">
           <input type="hidden" name="itemId" value={line.id} />
           {/* The form's default button: Enter in the quantity input submits the first
               submit button in tree order. Nameless, so the typed `quantity` is what
@@ -228,10 +261,11 @@ export function CartLine({
               type="submit"
               name="step"
               value={Math.max(floor, line.quantity - 1)}
-              disabled={line.quantity <= floor}
+              disabled={minusDisabled}
               formNoValidate
               aria-label="−"
               title="−"
+              {...(minusDisabled && minimumHint ? { 'aria-describedby': floorId } : {})}
             >
               −
             </button>
@@ -239,9 +273,10 @@ export function CartLine({
               type="number"
               name="quantity"
               min={floor}
-              defaultValue={line.quantity}
+              defaultValue={editError?.typed ?? line.quantity}
               aria-label={strings.qtyLabel}
-              {...(belowText ? { 'aria-invalid': true, 'aria-describedby': belowId } : {})}
+              {...(belowText || editError ? { 'aria-invalid': true } : {})}
+              {...(inputDescribedBy ? { 'aria-describedby': inputDescribedBy } : {})}
             />
             <button
               type="submit"
@@ -254,6 +289,9 @@ export function CartLine({
               +
             </button>
           </div>
+          {minimumHint ? (
+            <p id={floorId} className="m-0 mt-1 text-[11px] text-muted">{minimumHint}</p>
+          ) : null}
         </form>
       )}
 

@@ -37,7 +37,13 @@ import { getMe } from '../../../lib/api/account';
 import { getProductDisplayMode, PRICING_UNAVAILABLE } from '../../../lib/api/pricing';
 import type { DisplayMode } from '@endora-commerce/contracts';
 import type { Metadata } from 'next';
-import { cartBlocksCheckout, cartLineDisplayName } from '../../../lib/cartMinimum';
+import {
+  cartBlocksCheckout,
+  cartLineDisplayName,
+  cartLineEditError,
+  cartLineEditErrorHref,
+  parseCartQuantityEdit,
+} from '../../../lib/cartMinimum';
 import { droppedBelowMinimumReason } from '../../../lib/batchReport';
 import { tForLocale } from '../../../lib/i18n/messages';
 import { cartActionFailure } from '../../../lib/cart-action-failure';
@@ -67,6 +73,10 @@ export default async function CartPage({
 }: {
   searchParams: Promise<{
     error?: string;
+    /** U4 — the line whose quantity edit `error` refuses; the sentence renders beside it. */
+    errorItem?: string;
+    /** U4 — what the buyer typed into that line, kept in its field. */
+    typed?: string;
     couponError?: string;
     couponShortfall?: string;
     couponShortfallCurrency?: string;
@@ -218,7 +228,7 @@ export default async function CartPage({
         />
       ) : null}
 
-      {params.error ? (
+      {params.error && !cart.items.some((it) => cartLineEditError(params, it.id) !== null) ? (
         <div className="mb-3 rounded-md border border-[#fecaca] bg-[#fef2f2] px-[14px] py-[10px] text-[13px] text-[#b91c1c]" role="alert">
           {params.error}
         </div>
@@ -243,6 +253,7 @@ export default async function CartPage({
                 saveToListAction={saveToListAction}
                 locale={locale}
                 displayMode={displayMode}
+                editError={cartLineEditError(params, it.id)}
                 strings={strings.line}
               />
             ))}
@@ -401,15 +412,25 @@ async function updateAction(formData: FormData): Promise<void> {
   'use server';
   const itemId = (formData.get('itemId') as string) ?? '';
   // A stepper button posts `step`; the typed input and the one-step fix post `quantity`.
-  const quantity = Number(formData.get('step') ?? formData.get('quantity') ?? '0');
-  if (!Number.isFinite(quantity) || quantity < 1) redirect('/cart?error=invalid-quantity');
+  const step = formData.get('step');
+  const typed = formData.get('quantity');
+  const edit = parseCartQuantityEdit({
+    step: typeof step === 'string' ? step : null,
+    quantity: typeof typed === 'string' ? typed : null,
+  });
+  const typedValue = step === null && typeof typed === 'string' ? typed : null;
+  // The backend words its refusal (the minimum sentence) in the language it is asked in.
+  const { locale, ctx } = await getServerContext();
+  const t = tForLocale(locale);
+  if (edit.kind === 'invalid') redirect(cartLineEditErrorHref(itemId, t('cart.line.quantityInvalid'), typedValue));
   try {
-    const result = await updateCartItem(await readJar(), itemId, quantity);
+    // `quantity: 0` removes the line (FR-007, contract §2), whatever its minimum.
+    const quantity = edit.kind === 'remove' ? 0 : edit.quantity;
+    const result = await updateCartItem(await readJar(), itemId, quantity, ctx);
     if (result.newAnonCookie) await setAnonCartCookie(result.newAnonCookie);
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not update item.';
-    redirect(`/cart?error=${encodeURIComponent(message)}`);
+    const message = err instanceof StorefrontApiError ? err.message : t('cart.line.updateFailed');
+    redirect(cartLineEditErrorHref(itemId, message, typedValue));
   }
   redirect('/cart');
 }
@@ -417,12 +438,13 @@ async function updateAction(formData: FormData): Promise<void> {
 async function removeAction(formData: FormData): Promise<void> {
   'use server';
   const itemId = (formData.get('itemId') as string) ?? '';
+  const { locale, ctx } = await getServerContext();
   try {
-    const result = await removeCartItem(await readJar(), itemId);
+    const result = await removeCartItem(await readJar(), itemId, ctx);
     if (result.newAnonCookie) await setAnonCartCookie(result.newAnonCookie);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not remove item.';
+      err instanceof StorefrontApiError ? err.message : tForLocale(locale)('cart.line.removeFailed');
     redirect(`/cart?error=${encodeURIComponent(message)}`);
   }
   redirect('/cart');
@@ -504,12 +526,14 @@ async function convertToQrAction(formData: FormData): Promise<void> {
 
 async function submitForApprovalAction(): Promise<void> {
   'use server';
+  // `ctx` carries the storefront's language: without it the backend worded its refusal
+  // in its own default, whatever language the page was in (U4).
+  const { locale, ctx } = await getServerContext();
   try {
-    await submitCartForApproval(await readJar());
+    await submitCartForApproval(await readJar(), ctx);
   } catch (err) {
     // A refusal the backend worded (FR-039's minimum refusal, in the request's
     // language) passes through; anything else is the catalogue's sentence.
-    const { locale } = await getServerContext();
     const message = cartActionFailure(err, locale, 'cart.submitForApprovalFailed');
     redirect(`/cart?error=${encodeURIComponent(message)}`);
   }

@@ -55,6 +55,10 @@ export type MessageKey =
   | 'cart.line.noLongerAvailable'
   | 'cart.line.unknownProduct'
   | 'cart.line.setToMinimum'
+  | 'cart.line.minimumHint'
+  | 'cart.line.quantityInvalid'
+  | 'cart.line.updateFailed'
+  | 'cart.line.removeFailed'
   | 'cart.checkoutBlocked'
   | 'cart.approvalBlocked'
   | 'batchReport.more'
@@ -370,6 +374,10 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'cart.line.noLongerAvailable': 'No longer available',
     'cart.line.unknownProduct': 'Product removed from the catalogue',
     'cart.line.setToMinimum': 'Set to {count} pcs',
+    'cart.line.minimumHint': 'Minimum {count} pcs',
+    'cart.line.quantityInvalid': 'Enter a whole number. 0 removes the line.',
+    'cart.line.updateFailed': 'Could not update the quantity. Please try again.',
+    'cart.line.removeFailed': 'Could not remove the line. Please try again.',
     'cart.checkoutBlocked': 'Change or remove the flagged lines to continue to checkout.',
     'cart.approvalBlocked': 'Change or remove the flagged lines to submit the cart for approval.',
     'batchReport.more': '+{count} more',
@@ -666,6 +674,10 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'cart.line.noLongerAvailable': 'Produkt nie jest już dostępny',
     'cart.line.unknownProduct': 'Produkt usunięty z katalogu',
     'cart.line.setToMinimum': 'Ustaw {count} szt.',
+    'cart.line.minimumHint': 'Minimum {count} szt.',
+    'cart.line.quantityInvalid': 'Wpisz liczbę całkowitą. 0 usuwa pozycję.',
+    'cart.line.updateFailed': 'Nie udało się zmienić ilości. Spróbuj ponownie.',
+    'cart.line.removeFailed': 'Nie udało się usunąć pozycji. Spróbuj ponownie.',
     'cart.checkoutBlocked': 'Zmień lub usuń oznaczone pozycje, aby przejść do kasy.',
     'cart.approvalBlocked': 'Zmień lub usuń oznaczone pozycje, aby wysłać koszyk do akceptacji.',
     'batchReport.more': '+{count} więcej',
