@@ -573,8 +573,9 @@ export interface CustomFieldValuePort {
 // guard exists, and it costs nothing on an error path.
 
 /**
- * Container name: `customFieldListFilterPort`. Owner: `custom_fields`
- * (feature 157).
+ * Owner: `custom_fields` (feature 157). The doc block gains its container-name
+ * marker in the same change that registers the port, so the name it publishes
+ * always resolves.
  *
  * The admin lists of `orders`, `quote_requests` and `crm` ask it which custom
  * fields they offer as filters, and turn a request's filters into one

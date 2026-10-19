@@ -5,8 +5,11 @@ import {
   CatalogAttributeIntegrityError,
   CatalogAttributeReadService,
 } from '../../../../packages/modules/catalog/src/backend/services/catalog-attribute-read.service.js';
+import type { CustomFieldDefinitionReadPort } from '@endora-commerce/contracts';
 import type { ProductAttributeRow } from '../../helpers/package-entities.js';
-import type { CustomFieldDefinitionWithOptions } from '@endora-commerce/contracts';
+import type {
+  CachedDefinition,
+} from '../../../../packages/modules/custom_fields/src/backend/services/custom-field-definitions-cache.js';
 
 /**
  * T014 (feature 061) — unit tests for the composed attribute read model
@@ -56,7 +59,7 @@ interface StubExt {
 
 const NOW = new Date('2026-01-01T00:00:00Z');
 
-function makeDefinition(def: StubDef): CustomFieldDefinitionWithOptions {
+function makeDefinition(def: StubDef): CachedDefinition {
   return {
     definition: {
       id: def.id,
@@ -83,7 +86,7 @@ function makeDefinition(def: StubDef): CustomFieldDefinitionWithOptions {
       createdAt: NOW,
       updatedAt: NOW,
     })),
-  } as unknown as CustomFieldDefinitionWithOptions;
+  } as unknown as CachedDefinition;
 }
 
 function makeExtension(ext: StubExt): ProductAttributeRow {
@@ -129,7 +132,11 @@ function makeService(defs: StubDef[], exts: StubExt[]): CatalogAttributeReadServ
     getById: async (id: string) =>
       defs.filter((d) => d.id === id).map(makeDefinition)[0] ?? null,
   };
-  return new CatalogAttributeReadService(() => fakeEm, definitions);
+  // The stub answers the cache's entity shape; the port publishes records.
+  return new CatalogAttributeReadService(
+    () => fakeEm,
+    definitions as unknown as CustomFieldDefinitionReadPort,
+  );
 }
 
 /**
@@ -155,7 +162,11 @@ function makeHealingService(input: {
     getById: async (id: string) =>
       input.fresh.filter((d) => d.id === id).map(makeDefinition)[0] ?? null,
   };
-  return new CatalogAttributeReadService(() => fakeEm, definitions);
+  // The stub answers the cache's entity shape; the port publishes records.
+  return new CatalogAttributeReadService(
+    () => fakeEm,
+    definitions as unknown as CustomFieldDefinitionReadPort,
+  );
 }
 
 describe('CatalogAttributeReadService (feature 061, T014)', () => {
