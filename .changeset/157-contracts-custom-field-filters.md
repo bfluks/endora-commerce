@@ -8,7 +8,8 @@ Shared shapes for filtering admin lists on custom fields, and the code that refu
 
 - `customFieldFilterSchema` (type `CustomFieldFilter`) is one custom field's filter: `contains`,
   `in`, `is`, `min`/`max` (decimal strings) and `from`/`to` (calendar dates), strict. Which
-  operators apply is the field's value type to say; the others are ignored by the server.
+  operators apply is the field's value type to say: the admin lists refuse any other with 400
+  `VALIDATION_FAILED`, and only the CRM board ignores it.
 - `customFieldFiltersSchema` (type `CustomFieldFilters`) is a request's filters keyed by
   definition key, with the key grammar of a definition (so `__proto__`, dotted or prefixed keys
   are refused) and two caps: at most `CUSTOM_FIELD_FILTERS_MAX_KEYS` (10) keys and at most

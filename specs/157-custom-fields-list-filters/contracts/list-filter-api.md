@@ -194,6 +194,13 @@ Semantics:
 | Code | HTTP | Owner (manifest) | Raised by | `details` |
 | --- | --- | --- | --- | --- |
 | `CUSTOM_FIELD_FILTER_UNAVAILABLE` | 400 | `custom_fields` | `orders` (list, export), `quote_requests` (list), `crm` (Opportunities list) | `{ key: string, keys: string[] }` |
+| `CUSTOM_FIELD_OPTION_IN_USE` | 409 | `custom_fields` | `custom_fields` (option `DELETE`) | `{ value: string, label: string }` |
+| `CUSTOM_FIELD_VALUE_TYPE_LOCKED` | 409 | `custom_fields` | `custom_fields` (definition `PATCH`) | `{ key: string }` |
+| `CUSTOM_FIELD_STORED_VALUES_EXIST` | 409 | `custom_fields` | `custom_fields` (definition `POST`) | `{ key: string }` |
+
+The three 409 codes were added in the final review round (owner ruling 2026-10-19); they replace
+`CUSTOM_FIELD_DEFINITION_INVALID` and an English message for those refusals. A mismatched operator
+and an inverted range are not codes of their own: they are 400 `VALIDATION_FAILED` (§1.4).
 
 Sentences (`packages/modules/custom_fields/i18n/{en,pl}.json`):
 

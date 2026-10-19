@@ -215,6 +215,10 @@ with the new label and option; turn the option off and see it gone.
   error naming the key, with a way to remove the filter (US1 scenario 9). A **saved view** is checked on load
   instead and the unavailable filter is dropped with a notice **before** the list is requested (FR-014), so
   loading an old view never produces the error.
+- **Mismatched operator or inverted range.** An operator that does not apply to the field's value type
+  (`contains` on a Yes/No field), or an inverted range (a minimum above its maximum, a start date after its
+  end), is refused with 400 `VALIDATION_FAILED` rather than ignored or answered empty (owner ruling
+  2026-10-19; FR-011).
 - **Making a field required.** Existing records without a value are not touched and stay listable and
   filterable; the requirement bites at their next custom-field write (existing behaviour, surfaced in the
   editor, US3 scenario 7).

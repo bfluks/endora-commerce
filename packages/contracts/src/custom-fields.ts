@@ -174,8 +174,10 @@ const filterDecimalBoundSchema = z.string().regex(/^-?\d{1,12}(\.\d{1,4})?$/, 'N
 
 /**
  * One custom field's filter: the operators of every value type in one object.
- * Which of them apply is the definition's value type to say; the others are
- * ignored by the server. The CRM board's field filter is this same object.
+ * Which of them apply is the definition's value type to say
+ * (`CUSTOM_FIELD_FILTER_OPERATORS`): the admin lists refuse any other with 400
+ * `VALIDATION_FAILED` (`assertCustomFieldFilterOperators`), and only the CRM
+ * board ignores it. The CRM board's field filter is this same object.
  */
 export const customFieldFilterSchema = z
   .object({
