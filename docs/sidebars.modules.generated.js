@@ -195,7 +195,14 @@ const modules = [
       'module-reference/currencies',
     ],
   },
-  { type: 'doc', id: 'module-reference/custom-fields', label: 'custom_fields', key: 'custom_fields' },
+  {
+    type: 'category',
+    label: 'custom_fields', key: 'custom_fields',
+    link: { type: 'doc', id: 'modules/custom_fields' },
+    items: [
+      'module-reference/custom-fields',
+    ],
+  },
   {
     type: 'category',
     label: 'customer_accounts', key: 'customer_accounts',
