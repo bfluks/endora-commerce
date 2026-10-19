@@ -29,7 +29,10 @@ Shared shapes for filtering admin lists on custom fields, and the code that refu
 - `CUSTOM_FIELD_FILTER_OPERATORS` names the operators each value type applies, and
   `assertCustomFieldFilterOperators` throws the `ZodError` naming every operator of a filter that
   does not apply to its field, at `[key, operator]`. `customFieldFilterUnavailable(keys)` builds
-  the failure `isCustomFieldFilterUnavailableFailure` narrows.
+  the failure `isCustomFieldFilterUnavailableFailure` narrows. `assertCustomFieldFilterRanges`
+  throws the `ZodError` naming an inverted range (a minimum above its maximum, a start after its end).
+- `ERROR_CODES` gains `CUSTOM_FIELD_OPTION_IN_USE` (`details: { value, label }`),
+  `CUSTOM_FIELD_VALUE_TYPE_LOCKED` and `CUSTOM_FIELD_STORED_VALUES_EXIST` (`details: { key }`).
 - `calendarDateSchema` and `isCalendarDate` (a `YYYY-MM-DD` day the calendar has) are published
   from the shared primitives; the CRM schemas use the same one.
 - `adminOrdersListQuerySchema` accepts `customFieldFilters`.

@@ -39,6 +39,8 @@ export class CustomFieldDefinitionError extends Error {
       | 'invalid_key'
       | 'list_filter_unsupported',
     message: string,
+    /** Scalars a refusal's sentence names (feature 157): the field `key`, an option's `value` and `label`. */
+    readonly details?: Readonly<Record<string, string>>,
   ) {
     super(message);
     this.name = 'CustomFieldDefinitionError';
@@ -149,6 +151,7 @@ export async function applyUpdateDefinition(
       throw new CustomFieldDefinitionError(
         'value_type_locked',
         `Cannot change the value type of "${def.key}" while records hold values. Clear them first.`,
+        { key: def.key },
       );
     }
   }
@@ -285,6 +288,7 @@ export async function applyDeleteOption(
       throw new CustomFieldDefinitionError(
         'option_in_use',
         `Option "${option.value}" is in use and cannot be removed.`,
+        { value: option.value, label: option.labelDefault },
       );
     }
   }

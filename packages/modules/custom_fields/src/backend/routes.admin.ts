@@ -35,10 +35,14 @@ function toHttp(err: unknown): never {
         throw new HttpError(404, ERROR_CODES.CUSTOM_FIELD_NOT_FOUND, err.message);
       case 'duplicate_key':
         throw new HttpError(409, ERROR_CODES.CUSTOM_FIELD_KEY_CONFLICT, err.message);
+      // Feature 157 — each of the three a sentence of its own, naming what it
+      // refuses (`details`), rather than one code's English message.
       case 'value_type_locked':
+        throw new HttpError(409, ERROR_CODES.CUSTOM_FIELD_VALUE_TYPE_LOCKED, err.message, { ...err.details });
       case 'stored_values_exist':
+        throw new HttpError(409, ERROR_CODES.CUSTOM_FIELD_STORED_VALUES_EXIST, err.message, { ...err.details });
       case 'option_in_use':
-        throw new HttpError(409, ERROR_CODES.CUSTOM_FIELD_DEFINITION_INVALID, err.message);
+        throw new HttpError(409, ERROR_CODES.CUSTOM_FIELD_OPTION_IN_USE, err.message, { ...err.details });
       default:
         throw new HttpError(422, ERROR_CODES.CUSTOM_FIELD_DEFINITION_INVALID, err.message);
     }

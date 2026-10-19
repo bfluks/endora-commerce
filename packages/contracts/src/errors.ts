@@ -499,6 +499,14 @@ export const ERROR_CODES = {
   // not offer as a list filter (the definition's list-filter option is off,
   // the definition is gone, or its entity type is not served).
   CUSTOM_FIELD_FILTER_UNAVAILABLE: 'CUSTOM_FIELD_FILTER_UNAVAILABLE',
+  // Feature 157 — three 409 refusals of a definition change that used to share
+  // `CUSTOM_FIELD_DEFINITION_INVALID` and an English message: an option records
+  // still hold (`details.value`, `details.label`), a value type records hold
+  // values under (`details.key`), and a customer-visible field over values a
+  // deleted field left (`details.key`).
+  CUSTOM_FIELD_OPTION_IN_USE: 'CUSTOM_FIELD_OPTION_IN_USE',
+  CUSTOM_FIELD_VALUE_TYPE_LOCKED: 'CUSTOM_FIELD_VALUE_TYPE_LOCKED',
+  CUSTOM_FIELD_STORED_VALUES_EXIST: 'CUSTOM_FIELD_STORED_VALUES_EXIST',
 
   // Feature 058 — Credentials (reusable credential configurations).
   CREDENTIAL_NOT_FOUND: 'CREDENTIAL_NOT_FOUND',

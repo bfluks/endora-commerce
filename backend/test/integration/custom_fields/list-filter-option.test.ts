@@ -47,6 +47,7 @@ function changedMembers(entry: AuditRow): string[] {
 describe('custom_fields — the list-filter option of a definition', () => {
   let h: BackendServerHandle;
   let reader: { cookies: { b2b_session: string }; undo: () => void };
+  let polish: { cookies: { b2b_session: string }; undo: () => void };
   const created: string[] = [];
 
   const option = (value: string, sortOrder = 0) => ({
@@ -126,10 +127,19 @@ describe('custom_fields — the list-filter option of a definition', () => {
   beforeAll(async () => {
     h = await setupBackendServer();
     reader = await seedCrmAdmin(h.em(), `cf157_reader_${RUN}`, ['custom_fields:read']);
+    polish = await seedCrmAdmin(h.em(), `cf157_pl_${RUN}`, ['custom_fields:read', 'custom_fields:write']);
+    const language = await h.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/me/preferred-language',
+      cookies: polish.cookies,
+      payload: { preferredLanguage: 'pl' },
+    });
+    expect(language.statusCode, language.body).toBe(200);
   });
 
   afterAll(async () => {
     reader.undo();
+    polish.undo();
     for (const id of created) {
       await h.app.inject({ method: 'DELETE', url: `${API}/definitions/${id}`, ...ADMIN });
     }
@@ -296,10 +306,31 @@ describe('custom_fields — the list-filter option of a definition', () => {
       ...ADMIN,
     });
     expect(remove.statusCode, remove.body).toBe(409);
-    expect((remove.json() as { error: { message: string } }).error.message).toContain('"held"');
+    const refused = (remove.json() as { error: { code: string; message: string; details?: Record<string, unknown> } }).error;
+    expect(refused.code).toBe('CUSTOM_FIELD_OPTION_IN_USE');
+    expect(refused.details).toMatchObject({ value: 'held', label: 'HELD' });
+    expect(refused.message).toBe(
+      'The option “HELD” can\'t be removed because some records still use it. Change their value first.',
+    );
+
+    const polishRemove = await h.app.inject({
+      method: 'DELETE',
+      url: `${API}/definitions/${definition.id}/options/${held.id}`,
+      cookies: polish.cookies,
+    });
+    expect(polishRemove.statusCode, polishRemove.body).toBe(409);
+    expect((polishRemove.json() as { error: { message: string } }).error.message).toBe(
+      'Nie można usunąć opcji „HELD”, bo używają jej niektóre rekordy. Najpierw zmień ich wartość.',
+    );
 
     const retype = await patch(definition.id, { valueType: 'text', options: [] });
     expect(retype.statusCode, retype.body).toBe(409);
+    const locked = (retype.json() as { error: { code: string; message: string; details?: Record<string, unknown> } }).error;
+    expect(locked.code).toBe('CUSTOM_FIELD_VALUE_TYPE_LOCKED');
+    expect(locked.details).toMatchObject({ key: definition.key });
+    expect(locked.message).toBe(
+      `The type of the field “${definition.key}” can't be changed while records hold values for it. Clear those values first.`,
+    );
   });
 
   it('refuses an edit from an administrator who may only read custom fields', async () => {
