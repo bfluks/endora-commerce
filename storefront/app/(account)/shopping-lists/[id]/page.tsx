@@ -248,6 +248,7 @@ export default async function ShoppingListDetailPage({
                       itemId={it.id}
                       qty={it.quantity}
                       label={t('common.quantity')}
+                      saveLabel={t('shoppingList.qty.save')}
                       error={sp.qtyError === it.id ? t('shoppingList.qty.invalid') : null}
                     />
                   </td>
@@ -291,12 +292,14 @@ function UpdateQtyForm({
   itemId,
   qty,
   label,
+  saveLabel,
   error,
 }: {
   itemId: string;
   qty: number;
   /** The input's accessible name, in the page's language. */
   label: string;
+  saveLabel: string;
   /** The refusal of this row's last edit, in the page's language; `null` = none. */
   error: string | null;
 }): ReactNode {
@@ -318,7 +321,7 @@ function UpdateQtyForm({
           style={{ width: '4rem' }}
         />
         <button type="submit" form={formId} className="btn btn--outline btn--sm">
-          Save
+          {saveLabel}
         </button>
       </span>
       {/* Mounted empty on every row so the polite live region exists before it carries text

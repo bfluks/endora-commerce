@@ -83,12 +83,13 @@ describe('shopping list — quantity input', () => {
   });
 
   it.each([
-    ['en-US', 'Quantity', 'Enter a whole number from 1 to 9999.'],
-    ['pl-PL', 'Ilość', 'Wpisz liczbę całkowitą od 1 do 9999.'],
-  ])('%s: names the input and words a refused quantity beside it', async (tag, label, message) => {
+    ['en-US', 'Quantity', 'Enter a whole number from 1 to 9999.', 'Save'],
+    ['pl-PL', 'Ilość', 'Wpisz liczbę całkowitą od 1 do 9999.', 'Zapisz'],
+  ])('%s: names the input, its save button, and words a refused quantity beside it', async (tag, label, message, save) => {
     locale = tag;
     const idle = await render({});
     expect(qtyInput(idle)).toContain(`aria-label="${label}"`);
+    expect(idle).toMatch(new RegExp(`<button type="submit" form="sl-qty-i1"[^>]*>${save}</button>`));
     expect(qtyInput(idle)).not.toContain('aria-invalid');
     expect(idle).not.toContain(message);
 
