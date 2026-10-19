@@ -51,15 +51,20 @@ describe('useCustomFieldListFilterFields', () => {
     expect(result.current.fields).toEqual([]);
   });
 
-  it('never stays loading when the first mount\'s request settles after the second one\'s', async () => {
+  it('ignores a superseded request: a stale answer settling late never overwrites the current one', async () => {
     let settleFirst!: (value: unknown) => void;
     api.get
       .mockImplementationOnce(() => new Promise((resolve) => (settleFirst = resolve)))
       .mockResolvedValue({ data: FIELDS });
-    const { result } = renderHook(() => useCustomFieldListFilterFields(ENDPOINT), { wrapper: strict });
+    const { result, rerender } = renderHook(({ endpoint }) => useCustomFieldListFilterFields(endpoint), {
+      wrapper: strict,
+      initialProps: { endpoint: '/api/v1/admin/quote-requests/custom-field-filters' },
+    });
+    expect(result.current.status).toBe('loading');
+    rerender({ endpoint: ENDPOINT });
     await waitFor(() => expect(result.current.status).toBe('ready'));
     settleFirst({ data: [] });
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(result.current.status).toBe('ready');
     expect(result.current.fields).toEqual(FIELDS);
   });

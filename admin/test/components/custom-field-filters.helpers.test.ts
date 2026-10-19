@@ -110,16 +110,16 @@ describe('readCustomFieldFilterParams / writeCustomFieldFilterParams', () => {
     expect(Object.prototype).not.toHaveProperty('in');
   });
 
-  it('reads `constructor` and `toString` as ordinary unknown keys, own properties of a null-prototype record', () => {
+  it('reads `constructor` as an ordinary unknown key, an own property of a null-prototype record', () => {
+    // `toString` is not one: its capital fails the key grammar, so it is dropped like `Bad-Key`.
     const read = readCustomFieldFilterParams(new URLSearchParams('cf.constructor.in=x&cf.toString.in=y'));
     expect(Object.getPrototypeOf(read)).toBeNull();
-    expect(Object.hasOwn(read, 'constructor')).toBe(true);
-    expect(Object.hasOwn(read, 'toString')).toBe(true);
+    expect(Object.keys(read)).toEqual(['constructor']);
     expect(read.constructor).toEqual({ in: ['x'] });
     expect(typeof Object.prototype.toString).toBe('function');
+    expect(({}).constructor).toBe(Object);
     const written = writeCustomFieldFilterParams(new URLSearchParams(), read);
     expect(written.getAll('cf.constructor.in')).toEqual(['x']);
-    expect(written.getAll('cf.toString.in')).toEqual(['y']);
   });
 
   it('leaves other parameters alone and replaces every earlier `cf.*`', () => {
