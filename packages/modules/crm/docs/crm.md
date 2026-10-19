@@ -46,7 +46,7 @@ when at least one of them is visible.
 
 | Screen | Where | Permission | What it is for |
 | --- | --- | --- | --- |
-| Opportunities | **CRM → Opportunities** (`/crm/opportunities`) | `crm:read` | Every opportunity you may see, with search and filters by state, status, organization, assignee, tags, sales channel and creation date. |
+| Opportunities | **CRM → Opportunities** (`/crm/opportunities`) | `crm:read` | Every opportunity you may see, with search and filters by state, status, organization, assignee, tags, sales channel, creation date and the custom fields marked as list filters. |
 | New opportunity | the **New opportunity** button (`/crm/opportunities/new`) | `crm:write` | Create an opportunity by hand: a title, the organization and the currency are required; a contact person, a sales channel, an expected value, an expected close date and a description are optional. |
 | An opportunity | a row of the list (`/crm/opportunities/:id`) | `crm:read` | A header, a stage bar with its current status and the moves allowed from it, back and forward, a card of its facts on the right, and tabs: *Overview*, **Links** (its orders and quote requests), **Events** (what is planned for it, with reminders), *Notes*, *Messages*, *Attachments* and **Change history**. See *The opportunity's screen*. |
 | Board | **CRM → Board** (`/crm/board`) | `crm:read` | The same opportunities as cards, in a column per status. A holder of `crm:write` moves a card to another status. |
@@ -354,6 +354,19 @@ send the link to a colleague and the same filters are applied. **Clear
 filters** removes them all. A link saved before the card was changed still
 opens: a filter on a field that is no longer on the card is ignored.
 
+### The list's custom-field filters
+
+The **Opportunities list** does not follow the card. It offers a filter for every opportunity
+custom field whose **Use as list filter** option is on (set on **Custom Fields**), whether or not a
+card shows the field, beside its other filters. The filters work as the board's do for the same
+kind of field, except that an opportunity without a value never matches — *No* included. They are
+in the page address, and a change returns the list to its first page.
+
+The two rules are independent: a field can be a board filter because the card shows it and not a
+list filter, or the reverse. **A card field that is not a list filter cannot filter the list**: a
+link that filtered the list by it is answered with an error naming the field and **Remove this
+filter**, until the option is turned on. The board — its *Show more* included — is unchanged.
+
 ### For integrators
 
 | Verb + Path | Permission | Purpose |
@@ -383,8 +396,19 @@ keyed by reference: `{"custom:lead_source":{"in":["referral"]},"builtin:value":{
 The operators are `contains` (text), `min` / `max` (numbers and amounts, as
 decimal strings), `from` / `to` (dates, `YYYY-MM-DD`, both days included),
 `is` (yes / no) and `in` (options, and the contact person's customer-account
-id). A reference that is not on the card is ignored; a parameter that is not
-valid JSON of this shape answers `400`.
+id). A parameter that is not valid JSON of this shape answers `400`.
+
+Which references count depends on the request:
+
+- **The board**, and **the list with `cardValues=true`** (a board column continued with *Show
+  more*): a reference that is not on the card is ignored.
+- **The list otherwise**: a `custom:` reference is filtered when the field's list-filter option is
+  on, whether or not the card shows it, and answered with `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE`
+  (the key in `details.key`) when it is not; `builtin:` references keep the card rule. The offered
+  fields are at `GET /api/v1/admin/crm/opportunities/custom-field-filters` (`crm:read`).
+
+`cardValues` chooses the rule, never what may be seen: both run within the opportunities you may
+see.
 
 ## Linking orders
 

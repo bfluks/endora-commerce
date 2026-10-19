@@ -427,6 +427,22 @@ soft-deleted product is priced as before. The order created is exactly the
 lines and quantities on screen, in the unchanged `POST /api/v1/admin/orders`
 payload.
 
+## Custom-field filters
+
+An order custom field whose **Use as list filter** option is on (set on **Custom Fields**) is
+offered as a filter in the order list's advanced filters, labelled in your language: the text it
+contains, a number or date range, yes or no, or one or more options. An order without a value for
+the field never matches. Each custom-field filter is shown as a removable chip beside the other
+active filters, narrows the total and every page, and returns the list to its first page when it
+changes. The filters are in the page address, so a filtered list can be bookmarked or shared, and
+the **CSV export** exports the same orders.
+
+If the address names a filter that is no longer available — its option was switched off or the
+field deleted — the list says so by the field's name and offers **Remove this filter**; the CSV
+export is not offered until it is removed. API callers send the filters as `customFieldFilters` on
+`GET /api/v1/admin/orders` and `GET /api/v1/admin/orders/export`, and read the offered fields
+from `GET /api/v1/admin/orders/custom-field-filters` (`orders:read`).
+
 ## Saved views
 
 A saved view is a named set of order-list filters that an admin can apply again
@@ -440,8 +456,10 @@ is **— Select a view —**, and two buttons beside it: **Save view** and
 
 - **What a view remembers.** Every filter on the order list — status, payment
   status, sales channel, payment method, delivery method, the date range, the
-  search text, the organization and customer names and the total range — plus
-  the sort and the visible columns. Choosing a view replaces all of them with
+  search text, the organization and customer names, the total range and the
+  custom-field filters — plus the sort and the visible columns. A custom-field
+  filter that is no longer available when the view is loaded is dropped, with a
+  notice naming it, and the rest of the view loads. Choosing a view replaces all of them with
   the view's values: a filter the view does not hold is cleared, anything you
   had changed and not saved is discarded, and the list goes back to its first
   page.

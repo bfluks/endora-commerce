@@ -14,7 +14,12 @@ host-specific concern in its core.
 ## Supported host entities
 
 Custom fields are available on **Category, Order, Organization, CustomerAccount,
-QuoteRequest, and Product**. Each host entity carries an additive JSONB value
+QuoteRequest, Opportunity, and Product**. Two of them **follow an owner module**:
+QuoteRequest follows `quote_requests` and Opportunity follows `crm`. While the
+owner is not present, the type is left out of the admin surface and the
+definitions API entirely — not listed, created or edited — and its definitions,
+options and stored values are kept, to return unchanged with the module. Each
+host entity carries an additive JSONB value
 bag (`{ [definitionKey]: value }`); the host owns that column and its writes.
 For most hosts the bag is the `customFieldValues` column; the product host binds
 to the pre-existing `products.attribute_values` column instead (see the value-probe
@@ -173,6 +178,53 @@ capabilities stay on `product_attributes`). This keeps catalog-only concerns out
 of the generic core — the exact rot this separation exists to prevent, where
 `product_attributes` accreted `isVariantAxis` / `isPromoRule` / `filterPosition`
 until it was no longer reusable.
+
+## List filters (`listFilter`)
+
+`listFilter` is the one definition attribute the generic core **does** interpret,
+which is why it is a column beside `required` rather than a flag in `config`. A
+definition with it on is offered as a filter on its host's admin list, and the
+generic layer is what turns a request's filters into SQL — every host list would
+otherwise grow its own copy of the same six predicates.
+
+- **Which types may carry it is the registry's to say.** Each entity type's
+  registry entry declares `listFilter`; today `order`, `quote_request` and
+  `opportunity` do. Setting it on any other type is refused, and the
+  `entity-types` endpoint publishes the flag so the admin offers the option only
+  where it applies. Turning it on or off changes no stored value.
+- **The port.** `custom_fields` publishes `CustomFieldListFilterPort`:
+  `listFilterable(entityType)` answers the definitions a list offers, and
+  `condition(entityType, filters)` turns the whole request's filters into **one**
+  condition — `select t."id" from "<host table>" t where …`, every key and value
+  bound — or throws, naming every key that is not offered. The host list wraps
+  that condition as `id in (…)` in each statement it runs (rows, total, counts),
+  so the filter narrows the whole result, not a page, and runs inside the host's
+  own tenant and visibility scope.
+- **It reuses the storage binding.** The condition probes the same per-entity
+  `{ table, column }` binding as the change guards above, so a host is filterable
+  with no host-specific code in the generic module.
+- **Semantics.** `contains` (case-insensitive), `in` (any of the options; for a
+  multiselect, any held option), `is`, and inclusive `min`/`max` and
+  `from`/`to`. A record without a value never matches. Values within one field
+  are ORed; fields, and the list's own filters, are ANDed. At most 10 fields and
+  100 `in` values per request.
+- **A refusal is never silent.** A key that is unknown, of another type or not
+  offered is refused with `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE` naming it,
+  rather than ignored — an ignored filter shows an operator more records than
+  they asked for, without saying so.
+- **No storefront surface.** No custom-field filter reaches a storefront or
+  API-key endpoint.
+
+### Why the CRM board keeps its own predicates
+
+The Opportunity board filters by what its **cards** show — built-in fields and
+custom fields alike, the contact person included — and ignores a field the card
+no longer shows, so an old link keeps opening. That rule is the board's, not a
+definition's, and it covers fields the generic layer knows nothing about. So the
+board keeps its own predicates, and only the Opportunities **list** follows
+`listFilter`: its `custom:` references go through the port, refused when not
+offered, while the board — and the list request that continues one of its
+columns (`cardValues=true`) — keep the card rule.
 
 ## Data retention
 

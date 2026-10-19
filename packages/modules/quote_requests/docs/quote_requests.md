@@ -299,6 +299,29 @@ quote-request route — the detail, the history and every action. (Earlier relea
 A customer with the `org_admin` role on their own organization sees
 every Quote Request in the organization, not just their own.
 
+## Custom fields
+
+Quote requests take custom fields, defined on **Custom Fields**. They follow this module: while
+`quote_requests` is switched off its fields are not listed there, cannot be created or edited and
+are not offered by the definitions API; the fields, their options and the stored values are kept
+and come back unchanged when the module is switched on again.
+
+### Custom-field filters on the list
+
+A quote request field whose **Use as list filter** option is on is offered as a filter on the
+quote request list, labelled in your language: the text it contains, a number or date range, yes
+or no, or one or more options. A request without a value for the field never matches. The filter
+is applied by the server, so it narrows the whole list — the total and every page — not only the
+requests already loaded; status, search, sorting and paging keep working beside it. Each filter is
+shown as a removable chip, is kept in the page address and in saved views, and returns the list to
+its first page when it changes.
+
+If the address names a filter that is no longer available, the list says so by the field's name
+and offers **Remove this filter**. A saved view holding such a filter drops it on load, with a
+notice naming it. API callers send the filters as `customFieldFilters` on
+`GET /api/v1/admin/quote-requests` and read the offered fields from
+`GET /api/v1/admin/quote-requests/custom-field-filters` (`rfqs:handle`).
+
 ## Saved views
 
 A saved view is a named setup of the quote request list — its filters, sort and
@@ -310,13 +333,14 @@ The quote request list's toolbar carries a **Saved views** selector, whose
 first entry is **— Select a view —**, and two buttons beside it: **Save view**
 and **Delete view**.
 
-- **What a view remembers.** Six things: the **Visibility** scope, the
-  organization, the status selection, the search text, the sort and the
-  visible columns. Choosing a view replaces all six with the view's values,
-  discards anything you had changed and not saved, and goes back to the first
-  page. A status or column the list no longer knows is dropped; a view with no
-  columns shows the default ones; a view with no usable scope opens on your own
-  default scope.
+- **What a view remembers.** Seven things: the **Visibility** scope, the
+  organization, the status selection, the search text, the custom-field
+  filters, the sort and the visible columns. Choosing a view replaces all seven
+  with the view's values, discards anything you had changed and not saved, and
+  goes back to the first page. A status or column the list no longer knows is
+  dropped; a custom-field filter that is no longer available is dropped with a
+  notice naming it; a view with no columns shows the default ones; a view with
+  no usable scope opens on your own default scope.
 - **A view never widens what you can see.** It stores filter values, never
   results. After you load a view, the list is read with *your* permissions and
   *your* organizations, whoever saved it. *My organizations* means the
