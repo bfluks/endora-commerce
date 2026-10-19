@@ -61,8 +61,10 @@ export const customFieldFiltersQueryParamSchema: z.ZodType<CustomFieldFilters | 
 ```
 
 The record's key schema is the definition key schema (`^[a-z][a-z0-9_]{0,63}$`), so `__proto__`
-and every key with a dot, a colon, markup or more than 64 characters are refused at the
-boundary. `constructor` and `toString` **match** the regex; every consumer of a key therefore
+and every key with a dot, a colon, markup, an upper-case letter or more than 64 characters are
+refused at the boundary (`__proto__` explicitly as well: Zod's record skips an own `__proto__` key
+without a word, so the schema refuses it ahead of the record). `constructor` **matches** the regex
+(`toString` does not — it has an upper-case letter); every consumer of a key therefore
 looks it up through a `Map` or `Object.hasOwn` on an `Object.create(null)` record — never `in`,
 never a plain-object index (threat model F-4; §1.4, admin-surfaces §1.3).
 
