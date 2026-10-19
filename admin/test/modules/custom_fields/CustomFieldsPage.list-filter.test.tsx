@@ -49,15 +49,18 @@ const ORDER_ROWS = [
 ];
 
 const create = vi.fn(async (_body: unknown) => ({}));
+const remove = vi.fn(async (_id: string) => ({}));
+/** Replaced by a test that needs the definitions read to stay in flight. */
+let listOrder: () => Promise<CustomFieldDefinitionDto[]> = async () => ORDER_ROWS;
 
 vi.mock('../../../../packages/modules/custom_fields/src/admin/api/custom-fields-client', () => ({
   customFieldsClient: {
     listEntityTypes: async () => ENTITY_TYPES,
-    list: async (entityType?: string) => (entityType === 'order' ? ORDER_ROWS : []),
+    list: async (entityType?: string) => (entityType === 'order' ? listOrder() : []),
     get: async () => ORDER_ROWS[0],
     create: (body: unknown) => create(body),
     update: async () => ({}),
-    remove: async () => ({}),
+    remove: (id: string) => remove(id),
     createOption: async () => ({}),
     updateOption: async () => ({}),
     removeOption: async () => ({}),
@@ -79,7 +82,7 @@ function renderPage(permissions: string[], bundle: Record<string, string> = en):
   );
 }
 
-async function chooseEntity(value: string, entityLabel = 'Entity'): Promise<void> {
+async function chooseEntity(value: string, entityLabel = 'Record type'): Promise<void> {
   const select = await screen.findByLabelText(entityLabel);
   await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(ENTITY_TYPES.length));
   fireEvent.change(select, { target: { value } });
@@ -94,6 +97,8 @@ function cellOf(key: string, column: string): HTMLElement {
 
 beforeEach(() => {
   create.mockClear();
+  remove.mockClear();
+  listOrder = async () => ORDER_ROWS;
 });
 
 describe('CustomFieldsPage — the list-filter option', () => {
@@ -102,7 +107,7 @@ describe('CustomFieldsPage — the list-filter option', () => {
     await chooseEntity('order');
     await screen.findByText('po_ref');
     expect(cellOf('region', 'List filter')).toHaveTextContent('Yes');
-    expect(cellOf('po_ref', 'List filter')).toHaveTextContent('—');
+    expect(cellOf('po_ref', 'List filter')).toHaveTextContent('No');
   });
 
   it('shows the column in Polish from the Polish bundle', async () => {
@@ -122,6 +127,47 @@ describe('CustomFieldsPage — the list-filter option', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add field' }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create.mock.calls[0]![0]).toMatchObject({ entityType: 'order', key: 'channel_ref', listFilter: true });
+  });
+
+  it('asks in place before deleting a field, Keep taking the focus and giving it back', async () => {
+    renderPage(['custom_fields:read', 'custom_fields:write']);
+    await chooseEntity('order');
+    const trigger = await screen.findByRole('button', { name: 'Delete region' });
+    fireEvent.click(trigger);
+    expect(screen.getByText('Delete the field “region”?')).toBeInTheDocument();
+    const keep = screen.getByRole('button', { name: 'Keep' });
+    expect(keep).toHaveFocus();
+    fireEvent.click(keep);
+    expect(screen.getByRole('button', { name: 'Delete region' })).toHaveFocus();
+    expect(remove).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete region' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(remove).toHaveBeenCalledWith(ORDER_ROWS[0]!.id));
+  });
+
+  it('says it is loading, then offers one action when a record type has no fields', async () => {
+    let answer!: (rows: CustomFieldDefinitionDto[]) => void;
+    listOrder = () => new Promise((resolve) => (answer = resolve));
+    renderPage(['custom_fields:read', 'custom_fields:write']);
+    await chooseEntity('order');
+    expect(await screen.findByText('Loading fields…')).toHaveAttribute('role', 'status');
+    answer([]);
+    expect(await screen.findByText('No fields for this record type yet.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add a field' }));
+    expect(screen.getByLabelText('Key')).toHaveFocus();
+  });
+
+  it('offers a reader no action in the empty state', async () => {
+    listOrder = async () => [];
+    renderPage(['custom_fields:read']);
+    await chooseEntity('order');
+    expect(await screen.findByText('No fields for this record type yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add a field' })).toBeNull();
+  });
+
+  it('offers Required as a checkbox in the create form', async () => {
+    renderPage(['custom_fields:read', 'custom_fields:write']);
+    expect(await screen.findByRole('checkbox', { name: 'Required' })).toBeInTheDocument();
   });
 
   it('offers no Edit, Delete, audience select or create form to a reader (US3-9)', async () => {

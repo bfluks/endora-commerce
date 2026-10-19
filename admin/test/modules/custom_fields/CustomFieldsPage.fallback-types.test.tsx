@@ -49,7 +49,7 @@ describe('CustomFieldsPage — the entity types offered before the server answer
       </StrictMode>,
       BUNDLE,
     );
-    const select = (await screen.findByLabelText('Entity')) as HTMLSelectElement;
+    const select = (await screen.findByLabelText('Record type')) as HTMLSelectElement;
     const offered = () => within(select).getAllByRole('option').map((option) => option.textContent);
 
     expect(offered()).toContain('Order');
