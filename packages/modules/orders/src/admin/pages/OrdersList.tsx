@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
@@ -15,8 +15,10 @@ import { Alert, AlertDescription, Badge, Button, Card, CardContent, Label, PageH
 import type { MultiSelectOption } from '@endora-commerce/admin-kit/ui';
 import {
   CustomFieldListFilters,
+  customFieldDisplayName,
   customFieldFilterChips,
   customFieldFilterRefusal,
+  emptyCustomFieldFilters,
   pruneRemovedOptions,
   readCustomFieldFilterParams,
   ResponsiveTable,
@@ -25,10 +27,11 @@ import {
   sanitizeCustomFieldFilters,
   toCustomFieldFiltersParam,
   useCustomFieldListFilterFields,
+  withCustomFieldFilter,
   writeCustomFieldFilterParams,
 } from '@endora-commerce/admin-kit/components';
 import type { ResponsiveColumn, SavedViewState } from '@endora-commerce/admin-kit/components';
-import type { CustomFieldFilter, CustomFieldFilters, CustomFieldListFilterField } from '@endora-commerce/contracts';
+import type { CustomFieldFilters } from '@endora-commerce/contracts';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { DISPLAYABLE_PAYMENT_STATUSES, paymentStatusLabelKey } from '../lib/paymentStatus.js';
 import { OrdersBulkStatusDialog } from '../components/OrdersBulkStatusDialog.js';
@@ -144,36 +147,16 @@ const DEFAULT_SORT = 'placedAt:desc';
 const CUSTOM_FIELD_FILTERS_ENDPOINT = '/api/v1/admin/orders/custom-field-filters';
 
 /**
- * A custom field as the operator reads it: its label in their language, or —
- * for a key the list does not offer, which may have come from anywhere — the
- * key, cut to 64 characters. Always rendered as text.
+ * A saved view's custom-field filters kept as saved, for when the offered
+ * fields are not known (still loading, or failed): written to and read back
+ * from the address form, which re-applies the key grammar, each filter's
+ * schema and the caps — nothing more is judged until the fields are known.
  */
-function customFieldName(fields: readonly CustomFieldListFilterField[], key: string, language: string): string {
-  const field = fields.find((candidate) => candidate.key === key);
-  if (field) {
-    const base = language.split('-')[0] ?? language;
-    for (const candidate of [language, base]) {
-      const value = Object.hasOwn(field.label, candidate) ? field.label[candidate] : undefined;
-      if (typeof value === 'string' && value !== '') return value;
-    }
-    return field.labelDefault;
-  }
-  return key.length > 64 ? `${key.slice(0, 64)}…` : key;
-}
-
-/** `filters` with `key` set to `filter` (or removed when `null`), as a new prototype-free record. */
-function withCustomFieldFilter(
-  filters: CustomFieldFilters,
-  key: string,
-  filter: CustomFieldFilter | null,
-): CustomFieldFilters {
-  const next = Object.create(null) as CustomFieldFilters;
-  for (const existing of Object.keys(filters)) {
-    const value = filters[existing];
-    if (existing !== key && value !== undefined) next[existing] = value;
-  }
-  if (filter !== null) next[key] = filter;
-  return next;
+function savedCustomFieldFilters(saved: unknown): CustomFieldFilters {
+  if (typeof saved !== 'object' || saved === null || Array.isArray(saved)) return emptyCustomFieldFilters();
+  return readCustomFieldFilterParams(
+    writeCustomFieldFilterParams(new URLSearchParams(), saved as CustomFieldFilters),
+  );
 }
 
 export function OrdersList(): ReactNode {
@@ -215,6 +198,21 @@ export function OrdersList(): ReactNode {
   const [refusedCustomField, setRefusedCustomField] = useState<string | null>(null);
   /** The keys a loaded view carried that the list no longer offers. */
   const [droppedCustomFields, setDroppedCustomFields] = useState<string[]>([]);
+  /** The results region, focused once a refused filter is removed. */
+  const resultsRef = useRef<HTMLDivElement | null>(null);
+  /** Numbers each list request, so a slower, older answer cannot land last. */
+  const requestSequence = useRef(0);
+
+  /**
+   * The custom-field filters changed: back to the first page in the same
+   * update — so no request carries the new filters with the old page — and a
+   * dropped-filters notice about the previous state is no longer news.
+   */
+  const changeCustomFieldFilters = useCallback((next: CustomFieldFilters): void => {
+    setCustomFieldFilters(next);
+    setPage(0);
+    setDroppedCustomFields([]);
+  }, []);
 
   const [sort, setSort] = useState(DEFAULT_SORT);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -290,22 +288,31 @@ export function OrdersList(): ReactNode {
   ]);
 
   const refresh = useCallback(async (): Promise<void> => {
+    const current = ++requestSequence.current;
     setLoading(true);
     setError(null);
     setRefusedCustomField(null);
     try {
       const res = await apiClient.get<ListResponse>(`/api/v1/admin/orders?${queryString}`);
+      if (current !== requestSequence.current) return;
       setRows(res.data);
       setTotal(res.pagination.total);
       setCounts(res.counts ?? {});
       setPaymentStatusCounts(res.paymentStatusCounts ?? {});
       setSelected(new Set());
     } catch (err) {
+      if (current !== requestSequence.current) return;
       const refused = customFieldFilterRefusal(err);
-      if (refused !== null) setRefusedCustomField(refused);
-      else setError(err instanceof ApiError ? err.envelope.error.message : t('orders.error.load'));
+      if (refused !== null) {
+        // The refusal stands in for the results: nothing listed, nothing to page.
+        setRows([]);
+        setTotal(0);
+        setRefusedCustomField(refused);
+      } else {
+        setError(err instanceof ApiError ? err.envelope.error.message : t('orders.error.load'));
+      }
     } finally {
-      setLoading(false);
+      if (current === requestSequence.current) setLoading(false);
     }
   }, [queryString, t]);
 
@@ -313,11 +320,11 @@ export function OrdersList(): ReactNode {
   // are dropped from it; an unknown key stays, for the server to refuse.
   useEffect(() => {
     if (customFieldFields.status !== 'ready') return;
-    setCustomFieldFilters((current) => {
-      const pruned = pruneRemovedOptions(current, customFieldFields.fields);
-      return toCustomFieldFiltersParam(pruned) === toCustomFieldFiltersParam(current) ? current : pruned;
-    });
-  }, [customFieldFields]);
+    const pruned = pruneRemovedOptions(customFieldFilters, customFieldFields.fields);
+    if (toCustomFieldFiltersParam(pruned) !== toCustomFieldFiltersParam(customFieldFilters)) {
+      changeCustomFieldFilters(pruned);
+    }
+  }, [customFieldFields, customFieldFilters, changeCustomFieldFilters]);
 
   // The address follows the custom-field filters; every other parameter stays.
   useEffect(() => {
@@ -405,10 +412,18 @@ export function OrdersList(): ReactNode {
     setDateFrom(asString(f['dateFrom']));
     setDateTo(asString(f['dateTo']));
     // FR-014: a saved custom-field filter the list no longer offers is dropped,
-    // and the operator is told which.
-    const { kept, dropped } = sanitizeCustomFieldFilters(f['customFields'], customFieldFields.fields);
-    setCustomFieldFilters(kept);
-    setDroppedCustomFields(dropped);
+    // and the operator is told which — but only against fields that are known.
+    // While they load, or after they failed to, the saved filters are kept as
+    // saved (their keys and values still checked), with no notice: nothing is
+    // known to be gone.
+    if (customFieldFields.status === 'ready') {
+      const { kept, dropped } = sanitizeCustomFieldFilters(f['customFields'], customFieldFields.fields);
+      setCustomFieldFilters(kept);
+      setDroppedCustomFields(dropped);
+    } else {
+      setCustomFieldFilters(savedCustomFieldFilters(f['customFields']));
+      setDroppedCustomFields([]);
+    }
     setTextFilters({
       q: asString(f['q']),
       orgName: asString(f['orgName']),
@@ -492,7 +507,7 @@ export function OrdersList(): ReactNode {
   // Removable summary chips for every applied filter (search box excluded — it
   // is always visible). Operates on the live (un-debounced) text state so a
   // chip removal takes effect immediately.
-  type FilterChip = { key: string; label: string; onRemove: () => void };
+  type FilterChip = { key: string; label: string; onRemove: () => void; removeLabel?: string };
   const methodName = (list: MethodOption[], id: string): string =>
     pickName(list.find((m) => m.id === id)?.name) || id;
   const filterChips: FilterChip[] = [
@@ -542,7 +557,8 @@ export function OrdersList(): ReactNode {
     ...customFieldFilterChips(customFieldFields.fields, customFieldFilters, language, t).map((chip) => ({
       key: chip.id,
       label: chip.label,
-      onRemove: (): void => setCustomFieldFilters(chip.remove()),
+      removeLabel: chip.removeLabel,
+      onRemove: (): void => changeCustomFieldFilters(chip.remove()),
     })),
   ];
 
@@ -555,13 +571,15 @@ export function OrdersList(): ReactNode {
     setDateFrom('');
     setDateTo('');
     setTextFilters(EMPTY_TEXT);
-    setCustomFieldFilters(Object.create(null) as CustomFieldFilters);
+    changeCustomFieldFilters(emptyCustomFieldFilters());
   };
 
   const removeRefusedCustomField = (): void => {
     if (refusedCustomField === null) return;
-    setCustomFieldFilters((current) => withCustomFieldFilter(current, refusedCustomField, null));
+    changeCustomFieldFilters(withCustomFieldFilter(customFieldFilters, refusedCustomField, null));
     setRefusedCustomField(null);
+    // Focus follows the operator to what they are waiting for: the results.
+    resultsRef.current?.focus();
   };
 
   // Build the visible columns in canonical order.
@@ -684,26 +702,12 @@ export function OrdersList(): ReactNode {
         }
       />
 
-      {refusedCustomField !== null ? (
-        <Alert variant="destructive" className="mb-4">
-          <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>
-              {t('customFieldFilters.error.unavailable', {
-                field: customFieldName(customFieldFields.fields, refusedCustomField, language),
-              })}
-            </span>
-            <Button type="button" size="sm" variant="outline" onClick={removeRefusedCustomField}>
-              {t('customFieldFilters.error.remove')}
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : null}
       {droppedCustomFields.length > 0 ? (
-        <Alert className="mb-4">
+        <Alert variant="warning" className="mb-4">
           <AlertDescription>
             {t('customFieldFilters.notice.dropped', {
               fields: droppedCustomFields
-                .map((key) => customFieldName(customFieldFields.fields, key, language))
+                .map((key) => customFieldDisplayName(customFieldFields.fields, key, language))
                 .join(', '),
             })}
           </AlertDescription>
@@ -806,6 +810,7 @@ export function OrdersList(): ReactNode {
                 <button
                   key={chip.key}
                   type="button"
+                  aria-label={chip.removeLabel}
                   onClick={chip.onRemove}
                   className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2.5 py-1 text-xs hover:bg-muted"
                 >
@@ -923,13 +928,12 @@ export function OrdersList(): ReactNode {
                 fields={customFieldFields.fields}
                 value={customFieldFilters}
                 language={language}
+                status={customFieldFields.status}
+                onRetry={customFieldFields.reload}
                 onChange={(key, filter): void =>
-                  setCustomFieldFilters((current) => withCustomFieldFilter(current, key, filter))
+                  changeCustomFieldFilters(withCustomFieldFilter(customFieldFilters, key, filter))
                 }
               />
-              {customFieldFields.status === 'error' ? (
-                <p className="col-span-full text-sm text-muted-foreground">{t('customFieldFilters.loadFailed')}</p>
-              ) : null}
             </div>
           ) : null}
         </CardContent>
@@ -954,8 +958,31 @@ export function OrdersList(): ReactNode {
       ) : null}
 
       <Card>
-        <CardContent className="pt-6">
-          {loading ? (
+        <CardContent ref={resultsRef} tabIndex={-1} className="pt-6 focus:outline-none" aria-busy={loading}>
+          {/* Mounted before it has text, so a reload is announced (WCAG 4.1.3). */}
+          <p role="status" className="sr-only">
+            {loading ? t('orders.loading') : ''}
+          </p>
+          {refusedCustomField !== null ? (
+            <Alert variant="destructive">
+              <AlertDescription className="flex flex-wrap items-center gap-3">
+                <span>
+                  {t('customFieldFilters.error.unavailable', {
+                    field: customFieldDisplayName(customFieldFields.fields, refusedCustomField, language),
+                  })}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="min-h-11 sm:min-h-8"
+                  onClick={removeRefusedCustomField}
+                >
+                  {t('customFieldFilters.error.remove')}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : loading ? (
             <p className="text-sm text-muted-foreground">{t('orders.loading')}</p>
           ) : rows.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('orders.empty')}</p>
@@ -974,14 +1001,16 @@ export function OrdersList(): ReactNode {
               )}
             />
           )}
-          <PaginationFooter
-            page={page}
-            pageSize={pageSize}
-            total={total}
-            onPageSizeChange={setPageSize}
-            onPrev={(): void => setPage((p) => Math.max(0, p - 1))}
-            onNext={(): void => setPage((p) => p + 1)}
-          />
+          {refusedCustomField === null ? (
+            <PaginationFooter
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageSizeChange={setPageSize}
+              onPrev={(): void => setPage((p) => Math.max(0, p - 1))}
+              onNext={(): void => setPage((p) => p + 1)}
+            />
+          ) : null}
         </CardContent>
       </Card>
 

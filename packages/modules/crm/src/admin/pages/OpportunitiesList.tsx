@@ -3,7 +3,6 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { CircleDollarSign, Plus, SearchX, X } from 'lucide-react';
 import {
   opportunityBoardCustomFieldRef,
-  type CustomFieldFilter,
   type CustomFieldFilters,
   type OpportunityFieldFilters,
   type OpportunityStatusKind,
@@ -30,11 +29,14 @@ import {
 import {
   CustomFieldListFilters,
   ResponsiveTable,
+  customFieldDisplayName,
   customFieldFilterRefusal,
+  emptyCustomFieldFilters,
   pruneRemovedOptions,
   readCustomFieldFilterParams,
   toCustomFieldFiltersParam,
   useCustomFieldListFilterFields,
+  withCustomFieldFilter,
   writeCustomFieldFilterParams,
   type ResponsiveColumn,
 } from '@endora-commerce/admin-kit/components';
@@ -73,8 +75,6 @@ const SEARCH_DEBOUNCE_MS = 300;
 
 /** The custom fields this list offers as filters (feature 157). */
 const CUSTOM_FIELD_FILTERS_ENDPOINT = '/api/v1/admin/crm/opportunities/custom-field-filters';
-/** A refused key shown in the UI is cut here: one that did not come from this client may be any length. */
-const SHOWN_KEY_MAX = 64;
 
 /**
  * The custom-field filters as the list's `fieldFilters`: one `custom:<key>`
@@ -90,28 +90,6 @@ function customFieldReferences(filters: CustomFieldFilters): OpportunityFieldFil
     if (filter !== undefined) references[opportunityBoardCustomFieldRef(key)] = filter;
   }
   return references;
-}
-
-/**
- * `filters` with `key` set to `filter` (`null` removes it), as a new
- * prototype-free record — a key such as `constructor` stays an ordinary key.
- */
-function withCustomFilter(
-  filters: CustomFieldFilters,
-  key: string,
-  filter: CustomFieldFilter | null,
-): CustomFieldFilters {
-  const next = Object.create(null) as CustomFieldFilters;
-  for (const existing of Object.keys(filters)) {
-    const value = filters[existing];
-    if (existing !== key && value !== undefined) next[existing] = value;
-  }
-  if (filter !== null) next[key] = filter;
-  return next;
-}
-
-function shownKey(key: string): string {
-  return key.length > SHOWN_KEY_MAX ? `${key.slice(0, SHOWN_KEY_MAX)}…` : key;
 }
 
 /** The filters shared with the board, plus the two only a list has. */
@@ -167,8 +145,18 @@ export function OpportunitiesList(): ReactNode {
   );
   /** The key of a custom-field filter the server refused, until it is removed. */
   const [refusedKey, setRefusedKey] = useState<string | null>(null);
-  const { fields: customFields, status: customFieldsStatus } =
-    useCustomFieldListFilterFields(CUSTOM_FIELD_FILTERS_ENDPOINT);
+  const {
+    fields: customFields,
+    status: customFieldsStatus,
+    reload: reloadCustomFields,
+  } = useCustomFieldListFilterFields(CUSTOM_FIELD_FILTERS_ENDPOINT);
+  /** The results region, focused once a refused filter is removed. */
+  const resultsRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * The request last sent. StrictMode mounts effects twice in development, and
+   * an unchanged request is not sent again unless the operator retries.
+   */
+  const lastRequest = useRef<string | null>(null);
 
   /** The custom-field filters changed: into the address, and back to the first page. */
   const changeCustom = useCallback(
@@ -183,13 +171,12 @@ export function OpportunitiesList(): ReactNode {
 
   // Options removed since the address was written are dropped once the fields
   // are known; an unknown key stays for the server to refuse.
+  // Through `changeCustom`, so the address loses the removed options too.
   useEffect(() => {
     if (customFieldsStatus !== 'ready') return;
-    setCustomFilters((previous) => {
-      const pruned = pruneRemovedOptions(previous, customFields);
-      return toCustomFieldFiltersParam(pruned) === toCustomFieldFiltersParam(previous) ? previous : pruned;
-    });
-  }, [customFields, customFieldsStatus]);
+    const pruned = pruneRemovedOptions(customFilters, customFields);
+    if (toCustomFieldFiltersParam(pruned) !== toCustomFieldFiltersParam(customFilters)) changeCustom(pruned);
+  }, [customFields, customFieldsStatus, customFilters, changeCustom]);
 
   // The status filter offers the configured workflow. Without it the list is
   // still usable — the filter simply has nothing to offer.
@@ -233,10 +220,15 @@ export function OpportunitiesList(): ReactNode {
     };
   }, [filters, customFilters, sort, trail, pageSize]);
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useCallback(async (force = false): Promise<void> => {
+    const request = JSON.stringify(params);
+    if (!force && request === lastRequest.current) return;
+    lastRequest.current = request;
     const current = ++sequence.current;
     setLoading(true);
     setError(null);
+    // A refusal belongs to the request that earned it; a new one starts clear.
+    setRefusedKey(null);
     try {
       const page = await crmApi.listOpportunities(params);
       // A slower, older answer must not overwrite a newer one.
@@ -268,20 +260,17 @@ export function OpportunitiesList(): ReactNode {
     setSearch('');
     setFilters(NO_FILTERS);
     setTrail([]);
-    if (Object.keys(customFilters).length > 0) changeCustom(Object.create(null) as CustomFieldFilters);
+    if (Object.keys(customFilters).length > 0) changeCustom(emptyCustomFieldFilters());
   };
 
   const removeRefused = (): void => {
-    if (refusedKey !== null) changeCustom(withCustomFilter(customFilters, refusedKey, null));
+    if (refusedKey === null) return;
+    changeCustom(withCustomFieldFilter(customFilters, refusedKey, null));
+    // Focus follows the operator to what they are waiting for: the results.
+    resultsRef.current?.focus();
   };
 
-  const refusedField = refusedKey === null ? undefined : customFields.find((field) => field.key === refusedKey);
-  const refusedName =
-    refusedKey === null
-      ? ''
-      : refusedField
-        ? (refusedField.label[language] ?? refusedField.labelDefault)
-        : shownKey(refusedKey);
+  const refusedName = refusedKey === null ? '' : customFieldDisplayName(customFields, refusedKey, language);
 
   const filtered =
     hasFilters(filters) || search.trim() !== '' || Object.keys(customFilters).length > 0;
@@ -443,12 +432,11 @@ export function OpportunitiesList(): ReactNode {
               idPrefix="crm-opportunity"
               fields={customFields}
               value={customFilters}
-              onChange={(key, filter): void => changeCustom(withCustomFilter(customFilters, key, filter))}
+              onChange={(key, filter): void => changeCustom(withCustomFieldFilter(customFilters, key, filter))}
               language={language}
+              status={customFieldsStatus}
+              onRetry={reloadCustomFields}
             />
-            {customFieldsStatus === 'error' ? (
-              <p className="self-end text-sm text-muted-foreground">{tCore('customFieldFilters.loadFailed')}</p>
-            ) : null}
           </div>
           <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
             <div className="space-y-1">
@@ -480,7 +468,11 @@ export function OpportunitiesList(): ReactNode {
       </Card>
 
       <Card>
-        <CardContent className="pt-6" aria-busy={loading}>
+        <CardContent ref={resultsRef} tabIndex={-1} className="pt-6 focus:outline-none" aria-busy={loading}>
+          {/* Mounted before it has text, so a reload is announced (WCAG 4.1.3). */}
+          <p role="status" className="sr-only">
+            {loading && loaded ? t('opportunity.list.loading') : ''}
+          </p>
           {refusedKey !== null ? (
             <Alert variant="destructive">
               <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
@@ -494,7 +486,7 @@ export function OpportunitiesList(): ReactNode {
             <Alert variant="destructive">
               <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
                 <span>{error}</span>
-                <Button className="min-h-11 sm:min-h-8" variant="outline" size="sm" onClick={(): void => void load()}>
+                <Button className="min-h-11 sm:min-h-8" variant="outline" size="sm" onClick={(): void => void load(true)}>
                   {tCore('common.action.retry')}
                 </Button>
               </AlertDescription>

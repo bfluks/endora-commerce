@@ -5,12 +5,14 @@ import {
   type CustomFieldFilters,
   type CustomFieldListFilterField,
 } from '@endora-commerce/contracts';
+import { Button } from '../../ui/button.js';
 import { Input } from '../../ui/input.js';
 import { Label } from '../../ui/label.js';
 import { MultiSelect } from '../../ui/multi-select.js';
 import { Select } from '../../ui/select.js';
 import { useTranslation } from '../../i18n/useTranslation.js';
 import { resolveCustomFieldLabel, type CustomFieldFilterTranslator } from './custom-field-filter-chips.js';
+import type { CustomFieldListFilterFieldsStatus } from './useCustomFieldListFilterFields.js';
 
 export interface CustomFieldListFiltersProps {
   /** Prefix of every control's `id`, unique on the page. */
@@ -20,6 +22,14 @@ export interface CustomFieldListFiltersProps {
   /** One key's filter, whole; `null` when nothing of it is left. */
   onChange: (key: string, filter: CustomFieldFilter | null) => void;
   language: string;
+  /**
+   * Where the offered fields are (`useCustomFieldListFilterFields`): a
+   * placeholder cell while they load, and on failure a sentence with a retry —
+   * the same on every list. Omitted, the fields are taken as loaded.
+   */
+  status?: CustomFieldListFilterFieldsStatus;
+  /** Called by the retry on a failed load (the hook's `reload`). */
+  onRetry?: () => void;
 }
 
 /** How long typing pauses before a text or number filter is committed. */
@@ -43,8 +53,31 @@ export function CustomFieldListFilters({
   value,
   onChange,
   language,
+  status = 'ready',
+  onRetry,
 }: CustomFieldListFiltersProps): ReactNode {
   const t = useTranslation('core');
+  if (status === 'loading') {
+    return (
+      <div className="space-y-1" aria-busy="true">
+        <span className="sr-only">{t('customFieldFilters.loading')}</span>
+        <div aria-hidden="true" className="h-4 w-24 animate-pulse rounded bg-muted motion-reduce:animate-none" />
+        <div aria-hidden="true" className="h-9 w-full animate-pulse rounded-md bg-muted motion-reduce:animate-none" />
+      </div>
+    );
+  }
+  if (status === 'error') {
+    return (
+      <div className="col-span-full flex flex-wrap items-center gap-3">
+        <p className="text-sm text-destructive">{t('customFieldFilters.loadFailed')}</p>
+        {onRetry ? (
+          <Button type="button" size="sm" variant="outline" className="min-h-11 sm:min-h-8" onClick={onRetry}>
+            {t('customFieldFilters.retry')}
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
   return (
     <>
       {fields.map((field) => {
@@ -95,21 +128,31 @@ function FilterCell(props: ControlProps): ReactNode {
 /**
  * A local draft committed after {@link COMMIT_PAUSE_MS}. The draft adopts the
  * value from outside (a chip removed, a view loaded) whenever that value is no
- * longer what the draft would commit — and not while the operator types.
+ * longer what the draft would commit — and not while the operator types. A
+ * commit still pending when an outside value is adopted is dropped: the
+ * operator's half-typed draft must not land over the value they just chose.
  */
 function usePausedDraft<T>(
   committed: T,
   toFilter: (draft: T) => CustomFieldFilter | null | undefined,
   same: (a: T, b: T) => boolean,
   onCommit: (filter: CustomFieldFilter | null) => void,
+  pauseMs: number = COMMIT_PAUSE_MS,
 ): [T, (next: T) => void] {
   const [draft, setDraft] = useState<T>(committed);
+  const draftRef = useRef(draft);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const commitRef = useRef(onCommit);
   commitRef.current = onCommit;
 
   useEffect(() => {
-    setDraft((current) => (same(current, committed) ? current : committed));
+    if (same(draftRef.current, committed)) return;
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    draftRef.current = committed;
+    setDraft(committed);
     // `same` compares by value; `committed` is the only input that matters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(committed)]);
@@ -122,14 +165,18 @@ function usePausedDraft<T>(
   );
 
   const update = (next: T): void => {
+    draftRef.current = next;
     setDraft(next);
     if (timer.current !== null) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
+    const commit = (): void => {
       timer.current = null;
       const filter = toFilter(next);
-      // `undefined`: the draft is not a value yet (a half-typed number) — keep the last filter.
+      // `undefined`: the draft is not a value yet (a half-typed number, an
+      // inverted range) — keep the last filter.
       if (filter !== undefined) commitRef.current(filter);
-    }, COMMIT_PAUSE_MS);
+    };
+    if (pauseMs === 0) commit();
+    else timer.current = setTimeout(commit, pauseMs);
   };
   return [draft, update];
 }
@@ -171,6 +218,48 @@ function toDecimal(raw: string): string | undefined | null {
   return customFieldFilterSchema.shape.min.safeParse(normalised).success ? normalised : null;
 }
 
+/**
+ * Two bounds, side by side from `sm` up and stacked below it, each with a
+ * visible short label, and one message under them saying what is wrong —
+ * linked to the input it is about through `aria-describedby`.
+ */
+function RangeLayout({
+  labelId,
+  label,
+  children,
+  message,
+}: {
+  labelId: string;
+  label: string;
+  children: ReactNode;
+  message: { id: string; text: string } | null;
+}): ReactNode {
+  return (
+    <div className="space-y-1">
+      <Label id={labelId}>{label}</Label>
+      <div role="group" aria-labelledby={labelId} className="flex flex-col gap-2 sm:flex-row">
+        {children}
+      </div>
+      {message ? (
+        <p id={message.id} className="text-xs text-destructive">
+          {message.text}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function RangeBound({ id, prefix, children }: { id: string; prefix: string; children: ReactNode }): ReactNode {
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-2">
+      <label htmlFor={id} className="w-10 shrink-0 text-xs text-muted-foreground">
+        {prefix}
+      </label>
+      {children}
+    </div>
+  );
+}
+
 function NumberFilter({ id, label, filter, onChange, t }: ControlProps): ReactNode {
   const committed: Bounds = { min: filter?.min ?? '', max: filter?.max ?? '' };
   const [draft, setDraft] = usePausedDraft<Bounds>(
@@ -179,6 +268,7 @@ function NumberFilter({ id, label, filter, onChange, t }: ControlProps): ReactNo
       const min = toDecimal(bounds.min);
       const max = toDecimal(bounds.max);
       if (min === null || max === null) return undefined;
+      if (min !== undefined && max !== undefined && Number(min) > Number(max)) return undefined;
       if (min === undefined && max === undefined) return null;
       return { ...(min === undefined ? {} : { min }), ...(max === undefined ? {} : { max }) };
     },
@@ -186,68 +276,103 @@ function NumberFilter({ id, label, filter, onChange, t }: ControlProps): ReactNo
     onChange,
   );
   const labelId = `${id}-label`;
-  const invalidMin = toDecimal(draft.min) === null;
-  const invalidMax = toDecimal(draft.max) === null;
+  const messageId = `${id}-message`;
+  const min = toDecimal(draft.min);
+  const max = toDecimal(draft.max);
+  const invalidMin = min === null;
+  const invalidMax = max === null;
+  const inverted = typeof min === 'string' && typeof max === 'string' && Number(min) > Number(max);
+  const message =
+    invalidMin || invalidMax
+      ? { id: messageId, text: t('customFieldFilters.numberInvalid') }
+      : inverted
+        ? { id: messageId, text: t('customFieldFilters.rangeInverted') }
+        : null;
   return (
-    <div className="space-y-1">
-      <Label id={labelId}>{label}</Label>
-      <div role="group" aria-labelledby={labelId} className="flex gap-2">
+    <RangeLayout labelId={labelId} label={label} message={message}>
+      <RangeBound id={`${id}-min`} prefix={t('customFieldFilters.minLabel')}>
         <Input
           id={`${id}-min`}
           type="text"
           inputMode="decimal"
           aria-label={`${label}: ${t('customFieldFilters.min')}`}
-          aria-invalid={invalidMin || undefined}
-          placeholder={t('customFieldFilters.min')}
+          aria-invalid={invalidMin || inverted || undefined}
+          aria-describedby={invalidMin || inverted ? messageId : undefined}
           value={draft.min}
           onChange={(event): void => setDraft({ ...draft, min: event.target.value })}
         />
+      </RangeBound>
+      <RangeBound id={`${id}-max`} prefix={t('customFieldFilters.maxLabel')}>
         <Input
           id={`${id}-max`}
           type="text"
           inputMode="decimal"
           aria-label={`${label}: ${t('customFieldFilters.max')}`}
-          aria-invalid={invalidMax || undefined}
-          placeholder={t('customFieldFilters.max')}
+          aria-invalid={invalidMax || inverted || undefined}
+          aria-describedby={invalidMax || inverted ? messageId : undefined}
           value={draft.max}
           onChange={(event): void => setDraft({ ...draft, max: event.target.value })}
         />
-      </div>
-    </div>
+      </RangeBound>
+    </RangeLayout>
   );
 }
 
+interface Dates {
+  from: string;
+  to: string;
+}
+
+const isDate = (raw: string): boolean => raw !== '' && customFieldFilterSchema.shape.from.safeParse(raw).success;
+
 function DateFilter({ id, label, filter, onChange, t }: ControlProps): ReactNode {
+  const committed: Dates = { from: filter?.from ?? '', to: filter?.to ?? '' };
+  // Dates commit at once; the draft only holds an inverted pair back.
+  const [draft, setDraft] = usePausedDraft<Dates>(
+    committed,
+    (dates) => {
+      const from = isDate(dates.from) ? dates.from : undefined;
+      const to = isDate(dates.to) ? dates.to : undefined;
+      if (from !== undefined && to !== undefined && from > to) return undefined;
+      if (from === undefined && to === undefined) return null;
+      return { ...(from === undefined ? {} : { from }), ...(to === undefined ? {} : { to }) };
+    },
+    (a, b) => a.from === b.from && a.to === b.to,
+    onChange,
+    0,
+  );
   const labelId = `${id}-label`;
-  const set = (bound: 'from' | 'to', raw: string): void => {
-    const next: CustomFieldFilter = {};
-    if (filter?.from !== undefined) next.from = filter.from;
-    if (filter?.to !== undefined) next.to = filter.to;
-    const parsed = customFieldFilterSchema.shape[bound].safeParse(raw);
-    if (raw !== '' && parsed.success) next[bound] = raw;
-    else delete next[bound];
-    onChange(next.from === undefined && next.to === undefined ? null : next);
-  };
+  const messageId = `${id}-message`;
+  const inverted = isDate(draft.from) && isDate(draft.to) && draft.from > draft.to;
   return (
-    <div className="space-y-1">
-      <Label id={labelId}>{label}</Label>
-      <div role="group" aria-labelledby={labelId} className="flex gap-2">
+    <RangeLayout
+      labelId={labelId}
+      label={label}
+      message={inverted ? { id: messageId, text: t('customFieldFilters.dateRangeInverted') } : null}
+    >
+      <RangeBound id={`${id}-from`} prefix={t('customFieldFilters.from')}>
         <Input
           id={`${id}-from`}
           type="date"
           aria-label={`${label}: ${t('customFieldFilters.from')}`}
-          value={filter?.from ?? ''}
-          onChange={(event): void => set('from', event.target.value)}
+          aria-invalid={inverted || undefined}
+          aria-describedby={inverted ? messageId : undefined}
+          value={draft.from}
+          onChange={(event): void => setDraft({ ...draft, from: event.target.value })}
         />
+      </RangeBound>
+      <RangeBound id={`${id}-to`} prefix={t('customFieldFilters.to')}>
         <Input
           id={`${id}-to`}
           type="date"
           aria-label={`${label}: ${t('customFieldFilters.to')}`}
-          value={filter?.to ?? ''}
-          onChange={(event): void => set('to', event.target.value)}
+          aria-invalid={inverted || undefined}
+          aria-describedby={inverted ? messageId : undefined}
+          value={draft.to}
+          onChange={(event): void => setDraft({ ...draft, to: event.target.value })}
         />
-      </div>
-    </div>
+      </RangeBound>
+    </RangeLayout>
   );
 }
 

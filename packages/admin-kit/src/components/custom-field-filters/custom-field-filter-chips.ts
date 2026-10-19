@@ -16,6 +16,8 @@ export interface CustomFieldFilterChip {
   label: string;
   /** The filters without this chip's key. */
   remove: () => CustomFieldFilters;
+  /** The accessible name of the chip's remove action: "Remove filter <label>". */
+  removeLabel: string;
 }
 
 /**
@@ -23,6 +25,25 @@ export interface CustomFieldFilterChip {
  * → `labelDefault` — the rule the detail screens use, so a filter reads as the
  * field does where its value is shown.
  */
+/** Longest a key the list does not offer is shown, before an ellipsis (threat model F-5). */
+const DISPLAY_KEY_MAX = 64;
+
+/**
+ * How a custom field is named to the operator: its label in their language,
+ * the base language, then `labelDefault` — or, for a key the list does not
+ * offer (an old link, a server refusal), the key itself cut to 64 characters.
+ * Always plain text; never rendered as markup.
+ */
+export function customFieldDisplayName(
+  fields: readonly CustomFieldListFilterField[],
+  key: string,
+  language: string,
+): string {
+  const field = fields.find((candidate) => candidate.key === key);
+  if (field !== undefined) return resolveCustomFieldLabel(field.label, field.labelDefault, language);
+  return key.length > DISPLAY_KEY_MAX ? `${key.slice(0, DISPLAY_KEY_MAX)}…` : key;
+}
+
 export function resolveCustomFieldLabel(
   label: LocalizedLabel,
   labelDefault: string,
@@ -95,11 +116,13 @@ export function customFieldFilterChips(
     const filter = filters[key];
     if (filter === undefined) continue;
     const field = byKey.get(key);
-    const name = field === undefined ? key : resolveCustomFieldLabel(field.label, field.labelDefault, language);
+    const name = customFieldDisplayName(fields, key, language);
+    const label = `${name}: ${summarise(filter, field, language, t)}`;
     chips.push({
       id: `cf:${key}`,
-      label: `${name}: ${summarise(filter, field, language, t)}`,
+      label,
       remove: () => withoutCustomFieldFilter(filters, key),
+      removeLabel: t('customFieldFilters.removeChip', { label }),
     });
   }
   return chips;

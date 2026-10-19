@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { CustomFieldListFilterField, CustomFieldListFilterFieldsResponse } from '@endora-commerce/contracts';
 // The barrel, not `../../lib/api-client.js`: see `CustomFieldValuesPanel.tsx`.
 import { apiClient } from '../../lib/index.js';
@@ -8,6 +8,8 @@ export type CustomFieldListFilterFieldsStatus = 'loading' | 'ready' | 'error';
 export interface CustomFieldListFilterFieldsState {
   fields: CustomFieldListFilterField[];
   status: CustomFieldListFilterFieldsStatus;
+  /** Read the fields again — the retry after a failed load. */
+  reload: () => void;
 }
 
 /**
@@ -18,7 +20,12 @@ export interface CustomFieldListFilterFieldsState {
  * status stuck at `loading` (feature 147's rule).
  */
 export function useCustomFieldListFilterFields(endpoint: string): CustomFieldListFilterFieldsState {
-  const [state, setState] = useState<CustomFieldListFilterFieldsState>({ fields: [], status: 'loading' });
+  const [state, setState] = useState<Omit<CustomFieldListFilterFieldsState, 'reload'>>({
+    fields: [],
+    status: 'loading',
+  });
+  const [attempt, setAttempt] = useState(0);
+  const reload = useCallback((): void => setAttempt((current) => current + 1), []);
 
   useEffect(() => {
     let alive = true;
@@ -34,7 +41,7 @@ export function useCustomFieldListFilterFields(endpoint: string): CustomFieldLis
     return (): void => {
       alive = false;
     };
-  }, [endpoint]);
+  }, [endpoint, attempt]);
 
-  return state;
+  return { ...state, reload };
 }

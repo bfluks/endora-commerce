@@ -15,8 +15,9 @@ import { ApiError } from '../../lib/index.js';
  * `specs/157-custom-fields-list-filters/contracts/admin-surfaces.md` §1.3).
  *
  * **Every key-indexed record here is prototype-free** (threat model F-4).
- * `constructor`, `toString` and `hasOwnProperty` match the definition-key
- * grammar, so a record is built with `Object.create(null)`, membership is
+ * `constructor` matches the definition-key grammar (`toString` and
+ * `hasOwnProperty` do not: the grammar refuses capitals), so a record is built
+ * with `Object.create(null)`, membership is
  * `Object.hasOwn`, and a field is looked up through a `Map` — never `key in
  * obj` and never a bracket read on a plain object.
  */
@@ -227,5 +228,17 @@ export function toCustomFieldFiltersParam(filters: CustomFieldFilters): string |
 export function withoutCustomFieldFilter(filters: CustomFieldFilters, key: string): CustomFieldFilters {
   const next = copyFilters(filters);
   delete next[key];
+  return next;
+}
+
+/** `filters` with `key` set to `filter` — or removed, for `null` — as a new prototype-free record. */
+export function withCustomFieldFilter(
+  filters: CustomFieldFilters,
+  key: string,
+  filter: CustomFieldFilter | null,
+): CustomFieldFilters {
+  const next = copyFilters(filters);
+  if (filter === null) delete next[key];
+  else next[key] = filter;
   return next;
 }
