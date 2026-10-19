@@ -5,9 +5,8 @@ import { ApiError, useAuth } from '@endora-commerce/admin-kit/lib';
 import { customFieldsClient } from '../api/custom-fields-client.js';
 import { DefinitionBehaviourFields } from '../components/DefinitionBehaviourFields.js';
 import { DefinitionEditorDialog } from '../components/DefinitionEditorDialog.js';
-import { resolveLabel } from '../components/localized-label.js';
 import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardHeader, CardTitle, Checkbox, Label, PageHeader, Select } from '@endora-commerce/admin-kit/ui';
-import { ResponsiveTable, type ResponsiveColumn } from '@endora-commerce/admin-kit/components';
+import { ResponsiveTable, resolveCustomFieldLabel, type ResponsiveColumn } from '@endora-commerce/admin-kit/components';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import type {
   CustomFieldAudience,
@@ -196,7 +195,7 @@ export function CustomFieldsPage(): ReactNode {
       id: 'label',
       header: t('customFields.table.label'),
       primary: true,
-      render: (d) => resolveLabel(d.label, d.labelDefault, language),
+      render: (d) => resolveCustomFieldLabel(d.label, d.labelDefault, language),
     },
     { id: 'type', header: t('customFields.table.type'), render: (d) => t(`customFields.valueType.${d.valueType}`) },
     {

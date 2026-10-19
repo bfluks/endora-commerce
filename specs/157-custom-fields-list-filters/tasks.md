@@ -401,6 +401,13 @@ pnpm --filter backend run check:bundle-pairing
 
 ---
 
+**Final review round, stream A (2026-10-19)** — done:
+- B2: minted `CUSTOM_FIELD_OPTION_IN_USE` (`details.value`, `details.label`) and, rather than a generic `CUSTOM_FIELD_DEFINITION_INVALID` sentence, own codes `CUSTOM_FIELD_VALUE_TYPE_LOCKED` and `CUSTOM_FIELD_STORED_VALUES_EXIST` (`details.key`), each with en + pl sentences; `list-filter-option` 16/16, `recreate-over-orphaned-values` 3/3. An inverted number or date range is refused 400 `VALIDATION_FAILED` (`assertCustomFieldFilterRanges`; contract §1.4).
+- Kit: `resolveCustomFieldLabel`, `customFieldDisplayName`, `emptyCustomFieldFilters`, `withCustomFieldFilter`, `withoutCustomFieldFilter` exported, page copies deleted; ranges stack below `sm` with visible bound labels; a non-number bound and an inverted range are explained at the input and not sent; `aria-invalid` border on `Input`; pending commit dropped on an outside change; loading placeholder and failure sentence with *Try again* (`reload()`); chip remove names; Polish copy. Kit tests 49/49.
+- Pages (Orders, Quote Requests, Opportunities): saved views sanitised only against loaded fields; a refusal replaces the results; focus moves to the results after *Remove this filter*, the reload is announced; the dropped notice is `warning` and cleared on any custom-filter change and *Clear all*; Orders resets the page in the same update and ignores a stale answer (D4); Opportunities clears a refusal on each load (D5) and prunes through the address; Quote Requests and Opportunities send an unchanged request once (StrictMode). Not observed red: the page behaviour was written before these tests. Orders 23/23, Quote Requests 16/16, Opportunities 27/27.
+- B's editor round picked (`custom_fields` bundles merged by hand), `DefinitionOptionsEditor` reads `ERROR_CODES.CUSTOM_FIELD_OPTION_IN_USE` only, `localized-label.ts`'s `resolveLabel` replaced by the kit's.
+- Not built: Opportunities "More filters (n)" (awaiting the owner).
+
 ## Phase 9: Opportunities list **[admin UI]**
 
 **Goal**: the Opportunity half of US2 (FR-007, FR-011a, FR-013, FR-016).
