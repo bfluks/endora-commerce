@@ -48,8 +48,11 @@ export function DefinitionEditorDialog({ definition, entityTypeInfo, onClose, on
   const [labelInvalid, setLabelInvalid] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** An option action applies at once, so after one *Cancel* would undo nothing: it reads *Close*. */
+  const [optionsTouched, setOptionsTouched] = useState(false);
 
   const reread = useCallback(async (): Promise<void> => {
+    setOptionsTouched(true);
     setCurrent(await customFieldsClient.get(definition.id));
   }, [definition.id]);
 
@@ -82,6 +85,8 @@ export function DefinitionEditorDialog({ definition, entityTypeInfo, onClose, on
   };
 
   const labelErrorId = `${id}-label-error`;
+  const requiredNoticeId = `${id}-required-notice`;
+  const showRequiredNotice = required && !definition.required;
   return (
     <ModalDialog
       title={t('customFields.editor.title', { key: definition.key })}
@@ -90,7 +95,7 @@ export function DefinitionEditorDialog({ definition, entityTypeInfo, onClose, on
       footer={
         <>
           <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
-            {t('customFields.editor.cancel')}
+            {optionsTouched ? t('customFields.editor.close') : t('customFields.editor.cancel')}
           </Button>
           <Button type="button" disabled={busy} aria-busy={busy} onClick={(): void => void save()}>
             {t('customFields.editor.save')}
@@ -119,7 +124,7 @@ export function DefinitionEditorDialog({ definition, entityTypeInfo, onClose, on
             <dt className="text-muted-foreground">{t('customFields.editor.valueType')}</dt>
             <dd>{t(`customFields.valueType.${definition.valueType}`)}</dd>
           </dl>
-          <p className="text-sm text-muted-foreground">{t('customFields.editor.keyReadOnly')}</p>
+          <p className="break-words text-sm text-muted-foreground">{t('customFields.editor.keyReadOnly')}</p>
         </section>
 
         <fieldset className="space-y-2">
@@ -159,13 +164,22 @@ export function DefinitionEditorDialog({ definition, entityTypeInfo, onClose, on
               id={`${id}-required`}
               checked={required}
               disabled={busy}
+              aria-describedby={showRequiredNotice ? requiredNoticeId : undefined}
               onChange={(event): void => setRequired(event.target.checked)}
             />
             {t('customFields.form.required')}
           </label>
-          {required && !definition.required ? (
-            <p className="rounded-md border bg-muted p-3 text-sm">{t('customFields.editor.requiredNotice')}</p>
-          ) : null}
+          {/* A live region mounted before it has anything to say, so the notice is announced. */}
+          <p
+            id={requiredNoticeId}
+            data-testid="required-notice"
+            role="status"
+            className={
+              showRequiredNotice ? 'break-words rounded-md border bg-muted p-3 text-sm' : 'break-words text-sm'
+            }
+          >
+            {showRequiredNotice ? t('customFields.editor.requiredNotice') : ''}
+          </p>
         </fieldset>
 
         {SELECT_TYPES.has(definition.valueType) ? (
@@ -173,6 +187,7 @@ export function DefinitionEditorDialog({ definition, entityTypeInfo, onClose, on
             <h3 id={`${id}-options`} className="text-sm font-semibold">
               {t('customFields.editor.section.options')}
             </h3>
+            <p className="break-words text-sm text-muted-foreground">{t('customFields.editor.optionsNote')}</p>
             <DefinitionOptionsEditor definition={current} onChanged={reread} disabled={busy} />
           </section>
         ) : null}

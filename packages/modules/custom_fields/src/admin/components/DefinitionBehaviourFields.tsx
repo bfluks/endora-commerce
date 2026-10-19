@@ -22,6 +22,12 @@ export interface DefinitionBehaviourFieldsProps {
   value: { listFilter: boolean };
   onChange: (next: { listFilter: boolean }) => void;
   disabled?: boolean;
+  /**
+   * `stacked` (default): the controls over their help, in a block of their
+   * own. `row`: for a flex-wrap form row — the controls sit in the row and the
+   * help drops to a full-width line at the row's end.
+   */
+  layout?: 'stacked' | 'row';
 }
 
 /**
@@ -40,13 +46,13 @@ export function DefinitionBehaviourFields({
   value,
   onChange,
   disabled = false,
+  layout = 'stacked',
 }: DefinitionBehaviourFieldsProps): ReactNode {
   const t = useTranslation('custom_fields');
   const id = useId();
   if (!entityTypeInfo.listFilter) return null;
   const helpId = `${id}-help`;
-  return (
-    <div className="space-y-1">
+  const control = (
       <label htmlFor={id} className="flex min-h-11 items-center gap-2 text-sm font-medium">
         <Checkbox
           id={id}
@@ -57,7 +63,21 @@ export function DefinitionBehaviourFields({
         />
         {t('customFields.listFilter.label')}
       </label>
-      <p id={helpId} className="text-sm text-muted-foreground">
+  );
+  if (layout === 'row') {
+    return (
+      <>
+        {control}
+        <p id={helpId} className="order-last basis-full break-words text-sm text-muted-foreground">
+          {t('customFields.listFilter.help')}
+        </p>
+      </>
+    );
+  }
+  return (
+    <div className="space-y-1">
+      {control}
+      <p id={helpId} className="break-words text-sm text-muted-foreground">
         {t('customFields.listFilter.help')}
       </p>
     </div>

@@ -1,12 +1,22 @@
-import { useId, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MutableRefObject,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { Trash2 } from 'lucide-react';
 import { ApiError } from '@endora-commerce/admin-kit/lib';
 import { Button, Checkbox, Input, Label } from '@endora-commerce/admin-kit/ui';
 import { ReorderAnnouncer, TouchReorderButtons } from '@endora-commerce/admin-kit/components';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import type { CustomFieldDefinitionDto, CustomFieldOptionDto, LocalizedLabel } from '@endora-commerce/contracts';
 import { customFieldsClient } from '../api/custom-fields-client.js';
-import { sameLabel, withLanguages } from './localized-label.js';
+import { resolveLabel, sameLabel, withLanguages } from './localized-label.js';
 
 export interface DefinitionOptionsEditorProps {
   definition: CustomFieldDefinitionDto;
@@ -17,9 +27,24 @@ export interface DefinitionOptionsEditorProps {
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 
+/**
+ * The code the server refuses the removal of an option some record still holds
+ * with. Until it ships, that refusal is the definition module's generic `409`,
+ * which is the only `409` the option `DELETE` route answers — so both count.
+ */
+const OPTION_IN_USE_CODE = 'CUSTOM_FIELD_OPTION_IN_USE';
+
+function isOptionInUse(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  const { code } = error.envelope.error;
+  return code === OPTION_IN_USE_CODE || (error.status === 409 && code === 'CUSTOM_FIELD_DEFINITION_INVALID');
+}
+
 /** The server's sentence for a refusal — never its code — else the generic one. */
 function sentenceOf(error: unknown, t: Translate): string {
-  return error instanceof ApiError ? error.envelope.error.message : t('customFields.editor.option.failed');
+  return error instanceof ApiError && error.status < 500
+    ? error.envelope.error.message
+    : t('customFields.editor.option.failed');
 }
 
 /**
@@ -28,31 +53,56 @@ function sentenceOf(error: unknown, t: Translate): string {
  * An option's stored value is shown, never edited; an action sends only that
  * option's changed members. After every action the dialog re-reads the
  * definition.
+ *
+ * **A save never takes the operator's place.** Rows are keyed by the option
+ * alone, so a re-read relabels a row rather than replacing it; inputs stay
+ * enabled while a save is in flight (the row says `aria-busy`); and an input
+ * adopts the re-read value only when it is not being typed in. A reorder hands
+ * focus back to the moved row's button.
  */
 export function DefinitionOptionsEditor({ definition, onChanged, disabled = false }: DefinitionOptionsEditorProps): ReactNode {
   const t = useTranslation('custom_fields');
   const [announcement, setAnnouncement] = useState('');
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [moving, setMoving] = useState(false);
+  const [pendingFocus, setPendingFocus] = useState<{ optionId: string; direction: -1 | 1 } | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const options = [...definition.options].sort((a, b) => a.sortOrder - b.sortOrder);
 
-  const setRowError = (optionId: string, message: string | null): void =>
-    setRowErrors((current) => {
-      const next = { ...current };
-      if (message === null) delete next[optionId];
-      else next[optionId] = message;
-      return next;
-    });
+  const setRowError = useCallback(
+    (optionId: string, message: string | null): void =>
+      setRowErrors((current) => {
+        const next = { ...current };
+        if (message === null) delete next[optionId];
+        else next[optionId] = message;
+        return next;
+      }),
+    [],
+  );
+
+  // After a reorder settles: the moved row's matching button, or its other one
+  // when the move left the matching one disabled (first or last place).
+  useEffect(() => {
+    if (pendingFocus === null || moving) return;
+    const wrapper = rootRef.current?.querySelector(`[data-reorder-for="${pendingFocus.optionId}"]`);
+    const buttons = wrapper ? Array.from(wrapper.querySelectorAll('button')) : [];
+    const preferred = buttons[pendingFocus.direction < 0 ? 0 : 1];
+    const other = buttons[pendingFocus.direction < 0 ? 1 : 0];
+    const target = preferred && !preferred.disabled ? preferred : other;
+    target?.focus();
+    setPendingFocus(null);
+  }, [pendingFocus, moving, definition]);
 
   const move = async (index: number, direction: -1 | 1): Promise<void> => {
     const target = index + direction;
     const moved = options[index];
     if (moved?.id === undefined || target < 0 || target >= options.length) return;
+    const movedId = moved.id;
     const order = [...options];
     order.splice(index, 1);
     order.splice(target, 0, moved);
     setMoving(true);
-    setRowError(moved.id, null);
+    setRowError(movedId, null);
     try {
       // Only the options whose position changed are patched.
       for (const [position, option] of order.entries()) {
@@ -67,20 +117,27 @@ export function DefinitionOptionsEditor({ definition, onChanged, disabled = fals
           count: order.length,
         }),
       );
-      await onChanged();
     } catch (error) {
-      setRowError(moved.id, sentenceOf(error, t));
+      setRowError(movedId, sentenceOf(error, t));
     } finally {
+      // Re-read either way: a reorder refused half-way leaves an order on the
+      // server that is neither the old one nor the one asked for.
+      try {
+        await onChanged();
+      } catch {
+        // The rows keep what they show; the next action re-reads again.
+      }
+      setPendingFocus({ optionId: movedId, direction });
       setMoving(false);
     }
   };
 
   return (
-    <div className="space-y-3">
+    <div ref={rootRef} className="space-y-3">
       <ReorderAnnouncer message={announcement} />
       {options.map((option, index) => (
         <OptionRow
-          key={`${option.id ?? option.value}:${option.labelDefault}:${JSON.stringify(option.label)}:${String(option.isDefault)}`}
+          key={option.id ?? option.value}
           definitionId={definition.id}
           option={option}
           error={option.id === undefined ? undefined : rowErrors[option.id]}
@@ -88,15 +145,17 @@ export function DefinitionOptionsEditor({ definition, onChanged, disabled = fals
             if (option.id !== undefined) setRowError(option.id, message);
           }}
           onChanged={onChanged}
-          disabled={disabled || moving}
+          disabled={disabled}
           reorder={
-            <TouchReorderButtons
-              onMoveUp={(): void => void move(index, -1)}
-              onMoveDown={(): void => void move(index, 1)}
-              disableUp={index === 0}
-              disableDown={index === options.length - 1}
-              disabled={disabled || moving}
-            />
+            <div data-reorder-for={option.id ?? option.value}>
+              <TouchReorderButtons
+                onMoveUp={(): void => void move(index, -1)}
+                onMoveDown={(): void => void move(index, 1)}
+                disableUp={index === 0}
+                disableDown={index === options.length - 1}
+                disabled={disabled || moving}
+              />
+            </div>
           }
           t={t}
         />
@@ -112,6 +171,32 @@ export function DefinitionOptionsEditor({ definition, onChanged, disabled = fals
   );
 }
 
+interface LabelDraft {
+  value: string;
+  setValue: (next: string) => void;
+  ref: RefObject<HTMLInputElement | null>;
+  /** The value of a save still on its way, `null` when none is. */
+  sent: MutableRefObject<string | null>;
+}
+
+/**
+ * One label input's draft. It adopts the stored value when that changes, but
+ * not while the input has focus, and not while a save of a different value is
+ * still on its way back — so a re-read never overwrites what is being typed.
+ */
+function useLabelDraft(stored: string): LabelDraft {
+  const [value, setValue] = useState(stored);
+  const ref = useRef<HTMLInputElement | null>(null);
+  const sent = useRef<string | null>(null);
+  useEffect(() => {
+    if (ref.current !== null && ref.current === document.activeElement) return;
+    if (sent.current !== null && sent.current !== stored) return;
+    sent.current = null;
+    setValue(stored);
+  }, [stored]);
+  return { value, setValue, ref, sent };
+}
+
 interface OptionRowProps {
   definitionId: string;
   option: CustomFieldOptionDto;
@@ -125,22 +210,37 @@ interface OptionRowProps {
 
 function OptionRow({ definitionId, option, error, setError, onChanged, disabled, reorder, t }: OptionRowProps): ReactNode {
   const id = useId();
-  const [labelDefault, setLabelDefault] = useState(option.labelDefault);
-  const [en, setEn] = useState(option.label['en'] ?? '');
-  const [pl, setPl] = useState(option.label['pl'] ?? '');
+  const { language } = useTranslationContext();
+  const labelDefault = useLabelDraft(option.labelDefault);
+  const en = useLabelDraft(option.label['en'] ?? '');
+  const pl = useLabelDraft(option.label['pl'] ?? '');
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [savingDefault, setSavingDefault] = useState(false);
+  const [saved, setSaved] = useState('');
+  const keepRef = useRef<HTMLButtonElement>(null);
+  const removeRef = useRef<HTMLButtonElement>(null);
+  /** Where focus goes once the confirmation has opened or closed. */
+  const focusNext = useRef<'keep' | 'remove' | null>(null);
   const optionId = option.id;
 
-  const act = async (fn: () => Promise<unknown>): Promise<void> => {
-    if (optionId === undefined) return;
+  useEffect(() => {
+    if (focusNext.current === 'keep') keepRef.current?.focus();
+    if (focusNext.current === 'remove') removeRef.current?.focus();
+    focusNext.current = null;
+  }, [confirming]);
+
+  const act = async (fn: () => Promise<unknown>, onRefusal?: (err: unknown) => string): Promise<boolean> => {
+    if (optionId === undefined) return false;
     setBusy(true);
     setError(null);
     try {
       await fn();
       await onChanged();
+      return true;
     } catch (err) {
-      setError(sentenceOf(err, t));
+      setError(onRefusal ? onRefusal(err) : sentenceOf(err, t));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -148,92 +248,160 @@ function OptionRow({ definitionId, option, error, setError, onChanged, disabled,
 
   const commitLabels = (): void => {
     if (optionId === undefined) return;
-    const trimmedDefault = labelDefault.trim();
+    const trimmedDefault = labelDefault.value.trim();
     if (trimmedDefault === '') {
       setError(t('customFields.editor.labelDefaultRequired'));
       return;
     }
-    const label = withLanguages(option.label, en, pl);
+    // A value already on its way is not sent again (Enter, then the blur that follows).
     const patch: { labelDefault?: string; label?: LocalizedLabel } = {};
-    if (trimmedDefault !== option.labelDefault) patch.labelDefault = trimmedDefault;
-    if (!sameLabel(label, option.label)) patch.label = label;
+    if (trimmedDefault !== option.labelDefault && trimmedDefault !== labelDefault.sent.current) {
+      patch.labelDefault = trimmedDefault;
+    }
+    const enText = en.value.trim();
+    const plText = pl.value.trim();
+    const label = withLanguages(option.label, enText, plText);
+    const labelInFlight = en.sent.current === enText && pl.sent.current === plText;
+    if (!sameLabel(label, option.label) && !labelInFlight) patch.label = label;
     if (Object.keys(patch).length === 0) return;
-    void act(() => customFieldsClient.updateOption(definitionId, optionId, patch));
+    if (patch.labelDefault !== undefined) labelDefault.sent.current = patch.labelDefault;
+    if (patch.label !== undefined) {
+      en.sent.current = enText;
+      pl.sent.current = plText;
+    }
+    setSaved('');
+    void act(() => customFieldsClient.updateOption(definitionId, optionId, patch)).then((ok) => {
+      if (ok) {
+        setSaved(t('customFields.editor.option.saved'));
+        return;
+      }
+      labelDefault.sent.current = null;
+      en.sent.current = null;
+      pl.sent.current = null;
+    });
   };
 
-  const locked = disabled || busy;
+  const onEnter = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    commitLabels();
+  };
+
+  const edit = (draft: LabelDraft, next: string): void => {
+    draft.setValue(next);
+    setSaved('');
+  };
+
+  const labelInput = (draft: LabelDraft, suffix: string, labelKey: string): ReactNode => (
+    <div className="min-w-0 space-y-1">
+      <Label htmlFor={`${id}-${suffix}`}>{t(labelKey)}</Label>
+      <Input
+        ref={draft.ref}
+        id={`${id}-${suffix}`}
+        className="min-w-0"
+        value={draft.value}
+        disabled={disabled}
+        aria-describedby={error ? errorId : undefined}
+        onChange={(event): void => edit(draft, event.target.value)}
+        onBlur={commitLabels}
+        onKeyDown={onEnter}
+      />
+    </div>
+  );
+
+  const shownLabel = resolveLabel(option.label, option.labelDefault, language);
   const errorId = `${id}-error`;
   return (
     <div role="group" aria-label={option.labelDefault} aria-busy={busy} className="space-y-2 rounded-md border p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm">
+        <p className="min-w-0 break-words text-sm">
           <span className="text-muted-foreground">{t('customFields.editor.option.value')}: </span>
           <code className="font-mono text-xs">{option.value}</code>
         </p>
         {reorder}
       </div>
       <div className="grid gap-2 sm:grid-cols-3">
-        <div className="space-y-1">
-          <Label htmlFor={`${id}-default`}>{t('customFields.editor.labelDefault')}</Label>
-          <Input
-            id={`${id}-default`}
-            value={labelDefault}
-            disabled={locked}
-            aria-describedby={error ? errorId : undefined}
-            onChange={(event): void => setLabelDefault(event.target.value)}
-            onBlur={commitLabels}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor={`${id}-en`}>{t('customFields.editor.labelEn')}</Label>
-          <Input id={`${id}-en`} value={en} disabled={locked} onChange={(event): void => setEn(event.target.value)} onBlur={commitLabels} />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor={`${id}-pl`}>{t('customFields.editor.labelPl')}</Label>
-          <Input id={`${id}-pl`} value={pl} disabled={locked} onChange={(event): void => setPl(event.target.value)} onBlur={commitLabels} />
-        </div>
+        {labelInput(labelDefault, 'default', 'customFields.editor.labelDefault')}
+        {labelInput(en, 'en', 'customFields.editor.labelEn')}
+        {labelInput(pl, 'pl', 'customFields.editor.labelPl')}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <label htmlFor={`${id}-is-default`} className="flex min-h-11 items-center gap-2 text-sm">
           <Checkbox
             id={`${id}-is-default`}
             checked={option.isDefault}
-            disabled={locked}
+            disabled={disabled || savingDefault}
             onChange={(event): void => {
               const isDefault = event.target.checked;
-              if (optionId !== undefined) void act(() => customFieldsClient.updateOption(definitionId, optionId, { isDefault }));
+              if (optionId === undefined) return;
+              setSavingDefault(true);
+              void act(() => customFieldsClient.updateOption(definitionId, optionId, { isDefault })).finally(() =>
+                setSavingDefault(false),
+              );
             }}
           />
           {t('customFields.editor.option.default')}
         </label>
         {confirming ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm">{t('customFields.editor.option.removeConfirm', { label: option.labelDefault })}</span>
-            <Button type="button" variant="outline" size="sm" disabled={locked} onClick={(): void => setConfirming(false)}>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <Button
+              ref={keepRef}
+              type="button"
+              variant="outline"
+              size="sm"
+              className="min-h-11"
+              onClick={(): void => {
+                focusNext.current = 'remove';
+                setConfirming(false);
+              }}
+            >
               {t('customFields.editor.option.keep')}
             </Button>
+            <span className="min-w-0 break-words text-sm">
+              {t('customFields.editor.option.removeConfirm', { label: option.labelDefault })}
+            </span>
             <Button
               type="button"
               variant="destructive"
               size="sm"
-              disabled={locked}
+              className="min-h-11"
+              disabled={disabled || busy}
               onClick={(): void => {
                 setConfirming(false);
-                if (optionId !== undefined) void act(() => customFieldsClient.removeOption(definitionId, optionId));
+                if (optionId === undefined) return;
+                void act(
+                  () => customFieldsClient.removeOption(definitionId, optionId),
+                  (err) =>
+                    isOptionInUse(err) ? t('customFields.editor.option.inUse', { label: shownLabel }) : sentenceOf(err, t),
+                );
               }}
             >
               {t('customFields.editor.option.remove')}
             </Button>
           </div>
         ) : (
-          <Button type="button" variant="ghost" size="sm" disabled={locked} onClick={(): void => setConfirming(true)}>
+          <Button
+            ref={removeRef}
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="min-h-11"
+            disabled={disabled || busy}
+            onClick={(): void => {
+              focusNext.current = 'keep';
+              setConfirming(true);
+            }}
+          >
             <Trash2 className="size-4" aria-hidden="true" />
             {t('customFields.editor.option.remove')}
           </Button>
         )}
       </div>
+      <p role="status" className="text-sm text-muted-foreground">
+        {saved}
+      </p>
       {error ? (
-        <p id={errorId} role="alert" className="text-sm text-destructive">
+        <p id={errorId} role="alert" className="break-words text-sm text-destructive">
           {error}
         </p>
       ) : null}
@@ -291,49 +459,62 @@ function AddOptionRow({ definitionId, nextSortOrder, onChanged, disabled, t }: A
     }
   };
 
-  const locked = disabled || busy;
   const describedBy = error ? errorId : undefined;
   return (
-    <div role="group" aria-label={t('customFields.editor.option.add')} aria-busy={busy} className="space-y-2 rounded-md border border-dashed p-3">
+    <div
+      role="group"
+      aria-label={t('customFields.editor.option.add')}
+      aria-busy={busy}
+      className="space-y-2 rounded-md border border-dashed p-3"
+    >
       <div className="grid gap-2 sm:grid-cols-2">
-        <div className="space-y-1">
+        <div className="min-w-0 space-y-1">
           <Label htmlFor={`${id}-value`}>{t('customFields.editor.option.value')}</Label>
           <Input
             id={`${id}-value`}
+            className="min-w-0"
             value={value}
-            disabled={locked}
+            disabled={disabled}
             aria-invalid={invalid && value.trim() === '' ? true : undefined}
             aria-describedby={describedBy}
             onChange={(event): void => setValue(event.target.value)}
           />
         </div>
-        <div className="space-y-1">
+        <div className="min-w-0 space-y-1">
           <Label htmlFor={`${id}-default`}>{t('customFields.editor.labelDefault')}</Label>
           <Input
             id={`${id}-default`}
+            className="min-w-0"
             value={labelDefault}
-            disabled={locked}
+            disabled={disabled}
             aria-invalid={invalid && labelDefault.trim() === '' ? true : undefined}
             aria-describedby={describedBy}
             onChange={(event): void => setLabelDefault(event.target.value)}
           />
         </div>
-        <div className="space-y-1">
+        <div className="min-w-0 space-y-1">
           <Label htmlFor={`${id}-en`}>{t('customFields.editor.labelEn')}</Label>
-          <Input id={`${id}-en`} value={en} disabled={locked} onChange={(event): void => setEn(event.target.value)} />
+          <Input id={`${id}-en`} className="min-w-0" value={en} disabled={disabled} onChange={(event): void => setEn(event.target.value)} />
         </div>
-        <div className="space-y-1">
+        <div className="min-w-0 space-y-1">
           <Label htmlFor={`${id}-pl`}>{t('customFields.editor.labelPl')}</Label>
-          <Input id={`${id}-pl`} value={pl} disabled={locked} onChange={(event): void => setPl(event.target.value)} />
+          <Input id={`${id}-pl`} className="min-w-0" value={pl} disabled={disabled} onChange={(event): void => setPl(event.target.value)} />
         </div>
       </div>
       <div className="flex justify-end">
-        <Button type="button" variant="outline" size="sm" disabled={locked} onClick={(): void => void add()}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="min-h-11"
+          disabled={disabled || busy}
+          onClick={(): void => void add()}
+        >
           {t('customFields.editor.option.add')}
         </Button>
       </div>
       {error ? (
-        <p id={errorId} role="alert" className="text-sm text-destructive">
+        <p id={errorId} role="alert" className="break-words text-sm text-destructive">
           {error}
         </p>
       ) : null}

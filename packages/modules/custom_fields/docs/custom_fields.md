@@ -30,7 +30,7 @@ options and every stored value come back unchanged when the module is switched o
 
 ## Creating a field
 
-Choose the entity on **Custom Fields**, then fill in the form under the table:
+Choose the record type on **Custom Fields**, then fill in the form under the table:
 
 - **Key** — the field's identifier, lower-case letters, digits and underscores, starting with a
   letter (`po_number`). It never changes once the field exists.
@@ -43,14 +43,15 @@ Choose the entity on **Custom Fields**, then fill in the form under the table:
 - **Use as list filter** — offered only for orders, quote requests and opportunities. See
   [List filters](#list-filters).
 
-**Add field** creates it. Creating, editing and deleting fields needs the `custom_fields:write`
+**Add field** creates it. **Delete** (the bin) asks in place before a field is deleted. Creating,
+editing and deleting fields needs the `custom_fields:write`
 permission; an administrator with `custom_fields:read` only sees the table, without any control
 that changes it.
 
 ## Editing a field
 
 Each row of the table has an **Edit** button (the pencil). The dialog it opens shows the key, the
-entity and the type as fixed text, and edits the rest:
+record type and the type as fixed text, and edits the rest:
 
 - **Labels** — the default label (required), the English label and the Polish label.
 - **Required** — switching it on explains what follows: records that already exist keep their
@@ -58,7 +59,7 @@ entity and the type as fixed text, and edits the rest:
   fields are edited. Nothing is filled in for you.
 - **Options** of a choice field — each option is changed on its own, at once, without pressing
   **Save**:
-  - its default, English and Polish labels, saved when you leave the field;
+  - its default, English and Polish labels, saved when you leave the field or press Enter;
   - **Default**, the option preselected for a new record;
   - **Move up** / **Move down**, which changes the order the option is offered in;
   - **Remove**, after a confirmation inside the dialog. An option that any record still holds
@@ -66,13 +67,14 @@ entity and the type as fixed text, and edits the rest:
   - **Add option**, with its stored value and labels.
   An option's **stored value** never changes — it is what records hold — so relabelling an option
   keeps every record and every filter on it working.
-- **Use as list filter**, where the entity offers it.
+- **Use as list filter**, where the record type offers it.
 
-**Save** sends only what you changed, and nothing at all when nothing changed. If the change is
+Option changes are saved as soon as you make them, so once one is made the dialog's **Cancel**
+reads **Close**. **Save** sends only what you changed, and nothing at all when nothing changed. If the change is
 refused, the dialog stays open with the reason. Every change is recorded in the audit log as a
 change to the field.
 
-**What cannot change.** The key, the entity and the type are fixed once the field exists. To change
+**What cannot change.** The key, the record type and the type are fixed once the field exists. To change
 them, create a new field. An option still in use cannot be removed. No edit ever changes a value a
 record already holds.
 

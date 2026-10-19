@@ -15,3 +15,17 @@ export function sameLabel(a: LocalizedLabel, b: LocalizedLabel): boolean {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
   return [...keys].every((key) => a[key] === b[key]);
 }
+
+/**
+ * A label in the operator's language: `label[language]`, then the base
+ * language (`pl` for `pl-PL`), then `labelDefault` — the rule the detail
+ * screens and the list filters use. Local until the kit publishes its own.
+ */
+export function resolveLabel(label: LocalizedLabel, labelDefault: string, language: string): string {
+  const base = language.split('-')[0] ?? language;
+  for (const candidate of [language, base]) {
+    const value = Object.hasOwn(label, candidate) ? label[candidate] : undefined;
+    if (typeof value === 'string' && value !== '') return value;
+  }
+  return labelDefault;
+}
