@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { z } from 'zod';
 import {
   adminApproveQuoteRequestSchema,
   adminAssignQuoteRequestSchema,
@@ -29,6 +30,9 @@ export interface QuoteRequestsAdminDeps {
   /** `specs/147-saved-views/` (US3) — the Quote Request list's saved views. */
   listViewService: QuoteRequestListViewService;
 }
+
+/** The list's one query member with a schema: the custom-field filters (feature 157). */
+const customFieldFiltersQuerySchema = z.object({ customFieldFilters: customFieldFiltersQueryParamSchema });
 
 function parseIfMatch(request: FastifyRequest): number | null {
   const header = request.headers['if-match'];
@@ -64,7 +68,9 @@ export async function registerQuoteRequestsAdminRoutes(
     if (rawFilters !== undefined && typeof rawFilters !== 'string') {
       throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, 'customFieldFilters must be given once.');
     }
-    const customFieldFilters = customFieldFiltersQueryParamSchema.parse(rawFilters);
+    // Parsed under its own name, so a refusal is located at
+    // `customFieldFilters.<key>.<operator>` as on the Orders list.
+    const { customFieldFilters } = customFieldFiltersQuerySchema.parse({ customFieldFilters: rawFilters });
     const q = rawQuery as Record<string, string | undefined>;
 
     const status = q['status']

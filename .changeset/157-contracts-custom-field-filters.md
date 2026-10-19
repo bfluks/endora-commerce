@@ -26,6 +26,12 @@ Shared shapes for filtering admin lists on custom fields, and the code that refu
 - `CustomFieldListFilterPort`, `CustomFieldListFilterCondition`,
   `CustomFieldFilterUnavailableFailure` and the guard `isCustomFieldFilterUnavailableFailure` are
   the in-process seam the `custom_fields` module publishes for these lists.
+- `CUSTOM_FIELD_FILTER_OPERATORS` names the operators each value type applies, and
+  `assertCustomFieldFilterOperators` throws the `ZodError` naming every operator of a filter that
+  does not apply to its field, at `[key, operator]`. `customFieldFilterUnavailable(keys)` builds
+  the failure `isCustomFieldFilterUnavailableFailure` narrows.
+- `calendarDateSchema` and `isCalendarDate` (a `YYYY-MM-DD` day the calendar has) are published
+  from the shared primitives; the CRM schemas use the same one.
 - `adminOrdersListQuerySchema` accepts `customFieldFilters`.
 - `ERROR_CODES.CUSTOM_FIELD_FILTER_UNAVAILABLE`: an admin list was asked to filter on a custom
   field it does not offer; its `details` are `{ key, keys }`.

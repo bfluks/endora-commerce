@@ -12,6 +12,12 @@ import { requireModuleLayout } from '../../../scripts/lib/module-roots.js';
  * therefore named only by the admin lists that use them; a storefront or
  * external (API-key) route that named either would hand that to a buyer or an
  * integration. Read as text, by path: this file imports no module.
+ *
+ * **What a path cannot tell.** The scan judges files, not handlers: a file
+ * that serves both audiences — `orders`' `src/backend/routes.ts` registers the
+ * customer routes beside the admin list — is allowed whole, so a customer
+ * handler in it naming either would pass here. The contract tests are what
+ * hold the handlers (the storefront Orders list ignores the parameter).
  */
 const layout = await requireModuleLayout('[list-filter-admin-only]');
 

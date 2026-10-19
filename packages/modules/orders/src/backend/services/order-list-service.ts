@@ -1,11 +1,11 @@
 import { raw, type EntityManager, type FilterQuery, type Knex } from '@mikro-orm/postgresql';
-import type {
-  CustomerAccountReadPort,
-  CustomFieldFilterUnavailableFailure,
-  CustomFieldFilters,
-  CustomFieldListFilterCondition,
-  CustomFieldListFilterPort,
-  OrganizationDetailsPort,
+import {
+  customFieldFilterUnavailable,
+  type CustomerAccountReadPort,
+  type CustomFieldFilters,
+  type CustomFieldListFilterCondition,
+  type CustomFieldListFilterPort,
+  type OrganizationDetailsPort,
 } from '@endora-commerce/contracts';
 import { Order } from '../entities/order.entity.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
@@ -333,13 +333,7 @@ export class OrderListService {
     filters: CustomFieldFilters | undefined,
   ): Promise<CustomFieldListFilterCondition | null> {
     if (filters === undefined || Object.keys(filters).length === 0) return null;
-    if (this.customFieldListFilter === null) {
-      const failure = Object.assign(new Error('Custom-field filters are not available on this list.'), {
-        name: 'CustomFieldFilterUnavailableError' as const,
-        keys: Object.keys(filters),
-      }) satisfies CustomFieldFilterUnavailableFailure;
-      throw failure;
-    }
+    if (this.customFieldListFilter === null) throw customFieldFilterUnavailable(Object.keys(filters));
     return this.customFieldListFilter.condition('order', filters);
   }
 

@@ -261,3 +261,39 @@ describe('§1.4 isCustomFieldFilterUnavailableFailure', () => {
     expect(cf.isCustomFieldFilterUnavailableFailure({ keys: [] })).toBe(false);
   });
 });
+
+describe('§1.4 operators per value type', () => {
+  const types: Record<string, cf.CustomFieldValueType> = { flag: 'boolean', note: 'text', due: 'date' };
+  const typeOf = (key: string) => types[key];
+
+  it('accepts the operators of each type', () => {
+    expect(() =>
+      cf.assertCustomFieldFilterOperators(
+        { flag: { is: true }, note: { contains: 'x' }, due: { from: '2026-01-01', to: '2026-02-01' } },
+        typeOf,
+      ),
+    ).not.toThrow();
+  });
+
+  it('refuses every operator that does not apply, located at the key and the operator', () => {
+    let caught: unknown;
+    try {
+      cf.assertCustomFieldFilterOperators({ flag: { contains: 'x' }, note: { min: '1' }, unknown: { is: true } }, typeOf);
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as { name?: string }).name).toBe('ZodError');
+    expect((caught as { issues: Array<{ path: unknown[] }> }).issues.map((issue) => issue.path)).toEqual([
+      ['flag', 'contains'],
+      ['note', 'min'],
+    ]);
+  });
+});
+
+describe('§1.4 customFieldFilterUnavailable', () => {
+  it('builds a failure the guard narrows, naming the keys', () => {
+    const failure = cf.customFieldFilterUnavailable(['a', 'b']);
+    expect(cf.isCustomFieldFilterUnavailableFailure(failure)).toBe(true);
+    expect(failure.keys).toEqual(['a', 'b']);
+  });
+});

@@ -88,6 +88,13 @@ export interface OpportunityServiceDeps {
    * The list's custom-field filters (`specs/157-custom-fields-list-filters/`):
    * `custom_fields`' `customFieldListFilterPort`, which offers the fields and
    * turns them into one condition.
+   *
+   * Required, unlike the Orders and Quote Request hosts' optional argument:
+   * this service is built in one place only, the module's composition, which
+   * always binds it — `custom_fields` is non-deactivatable and `customFields`
+   * above is already a required edge to it. Those two hosts' list services are
+   * also built by callers that never filter on custom fields (the Orders
+   * prompt tools), which is the only reason theirs may be absent.
    */
   customFieldListFilter: CustomFieldListFilterPort;
   /** Recalculates a computed Opportunity's value — asked when its mode becomes `computed`. */

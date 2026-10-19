@@ -250,6 +250,24 @@ describe('admin Orders list — custom-field filters', () => {
       expect(rows.map((row) => row.split(',')[column]).sort()).toEqual(listed);
     });
 
+    it('matches only a stored "no" for No — a request without the value matches neither', async () => {
+      const ids = (await list(`${param({ [BOOLEAN]: { is: false } })}&organizationId=${organizationB}&pageSize=50`)).data.map(
+        (row) => row.id,
+      );
+      expect(ids).toEqual([perType.get('boolean')!.miss]);
+    });
+
+    it('is not applied by the buyer’s own Orders list', async () => {
+      const customer = { b2b_session: 'stub-customer-session' };
+      const plain = await get('/api/v1/orders', customer);
+      expect(plain.statusCode, plain.body).toBe(200);
+      const filtered = await get(`/api/v1/orders?${param({ [S]: { in: ['zzz'] } })}`, customer);
+      expect(filtered.statusCode, filtered.body).toBe(plain.statusCode);
+      const idsOf = (body: string) =>
+        ((JSON.parse(body) as { data?: Array<{ id: string }> }).data ?? []).map((row) => row.id).sort();
+      expect(idsOf(filtered.body)).toEqual(idsOf(plain.body));
+    });
+
     it('filters on an internal field', async () => {
       expect((await list(param({ [T]: { contains: 'needle' } }))).pagination.total).toBe(8);
     });
@@ -330,6 +348,49 @@ describe('admin Orders list — custom-field filters', () => {
         expect(response.statusCode, response.body).toBe(400);
         expect((response.json() as ErrorBody).error.code).toBe('VALIDATION_FAILED');
       }
+    });
+
+    it('refuses an operator that does not apply to the field as a validation failure', async () => {
+      for (const filters of [{ [BOOLEAN]: { contains: 'x' } }, { [S]: { min: '1' } }]) {
+        const response = await get(`${ORDERS}?${param(filters)}`);
+        expect(response.statusCode, response.body).toBe(400);
+        expect((response.json() as ErrorBody).error.code).toBe('VALIDATION_FAILED');
+      }
+    });
+
+    it.each([
+      ['__proto__', '{"__proto__":{"is":true}}'],
+      ['an SQL-shaped key', JSON.stringify({ "a'; drop table orders;--": { is: true } })],
+      ['101 `in` values over three keys', JSON.stringify({
+        [S]: { in: Array.from({ length: 50 }, (_, i) => `a${i}`) },
+        [MULTI]: { in: Array.from({ length: 50 }, (_, i) => `b${i}`) },
+        [key('third')]: { in: ['c'] },
+      })],
+      ['51 `in` values on one key', JSON.stringify({ [S]: { in: Array.from({ length: 51 }, (_, i) => `a${i}`) } })],
+    ])('refuses %s as a validation failure, reading nothing', async (_name, raw) => {
+      const response = await get(`${ORDERS}?customFieldFilters=${encodeURIComponent(raw)}`);
+      expect(response.statusCode, response.body).toBe(400);
+      expect((response.json() as ErrorBody).error.code).toBe('VALIDATION_FAILED');
+    });
+
+    it('refuses a filter as soon as its option is switched off, and answers again when it is back on', async () => {
+      const toggled = key('toggled');
+      await define('order', toggled, 'boolean');
+      const id = definitionIds.at(-1)!;
+      const filters = param({ [toggled]: { is: true } });
+      const patch = (listFilter: boolean) =>
+        h.app.inject({ method: 'PATCH', url: `${API}/definitions/${id}`, cookies: ADMIN, payload: { listFilter } });
+
+      expect((await get(`${ORDERS}?${filters}`)).statusCode).toBe(200);
+      expect((await patch(false)).statusCode).toBe(200);
+      for (const path of [ORDERS, `${ORDERS}/export`]) {
+        const refused = await get(`${path}?${filters}`);
+        expect(refused.statusCode, refused.body).toBe(400);
+        expect((refused.json() as ErrorBody).error.code).toBe('CUSTOM_FIELD_FILTER_UNAVAILABLE');
+      }
+      expect((await patch(true)).statusCode).toBe(200);
+      expect((await get(`${ORDERS}?${filters}`)).statusCode).toBe(200);
+      expect((await get(`${ORDERS}/export?${filters}`)).statusCode).toBe(200);
     });
 
     it('refuses a malformed bound as a validation failure', async () => {
