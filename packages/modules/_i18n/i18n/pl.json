@@ -1730,6 +1730,7 @@
   "rfq.detail.history.entry.completed": "Zapytanie zrealizowane zamówieniem",
   "rfq.detail.history.entry.note_added": "Dodano notatkę",
   "rfq.detail.history.entry.pdf_sent": "Wysłano PDF oferty do klienta",
+  "rfq.detail.history.entry.custom_field_carry_skipped": "Nie przeniesiono wartości pól niestandardowych z szansy sprzedażowej",
   "rfq.detail.history.pdfSent.recipients": "Do: {recipients}",
   "rfq.detail.history.pdfSent.template": "Szablon: {name}",
   "rfq.detail.history.pdfSent.builtIn": "Szablon: układ wbudowany",

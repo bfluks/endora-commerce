@@ -189,6 +189,14 @@ const FULL: QuoteRequestHistory = {
     entry('pdf_sent', REP, {
       delivery: { recipients: ['buyer@example.com', 'two@example.com'], templateName: 'With discounts', language: 'pl-PL', message: XSS },
     }),
+    // Feature 158 — values a Sales Opportunity could not carry into the request
+    // (its skip lines are rendered and tested with the History renderer, T048).
+    entry('custom_field_carry_skipped', SYSTEM, {
+      customFieldCarry: {
+        source: { entityType: 'opportunity', recordId: ORDER_ID, reference: 'OPP-000001' },
+        skipped: [{ key: 'order_source', reason: 'value_invalid' }],
+      },
+    }),
   ],
 };
 
@@ -359,7 +367,7 @@ describe.each<Language>(['en', 'pl'])('RfqHistory — %s', (language) => {
     // A custom role is shown as stored.
     expect(screen.getByText(withDetail('Dana Lead', 'Key account lead'))).toBeInTheDocument();
     // System.
-    expect(screen.getAllByText(tr(language, 'actor.system')).length).toBe(2);
+    expect(screen.getAllByText(tr(language, 'actor.system')).length).toBe(3);
     // Unresolvable: recorded role (translated) + "unknown user".
     expect(screen.getByText(withDetail(unknownUser(), role('administrator')))).toBeInTheDocument();
     expect(screen.getByText(withDetail(unknownUser(), role('platformAdministrator')))).toBeInTheDocument();

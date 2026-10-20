@@ -1730,6 +1730,7 @@
   "rfq.detail.history.entry.completed": "Request completed with an order",
   "rfq.detail.history.entry.note_added": "Note added",
   "rfq.detail.history.entry.pdf_sent": "Quote PDF sent to the customer",
+  "rfq.detail.history.entry.custom_field_carry_skipped": "Custom field values not carried from a sales opportunity",
   "rfq.detail.history.pdfSent.recipients": "To: {recipients}",
   "rfq.detail.history.pdfSent.template": "Template: {name}",
   "rfq.detail.history.pdfSent.builtIn": "Template: built-in layout",

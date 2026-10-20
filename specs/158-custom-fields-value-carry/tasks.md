@@ -531,6 +531,16 @@ R-11).
 - The CRM integration test seeds Orders with `seedCrmOrder` + values and announces
   `order.created.v1` (as `auto-create.test.ts` does), and reads/restores both auto-create settings'
   `global_value` (rule 7).
+- **Block-end gap fix** (a Phase 1 consequence no phase's verification ran): the new
+  `custom_field_carry_skipped` history entry kind reddened `quote_requests`'
+  `history-bundle-coverage.test.ts` and `admin/test/modules/quote_requests/RfqDetail.history.test.tsx`.
+  Added `rfq.detail.history.entry.custom_field_carry_skipped` (en + pl) to the core bundle
+  `packages/modules/_i18n/i18n/`, beside `pdf_sent` (feature 153's precedent), and one entry of the
+  kind to the admin test's `FULL` fixture. **Changed existing assertions** (rule 12):
+  `history-bundle-coverage.test.ts` `ENTRY_KINDS` 13 → 14; `RfqDetail.history.test.tsx` "names
+  every actor" system-actor count 2 → 3. T031 (bundle key) and T048/T051 (skip lines) start from here.
+  mod-quote-requests 313/313, mod-orders 199/199, mod-crm `src/admin/index.test.ts` 18/18, admin
+  RfqDetail.history + crm history 53/53.
 - Verification: mod-crm 3 files 33/33; `[PG]` custom-field-carry-into-opportunity 9/9, auto-create
   12/12, history 6/6, custom-fields 10/10; typecheck + lint clean; `check:port-dependencies`,
   `check:port-catches`, `check:port-shape` 0 violations; `check:command-coverage --strict` 0 blocking.
