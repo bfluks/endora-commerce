@@ -876,5 +876,13 @@
   "adminSearch.field.number": "Opportunity number",
   "adminSearch.field.title": "Title",
   "adminSearch.field.organizationName": "Organization name",
-  "adminSearch.field.description": "Description"
+  "adminSearch.field.description": "Description",
+  "history.field.customFieldCarry": "Custom fields not carried",
+  "history.customFieldCarry.from.order": "Not carried from the order:",
+  "history.customFieldCarry.from.quote_request": "Not carried from the quote request:",
+  "history.customFieldCarry.line": "{field} — {reason}",
+  "history.carryReason.target_missing": "the opportunity has no field with this key",
+  "history.carryReason.value_type_mismatch": "the opportunity's field has a different value type",
+  "history.carryReason.audience_mismatch": "the opportunity's field is visible to customers, but the source field is internal",
+  "history.carryReason.value_invalid": "the value is not valid for the opportunity's field"
 }

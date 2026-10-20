@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   QUOTE_REQUEST_HISTORY_EVENT_WINDOW,
+  customFieldCarrySkipReasonSchema,
   type QuoteRequestHistory,
   type QuoteRequestHistoryActor,
   type QuoteRequestHistoryChange,
@@ -25,6 +26,11 @@ import { adminNumberLocale, rfqNumberFormat } from '../number-format.js';
  * Every key is `rfq.detail.history.*` in the `core` bundle, the one the host
  * screen reads; `history-bundle-coverage.test.ts` holds that every entry and
  * change kind has one in both languages.
+ *
+ * Feature 158 adds one entry whose sentences are this module's own bundle's
+ * (`history.*` in `quote_requests`): custom-field values a Sales Opportunity
+ * could not carry into the request. Its title is `core`'s, as every kind's is;
+ * under it the Opportunity's number, then a key and a reason per line.
  */
 
 type T = (key: string, params?: Record<string, string | number>) => string;
@@ -38,8 +44,14 @@ const ROLE_KEYS: Record<string, string> = {
   Administrator: 'administrator',
 };
 
+/** A field key shown to an operator is cut here. */
+const SHOWN_KEY_LIMIT = 64;
+const SKIP_REASONS: ReadonlySet<string> = new Set(customFieldCarrySkipReasonSchema.options);
+
 interface Formatters {
   t: T;
+  /** This module's own bundle (feature 158). */
+  q: T;
   amount: (n: number | null) => string;
   dateTime: (iso: string) => string;
 }
@@ -47,6 +59,7 @@ interface Formatters {
 /** Built once per language and translator, not on every render (review fix N6). */
 function useFormatters(): Formatters {
   const t = useTranslation('core');
+  const q = useTranslation('quote_requests');
   const { language } = useTranslationContext();
   return useMemo(() => {
     const locale = adminNumberLocale(language);
@@ -55,13 +68,14 @@ function useFormatters(): Formatters {
     const h: T = (key, params) => t(`rfq.detail.history.${key}`, params);
     return {
       t: h,
+      q,
       amount: (n) => (n === null ? h('none') : numbers.amount(n)),
       dateTime: (iso) => {
         const d = new Date(iso);
         return Number.isNaN(d.getTime()) ? iso : dates.format(d);
       },
     };
-  }, [language, t]);
+  }, [language, t, q]);
 }
 
 /**
@@ -149,9 +163,14 @@ function changeSentence(f: Formatters, change: QuoteRequestHistoryChange): strin
   }
 }
 
+function shownKey(key: string): string {
+  return key.length > SHOWN_KEY_LIMIT ? `${key.slice(0, SHOWN_KEY_LIMIT)}…` : key;
+}
+
 function HistoryEntry({ entry, f }: { entry: QuoteRequestHistoryEntry; f: Formatters }): ReactNode {
-  const { t } = f;
+  const { t, q } = f;
   const keys = entry.changes === null ? [] : changeKeys(entry.changes);
+  const carry = entry.customFieldCarry ?? null;
   return (
     <li className="rounded-md border p-3 text-sm">
       <div className="mb-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
@@ -160,6 +179,22 @@ function HistoryEntry({ entry, f }: { entry: QuoteRequestHistoryEntry; f: Format
         {entry.revisionNumber !== null ? <span>{t('revision', { number: entry.revisionNumber })}</span> : null}
       </div>
       <p className="font-medium">{t(`entry.${entry.kind}`)}</p>
+      {carry !== null ? (
+        <p className="mt-1 break-words text-muted-foreground">
+          {q('history.carrySource', { reference: carry.source.reference })}
+        </p>
+      ) : null}
+      {carry !== null ? (
+        <ul className="mt-1 list-disc space-y-0.5 pl-5">
+          {carry.skipped.map((skip) => (
+            <li key={skip.key} className="break-words">
+              {SKIP_REASONS.has(skip.reason)
+                ? q('history.carryLine', { field: shownKey(skip.key), reason: q(`history.carryReason.${skip.reason}`) })
+                : shownKey(skip.key)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {entry.reason !== null ? (
         <p className="mt-1 whitespace-pre-wrap break-words">{t('reason', { text: entry.reason })}</p>
       ) : null}

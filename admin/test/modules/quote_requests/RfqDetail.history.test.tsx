@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import {
   QUOTE_REQUEST_HISTORY_EVENT_WINDOW,
+  customFieldCarrySkipReasonSchema,
   quoteRequestHistoryChangeSchema,
   quoteRequestHistoryEntryKindSchema,
   type QuoteRequestHistory,
@@ -69,6 +70,21 @@ function coreEntries(language: Language): Record<string, string> {
 }
 
 const ENTRIES: Record<Language, Record<string, string>> = { en: coreEntries('en'), pl: coreEntries('pl') };
+
+/** `quote_requests`' own bundle, shipped — the feature 158 entry's detail lines are its. */
+function moduleEntries(language: Language): Record<string, string> {
+  return JSON.parse(
+    readFileSync(join(REPO_ROOT, 'packages/modules/quote_requests/i18n', `${language}.json`), 'utf8'),
+  ) as Record<string, string>;
+}
+
+const MODULE_ENTRIES: Record<Language, Record<string, string>> = { en: moduleEntries('en'), pl: moduleEntries('pl') };
+
+function trModule(language: Language, key: string, params: Record<string, string | number> = {}): string {
+  const template = MODULE_ENTRIES[language][key];
+  if (template === undefined) throw new Error(`missing ${language} key quote_requests ${key}`);
+  return template.replace(/\{(\w+)\}/g, (_m, name: string) => String(params[name]));
+}
 const LOCALE: Record<Language, string> = { en: 'en-GB', pl: 'pl-PL' };
 
 function tr(language: Language, key: string, params: Record<string, string | number> = {}): string {
@@ -216,7 +232,7 @@ function answerHistory(history: QuoteRequestHistory): void {
 }
 
 function renderHistory(language: Language): ReturnType<typeof render> {
-  const bundle: Bundle = { core: ENTRIES[language] };
+  const bundle: Bundle = { core: ENTRIES[language], quote_requests: MODULE_ENTRIES[language] };
   const wrapper = ({ children }: { children: ReactNode }): ReactElement => (
     <TranslationProvider language={language} initialBundle={bundle}>
       <>{children}</>
@@ -279,6 +295,46 @@ describe.each<Language>(['en', 'pl'])('RfqHistory — %s', (language) => {
       expect(text, kind).not.toContain(kind);
     }
     expect(container.innerHTML).not.toMatch(/rfq\.detail\.history|core\.rfq/);
+  });
+
+  it('says which sales opportunity a carry came from and lists each key not carried with its reason (158, T048)', async () => {
+    const longKey = `k${'x'.repeat(70)}`;
+    answerHistory({
+      truncated: false,
+      entries: [
+        entry('custom_field_carry_skipped', SYSTEM, {
+          customFieldCarry: {
+            source: { entityType: 'opportunity', recordId: ORDER_ID, reference: 'OPP-000042' },
+            skipped: [
+              { key: 'order_source', reason: 'target_missing' },
+              { key: 'fair', reason: 'value_type_mismatch' },
+              { key: longKey, reason: 'audience_mismatch' },
+              { key: XSS, reason: 'value_invalid' },
+            ],
+          },
+        }),
+      ],
+    });
+    const { container } = renderHistory(language);
+    await screen.findByText(tr(language, 'entry.custom_field_carry_skipped'));
+    expect(screen.getByText(trModule(language, 'history.carrySource', { reference: 'OPP-000042' }))).toBeInTheDocument();
+    const reason = (code: string): string => trModule(language, `history.carryReason.${code}`);
+    const lines = screen.getAllByRole('listitem').filter((item) => item.tagName === 'LI' && item.closest('ul ul, li ul'));
+    expect(lines.map((item) => item.textContent)).toEqual([
+      trModule(language, 'history.carryLine', { field: 'order_source', reason: reason('target_missing') }),
+      trModule(language, 'history.carryLine', { field: 'fair', reason: reason('value_type_mismatch') }),
+      trModule(language, 'history.carryLine', { field: `${longKey.slice(0, 64)}…`, reason: reason('audience_mismatch') }),
+      trModule(language, 'history.carryLine', { field: XSS, reason: reason('value_invalid') }),
+    ]);
+    // A key is text, never markup; no reason reaches the operator as its code.
+    expect(container.querySelector('img, script')).toBeNull();
+    expect(container.textContent).not.toMatch(/target_missing|value_type_mismatch|audience_mismatch|value_invalid/);
+  });
+
+  it('ships a reason sentence for every reason a carry can be skipped by (158)', () => {
+    for (const code of customFieldCarrySkipReasonSchema.options) {
+      expect(MODULE_ENTRIES[language][`history.carryReason.${code}`], code).toBeTruthy();
+    }
   });
 
   it('prints who a quote PDF was sent to, with which template, language and message, as text (153)', async () => {

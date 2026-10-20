@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   OPPORTUNITY_BOARD_BUILTIN_FIELD_KEYS,
   calendarScopeSchema,
+  customFieldCarrySkipReasonSchema,
   opportunityEventReminderChannelSchema,
   opportunityEventReminderStateSchema,
   opportunityEventRuleSchema,
@@ -202,6 +203,10 @@ describe('crm admin copy', () => {
       // One label per field the history can show — the set the tab itself reads.
       'history.field.': [...LABELLED_HISTORY_FIELDS],
       'history.notFollowed.': ['skipped', 'failed'],
+      // Feature 158 — what a carry into the Opportunity skipped: the record it
+      // came from, and every reason the contract can answer.
+      'history.customFieldCarry.from.': ['order', 'quote_request'],
+      'history.carryReason.': [...customFieldCarrySkipReasonSchema.options],
       'references.kind.': ['product', 'order', 'admin_user'],
       'references.inserted.': ['product', 'order', 'admin_user'],
       'references.unavailable.': ['product', 'order', 'admin_user'],

@@ -545,6 +545,120 @@ describe('the Change history tab, on what an entry carries', () => {
   });
 });
 
+/**
+ * Feature 158 (T049, US2-5, US2-6) — a creation or a join that could not carry
+ * every custom-field value into the Opportunity says so: from which kind of
+ * record, and — for somebody who may read the fields — a line per key with
+ * its reason (`specs/158-custom-fields-value-carry/contracts/admin-surfaces.md` §4).
+ */
+describe('the Change history tab, on custom-field values not carried', () => {
+  const CREATED_WITH_SKIPS = entry({
+    id: 'audit-cc',
+    action: 'crm.opportunity.create',
+    actor: { kind: 'system', id: null, name: null },
+    before: null,
+    after: {
+      title: 'Fleet renewal',
+      customFieldValues: { lead_source: 'trade_fair' },
+      customFieldCarry: {
+        source: { entityType: 'quote_request', recordId: '00000000-0000-4000-8000-0000000000e7' },
+        carried: ['lead_source'],
+        skipped: [
+          { key: 'region', reason: 'value_type_mismatch' },
+          { key: 'gone_field', reason: 'target_missing' },
+        ],
+      },
+    },
+  });
+  const JOINED_WITH_SKIPS = entry({
+    id: 'audit-cj',
+    action: 'crm.opportunity.link_add',
+    actor: { kind: 'system', id: null, name: null },
+    before: null,
+    after: {
+      linkId: 'l9',
+      documentKind: 'order',
+      documentId: UNLINKED_ORDER_ID,
+      linkSource: 'auto',
+      customFieldCarry: {
+        source: { entityType: 'order', recordId: UNLINKED_ORDER_ID },
+        carried: [],
+        skipped: [{ key: 'key_account', reason: 'audience_mismatch' }],
+      },
+    },
+  });
+  const CARRIED_ONLY = entry({
+    id: 'audit-co',
+    action: 'crm.opportunity.create',
+    before: null,
+    after: {
+      title: 'Fleet renewal',
+      customFieldValues: { lead_source: 'referral' },
+      customFieldCarry: {
+        source: { entityType: 'order', recordId: UNLINKED_ORDER_ID },
+        carried: ['lead_source'],
+        skipped: [],
+      },
+    },
+  });
+
+  const only = (...entries: OpportunityHistoryEntry[]): void => {
+    pages[''] = { data: entries, pagination: { cursor: null, hasMore: false, limit: 50 }, truncated: false };
+  };
+  const READER = ['crm:read', 'orders:read', 'custom_fields:read'];
+  const row = (entryItem: HTMLElement, label: string): HTMLElement =>
+    within(entryItem).getByText(label).parentElement as HTMLElement;
+  const line = (field: string, reason: string): string =>
+    en('history.customFieldCarry.line', { field, reason: en(`history.carryReason.${reason}`) });
+
+  it('says a creation could not carry some values, a line per key under its label, with the reason', async () => {
+    only(CREATED_WITH_SKIPS);
+    const panel = await openHistory(READER);
+    const created = item(panel, 0);
+    const carry = row(created, en('history.field.customFieldCarry'));
+    expect(within(carry).getByText(en('history.customFieldCarry.from.quote_request'))).toBeInTheDocument();
+    await within(carry).findByText(line('Region', 'value_type_mismatch'));
+    expect(within(carry).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      line('Region', 'value_type_mismatch'),
+      // A key with no definition is shown under its code.
+      line('gone_field', 'target_missing'),
+    ]);
+    // What it did carry shows as the values themselves, not again here.
+    expect(within(row(created, en('history.field.customFieldValues'))).getByText(/Lead source/)).toBeInTheDocument();
+    expect(created).not.toHaveTextContent('customFieldCarry');
+    expect(created).not.toHaveTextContent('value_type_mismatch');
+    expect(created).not.toHaveTextContent('{');
+  });
+
+  it('says a join could not carry a value from the order', async () => {
+    only(JOINED_WITH_SKIPS);
+    const panel = await openHistory(READER);
+    const joined = item(panel, 0);
+    const carry = row(joined, en('history.field.customFieldCarry'));
+    expect(within(carry).getByText(en('history.customFieldCarry.from.order'))).toBeInTheDocument();
+    expect(await within(carry).findByText(line('Key account', 'audience_mismatch'))).toBeInTheDocument();
+  });
+
+  it('shows the entry without the field lines to a reader who may not read the fields', async () => {
+    only(CREATED_WITH_SKIPS);
+    const panel = await openHistory(['crm:read', 'orders:read']);
+    const created = item(panel, 0);
+    const carry = row(created, en('history.field.customFieldCarry'));
+    expect(within(carry).getByText(en('history.customFieldCarry.from.quote_request'))).toBeInTheDocument();
+    expect(within(carry).queryAllByRole('listitem')).toEqual([]);
+    expect(created).not.toHaveTextContent('gone_field');
+    expect(getSpy).not.toHaveBeenCalledWith(DEFINITIONS_PATH);
+  });
+
+  it('says nothing about a carry that skipped nothing', async () => {
+    only(CARRIED_ONLY);
+    const panel = await openHistory(READER);
+    const created = item(panel, 0);
+    expect(within(created).queryByText(en('history.field.customFieldCarry'))).toBeNull();
+    expect(created).not.toHaveTextContent('customFieldCarry');
+  });
+});
+
 describe('historyChanges', () => {
   it('answers the fields that differ for an edit', () => {
     expect(historyChanges({ before: { a: 1, b: 2 }, after: { a: 1, b: 3 } })).toEqual([

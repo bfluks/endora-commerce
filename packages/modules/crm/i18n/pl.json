@@ -876,5 +876,13 @@
   "adminSearch.field.number": "Numer szansy sprzedażowej",
   "adminSearch.field.title": "Tytuł",
   "adminSearch.field.organizationName": "Nazwa organizacji",
-  "adminSearch.field.description": "Opis"
+  "adminSearch.field.description": "Opis",
+  "history.field.customFieldCarry": "Nieprzeniesione pola niestandardowe",
+  "history.customFieldCarry.from.order": "Nie przeniesiono z zamówienia:",
+  "history.customFieldCarry.from.quote_request": "Nie przeniesiono z zapytania ofertowego:",
+  "history.customFieldCarry.line": "{field} — {reason}",
+  "history.carryReason.target_missing": "szansa sprzedażowa nie ma pola o tym kluczu",
+  "history.carryReason.value_type_mismatch": "pole szansy sprzedażowej ma inny typ wartości",
+  "history.carryReason.audience_mismatch": "pole szansy sprzedażowej jest widoczne dla klientów, a pole źródłowe jest wewnętrzne",
+  "history.carryReason.value_invalid": "wartość nie pasuje do pola szansy sprzedażowej"
 }

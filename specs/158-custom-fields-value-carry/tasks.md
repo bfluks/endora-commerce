@@ -801,30 +801,30 @@ pnpm --filter backend run check:admin-surface
 **Goal**: the skip entries readable in the admin (FR-010, FR-010a, FR-016; US1-4, US2-5, US2-6;
 contract `admin-surfaces.md` §2 – §4).
 
-- [ ] T047 [P] [US1] **RED** New `admin/test/modules/orders/OrderDetail.system-note.test.tsx`
+- [x] T047 [P] [US1] **RED** New `admin/test/modules/orders/OrderDetail.system-note.test.tsx`
   (StrictMode; `apiClient` mocked as the existing order detail tests do): a comment with
   `systemNote` renders author *System*, the *Internal* marker and one line per skipped key with the
   translated reason, in `en` and `pl`; the field's label is used when the Order definition is
   known, the key otherwise (truncated at 64); a comment without `systemNote` renders as before.
   Fails: renders the fallback body under no author
-- [ ] T048 [P] [US3] **RED** Extend `admin/test/modules/quote_requests/RfqDetail.history.test.tsx`:
+- [x] T048 [P] [US3] **RED** Extend `admin/test/modules/quote_requests/RfqDetail.history.test.tsx`:
   a `custom-field-carry-skipped` entry renders its title with the Opportunity's reference and one
   line per key and reason in `en` and `pl`. Fails: unknown type
-- [ ] T049 [P] [US2] **RED** Extend `admin/test/modules/crm/history.test.tsx`: a
+- [x] T049 [P] [US2] **RED** Extend `admin/test/modules/crm/history.test.tsx`: a
   `crm.opportunity.create` and a `crm.opportunity.link_add` entry whose `after.customFieldCarry`
   has skipped keys render "Not carried from …" with one line per key and reason; for a reader
   without `custom_fields:read` the lines are not shown (the existing `canSeeCustomFields` gate).
   Fails: raw key rendered
-- [ ] T050 [US1] Implement in `packages/modules/orders/src/admin/pages/OrderDetail.tsx` and add the
+- [x] T050 [US1] Implement in `packages/modules/orders/src/admin/pages/OrderDetail.tsx` and add the
   keys to `packages/modules/orders/i18n/{en,pl}.json`; T047 green
-- [ ] T051 [US3] Implement in `packages/modules/quote_requests/src/admin/pages/RfqHistory.tsx`
+- [x] T051 [US3] Implement in `packages/modules/quote_requests/src/admin/pages/RfqHistory.tsx`
   (keys in `packages/modules/quote_requests/i18n/{en,pl}.json`); T048 green
-- [ ] T052 [US2] Implement in `packages/modules/crm/src/admin/components/OpportunityHistory.tsx`,
+- [x] T052 [US2] Implement in `packages/modules/crm/src/admin/components/OpportunityHistory.tsx`,
   add `customFieldCarry` to `LABELLED_HISTORY_FIELDS` in
   `packages/modules/crm/src/admin/lib/history-fields.ts` and its keys to
   `packages/modules/crm/i18n/{en,pl}.json`; `packages/modules/crm/src/admin/index.test.ts` green;
   T049 green
-- [ ] T053 Changesets `.changeset/158-orders-carry-note-ui.md` (`mod-orders`: patch),
+- [x] T053 Changesets `.changeset/158-orders-carry-note-ui.md` (`mod-orders`: patch),
   `.changeset/158-quote-requests-carry-history-ui.md` (`mod-quote-requests`: patch),
   `.changeset/158-crm-carry-history-ui.md` (`mod-crm`: patch)
 
@@ -846,6 +846,19 @@ pnpm --filter admin run typecheck
 pnpm --filter backend run i18n:hardcoded
 pnpm --filter backend run check:bundle-pairing
 ```
+
+- **Phase 8 notes.** Order note keys in `orders/i18n` read through a second translator
+  (`OrderDetail` reads `core`); the source sentence is one key per source type
+  (`orderDetail.comments.systemNote.customFieldCarrySkipped.{quote_request,opportunity}`) so Polish
+  can decline it. The Quote Request entry keeps `core`'s `entry.custom_field_carry_skipped` title
+  (the existing "every kind has a title" assertion) and adds `history.carrySource` plus the lines
+  from `quote_requests/i18n`, instead of a title-with-reference key. CRM `index.test.ts` gains two
+  composed families (`history.customFieldCarry.from.`, `history.carryReason.` from
+  `customFieldCarrySkipReasonSchema`) — additions, no changed assertion. The `OrderDetail` lint
+  warning at the `handleAddComment` `useCallback` predates this phase. Verification: admin 3 files
+  (system-note 12, RfqDetail.history 32, crm history 29) green; crm `index.test.ts` 18/18;
+  `history-bundle-coverage` 49/49; typecheck and lint clean (one pre-existing warning);
+  `i18n:hardcoded` regressions 0; `check:bundle-pairing` 0.
 
 ---
 

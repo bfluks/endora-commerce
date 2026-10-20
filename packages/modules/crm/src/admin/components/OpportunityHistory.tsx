@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, History } from 'lucide-react';
-import type {
-  OpportunityDetail,
-  OpportunityHistoryEntry,
-  OpportunityWorkflowStatus,
+import {
+  customFieldCarrySkipReasonSchema,
+  type OpportunityDetail,
+  type OpportunityHistoryEntry,
+  type OpportunityWorkflowStatus,
 } from '@endora-commerce/contracts';
 import { formatDateTime, useAuth } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Button } from '@endora-commerce/admin-kit/ui';
@@ -38,6 +39,9 @@ const TEXT_LIMIT = 280;
 const ORDERS_READ = 'orders:read';
 const RETRY_ACTION = 'crm.opportunity.propagation_retry';
 const NOT_FOLLOWED_ACTION = 'crm.opportunity.propagation_skip';
+/** A field key shown to an operator is cut here. */
+const SHOWN_KEY_LIMIT = 64;
+const CARRY_SKIP_REASONS: ReadonlySet<string> = new Set(customFieldCarrySkipReasonSchema.options);
 
 type State = Record<string, unknown>;
 
@@ -52,6 +56,21 @@ function asState(value: unknown): State | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as State)
     : null;
+}
+
+/**
+ * The keys a `customFieldCarry` member says were not carried, each with its
+ * reason (feature 158, data-model §4.3) — `[]` for one that only carried.
+ */
+function carrySkips(raw: unknown): Array<{ key: string; reason: string }> {
+  const skipped = asState(raw)?.skipped;
+  if (!Array.isArray(skipped)) return [];
+  return skipped.flatMap((item: unknown) => {
+    const skip = asState(item);
+    return typeof skip?.key === 'string' && typeof skip.reason === 'string'
+      ? [{ key: skip.key, reason: skip.reason }]
+      : [];
+  });
 }
 
 function same(a: unknown, b: unknown): boolean {
@@ -227,7 +246,7 @@ export function OpportunityHistory(props: OpportunityHistoryProps): ReactNode {
 
   // The fields' own labels, for somebody `custom_fields` lets read them.
   const { definitions } = useOpportunityFieldDefinitions(
-    canSeeCustomFields && carries('customFieldValues'),
+    canSeeCustomFields && (carries('customFieldValues') || carries('customFieldCarry')),
   );
 
   /** Administrators this page can name: the assignee and everybody who acted. */
@@ -412,6 +431,40 @@ export function OpportunityHistory(props: OpportunityHistoryProps): ReactNode {
     );
   };
 
+  /**
+   * What a creation or a join could not carry in (feature 158): which kind of
+   * record the values came from, then — for somebody `custom_fields` lets read
+   * the fields — a line per key with its reason. What it did carry is silent
+   * here; the values show in the entry's custom fields row.
+   */
+  const carryNote = (raw: unknown): ReactNode => {
+    const source = asState(asState(raw)?.source);
+    const from = source?.entityType === 'order' ? 'order' : 'quote_request';
+    return (
+      <div className="space-y-0.5">
+        <p>{t(`history.customFieldCarry.from.${from}`)}</p>
+        {canSeeCustomFields ? (
+          <ul className="list-disc space-y-0.5 pl-5">
+            {carrySkips(raw).map((skip) => {
+              const definition = definitions.find((candidate) => candidate.key === skip.key);
+              const label = customFieldLabel(definition, skip.key, language);
+              return (
+                <li key={skip.key}>
+                  {t('history.customFieldCarry.line', {
+                    field: label.length > SHOWN_KEY_LIMIT ? `${label.slice(0, SHOWN_KEY_LIMIT)}…` : label,
+                    reason: CARRY_SKIP_REASONS.has(skip.reason)
+                      ? t(`history.carryReason.${skip.reason}`)
+                      : humaniseKey(skip.reason),
+                  })}
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+      </div>
+    );
+  };
+
   const actor = (entry: OpportunityHistoryEntry): string => {
     if (entry.actor.kind !== 'admin') return t('history.actor.system');
     return entry.actor.name ?? t('history.actor.deleted');
@@ -491,7 +544,10 @@ export function OpportunityHistory(props: OpportunityHistoryProps): ReactNode {
           {entries.map((entry) => {
             // An Order's status is `orders`' to show: no row without `orders:read`.
             const changes = historyChanges(entry).filter(
-              (change) => canReadOrders || change.field !== 'orderStatusCode',
+              (change) =>
+                (canReadOrders || change.field !== 'orderStatusCode') &&
+                // A carry that skipped nothing has nothing to say.
+                (change.field !== 'customFieldCarry' || carrySkips(change.after).length > 0),
             );
             return (
               <li key={entry.id} className="space-y-2 rounded-md border border-border p-3">
@@ -515,6 +571,8 @@ export function OpportunityHistory(props: OpportunityHistoryProps): ReactNode {
                         <dd className="whitespace-pre-wrap break-words">
                           {change.field === 'customFieldValues' ? (
                             customFields(change)
+                          ) : change.field === 'customFieldCarry' ? (
+                            carryNote(change.after)
                           ) : 'before' in change ? (
                             <>
                               <span className="sr-only">{t('history.status.from')}</span>
@@ -528,7 +586,7 @@ export function OpportunityHistory(props: OpportunityHistoryProps): ReactNode {
                               <span className="sr-only">{t('history.status.to')}</span>
                             </>
                           ) : null}
-                          {change.field === 'customFieldValues' ? null : (
+                          {change.field === 'customFieldValues' || change.field === 'customFieldCarry' ? null : (
                             <span>{value(change.field, change.after, entry)}</span>
                           )}
                         </dd>

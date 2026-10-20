@@ -68,5 +68,13 @@
   "adminSearch.field.organizationName": "Organization name",
   "adminSearch.field.customer": "Customer name or e-mail",
   "adminSearch.field.billingCompanyName": "Billing company name",
-  "adminSearch.field.billingTaxId": "Billing tax ID"
+  "adminSearch.field.billingTaxId": "Billing tax ID",
+  "orderDetail.comments.systemAuthor": "System",
+  "orderDetail.comments.systemNote.customFieldCarrySkipped.quote_request": "Not carried from quote request {reference}:",
+  "orderDetail.comments.systemNote.customFieldCarrySkipped.opportunity": "Not carried from sales opportunity {reference}:",
+  "orderDetail.comments.carryLine": "{field} — {reason}",
+  "orderDetail.comments.carryReason.target_missing": "the order has no field with this key",
+  "orderDetail.comments.carryReason.value_type_mismatch": "the order's field has a different value type",
+  "orderDetail.comments.carryReason.audience_mismatch": "the order's field is visible to customers, but the source field is internal",
+  "orderDetail.comments.carryReason.value_invalid": "the value is not valid for the order's field"
 }
