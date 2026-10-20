@@ -372,7 +372,8 @@ niestandardowego szansy z włączoną opcją **Używaj jako filtra listy** (usta
 niestandardowe**), niezależnie od tego, czy karta pokazuje to pole, obok pozostałych filtrów.
 Filtry działają jak filtry tablicy dla pól tego samego rodzaju, z tą różnicą, że szansa bez
 wartości nigdy nie pasuje — także do *Nie*. Są zapisane w adresie strony, a ich zmiana wraca do
-pierwszej strony listy.
+pierwszej strony listy. Panel pokazuje pierwsze trzy; pozostałe kryją się pod **Więcej filtrów (n)**,
+a ukryte pole z aktywnym filtrem jest zawsze widoczne.
 
 Te dwie reguły są niezależne: pole może być filtrem tablicy, bo pokazuje je karta, a nie być
 filtrem listy — albo odwrotnie. **Pole karty, które nie jest filtrem listy, nie filtruje listy**:

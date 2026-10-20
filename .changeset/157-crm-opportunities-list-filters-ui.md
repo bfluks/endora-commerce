@@ -12,4 +12,6 @@ Custom-field filters on the Opportunities list, governed by the list-filter opti
   shared.
 - A filter that is no longer available is reported by the field's name, with *Remove this
   filter*.
+- The panel shows the first three custom-field filters and puts the rest behind *More filters
+  (n)*; a hidden field with an active filter is always shown.
 - The board, its card-field filters and its lanes are unchanged.

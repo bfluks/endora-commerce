@@ -99,6 +99,8 @@
   "opportunity.list.filter.createdFrom": "Utworzone od",
   "opportunity.list.filter.createdTo": "Utworzone do",
   "opportunity.list.filter.clear": "Wyczyść filtry",
+  "opportunity.list.filter.moreCustom": "Więcej filtrów ({count})",
+  "opportunity.list.filter.fewerCustom": "Mniej filtrów",
   "opportunity.list.col.number": "Numer",
   "opportunity.list.col.title": "Tytuł",
   "opportunity.list.col.organization": "Organizacja",
