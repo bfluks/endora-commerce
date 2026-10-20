@@ -640,15 +640,14 @@ local Postgres sweep this phase used to run.
 - [x] T076 Record T069 – T075 on the tip (tip and base hashes, CI run links, durations, any
   known-flake re-run with its evidence) in this file as a `tasks.md`-only commit; the tip recorded
   is the one pushed; the pull request body says `Closes #286`
-  **Done 2026-10-20**: T069 – T075 are recorded under their tasks (code tip `1e3696369`, pushed tip `fea9b0335`, base `4aa101a51`); no known-flake re-run was needed. Sign-off: `dco-signoff` `commits=40 findings=0` locally (T073) and the fork's `dco` job green ([PR #3 checks](https://github.com/bfluks/endora-commerce/pull/3/checks)). The pull request body is drafted with `Closes #286`.
+  **Done 2026-10-20**: T069 – T075 are recorded under their tasks (code tip `1e3696369`, CI on `fea9b0335`, base `4aa101a51`; this commit adds only this file on top); no known-flake re-run was needed. Sign-off: `dco-signoff` `commits=40 findings=0` locally (T073) and the fork's `dco` job green ([PR #3 checks](https://github.com/bfluks/endora-commerce/pull/3/checks)). The pull request body is drafted with `Closes #286`.
   **Upstream pull request**: _to be filled_.
-- [ ] T081 Owner's manual test of the admin (quickstart §1 – §4) — **waived by the owner (2026-10-20)**; not run, so not passed. The flows are covered by the automated tests in *Requirement → test*; the pull request states the waiver.
 
 **Verification**: T074's jobs all green on the recorded tip and T075's per-file table has no red
 file.
 
 (Task ids T077 – T080 are retired: the local container, the local `[PG]` sweep, `boot-gate` and
-the docs build moved into T074 – T075. Phase 13 now holds three tasks; T081 records the owner's manual test.)
+the docs build moved into T074 – T075. Phase 13 now holds three tasks.)
 
 ---
 
