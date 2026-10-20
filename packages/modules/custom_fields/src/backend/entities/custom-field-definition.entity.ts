@@ -33,7 +33,8 @@ export class CustomFieldDefinition {
     | 'sortOrder'
     | 'label'
     | 'config'
-    | 'listFilter';
+    | 'listFilter'
+    | 'carryTo';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -82,6 +83,15 @@ export class CustomFieldDefinition {
    */
   @Property({ type: 'boolean' })
   listFilter: boolean = false;
+
+  /**
+   * The entity types this definition's values carry to
+   * (`specs/158-custom-fields-value-carry/`). Settable only to the registry
+   * entry's `carryTargets`, each judged compatible when it is turned on; an
+   * entry whose owner module is off is kept, and not served.
+   */
+  @Property({ type: 'json' })
+  carryTo: SupportedEntityType[] = [];
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

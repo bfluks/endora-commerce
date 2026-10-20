@@ -458,6 +458,8 @@ export const CUSTOM_FIELD_DEFINITION_ERROR_CODES = [
   'option_in_use',
   // Feature 157 — `listFilter` set on a definition whose entity type does not offer it.
   'list_filter_unsupported',
+  // Feature 158 — a carry target turned on that cannot take the definition's values.
+  'carry_incompatible',
 ] as const;
 export type CustomFieldDefinitionErrorCode =
   (typeof CUSTOM_FIELD_DEFINITION_ERROR_CODES)[number];

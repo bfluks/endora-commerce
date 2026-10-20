@@ -162,15 +162,18 @@ export class CustomFieldValueService {
 }
 
 /** A value is "empty" (⇒ absent) when undefined, null, '', or an empty array. */
-function isEmpty(v: unknown): boolean {
+export function isEmpty(v: unknown): boolean {
   return v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
 }
 
 type CoerceOk = { value: unknown };
 type CoerceErr = { code: CustomFieldValidationErrorDto['code']; message: string };
 
-/** Validate + coerce one value by its declared type. Returns the stored value or a typed error. */
-function coerce(
+/**
+ * Validate + coerce one value by its declared type. Returns the stored value or a typed error.
+ * Exported for the carry port (feature 158), which judges a carried value by the same rule.
+ */
+export function coerce(
   valueType: string,
   raw: unknown,
   options: { value: string }[],

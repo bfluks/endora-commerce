@@ -10,7 +10,7 @@ import type {
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { CustomFieldDefinition } from '../entities/custom-field-definition.entity.js';
 import { CustomFieldOption } from '../entities/custom-field-option.entity.js';
-import { isSupportedEntityType } from './custom-field-registry.js';
+import { isEntityTypeServed, isSupportedEntityType } from './custom-field-registry.js';
 import type {
   CustomFieldDefinitionsCache,
   CachedDefinition,
@@ -57,6 +57,22 @@ import type {
 export { CustomFieldDefinitionError };
 
 const SELECT_TYPES = new Set(['select', 'multiselect']);
+
+/**
+ * A patch's `carryTo` with the stored targets it could not see merged back
+ * (feature 158, research R-12): a carry to a type whose owner module is off is
+ * not served, so a save made meanwhile must not read as turning it off.
+ */
+function retainHiddenCarryTargets(
+  patch: UpdateCustomFieldDefinitionRequest,
+  current: CustomFieldDefinition,
+): UpdateCustomFieldDefinitionRequest {
+  if (patch.carryTo === undefined) return patch;
+  const hidden = current.carryTo.filter(
+    (target) => !isEntityTypeServed(target) && !patch.carryTo!.includes(target),
+  );
+  return hidden.length === 0 ? patch : { ...patch, carryTo: [...patch.carryTo, ...hidden] };
+}
 
 /**
  * CustomFieldDefinitionService (feature 055) — CRUD over definitions and options.
@@ -203,7 +219,9 @@ export class CustomFieldDefinitionService implements DefinitionSource, CustomFie
         );
       }
     }
-    const def = await this.commandBus.run(updateDefinitionCommand(id, patch, this.valueService));
+    const def = await this.commandBus.run(
+      updateDefinitionCommand(id, retainHiddenCarryTargets(patch, current), this.valueService),
+    );
     await this.cache.publishInvalidate(current.entityType);
     return def;
   }

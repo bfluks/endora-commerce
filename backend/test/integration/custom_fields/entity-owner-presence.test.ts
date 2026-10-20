@@ -26,10 +26,15 @@ const API = '/api/v1/admin/custom-fields';
 const UNOWNED = ['category', 'order', 'organization', 'customer', 'product'];
 const AXES: OffStateAxis[] = ['deactivated', 'platform-unavailable'];
 
-/** The owned types, their owner module, and the host table their values live on. */
+/**
+ * The owned types, their owner module, the host table their values live on, and
+ * — for the carry options of `specs/158-custom-fields-value-carry/` — the other
+ * owned type that carries values to it (`source`, offered `order` too) and a
+ * type whose only other target is it (`carrier`).
+ */
 const OWNED = [
-  { entityType: 'opportunity', owner: 'crm', table: 'crm_opportunities' },
-  { entityType: 'quote_request', owner: 'quote_requests', table: 'quote_requests' },
+  { entityType: 'opportunity', owner: 'crm', table: 'crm_opportunities', source: 'quote_request', carrier: 'order' },
+  { entityType: 'quote_request', owner: 'quote_requests', table: 'quote_requests', source: 'opportunity', carrier: 'opportunity' },
 ] as const;
 type Owned = (typeof OWNED)[number];
 
@@ -40,8 +45,13 @@ interface EntityTypeRow {
   entityType: string;
   labelKey: string;
   listFilter: boolean;
+  carryTargets: string[];
   managedBy?: unknown;
 }
+
+/** The rows as they read once `absent` is no longer a carry target of any type (feature 158). */
+const withoutCarryTarget = (rows: EntityTypeRow[], absent: string): EntityTypeRow[] =>
+  rows.map((row) => ({ ...row, carryTargets: row.carryTargets.filter((target) => target !== absent) }));
 
 interface DefinitionBody {
   id: string;
@@ -131,23 +141,28 @@ describe('custom_fields — a host type follows its owner module', () => {
       entityType: 'opportunity',
       labelKey: 'customFields.entity.opportunity',
       listFilter: true,
+      carryTargets: ['quote_request', 'order'],
     });
     expect(rows.find((row) => row.entityType === 'quote_request')).toEqual({
       entityType: 'quote_request',
       labelKey: 'customFields.entity.quoteRequest',
       listFilter: true,
+      carryTargets: ['order', 'opportunity'],
     });
   });
 
   describe.each(OWNED)('$entityType, owned by $owner', (owned) => {
     it.each(AXES)(
-      'omits the owned type while its owner is %s, and answers every other type exactly as before',
+      'omits the owned type while its owner is %s — as a type and as a carry target — and answers every other type exactly as before',
       async (axis) => {
         const before = await entityTypes();
         await withModuleOff(owned.owner, axis, async () => {
           const during = await entityTypes();
           expect(during.map((row) => row.entityType)).not.toContain(owned.entityType);
-          expect(during).toEqual(before.filter((row) => row.entityType !== owned.entityType));
+          expect(during.flatMap((row) => row.carryTargets)).not.toContain(owned.entityType);
+          expect(during).toEqual(
+            withoutCarryTarget(before.filter((row) => row.entityType !== owned.entityType), owned.entityType),
+          );
         });
         expect(await entityTypes()).toEqual(before);
       },
@@ -295,5 +310,70 @@ describe('custom_fields — a host type follows its owner module', () => {
         expect(refusal(off)).toEqual(refusal(on));
       });
     });
+  });
+
+  // `specs/158-custom-fields-value-carry/` FR-005, research R-12 — a carry to a
+  // type whose owner is off is hidden and inert, never dropped, and offered
+  // again with the owner.
+  describe.each(OWNED)('carry options naming $entityType, owned by $owner', (owned) => {
+    const storedCarryTo = async (id: string): Promise<string[]> => {
+      const rows = (await h
+        .em()
+        .getConnection()
+        .execute(`select carry_to from "custom_field_definitions" where id = ?`, [id])) as Array<{
+        carry_to: string[];
+      }>;
+      expect(rows).toHaveLength(1);
+      return [...rows[0]!.carry_to].sort();
+    };
+
+    it.each(AXES)(
+      'hides the carry while the owner is %s, keeps it through a save, refuses a new one, and serves it again afterwards',
+      async (axis) => {
+        const tag = `${owned.entityType}_${axis.replace(/-/g, '_')}`;
+        const key = fixtureKey(`carry_${tag}`);
+        await defineKept('order', key);
+        await defineKept(owned.entityType, key);
+        const source = await defineKept(owned.source, key, { carryTo: ['order', owned.entityType] });
+        const both = ['order', owned.entityType].sort();
+        expect(await storedCarryTo(source.id)).toEqual(both);
+
+        const carrierKey = fixtureKey(`carrier_${tag}`);
+        await defineKept(owned.entityType, carrierKey);
+        const carrier = await defineKept(owned.carrier, carrierKey);
+
+        await withModuleOff(owned.owner, axis, async () => {
+          const served = await readDefinition(source.id);
+          expect(served.statusCode, served.body).toBe(200);
+          expect((served.json() as { data: { carryTo: string[] } }).data.carryTo).toEqual(['order']);
+
+          const save = await h.app.inject({
+            method: 'PATCH',
+            url: `${API}/definitions/${source.id}`,
+            ...ADMIN,
+            payload: { labelDefault: 'Saved while off', carryTo: ['order'] },
+          });
+          expect(save.statusCode, save.body).toBe(200);
+          expect((save.json() as { data: { carryTo: string[] } }).data.carryTo).toEqual(['order']);
+          expect(await storedCarryTo(source.id)).toEqual(both);
+
+          const turnOn = await h.app.inject({
+            method: 'PATCH',
+            url: `${API}/definitions/${carrier.id}`,
+            ...ADMIN,
+            payload: { carryTo: [owned.entityType] },
+          });
+          expect(turnOn.statusCode, turnOn.body).toBe(422);
+          const error = (turnOn.json() as { error: { code: string; details?: Record<string, unknown> } }).error;
+          expect(error.code).toBe('CUSTOM_FIELD_CARRY_INCOMPATIBLE');
+          expect(error.details).toMatchObject({ code: 'target_unavailable', targetEntityType: owned.entityType });
+          expect(await storedCarryTo(carrier.id)).toEqual([]);
+        });
+
+        const restored = await readDefinition(source.id);
+        expect(restored.statusCode, restored.body).toBe(200);
+        expect([...(restored.json() as { data: { carryTo: string[] } }).data.carryTo].sort()).toEqual(both);
+      },
+    );
   });
 });

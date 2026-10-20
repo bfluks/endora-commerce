@@ -19,6 +19,21 @@ describe('custom-field registry', () => {
     expect([...owned].sort()).toEqual(['opportunity', 'quote_request']);
   });
 
+  // `specs/158-custom-fields-value-carry/` data-model §1.1 — the carry pairs.
+  it('offers carry targets on exactly quote_request, order and opportunity', () => {
+    expect(SUPPORTED_ENTITIES.quote_request.carryTargets).toEqual(['order', 'opportunity']);
+    expect(SUPPORTED_ENTITIES.order.carryTargets).toEqual(['opportunity']);
+    expect(SUPPORTED_ENTITIES.opportunity.carryTargets).toEqual(['quote_request', 'order']);
+    const carrying = SUPPORTED_ENTITY_TYPES.filter((type) => SUPPORTED_ENTITIES[type].carryTargets !== undefined);
+    expect([...carrying].sort()).toEqual(['opportunity', 'order', 'quote_request']);
+  });
+
+  it('never offers a type as its own carry target', () => {
+    for (const type of SUPPORTED_ENTITY_TYPES) {
+      expect(SUPPORTED_ENTITIES[type].carryTargets ?? []).not.toContain(type);
+    }
+  });
+
   it('keeps product host-managed', () => {
     expect(SUPPORTED_ENTITIES.product.managedBy?.moduleId).toBe('catalog');
   });

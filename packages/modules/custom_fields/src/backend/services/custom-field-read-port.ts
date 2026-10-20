@@ -101,8 +101,7 @@ export function toCustomFieldDefinitionRecord(
     sortOrder: definition.sortOrder,
     config: definition.config ?? {},
     listFilter: definition.listFilter,
-    // Feature 158 Phase 1 placeholder: the column lands in Phase 2.
-    carryTo: [],
+    carryTo: [...(definition.carryTo ?? [])],
     createdAt: definition.createdAt,
     updatedAt: definition.updatedAt,
   };

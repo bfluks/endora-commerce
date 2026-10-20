@@ -247,12 +247,12 @@ pnpm --filter backend exec vitest run --config vitest.unit.config.ts test/unit/k
 **Goal**: US4 on the server (FR-001 – FR-006, FR-011, FR-019 server half) and the compute port every
 conversion uses (FR-007, FR-009, FR-010, FR-014; research R-1 – R-5, R-12).
 
-- [ ] T007 [P] **RED** Extend the co-located registry test
+- [x] T007 [P] **RED** Extend the co-located registry test
   `packages/modules/custom_fields/src/backend/services/custom-field-registry.test.ts` (created by
   the filters feature): exactly `quote_request` → `['order', 'opportunity']`, `order` →
   `['opportunity']`, `opportunity` → `['quote_request', 'order']` carry `carryTargets`; no other
   entry does; no entry lists itself. Fails: no marker
-- [ ] T008 [P] [US4] **RED** New `backend/test/integration/custom_fields/carry-options.test.ts`
+- [x] T008 [P] [US4] **RED** New `backend/test/integration/custom_fields/carry-options.test.ts`
   (own stub sessions: a `custom_fields:write` admin and a `custom_fields:read`-only one, standing
   rule 7). Per-run fields (standing rule 6). Cases, each asserting status, `error.code` and
   `error.details.code`: create a QR `select` field with `carryTo: ['order']` and no Order field →
@@ -268,7 +268,7 @@ conversion uses (FR-007, FR-009, FR-010, FR-014; research R-1 – R-5, R-12).
   → each 200 (FR-019) and the source's `carryTo` still `['order']`; re-sending `carryTo:
   ['order']` on the drifted source → 200 (not re-judged); the read-only admin's PATCH → 403. Fails:
   `carryTo` unknown
-- [ ] T009 [P] [US4] **RED** Extend `backend/test/integration/custom_fields/entity-owner-presence.test.ts`
+- [x] T009 [P] [US4] **RED** Extend `backend/test/integration/custom_fields/entity-owner-presence.test.ts`
   (FR-005, R-12) for both owned types and both presence axes: while `crm` is off,
   `GET …/entity-types` omits `opportunity` from every `carryTargets`; a QR definition with
   `carryTo: ['order', 'opportunity']` is served with `['order']`; PATCHing its label **and** its
@@ -276,11 +276,11 @@ conversion uses (FR-007, FR-009, FR-010, FR-014; research R-1 – R-5, R-12).
   helper, not the route); turning on `opportunity` from an Order field → 422 `target_unavailable`;
   after `crm` returns the field is served with both again. The same for `quote_requests` off and an
   Opportunity field carrying to `quote_request`. Fails: entries served while off
-- [ ] T010 Scaffold `pnpm --filter backend run migration:new -- --module custom_fields --name definition_carry_to`;
+- [x] T010 Scaffold `pnpm --filter backend run migration:new -- --module custom_fields --name definition_carry_to`;
   write `up`/`down` per data-model §1 (never pick a timestamp);
   `pnpm --filter backend run composer:generate`; commit the regenerated
   `backend/src/db/migrations-registry.generated.ts`
-- [ ] T011 [US4] Implement the attribute (data-model §1, research R-1, R-2, R-4, R-12):
+- [x] T011 [US4] Implement the attribute (data-model §1, research R-1, R-2, R-4, R-12):
   `carryTo` on `CustomFieldDefinition` (+ `[OptionalProps]`); `carryTargets` markers in
   `custom-field-registry.ts`; `carry_incompatible` in `CustomFieldDefinitionError` with a `details`
   member (`custom-field-definition-apply.ts`); `applyCreateDefinition` / `applyUpdateDefinition`
@@ -289,12 +289,12 @@ conversion uses (FR-007, FR-009, FR-010, FR-014; research R-1 – R-5, R-12).
   `assessCustomFieldCarry`, owner presence through `effectiveState.isPresent`) — the definition
   service passes nothing new; `snapshotDefinition` + `carryTo`; `toCustomFieldDefinitionRecord` +
   `carryTo`; T007 green
-- [ ] T012 [US4] Implement serving and retention in `packages/modules/custom_fields/src/backend/routes.admin.ts`:
+- [x] T012 [US4] Implement serving and retention in `packages/modules/custom_fields/src/backend/routes.admin.ts`:
   `serialize` strips absent-owner targets from `carryTo`; `entity-types` serves filtered
   `carryTargets`; `toHttp` maps `carry_incompatible` to 422 `CUSTOM_FIELD_CARRY_INCOMPATIBLE` with
   `details` (contract §2); the PATCH path merges hidden entries back
   (`custom-field-definition.service.ts` `update`, before the Command); T008, T009 green
-- [ ] T013 [P] **RED** New co-located `packages/modules/custom_fields/src/backend/services/custom-field-carry.service.test.ts`
+- [x] T013 [P] **RED** New co-located `packages/modules/custom_fields/src/backend/services/custom-field-carry.service.test.ts`
   (pure; a stub `DefinitionSource` and a stub presence function), contract §4.1 / research R-5:
   carry off on the source → nothing; source value empty (`''`, `null`, `[]`) → nothing; source key
   dormant (no live source definition) → nothing; target already holds a non-empty value → kept,
@@ -305,14 +305,14 @@ conversion uses (FR-007, FR-009, FR-010, FR-014; research R-1 – R-5, R-12).
   coerced `12`; an unrelated **required** empty target field never appears anywhere; the key
   `constructor` carries like any other; either owner absent → `{ values: target, carried: [],
   skipped: [] }`; the returned `values` never loses a target key. Fails: no service
-- [ ] T014 Implement `packages/modules/custom_fields/src/backend/services/custom-field-carry.service.ts`
+- [x] T014 Implement `packages/modules/custom_fields/src/backend/services/custom-field-carry.service.ts`
   (`CustomFieldCarryService implements CustomFieldCarryPort`, over the same `DefinitionSource`, the
   value service's `coerce` and `isEmpty` exported from `custom-field-value.service.ts` with no
   behaviour change, presence through `effectiveState.isPresent` on the registry's
   `ownerModuleId`); register it in `packages/modules/custom_fields/src/backend/index.ts` with
   `ctx.di.providePort<CustomFieldCarryPort>('customFieldCarryPort', …)` built from
   `customFieldServices.definitionService`; T013 green
-- [ ] T015 [P] **RED → green** New `backend/test/integration/custom_fields/carry-port.test.ts`: the
+- [x] T015 [P] **RED → green** New `backend/test/integration/custom_fields/carry-port.test.ts`: the
   port resolved from the composed test server (`h.container` / the harness's port accessor, as
   `one-definitions-cache.test.ts` reaches the module) answers a real QR → Order plan; a definition
   change (option added to the target) is visible to the next `plan` call without waiting for the
@@ -320,6 +320,35 @@ conversion uses (FR-007, FR-009, FR-010, FR-014; research R-1 – R-5, R-12).
   `.changeset/158-custom-fields-carry-options.md` — `'@endora-commerce/mod-custom-fields': minor`:
   the carry options on definitions and entity types, the configuration refusal
   (`CUSTOM_FIELD_CARRY_INCOMPATIBLE`), retention while an owner is off, `customFieldCarryPort`
+
+**Phase 2 result** (2026-10-20):
+- Migration `20261020T110920_custom_fields_definition_carry_to`, registered in the module's
+  `src/migrations/index.ts` barrel and the regenerated registry.
+- T011: `assertCarryTargetsAccepted` (in `custom-field-definition-apply.ts`) is the judgement both
+  definition Commands call on their `em`; the apply seam itself refuses only a pair the registry
+  does not offer (a host names none). `carry_incompatible` joins contracts'
+  `CUSTOM_FIELD_DEFINITION_ERROR_CODES`; `CustomFieldDefinitionError.details` widened to carry the
+  `missingOptionValueList` array.
+- T014: the service takes an injectable presence function (default `effectiveState.isPresent`)
+  and also requires the pair to be in the registry's `carryTargets`.
+- **Changed existing assertions** (rule 12): `entity-owner-presence.test.ts` — the two
+  entity-type rows of "offers every owned type …" gain `carryTargets`, and "omits the owned type
+  while its owner is …" compares the other rows with the absent type removed from their
+  `carryTargets` (FR-005). `definition-read-by-id.test.ts` (a Phase 1 sweep miss: untyped fake,
+  red on the fork CI) gains `carryTo` on its row and expected record. `toCustomFieldDefinitionRecord`
+  reads `definition.carryTo ?? []`, like its `label`/`config` neighbours, so the partial rows of
+  `definition-apply-seam.test.ts` stay unchanged.
+- Fork CI on the Phase 1 tip: red on `check:port-shape` (the T006 type had split the
+  `customFieldDefinitionService` doc block from its interface — moved above it; and
+  `customFieldCarryPort` documented before T014 registered it) and on `definition-read-by-id`.
+  All three fixed here.
+- **For Phase 5**: `check:port-shape` parses only singular `Container name: \`x\`` lines, so the
+  receiver port's "Container names:" block is not yet a publication. T031/T032 must rewrite it
+  as two `Container name:` lines in the commit that registers both names.
+- Verification: mod-custom-fields 4 files 52/52 (whole package 93/93); `[PG]` carry-options 10/10,
+  entity-owner-presence 27/27, carry-port 3/3, host-managed 6/6; backend unit (5 files) 280/280;
+  typecheck + lint clean; `check:command-coverage --strict` 0 blocking; `check:port-shape`
+  0 violations; `check:port-dependencies` 0; `check:module-boundary` 0; `overlay:check` clean.
 
 **Verification**:
 ```bash

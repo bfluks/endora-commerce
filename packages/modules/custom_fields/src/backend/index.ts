@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { Redis } from 'ioredis';
 import type {
+  CustomFieldCarryPort,
   CustomFieldDefinitionReadPort,
   CustomFieldListFilterPort,
   CustomFieldValuePort,
@@ -13,6 +14,7 @@ import { CustomFieldDefinitionService } from './services/custom-field-definition
 import { CustomFieldValueService } from './services/custom-field-value.service.js';
 import { CustomFieldDefinitionReadService } from './services/custom-field-read-port.js';
 import { CustomFieldListFilterService } from './services/custom-field-list-filter.service.js';
+import { CustomFieldCarryService } from './services/custom-field-carry.service.js';
 import { registerCustomFieldsAdminRoutes } from './routes.admin.js';
 import { CustomFieldDefinition } from './entities/custom-field-definition.entity.js';
 import { CustomFieldOption } from './entities/custom-field-option.entity.js';
@@ -168,6 +170,25 @@ export function registerModule(ctx: ModuleContext): void {
       .asFunction(
         ({ customFieldServices }: CustomFieldsCradle) =>
           new CustomFieldListFilterService(customFieldServices.definitionService),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Feature 158 — which custom-field values carry from one record into another
+   * of a type the definition names in `carryTo`
+   * (`specs/158-custom-fields-value-carry/contracts/carry-api.md` §4.1). It
+   * computes and never writes: the module owning the target record persists
+   * the answer in its own write. Reads through the same per-entity cache, so a
+   * committed definition change reaches the next plan without waiting for the
+   * TTL.
+   */
+  ctx.di.providePort<CustomFieldCarryPort>(
+    'customFieldCarryPort',
+    ctx
+      .asFunction(
+        ({ customFieldServices }: CustomFieldsCradle) =>
+          new CustomFieldCarryService(customFieldServices.definitionService),
       )
       .singleton(),
   );

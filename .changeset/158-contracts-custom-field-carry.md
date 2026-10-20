@@ -32,6 +32,8 @@ Shared shapes for carrying custom-field values between Quote Requests, Orders an
 - `rfqEventTypeSchema` gains `custom-field-carry-skipped`; `quoteRequestHistoryEntryKindSchema`
   gains `custom_field_carry_skipped`, whose entries carry `customFieldCarry` (the source
   Opportunity and the skipped keys). Admin replies only.
+- `CUSTOM_FIELD_DEFINITION_ERROR_CODES` gains `carry_incompatible`, so
+  `isCustomFieldDefinitionFailure` recognises a refused carry option.
 - `ERROR_CODES.CUSTOM_FIELD_CARRY_INCOMPATIBLE` — 422 when a definition's carry option is turned
   on towards a target that cannot take its values; `details.code` names why (`target_missing`,
   `value_type_mismatch`, `options_missing`, `audience_mismatch`, `pair_unsupported`,

@@ -8,6 +8,7 @@ import { CustomFieldDefinition } from '../entities/custom-field-definition.entit
 import { CustomFieldOption } from '../entities/custom-field-option.entity.js';
 import {
   applyCreateDefinition,
+  assertCarryTargetsAccepted,
   CustomFieldDefinitionError,
   applyCreateOption,
   applyDeleteDefinition,
@@ -41,6 +42,7 @@ function snapshotDefinition(def: CustomFieldDefinition): Record<string, unknown>
     sortOrder: def.sortOrder,
     config: def.config,
     listFilter: def.listFilter,
+    carryTo: [...def.carryTo],
   };
 }
 
@@ -87,6 +89,19 @@ export function createDefinitionCommand(
           { key: input.key },
         );
       }
+      // Feature 158 — every carry target of a new definition is judged now,
+      // in this transaction, against the same-key definition of the target.
+      await assertCarryTargetsAccepted(
+        em,
+        {
+          entityType: input.entityType,
+          key: input.key,
+          valueType: input.valueType,
+          audience: input.audience,
+          options: input.options,
+        },
+        input.carryTo,
+      );
       const def = await applyCreateDefinition(em, input);
       return { result: def, after: snapshotDefinition(def) };
     },
@@ -108,6 +123,25 @@ export function updateDefinitionCommand(
       return def ? snapshotDefinition(def) : null;
     },
     run: async ({ em }) => {
+      // Feature 158 — only the carry targets this patch turns on are judged:
+      // one already on stays as configured whatever has drifted since (FR-019).
+      const current = await em.findOne(CustomFieldDefinition, { id });
+      const added = current
+        ? (patch.carryTo ?? []).filter((target) => !current.carryTo.includes(target))
+        : [];
+      if (current && added.length > 0) {
+        await assertCarryTargetsAccepted(
+          em,
+          {
+            entityType: current.entityType,
+            key: current.key,
+            valueType: patch.valueType ?? current.valueType,
+            audience: patch.audience ?? current.audience,
+            options: await em.find(CustomFieldOption, { definitionId: id }),
+          },
+          added,
+        );
+      }
       const def = await applyUpdateDefinition(em, id, patch, probes);
       return { result: def, after: snapshotDefinition(def) };
     },

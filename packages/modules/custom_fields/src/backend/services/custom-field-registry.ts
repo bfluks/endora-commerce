@@ -54,11 +54,25 @@ export interface SupportedEntityMeta {
    * it.
    */
   readonly listFilter?: true;
+  /**
+   * Optional carry marker (feature 158). The entity types definitions of this
+   * type may carry their values to, when a record of such a type is created
+   * from, or joins, a record of this type. A definition's `carryTo` may name
+   * only these; on any other type the option is refused. Generic, like the
+   * markers above: the core asks only whether a pair is listed, never which
+   * hosts make the conversion.
+   */
+  readonly carryTargets?: readonly SupportedEntityType[];
 }
 
 export const SUPPORTED_ENTITIES: Record<SupportedEntityType, SupportedEntityMeta> = {
   category: { labelKey: 'customFields.entity.category', orgOwned: false },
-  order: { labelKey: 'customFields.entity.order', orgOwned: true, listFilter: true },
+  order: {
+    labelKey: 'customFields.entity.order',
+    orgOwned: true,
+    listFilter: true,
+    carryTargets: ['opportunity'],
+  },
   organization: { labelKey: 'customFields.entity.organization', orgOwned: false },
   customer: { labelKey: 'customFields.entity.customer', orgOwned: true },
   // Feature 157 — a Quote Request belongs to `quote_requests`, and its
@@ -68,6 +82,7 @@ export const SUPPORTED_ENTITIES: Record<SupportedEntityType, SupportedEntityMeta
     orgOwned: true,
     ownerModuleId: 'quote_requests',
     listFilter: true,
+    carryTargets: ['order', 'opportunity'],
   },
   product: {
     labelKey: 'customFields.entity.product',
@@ -84,6 +99,7 @@ export const SUPPORTED_ENTITIES: Record<SupportedEntityType, SupportedEntityMeta
     orgOwned: true,
     ownerModuleId: 'crm',
     listFilter: true,
+    carryTargets: ['quote_request', 'order'],
   },
 };
 
@@ -106,6 +122,11 @@ export function isSupportedEntityType(value: string): value is SupportedEntityTy
 export function isEntityTypeServed(entityType: string): boolean {
   const owner = isSupportedEntityType(entityType) ? SUPPORTED_ENTITIES[entityType].ownerModuleId : undefined;
   return !owner || effectiveState.isPresent(owner);
+}
+
+/** The entity types definitions of `entityType` may carry their values to (feature 158). */
+export function carryTargetsOf(entityType: string): readonly SupportedEntityType[] {
+  return isSupportedEntityType(entityType) ? (SUPPORTED_ENTITIES[entityType].carryTargets ?? []) : [];
 }
 
 /** Whether definitions of `entityType` may be marked as list filters (feature 157). */
