@@ -6,7 +6,19 @@ import type {
   CustomFieldEntityTypeInfo,
   CustomFieldValueType,
   LocalizedLabel,
+  SupportedEntityType,
 } from '@endora-commerce/contracts';
+import { entityTypeLabelKey } from '../lib/carry-labels.js';
+
+/**
+ * The block's value. `carryTo` is present where the entity type offers carry
+ * targets (feature 158) — a caller for a type that offers none leaves it out,
+ * and `onChange` answers it back only when it was given or changed.
+ */
+export interface DefinitionBehaviourValue {
+  listFilter: boolean;
+  carryTo?: SupportedEntityType[];
+}
 
 export interface DefinitionBehaviourFieldsProps {
   /** The definition being created (the form's draft, no `id`) or edited. */
@@ -19,8 +31,10 @@ export interface DefinitionBehaviourFieldsProps {
   };
   /** The `entity-types` entry of the definition's type. */
   entityTypeInfo: CustomFieldEntityTypeInfo;
-  value: { listFilter: boolean };
-  onChange: (next: { listFilter: boolean }) => void;
+  value: DefinitionBehaviourValue;
+  onChange: (next: DefinitionBehaviourValue) => void;
+  /** The entity-types list, to name a carry target; the bundle's own key without it. */
+  entityTypes?: readonly CustomFieldEntityTypeInfo[];
   disabled?: boolean;
   /**
    * `stacked` (default): the controls over their help, in a block of their
@@ -35,51 +49,122 @@ export interface DefinitionBehaviourFieldsProps {
  * `specs/157-custom-fields-list-filters/contracts/admin-surfaces.md` §3): the
  * one block the create form and the editor dialog both render.
  *
- * Today it is the *Use as list filter* option, offered only where the entity
- * type's entry says the type has it. `definition` is passed although nothing
- * reads it yet, so the signature does not change when a behaviour depends on
- * the field itself — **this is the seam `custom-fields-value-carry` extends**,
- * by additive optional props, never by a restructure.
+ * - *Use as list filter*, offered only where the entity type's entry says the
+ *   type has it (feature 157).
+ * - *Carry value to …*, one checkbox per `entityTypeInfo.carryTargets` entry
+ *   in the registry's order, none when the type has no target (feature 158,
+ *   `specs/158-custom-fields-value-carry/contracts/admin-surfaces.md` §1.1).
+ *   Each checkbox is described by its own help line, so a screen reader hears
+ *   what turning it on does without reading the block's prose.
  */
 export function DefinitionBehaviourFields({
   entityTypeInfo,
   value,
   onChange,
+  entityTypes = [],
   disabled = false,
   layout = 'stacked',
 }: DefinitionBehaviourFieldsProps): ReactNode {
   const t = useTranslation('custom_fields');
   const id = useId();
-  if (!entityTypeInfo.listFilter) return null;
+  // `?? []`: an entry read from a server older than feature 158 has no marker.
+  const carryTargets = entityTypeInfo.carryTargets ?? [];
+  const carryTo = value.carryTo ?? [];
+  if (!entityTypeInfo.listFilter && carryTargets.length === 0) return null;
   const helpId = `${id}-help`;
-  const control = (
-      <label htmlFor={id} className="flex min-h-11 items-center gap-2 text-sm font-medium">
-        <Checkbox
-          id={id}
-          checked={value.listFilter}
-          disabled={disabled}
-          aria-describedby={helpId}
-          onChange={(event): void => onChange({ listFilter: event.target.checked })}
-        />
-        {t('customFields.listFilter.label')}
-      </label>
-  );
+
+  const emit = (next: Partial<DefinitionBehaviourValue>): void =>
+    onChange({
+      listFilter: next.listFilter ?? value.listFilter,
+      ...(value.carryTo !== undefined || next.carryTo !== undefined ? { carryTo: next.carryTo ?? carryTo } : {}),
+    });
+
+  const listFilterControl = entityTypeInfo.listFilter ? (
+    <label htmlFor={id} className="flex min-h-11 items-center gap-2 text-sm font-medium">
+      <Checkbox
+        id={id}
+        checked={value.listFilter}
+        disabled={disabled}
+        aria-describedby={helpId}
+        onChange={(event): void => emit({ listFilter: event.target.checked })}
+      />
+      {t('customFields.listFilter.label')}
+    </label>
+  ) : null;
+  const listFilterHelp = (className: string): ReactNode =>
+    entityTypeInfo.listFilter ? (
+      <p id={helpId} className={className}>
+        {t('customFields.listFilter.help')}
+      </p>
+    ) : null;
+
+  const carryControls = carryTargets.map((target) => {
+    const controlId = `${id}-carry-${target}`;
+    const entityType = t(entityTypeLabelKey(target, entityTypes));
+    return {
+      target,
+      control: (
+        <label key={controlId} htmlFor={controlId} className="flex min-h-11 items-center gap-2 text-sm font-medium">
+          <Checkbox
+            id={controlId}
+            checked={carryTo.includes(target)}
+            disabled={disabled}
+            aria-describedby={`${controlId}-help`}
+            onChange={(event): void =>
+              emit({
+                // Kept in the registry's order, whatever order they were ticked in.
+                carryTo: event.target.checked
+                  ? carryTargets.filter((candidate) => candidate === target || carryTo.includes(candidate))
+                  : carryTo.filter((candidate) => candidate !== target),
+              })
+            }
+          />
+          {t('customFields.carry.toggle', { entityType })}
+        </label>
+      ),
+      help: (className: string): ReactNode => (
+        <p key={`${controlId}-help`} id={`${controlId}-help`} className={className}>
+          {t('customFields.carry.help', { entityType })}
+        </p>
+      ),
+    };
+  });
+
   if (layout === 'row') {
+    const help = 'order-last basis-full break-words text-sm text-muted-foreground';
     return (
       <>
-        {control}
-        <p id={helpId} className="order-last basis-full break-words text-sm text-muted-foreground">
-          {t('customFields.listFilter.help')}
-        </p>
+        {listFilterControl}
+        {carryControls.length > 0 ? (
+          <div role="group" aria-label={t('customFields.carry.legend')} className="flex flex-wrap items-center gap-x-4">
+            {carryControls.map((item) => item.control)}
+          </div>
+        ) : null}
+        {listFilterHelp(help)}
+        {carryControls.map((item) => item.help(help))}
       </>
     );
   }
+  const help = 'break-words text-sm text-muted-foreground';
   return (
-    <div className="space-y-1">
-      {control}
-      <p id={helpId} className="break-words text-sm text-muted-foreground">
-        {t('customFields.listFilter.help')}
-      </p>
+    <div className="space-y-3">
+      {listFilterControl ? (
+        <div className="space-y-1">
+          {listFilterControl}
+          {listFilterHelp(help)}
+        </div>
+      ) : null}
+      {carryControls.length > 0 ? (
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-semibold">{t('customFields.carry.legend')}</legend>
+          {carryControls.map((item) => (
+            <div key={item.target} className="space-y-1">
+              {item.control}
+              {item.help(help)}
+            </div>
+          ))}
+        </fieldset>
+      ) : null}
     </div>
   );
 }

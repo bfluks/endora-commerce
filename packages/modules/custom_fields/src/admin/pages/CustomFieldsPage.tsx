@@ -1,19 +1,23 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ListPlus, Pencil, Trash2 } from 'lucide-react';
+import { ListPlus, Pencil, Trash2, TriangleAlert } from 'lucide-react';
 import { ApiError, useAuth } from '@endora-commerce/admin-kit/lib';
 import { customFieldsClient } from '../api/custom-fields-client.js';
+import { CarryDriftDialog } from '../components/CarryDriftWarning.js';
 import { DefinitionBehaviourFields } from '../components/DefinitionBehaviourFields.js';
 import { DefinitionEditorDialog } from '../components/DefinitionEditorDialog.js';
+import { carryCounterpartsBrokenBy, type CarryCounterpart, type DefinitionChange } from '../lib/carry-drift.js';
+import { entityTypeLabelKey, incompatibilitySentence, refusalSentence } from '../lib/carry-labels.js';
 import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardHeader, CardTitle, Checkbox, Label, PageHeader, Select } from '@endora-commerce/admin-kit/ui';
 import { ResponsiveTable, resolveCustomFieldLabel, type ResponsiveColumn } from '@endora-commerce/admin-kit/components';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
-import type {
-  CustomFieldAudience,
-  CustomFieldDefinitionDto,
-  CustomFieldEntityTypeInfo,
-  CustomFieldValueType,
-  SupportedEntityType,
+import {
+  assessCustomFieldCarry,
+  type CustomFieldAudience,
+  type CustomFieldDefinitionDto,
+  type CustomFieldEntityTypeInfo,
+  type CustomFieldValueType,
+  type SupportedEntityType,
 } from '@endora-commerce/contracts';
 
 /**
@@ -56,11 +60,27 @@ function draftOptions(
     .map((value, i) => ({ value, label: {}, labelDefault: value, isDefault: false, sortOrder: i }));
 }
 
+/** A change from the table waiting on the drift warning's answer (feature 158). */
+interface PendingTableChange {
+  change: DefinitionChange;
+  counterparts: CarryCounterpart[];
+  /** The deleted field's sentence above the warning; none for an audience change. */
+  lead?: string;
+  proceed: () => void;
+}
+
 /**
  * Custom-field definition management (feature 055). List + create per entity
  * type; an existing definition is edited in `DefinitionEditorDialog` (feature
  * 157). Every write control — create, edit, delete, audience — is offered only
  * to an operator holding `custom_fields:write`; a reader sees the table.
+ *
+ * Feature 158 (`specs/158-custom-fields-value-carry/contracts/admin-surfaces.md`
+ * §1): the *Carry value to …* options, a *Carries to* column whose chips are
+ * marked *Incompatible* when the same-key target no longer fits, and a warning
+ * before an audience change or a deletion that breaks an enabled carry. Both
+ * read the definitions of **every** type — a second, unfiltered list, asked
+ * only once some type offers a carry target.
  */
 export function CustomFieldsPage(): ReactNode {
   // One namespace, this module's own (feature 091, R8). The screen used to
@@ -108,6 +128,41 @@ export function CustomFieldsPage(): ReactNode {
   const [audience, setAudience] = useState<CustomFieldAudience>('internal');
   const [options, setOptions] = useState('');
   const [listFilter, setListFilter] = useState(false);
+  const [carryTo, setCarryTo] = useState<SupportedEntityType[]>([]);
+
+  // Feature 158 — every type's definitions, for the carry marks and warnings.
+  // `null` until read (or when the read failed): no mark is shown on a guess.
+  const offersCarry = entityTypes.some((info) => (info.carryTargets ?? []).length > 0);
+  const [allDefinitions, setAllDefinitions] = useState<CustomFieldDefinitionDto[] | null>(null);
+  const allSequence = useRef(0);
+  const [pendingChange, setPendingChange] = useState<PendingTableChange | null>(null);
+
+  const loadAll = useCallback(async (): Promise<void> => {
+    const current = ++allSequence.current;
+    try {
+      const listed = await customFieldsClient.list();
+      if (current === allSequence.current) setAllDefinitions(listed);
+    } catch {
+      if (current === allSequence.current) setAllDefinitions(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (offersCarry) void loadAll();
+  }, [offersCarry, loadAll]);
+
+  /** What the page knows of every definition: the full list, the selected type's rows fresher. */
+  const known = useMemo(() => {
+    const byId = new Map<string, CustomFieldDefinitionDto>();
+    for (const definition of allDefinitions ?? []) byId.set(definition.id, definition);
+    for (const row of rows) byId.set(row.id, row);
+    return [...byId.values()];
+  }, [allDefinitions, rows]);
+
+  const typeLabel = useCallback(
+    (type: SupportedEntityType): string => t(entityTypeLabelKey(type, entityTypes)),
+    [t, entityTypes],
+  );
 
   const refresh = useCallback(async (): Promise<void> => {
     setError(null);
@@ -136,18 +191,34 @@ export function CustomFieldsPage(): ReactNode {
     })();
   }, []);
 
+  /** The table's rows and, where carries exist, every type's definitions. */
+  const reload = useCallback(async (): Promise<void> => {
+    await Promise.all([refresh(), offersCarry ? loadAll() : Promise.resolve()]);
+  }, [refresh, offersCarry, loadAll]);
+
   const run = useCallback(
     async (fn: () => Promise<unknown>): Promise<void> => {
       setError(null);
       try {
         await fn();
-        await refresh();
+        await reload();
       } catch (err) {
-        setError(err instanceof ApiError ? err.envelope.error.message : t('customFields.error.action'));
+        // A carry refusal reads as a sentence built from `details` (feature 158).
+        setError(refusalSentence(t, err, typeLabel, t('customFields.error.action')));
       }
     },
-    [refresh, t],
+    [reload, t, typeLabel],
   );
+
+  /** Runs `proceed` at once, or after the drift warning when `change` breaks an enabled carry. */
+  const guarded = (change: DefinitionChange, proceed: () => void, lead?: string): void => {
+    const counterparts = carryCounterpartsBrokenBy(change, known);
+    if (counterparts.length === 0) {
+      proceed();
+      return;
+    }
+    setPendingChange({ change, counterparts, proceed, ...(lead ? { lead } : {}) });
+  };
 
   // Keep takes the place and the focus of Delete; keeping gives it back.
   useEffect(() => {
@@ -159,6 +230,10 @@ export function CustomFieldsPage(): ReactNode {
     returnFocusTo.current = null;
     if (id !== null) document.querySelector<HTMLButtonElement>(`[data-delete-trigger="${id}"]`)?.focus();
   }, [confirmingDelete]);
+
+  const carryTargets = entityTypeInfo?.carryTargets ?? [];
+  /** The ticked targets the selected type still offers — a type switch keeps no stale target. */
+  const draftCarryTo = carryTo.filter((target) => carryTargets.includes(target));
 
   const submit = (): void => {
     const opts = draftOptions(valueType, options);
@@ -173,8 +248,8 @@ export function CustomFieldsPage(): ReactNode {
         audience,
         sortOrder: rows.length,
         config: {},
-        // Feature 158 — the carry toggles land with the editor (Phase 7).
-        carryTo: [],
+        // Feature 158 — `[]` unless the operator ticked a target the type offers.
+        carryTo: draftCarryTo,
         options: opts,
         // Sent only where the entity type offers the option.
         ...(entityTypeInfo?.listFilter ? { listFilter } : {}),
@@ -184,6 +259,7 @@ export function CustomFieldsPage(): ReactNode {
       setOptions('');
       setAudience('internal');
       setListFilter(false);
+      setCarryTo([]);
     });
   };
 
@@ -223,13 +299,13 @@ export function CustomFieldsPage(): ReactNode {
           <Select
             aria-label={t('customFields.audience.rowLabel', { key: d.key })}
             value={d.audience}
-            onChange={(e) =>
-              void run(() =>
-                customFieldsClient.update(d.id, {
-                  audience: e.target.value as CustomFieldAudience,
-                }),
-              )
-            }
+            onChange={(e) => {
+              const next = e.target.value as CustomFieldAudience;
+              // The select is the row's stored audience, so a cancelled warning leaves it as it was.
+              guarded({ kind: 'audience', definitionId: d.id, audience: next }, () =>
+                void run(() => customFieldsClient.update(d.id, { audience: next })),
+              );
+            }}
           >
             {AUDIENCES.map((a) => (
               <option key={a} value={a}>
@@ -251,7 +327,53 @@ export function CustomFieldsPage(): ReactNode {
       header: t('customFields.table.listFilter'),
       render: (d) => (d.listFilter ? t('customFields.listFilter.yes') : t('customFields.listFilter.no')),
     },
+    {
+      id: 'carriesTo',
+      header: t('customFields.table.carriesTo'),
+      render: (d) => carryChips(d),
+    },
   ];
+
+  /**
+   * One chip per carry target, and an *Incompatible* mark with its reason
+   * where the same-key target no longer fits (FR-020). The reason is visible
+   * text on a narrow screen and the chip's description on a wide one.
+   */
+  function carryChips(d: CustomFieldDefinitionDto): ReactNode {
+    const targets = d.carryTo ?? [];
+    if (targets.length === 0) return '—';
+    return (
+      <ul className="flex flex-col gap-1">
+        {targets.map((target) => {
+          const entityType = typeLabel(target);
+          const reasons =
+            allDefinitions === null
+              ? []
+              : assessCustomFieldCarry(
+                  d,
+                  known.find((candidate) => candidate.entityType === target && candidate.key === d.key) ?? null,
+                );
+          const reason = reasons.map((item) => incompatibilitySentence(t, item, entityType, d.key)).join(' ');
+          return (
+            <li key={target} className="min-w-0 space-y-0.5">
+              <span className="flex flex-wrap items-center gap-1">
+                <Badge variant="secondary">{entityType}</Badge>
+                {reasons.length > 0 ? (
+                  <Badge variant="warning" title={reason} className="gap-1">
+                    <TriangleAlert className="size-3" aria-hidden="true" />
+                    {t('customFields.carry.incompatible')}
+                  </Badge>
+                ) : null}
+              </span>
+              {reasons.length > 0 ? (
+                <span className="block break-words text-xs text-muted-foreground sm:sr-only">{reason}</span>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
 
   const actions = (d: CustomFieldDefinitionDto): ReactNode =>
     confirmingDelete === d.id ? (
@@ -298,7 +420,20 @@ export function CustomFieldsPage(): ReactNode {
           className="min-h-11 min-w-11"
           data-delete-trigger={d.id}
           aria-label={t('customFields.table.delete', { key: d.key })}
-          onClick={() => setConfirmingDelete(d.id)}
+          onClick={() => {
+            // A deletion that breaks a carry asks once, in the warning; any other in the row.
+            const counterparts = carryCounterpartsBrokenBy({ kind: 'delete', definitionId: d.id }, known);
+            if (counterparts.length === 0) {
+              setConfirmingDelete(d.id);
+              return;
+            }
+            setPendingChange({
+              change: { kind: 'delete', definitionId: d.id },
+              counterparts,
+              lead: t('customFields.table.deleteConfirm', { key: d.key }),
+              proceed: () => void run(() => customFieldsClient.remove(d.id)),
+            });
+          }}
         >
           <Trash2 className="size-4" aria-hidden="true" />
         </Button>
@@ -448,8 +583,12 @@ export function CustomFieldsPage(): ReactNode {
               <DefinitionBehaviourFields
                 definition={{ key: key.trim(), valueType, options: draftOptions(valueType, options), audience }}
                 entityTypeInfo={entityTypeInfo}
-                value={{ listFilter }}
-                onChange={(next) => setListFilter(next.listFilter)}
+                value={carryTargets.length > 0 ? { listFilter, carryTo: draftCarryTo } : { listFilter }}
+                onChange={(next) => {
+                  setListFilter(next.listFilter);
+                  if (next.carryTo !== undefined) setCarryTo(next.carryTo);
+                }}
+                entityTypes={entityTypes}
                 layout="row"
               />
             ) : null}
@@ -468,14 +607,30 @@ export function CustomFieldsPage(): ReactNode {
         <DefinitionEditorDialog
           definition={editing}
           entityTypeInfo={entityTypeInfo}
+          entityTypes={entityTypes}
+          definitions={known}
           onClose={() => {
             setEditing(null);
             // Option actions apply at once, so a cancelled dialog may still have changed the row.
-            void refresh();
+            void reload();
           }}
           onSaved={() => {
             setEditing(null);
-            void refresh();
+            void reload();
+          }}
+        />
+      ) : null}
+
+      {pendingChange ? (
+        <CarryDriftDialog
+          counterparts={pendingChange.counterparts}
+          typeLabel={typeLabel}
+          {...(pendingChange.lead ? { lead: pendingChange.lead } : {})}
+          proceedVariant={pendingChange.change.kind === 'delete' ? 'destructive' : 'default'}
+          onCancel={() => setPendingChange(null)}
+          onProceed={() => {
+            setPendingChange(null);
+            pendingChange.proceed();
           }}
         />
       ) : null}

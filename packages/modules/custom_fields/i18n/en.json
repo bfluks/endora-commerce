@@ -97,5 +97,20 @@
   "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.options_missing": "The field “{key}” on {targetEntityType} lacks these options: {missingOptionValues}.",
   "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.audience_mismatch": "The field “{key}” on {targetEntityType} is visible to customers, but this field is internal. Change one of them first.",
   "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.pair_unsupported": "Values of this field cannot be carried to {targetEntityType}.",
-  "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.target_unavailable": "{targetEntityType} is switched off, so values cannot be carried to it."
+  "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.target_unavailable": "{targetEntityType} is switched off, so values cannot be carried to it.",
+  "customFields.table.carriesTo": "Carries to",
+  "customFields.carry.legend": "Value carry-over",
+  "customFields.carry.toggle": "Carry value to {entityType}",
+  "customFields.carry.help": "When a record of type {entityType} is created from this one, its empty field with the same key receives this value.",
+  "customFields.carry.incompatible": "Incompatible",
+  "customFields.carry.incompatibleLabel": "Carry to {entityType} is incompatible: {reason}",
+  "customFields.carry.reason.target_missing": "{entityType} has no field with the key “{key}”.",
+  "customFields.carry.reason.value_type_mismatch": "The {entityType} field is {targetValueType}, but this field is {sourceValueType}.",
+  "customFields.carry.reason.options_missing": "The {entityType} field lacks these options: {missingOptionValues}.",
+  "customFields.carry.reason.audience_mismatch": "The {entityType} field is visible to customers, but this field is internal.",
+  "customFields.carry.warning.title": "This change stops values from carrying",
+  "customFields.carry.warning.body": "After this change, values will no longer carry between this field and:",
+  "customFields.carry.warning.counterpart": "{entityType} · {key}",
+  "customFields.carry.warning.proceed": "Continue anyway",
+  "customFields.carry.warning.cancel": "Cancel"
 }

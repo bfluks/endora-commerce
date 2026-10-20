@@ -16,13 +16,32 @@ import { ReorderAnnouncer, TouchReorderButtons, resolveCustomFieldLabel } from '
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { ERROR_CODES, type CustomFieldDefinitionDto, type CustomFieldOptionDto, type LocalizedLabel } from '@endora-commerce/contracts';
 import { customFieldsClient } from '../api/custom-fields-client.js';
+import type { CarryCounterpart, DefinitionChange } from '../lib/carry-drift.js';
 import { sameLabel, withLanguages } from './localized-label.js';
+
+/**
+ * Asks before an option change that breaks an enabled carry (feature 158,
+ * `specs/158-custom-fields-value-carry/contracts/admin-surfaces.md` §1.4). The
+ * dialog that renders this editor owns the question; the editor only says
+ * which change it is about to make.
+ */
+export interface CarryDriftGuard {
+  /** The enabled carries `change` would break; `[]` asks nothing. */
+  brokenBy: (change: DefinitionChange) => CarryCounterpart[];
+  /** Shows the warning; answers `true` once the operator proceeds, `false` on cancel. */
+  confirm: (
+    counterparts: readonly CarryCounterpart[],
+    options?: { lead?: string; destructive?: boolean },
+  ) => Promise<boolean>;
+}
 
 export interface DefinitionOptionsEditorProps {
   definition: CustomFieldDefinitionDto;
   /** Re-reads the definition after an option action. */
   onChanged: () => Promise<void>;
   disabled?: boolean;
+  /** Feature 158 — present where a change can break a carry. */
+  carryGuard?: CarryDriftGuard;
 }
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
@@ -52,7 +71,12 @@ function sentenceOf(error: unknown, t: Translate): string {
  * adopts the re-read value only when it is not being typed in. A reorder hands
  * focus back to the moved row's button.
  */
-export function DefinitionOptionsEditor({ definition, onChanged, disabled = false }: DefinitionOptionsEditorProps): ReactNode {
+export function DefinitionOptionsEditor({
+  definition,
+  onChanged,
+  disabled = false,
+  carryGuard,
+}: DefinitionOptionsEditorProps): ReactNode {
   const t = useTranslation('custom_fields');
   const [announcement, setAnnouncement] = useState('');
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
@@ -138,6 +162,7 @@ export function DefinitionOptionsEditor({ definition, onChanged, disabled = fals
           }}
           onChanged={onChanged}
           disabled={disabled}
+          carryGuard={carryGuard}
           reorder={
             <div data-reorder-for={option.id ?? option.value}>
               <TouchReorderButtons
@@ -157,6 +182,7 @@ export function DefinitionOptionsEditor({ definition, onChanged, disabled = fals
         nextSortOrder={options.reduce((max, option) => Math.max(max, option.sortOrder), -1) + 1}
         onChanged={onChanged}
         disabled={disabled}
+        carryGuard={carryGuard}
         t={t}
       />
     </div>
@@ -196,11 +222,22 @@ interface OptionRowProps {
   setError: (message: string | null) => void;
   onChanged: () => Promise<void>;
   disabled: boolean;
+  carryGuard: CarryDriftGuard | undefined;
   reorder: ReactNode;
   t: Translate;
 }
 
-function OptionRow({ definitionId, option, error, setError, onChanged, disabled, reorder, t }: OptionRowProps): ReactNode {
+function OptionRow({
+  definitionId,
+  option,
+  error,
+  setError,
+  onChanged,
+  disabled,
+  carryGuard,
+  reorder,
+  t,
+}: OptionRowProps): ReactNode {
   const id = useId();
   const { language } = useTranslationContext();
   const labelDefault = useLabelDraft(option.labelDefault);
@@ -302,6 +339,13 @@ function OptionRow({ definitionId, option, error, setError, onChanged, disabled,
   );
 
   const shownLabel = resolveCustomFieldLabel(option.label, option.labelDefault, language);
+  const remove = (): void => {
+    if (optionId === undefined) return;
+    void act(
+      () => customFieldsClient.removeOption(definitionId, optionId),
+      (err) => (isOptionInUse(err) ? t('customFields.editor.option.inUse', { label: shownLabel }) : sentenceOf(err, t)),
+    );
+  };
   const errorId = `${id}-error`;
   return (
     <div role="group" aria-label={option.labelDefault} aria-busy={busy} className="space-y-2 rounded-md border p-3">
@@ -360,12 +404,7 @@ function OptionRow({ definitionId, option, error, setError, onChanged, disabled,
               disabled={disabled || busy}
               onClick={(): void => {
                 setConfirming(false);
-                if (optionId === undefined) return;
-                void act(
-                  () => customFieldsClient.removeOption(definitionId, optionId),
-                  (err) =>
-                    isOptionInUse(err) ? t('customFields.editor.option.inUse', { label: shownLabel }) : sentenceOf(err, t),
-                );
+                remove();
               }}
             >
               {t('customFields.editor.option.remove')}
@@ -380,6 +419,21 @@ function OptionRow({ definitionId, option, error, setError, onChanged, disabled,
             className="min-h-11"
             disabled={disabled || busy}
             onClick={(): void => {
+              // A removal that breaks a carry asks once, with the carries named;
+              // any other asks as it always has, in the row.
+              const broken =
+                carryGuard?.brokenBy({ kind: 'remove-option', definitionId, optionValue: option.value }) ?? [];
+              if (carryGuard && broken.length > 0) {
+                void carryGuard
+                  .confirm(broken, {
+                    lead: t('customFields.editor.option.removeConfirm', { label: option.labelDefault }),
+                    destructive: true,
+                  })
+                  .then((proceed) => {
+                    if (proceed) remove();
+                  });
+                return;
+              }
               focusNext.current = 'keep';
               setConfirming(true);
             }}
@@ -406,10 +460,11 @@ interface AddOptionRowProps {
   nextSortOrder: number;
   onChanged: () => Promise<void>;
   disabled: boolean;
+  carryGuard: CarryDriftGuard | undefined;
   t: Translate;
 }
 
-function AddOptionRow({ definitionId, nextSortOrder, onChanged, disabled, t }: AddOptionRowProps): ReactNode {
+function AddOptionRow({ definitionId, nextSortOrder, onChanged, disabled, carryGuard, t }: AddOptionRowProps): ReactNode {
   const id = useId();
   const [value, setValue] = useState('');
   const [labelDefault, setLabelDefault] = useState('');
@@ -430,6 +485,8 @@ function AddOptionRow({ definitionId, nextSortOrder, onChanged, disabled, t }: A
     }
     setInvalid(false);
     setError(null);
+    const broken = carryGuard?.brokenBy({ kind: 'add-option', definitionId, optionValue: trimmedValue }) ?? [];
+    if (carryGuard && broken.length > 0 && !(await carryGuard.confirm(broken))) return;
     setBusy(true);
     try {
       await customFieldsClient.createOption(definitionId, {

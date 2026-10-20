@@ -97,5 +97,20 @@
   "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.options_missing": "Polu „{key}” dla typu {targetEntityType} brakuje tych opcji: {missingOptionValues}.",
   "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.audience_mismatch": "Pole „{key}” dla typu {targetEntityType} jest widoczne dla klientów, a to pole jest wewnętrzne. Najpierw zmień jedno z nich.",
   "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.pair_unsupported": "Wartości tego pola nie mogą być przenoszone do typu {targetEntityType}.",
-  "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.target_unavailable": "Typ {targetEntityType} jest wyłączony, więc nie można przenosić do niego wartości."
+  "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.target_unavailable": "Typ {targetEntityType} jest wyłączony, więc nie można przenosić do niego wartości.",
+  "customFields.table.carriesTo": "Przenosi do",
+  "customFields.carry.legend": "Przenoszenie wartości",
+  "customFields.carry.toggle": "Przenoś wartość do: {entityType}",
+  "customFields.carry.help": "Gdy z tego rekordu powstanie rekord typu „{entityType}”, jego puste pole o tym samym kluczu otrzyma tę wartość.",
+  "customFields.carry.incompatible": "Niezgodne",
+  "customFields.carry.incompatibleLabel": "Przenoszenie do typu „{entityType}” jest niezgodne: {reason}",
+  "customFields.carry.reason.target_missing": "Typ „{entityType}” nie ma pola o kluczu „{key}”.",
+  "customFields.carry.reason.value_type_mismatch": "Pole typu „{entityType}” ma typ wartości „{targetValueType}”, a to pole — „{sourceValueType}”.",
+  "customFields.carry.reason.options_missing": "W polu typu „{entityType}” brakuje tych opcji: {missingOptionValues}.",
+  "customFields.carry.reason.audience_mismatch": "Pole typu „{entityType}” jest widoczne dla klientów, a to pole jest wewnętrzne.",
+  "customFields.carry.warning.title": "Ta zmiana przerwie przenoszenie wartości",
+  "customFields.carry.warning.body": "Po tej zmianie wartości nie będą już przenoszone między tym polem a:",
+  "customFields.carry.warning.counterpart": "{entityType} · {key}",
+  "customFields.carry.warning.proceed": "Kontynuuj mimo to",
+  "customFields.carry.warning.cancel": "Anuluj"
 }

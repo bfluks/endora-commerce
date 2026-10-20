@@ -735,7 +735,7 @@ pnpm --filter backend run check:port-catches
 SC-007; contract `admin-surfaces.md` §1; research R-14). Extends the filters feature's editor by
 additive props only.
 
-- [ ] T041 [P] [US4] **RED** New `admin/test/modules/custom_fields/carry-drift.test.ts` over
+- [x] T041 [P] [US4] **RED** New `admin/test/modules/custom_fields/carry-drift.test.ts` over
   `carryCounterpartsBrokenBy` (contract `admin-surfaces.md` §1.4): removing an option a carrying
   source holds → that source named (`role: 'source'`); removing an option no source holds → `[]`;
   adding an option to a source whose target lacks it → the target named; target audience →
@@ -743,7 +743,7 @@ additive props only.
   `customer` target → the target named; deleting a target → every carrying source; deleting a
   source → its targets; an already-incompatible carry is not re-reported by a non-delete change;
   key `constructor` handled. Fails: no helper
-- [ ] T042 [P] [US4] **RED** New `admin/test/modules/custom_fields/CustomFieldsPage.carry.test.tsx`
+- [x] T042 [P] [US4] **RED** New `admin/test/modules/custom_fields/CustomFieldsPage.carry.test.tsx`
   (StrictMode; `AuthProvider` with `custom_fields:read` + `:write`; the module client mocked as the
   filters feature's editor test does): the create form and the editor offer one *Carry value to …*
   checkbox per `carryTargets` entry and none for Category (US4-4); an Order field offers no *Quote
@@ -752,16 +752,16 @@ additive props only.
   key and the type (US4-2, US4-3); the *Carries to* column shows translated chips in `en` and in
   `pl` (US4-5); a chip whose target lacks a source option shows *Incompatible* with the reason, and
   the mark disappears when the list re-reads compatible (US4-7). Fails: no toggles
-- [ ] T043 [P] [US4] **RED** New `admin/test/modules/custom_fields/CustomFieldsPage.carry-drift.test.tsx`
+- [x] T043 [P] [US4] **RED** New `admin/test/modules/custom_fields/CustomFieldsPage.carry-drift.test.tsx`
   (StrictMode): removing a target option, adding a source option, changing an audience in the table
   and deleting a definition that is part of an enabled carry each open an in-page confirmation
   listing "<type> · <key>" before any request; *Cancel* sends nothing; *Proceed* sends exactly the
   request the action sent before (US4-6, US4-8, SC-007); a change that breaks nothing asks nothing
-- [ ] T044 [P] Add the keys of contract `admin-surfaces.md` §1.5 to
+- [x] T044 [P] Add the keys of contract `admin-surfaces.md` §1.5 to
   `packages/modules/custom_fields/i18n/en.json` and `pl.json`
-- [ ] T045 [US4] Implement `packages/modules/custom_fields/src/admin/lib/carry-drift.ts`
+- [x] T045 [US4] Implement `packages/modules/custom_fields/src/admin/lib/carry-drift.ts`
   (prototype-free lookups); T041 green
-- [ ] T046 [US4] Implement in `DefinitionBehaviourFields.tsx`, `DefinitionEditorDialog.tsx`,
+- [x] T046 [US4] Implement in `DefinitionBehaviourFields.tsx`, `DefinitionEditorDialog.tsx`,
   `DefinitionOptionsEditor.tsx` and `CustomFieldsPage.tsx`
   (`packages/modules/custom_fields/src/admin/`): the toggles (additive `value.carryTo` /
   `onChange`), the refusal sentence from `details`, the *Carries to* column and the mark
@@ -781,6 +781,18 @@ pnpm --filter backend run i18n:hardcoded
 pnpm --filter backend run check:bundle-pairing
 pnpm --filter backend run check:admin-surface
 ```
+
+- **Phase 7 notes.** The page reads a second, unfiltered definitions list, only once some type
+  offers a carry target, for the *Incompatible* mark and the drift warnings (the per-type list
+  shows only one type). The refusal sentence reuses the Phase 1 keys
+  `errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.<token>` with the type and value-type names translated,
+  rather than minting six `customFields.carry.refusal.*` copies. Inside the editor the warning takes
+  the dialog's place (the editor stays mounted, hidden) instead of a second modal, which would also
+  answer Escape and trap focus; on the table it is its own `ModalDialog`. A removal or deletion that
+  breaks a carry asks once, in the warning, instead of the in-row confirmation. `value.carryTo` is
+  passed only where the type offers targets, so the existing editor test's `toEqual` on `value`
+  holds. Verification: 5 files 71/71; typecheck, lint, `i18n:hardcoded` (regressions 0),
+  `check:bundle-pairing`, `check:admin-surface` clean.
 
 ---
 
