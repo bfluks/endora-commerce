@@ -20,8 +20,8 @@ import corePl from '../../../../packages/modules/_i18n/i18n/pl.json';
  */
 
 const ENTITY_TYPES: CustomFieldEntityTypeInfo[] = [
-  { entityType: 'order', labelKey: 'customFields.entity.order', listFilter: true },
-  { entityType: 'customer', labelKey: 'customFields.entity.customer', listFilter: false },
+  { entityType: 'order', labelKey: 'customFields.entity.order', listFilter: true, carryTargets: [] },
+  { entityType: 'customer', labelKey: 'customFields.entity.customer', listFilter: false, carryTargets: [] },
 ];
 
 function definition(overrides: Partial<CustomFieldDefinitionDto>): CustomFieldDefinitionDto {
@@ -37,6 +37,7 @@ function definition(overrides: Partial<CustomFieldDefinitionDto>): CustomFieldDe
     sortOrder: 0,
     config: { hostFlag: true },
     listFilter: false,
+    carryTo: [],
     options: [
       { id: '00000000-0000-4000-8000-0000000000a1', value: 'north', label: { en: 'North' }, labelDefault: 'North', isDefault: false, sortOrder: 0 },
       { id: '00000000-0000-4000-8000-0000000000a2', value: 'south', label: { en: 'South' }, labelDefault: 'South', isDefault: false, sortOrder: 1 },

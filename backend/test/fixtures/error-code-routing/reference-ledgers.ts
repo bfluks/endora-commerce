@@ -748,6 +748,14 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'customer-visible definition earns over values a deleted field left under its key. The noun ' +
       'is the definition, raised from `custom_fields`\' admin routes (D-121 T1).',
   },
+  CUSTOM_FIELD_CARRY_INCOMPATIBLE: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 158 (`specs/158-custom-fields-value-carry/`, FR-003, FR-011) for turning ' +
+      'on a definition\'s carry option towards a target that cannot take its values, named by the ' +
+      '`details.code` token. The noun is the custom-field definition and its carry option, and the ' +
+      'judgement is `custom_fields`\' own definition Command (D-121 T1).',
+  },
 };
 
 /**

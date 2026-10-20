@@ -147,7 +147,7 @@ every shape of [contracts/carry-api.md](./contracts/carry-api.md) §1, §2, §4�
   Every `MISSING:` line is a stop; `check-ignore` must name an ignore rule for each file. Do not
   start a second service stack from the worktree — the copied `.env` points at the primary
   checkout's services.
-- [ ] T001 [P] **RED** New `packages/contracts/src/custom-fields.carry.test.ts` (FR-001, FR-003,
+- [x] T001 [P] **RED** New `packages/contracts/src/custom-fields.carry.test.ts` (FR-001, FR-003,
   FR-011): `customFieldCarryToSchema` accepts `[]`, `['order']`, `['order', 'opportunity']`; refuses
   a duplicate, three entries and `'invoice'`; `createCustomFieldDefinitionSchema.parse` without
   `carryTo` yields `[]`; `updateCustomFieldDefinitionSchema.parse({ labelDefault: 'x' })` carries no
@@ -161,7 +161,7 @@ every shape of [contracts/carry-api.md](./contracts/carry-api.md) §1, §2, §4�
   `internal`→`customer` → `audience_mismatch`; `customer`→`internal`, `customer`→`customer` → `[]`;
   options missing **and** audience → both, in that order. (The port interfaces are type-only and
   are compile-checked by T002's typecheck.) Fails: none of these exports exist
-- [ ] T002 Implement contract §1 and §4.1/§4.2 in `packages/contracts/src/custom-fields.ts`:
+- [x] T002 Implement contract §1 and §4.1/§4.2 in `packages/contracts/src/custom-fields.ts`:
   `CUSTOM_FIELD_CARRY_MAX_TARGETS`, `customFieldCarryToSchema`, `carryTo` on the definition /
   create (default `[]`) / update (optional, re-declared without the default beside `audience` and
   `config`) schemas and on `CustomFieldDefinitionRecord`, `carryTargets` on the entity-type info
@@ -170,15 +170,15 @@ every shape of [contracts/carry-api.md](./contracts/carry-api.md) §1, §2, §4�
   `CustomFieldCarryPort`, `CustomFieldCarryReceipt`, `CustomFieldCarryReceiverPort` (each port with
   the "Container name / Owner / Owner off" doc block the file's other ports carry); confirm
   `packages/contracts/src/index.ts` re-exports them; T001 green
-- [ ] T003 [P] **RED** Extend `packages/contracts/src/orders.test.ts` and
+- [x] T003 [P] **RED** Extend `packages/contracts/src/orders.test.ts` and
   `packages/contracts/src/quote-requests.test.ts` (FR-010, FR-010a): `orderCommentSystemNoteSchema`
   parses contract §5's example, refuses `skipped: []` and an unknown `reason`;
   `orderCommentSchema` accepts `systemNote: null`, an absent `systemNote` and a valid note;
   `rfqEventTypeSchema` accepts `'custom-field-carry-skipped'`. Fails: unknown schema / enum member
-- [ ] T004 Implement contract §5 (`orderCommentSystemNoteSchema`, `orderCommentSchema.systemNote`)
+- [x] T004 Implement contract §5 (`orderCommentSystemNoteSchema`, `orderCommentSchema.systemNote`)
   in `packages/contracts/src/orders.ts` and contract §6 (`rfqEventTypeSchema` member, the history
   entry DTO variant) in `packages/contracts/src/quote-requests.ts`; T003 green
-- [ ] T005 Mint `CUSTOM_FIELD_CARRY_INCOMPATIBLE` in **one commit** (standing rule 9; contract §2):
+- [x] T005 Mint `CUSTOM_FIELD_CARRY_INCOMPATIBLE` in **one commit** (standing rule 9; contract §2):
   `ERROR_CODES` in `packages/contracts/src/errors.ts`; a `MINTED_ERROR_CODES` entry in
   `backend/test/fixtures/error-code-routing/reference-ledgers.ts` (`to: 'custom_fields'`, reason:
   the noun is the custom-field definition and its carry option, decided by `custom_fields`' own
@@ -188,7 +188,7 @@ every shape of [contracts/carry-api.md](./contracts/carry-api.md) §1, §2, §4�
   the doc block's count); `errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE` and one `.<token>` sentence per
   token in `packages/modules/custom_fields/i18n/{en,pl}.json` (contract §2's English; Polish
   translated, placeholders identical)
-- [ ] T006 Record sweep for the new required members (contract §1.3):
+- [x] T006 Record sweep for the new required members (contract §1.3):
   `set -o pipefail; grep -rln "listFilter:" packages backend/test admin/test --include=*.ts --include=*.tsx | grep -v /dist/`
   lists every hand-built `CustomFieldDefinitionRecord` / `CustomFieldDefinitionDto` /
   entity-type fake (the filters feature added `listFilter` to exactly these); add `carryTo: []` or
@@ -198,6 +198,28 @@ every shape of [contracts/carry-api.md](./contracts/carry-api.md) §1, §2, §4�
   carry and receiver port types, the order comment system note, the
   `custom-field-carry-skipped` history event type, `CUSTOM_FIELD_CARRY_INCOMPATIBLE`
   (`specs/conventions/release-intent.md`)
+
+**Phase 1 result** (2026-10-20):
+- T000a's `build:packages` had left most packages without `dist`; re-run before T001.
+- T002: also exports `customFieldCarrySkipSchema` (the Zod twin of `CustomFieldCarrySkip`), which
+  `orders.ts` and `quote-requests.ts` import for §5 / §6.
+- T003/T004: §6's history entry is kind `custom_field_carry_skipped` with a nullable optional
+  `customFieldCarry: { source, skipped }` member. **Changed existing assertion** (rule 12):
+  `quote-requests.test.ts` "parses every entry kind" — `toHaveLength(13)` → `14`.
+- T006 sweep, beyond the planned fakes (`custom-fields.test.ts`, `CustomFieldsPage.editor.test.tsx`,
+  `CustomFieldsPage.list-filter.test.tsx`, `one-definitions-cache.test.ts`,
+  `attribute-definition-read-port.test.ts`): `custom_fields` source had to compile too —
+  `carryTo: []` in `toCustomFieldDefinitionRecord` and `carryTargets: []` in the entity-types route
+  (Phase 1 placeholders, replaced by T011/T012); `CustomFieldsPage.tsx` sends `carryTo: []` on create
+  and its pre-API fallback types offer `carryTargets: []`. To keep `catalog` untouched, the apply
+  seam takes a new `CustomFieldDefinitionApplyCreateInput` (`ports/index.ts`; the create request
+  with `carryTo` optional — a host-managed type offers no carry target) in
+  `custom-field-definition-apply.ts` and `custom-field-definition.service.ts`.
+- Verification: contracts 113/113 (3 files); typecheck contracts, mod-custom-fields, mod-catalog,
+  mod-crm, mod-orders, mod-quote-requests, admin, backend — clean; lint contracts and
+  mod-custom-fields clean; `check:error-translations` 0 violations; `check:bundle-pairing` 0
+  findings; `error-code-routing-equality` 23/23; `[PG]` `error-code-ownership` 11/11;
+  `manifests:generate` moved nothing.
 
 **Verification**:
 ```bash

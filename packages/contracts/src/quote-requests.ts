@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isoDateTimeSchema, OriginReferenceSchema, uuidSchema, type OriginReference } from './common.js';
+import { customFieldCarrySkipSchema } from './custom-fields.js';
 
 /**
  * Quote Requests (RFQ) module contracts — feature 008 workflow rewrite.
@@ -109,6 +110,9 @@ export const rfqEventTypeSchema = z.enum([
   // Feature 153 (owner answer Q4) — the quote PDF was e-mailed. Admin replies
   // only: a customer reply leaves these events out.
   'pdf-sent',
+  // Feature 158 — custom-field values a Sales Opportunity could not carry into
+  // this request. Admin replies only: it names keys of possibly internal fields.
+  'custom-field-carry-skipped',
 ]);
 export type RfqEventType = z.infer<typeof rfqEventTypeSchema>;
 
@@ -232,6 +236,8 @@ export const quoteRequestHistoryEntryKindSchema = z.enum([
   'note_added',
   // Feature 153 (owner answer Q4).
   'pdf_sent',
+  // Feature 158.
+  'custom_field_carry_skipped',
 ]);
 export type QuoteRequestHistoryEntryKind = z.infer<typeof quoteRequestHistoryEntryKindSchema>;
 
@@ -263,6 +269,21 @@ export const quoteRequestHistoryEntrySchema = z.object({
       templateName: z.string().nullable(),
       language: z.string().nullable(),
       message: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
+  /**
+   * Feature 158 — `custom_field_carry_skipped` entries only: the Sales
+   * Opportunity the values came from and every key not carried, with its reason.
+   */
+  customFieldCarry: z
+    .object({
+      source: z.object({
+        entityType: z.literal('opportunity'),
+        recordId: uuidSchema,
+        reference: z.string(),
+      }),
+      skipped: z.array(customFieldCarrySkipSchema).min(1),
     })
     .nullable()
     .optional(),

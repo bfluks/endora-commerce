@@ -8,7 +8,11 @@ import {
   uuidSchema,
   type OriginReference,
 } from './common.js';
-import { customFieldFiltersQueryParamSchema, customFieldValuesSchema } from './custom-fields.js';
+import {
+  customFieldCarrySkipSchema,
+  customFieldFiltersQueryParamSchema,
+  customFieldValuesSchema,
+} from './custom-fields.js';
 import { vatStatusSchema } from './organizations.js';
 import {
   savedListViewColumnsSchema,
@@ -872,6 +876,25 @@ export type AdminOrderPreviewResponse = z.infer<typeof adminOrderPreviewResponse
 
 // --- Comments --------------------------------------------------------------
 
+/**
+ * Feature 158 — an author-less **system note** the platform writes into an
+ * Order's comments: custom-field values that could not be carried into the
+ * Order from the record it was created from. Internal, never notifying, and
+ * never listed to the buyer. The comment's `body` is an English fallback; a
+ * reader renders the note in its own language from this shape.
+ */
+export const orderCommentSystemNoteSchema = z.object({
+  kind: z.literal('custom_field_carry_skipped'),
+  source: z.object({
+    entityType: z.enum(['quote_request', 'opportunity']),
+    recordId: uuidSchema,
+    /** The source's business number. */
+    reference: z.string(),
+  }),
+  skipped: z.array(customFieldCarrySkipSchema).min(1),
+});
+export type OrderCommentSystemNote = z.infer<typeof orderCommentSystemNoteSchema>;
+
 export const orderCommentSchema = z.object({
   id: uuidSchema,
   orderId: uuidSchema,
@@ -881,6 +904,8 @@ export const orderCommentSchema = z.object({
   body: z.string(),
   isCustomerVisible: z.boolean(),
   notifyCustomer: z.boolean(),
+  /** Feature 158 — admin replies only; present ⇒ a system note (both authors `null`). */
+  systemNote: orderCommentSystemNoteSchema.nullable().optional(),
   createdAt: isoDateTimeSchema,
 });
 export type OrderComment = z.infer<typeof orderCommentSchema>;

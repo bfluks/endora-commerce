@@ -19,8 +19,8 @@ import coreEn from '../../../../packages/modules/_i18n/i18n/en.json';
  */
 
 const ENTITY_TYPES: CustomFieldEntityTypeInfo[] = [
-  { entityType: 'order', labelKey: 'customFields.entity.order', listFilter: true },
-  { entityType: 'organization', labelKey: 'customFields.entity.organization', listFilter: false },
+  { entityType: 'order', labelKey: 'customFields.entity.order', listFilter: true, carryTargets: [] },
+  { entityType: 'organization', labelKey: 'customFields.entity.organization', listFilter: false, carryTargets: [] },
 ];
 
 function definition(overrides: Partial<CustomFieldDefinitionDto>): CustomFieldDefinitionDto {
@@ -36,6 +36,7 @@ function definition(overrides: Partial<CustomFieldDefinitionDto>): CustomFieldDe
     sortOrder: 0,
     config: {},
     listFilter: true,
+    carryTo: [],
     options: [],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',

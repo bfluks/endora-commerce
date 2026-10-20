@@ -161,6 +161,7 @@ describe('§1.1 the listFilter attribute', () => {
     audience: 'internal',
     sortOrder: 0,
     config: {},
+    carryTo: [],
     options: [],
     createdAt: NOW,
     updatedAt: NOW,

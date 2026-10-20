@@ -1,13 +1,13 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   customFieldDefinitionSchema,
-  type CreateCustomFieldDefinitionRequest,
   type CustomFieldOptionDto,
   type SupportedEntityType,
   type UpdateCustomFieldDefinitionRequest,
 } from '@endora-commerce/contracts';
 import { CustomFieldDefinition } from '../entities/custom-field-definition.entity.js';
 import { CustomFieldOption } from '../entities/custom-field-option.entity.js';
+import type { CustomFieldDefinitionApplyCreateInput } from '../../ports/index.js';
 import { isSupportedEntityType, offersListFilter } from './custom-field-registry.js';
 
 /**
@@ -92,7 +92,7 @@ export function assertListFilterSupported(entityType: string, listFilter: boolea
 /** Create a definition (+ its options for select types) on the caller's EM. */
 export async function applyCreateDefinition(
   em: EntityManager,
-  input: CreateCustomFieldDefinitionRequest,
+  input: CustomFieldDefinitionApplyCreateInput,
 ): Promise<CustomFieldDefinition> {
   // command-coverage-ignore: apply-seam primitive — mutates on the invoking Command's
   // transactional EM; the caller (custom_fields definition command or a host command,

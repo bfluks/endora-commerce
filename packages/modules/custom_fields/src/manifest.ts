@@ -69,8 +69,25 @@ export const manifest = defineModuleManifest({
    * refusals of a definition change that shared `CUSTOM_FIELD_DEFINITION_INVALID`
    * and an English message; each now has a sentence naming what it refuses
    * (`details.label` / `details.value`, or `details.key`) and no tokens.
+   *
+   * **`CUSTOM_FIELD_CARRY_INCOMPATIBLE`** (feature 158) is the family's tenth
+   * and the first with tokens: the definition Commands refuse turning on a
+   * carry towards a target that cannot take the values, and `details.code`
+   * names why — one sentence per token, filled from `details.key`,
+   * `details.targetEntityType` and the type or option members.
    */
   errorCodes: [
+    {
+      code: 'CUSTOM_FIELD_CARRY_INCOMPATIBLE',
+      tokens: [
+        'target_missing',
+        'value_type_mismatch',
+        'options_missing',
+        'audience_mismatch',
+        'pair_unsupported',
+        'target_unavailable',
+      ],
+    },
     { code: 'CUSTOM_FIELD_DEFINITION_INVALID' },
     { code: 'CUSTOM_FIELD_FILTER_UNAVAILABLE' },
     { code: 'CUSTOM_FIELD_HOST_MANAGED' },

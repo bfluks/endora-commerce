@@ -83,6 +83,25 @@ export const updateCustomFieldOptionSchema = z.object({
 });
 export type UpdateCustomFieldOptionRequest = z.infer<typeof updateCustomFieldOptionSchema>;
 
+/**
+ * How many entity types one definition may carry its values to (feature 158).
+ * Every source type of the registry offers at most two targets.
+ */
+export const CUSTOM_FIELD_CARRY_MAX_TARGETS = 2;
+
+/**
+ * The entity types a definition's values carry **to** when a record of such a
+ * type is created from, or joins, a record of the definition's own type
+ * (feature 158). Which pairs exist is the registry's `carryTargets` marker to
+ * say ({@link customFieldEntityTypeInfoSchema}); "never the definition's own
+ * type" is a server refusal, not a refine — the patch schema does not know
+ * the type.
+ */
+export const customFieldCarryToSchema = z
+  .array(supportedEntityTypeSchema)
+  .max(CUSTOM_FIELD_CARRY_MAX_TARGETS)
+  .refine((list) => new Set(list).size === list.length, 'Duplicate carry target');
+
 /** A full custom-field definition, options embedded. */
 export const customFieldDefinitionSchema = z.object({
   id: uuidSchema,
@@ -104,6 +123,8 @@ export const customFieldDefinitionSchema = z.object({
    * offers the option ({@link customFieldEntityTypeInfoSchema}).
    */
   listFilter: z.boolean(),
+  /** See {@link customFieldCarryToSchema} (feature 158). */
+  carryTo: customFieldCarryToSchema,
   options: z.array(customFieldOptionSchema).default([]),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
@@ -117,9 +138,11 @@ export const createCustomFieldDefinitionSchema = customFieldDefinitionSchema
   // customer only where an administrator has said they may.
   // A definition created without `listFilter` is not a list filter; the
   // server reads the absence as `false` rather than the schema defaulting it.
+  // A definition created without `carryTo` carries nothing (feature 158).
   .extend({
     audience: customFieldAudienceSchema.default('internal'),
     listFilter: z.boolean().optional(),
+    carryTo: customFieldCarryToSchema.default([]),
   });
 export type CreateCustomFieldDefinitionRequest = z.infer<typeof createCustomFieldDefinitionSchema>;
 
@@ -136,6 +159,7 @@ export const updateCustomFieldDefinitionSchema = createCustomFieldDefinitionSche
     audience: customFieldAudienceSchema.optional(),
     config: z.record(z.string(), z.unknown()).optional(),
     listFilter: z.boolean().optional(),
+    carryTo: customFieldCarryToSchema.optional(),
   });
 export type UpdateCustomFieldDefinitionRequest = z.infer<typeof updateCustomFieldDefinitionSchema>;
 
@@ -158,6 +182,11 @@ export const customFieldEntityTypeInfoSchema = z.object({
     .optional(),
   /** Whether definitions of this type may be marked as list filters (feature 157). */
   listFilter: z.boolean(),
+  /**
+   * The entity types definitions of this type may carry their values to
+   * (feature 158), filtered to targets whose owner module is present.
+   */
+  carryTargets: z.array(supportedEntityTypeSchema).default([]),
 });
 export type CustomFieldEntityTypeInfo = z.infer<typeof customFieldEntityTypeInfoSchema>;
 
@@ -473,6 +502,8 @@ export interface CustomFieldDefinitionRecord {
   sortOrder: number;
   config: Record<string, unknown>;
   listFilter: boolean;
+  /** Feature 158 — see {@link customFieldCarryToSchema}. */
+  carryTo: SupportedEntityType[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -699,4 +730,167 @@ export function isCustomFieldFilterUnavailableFailure(
     error.name === 'CustomFieldFilterUnavailableError' &&
     Array.isArray((error as { keys?: unknown }).keys)
   );
+}
+
+// ---------------------------------------------------------------------------
+// --- value carry-over (specs/158-custom-fields-value-carry/) ---------------
+// ---------------------------------------------------------------------------
+
+/** One side of a carry pair, as the compatibility rule reads it. */
+export interface CustomFieldCarryParty {
+  valueType: CustomFieldValueType;
+  audience: CustomFieldAudience;
+  options: ReadonlyArray<{ value: string }>;
+}
+
+/** Why a carry from one definition to the same-key definition of another type cannot work. */
+export type CustomFieldCarryIncompatibility =
+  | { reason: 'target_missing' }
+  | {
+      reason: 'value_type_mismatch';
+      sourceValueType: CustomFieldValueType;
+      targetValueType: CustomFieldValueType;
+    }
+  | { reason: 'options_missing'; missingOptionValues: string[] }
+  | { reason: 'audience_mismatch' };
+
+/**
+ * The one compatibility rule of a carry pair (feature 158). The server refuses
+ * turning a carry on with it, the admin marks drifted carries with it, and the
+ * carry port applies its type and audience halves at conversion. Pure: no I/O.
+ *
+ * Every reason, in this order; `[]` means compatible:
+ * - no target → `target_missing`, and nothing else;
+ * - value types differ → `value_type_mismatch` — no widening, and the options
+ *   question is not asked;
+ * - `select` / `multiselect`: the source option values the target lacks, in
+ *   source order (labels ignored, extra target options fine) → `options_missing`;
+ * - an `internal` source into a `customer` target → `audience_mismatch`.
+ */
+export function assessCustomFieldCarry(
+  source: CustomFieldCarryParty,
+  target: CustomFieldCarryParty | null,
+): CustomFieldCarryIncompatibility[] {
+  if (target === null) return [{ reason: 'target_missing' }];
+  const reasons: CustomFieldCarryIncompatibility[] = [];
+  if (source.valueType !== target.valueType) {
+    reasons.push({
+      reason: 'value_type_mismatch',
+      sourceValueType: source.valueType,
+      targetValueType: target.valueType,
+    });
+  } else if (source.valueType === 'select' || source.valueType === 'multiselect') {
+    const offered = new Set(target.options.map((option) => option.value));
+    const missingOptionValues = source.options
+      .map((option) => option.value)
+      .filter((value) => !offered.has(value));
+    if (missingOptionValues.length > 0) {
+      reasons.push({ reason: 'options_missing', missingOptionValues });
+    }
+  }
+  if (source.audience === 'internal' && target.audience === 'customer') {
+    reasons.push({ reason: 'audience_mismatch' });
+  }
+  return reasons;
+}
+
+/**
+ * Why one value was not carried at conversion. `value_invalid` is the
+ * per-value twin of `options_missing`: the value itself does not satisfy the
+ * target definition.
+ */
+export const customFieldCarrySkipReasonSchema = z.enum([
+  'target_missing',
+  'value_type_mismatch',
+  'audience_mismatch',
+  'value_invalid',
+]);
+export type CustomFieldCarrySkipReason = z.infer<typeof customFieldCarrySkipReasonSchema>;
+
+export const customFieldCarrySkipSchema = z.object({
+  key: z.string(),
+  reason: customFieldCarrySkipReasonSchema,
+});
+
+/** One key not carried, with its reason. */
+export interface CustomFieldCarrySkip {
+  readonly key: string;
+  readonly reason: CustomFieldCarrySkipReason;
+}
+
+/**
+ * What {@link CustomFieldCarryPort.plan} answers: `values` is the target bag to
+ * persist — the target's own bag plus the carried keys, never a removed or
+ * overwritten key — `carried` the keys added and `skipped` the keys not
+ * carried, each with its reason.
+ */
+export interface CustomFieldCarryPlan {
+  readonly values: Record<string, unknown>;
+  readonly carried: readonly string[];
+  readonly skipped: readonly CustomFieldCarrySkip[];
+}
+
+/**
+ * Container name: `customFieldCarryPort`. Owner: `custom_fields` (feature 158).
+ *
+ * The host that owns a carry's **target** record asks it which source values
+ * carry into its own current bag, and persists the answer in its own write.
+ * Only source definitions whose `carryTo` names the target type and whose value
+ * is non-empty are considered; a target key that already holds a value is kept
+ * and neither carried nor skipped; unrelated target fields — required ones
+ * included — are never consulted, so a host must not run `validateAndMerge`
+ * over the answer. Either type's owner absent → an empty plan.
+ *
+ * It performs **no** database write, **no** audit and emits **no** event.
+ *
+ * **Owner off:** the seam fails closed — resolving this port throws
+ * `ModuleDisabledError` and the call answers 503 `MODULE_DISABLED`, so nothing
+ * half-executes. Whether `custom_fields` has an off state at all is its manifest's
+ * `activation` to say, not this line's: a module declaring
+ * `nonDeactivatable` never enters one.
+ */
+export interface CustomFieldCarryPort {
+  plan(input: {
+    sourceType: SupportedEntityType;
+    targetType: SupportedEntityType;
+    sourceValues: Record<string, unknown>;
+    targetValues: Record<string, unknown>;
+  }): Promise<CustomFieldCarryPlan>;
+}
+
+/** What a receiver answers: `not-found` for a missing record and for another Organization's alike. */
+export interface CustomFieldCarryReceipt {
+  readonly outcome: 'applied' | 'not-found';
+  readonly carried: readonly string[];
+  readonly skipped: readonly CustomFieldCarrySkip[];
+}
+
+/**
+ * Container names: `orderCustomFieldCarryPort` (owner `orders`) and
+ * `quoteRequestCustomFieldCarryPort` (owner `quote_requests`) (feature 158).
+ *
+ * `crm` pushes a Sales Opportunity's values to the document created from it,
+ * once its origin link is made; the document's owner carries them into empty
+ * fields in one Command of its own and records what it skipped on the record.
+ * `not-found` for a missing record **and** for a record of another
+ * Organization — one answer, no existence leak; `applied` otherwise, even when
+ * nothing was carried. A second call carries nothing more (fill-empty).
+ *
+ * **Owner off:** the seam fails closed — resolving this port throws
+ * `ModuleDisabledError` and the call answers 503 `MODULE_DISABLED`, so nothing
+ * half-executes. `orders` is not deactivatable; for `quote_requests` the caller
+ * decides presence first and does not call.
+ */
+export interface CustomFieldCarryReceiverPort {
+  receiveCarriedValues(input: {
+    recordId: string;
+    organizationId: string;
+    source: {
+      entityType: 'opportunity';
+      recordId: string;
+      /** The source's business number, for the skip entry's sentence. */
+      reference: string;
+      values: Record<string, unknown>;
+    };
+  }): Promise<CustomFieldCarryReceipt>;
 }

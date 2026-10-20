@@ -29,6 +29,8 @@ const FALLBACK_ENTITY_TYPES: CustomFieldEntityTypeInfo[] = (
   labelKey: `customFields.entity.${entityType}`,
   // The list-filter option is offered only once the server says the type has it.
   listFilter: false,
+  // So are the carry options (feature 158).
+  carryTargets: [],
 }));
 const VALUE_TYPES: CustomFieldValueType[] = [
   'text',
@@ -171,6 +173,8 @@ export function CustomFieldsPage(): ReactNode {
         audience,
         sortOrder: rows.length,
         config: {},
+        // Feature 158 — the carry toggles land with the editor (Phase 7).
+        carryTo: [],
         options: opts,
         // Sent only where the entity type offers the option.
         ...(entityTypeInfo?.listFilter ? { listFilter } : {}),

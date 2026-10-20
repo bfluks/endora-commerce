@@ -87,10 +87,20 @@ import type {
  * manifest's `activation` to say, not this line's: a module declaring
  * `nonDeactivatable` never enters one.
  */
+/**
+ * What {@link CustomFieldDefinitionApplyApi.applyCreate} takes: the create
+ * request with `carryTo` optional (feature 158). A host-managed type's registry
+ * entry offers no carry target, so a host never names one; an absent `carryTo`
+ * is stored as none.
+ */
+export type CustomFieldDefinitionApplyCreateInput = Omit<CreateCustomFieldDefinitionRequest, 'carryTo'> & {
+  carryTo?: SupportedEntityType[];
+};
+
 export interface CustomFieldDefinitionApplyApi {
   applyCreate(
     em: EntityManager,
-    input: CreateCustomFieldDefinitionRequest,
+    input: CustomFieldDefinitionApplyCreateInput,
   ): Promise<CustomFieldDefinitionRecord>;
   applyUpdate(
     em: EntityManager,

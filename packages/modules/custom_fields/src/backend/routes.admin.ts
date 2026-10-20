@@ -158,6 +158,8 @@ export async function registerCustomFieldsAdminRoutes(
         labelKey: meta.labelKey,
         // Whether the type's definitions may be list filters (feature 157).
         listFilter: meta.listFilter === true,
+        // Feature 158 Phase 1 placeholder: the registry marker lands in Phase 2.
+        carryTargets: [],
         ...(meta.managedBy
           ? {
               managedBy: {

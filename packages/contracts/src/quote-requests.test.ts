@@ -228,7 +228,7 @@ describe('quote request history — entries and response', () => {
     for (const kind of quoteRequestHistoryEntryKindSchema.options) {
       expect(quoteRequestHistoryEntrySchema.parse({ ...ENTRY, kind }).kind).toBe(kind);
     }
-    expect(quoteRequestHistoryEntryKindSchema.options).toHaveLength(13);
+    expect(quoteRequestHistoryEntryKindSchema.options).toHaveLength(14);
   });
 
   it('refuses an unknown entry kind', () => {
@@ -527,5 +527,62 @@ describe('quote PDF — sending (T055, owner answer Q4)', () => {
     for (const code of ['QUOTE_REQUEST_PDF_TOO_LARGE', 'QUOTE_REQUEST_PDF_EMAIL_UNAVAILABLE', 'QUOTE_REQUEST_PDF_SEND_FAILED']) {
       expect((ERROR_CODES as Record<string, string>)[code]).toBe(code);
     }
+  });
+});
+
+describe('feature 158 — the custom-field-carry-skipped history event', () => {
+  it('is an event type', () => {
+    expect(rfqEventTypeSchema.parse('custom-field-carry-skipped')).toBe('custom-field-carry-skipped');
+  });
+
+  it('projects to a custom_field_carry_skipped entry naming its source and every skipped key', () => {
+    expect(quoteRequestHistoryEntryKindSchema.parse('custom_field_carry_skipped')).toBe('custom_field_carry_skipped');
+    const entry = quoteRequestHistoryEntrySchema.parse({
+      id: ID(40),
+      eventIds: [ID(40)],
+      kind: 'custom_field_carry_skipped',
+      occurredAt: AT,
+      actor: { kind: 'system' },
+      revisionNumber: null,
+      note: null,
+      reason: null,
+      changes: null,
+      relatedQuoteRequestId: null,
+      orderId: null,
+      customFieldCarry: {
+        source: { entityType: 'opportunity', recordId: ID(41), reference: 'OPP-7' },
+        skipped: [{ key: 'order_source', reason: 'audience_mismatch' }],
+      },
+    });
+    expect(entry.customFieldCarry?.skipped).toEqual([{ key: 'order_source', reason: 'audience_mismatch' }]);
+  });
+
+  it('refuses a carry entry that skipped nothing or names another source type', () => {
+    const base = {
+      id: ID(42),
+      eventIds: [ID(42)],
+      kind: 'custom_field_carry_skipped',
+      occurredAt: AT,
+      actor: { kind: 'system' },
+      revisionNumber: null,
+      note: null,
+      reason: null,
+      changes: null,
+      relatedQuoteRequestId: null,
+      orderId: null,
+    };
+    const source = { entityType: 'opportunity', recordId: ID(43), reference: 'OPP-8' };
+    expect(
+      quoteRequestHistoryEntrySchema.safeParse({ ...base, customFieldCarry: { source, skipped: [] } }).success,
+    ).toBe(false);
+    expect(
+      quoteRequestHistoryEntrySchema.safeParse({
+        ...base,
+        customFieldCarry: {
+          source: { ...source, entityType: 'order' },
+          skipped: [{ key: 'k', reason: 'value_invalid' }],
+        },
+      }).success,
+    ).toBe(false);
   });
 });

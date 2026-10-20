@@ -90,5 +90,12 @@
   "customFields.table.emptyAction": "Dodaj nowe pole",
   "errors.CUSTOM_FIELD_OPTION_IN_USE": "Nie można usunąć opcji „{label}”, bo używają jej niektóre rekordy. Najpierw zmień ich wartość.",
   "errors.CUSTOM_FIELD_VALUE_TYPE_LOCKED": "Nie można zmienić typu pola „{key}”, dopóki rekordy mają w nim wartości. Najpierw usuń te wartości.",
-  "errors.CUSTOM_FIELD_STORED_VALUES_EXIST": "Rekordy mają już wartości pod kluczem „{key}”, pozostawione przez usunięte pole. Utwórz pole jako wewnętrzne, przejrzyj te wartości, a potem zmień, kto je widzi."
+  "errors.CUSTOM_FIELD_STORED_VALUES_EXIST": "Rekordy mają już wartości pod kluczem „{key}”, pozostawione przez usunięte pole. Utwórz pole jako wewnętrzne, przejrzyj te wartości, a potem zmień, kto je widzi.",
+  "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE": "To pole nie może tam przenieść swojej wartości.",
+  "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.target_missing": "Dla typu {targetEntityType} nie ma pola o kluczu „{key}”. Najpierw je utwórz.",
+  "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.value_type_mismatch": "Pole „{key}” dla typu {targetEntityType} ma typ {targetValueType}, a to pole ma typ {sourceValueType}.",
+  "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.options_missing": "Polu „{key}” dla typu {targetEntityType} brakuje tych opcji: {missingOptionValues}.",
+  "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.audience_mismatch": "Pole „{key}” dla typu {targetEntityType} jest widoczne dla klientów, a to pole jest wewnętrzne. Najpierw zmień jedno z nich.",
+  "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.pair_unsupported": "Wartości tego pola nie mogą być przenoszone do typu {targetEntityType}.",
+  "errors.CUSTOM_FIELD_CARRY_INCOMPATIBLE.target_unavailable": "Typ {targetEntityType} jest wyłączony, więc nie można przenosić do niego wartości."
 }
