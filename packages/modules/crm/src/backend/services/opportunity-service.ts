@@ -15,6 +15,7 @@ import {
   type CustomFieldFilters,
   type CustomFieldListFilterField,
   type CustomFieldListFilterPort,
+  type CustomFieldCarryPort,
   type CustomFieldValuePort,
   type OpportunityCreatedEvent,
   type OpportunityBoardCardField,
@@ -37,6 +38,7 @@ import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { getTenantContext, isOrgInScope } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
 import { isDeepStrictEqual } from 'util';
+import { carryIntoOpportunity, type OpportunityCarrySource } from './opportunity-custom-field-carry.js';
 import {
   OpportunityWorkflowConfigError,
   resolveOpportunityStatusName,
@@ -84,6 +86,11 @@ export interface OpportunityServiceDeps {
   unresolvedPropagations: (opportunityId: string) => Promise<PropagationOutcome[]>;
   /** Operator-defined fields (US15): `custom_fields` validates, this service writes. */
   customFields: CustomFieldValuePort;
+  /**
+   * `custom_fields`' carry port (feature 158): the document's values an
+   * Opportunity created for it receives. Lazy, like every port here.
+   */
+  customFieldCarry: CustomFieldCarryPort;
   /**
    * The list's custom-field filters (`specs/157-custom-fields-list-filters/`):
    * `custom_fields`' `customFieldListFilterPort`, which offers the fields and
@@ -142,6 +149,12 @@ export interface AutomaticOpportunityInput {
   source: Exclude<OpportunitySource, 'manual'>;
   /** The document it is created for, linked in the same Command. */
   document: { kind: OpportunityDocumentKind; id: string };
+  /**
+   * The document's custom-field values, carried into the new Opportunity
+   * (feature 158). Absent for a document created **from** an Opportunity: that
+   * carry goes the other way.
+   */
+  carry?: OpportunityCarrySource;
 }
 
 /** What the create Command writes beside the request's own fields. */
@@ -149,6 +162,8 @@ interface CreateOptions {
   source: OpportunitySource;
   /** A document linked to the Opportunity in the same transaction (`link_source = 'auto'`). */
   document?: { kind: OpportunityDocumentKind; id: string };
+  /** Feature 158 — what the custom-field carry adds to the audit entry (`customFieldCarry`). */
+  carryAfter?: Record<string, unknown>;
 }
 
 /** What an edit that changed the assignee hands on: the announcement, and whom to tell. */
@@ -339,6 +354,14 @@ export class OpportunityService {
         ? input.salesChannelId
         : null;
 
+    // Feature 158 (US2; research R-9) — the document's carried custom-field
+    // values, planned before the Command: the Opportunity is new, so every
+    // carried field is empty. Not validated against the Opportunity's other
+    // fields — a required one must not stop the creation.
+    const carry = input.carry
+      ? await carryIntoOpportunity(this.deps.customFieldCarry, input.carry, {})
+      : null;
+
     let created: { id: string; organizationId: string; number: string } | null = null;
     // The create Command refuses when the start status it was handed has gone
     // by the time it holds it (research N-R12). A person retries; nobody is
@@ -357,9 +380,10 @@ export class OpportunityService {
               salesChannelId,
               assignedAdminUserId,
               valueMode: 'computed',
+              ...(carry && carry.carried.length > 0 ? { customFieldValues: carry.values } : {}),
             },
             initial.code,
-            { source: input.source, document: input.document },
+            { source: input.source, document: input.document, ...(carry ? { carryAfter: carry.after } : {}) },
           ),
         );
       } catch (error) {
@@ -468,6 +492,7 @@ export class OpportunityService {
             ...(options.document
               ? { linkedDocument: { documentKind: options.document.kind, documentId: options.document.id } }
               : {}),
+            ...(options.carryAfter ?? {}),
           },
         };
       },

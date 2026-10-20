@@ -472,7 +472,7 @@ pnpm --filter backend run check:transaction-context
 **Goal**: US2 (FR-007 – FR-010, FR-012 – FR-015 for the two pairs into Opportunities; research R-9,
 R-11).
 
-- [ ] T023 [US2] **RED** New `backend/test/integration/crm/custom-field-carry-into-opportunity.test.ts`
+- [x] T023 [US2] **RED** New `backend/test/integration/crm/custom-field-carry-into-opportunity.test.ts`
   (standing rule 7 for both auto-create settings; Order, QR and Opportunity `select` fields
   `order_source`; Order → Opportunity and QR → Opportunity on). Cases, each awaiting
   `OpportunityAutoCreateService.idle()` as `auto-create.test.ts` does: order placed with
@@ -490,7 +490,7 @@ R-11).
   holding a value, to an Opportunity with an empty field (`OpportunityLinkService.add`,
   `linkSource: 'manual'`) → the Opportunity stays empty and the `link_add` entry has no
   `customFieldCarry` (US3-5, FR-008, owner ruling 2026-10-19). Fails: nothing carried
-- [ ] T024 [P] [US2] **RED** New co-located `packages/modules/crm/src/backend/services/opportunity-custom-field-carry.test.ts`
+- [x] T024 [P] [US2] **RED** New co-located `packages/modules/crm/src/backend/services/opportunity-custom-field-carry.test.ts`
   over a stub `CustomFieldCarryPort`: `carryIntoOpportunity({ sourceType, sourceValues },
   currentValues)` returns `{ values, after }` where `after` is `{}` when nothing was carried or
   skipped, else `{ customFieldCarry: { source, carried, skipped } }`; and extend
@@ -498,7 +498,7 @@ R-11).
   receives `carry: { sourceType: 'order', sourceValues }` for an Order and `'quote_request'` for a
   QR; `linkOrderPlacedFromQuoteRequest` receives the Order record unchanged. Fails: no helper / no
   `carry` member
-- [ ] T025 [US2] Implement `packages/modules/crm/src/backend/services/opportunity-custom-field-carry.ts`
+- [x] T025 [US2] Implement `packages/modules/crm/src/backend/services/opportunity-custom-field-carry.ts`
   and its use: `AutomaticOpportunityInput.carry?` and `createForDocument` (plan before the Command;
   `customFieldValues` and the skip member into `#createCommand`'s input/options, merged into its
   `after`) in `opportunity-service.ts`; `AutomaticLink.carry?` and the `crm.opportunity.link_add`
@@ -506,15 +506,34 @@ R-11).
   `loadOpportunity`; assign when `carried` is non-empty; `after` gains the member);
   `linkOrderPlacedFromQuoteRequest` passes `{ sourceType: 'order', sourceValues:
   order.customFieldValues }`; T024 green
-- [ ] T026 [US2] Pass the document's values from `opportunity-auto-create-service.ts`
+- [x] T026 [US2] Pass the document's values from `opportunity-auto-create-service.ts`
   (`#placedOrder` → `order.customFieldValues`, `#submittedQuoteRequest` →
   `quoteRequest.record.customFieldValues`); origin links pass **no** `carry` (R-9); wire
   `lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort')` in
   `packages/modules/crm/src/backend/index.ts` (resolved per call, never captured); T023 green
-- [ ] T027 Changeset `.changeset/158-crm-custom-field-carry.md` — `'@endora-commerce/mod-crm':
+- [x] T027 Changeset `.changeset/158-crm-custom-field-carry.md` — `'@endora-commerce/mod-crm':
   minor`: Opportunities created for, or joined by, an Order or Quote Request receive carried
   custom-field values into empty fields; skipped keys are named in the creation or link history
   entry (extended in T035)
+
+**Phase 4 result** (2026-10-20):
+- T024/T025 deviation: `carryIntoOpportunity(port, { sourceType, recordId, sourceValues }, currentValues)`
+  takes the port explicitly and the source's `recordId` (the audit member's `source.recordId`,
+  data-model §4.3), and answers `{ values, carried, after }`. The link entry also gains
+  `customFieldValues` when values were carried, as the creation entry's snapshot already shows them.
+- T026: the port reaches both `OpportunityService` and `OpportunityLinkService` deps as
+  `lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort')` (the proxy resolves per call),
+  beside the existing `customFields` port. Nothing else constructs either service.
+- **Changed existing assertions** (rule 12): `opportunity-auto-create-service.test.ts` — the two
+  `createForDocument` `toHaveBeenCalledWith` objects gain `carry`, the Order and Quote Request
+  fixtures gain `customFieldValues`, and the Order case also asserts
+  `linkOrderPlacedFromQuoteRequest` received the Order unchanged.
+- The CRM integration test seeds Orders with `seedCrmOrder` + values and announces
+  `order.created.v1` (as `auto-create.test.ts` does), and reads/restores both auto-create settings'
+  `global_value` (rule 7).
+- Verification: mod-crm 3 files 33/33; `[PG]` custom-field-carry-into-opportunity 9/9, auto-create
+  12/12, history 6/6, custom-fields 10/10; typecheck + lint clean; `check:port-dependencies`,
+  `check:port-catches`, `check:port-shape` 0 violations; `check:command-coverage --strict` 0 blocking.
 
 **Verification**:
 ```bash
