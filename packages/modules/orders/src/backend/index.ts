@@ -14,6 +14,7 @@ import type {
   CatalogProductReadPort,
   CreditLimitReadPort,
   CustomerAccountReadPort,
+  CustomFieldCarryPort,
   CustomFieldListFilterPort,
   DeliveryMethodReadPort,
   EmailDefaultsRegistryPort,
@@ -639,6 +640,9 @@ export function registerModule(ctx: ModuleContext): void {
               effectiveState.isPresent('quote_requests')
                 ? lazyPort<QuoteRequestReadPort>(ctx, 'quoteRequestReadPort')
                 : null,
+            // Feature 158 — the custom-field values a vouched Quote Request
+            // carries into the Order (`custom_fields` is not deactivatable).
+            customFieldCarry: () => lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort'),
             // The payment row placement opens (feature 080, T048; D-179). **No
             // presence question**, unlike every other switchable owner on this
             // list — and the difference is a fallback rather than a lock. An

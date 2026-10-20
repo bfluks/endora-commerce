@@ -1399,6 +1399,9 @@ export async function registerOrderRoutes(
 function serializeCommentForCustomer(c: OrderComment): Record<string, unknown> {
   const serialized = serializeComment(c);
   delete serialized.authorAdminUserId;
+  // Feature 158 — a system note is never listed to the buyer, and the member
+  // is the admin surface's.
+  delete serialized.systemNote;
   return serialized;
 }
 
@@ -1411,6 +1414,7 @@ function serializeComment(c: OrderComment): Record<string, unknown> {
     body: c.body,
     isCustomerVisible: c.isCustomerVisible,
     notifyCustomer: c.notifyCustomer,
+    systemNote: c.systemNote ?? null,
     createdAt: c.createdAt.toISOString(),
   };
 }

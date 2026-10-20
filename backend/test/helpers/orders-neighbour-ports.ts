@@ -164,6 +164,11 @@ export function orderServiceNeighbours(
     // degrade and the default here: these rigs place orders from baskets no
     // quote filled, so there is no claim to vouch for.
     quoteRequestRead: () => null,
+    // Feature 158 — asked only for a vouched quote source, which these rigs
+    // never have; it answers the target bag unchanged.
+    customFieldCarry: () => ({
+      plan: async ({ targetValues }) => ({ values: { ...targetValues }, carried: [], skipped: [] }),
+    }),
     // A value and not an accessor, because `payments` has no degrade even though
     // it is switchable (D-179): there is no order without a record of what is
     // owed. A rig that wants the absent owner hands in a double that throws

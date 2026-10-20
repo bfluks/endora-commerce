@@ -38,6 +38,7 @@ import { Migration20260821T131145OrdersPurchaseConversionMarker } from './202608
 import { Migration20260824T080000OrdersDeliveryPointSnapshot } from './20260824T080000_orders_delivery_point_snapshot.js';
 import { Migration20261003T201537OrdersOrderTransitionEffects } from './20261003T201537_orders_order_transition_effects.js';
 import { Migration20261016T082022OrdersOrderItemReturnableAtPurchase } from './20261016T082022_orders_order_item_returnable_at_purchase.js';
+import { Migration20261020T113026OrdersOrderCommentSystemNote } from './20261020T113026_orders_order_comment_system_note.js';
 
 export const migrations = [
   Migration20260611T140355OrdersBusinessId,
@@ -56,6 +57,7 @@ export const migrations = [
   Migration20260824T080000OrdersDeliveryPointSnapshot,
   Migration20261003T201537OrdersOrderTransitionEffects,
   Migration20261016T082022OrdersOrderItemReturnableAtPurchase,
+  Migration20261020T113026OrdersOrderCommentSystemNote,
 ];
 
 export {
@@ -75,4 +77,5 @@ export {
   Migration20260824T080000OrdersDeliveryPointSnapshot,
   Migration20261003T201537OrdersOrderTransitionEffects,
   Migration20261016T082022OrdersOrderItemReturnableAtPurchase,
+  Migration20261020T113026OrdersOrderCommentSystemNote,
 };

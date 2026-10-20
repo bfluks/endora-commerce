@@ -4,6 +4,7 @@ import {
   ERROR_CODES,
   pickLocalized,
   type CartSnapshot,
+  type CustomFieldCarryPort,
   type FulfilmentStrategy,
   type InventoryFulfilmentPlanningPort,
   type InventoryStockReadPort,
@@ -37,6 +38,7 @@ import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Order } from '../entities/order.entity.js';
 import { OrderItem } from '../entities/order-item.entity.js';
 import { OrderAppliedPromotion } from '../entities/order-applied-promotion.entity.js';
+import { buildCarrySkipNote } from '../order-carry-note.js';
 /**
  * The two em-carrying interfaces their owners write (D-94.5).
  *
@@ -342,6 +344,13 @@ export interface OrderServiceNeighbourPorts {
    * vouch for the claim, and an unvouched id is not written.
    */
   readonly quoteRequestRead: () => QuoteRequestReadPort | null;
+  /**
+   * `custom_fields`' carry port (`specs/158-custom-fields-value-carry/`,
+   * research R-7): which of the vouched Quote Request's custom-field values the
+   * new Order receives. Resolved per call; `custom_fields` is not
+   * deactivatable, so there is no absent state to ask about and no `catch`.
+   */
+  readonly customFieldCarry: () => CustomFieldCarryPort;
   /**
    * The payment row placement opens — this transaction's own `EntityManager`,
    * and no accessor (feature 080, T048; D-179).
@@ -2022,6 +2031,22 @@ export class OrderService {
       // Vouched once, at the top of the transaction under the request's lock.
       const { sourceQuoteRequestId } = quoteSource;
 
+      // Feature 158 (US1; research R-7) — the vouched request's custom-field
+      // values its definitions carry to Orders, read now, under the same lock.
+      // Only empty fields are filled (a new Order has none) and nothing here can
+      // refuse the placement: a value that cannot be carried is skipped and
+      // named in a system note below. The carried bag is not run through
+      // `validateAndMerge` — an unrelated required field must not fail checkout.
+      const carry =
+        sourceQuoteRequestId !== null && quoteSource.quoteRequest !== null
+          ? await this.neighbours.customFieldCarry().plan({
+              sourceType: 'quote_request',
+              targetType: 'order',
+              sourceValues: quoteSource.quoteRequest.customFieldValues,
+              targetValues: {},
+            })
+          : null;
+
       const order = tx.create(Order, {
         organizationId: ctx.organizationId,
         placedByCustomerAccountId: ctx.customerAccountId,
@@ -2106,8 +2131,24 @@ export class OrderService {
         // second write. The column's `false` default is the opposite answer
         // on purpose, and only for rows that predate it — see the migration.
         purchaseConversionOwed: true,
+        ...(carry && carry.carried.length > 0 ? { customFieldValues: { ...carry.values } } : {}),
       });
       await tx.persistAndFlush(order);
+
+      // Feature 158 (FR-010a) — what could not be carried, as one internal,
+      // author-less, non-notifying note in this transaction.
+      if (carry && carry.skipped.length > 0 && quoteSource.quoteRequest) {
+        buildCarrySkipNote(tx, {
+          orderId: order.id,
+          source: {
+            entityType: 'quote_request',
+            recordId: quoteSource.quoteRequest.id,
+            reference: quoteSource.quoteRequest.businessId,
+          },
+          skipped: carry.skipped,
+        });
+        await tx.flush();
+      }
 
       // Feature 045 (US2) — stamp the per-promotion discount breakdown.
       for (const ap of appliedPromotions) {
@@ -2468,7 +2509,13 @@ export class OrderService {
           objectType: 'order',
           objectId: order.id,
           stateBefore: null,
-          stateAfter: { total: total.toFixed(2), currency, status: order.status },
+          stateAfter: {
+            total: total.toFixed(2),
+            currency,
+            status: order.status,
+            // Feature 158 (US1-5) — the custom-field values carried from the request.
+            ...(carry && carry.carried.length > 0 ? { carriedCustomFieldKeys: [...carry.carried] } : {}),
+          },
         });
       }
 

@@ -38,6 +38,7 @@ import type {
   AddressReadPort,
   AddressServicePort,
   AssetReadPort,
+  CustomFieldCarryPort,
   CustomFieldListFilterPort,
   CustomFieldValuePort,
   CartReadPort,
@@ -227,6 +228,12 @@ export interface OrdersModuleOptions {
    * nothing.
    */
   quoteRequestRead: () => QuoteRequestReadPort | null;
+  /**
+   * `custom_fields`' carry port (`specs/158-custom-fields-value-carry/`): the
+   * vouched Quote Request's custom-field values the new Order receives. An
+   * accessor resolved per call; `custom_fields` is not deactivatable.
+   */
+  customFieldCarry: () => CustomFieldCarryPort;
   /**
    * The payment row placement opens (feature 080, T048; D-179). A value and not
    * an accessor, unlike the two `invoices` names above and unlike `inventory`:
@@ -507,6 +514,7 @@ export function commerceModule(options: OrdersModuleOptions) {
           cartRead: options.cartRead,
           invoicePlacementApply: options.invoicePlacementApply,
           quoteRequestRead: options.quoteRequestRead,
+          customFieldCarry: options.customFieldCarry,
           paymentPlacementApply: options.paymentPlacementApply,
         },
         ...(options.mailer ? { mailer: options.mailer } : {}),

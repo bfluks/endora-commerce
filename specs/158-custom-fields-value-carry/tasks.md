@@ -375,7 +375,7 @@ pnpm --filter backend run overlay:check
 **Goal**: US1 on the server (FR-007 – FR-010a, FR-012 – FR-015 for the QR → Order pair; research
 R-7, R-8).
 
-- [ ] T016 [US1] **RED** Extend `backend/test/contract/orders/comments.test.ts` (FR-010a, SC-006): a
+- [x] T016 [US1] **RED** Extend `backend/test/contract/orders/comments.test.ts` (FR-010a, SC-006): a
   system-note row inserted through the test's database helper (author null ×2, not visible, not
   notifying, a `system_note` of contract §5's shape) is listed by
   `GET /api/v1/admin/orders/:id/comments` with `systemNote` equal to the stored shape and
@@ -383,7 +383,7 @@ R-7, R-8).
   when its `is_customer_visible` is forced `true` in a second row (the `systemNote: null` filter);
   every existing admin/customer comment still has `systemNote: null` on the admin list. Fails: no
   column
-- [ ] T017 [US1] **RED** New `backend/test/integration/orders/place-order-custom-field-carry.test.ts`
+- [x] T017 [US1] **RED** New `backend/test/integration/orders/place-order-custom-field-carry.test.ts`
   (buyer of Organization A assigned to the store, standing rule 6; the quote seeding as
   `backend/test/integration/orders/place-order-from-quote-request.test.ts` does; QR and Order
   `select` fields `order_source` (`fair`, `web`), QR → Order on). Cases: the approved request holds
@@ -397,9 +397,9 @@ R-7, R-8).
   the request's value edited after conversion, before checkout → the edited value carried; an
   impersonated placement's `order.place_on_behalf` audit `stateAfter.carriedCustomFieldKeys` names
   the key (US1-5). Fails: nothing carried
-- [ ] T018 Scaffold `pnpm --filter backend run migration:new -- --module orders --name order_comment_system_note`;
+- [x] T018 Scaffold `pnpm --filter backend run migration:new -- --module orders --name order_comment_system_note`;
   `up`/`down` per data-model §2; `composer:generate`; commit the registry
-- [ ] T019 [US1] Implement the note model: `OrderComment.systemNote` (+ `[OptionalProps]`) in
+- [x] T019 [US1] Implement the note model: `OrderComment.systemNote` (+ `[OptionalProps]`) in
   `packages/modules/orders/src/backend/entities/order-comment.entity.ts`; `listForCustomer` filters
   `systemNote: null` (`order-comment-service.ts`); the admin `serializeComment` in
   `packages/modules/orders/src/backend/routes.ts` adds `systemNote` (customer serializer
@@ -407,7 +407,7 @@ R-7, R-8).
   `buildCarrySkipNote(em, { orderId, source, skipped })` that creates the row with the invariants
   of data-model §2 and the English fallback `body` (shared by placement and the receiver, Phase 5);
   T016 green
-- [ ] T020 [US1] Implement the carry in `OrderService.placeOrder`
+- [x] T020 [US1] Implement the carry in `OrderService.placeOrder`
   (`packages/modules/orders/src/backend/services/order-service.ts`): after the vouched assessment
   (`QuoteRequestSourceAssessment` from `#vouchedQuoteRequestSource`) and before
   `tx.create(Order, …)`, when `sourceQuoteRequestId !== null`, call
@@ -417,17 +417,37 @@ R-7, R-8).
   `plan.skipped` is non-empty (with a `command-coverage-ignore:` comment citing
   `order-comment-service.ts`'s reason); add `carriedCustomFieldKeys` to the impersonation audit's
   `stateAfter` when non-empty. No `validateAndMerge` on the carried bag; no `catch`; T017 green
-- [ ] T021 Wire `customFieldCarry: () => lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort')`
+- [x] T021 Wire `customFieldCarry: () => lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort')`
   into `OrderServiceNeighbourPorts` in `packages/modules/orders/src/backend/index.ts`; run
   `pnpm --filter backend run check:port-dependencies` — if it reports the edge, add
   `custom_fields` to `dependencies` in `packages/modules/orders/src/manifest.ts` with a comment
   (non-deactivatable owner — no activation consequence) and say why in the commit; if it does not,
   change nothing. Update any `OrderServiceNeighbourPorts` stub in co-located or backend tests the
   type check names (standing rule 12: name each file in the commit)
-- [ ] T022 Changeset `.changeset/158-orders-custom-field-carry-placement.md` —
+- [x] T022 Changeset `.changeset/158-orders-custom-field-carry-placement.md` —
   `'@endora-commerce/mod-orders': minor`: an Order placed from a vouched Quote Request receives the
   request's carried custom-field values; a value that cannot be carried is recorded as an internal
   system note in the Order's comments (admin `systemNote` member; never listed to the buyer)
+
+**Phase 3 result** (2026-10-20):
+- **Anchors re-derived after `91df8b536`** (`order-service.ts`, by symbol): `QuoteRequestSourceAssessment`
+  (interface beside `NO_QUOTE_REQUEST_SOURCE`) still carries `quoteRequest: QuoteRequestRecord | null`;
+  `#vouchedQuoteRequestSource` is called in `placeOrder` before `assertBasketMeetsMinimums`;
+  `#assessQuoteRequestSource` returns the record with `sourceQuoteRequestId` only when accepted;
+  the carry sits after `const { sourceQuoteRequestId } = quoteSource;`, the Order's
+  `customFieldValues` join `tx.create(Order, …)`, the note follows `tx.persistAndFlush(order)`, and
+  `carriedCustomFieldKeys` joins the `order.place_on_behalf` `stateAfter`. No design conflict.
+- T019: the note's reference is the request's `businessId`; `serializeCommentForCustomer` also
+  deletes `systemNote`, so the buyer's reply shape is unchanged.
+- T021: the accessor is threaded through `OrdersModuleOptions` (`plugin.ts`) as well as
+  `index.ts`. `check:port-dependencies` reported no edge, so `orders`' manifest is unchanged.
+  Stub updated (rule 12): `backend/test/helpers/orders-neighbour-ports.ts` gains a
+  `customFieldCarry` that answers the target bag unchanged (its rigs never vouch a source).
+- Verification: `[PG]` comments 5/5, place-order-custom-field-carry 9/9, place-order-from-quote-request
+  16/16, admin-write-scope 10/10; migration unit tests 265/265; mod-orders typecheck clean, lint 0
+  errors (1 pre-existing warning in an untouched admin file); `check:command-coverage --strict`
+  0 blocking; `check:port-dependencies`, `check:port-catches`, `check:transaction-context`,
+  `check:port-shape` 0 violations.
 
 **Verification**:
 ```bash
