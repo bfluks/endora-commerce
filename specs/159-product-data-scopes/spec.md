@@ -406,8 +406,9 @@ the minimum, the return eligibility and the displayed price mode.
   basket add and order placement.
 - **FR-005**: A product page request at (C, L) for a product not effectively available there MUST answer
   exactly as for a product that does not exist (no status-specific response that reveals existence),
-  except for the archived case, which MUST keep its current "gone" answer. This closes the reachable-draft
-  gap noted in *Current state*.
+  except for the archived case, which MUST keep its current "gone" answer. Interim reading: this also stops
+  a `draft` product being reachable by its URL (the gap noted in *Current state*); whether a not-yet-published
+  product should instead stay reachable by direct link as a preview is open — *Deferred to clarify* D-1.
 - **FR-006**: A basket line whose product is no longer effectively available at the basket's (C, L) MUST be
   shown as unavailable and MUST block placement, reusing the existing unavailable-line behaviour.
 - **FR-007**: An unresolved request channel MUST NOT match any scoped value or any product (fail closed,
@@ -449,8 +450,8 @@ the minimum, the return eligibility and the displayed price mode.
 - **FR-012**: "Use inherited" MUST remove the override at that scope; the effective value MUST then be the
   inherited one. Storing an empty value MUST NOT be the way to inherit.
 - **FR-013**: Changing a global value MUST NOT alter or remove any override, and the product editor MUST
-  NOT warn about existing overrides when the global status (or any global value) is changed (owner
-  decision 3).
+  NOT warn about existing overrides when the global status is changed (owner decision 3). The same
+  no-warning rule is assumed for every other global value (assumption A-9).
 - **FR-014**: An override MUST be accepted only for a scope valid for the product (FR-009 and *Terms*); an
   override for a channel the product is not a member of, or a language the channel does not offer, MUST be
   refused with a validation error naming the scope.
@@ -543,14 +544,6 @@ the minimum, the return eligibility and the displayed price mode.
 - **FR-079**: Packaging-unit names MUST be translatable per language; order lines MUST keep the name in the
   language they were placed in.
 
-#### Order constraints and price display mode
-
-- **FR-100**: Minimum order quantity and "returnable" MUST be settable per channel, inheriting the global
-  value, and every feature-155 check MUST use the value of the basket's or order's channel.
-- **FR-101**: The price display mode chain MUST gain a channel-level product override, with precedence
-  (most specific first): organization → product × channel → product → category → global default (interim
-  reading; see *Deferred to clarify* D-5).
-
 #### Auditing, tenancy, activation, integrations
 
 - **FR-080**: Every write of a scoped value (set, change, use inherited) MUST run as an audited Command
@@ -572,6 +565,17 @@ the minimum, the return eligibility and the displayed price mode.
   state which scope they read and write for every field of FR-009; a connector that writes only global
   values MUST NOT remove overrides set by operators.
 - **FR-092**: Import / export MUST be able to round-trip status and display visibility per scope.
+
+#### Order constraints and price display mode
+
+- **FR-100**: Minimum order quantity and "returnable" MUST be settable per channel, inheriting the global
+  value, and every feature-155 check MUST use the value of the basket's or order's channel.
+- **FR-101**: The price display mode chain MUST gain a channel-level product override, with precedence
+  (most specific first): organization → product × channel → product → category → global default (interim
+  reading; see *Deferred to clarify* D-5).
+
+#### Deployment and module activation
+
 - **FR-110**: Deployment migration MUST make every existing product's effective availability and listing
   identical to before deployment: existing status becomes the global status, display visibility becomes
   *catalog and search* everywhere, no windows, existing audience rule becomes the global audience rule.
@@ -624,14 +628,17 @@ the minimum, the return eligibility and the displayed price mode.
   synchronisation, unless clarify decides otherwise.
 - **A-7**: Scoped values are edited by operators with the existing product-edit permission (FR-084).
 - **A-8**: Out-of-audience and out-of-channel answers keep their current not-found semantics (#227).
+- **A-9**: Owner decision 3 (no warning about overrides on a global change) is extended from status to
+  every scoped field; clarify may restrict it to status.
 
 ### Deferred to `/speckit.clarify` (not decided; interim reading only)
 
 These have a reasonable interim reading taken from the issue's table, used above so the spec is complete,
 but they are **open** and the owner decides them in clarify:
 
-- **D-1**: Whether `draft` survives as a status value, and whether a never-published product should be
-  reachable anywhere (tied to FR-010).
+- **D-1**: Whether `draft` survives as a status value, and whether a never-published product stays
+  reachable by direct link (e.g. as a preview) or answers not-found like any unavailable product (tied to
+  FR-005 and FR-010).
 - **D-2**: Which fields really need channel × language rather than channel only — notably display
   visibility (interim: C×L) and audience / window (interim: channel only) (FR-009).
 - **D-3**: "Not visible individually" semantics — reachable by direct link (issue) or not reachable at all
