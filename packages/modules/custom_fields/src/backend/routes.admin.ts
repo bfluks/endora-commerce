@@ -5,6 +5,7 @@ import {
   customFieldOptionSchema,
   supportedEntityTypeSchema,
   updateCustomFieldDefinitionSchema,
+  updateCustomFieldOptionSchema,
   type CustomFieldEntityTypeInfo,
   type SupportedEntityType,
 } from '@endora-commerce/contracts';
@@ -264,9 +265,11 @@ export async function registerCustomFieldsAdminRoutes(
 
   app.patch<{ Params: { id: string; optionId: string } }>(
     '/api/v1/admin/custom-fields/definitions/:id/options/:optionId',
-    { preHandler: requireAdmin('custom_fields:write'), schema: { body: customFieldOptionSchema.partial() } },
+    // Feature 157 — the patch schema carries no create defaults, so a relabel
+    // does not reset the option's default flag, position or translations.
+    { preHandler: requireAdmin('custom_fields:write'), schema: { body: updateCustomFieldOptionSchema } },
     async (request) => {
-      const body = customFieldOptionSchema.partial().parse(request.body);
+      const body = updateCustomFieldOptionSchema.parse(request.body);
       await assertDefinitionNotHostManaged(request.params.id);
       try {
         const opt = await definitionService.updateOption(request.params.id, request.params.optionId, {

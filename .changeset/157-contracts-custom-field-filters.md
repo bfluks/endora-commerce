@@ -34,6 +34,10 @@ Shared shapes for filtering admin lists on custom fields, and the code that refu
   throws the `ZodError` naming an inverted range (a minimum above its maximum, a start after its end).
 - `ERROR_CODES` gains `CUSTOM_FIELD_OPTION_IN_USE` (`details: { value, label }`),
   `CUSTOM_FIELD_VALUE_TYPE_LOCKED` and `CUSTOM_FIELD_STORED_VALUES_EXIST` (`details: { key }`).
+- `updateCustomFieldOptionSchema` (type `UpdateCustomFieldOptionRequest`) is the body of an option
+  patch: `label`, `labelDefault`, `isDefault` and `sortOrder`, each optional and without a default,
+  and never `value`. `customFieldOptionSchema.partial()` is not a patch shape: it fills an absent
+  member with its create default.
 - `calendarDateSchema` and `isCalendarDate` (a `YYYY-MM-DD` day the calendar has) are published
   from the shared primitives; the CRM schemas use the same one.
 - `adminOrdersListQuerySchema` accepts `customFieldFilters`.

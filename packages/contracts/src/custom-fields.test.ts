@@ -322,3 +322,14 @@ describe('§1.4 ranges', () => {
     expect(() => cf.assertCustomFieldFilterRanges({ a: { min: '1' }, b: { to: '2026-01-01' } })).not.toThrow();
   });
 });
+
+describe('updateCustomFieldOptionSchema', () => {
+  it('carries only what a patch names — no defaults that would reset the rest', () => {
+    expect(cf.updateCustomFieldOptionSchema.parse({ labelDefault: 'x' })).toEqual({ labelDefault: 'x' });
+    expect(cf.updateCustomFieldOptionSchema.parse({ sortOrder: 2 })).toEqual({ sortOrder: 2 });
+  });
+
+  it('never takes the stored value', () => {
+    expect(cf.updateCustomFieldOptionSchema.parse({ value: 'renamed', isDefault: true })).toEqual({ isDefault: true });
+  });
+});

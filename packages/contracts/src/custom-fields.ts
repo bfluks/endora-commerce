@@ -69,6 +69,20 @@ export const customFieldOptionSchema = z.object({
 });
 export type CustomFieldOptionDto = z.infer<typeof customFieldOptionSchema>;
 
+/**
+ * Patch an option (feature 157). Every member optional and **without the create
+ * defaults**: `customFieldOptionSchema.partial()` keeps them, so a patch naming
+ * only the label used to arrive carrying `isDefault: false`, `sortOrder: 0`
+ * and `label: {}` and reset all three. The stored `value` is never patched.
+ */
+export const updateCustomFieldOptionSchema = z.object({
+  label: localizedLabelSchema.optional(),
+  labelDefault: z.string().min(1).max(200).optional(),
+  isDefault: z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
+});
+export type UpdateCustomFieldOptionRequest = z.infer<typeof updateCustomFieldOptionSchema>;
+
 /** A full custom-field definition, options embedded. */
 export const customFieldDefinitionSchema = z.object({
   id: uuidSchema,

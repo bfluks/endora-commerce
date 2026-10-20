@@ -217,7 +217,20 @@ describe('custom_fields — the list-filter option of a definition', () => {
       payload: { labelDefault: 'Bee' },
     });
     expect(relabel.statusCode, relabel.body).toBe(200);
-    expect(await audit('custom_fields.option.updated', optionId)).toHaveLength(1);
+    const relabelled = await audit('custom_fields.option.updated', optionId);
+    expect(relabelled).toHaveLength(1);
+    expect(changedMembers(relabelled[0]!)).toEqual(['labelDefault']);
+
+    const translate = await h.app.inject({
+      method: 'PATCH',
+      url: `${API}/definitions/${definition.id}/options/${optionId}`,
+      ...ADMIN,
+      payload: { label: { pl: 'Pszczoła' } },
+    });
+    expect(translate.statusCode, translate.body).toBe(200);
+    const translated = await audit('custom_fields.option.updated', optionId);
+    expect(translated).toHaveLength(2);
+    expect(changedMembers(translated[0]!)).toEqual(['label']);
 
     const reorder = await h.app.inject({
       method: 'PATCH',
@@ -226,7 +239,9 @@ describe('custom_fields — the list-filter option of a definition', () => {
       payload: { sortOrder: 5 },
     });
     expect(reorder.statusCode, reorder.body).toBe(200);
-    expect(await audit('custom_fields.option.updated', optionId)).toHaveLength(2);
+    const reordered = await audit('custom_fields.option.updated', optionId);
+    expect(reordered).toHaveLength(3);
+    expect(changedMembers(reordered[0]!)).toEqual(['sortOrder']);
 
     const makeDefault = await h.app.inject({
       method: 'PATCH',
@@ -235,7 +250,9 @@ describe('custom_fields — the list-filter option of a definition', () => {
       payload: { isDefault: true },
     });
     expect(makeDefault.statusCode, makeDefault.body).toBe(200);
-    expect(await audit('custom_fields.option.updated', optionId)).toHaveLength(3);
+    const defaulted = await audit('custom_fields.option.updated', optionId);
+    expect(defaulted).toHaveLength(4);
+    expect(changedMembers(defaulted[0]!)).toEqual(['isDefault']);
 
     const remove = await h.app.inject({
       method: 'DELETE',

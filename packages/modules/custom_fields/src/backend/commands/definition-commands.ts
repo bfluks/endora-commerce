@@ -44,6 +44,22 @@ function snapshotDefinition(def: CustomFieldDefinition): Record<string, unknown>
   };
 }
 
+/**
+ * Every member an option edit can change (feature 157): an audit entry whose
+ * before and after differ in exactly what the operator changed — the labels,
+ * the default flag or the position — rather than looking unchanged.
+ */
+function snapshotOption(o: CustomFieldOption): Record<string, unknown> {
+  return {
+    id: o.id,
+    value: o.value,
+    label: o.label,
+    labelDefault: o.labelDefault,
+    isDefault: o.isDefault,
+    sortOrder: o.sortOrder,
+  };
+}
+
 /** Create a definition (+ its options for select types). */
 export function createDefinitionCommand(
   input: CreateCustomFieldDefinitionRequest,
@@ -143,11 +159,11 @@ export function updateOptionCommand(
     objectId: optionId,
     capture: async ({ em }) => {
       const o = await em.findOne(CustomFieldOption, { id: optionId });
-      return o ? { id: o.id, value: o.value, labelDefault: o.labelDefault } : null;
+      return o ? snapshotOption(o) : null;
     },
     run: async ({ em }) => {
       const o = await applyUpdateOption(em, definitionId, optionId, patch);
-      return { result: o, after: { id: o.id, value: o.value, labelDefault: o.labelDefault } };
+      return { result: o, after: snapshotOption(o) };
     },
   };
 }
