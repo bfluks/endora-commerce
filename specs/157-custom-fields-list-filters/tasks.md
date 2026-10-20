@@ -408,6 +408,8 @@ pnpm --filter backend run check:bundle-pairing
 - B's editor round picked (`custom_fields` bundles merged by hand), `DefinitionOptionsEditor` reads `ERROR_CODES.CUSTOM_FIELD_OPTION_IN_USE` only, `localized-label.ts`'s `resolveLabel` replaced by the kit's.
 - Not built: Opportunities "More filters (n)" (awaiting the owner).
 
+**Owner ruling U1 A (2026-10-19), stream B** — done: the Opportunities list shows the first **3** custom-field filters (with the built-in filters' 10 spans on the 4-column grid, three cells and the disclosure finish a row) and the rest behind *More filters (n)* / *Więcej filtrów (n)*, a `<button type="button">` with `aria-expanded`, `aria-controls` (the filter grid) and `min-h-11`. A later field with an active filter is shown collapsed; a shown field stays while its filter is cleared, until the next toggle or *Clear*; expanding appends and moves nothing already visible, and a filter turning active while expanded does not reorder the grid. Open state is not remembered (every visit starts collapsed). Kept local to `OpportunitiesList.tsx` rather than a kit `visibleCount` prop, because the kit belongs to stream A. Red first: `admin/test/modules/crm/OpportunitiesList.more-filters.test.tsx` 7 of 9 red, then 10/10. crm docs (en + pl) carry one sentence, Polish cache re-pinned.
+
 ## Phase 9: Opportunities list **[admin UI]**
 
 **Goal**: the Opportunity half of US2 (FR-007, FR-011a, FR-013, FR-016).

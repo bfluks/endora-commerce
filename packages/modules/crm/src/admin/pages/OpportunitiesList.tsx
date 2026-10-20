@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CircleDollarSign, Plus, SearchX, X } from 'lucide-react';
+import { ChevronDown, CircleDollarSign, Plus, SearchX, X } from 'lucide-react';
 import {
   opportunityBoardCustomFieldRef,
   type CustomFieldFilters,
+  type CustomFieldListFilterField,
   type OpportunityFieldFilters,
   type OpportunityStatusKind,
   type OpportunitySummary,
@@ -77,6 +78,54 @@ const SEARCH_DEBOUNCE_MS = 300;
 const CUSTOM_FIELD_FILTERS_ENDPOINT = '/api/v1/admin/crm/opportunities/custom-field-filters';
 
 /**
+ * How many custom-field filters the always-open panel shows before the rest
+ * go behind *More filters (n)* (feature 157, owner ruling U1 A). Three, because
+ * the built-in filters fill two and a half rows of the four-column grid: three
+ * custom cells and the disclosure complete the row after them.
+ */
+const VISIBLE_CUSTOM_FILTERS = 3;
+
+/** The filter grid; the *More filters* disclosure controls it. */
+const FILTER_GRID_ID = 'crm-opportunity-filters';
+
+interface CustomFieldDisclosure {
+  /** The fields on screen, in the order they are rendered. */
+  shown: readonly CustomFieldListFilterField[];
+  /** How many fields collapsing hides (collapsed: how many it hides now). */
+  hidden: number;
+  /** The fields beyond the first ones that stay on screen while collapsed. */
+  promoted: readonly string[];
+}
+
+/**
+ * Which custom-field filters are on screen. Collapsed: the first
+ * {@link VISIBLE_CUSTOM_FILTERS}, plus every later field that is active or
+ * pinned — an active filter is never hidden, and a field the operator is
+ * clearing does not vanish under them. Expanded: the same fields in the same
+ * places, then the rest, so expanding moves nothing already visible; `pinned`
+ * is the set taken when the disclosure last opened, so a filter turning active
+ * while expanded does not reorder the grid either.
+ */
+function customFieldDisclosure(
+  fields: readonly CustomFieldListFilterField[],
+  filters: CustomFieldFilters,
+  pinned: readonly string[],
+  expanded: boolean,
+): CustomFieldDisclosure {
+  const head = fields.slice(0, VISIBLE_CUSTOM_FILTERS);
+  const tail = fields.slice(VISIBLE_CUSTOM_FILTERS);
+  const promoted = tail.filter(
+    (field) => pinned.includes(field.key) || (!expanded && Object.hasOwn(filters, field.key)),
+  );
+  const rest = tail.filter((field) => !promoted.includes(field));
+  return {
+    shown: expanded ? [...head, ...promoted, ...rest] : [...head, ...promoted],
+    hidden: rest.length,
+    promoted: promoted.map((field) => field.key),
+  };
+}
+
+/**
  * The custom-field filters as the list's `fieldFilters`: one `custom:<key>`
  * reference each. Sent without `cardValues`, so the server applies the
  * list-filter option, not the board card's rule (FR-011a).
@@ -143,6 +192,13 @@ export function OpportunitiesList(): ReactNode {
   const [customFilters, setCustomFilters] = useState<CustomFieldFilters>(() =>
     readCustomFieldFilterParams(searchParams),
   );
+  /** Whether *More filters* is open. Not remembered: every visit starts collapsed. */
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+  /**
+   * The later fields kept on screen beside the first ones — those active when
+   * the page opened or when the disclosure was last toggled.
+   */
+  const [pinnedKeys, setPinnedKeys] = useState<readonly string[]>(() => Object.keys(customFilters));
   /** The key of a custom-field filter the server refused, until it is removed. */
   const [refusedKey, setRefusedKey] = useState<string | null>(null);
   const {
@@ -261,6 +317,25 @@ export function OpportunitiesList(): ReactNode {
     setFilters(NO_FILTERS);
     setTrail([]);
     if (Object.keys(customFilters).length > 0) changeCustom(emptyCustomFieldFilters());
+    setPinnedKeys([]);
+  };
+
+  const disclosure = customFieldDisclosure(customFields, customFilters, pinnedKeys, moreFiltersOpen);
+
+  const toggleMoreFilters = (): void => {
+    if (moreFiltersOpen) {
+      // What stays on screen once collapsed: the later fields still active.
+      setPinnedKeys(
+        customFields
+          .slice(VISIBLE_CUSTOM_FILTERS)
+          .filter((field) => Object.hasOwn(customFilters, field.key))
+          .map((field) => field.key),
+      );
+    } else {
+      // The fields already on screen keep their places while expanded.
+      setPinnedKeys(disclosure.promoted);
+    }
+    setMoreFiltersOpen(!moreFiltersOpen);
   };
 
   const removeRefused = (): void => {
@@ -387,7 +462,7 @@ export function OpportunitiesList(): ReactNode {
 
       <Card className="mb-4">
         <CardContent className="pt-6">
-          <div className="grid gap-x-3 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div id={FILTER_GRID_ID} className="grid gap-x-3 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
             <OpportunityFilterFields
               idPrefix="crm-opportunity"
               search={search}
@@ -430,13 +505,33 @@ export function OpportunitiesList(): ReactNode {
             </OpportunityFilterFields>
             <CustomFieldListFilters
               idPrefix="crm-opportunity"
-              fields={customFields}
+              fields={disclosure.shown}
               value={customFilters}
               onChange={(key, filter): void => changeCustom(withCustomFieldFilter(customFilters, key, filter))}
               language={language}
               status={customFieldsStatus}
               onRetry={reloadCustomFields}
             />
+            {customFieldsStatus === 'ready' && disclosure.hidden > 0 ? (
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 min-w-11"
+                  aria-expanded={moreFiltersOpen}
+                  aria-controls={FILTER_GRID_ID}
+                  onClick={toggleMoreFilters}
+                >
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={`transition-transform motion-reduce:transition-none${moreFiltersOpen ? ' rotate-180' : ''}`}
+                  />
+                  {moreFiltersOpen
+                    ? t('opportunity.list.filter.fewerCustom')
+                    : t('opportunity.list.filter.moreCustom', { count: disclosure.hidden })}
+                </Button>
+              </div>
+            ) : null}
           </div>
           <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
             <div className="space-y-1">

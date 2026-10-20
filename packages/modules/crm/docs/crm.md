@@ -360,7 +360,9 @@ The **Opportunities list** does not follow the card. It offers a filter for ever
 custom field whose **Use as list filter** option is on (set on **Custom Fields**), whether or not a
 card shows the field, beside its other filters. The filters work as the board's do for the same
 kind of field, except that an opportunity without a value never matches — *No* included. They are
-in the page address, and a change returns the list to its first page.
+in the page address, and a change returns the list to its first page. The panel shows the first
+three; the rest are behind **More filters (n)**, and a hidden field with an active filter is always
+shown.
 
 The two rules are independent: a field can be a board filter because the card shows it and not a
 list filter, or the reverse. **A card field that is not a list filter cannot filter the list**: a
