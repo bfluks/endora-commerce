@@ -868,8 +868,9 @@ export interface CustomFieldCarryReceipt {
 }
 
 /**
- * Container names: `orderCustomFieldCarryPort` (owner `orders`) and
- * `quoteRequestCustomFieldCarryPort` (owner `quote_requests`) (feature 158).
+ * Container name: `orderCustomFieldCarryPort`. Owner: `orders`.
+ * Container name: `quoteRequestCustomFieldCarryPort`. Owner: `quote_requests`.
+ * (Feature 158.)
  *
  * `crm` pushes a Sales Opportunity's values to the document created from it,
  * once its origin link is made; the document's owner carries them into empty

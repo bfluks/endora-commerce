@@ -66,7 +66,7 @@ export const CUSTOMER_PAYLOAD_KEYS = new Set([
  * quote PDF to — possibly someone other than the requester — and is the
  * administrators' record of the send, shown on the admin History only.
  */
-export const ADMIN_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set(['pdf-sent']);
+export const ADMIN_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set(['pdf-sent', 'custom-field-carry-skipped']);
 
 /** The stored events a customer may see. */
 export function customerEventsOf<T extends { readonly eventType: string }>(events: readonly T[]): T[] {

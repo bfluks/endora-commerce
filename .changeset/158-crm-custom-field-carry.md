@@ -17,6 +17,14 @@ Sales Opportunities created for, or joined by, an Order or a Quote Request recei
   `customFieldCarry: { source: { entityType, recordId }, carried, skipped }` (each skipped key
   with its reason), and the link entry gains `customFieldValues` when values were carried. These
   entries are what `GET /api/v1/admin/crm/opportunities/:id/history` returns.
+- **From an Opportunity into its documents.** Once an Order or a Quote Request an administrator
+  created from an Opportunity is linked to it, the Opportunity's values are pushed to the
+  document's owner (`orderCustomFieldCarryPort`, `quoteRequestCustomFieldCarryPort`), which carries
+  them into empty fields and records what it skipped on the document. Only a link just made
+  carries; a refused origin carries nothing. The Quote Request receiver is reached only while
+  `quote_requests` is present — a new `degrades-without` entry for
+  `quoteRequestCustomFieldCarryPort` in the manifest.
+- `OpportunityOriginLinkServiceDeps` gains the required `carryIntoDocument`.
 - `OpportunityServiceDeps` and `OpportunityLinkServiceDeps` gain the required `customFieldCarry`
   (`CustomFieldCarryPort`); `AutomaticOpportunityInput` and `AutomaticLink` gain an optional
   `carry`.

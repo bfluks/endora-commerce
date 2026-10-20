@@ -16,6 +16,8 @@ import type {
   CatalogAttributeReadPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
+  CustomFieldCarryPort,
+  CustomFieldCarryReceiverPort,
   CustomFieldListFilterPort,
   CustomFieldDefinitionReadPort,
   DocumentRenderPort,
@@ -35,6 +37,7 @@ import type {
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import type { Redis } from 'ioredis';
 import { QuoteRequestReadService } from './services/quote-request-read-port.js';
+import { QuoteRequestCustomFieldCarryReceiver } from './services/quote-request-custom-field-carry-receiver.js';
 import {
   createQuoteRequestAdminSearchProvider,
   type QuoteRequestAdminSearchProviderDeps,
@@ -557,6 +560,25 @@ export function registerModule(ctx: ModuleContext): void {
     ctx
       .asFunction(
         ({ emFactory }: QuoteRequestsCradle) => new QuoteRequestReadService(emFactory),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Feature 158 — a Sales Opportunity's custom-field values received into a
+   * Quote Request created from it (`specs/158-custom-fields-value-carry/`,
+   * contract `carry-api.md` §4.2). `crm` decides this module's presence before
+   * it calls; the carry itself is planned by `custom_fields`.
+   */
+  ctx.di.providePort<CustomFieldCarryReceiverPort>(
+    'quoteRequestCustomFieldCarryPort',
+    ctx
+      .asFunction(
+        ({ commandBus }: QuoteRequestsCradle) =>
+          new QuoteRequestCustomFieldCarryReceiver({
+            commandBus,
+            customFieldCarry: lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort'),
+          }),
       )
       .singleton(),
   );

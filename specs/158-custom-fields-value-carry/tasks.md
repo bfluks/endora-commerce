@@ -568,7 +568,7 @@ pnpm --filter backend run check:command-coverage -- --strict
 **Goal**: US3 (FR-007 – FR-010a, FR-012 – FR-015 for the two pairs out of Opportunities; research
 R-10, R-11, R-13).
 
-- [ ] T028 [P] [US3] **RED** New `backend/test/integration/quote_requests/custom-field-carry-receiver.test.ts`:
+- [x] T028 [P] [US3] **RED** New `backend/test/integration/quote_requests/custom-field-carry-receiver.test.ts`:
   `quoteRequestCustomFieldCarryPort.receiveCarriedValues` (resolved from the composed server) on a
   QR of Organization A with an empty compatible field → `applied`, value stored, one
   `quote_request.custom_fields.carry` audit entry with the system actor; a QR already holding a
@@ -577,14 +577,14 @@ R-10, R-11, R-13).
   admin history and **absent** from the buyer's request detail (Q5); `organizationId` of
   Organization B → `not-found` and nothing written (FR-012; same answer as a random id). Fails: no
   port
-- [ ] T029 [P] [US3] **RED** New `backend/test/integration/orders/custom-field-carry-receiver.test.ts`:
+- [x] T029 [P] [US3] **RED** New `backend/test/integration/orders/custom-field-carry-receiver.test.ts`:
   the same four cases for `orderCustomFieldCarryPort` — the skip as one system note (Phase 3's
   builder), audit `order.custom_fields.carry`, the buyer's comment list unchanged, no notification.
   Fails: no port
-- [ ] T030 Scaffold `pnpm --filter backend run migration:new -- --module quote_requests --name quote_request_event_carry_skipped`;
+- [x] T030 Scaffold `pnpm --filter backend run migration:new -- --module quote_requests --name quote_request_event_carry_skipped`;
   `up`/`down` per data-model §3 (its `BEFORE` list = the pdf-sent migration's list plus
   `'pdf-sent'`); `composer:generate`; commit the registry
-- [ ] T031 [US3] Implement the QR receiver: `'custom-field-carry-skipped'` in
+- [x] T031 [US3] Implement the QR receiver: `'custom-field-carry-skipped'` in
   `QuoteRequestEventType` (`quote-request-event.entity.ts`); `ADMIN_ONLY_EVENT_TYPES`
   (`customer-projection.ts`); the `history-projection.ts` case (and its co-located
   `history-projection.test.ts` / `customer-projection.test.ts` cases — standing rule 12, named
@@ -594,11 +594,11 @@ R-10, R-11, R-13).
   `packages/modules/quote_requests/src/backend/index.ts`; the history bundle key for the new type in
   `packages/modules/quote_requests/i18n/{en,pl}.json` so `history-bundle-coverage.test.ts` stays
   green; T028 green
-- [ ] T032 [US3] Implement the order receiver: new
+- [x] T032 [US3] Implement the order receiver: new
   `packages/modules/orders/src/backend/services/order-custom-field-carry-receiver.ts` (one Command,
   `order.custom_fields.carry`, `buildCarrySkipNote` on the Command's `em`), published as
   `orderCustomFieldCarryPort` in `packages/modules/orders/src/backend/index.ts`; T029 green
-- [ ] T033 [US3] **RED** New `backend/test/integration/crm/custom-field-carry-from-opportunity.test.ts`
+- [x] T033 [US3] **RED** New `backend/test/integration/crm/custom-field-carry-from-opportunity.test.ts`
   (an Opportunity of Organization A holding `order_source`; Opportunity → QR and Opportunity →
   Order on): an administrator creates a QR with `origin: { type: 'crm_opportunity', id }` → after
   `idle()` the QR holds the value (US3-1); an Order created through the admin create path with the
@@ -611,7 +611,7 @@ R-10, R-11, R-13).
   Extend `packages/modules/crm/src/backend/services/opportunity-origin-link-service.test.ts`
   (standing rule 12 — named here): the new `carryIntoDocument` dependency is called exactly once,
   on `linked`, never on `already-linked` / `refused` / `not-ours`. Fails: nothing carried
-- [ ] T034 [US3] Implement the push in `opportunity-origin-link-service.ts`: a dependency
+- [x] T034 [US3] Implement the push in `opportunity-origin-link-service.ts`: a dependency
   `carryIntoDocument(document, opportunity)` composed in `packages/modules/crm/src/backend/index.ts`
   that, for an Opportunity with values, calls `lazyPort<CustomFieldCarryReceiverPort>(ctx,
   'orderCustomFieldCarryPort')` for an Order, or — only when `quoteRequests.isPresent()` —
@@ -620,12 +620,38 @@ R-10, R-11, R-13).
   the value); add the `nonBindingDependencies` entry for `quoteRequestCustomFieldCarryPort`
   (`kind: 'degrades-without'`, `whenAbsent` per research R-16) to
   `packages/modules/crm/src/manifest.ts`; T033 green
-- [ ] T035 Changesets: `.changeset/158-quote-requests-custom-field-carry.md` —
+- [x] T035 Changesets: `.changeset/158-quote-requests-custom-field-carry.md` —
   `'@endora-commerce/mod-quote-requests': minor` (`quoteRequestCustomFieldCarryPort`, the
   `custom-field-carry-skipped` history entry, admin-only); `.changeset/158-orders-custom-field-carry-receiver.md`
   — `'@endora-commerce/mod-orders': minor` (`orderCustomFieldCarryPort`); extend
   `.changeset/158-crm-custom-field-carry.md` with the Opportunity → document carry and the new
   non-binding edge
+
+**Phase 5 result** (2026-10-20):
+- Migration `20261020T130555_quote_requests_quote_request_event_carry_skipped`, registered in the
+  module barrel and the regenerated registry.
+- T031: the history bundle title was already added at the block 1 end (core `_i18n` bundle). The
+  receiver writes the skip event with `actorRoleLabel: 'System'` (how the projection names a
+  system actor, as the expiry worker and the completion reactor do) and bumps the request's
+  `version` when it carries values. The projection reads the payload field by field
+  (`customFieldCarryOf`). New unit cases in `history-projection.test.ts` and
+  `customer-projection.test.ts` (rule 12: added, no existing assertion changed).
+- Contract doc block: the receiver port's "Container names:" became two `Container name:` lines
+  in this commit, which registers both names.
+- T034: `carryIntoDocument` is `createCarryIntoDocument` in the new
+  `crm/src/backend/services/opportunity-document-carry.ts`, composed in `index.ts`; it skips an
+  Opportunity with no values and asks `isPresent()` before reaching the Quote Request receiver.
+  The origin-link unit test's `service()` stub gains `carryIntoDocument` (rule 12). The manifest's
+  new `degrades-without` entry regenerated `docs/docs/module-reference/crm.md`; the Polish cache
+  entry and materialised page were re-pinned (`check:docs-translations` 0 findings).
+- Verification: mod-quote-requests 3 files 80/80; mod-crm origin-link 18/18; `[PG]`
+  quote_requests custom-field-carry-receiver 4/4, orders custom-field-carry-receiver 4/4,
+  crm custom-field-carry-from-opportunity 6/6, quote_requests admin-create-origin 10/10, orders
+  admin-create-origin 10/10, quote_requests history 12/12; migration + module-graph unit 273/273;
+  typecheck + lint clean (quote-requests, orders, crm, contracts, backend); `check:port-shape`,
+  `check:port-dependencies`, `check:port-catches`, `check:module-boundary` 0 violations;
+  `check:command-coverage --strict` 0 blocking; `manifests:check`, `check:module-docs` pass.
+  (Two `[PG]` files first ran beside a static batch and were skipped at setup; re-run alone, green.)
 
 **Verification**:
 ```bash
