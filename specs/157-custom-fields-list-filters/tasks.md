@@ -540,10 +540,11 @@ checked locally only with what is cheap and host-independent (standing rule 12).
   ```
   (`git status` must print nothing.)
   **Done 2026-10-20** on base `origin/master` `4aa101a51` (release 0.107.0), backup `backup/157-pre-rebase-1`, rerere on. Stream B's U1 A (`e516e561b`, `c09d9f618`) cherry-picked first, cleanly. 39 commits before and after, none dropped; two conflicts: `reference-ledgers.ts` (156's seven `ASSET_*` codes and our `CUSTOM_FIELD_FILTER_UNAVAILABLE`, both kept) and the Polish module-map translation cache (re-pinned from the materialised page with `hashSourceBody`). No `custom_fields` migration landed on master, so no re-stamp; `UPDATE_OPENAPI_BASELINE=1` left the baseline unchanged. T000 re-run: the `git log` prints 154's basket attribution, three 156 commits and the 0.107.0 release; the `git grep` prints only `blog/.../routes.admin.ts` `listFiltersSchema`, a substring match, not a collision. The regeneration block left `git status` empty; the agent-context appendix commit normalises the tag and restores the 152/153 lines the script trims. Local [PG]: the 10 branch files plus `orders/list-and-views`, `openapi-baseline` and the error-code ledger tests, all green.
-- [ ] T070 `quality` part 1 (`pnpm -r run typecheck`, `pnpm -r run lint`): **covered by the fork's
+- [x] T070 `quality` part 1 (`pnpm -r run typecheck`, `pnpm -r run lint`): **covered by the fork's
   CI** — the `quality` job on the pushed tip (T074). Filtered typecheck and lint of every touched
   workspace ran in each phase.
-- [ ] T071 `quality` part 2 — the `quality` job's check list in `.github/workflows/quality.yml`
+  **Done 2026-10-20** on `fea9b0335`: the fork's `quality` job green, 20 min ([PR #3 checks](https://github.com/bfluks/endora-commerce/pull/3/checks)); locally on `1e3696369` typecheck of backend, admin and contracts and lint of the nine touched workspaces exit 0 (T073).
+- [x] T071 `quality` part 2 — the `quality` job's check list in `.github/workflows/quality.yml`
   (lines 110–155 on `3d9ca98cd`, unchanged since `fda284a45`): **covered by the fork's CI** (T074).
   Locally run only the checks this feature's inputs feed, one per line:
   ```bash
@@ -561,9 +562,11 @@ checked locally only with what is cheap and host-independent (standing rule 12).
   pnpm --filter backend run overlay:check
   pnpm --filter backend run manifests:check
   ```
-- [ ] T072 `quality:static` (`check-naming.sh`, `check-language.sh`): **covered by the fork's CI**
+  **Done 2026-10-20**: the list above exits 0 locally on `1e3696369` (T073); the full check list ran green in the fork's `quality` job on `fea9b0335` ([PR #3 checks](https://github.com/bfluks/endora-commerce/pull/3/checks)).
+- [x] T072 `quality:static` (`check-naming.sh`, `check-language.sh`): **covered by the fork's CI**
   (`quality:static` runs on Linux; on macOS the scripts need GNU awk, so no local Docker run is
   required).
+  **Done 2026-10-20**: `quality:static` green on `fea9b0335` ([PR #3 checks](https://github.com/bfluks/endora-commerce/pull/3/checks)).
 - [x] T073 Release intent and sign-off, locally:
   ```bash
   git fetch --no-tags origin +refs/heads/master:refs/remotes/origin/master
@@ -584,15 +587,15 @@ checked locally only with what is cheap and host-independent (standing rule 12).
 run (owner ruling 2026-09-03), on the fork's CI — the remote-CI rule replaces the local Linux container and the
 local Postgres sweep this phase used to run.
 
-- [ ] T074 Push the branch to the fork and open the draft pull request; record the result of every
+- [x] T074 Push the branch to the fork and open the draft pull request; record the result of every
   job on the pushed tip: `quality` (T070, T071), `quality:static` (T072), `test:backend:unit`,
   `test:frontend` (the packages' co-located suites included — `admin-kit`, `mod-custom-fields`,
   `mod-crm`'s board tests), `release:changeset`, `pack-gate`, `boot-gate`, `build:docs` (the docs
   build and `verify:docs-build`), `dco`. A red on a known load-timing test in a file this branch
   does not touch is re-run and recorded as such; a red in a touched file is a defect, fixed on the
   branch with a new signed commit.
-  **Open 2026-10-20**: the force-push of the rebased tip to the fork was held for the owner's approval and not run, so draft PR #3 has not seen it; T070–T072 wait on that run.
-- [ ] T075 Service-backed run: build the throwaway `ci-pg/<branch>` branch from the tip plus the
+  **Done 2026-10-20** on `fea9b0335` (base `origin/master` `4aa101a51`), draft [PR #3](https://github.com/bfluks/endora-commerce/pull/3), 9/9 green with no re-run ([checks](https://github.com/bfluks/endora-commerce/pull/3/checks)): `quality` (20 min), `quality:static`, `test:backend:unit`, `test:frontend`, `release:changeset`, `pack-gate` (6 min), `boot-gate` (7 min), `build:docs` (5 min), `dco`. `fea9b0335` differs from `1e3696369` in this file only.
+- [x] T075 Service-backed run: build the throwaway `ci-pg/<branch>` branch from the tip plus the
   fork-only workflow commit and a `ci-pg-files.txt` (paths relative to `backend/`) listing every
   server-bound file this feature adds or changes and every one that names custom fields:
   ```text
@@ -632,16 +635,20 @@ local Postgres sweep this phase used to run.
   ```
   Push `ci-pg/<branch>`, record the per-file table, delete the branch. A red file is fixed on the
   feature branch (never on `ci-pg/…`) and the run repeated.
-  **Run 2026-10-20 on `1e3696369`** ([run](https://github.com/bfluks/endora-commerce/actions/runs/39377077106), 51 files, 20 min): 50 green, one red — `test/integration/demo/demo-shop.test.ts` > *enters the system scope exactly once per run*: a second ledger entry, `worker` / `invoices: one-time document template access grant`. Not this branch's: it touches neither `invoices`, `document_templates` nor `demo`, and the same assertion fails the same way on a clean `origin/master` `4aa101a51` worktree. Left open for the owner's call on that red; the `ci-pg` branch is deleted.
-- [ ] T076 Record T069 – T075 on the tip (tip and base hashes, CI run links, durations, any
+  **Run 2026-10-20 on `1e3696369`** ([run](https://github.com/bfluks/endora-commerce/actions/runs/39377077106), 51 files, 20 min): 50 green, one red — `test/integration/demo/demo-shop.test.ts` > *enters the system scope exactly once per run*: a second ledger entry, `worker` / `invoices: one-time document template access grant`. Not this branch's: it touches neither `invoices`, `document_templates` nor `demo`, and the same assertion fails the same way on a clean `origin/master` `4aa101a51` worktree. The `ci-pg` branch is deleted.
+  **Done 2026-10-20**: accepted with the one red recorded as pre-existing on `origin/master` and not caused by this branch ([run](https://github.com/bfluks/endora-commerce/actions/runs/39377077106), ci-pg tip `a3e017d23` = `1e3696369` plus the fork-only workflow commit). The pull request names it under its risks.
+- [x] T076 Record T069 – T075 on the tip (tip and base hashes, CI run links, durations, any
   known-flake re-run with its evidence) in this file as a `tasks.md`-only commit; the tip recorded
   is the one pushed; the pull request body says `Closes #286`
+  **Done 2026-10-20**: T069 – T075 are recorded under their tasks (code tip `1e3696369`, pushed tip `fea9b0335`, base `4aa101a51`); no known-flake re-run was needed. Sign-off: `dco-signoff` `commits=40 findings=0` locally (T073) and the fork's `dco` job green ([PR #3 checks](https://github.com/bfluks/endora-commerce/pull/3/checks)). The pull request body is drafted with `Closes #286`.
+  **Upstream pull request**: _to be filled_.
+- [ ] T081 Owner's manual test of the admin (quickstart §1 – §4) — **waived by the owner (2026-10-20)**; not run, so not passed. The flows are covered by the automated tests in *Requirement → test*; the pull request states the waiver.
 
 **Verification**: T074's jobs all green on the recorded tip and T075's per-file table has no red
 file.
 
 (Task ids T077 – T080 are retired: the local container, the local `[PG]` sweep, `boot-gate` and
-the docs build moved into T074 – T075. Phase 13 now holds three tasks.)
+the docs build moved into T074 – T075. Phase 13 now holds three tasks; T081 records the owner's manual test.)
 
 ---
 
