@@ -530,7 +530,8 @@ R-11).
   `linkOrderPlacedFromQuoteRequest` received the Order unchanged.
 - The CRM integration test seeds Orders with `seedCrmOrder` + values and announces
   `order.created.v1` (as `auto-create.test.ts` does), and reads/restores both auto-create settings'
-  `global_value` (rule 7).
+  value in force, `coalesce(global_value, default_value)`, failing on a missing row (rule 7;
+  `check:fixture-substitution` refused the first version's `?? false`, red on the fork CI).
 - **Block-end gap fix** (a Phase 1 consequence no phase's verification ran): the new
   `custom_field_carry_skipped` history entry kind reddened `quote_requests`'
   `history-bundle-coverage.test.ts` and `admin/test/modules/quote_requests/RfqDetail.history.test.tsx`.

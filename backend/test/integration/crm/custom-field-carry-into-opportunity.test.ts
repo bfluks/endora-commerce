@@ -172,11 +172,17 @@ describe('crm — custom-field values carried into Sales Opportunities', () => {
   beforeAll(async () => {
     h = await setupBackendServer();
     for (const code of SETTINGS) {
+      // The value in force, read and kept to write back (standing rule 7); a
+      // setting the module did not register is a broken fixture, not `false`.
       const rows = (await h
         .em()
         .getConnection()
-        .execute(`select global_value from "settings" where code = ?`, [code])) as Array<{ global_value: unknown }>;
-      stored.set(code, rows[0]?.global_value ?? false);
+        .execute(`select coalesce(global_value, default_value) as value from "settings" where code = ?`, [
+          code,
+        ])) as Array<{ value: unknown }>;
+      const row = rows[0];
+      if (!row) throw new Error(`The setting ${code} is not registered.`);
+      stored.set(code, row.value);
     }
     await restoreDefaultCrmWorkflow(h.em());
     rep = await seedCrmAdmin(h.em(), `cfc-rep-${RUN}`, ['crm:read', 'crm:write', 'orders:read']);
@@ -187,7 +193,7 @@ describe('crm — custom-field values carried into Sales Opportunities', () => {
   });
 
   afterAll(async () => {
-    for (const code of SETTINGS) await setCrmSetting(h, code, stored.get(code) ?? false);
+    for (const code of SETTINGS) await setCrmSetting(h, code, stored.get(code));
     for (const id of [...created].reverse()) {
       await h.app.inject({ method: 'DELETE', url: `${CUSTOM_FIELDS_API}/definitions/${id}`, cookies: CRM_ADMIN });
     }
