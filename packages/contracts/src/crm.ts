@@ -345,7 +345,9 @@ export const OpportunityBoardCardConfigResponseSchema = dataEnvelope(Opportunity
 
 /**
  * One field's filter: the operators of every kind in one object. Which of them
- * apply is the field's kind to say; the others are ignored by the server.
+ * apply is the field's kind to say. The board ignores the others; the
+ * Opportunities list refuses them on a `custom:` reference with 400
+ * `VALIDATION_FAILED`, as it refuses an inverted range.
  *
  * The same object as the admin lists' custom-field filter
  * (`specs/157-custom-fields-list-filters/`), so a board filter and a list
