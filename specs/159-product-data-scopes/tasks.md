@@ -79,8 +79,10 @@ phase boundaries by the coordinator.
 every generated artefact (`backend/src/db/*.generated.ts`, `manifest-index.generated.ts`, module-reference
 pages, package manifests), `pnpm-lock.yaml`, the `AGENTS.md` appendix, `.changeset/`. S2 and S3 put any
 line they need in such a file into **one separate commit per phase**, titled `chore(159): <stream> handover
-P<n>`, touching only shared files; the coordinator applies it on S1 at the boundary and **S1 regenerates**
-every generated artefact rather than cherry-picking one.
+P<n>`, touching only shared files; the coordinator applies it on S1 at the boundary. A stream that adds a migration, entity or error code
+**also regenerates and commits the generated artefacts on its own branch** (so its own `ci-pg` run has them
+registered); when the coordinator applies the stream's commits to S1, the generated files are **not**
+cherry-picked — S1 regenerates them on its tip and commits the result.
 
 ## Blocks, review checkpoints and the #384 gate
 
@@ -94,12 +96,12 @@ every generated artefact rather than cherry-picking one.
 | — | **Review checkpoint C** | | | |
 | D | 13–15 | S3 | admin UI | P13 after Block A; P14 after P9; P15 after P10–P11 |
 | — | **Review checkpoint D** (code review + designer UX audit) | | | |
-| E | 16–19 | S2 | backend + storefront | P16 after Block A; P17–P18 after P5 (⛔384) |
+| E | 16–19 | S2 | backend + storefront | P16 after Block A; P17–P19 after **Block B complete** (⛔384; P8 and P17 both edit `catalog-query.service.ts`, P7 and P17 both edit `sitemap-generator.service.ts`) |
 | — | **Review checkpoint E** | | | |
 | F | 20–23 | S2 (20 backend), S3 (20 UI, 23), S1 (21, 22) | mixed | P21–P22 after Block B; P20 after P17–P18 |
 | — | **Review checkpoint F** (backend: 21–22; UI: 20, 23 with designer) | | | |
 | G | 24–25 | S1 | cross-cutting | every block merged |
-| — | **Final review pack** + green remote CI; coordinator re-asks Q1 (T250) | | | |
+| — | **Final review pack** + green remote CI; coordinator re-asks Q1 (T156) | | | |
 
 ## Dependency chain
 
@@ -108,8 +110,8 @@ P1 ─► P2 (contracts, codes) ─► P3 (schema) ─► P4 (scope writes, even
         │                                       ├─► P13 (admin scope controls)          [S3]
         │                                       └─► P16 (URL-key storage + writes)       [S2]
 ⛔384 ─► P5 (availability SQL, port, catalog reads) ─► P6 (acquisition seams) ─► P7 (search, sitemap, feeds, sweep) ─► P8 (effective names, perf)
-P5 ─► P17 (key resolution, storefront redirect) ─► P18 (SEO C×L) ─► P19 (connectors, import)   [S2]
-P8 ─► P9 (overview, FR-090) ─► P14 (overview UI)                                                 [S3]
+P8 (Block B done) ─► P17 (key resolution, storefront redirect) ─► P18 (SEO C×L) ─► P19 (connectors, import)   [S2]
+P8, P16 ─► P9 (overview, FR-090) ─► P14 (overview UI)                                           [S3]
 P8 ─► P10 (bulk) ─► P11 (gate) ─► P15 (bulk + gate UI)                                          [S3]
 P8 ─► P12 (order rules per channel)
 P8 ─► P21 (media) ─► P22 (attachments, packaging) ─► P23 (media UI)                             [S3]
@@ -117,8 +119,9 @@ P17, P18 ─► P20 (URL-key + SEO UI)
 all ─► P24 (off-state, parity, docs, changesets) ─► P25 (final gate)
 ```
 
-`catalog-query.service.ts` is edited by P5, P8, P12, P17, P18, P21, P22: those phases run **in sequence**
-(S2's P17/P18 rebase onto S1's tip before starting, and S1 does not touch the PDP method while P17–P18 run).
+`catalog-query.service.ts` is edited by P5, P8, P12, P17, P18, P21, P22: those phases run **in sequence**.
+S2 starts P17 only after Block B is merged and rebases onto S1's tip first; while P17–P18 run, S1's P12,
+P21 and P22 wait (S1 works on P9–P11 meanwhile, which do not touch that file).
 
 ---
 
@@ -146,7 +149,7 @@ consumer still compiles.
 - [ ] T007 [P] [S1] RED schema tests — `patchProductScopesRequestSchema` (absent vs `null`, window `from < until` refused at service not schema, MOQ range), `productScopesResponseSchema`, `scopeOverviewResponseSchema`, `bulkUpdateFieldsObject.scopedStatus` (refine counts it; combined with `status` refused), `productKeyResolutionSchema`, `putProductUrlKeysRequestSchema` — `packages/contracts/src/product-scopes-shapes.test.ts`, `packages/contracts/src/product-url-keys.test.ts`
 - [ ] T008 [S1] Implement `product-scopes.ts` per `contracts/product-scopes.md` §1–§3 and `admin-scopes-api.md` (shapes), incl. `CatalogProductAvailabilityPort`, `CatalogProductScopeWritePort` types — `packages/contracts/src/product-scopes.ts`
 - [ ] T009 [S1] Create `product-url-keys.ts` with the shapes of `contracts/url-keys-and-redirects.md` §1–§5 and `CatalogProductUrlKeyReadPort` (S2 owns the file from Phase 16 on) — `packages/contracts/src/product-url-keys.ts`
-- [ ] T010 [S1] Additive edits: bulk `scopedStatus` + reasons `scope_invalid`, `completeness_gate` (`catalog.ts:791`, `:817`); `CatalogProductRecord.publishFrom/publishUntil` (optional until P3 fills them); `SeoProductMetaPort` in `seo.ts`; barrel exports — `packages/contracts/src/{catalog,seo,index}.ts`
+- [ ] T010 [S1] Additive edits: bulk `scopedStatus` + reasons `scope_invalid`, `completeness_gate` (`catalog.ts:791`, `:817`); `CatalogProductRecord.publishFrom?/publishUntil?` (optional, permanently — fixtures build record literals); `SeoProductMetaPort` in `seo.ts`; barrel exports — `packages/contracts/src/{catalog,seo,index}.ts`
 - [ ] T011 [S1] Mint `SCOPE_INVALID`, `SCOPE_INCOMPLETE`, `URL_KEY_TAKEN`, `URL_KEY_REDIRECT_TAKEOVER_REQUIRED`, `URL_REDIRECT_NOT_FOUND` in one commit per `contracts/error-codes.md` (ERROR_CODES, `MINTED_ERROR_CODES`, catalog manifest `errorCodes`, `errors.<CODE>` en+pl, `composer:generate` + Polish module-reference refresh) — `packages/contracts/src/errors.ts`, `backend/test/fixtures/error-code-routing/reference-ledgers.ts`, `packages/modules/catalog/src/manifest.ts`, `packages/modules/catalog/i18n/{en,pl}.json`
 - [ ] T012 [S1] Changeset: `@endora-commerce/contracts` `minor` (new exports `product-scopes`, `product-url-keys`, `SeoProductMetaPort`) — `.changeset/159-product-scopes-contracts.md`
 - [ ] T013 [S1] Build contracts; type-check consumers by name
@@ -166,7 +169,7 @@ exist, registered, with entities (data-model §1–§3).
 - [ ] T014 [P] [PG] [S1] RED integration test: both tables exist; `CHECK`s refuse a bad status, `from >= until`, MOQ 0 and 1 000 001, `allowed_organization_ids` without `visibility`, bounds without `window_overridden`; cascade on product hard delete and on channel delete (edge case *Channel deleted*) — `backend/test/integration/catalog/product-scopes-schema.test.ts`
 - [ ] T015 [S1] Scaffold and fill `pnpm --filter backend run migration:new -- --module catalog --name product_scopes` per data-model §1–§3 (`down` drops both tables and both columns)
 - [ ] T016 [P] [S1] Entities `ProductChannelScope`, `ProductChannelLanguageScope` (`@GlobalEntity()`), `Product.publishFrom/publishUntil` in `[OptionalProps]` with doc comments citing the FRs — `packages/modules/catalog/src/backend/entities/{product-channel-scope,product-channel-language-scope,product}.entity.ts`
-- [ ] T017 [S1] `toCatalogProductRecord` fills `publishFrom/publishUntil`; make the contract fields required — `catalog-product-read.service.ts` **(⛔384 touches this file: if #384 is not merged, put the two fields in a one-line hunk away from `listValueOverridesByProductIds` and expect a trivial rebase)**
+- [ ] T017 [S1] `toCatalogProductRecord` fills `publishFrom/publishUntil` (the contract fields stay **optional** — required would break every consumer fixture that builds a record literal) — `catalog-product-read.service.ts` **(⛔384 touches this file: if #384 is not merged, put the two fields in a one-line hunk away from `listValueOverridesByProductIds` and expect a trivial rebase)**
 - [ ] T018 [S1] Regenerate + commit: `composer:generate`, `manifests:generate`, `pnpm install --lockfile-only`
 - [ ] T019 [S1] `check-entity-tenant-classification` passes for the two entities (platform-global, FR-083)
 - [ ] T020 [S1] Run the registry/graph tests
@@ -242,11 +245,23 @@ undoable, evented. No read path changes yet.
 - [ ] T046 [S1] Each module's manifest already lists `catalog`; `check:port-dependencies` green; changesets for touched packages (`patch`)
 - [ ] T047 [S1] Grep `backend/test/**` for `outOfRequestChannel` / `productIdsInRequestChannel` expectations that changed meaning; update or justify (AGENTS.md trap: derived expectations)
 
-**Verification**:
-- `[PG]` each of T039–T041's files, one per line
+**Verification** (one invocation per line):
+- `[PG] backend/test/integration/carts/scoped-availability.test.ts`
+- `[PG] backend/test/integration/quote_requests/scoped-availability.test.ts`
+- `[PG] backend/test/integration/comparisons/scoped-availability.test.ts`
+- `[PG] backend/test/integration/shopping_lists/scoped-availability.test.ts`
+- `[PG] backend/test/integration/quick_order/scoped-availability.test.ts`
 - `[PG] backend/test/contract/catalog/product-acquisition-visibility.test.ts`
-- `pnpm --filter @endora-commerce/mod-carts run typecheck` (and `mod-orders`, `mod-quote-requests`, `mod-comparisons`, `mod-shopping-lists`, `mod-quick-order`, one line each)
-- `pnpm --filter backend run check:port-dependencies && pnpm --filter backend run check:port-catches && pnpm --filter backend run check:module-boundary`
+- `pnpm --filter @endora-commerce/mod-carts run typecheck`
+- `pnpm --filter @endora-commerce/mod-orders run typecheck`
+- `pnpm --filter @endora-commerce/mod-quote-requests run typecheck`
+- `pnpm --filter @endora-commerce/mod-comparisons run typecheck`
+- `pnpm --filter @endora-commerce/mod-shopping-lists run typecheck`
+- `pnpm --filter @endora-commerce/mod-quick-order run typecheck`
+- `pnpm --filter @endora-commerce/contracts run typecheck`
+- `pnpm --filter backend run check:port-dependencies`
+- `pnpm --filter backend run check:port-catches`
+- `pnpm --filter backend run check:module-boundary`
 
 ### Phase 7: [backend] ⛔384 Search, sitemap, feeds and the window sweep (US1, US2)
 
@@ -262,11 +277,19 @@ undoable, evented. No read path changes yet.
 - [ ] T055 [US1] [S1] Feeds selection uses `filterAvailable` at the feed's channel/language — `packages/modules/product_feeds/src/backend/services/product-selection.service.ts`
 - [ ] T056 [S1] `search` docs page: new fields and the reindex step — `packages/modules/search/docs/search.md` + PL mirror
 
-**Verification**:
-- `[PG]` T048, T049 (two files), T050 — one per line
+**Verification** (one invocation per line):
+- `[PG] backend/test/integration/search/scoped-availability.test.ts`
+- `[PG] backend/test/contract/seo/sitemap-scoped.test.ts`
+- `[PG] backend/test/integration/product_feeds/scoped-availability.test.ts`
+- `[PG] backend/test/integration/catalog/publication-window-sweep.test.ts`
+- `[PG] backend/test/contract/seo/sitemap.test.ts`
 - `pnpm --filter @endora-commerce/mod-search exec vitest run src/backend/services/search-hit-channel-overrides.test.ts` (#384's, still green)
-- `pnpm --filter @endora-commerce/mod-search run typecheck` (and `mod-seo`, `mod-product-feeds`)
-- `pnpm --filter backend run check:subscribe-seam && pnpm --filter backend run check:entry-presence`
+- `pnpm --filter @endora-commerce/mod-search run typecheck`
+- `pnpm --filter @endora-commerce/mod-seo run typecheck`
+- `pnpm --filter @endora-commerce/mod-product-feeds run typecheck`
+- `pnpm --filter @endora-commerce/mod-catalog run typecheck`
+- `pnpm --filter backend run check:subscribe-seam`
+- `pnpm --filter backend run check:entry-presence`
 
 ### Phase 8: [backend] ⛔384 Effective names everywhere (FR-017) and performance (SC-004)
 
@@ -283,10 +306,20 @@ undoable, evented. No read path changes yet.
 - [ ] T065 [S1] Benchmark: a scoped variant of `backend/test/perf/catalog-list.bench.ts` and `backend/test/perf/catalog/listing-filtered-page.bench.ts` (20% of products with C and C×L rows, windows, audience overrides, effective-name sort) and record before/after in the PR; **> 10% regression stops the block** and goes back to the architect (R1 fallback) — `backend/test/perf/catalog/listing-scoped-availability.bench.ts`
 - [ ] T066 [S1] Release note entry: name sort order (D6), reindex per channel (R21) — `.changeset/159-…` bodies of the touched packages
 
-**Verification**:
-- `[PG]` T057, T058, each T059 file — one per line
+**Verification** (one invocation per line):
+- `[PG] backend/test/integration/catalog/effective-text-parity.test.ts`
+- `[PG] backend/test/integration/catalog/listing-effective-names.test.ts`
+- `[PG] backend/test/integration/catalog/listing-name-sort-paging.test.ts` (existing; the keyset changed)
+- `[PG] backend/test/integration/catalog/quick-search-effective-names.test.ts`
+- `[PG] backend/test/integration/comparisons/effective-values.test.ts`
+- `[PG] backend/test/integration/carts/effective-names.test.ts`
+- `[PG] backend/test/integration/quote_requests/effective-names.test.ts`
 - `[PG] cd backend && PERF_RUN=true pnpm exec vitest run test/perf/catalog/listing-scoped-availability.bench.ts` (needs the services; read `specs/conventions/backend-test-suite.md` § serial project first — it shares the host's CPU)
-- `pnpm --filter @endora-commerce/mod-catalog run typecheck` (and every module touched)
+- `pnpm --filter @endora-commerce/mod-catalog run typecheck`
+- `pnpm --filter @endora-commerce/mod-search run typecheck`
+- `pnpm --filter @endora-commerce/mod-carts run typecheck`
+- `pnpm --filter @endora-commerce/mod-quote-requests run typecheck`
+- `pnpm --filter @endora-commerce/mod-comparisons run typecheck`
 
 > **Review checkpoint B** — code review + security review in parallel on Phases 5–8 (focus: single
 > not-found preserved at every seam, no post-cut narrowing, SQL parameterisation of every new fragment,
@@ -300,14 +333,14 @@ undoable, evented. No read path changes yet.
 
 - [ ] T067 [P] [US4] [PG] [S1] RED overview: cells name overridden fields and the effective source (cell/channel/language/global); channel rows and language columns; orphans (non-member, language removed, attribute scope narrowed); product in no channel → only global and language scopes (US4 #4); `catalog:read` gets it, writes need `catalog:write` (US4 #3) — `backend/test/contract/catalog/scope-overview.test.ts`
 - [ ] T068 [P] [PG] [S1] RED FR-090 preview counts orphaned overrides per channel; widening reports 0; the attribute update still retains rows — `backend/test/contract/catalog/attribute-scope-change-preview.test.ts`
-- [ ] T069 [US4] [S1] `ScopeOverviewService` over scope rows, `product_value_overrides`, URL keys (once P16 lands — tolerate absence by reading the table only when the entity is registered; the field list is data, not code), media/attachment rows (once P21–P22 land) and `seoProductMetaPort.listScopesForProduct` behind `effectiveState.isPresent('seo')` — `services/scope-overview.service.ts`
+- [ ] T069 [US4] [S1] `ScopeOverviewService` over scope rows, `product_value_overrides` and URL keys (P16 is merged before Block C — see the chain); media/attachment fields join in T134a/T139a and SEO in T118a — `services/scope-overview.service.ts`
 - [ ] T070 [US4] [S1] Route `GET …/products/:id/scope-overview` — `routes.admin.ts`
 - [ ] T071 [S1] Preview route `GET …/attributes/:idOrKey/scope-change-preview` — `routes.admin.ts`, `attribute-set.service.ts` or a new `attribute-scope-preview.ts`
-- [ ] T072 [S1] Declare `seoProductMetaPort` in catalog `nonBindingDependencies` as `degrades-without` with the R12 `whenAbsent` sentence — `packages/modules/catalog/src/manifest.ts` (`seo` provides the port in P18; until then the probe answers absent and the overview omits SEO)
+- *T072 moved to Phase 18 as T118b — a port must be declared in the phase that provides it, or `check:port-dependencies` reports a port resolved and registered by nobody.*
 
 **Verification**:
-- `[PG]` T067, T068
-- `pnpm --filter backend run check:port-dependencies`
+- `[PG] backend/test/contract/catalog/scope-overview.test.ts`
+- `[PG] backend/test/contract/catalog/attribute-scope-change-preview.test.ts`
 - `pnpm --filter @endora-commerce/mod-catalog run typecheck`
 
 ### Phase 10: [backend] Bulk scoped status (US5, FR-050–FR-052)
@@ -342,9 +375,16 @@ undoable, evented. No read path changes yet.
 - [ ] T085 [US10] [S1] PDP/listing DTO `minOrderQuantity` channel-effective — `catalog-query.service.ts`
 - [ ] T086 [S1] Changesets (`patch`) for touched packages
 
-**Verification**:
-- `[PG]` T082, T083; `[PG] backend/test/contract/catalog/product-order-rules.test.ts` (155's, still green)
-- type-check each touched module by name
+**Verification** (one invocation per line):
+- `[PG] backend/test/integration/carts/channel-order-rules.test.ts`
+- `[PG] backend/test/integration/orders/channel-returnable.test.ts`
+- `[PG] backend/test/contract/catalog/product-order-rules.test.ts` (155's, still green)
+- `[PG] backend/test/contract/catalog/packaging-unit-minimum.test.ts` (155's, still green)
+- `pnpm --filter @endora-commerce/mod-carts run typecheck`
+- `pnpm --filter @endora-commerce/mod-orders run typecheck`
+- `pnpm --filter @endora-commerce/mod-quote-requests run typecheck`
+- `pnpm --filter @endora-commerce/mod-quick-order run typecheck`
+- `pnpm --filter @endora-commerce/mod-catalog run typecheck`
 
 > **Review checkpoint C** — code review + security review on Phases 9–12.
 
@@ -381,7 +421,11 @@ undoable, evented. No read path changes yet.
 - [ ] T098 [US6] [S3] Gate messages in scope controls and the global status save — `ProductScopeEditor.tsx`, `ProductEditor.tsx`
 - [ ] T099 [S3] i18n keys (handover)
 
-**Verification**: the two RED files; `pnpm --filter admin run typecheck`; `pnpm --filter backend run i18n:hardcoded`
+**Verification** (one invocation per line):
+- `pnpm --filter admin exec vitest run test/modules/catalog/products-bulk-scoped-status.test.tsx`
+- `pnpm --filter admin exec vitest run test/modules/catalog/scope-completeness-messages.test.tsx`
+- `pnpm --filter admin run typecheck`
+- `pnpm --filter backend run i18n:hardcoded`
 
 > **Review checkpoint D** — code review + **designer UX/accessibility audit** on Phases 13–15
 > (`.claude/skills/ux-laws/SKILL.md`), plus product-owner check of US1–US6 acceptance scenarios in the UI.
@@ -400,9 +444,13 @@ undoable, evented. No read path changes yet.
 - [ ] T105 [US7] [S2] Routes in `routes.admin.url-keys.ts`; registration line + composition as a handover commit
 - [ ] T106 [S2] Handover: S1 regenerates artefacts after applying T102
 
-**Verification**: `[PG]` T100, T101; `pnpm --filter @endora-commerce/mod-catalog run typecheck`; registry tests as in Phase 3
+**Verification** (one invocation per line):
+- `[PG] backend/test/integration/catalog/url-key-uniqueness.test.ts`
+- `[PG] backend/test/contract/catalog/url-keys-api.test.ts`
+- `pnpm --filter @endora-commerce/mod-catalog run typecheck`
+- `pnpm --filter backend exec vitest run --config vitest.unit.config.ts test/unit/db/migrations-registry.test.ts test/unit/db/module-graph.test.ts`
 
-### Phase 17: [backend + storefront] ⛔384 Key resolution, redirects, alternates (US7, FR-071–FR-074, FR-111) — after Phase 5
+### Phase 17: [backend + storefront] ⛔384 Key resolution, redirects, alternates (US7, FR-071–FR-074, FR-111) — after Block B
 
 - [ ] T107 [P] [US7] [PG] [S2] RED resolution at (C, L): current key serves; other current key of the product in L → redirect to effective key; redirect key → redirect at every (C, L) of its language (US7 #3); key of another language → 404 (K1, US7 #1); unavailable target → 404; archived → 410; global redirect (`NULL` language) only where the product has no L key (US7 #8) — `backend/test/integration/catalog/url-key-resolution.test.ts`
 - [ ] T108 [P] [US7] [PG] [S2] RED `seo` off: redirects answer 404, rows persist, writes still enforce the invariant; `seo` on again → served (FR-111) — `backend/test/integration/catalog/url-redirects-seo-off.test.ts`
@@ -412,7 +460,14 @@ undoable, evented. No read path changes yet.
 - [ ] T112 [US7] [S2] Sitemap: one `<loc>` per live language with effective key and `?lang` rule — `seo/src/backend/services/sitemap-generator.service.ts`
 - [ ] T113 [US7] [S2] Storefront PDP + metadata — `storefront/app/(catalog)/p/[slug]/page.tsx`, `storefront/lib/api/catalog.ts`
 
-**Verification**: `[PG]` T107, T108; `[PG] backend/test/contract/seo/sitemap.test.ts`; `pnpm --filter storefront exec vitest run test/catalog/pdp-redirect.test.ts`; `pnpm --filter storefront run typecheck`; `pnpm --filter backend run check:storefront-indexability`
+**Verification** (one invocation per line):
+- `[PG] backend/test/integration/catalog/url-key-resolution.test.ts`
+- `[PG] backend/test/integration/catalog/url-redirects-seo-off.test.ts`
+- `[PG] backend/test/contract/seo/sitemap.test.ts`
+- `pnpm --filter storefront exec vitest run test/catalog/pdp-redirect.test.ts`
+- `pnpm --filter storefront run typecheck`
+- `pnpm --filter @endora-commerce/mod-catalog run typecheck`
+- `pnpm --filter backend run check:storefront-indexability`
 
 ### Phase 18: [backend] ⛔384 SEO per channel × language (US8, FR-075) — after Phase 17
 
@@ -421,9 +476,19 @@ undoable, evented. No read path changes yet.
 - [ ] T116 [S2] Migration `--module seo --name meta_override_channel_scope`; entity changes — `packages/modules/seo/src/{migrations,backend/entities/seo-meta-override.entity.ts}`
 - [ ] T117 [US8] [S2] `MetaTagResolverService` scope walk; admin routes accept `channelId`; `seoProductMetaPort` provided — `packages/modules/seo/src/backend/{services/meta-tag-resolver.service.ts,routes.ts,index.ts}`
 - [ ] T118 [US8] [S2] PDP `seo` block through the port behind the `seo` presence probe — `catalog-query.service.ts` (`:1437` block)
+- [ ] T118a [US4] [S2] `ScopeOverviewService` lists SEO scopes through `seoProductMetaPort.listScopesForProduct` behind `effectiveState.isPresent('seo')`; extend `scope-overview.test.ts` with an SEO override and the `seo`-off case — `services/scope-overview.service.ts` (**handover**: S1 owns the file; deliver as the phase's handover commit)
+- [ ] T118b [S2] Declare `seoProductMetaPort` in catalog `nonBindingDependencies` as `degrades-without` with the R12 `whenAbsent` sentence (handover commit to `packages/modules/catalog/src/manifest.ts`) — same phase as the provider (T117)
 - [ ] T119 [S2] `seo` docs page + PL mirror; `seo` changeset (`patch`)
 
-**Verification**: `[PG]` T114, T115; `[PG] backend/test/contract/seo/meta-override.test.ts`; `pnpm --filter @endora-commerce/mod-seo run typecheck`; `pnpm --filter backend run check:port-dependencies`; fk-dependency-drift test
+**Verification** (one invocation per line):
+- `[PG] backend/test/integration/seo/meta-channel-scope.test.ts`
+- `[PG] backend/test/contract/catalog/product-seo-scoped.test.ts`
+- `[PG] backend/test/contract/catalog/scope-overview.test.ts`
+- `[PG] backend/test/contract/seo/meta-override.test.ts`
+- `pnpm --filter @endora-commerce/mod-seo run typecheck`
+- `pnpm --filter @endora-commerce/mod-catalog run typecheck`
+- `pnpm --filter backend run check:port-dependencies`
+- `pnpm --filter backend exec vitest run --config vitest.unit.config.ts test/unit/db/fk-dependency-drift.test.ts`
 
 ### Phase 19: [backend] Connectors and import/export (FR-091–FR-093)
 
@@ -433,7 +498,12 @@ undoable, evented. No read path changes yet.
 - [ ] T123 [S2] CSV columns — `catalog-bulk-import.service.ts`, `packages/modules/import_export/src/backend/services/` adapter
 - [ ] T124 [S2] Connector-author note: which scope each field is read/written at (FR-091) — `packages/modules/catalog/docs/catalog/url-keys-and-redirects.md` § Integrations (+ PL)
 
-**Verification**: `[PG]` T120, T121; type-check `mod-catalog`, `mod-import-export`
+**Verification** (one invocation per line):
+- `[PG] backend/test/integration/catalog/scope-write-port.test.ts`
+- `[PG] backend/test/integration/catalog/bulk-import-scoped-status.test.ts`
+- `[PG] backend/test/integration/catalog/bulk-import-command.test.ts` (existing, still green)
+- `pnpm --filter @endora-commerce/mod-catalog run typecheck`
+- `pnpm --filter @endora-commerce/mod-import-export run typecheck`
 
 > **Review checkpoint E** — code review + security review on Phases 16–19 (focus: advisory-lock ordering,
 > takeover authorisation (operator only), redirect open-redirect safety — targets are always the
@@ -451,7 +521,12 @@ undoable, evented. No read path changes yet.
 - [ ] T128 [US8] [S3] SEO panel per scope — `packages/modules/seo/src/admin/**`
 - [ ] T129 [S3] i18n keys in `catalog` and `seo` bundles (handover for catalog)
 
-**Verification**: the two RED files; `pnpm --filter admin run typecheck`; `pnpm --filter backend run i18n:hardcoded`
+**Verification** (one invocation per line):
+- `pnpm --filter admin exec vitest run test/modules/catalog/product-url-keys-panel.test.tsx`
+- `pnpm --filter admin exec vitest run test/modules/seo/seo-meta-scope.test.tsx`
+- `pnpm --filter admin run typecheck`
+- `pnpm --filter backend run i18n:hardcoded`
+- `pnpm --filter backend exec vitest run --config vitest.unit.config.ts test/unit/_i18n/registered-bundles-shape.test.ts`
 
 ### Phase 21: [backend + storefront] ⛔384 Gallery per channel and alt per language (US9 a, FR-076, FR-077)
 
@@ -460,8 +535,14 @@ undoable, evented. No read path changes yet.
 - [ ] T132 [US9] [S1] Gallery service + routes (`channel-roles`, item `altText`, `hiddenInChannels`), Command `product.media.update`, `changedFields: ['media']` — `services/gallery.service.ts`, `routes.admin.ts`
 - [ ] T133 [US9] [S1] Effective gallery in C and alt at L on PDP, listing card (`#listingCardReadsFor`), OG image — `catalog-query.service.ts`, `primary-asset-url.ts`
 - [ ] T134 [S1] Regenerate artefacts
+- [ ] T134a [US4] [S1] `ScopeOverviewService` + `scope-overview.test.ts` cover gallery role/hidden overrides per channel, per-language alt, and their orphans (FR-041 "every field")
 
-**Verification**: `[PG]` T130; `[PG] backend/test/contract/catalog/gallery.test.ts`; `[PG] backend/test/integration/catalog/gallery-batch-read.test.ts`; type-check `mod-catalog`
+**Verification** (one invocation per line):
+- `[PG] backend/test/contract/catalog/media-scopes.test.ts`
+- `[PG] backend/test/contract/catalog/scope-overview.test.ts`
+- `[PG] backend/test/contract/catalog/gallery.test.ts`
+- `[PG] backend/test/integration/catalog/gallery-batch-read.test.ts`
+- `pnpm --filter @endora-commerce/mod-catalog run typecheck`
 
 ### Phase 22: [backend + storefront] Attachments and packaging units (US9 b, FR-078, FR-079)
 
@@ -470,8 +551,17 @@ undoable, evented. No read path changes yet.
 - [ ] T137 [US9] [S1] Attachment + packaging services/routes accept translations and `hiddenInChannels` (admin packaging schemas stay `.strict()` with the key added) — `services/{attachment,packaging-unit}.service.ts`, `packages/contracts/src/catalog.ts`
 - [ ] T138 [US9] [S1] PDP DTO and basket/RFQ snapshot take the effective name at the scope language — `catalog-query.service.ts`, `cart-service.ts`, `rfq-service.ts`
 - [ ] T139 [S1] Regenerate artefacts; changesets
+- [ ] T139a [US4] [S1] `ScopeOverviewService` + `scope-overview.test.ts` cover attachment translations / hidden per channel and packaging-unit name translations
 
-**Verification**: `[PG]` T135 (two files); `[PG] backend/test/contract/catalog/packaging-units.contract.test.ts`; `[PG] backend/test/contract/catalog/attachments.test.ts`; type-check touched modules
+**Verification** (one invocation per line):
+- `[PG] backend/test/contract/catalog/attachment-packaging-translations.test.ts`
+- `[PG] backend/test/integration/carts/packaging-unit-name-snapshot.test.ts`
+- `[PG] backend/test/contract/catalog/scope-overview.test.ts`
+- `[PG] backend/test/contract/catalog/packaging-units.contract.test.ts`
+- `[PG] backend/test/contract/catalog/attachments.test.ts`
+- `pnpm --filter @endora-commerce/mod-catalog run typecheck`
+- `pnpm --filter @endora-commerce/mod-carts run typecheck`
+- `pnpm --filter @endora-commerce/mod-quote-requests run typecheck`
 
 ### Phase 23: [admin UI] Media, attachments, packaging per scope (US9) — after Phases 21–22
 
@@ -480,7 +570,11 @@ undoable, evented. No read path changes yet.
 - [ ] T142 [US9] [S3] `PackagingUnitsEditor.tsx` translations
 - [ ] T143 [S3] i18n keys (handover)
 
-**Verification**: the RED files; `pnpm --filter admin run typecheck`; `i18n:hardcoded`
+**Verification** (one invocation per line):
+- `pnpm --filter admin exec vitest run test/modules/catalog/product-media-scopes.test.tsx`
+- `pnpm --filter admin exec vitest run test/modules/catalog/PackagingUnitsEditor.translations.test.tsx`
+- `pnpm --filter admin run typecheck`
+- `pnpm --filter backend run i18n:hardcoded`
 
 > **Review checkpoint F** — backend (Phases 21–22): code + security review; UI (Phases 20, 23): code
 > review + designer audit.
@@ -499,7 +593,7 @@ undoable, evented. No read path changes yet.
 - [ ] T149 [S1] Changesets: one per meaning for every published package touched (`contracts` minor; modules patch/minor as their exports changed); `pnpm changeset:status`
 - [ ] T150 [S1] AGENTS.md traps: grep `backend/test/**` for every file path renamed or deleted in this feature; re-derive anything derived from moved files (e.g. `module-removal.test.ts` ledger); re-record a read size **only** if the band refuses it, after reading `specs/conventions/check-estate.md`
 
-**Verification**: `[PG]` T144, T145; `pnpm --filter backend run check:docs-translations`; `pnpm --filter backend run check:module-docs`; `pnpm changeset:status`; `pnpm run check:naming && pnpm run check:language` (in Docker Ubuntu on the macOS host — the BSD-tool gap)
+**Verification** (one invocation per line): `[PG] backend/test/integration/catalog/deploy-parity.test.ts`; `[PG] backend/test/contract/catalog/scoped-availability-all-consumers.test.ts`; `pnpm --filter backend run check:docs-translations`; `pnpm --filter backend run check:module-docs`; `pnpm changeset:status`; `pnpm run check:naming && pnpm run check:language` (in Docker Ubuntu on the macOS host — the BSD-tool gap)
 
 ### Phase 25: Final gate and acceptance hand-off
 
@@ -508,7 +602,7 @@ undoable, evented. No read path changes yet.
 - [ ] T153 [S1] Every `check:*` in the `quality` job: `check:module-boundary`, `check:port-dependencies`, `check:port-catches`, `check:subscribe-seam`, `check:entry-presence`, `check:off-state-coverage`, `check:action-route-permissions`, `check:bundle-pairing`, `check:release-intent -- --since origin/master`, `manifests:check`, `overlay:check`
 - [ ] T154 [S1] Fork `ci-pg` fully green on the rebased tip; record the run URL
 - [ ] T155 [S1] Re-run `quickstart.md` §1–§9 on a dev stack; record findings in the PR
-- [ ] T250 **Coordinator re-asks owner Q1 (status values A — `draft`/`active`/`inactive` — vs B — enabled/disabled per scope + global archive action) before acceptance.** If B: add a phase (contract constant + `CHECK`s + data migration mapping scope values + admin control + archive action), per research R3; nothing else changes
+- [ ] T156 **Coordinator re-asks owner Q1 (status values A — `draft`/`active`/`inactive` — vs B — enabled/disabled per scope + global archive action) before acceptance.** If B: add a phase (contract constant + `CHECK`s + data migration mapping scope values + admin control + archive action), per research R3; nothing else changes
 
 **Verification**: as listed in T151–T154.
 
@@ -539,8 +633,8 @@ undoable, evented. No read path changes yet.
 ## Parallel execution examples
 
 - After Block A: **S3** starts Phase 13 and **S2** starts Phase 16 while **S1** waits for #384 (or stacks).
-- After Phase 5: S2 runs Phases 17–18 only after rebasing onto S1's Phase 5 tip; S1 continues with Phases
-  6–7, which do not touch the PDP method.
+- After Block B: S2 runs Phases 17–19 after rebasing onto S1's tip; S1 runs Phases 9–11 meanwhile (no
+  shared file), then 12, 21, 22 once S2's P18 is applied.
 - Within a phase, `[P]` RED tests are written together; implementation follows in order.
 
 ## Implementation strategy
