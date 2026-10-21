@@ -24,7 +24,7 @@ refusal keeps the seam's **existing single not-found answer** (#227, #259). Rese
 | 16 | quote_requests · `rfq-service.ts:223-225`, `:758`, snapshots `:462`, `:635` | audience + channel; baseline name | buyer: `filterAvailable` at (RFQ channel, L) → single not-found (FR-018); operator (`createOnBehalf`): accept + `warnings: [{ productId, code: 'PRODUCT_UNAVAILABLE_IN_SCOPE' }]`; names via `effectiveNames` in L (N2) |
 | 17 | shopping_lists · `shopping-list-service.ts:236-249`, `:462` | audience + channel | `filterAvailable` |
 | 18 | quick_order · `catalog-lookup.ts:56`, `routes.ts:106` | `productIdsInRequestChannel` + status | `filterAvailable`; `'unrestricted'` operator arm unchanged (exempt) |
-| 19 | cms · product blocks (`storefront-resolver.ts`) | catalog list read | through the catalog listing read (row 1) — verify in the phase, no own predicate |
+| 19 | cms · product blocks — `storefront/lib/page-builder/catalog-block-data.ts` over `packages/cms-components/src/utils/catalog-block-data.ts` (cms's own `storefront-resolver.ts` reads pages only, never products) | `listProducts` + `getProductBySlug` (slugs stored in the block) | through rows 1 and 3, no own predicate; the stored slug keeps resolving after the product gains a language key (R28 stable handle) — T045a, T107 |
 | 20 | orders · reorder (`order-reorder-service.ts:91`), quote `convertToOrder` | exempt (2026-08-21 ruling) | **unchanged** — commitments rebuild; placement (row 14) still refuses an unavailable line |
 
 ## Events (R10)
@@ -46,6 +46,7 @@ upserts).
 - `seo` off: redirects answer 404, PDP metadata is derived, redirect and SEO rows persist and reappear on
   re-enable (FR-111) — `backend/test/integration/catalog/url-redirects-seo-off.test.ts` [PG].
 - `search` off: the Postgres listing applies the same availability predicate (rows 1–2) — covered by the
-  existing degrade path; asserted in `availability-listing.test.ts` with the search backend off.
+  existing degrade path; asserted in `backend/test/contract/catalog/scoped-availability-matrix.test.ts` with the search backend off
+  (T146).
 - Consumers (`carts`, `quote_requests`, `comparisons`, `shopping_lists`, `quick_order`, `product_feeds`)
   keep their own off-state tests; the port's owner is non-deactivatable, so no new off-state case arises.
