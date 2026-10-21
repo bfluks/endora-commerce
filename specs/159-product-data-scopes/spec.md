@@ -2,8 +2,9 @@
 
 **Feature Branch**: `feat/159-product-data-scopes`
 **Created**: 2026-10-20
-**Status**: Draft — clarify session 1 recorded 2026-10-21; D-1, D-3, D-5, A-9 and the per-scope meaning of
-`inactive` (FR-010) still open
+**Status**: Draft — clarify rounds 1 and 2 recorded 2026-10-21; no [NEEDS CLARIFICATION] marker remains.
+D-1 (draft preview by direct link) stays deferred with an interim reading; the status value set (FR-010) is
+re-asked by the coordinator before acceptance
 **Issues**: #385 (source), depends on #384; adjacent to #377 and #241
 **Input**: Issue #385 — *Catalog: Magento-style scopes for product data — status, visibility, URL, SEO,
 media per sales channel and language.* An operator cannot set a product's status or visibility per sales
@@ -24,7 +25,8 @@ spec records the owner's binding decisions so far and leaves the rest open for c
 3. The product editor **does not warn** that some scopes override the global status when the global
    switch is changed.
 4. Every field in the issue's "Proposed scope per field" table is in scope for this feature, subject to
-   analysis; the improvements over Magento listed in the issue are welcome.
+   analysis; the improvements over Magento listed in the issue are welcome. *(Narrowed in clarify round 2,
+   2026-10-21: display visibility and price display mode per channel are dropped from this feature.)*
 5. #384 (the storefront ignores the channel overrides that already exist) is a separate bug, fixed on its
    own branch; this spec assumes it lands first.
 
@@ -58,6 +60,41 @@ spec records the owner's binding decisions so far and leaves the rest open for c
   after #384: quick search (consumer `quick_order`), listing free-text search, attribute filters, filter
   option counts and name sort, comparisons, and line names snapshotted into baskets and quote requests.
   Search-result card names are fixed under #384 itself (FR-017, FR-004, A-1).
+- Q: (round 2) Should the new Magento-style **display visibility** (not visible individually / catalog /
+  search / catalog and search) be introduced? → A: No — dropped. "Keep the visibility options we had until
+  now": the only visibility concept stays the existing **audience** `visibility` (`public` /
+  `logged_in_only` / `organization_restricted`) with `allowedOrganizationIds`, made settable per channel
+  (FR-030). This supersedes the display-visibility halves of the D-2 and D-4 answers above and, for display
+  visibility, pre-specification owner decision 4. Recorded facts: variants are not separate products today
+  (`product_variants` rows under a `configurable` parent, never listed and never given a page of their own),
+  so Magento's main use of "not visible individually" does not arise; grouped and bundle children are real
+  products and stay governed by status, channel membership and audience, as today. D-3 is moot. "Hide from
+  listing and search but sell by direct link or quick order" moves to *Out of Scope* as a possible follow-up.
+  FR-003, FR-020, FR-021, FR-022 are removed; FR-050 covers status only.
+- Q: (round 2, D-5) Where does a product × channel price display mode sit in the display-mode chain? → A:
+  Removed from this feature — price display mode per channel is out of scope (a possible future issue). This
+  supersedes pre-specification owner decision 4 for price display mode. FR-101 is removed; minimum order
+  quantity and "returnable" per channel stay (FR-100).
+- Q: (round 2, A-9) Does the "no warning about overrides when the global value changes" rule cover only
+  status or every scoped field? → A: Every scoped field (option A; FR-013, A-9).
+- Q: (round 2, N1) What does `inactive` mean when set as an override at channel or channel × language? → A:
+  Plain "off" in that scope — identical in effect to `draft` there (not-found); archiving (`archivedAt`,
+  `product.archived.v1`, "gone") stays global-only (option a; FR-010).
+- Q: (round 2, N2) In which language are product names snapshotted into basket and quote-request lines? →
+  A: The request language at snapshot time, falling back to the channel's default language; documents
+  created by an operator in the admin use the channel's default language (option a; FR-017).
+- Q: (round 2, N3) In *refuse* mode, what happens to an edit that turns the product on in several
+  (channel, language) pairs when only some fail the gate? → A: A single-product edit — including a change of
+  the global switch — is refused as a whole if any pair fails; bulk edit skips and reports the failing
+  products, as FR-051 does (option a; FR-060, FR-061).
+- Q: (round 2, N4) How is URL-key uniqueness kept when a product joins a channel or a channel gains a
+  language? → A: Joining a channel where another product already has the same effective key at some
+  (channel, language) is refused, naming the clash. A channel adding a language that creates a clash is
+  allowed; the clashing key is marked orphaned (FR-015) and shown in the scope overview with a warning
+  (FR-070, FR-015).
+- Q: (round 2, N5) Must quote requests respect effective availability? → A: Quote requests created by a
+  buyer refuse lines whose product is not effectively available at the quote request's channel and
+  language; quote requests created by an operator only warn (option a; FR-018).
 
 ## Current state (origin/master cde5563ea)
 
@@ -126,8 +163,6 @@ runtime, unless stated.
 - Gallery: `gallery_items` and `gallery_item_labels` (roles base / small / thumbnail, unique per product)
   are global (`packages/modules/catalog/src/backend/entities/gallery-item*.entity.ts`). Attachment names
   and packaging-unit names are plain strings.
-- Price display mode overrides: scope `organization` | `category` | `product`, no channel
-  (`packages/modules/price_lists/src/backend/entities/price-display-mode-override.entity.ts:23`).
 - Channel membership `sales_channel_products` is a bare yes/no, read and written only through the platform
   membership service (`packages/platform/src/kernel/sales-channels/sales-channel-membership.service.ts`);
   admin zone `packages/modules/sales_channels/src/admin/zones/ProductChannelMembership.tsx`.
@@ -146,9 +181,9 @@ runtime, unless stated.
 - **Use inherited** — removes the override at that scope; it does not store an empty value.
 - **Status** — `draft` / `active` / `inactive` at a scope (FR-010); the product is switched **on** at a
   scope when its effective status there is `active`, and **off** otherwise.
-- **Display visibility** — *where* a live product is listed: not visible individually / catalog only /
-  search only / catalog and search. Distinct from **audience visibility** (who may see it: public /
-  logged-in only / organization-restricted). Every requirement names which one it means.
+- **Audience visibility** — who may see a product: public / logged-in only / organization-restricted with an
+  organization list. It is the only visibility concept in this spec (clarify round 2 dropped a separate
+  display visibility).
 - **Publication window** — an optional from / to period per channel inside which the product may be live.
 - **Effectively available** at (channel, language, buyer, now) — see FR-001.
 
@@ -190,37 +225,32 @@ compare against the expected matrix; then remove one override and repeat.
    exactly the same (channel, language) pairs and lists as before deployment.
 8. **Given** a per-scope status change, **When** an auditor opens the audit log, **Then** one entry
    records the actor, the product, the scope and the before / after value, and the change can be undone.
+9. **Given** a product whose effective status is off at (C, L), **When** a buyer raises a quote request at
+   (C, L) containing it, **Then** that line is refused; **when** an operator creates a quote request at
+   (C, L) containing it in the admin, **Then** the line is accepted with a warning (FR-018).
 
 ---
 
-### User Story 2 - Display visibility and publication window per scope (Priority: P2)
+### User Story 2 - Publication window per channel (Priority: P2)
 
-An operator marks a spare part "search only" in B2C × Polish so that it is findable but does not clutter
-category pages, and marks variant children "not visible individually" so that they are only reachable
-through their parent. For a seasonal product they set a publication window from 1 to 31 December in B2C;
-outside it the product is not live there, without anybody having to switch it on and off.
+For a seasonal product an operator sets a publication window from 1 to 31 December in B2C; outside it the
+product is not live there, without anybody having to switch it on and off.
 
-**Why this priority**: Completes "where and when is it live" — the second half of phase 2 — and replaces
-manual on/off toggling for scheduled launches.
+**Why this priority**: Completes "when is it live" — the second half of phase 2 — and replaces manual on/off
+toggling for scheduled launches. (Clarify round 2 dropped the display-visibility half of this story.)
 
-**Independent Test**: Seed products with each display-visibility value at one (C, L) and one product with a
-window in the past, present and future; assert category listing, search results and product page per case
-at a controlled "now".
+**Independent Test**: Seed one product with a window in the past, one in the present and one in the future
+in one channel; assert listing, search results and product page per case at a controlled "now", and that
+other channels are unaffected.
 
 **Acceptance Scenarios**:
 
-1. **Given** display visibility "catalog only" at (C, L), **When** a buyer browses a category or the list
-   at (C, L), **Then** the product appears; **when** they search, **Then** it does not.
-2. **Given** "search only", **Then** the converse holds.
-3. **Given** "not visible individually", **Then** the product appears in neither listing nor search, its
-   page is reachable by direct link only if FR-022 allows it, and it remains purchasable as a variant or
-   bundle / grouped child of a live parent.
-4. **Given** a publication window whose start is in the future, **When** a buyer browses at a time before
+1. **Given** a publication window whose start is in the future, **When** a buyer browses at a time before
    the start, **Then** the product is not live in that channel; **at** the start it becomes live without
    any operator action.
-5. **Given** a window that has ended, **Then** the product is no longer live in that channel and its status
+2. **Given** a window that has ended, **Then** the product is no longer live in that channel and its status
    value is unchanged.
-6. **Given** no window, **Then** the product is not time-limited.
+3. **Given** no window, **Then** the product is not time-limited.
 
 ---
 
@@ -248,9 +278,9 @@ channel.
 ### User Story 4 - Scope overview matrix in the product editor (Priority: P4)
 
 In the product editor an operator opens one overview showing channels × languages for the product. Each
-cell shows the effective status and display visibility and marks every field overridden at that cell (and
-at the channel row and the language column). From a cell they jump to the field, or reset any override to
-inherited.
+cell shows the effective status and marks every field overridden at that cell (and at the channel row and
+the language column), plus any orphaned override or orphaned URL key with a warning (FR-015). From a cell
+they jump to the field, or reset any override to inherited.
 
 **Why this priority**: The main UX improvement over Magento's per-field "Use Default Value" checkbox;
 without it, operators cannot see why a product is or is not live somewhere.
@@ -270,10 +300,10 @@ cell's markers and effective values; reset one and assert the cell and the store
 
 ---
 
-### User Story 5 - Bulk edit status and display visibility per scope (Priority: P5)
+### User Story 5 - Bulk edit status per scope (Priority: P5)
 
-From the product list an operator selects 300 products and sets status off and display visibility "catalog
-and search" for B2C × German, or resets those overrides to inherited, in one action.
+From the product list an operator selects 300 products and sets status off for B2C × German, or resets that
+override to inherited, in one action.
 
 **Why this priority**: Launches and withdrawals happen per market for many products at once; doing it one
 product at a time defeats the feature.
@@ -309,6 +339,13 @@ response per FR-060.
 1. **Given** a missing German name, **When** the operator enables the product at (B2C, de), **Then** the
    missing field is named, and the outcome follows FR-060.
 2. **Given** all required values present, **Then** no gate message is shown.
+3. **Given** the gate setting is *refuse* and a product with no overrides that lacks a German name, **When**
+   the operator turns the global switch on so that the product would become live in (B2C, pl), (B2C, de)
+   and (B2B, pl), **Then** the whole change is refused, nothing is saved, and the missing German name at
+   (B2C, de) is named (FR-060).
+4. **Given** the gate setting is *refuse* and a bulk selection in which some products fail the gate,
+   **When** the bulk action runs, **Then** the passing products are changed and the failing ones are
+   skipped and reported per product (FR-061, FR-051).
 
 ---
 
@@ -338,6 +375,12 @@ URL redirects permanently to the new one in the same (C, L).
    and only on confirmation is the key saved and that redirect removed (FR-072).
 6. **Given** an existing redirect, **When** the operator deletes it, **Then** the old URL answers not-found
    and the product's current URL is unchanged.
+7. **Given** product P in channel A with effective key `drill` at (A, pl) and product Q, not a member of A,
+   with effective key `drill` at pl, **When** the operator adds Q to channel A, **Then** the membership
+   change is refused and the message names P, the key and (A, pl) (FR-070).
+8. **Given** products P and Q in channel A whose keys clash only in German, which A does not offer, **When**
+   German is added to A, **Then** the change is saved, the clashing key is marked orphaned at (A, de) and
+   the scope overview shows it with a warning (FR-070, FR-015).
 
 ---
 
@@ -383,23 +426,21 @@ translates packaging-unit names ("karton" / "carton").
 
 ---
 
-### User Story 10 - Order constraints and price display mode per channel (Priority: P10)
+### User Story 10 - Order constraints per channel (Priority: P10)
 
-An operator sets minimum order quantity 10 in B2B and 1 in B2C, makes the product returnable only in B2C,
-and sets the price display mode (net / gross) for the product in B2B.
+An operator sets minimum order quantity 10 in B2B and 1 in B2C, and makes the product returnable only in
+B2C. (Price display mode per channel was removed from this feature in clarify round 2; *Out of Scope*.)
 
-**Why this priority**: Phase 6; extends feature 155 and the price display chain with a channel step.
+**Why this priority**: Phase 6; extends feature 155 with a channel step.
 
 **Independent Test**: Seed overrides per channel; add to basket and place orders in each channel and assert
-the minimum, the return eligibility and the displayed price mode.
+the minimum and the return eligibility.
 
 **Acceptance Scenarios**:
 
 1. **Given** MOQ 10 in B2B, **When** a B2B buyer adds 5, **Then** the basket refuses as feature 155 does;
    in B2C the same quantity is accepted.
 2. **Given** returnable only in B2C, **Then** a return is offered on B2C orders and not on B2B orders.
-3. **Given** a channel-level price display mode for the product, **Then** it applies in that channel
-   according to the precedence in FR-101.
 
 ---
 
@@ -417,9 +458,10 @@ the minimum, the return eligibility and the displayed price mode.
 - **Channel deleted**: its scoped values are removed with it.
 - **Global archive vs per-scope enable**: an archived (or deleted) product is unavailable everywhere,
   whatever its per-scope status.
-- **Variant / bundle child "not visible individually"**: still resolvable and purchasable through a live
-  parent in the same (C, L); a child whose own status is off at (C, L) is not purchasable there even via
-  the parent.
+- **Variants and grouped / bundle children**: a variant is a `product_variants` row of its `configurable`
+  parent, not a product; it has no status, page or listing of its own and follows the parent. A grouped or
+  bundle child is a real product governed by its own status, channel membership and audience, as today: a
+  child whose effective status is off at (C, L) is not purchasable there even via the parent.
 - **Parent off, child on**: the child does not make the parent reachable.
 - **Unresolved channel** (no header, no host mapping and no default): no scoped value matches and no
   product is live — fail closed (Constitution XII).
@@ -429,8 +471,14 @@ the minimum, the return eligibility and the displayed price mode.
   (not-found), the redirect does not leak that the product exists.
 - **Attribute scope flag changed** after values exist (e.g. a language-scoped attribute made global):
   defined by FR-090.
-- **Module off**: with `seo` off, redirects and SEO overrides are not served, but the data persists; with
-  `search` off, "search only" products are simply not listed anywhere (FR-111).
+- **Module off**: with `seo` off, redirects and SEO overrides are not served, but the data persists
+  (FR-111).
+- **Joining a channel with a clashing URL key**: refused, naming the clashing product, key and (C, L)
+  (FR-070).
+- **A channel gaining a language that creates a URL-key clash**: allowed; the clashing key is orphaned and
+  flagged in the overview (FR-070, FR-015).
+- **`inactive` set below the global scope**: plain "off" there, not-found like `draft`; it never archives
+  (FR-010).
 - **Concurrent edits** at the same scope by two operators: last write wins, each audited.
 
 ## Requirements *(mandatory)*
@@ -445,15 +493,13 @@ the minimum, the return eligibility and the displayed price mode.
   audience rule for C admits the buyer.
 - **FR-002**: Effective availability MUST be computed by one shared definition that every consumer below
   uses; no consumer may apply its own status predicate.
-- **FR-003**: Display visibility at (C, L) MUST decide only *where* an effectively available product is
-  listed (category / product listing, search, both, neither); it MUST NOT make an unavailable product
-  available.
-- **FR-004**: The following consumers MUST honour FR-001 and FR-003 for their (C, L): storefront product
-  list and filter facets; product page (including links, related products and bundle configuration);
-  search indexing and search results; sitemap; product feeds; quick order; comparisons; CMS product blocks;
-  basket add and order placement. Every one of them, and in addition quick search, the listing's free-text
-  search, attribute filters, filter option counts and name sort, basket line names and quote-request line
-  names, MUST read scoped field values at their effective (C, L) value (FR-017).
+- **FR-003**: *Removed — clarify 2026-10-21 round 2 (display visibility dropped).*
+- **FR-004**: The following consumers MUST honour FR-001 for their (C, L): storefront product list and
+  filter facets; product page (including links, related products and bundle configuration); search indexing
+  and search results; sitemap; product feeds; quick order; comparisons; CMS product blocks; basket add and
+  order placement; quote-request line creation (FR-018). Every one of them, and in addition quick search,
+  the listing's free-text search, attribute filters, filter option counts and name sort, basket line names
+  and quote-request line names, MUST read scoped field values at their effective (C, L) value (FR-017).
 - **FR-005**: A product page request at (C, L) for a product not effectively available there MUST answer
   exactly as for a product that does not exist (no status-specific response that reveals existence),
   except for the archived case, which MUST keep its current "gone" answer. Interim reading: this also stops
@@ -463,6 +509,10 @@ the minimum, the return eligibility and the displayed price mode.
   shown as unavailable and MUST block placement, reusing the existing unavailable-line behaviour.
 - **FR-007**: An unresolved request channel MUST NOT match any scoped value or any product (fail closed,
   Constitution XII); channel membership MUST be read only through the sanctioned membership service.
+- **FR-018**: A quote request created by a **buyer** MUST refuse every line whose product is not
+  effectively available (FR-001) at the quote request's channel and language, with an answer that does not
+  reveal the product's existence beyond what FR-005 allows. A quote request created by an **operator** in
+  the admin MUST accept such a line and show a warning naming it.
 
 #### Scope model and inheritance
 
@@ -476,7 +526,6 @@ the minimum, the return eligibility and the displayed price mode.
   | Name, description | yes | yes | yes | yes (unchanged) |
   | User attributes | per attribute flags (unchanged) | | | |
   | Status | yes | — | yes | yes |
-  | Display visibility | yes | — | yes | yes |
   | Audience visibility | yes | — | yes | — |
   | Publication window | yes | — | yes | — |
   | URL key | yes | yes | — | yes |
@@ -487,34 +536,34 @@ the minimum, the return eligibility and the displayed price mode.
   | Attachment hidden | — (shown) | — | yes | — |
   | Packaging-unit name | yes | yes | — | — |
   | Minimum order quantity, returnable | yes | — | yes | — |
-  | Price display mode | existing chain | — | yes | — |
 
-  SKU, type, attribute set, stock flags, fulfilment strategy, product links, bundle / grouped / variant
-  structure, prices, promotions and warehouses MUST remain as they are.
+  Clarify round 2 removed the display-visibility and price-display-mode rows. SKU, type, attribute set,
+  stock flags, fulfilment strategy, product links, bundle / grouped / variant structure, prices, price
+  display mode, promotions and warehouses MUST remain as they are.
 - **FR-010**: Status MUST hold one of `draft` / `active` / `inactive` at every scope it supports (FR-009);
   the product is "on" at (C, L) exactly when its effective status there is `active`. The **global** value
   keeps today's semantics in full: setting it to `inactive` archives the product (sets `archivedAt`, emits
   `product.archived.v1` once per transition, product page answers "gone"), and moving away clears
   `archivedAt`. Archiving MUST remain a global, product-wide state (FR-001), not a per-scope one.
-  [NEEDS CLARIFICATION: what `inactive` set as an override at C or C×L means — plain "off" there, identical
-  in effect to `draft`; or refused below the global scope, so overrides hold only `draft` / `active`?]
-  This value set is provisional: the owner may replace it with enabled / disabled per scope plus a separate
+  `inactive` set as an override at C or C×L MUST mean plain "off" in that scope — identical in effect to
+  `draft` there (not-found, FR-005) — and MUST NOT set `archivedAt`, emit `product.archived.v1` or answer
+  "gone" (clarify 2026-10-21 round 2, N1). This value set is provisional: the owner may replace it with enabled / disabled per scope plus a separate
   global archive action, and the coordinator re-asks before acceptance (Clarifications 2026-10-21).
 - **FR-011**: Every scoped field MUST have a global value; an override MUST exist only at a scope where an
   operator (or an integration) set one.
 - **FR-012**: "Use inherited" MUST remove the override at that scope; the effective value MUST then be the
   inherited one. Storing an empty value MUST NOT be the way to inherit.
 - **FR-013**: Changing a global value MUST NOT alter or remove any override, and the product editor MUST
-  NOT warn about existing overrides when the global status is changed (owner decision 3).
-  [NEEDS CLARIFICATION: does the no-warning rule extend to every other global value of a scoped field, or
-  only to status? — assumption A-9]
+  NOT warn about existing overrides when the global value of **any** scoped field is changed — status
+  (owner decision 3) and every other field of FR-009 (A-9, confirmed in clarify 2026-10-21 round 2).
 - **FR-014**: An override MUST be accepted only for a scope valid for the product (FR-009 and *Terms*); an
   override for a channel the product is not a member of, or a language the channel does not offer, MUST be
   refused with a validation error naming the scope.
 - **FR-015**: Overrides made invalid later (product leaves a channel, a language leaves a channel, an
   attribute's scope flags change) MUST be retained and ignored by resolution, and MUST be listed as orphaned
-  in the scope overview with a way to delete them.
-- **FR-016**: Status and display visibility MUST be filterable when listing, searching and generating
+  in the scope overview with a way to delete them. A URL key orphaned by a clash (FR-070) MUST be listed
+  the same way, with a warning that the product is not reachable by that key at that (C, L).
+- **FR-016**: Effective status (and therefore effective availability) MUST be filterable when listing, searching and generating
   sitemaps and feeds, without resolving every product's overrides one by one (performance target SC-004).
 - **FR-017**: Every storefront and buyer-facing consumer MUST use the **effective (C, L) value** of every
   scoped field (FR-008) — never the baseline — wherever it matches, filters, counts, sorts, displays or
@@ -524,21 +573,17 @@ the minimum, the return eligibility and the displayed price mode.
   (c) comparisons — product names and compared attribute values;
   (d) basket line names and batch-add outcome messages;
   (e) product names snapshotted into quote-request lines.
-  A snapshot MUST keep the value it was taken with. The same holds for every field of FR-009 as its story
+  A snapshot MUST keep the value it was taken with. A snapshot taken for a buyer MUST use the request
+  language at snapshot time, falling back to the channel's default language when the request language is
+  not one the channel offers (A-3); a document created by an operator in the admin MUST use the channel's
+  default language (clarify 2026-10-21 round 2, N2). The same holds for every field of FR-009 as its story
   lands. Search-result card names are fixed under #384 (A-1). Matching, filtering, counting and sorting on
   effective values MUST meet SC-004.
 
-#### Display visibility and publication window
+#### Publication window
 
-- **FR-020**: Display visibility MUST take one of: *not visible individually*, *catalog*, *search*,
-  *catalog and search*; default *catalog and search*.
-- **FR-021**: A product that is *not visible individually* at (C, L) MUST remain purchasable at (C, L) as a
-  variant, bundle-slot option or grouped item of an effectively available parent.
-- **FR-022**: Interim reading (the issue's): a product that is *not visible individually* at (C, L) and
-  effectively available there MUST keep a product page reachable by direct link, and MUST NOT appear in the
-  sitemap or feeds for (C, L). [NEEDS CLARIFICATION: is a product that is *not visible individually*
-  reachable by direct link (the issue's reading, above), or does it have no own page at all and is reachable
-  only through its parent (Magento)? — D-3]
+- **FR-020**, **FR-021**, **FR-022**: *Removed — clarify 2026-10-21 round 2 (display visibility dropped;
+  D-3 moot).*
 - **FR-023**: A publication window MUST be an optional start, an optional end, or both, per channel; the
   start MUST be before the end. Outside the window the product MUST NOT be effectively available in that
   channel, and the transition MUST take effect without operator action and within the time stated in
@@ -557,8 +602,8 @@ the minimum, the return eligibility and the displayed price mode.
 - **FR-040**: The product editor MUST offer, for every scoped field, a way to set it at each supported scope
   and to "use inherited", and MUST show the source of the effective value.
 - **FR-041**: The editor MUST offer a scope overview: channels × languages for the product's channels, with
-  the channel and language levels, marking per cell the overridden fields, the effective status and display
-  visibility, and offering "reset to inherited" per field per cell.
+  the channel and language levels, marking per cell the overridden fields, the effective status and any
+  orphaned override or orphaned URL key (FR-015), and offering "reset to inherited" per field per cell.
 - **FR-042**: The overview and scope controls MUST be read-only for an operator without the product-edit
   permission, and MUST be reachable from the product editor and discoverable in the command palette
   (Constitution XVI) as part of the product editor.
@@ -566,9 +611,9 @@ the minimum, the return eligibility and the displayed price mode.
 
 #### Bulk edit
 
-- **FR-050**: The product list MUST offer a bulk action that sets, or resets to inherited, status and display
-  visibility at one chosen scope for the selected products. It covers those two fields only; bulk edit of
-  the other channel-scoped fields is a follow-up (clarify 2026-10-21, D-4; *Out of Scope*).
+- **FR-050**: The product list MUST offer a bulk action that sets, or resets to inherited, **status** at one
+  chosen scope for the selected products. It covers status only; bulk edit of the other channel-scoped
+  fields is a follow-up (clarify 2026-10-21, D-4, narrowed to status by round 2; *Out of Scope*).
 - **FR-051**: Products not valid for the chosen scope MUST be skipped and reported per product.
 - **FR-052**: The bulk action MUST run on the existing durable bulk-operation path and be audited per product
   and reversible as a whole (FR-080, FR-081).
@@ -580,10 +625,15 @@ the minimum, the return eligibility and the displayed price mode.
   (C, L), and MUST name every missing field. What follows is decided by one **platform-level setting**
   (one value for the whole platform, not per channel) with two values: *warn* — the change is saved and the
   missing fields are shown — and *refuse* — the change is not saved. The default MUST be *warn*. The setting
-  MUST have Polish and English labels (FR-043).
+  MUST have Polish and English labels (FR-043). In *refuse* mode, a single-product edit that would turn the
+  product on in several (channel, language) pairs — a change of the global switch, or a channel-level
+  override that turns on every language of that channel — MUST be refused **as a whole** if any one pair
+  fails, naming every missing field per pair; no pair is turned on partially (clarify 2026-10-21 round 2,
+  N3).
 - **FR-061**: The gate MUST apply equally to single edits, bulk edits and changes of the global switch that
   turn on scopes without overrides, and MUST NOT apply to imports and PIM synchronisation (A-6, confirmed in
-  clarify 2026-10-21).
+  clarify 2026-10-21). In *refuse* mode a bulk edit MUST change the products that pass and skip and report
+  per product those that fail, as FR-051 does for invalid scopes.
 
 #### URL key and redirects
 
@@ -591,6 +641,11 @@ the minimum, the return eligibility and the displayed price mode.
   channel × language, and its **effective** value MUST be unique per (channel, language): no two products
   may resolve to the same key at the same (C, L). A save that would break this MUST be refused naming the
   conflicting product. The same key MAY be used by different products in different channels or languages.
+  The rule MUST also hold when the space of (C, L) pairs changes (clarify 2026-10-21 round 2, N4):
+  adding a product to a channel where another product already resolves to the same effective key at any
+  (C, L) of that channel MUST be refused by the membership write, naming the clashing product, the key and
+  the (C, L); adding a language to a channel that creates a clash MUST be allowed, and the clashing key MUST
+  be marked orphaned at that (C, L) (FR-015) and shown in the scope overview with a warning.
 - **FR-071**: A request at (C, L) for a key that belongs to the same product in another language of C MUST
   redirect permanently to the (C, L) URL; a key of no product MUST answer not-found.
 - **FR-072**: Changing a URL key MUST keep the previous URL as a permanent redirect to the current URL in
@@ -625,7 +680,7 @@ the minimum, the return eligibility and the displayed price mode.
   redirecting key (FR-072) are admin writes and MUST run the same way.
 - **FR-081**: Single and bulk scoped writes MUST be reversible with the standard undo (all-or-nothing per
   product, conflict report for products changed since).
-- **FR-082**: Status, display-visibility, window, audience and URL-key changes MUST emit domain events so
+- **FR-082**: Status, window, audience and URL-key changes MUST emit domain events so
   that search, sitemap, feeds and webhooks update; an archive MUST still emit the existing archive event.
 - **FR-083**: The new scoped data is catalogue data and MUST be classified as platform-global, as product
   value overrides are today (Constitution XI); audience evaluation stays at read time against the buyer's
@@ -638,34 +693,28 @@ the minimum, the return eligibility and the displayed price mode.
 - **FR-091**: PIM connectors (Ergonode, Akeneo, Pimcore, UnoPim) and catalogue import / export MUST each
   state which scope they read and write for every field of FR-009; a connector that writes only global
   values MUST NOT remove overrides set by operators.
-- **FR-092**: Import / export MUST be able to round-trip status and display visibility per scope.
+- **FR-092**: Import / export MUST be able to round-trip status per scope.
 
-#### Order constraints and price display mode
+#### Order constraints
 
 - **FR-100**: Minimum order quantity and "returnable" MUST be settable per channel, inheriting the global
   value, and every feature-155 check MUST use the value of the basket's or order's channel.
-- **FR-101**: The price display mode chain MUST gain a channel-level product override. Today's chain, first
-  match wins, is **product → category → organization → settings defaults**
-  (`packages/modules/price_lists/src/backend/services/display-mode-resolver.ts`) — a product override beats
-  an organization override. [NEEDS CLARIFICATION: where does product × channel sit — (A) organization →
-  product × channel → product → category → settings, which **inverts** today's order by making organization
-  win over product; or (B) product × channel → product → category → organization → settings, which extends
-  today's order unchanged? — D-5]
+- **FR-101**: *Removed — clarify 2026-10-21 round 2 (price display mode per channel out of scope, D-5).*
 
 #### Deployment and module activation
 
 - **FR-110**: Deployment migration MUST make every existing product's effective availability and listing
-  identical to before deployment: existing status becomes the global status, display visibility becomes
-  *catalog and search* everywhere, no windows, existing audience rule becomes the global audience rule.
+  identical to before deployment: existing status becomes the global status, no windows, existing audience
+  rule becomes the global audience rule.
 - **FR-111**: When `seo` is off, redirects and SEO overrides MUST NOT be served and their data MUST persist;
-  when `search` is off, search-visibility has no surface; scoped catalogue data MUST persist across any
+  scoped catalogue data MUST persist across any
   module being turned off and on (Constitution XVII).
 
 ### Key Entities
 
 - **Product (scoped values)** — the product's global values plus the set of overrides per scope for status,
-  display visibility, publication window, audience, URL key, SEO, media roles / hidden flags, translated
-  labels, minimum order quantity, returnable and price display mode.
+  publication window, audience, URL key, SEO, media roles / hidden flags, translated labels, minimum order
+  quantity and returnable.
 - **Scope** — Global, Language, Channel, or Channel × language; valid only for the product's channels and
   their languages.
 - **Override** — a value of one field at one scope; absent means inherit.
@@ -692,6 +741,9 @@ the minimum, the return eligibility and the displayed price mode.
   change of 1 000 products can be undone in one action.
 - **SC-007**: Zero products reachable at a (channel, language) where their effective status is off, measured
   by automated tests across all FR-004 consumers.
+- **SC-008**: Zero (channel, language) pairs in which two products resolve to the same effective URL key,
+  across product edits, channel-membership changes and channel-language changes (FR-070); a clash created by
+  a channel gaining a language is visible in the scope overview of every product concerned.
 
 ## Assumptions
 
@@ -709,32 +761,30 @@ the minimum, the return eligibility and the displayed price mode.
 - **A-7**: Scoped values are edited by operators with the existing product-edit permission (FR-084).
 - **A-8**: Out-of-audience and out-of-channel answers keep their current not-found semantics (#227).
 - **A-9**: Owner decision 3 (no warning about overrides on a global change) is extended from status to
-  every scoped field; clarify may restrict it to status. **Open** — the owner asked for more context
-  (FR-013).
+  every scoped field — confirmed in clarify 2026-10-21 round 2 (FR-013).
 
 ### Deferred to `/speckit.clarify` (not decided; interim reading only)
 
-These carry an interim reading used above so the spec is complete, but they are **open** and the owner
-decides them in clarify. D-2, D-4 and D-6 were decided on 2026-10-21 (see *Clarifications*) and are no
-longer listed.
+These carry an interim reading used above so the spec is complete, but they are **open**. D-2, D-4 and D-6
+were decided on 2026-10-21 in round 1, D-3 became moot and D-5 was removed from the feature in round 2 (see
+*Clarifications*); they are no longer listed. Only D-1 remains, without a marker: the owner deferred it.
 
 - **D-1**: Whether a never-published (`draft`) product stays reachable by direct link (e.g. as a preview) or
   answers not-found like any unavailable product (FR-005; interim: not-found). That `draft` survives as a
   status value was decided on 2026-10-21 (FR-010).
-- **D-3**: "Not visible individually" semantics — reachable by direct link (issue) or not reachable at all
-  except through its parent (Magento) (FR-022). Open; the owner asked for more context.
-- **D-5**: Where the product × channel step sits in the price display mode chain, given today's order
-  product → category → organization → settings (FR-101): (A) after organization (organization first),
-  which inverts today's product-over-organization precedence; (B) first, extending today's order. Open; the owner asked for more
-  context.
 
 ## Out of Scope
 
 - #384 (storefront honouring existing overrides) — separate fix, a dependency.
 - Per-variant galleries (#377), beyond not contradicting them; channel-specific image sets (the image set
   stays global, FR-076).
-- Bulk edit of channel-scoped fields other than status and display visibility — publication window, audience,
-  minimum order quantity, returnable, price display mode — a follow-up (FR-050).
+- Bulk edit of scoped fields other than status — publication window, audience, minimum order quantity,
+  returnable — a follow-up (FR-050).
+- A Magento-style **display visibility** (not visible individually / catalog / search / catalog and search)
+  — dropped in clarify round 2; the audience visibility is the only visibility concept. A follow-up may add
+  "hide from listing and search but keep selling by direct link or quick order" if a need appears.
+- **Price display mode per channel** (a product × channel step in the net / gross display-mode chain) —
+  removed in clarify round 2 (D-5); a possible future issue. The existing chain is unchanged.
 - Making catalogue bulk writes other than those of US5 audited (#241).
 - Per-channel prices, promotions, warehouses, stock, SKU, product type or structure.
 - A Magento-style "store view" entity; the two existing axes are kept.
