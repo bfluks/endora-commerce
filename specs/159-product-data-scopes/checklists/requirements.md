@@ -48,6 +48,14 @@
   and the orphaned-by-clash key are gone. The publication window is date-time instants in the operator's
   local time (C3; FR-023, US2, A-10). A channel audience override replaces the whole rule and may name
   non-member organizations with a warning (C4; FR-030, US3). No open marker remains.
+- Clarify round 4 (2026-10-21): the three consequences of per-language uniqueness confirmed (FR-070 now
+  defines the effective key at (C, L); FR-072 states that a first language key turns the global key into a
+  redirect in that language only). Cross-language redirects dropped — only keys of L resolve at (C, L)
+  (K1; FR-071, US7 #1, edge case). Imports and PIM connectors writing a taken key have the key refused and
+  reported, never taking over a redirect (K2; new FR-093, A-11, US7 #9). The completeness gate's URL-key
+  item is satisfied by the global key, while name and required attributes may not be satisfied by another
+  language's fallback value (K3; FR-060, US6). The publication window's end is inclusive (K4; FR-023,
+  Terms, US2 #5). No open marker remains.
 - "No implementation details": the *Current state* section cites code paths deliberately (house style of
   specs 156/157) to anchor the baseline; requirements themselves are stated as behaviour. FR-016 and FR-052
   name a performance property and the existing bulk path, not a technology.

@@ -2,7 +2,7 @@
 
 **Feature Branch**: `feat/159-product-data-scopes`
 **Created**: 2026-10-20
-**Status**: Draft — clarify rounds 1, 2 and 3 recorded 2026-10-21; no open clarification marker remains.
+**Status**: Draft — clarify rounds 1, 2, 3 and 4 recorded 2026-10-21; no open clarification marker remains.
 D-1 (draft preview by direct link) stays deferred with an interim reading; the status value set (FR-010) is
 re-asked by the coordinator before acceptance
 **Issues**: #385 (source), depends on #384; adjacent to #377 and #241
@@ -117,6 +117,27 @@ spec records the owner's binding decisions so far and leaves the rest open for c
   replaces the whole rule — mode and organization list — as one value; nothing is merged with the global
   list. (b) The list may name organizations that are not members of the channel: the save is allowed and
   the editor shows a warning naming them (recommended option; FR-030, US3).
+- Q: (round 4, Q3a consequences) Are the three consequences derived from per-language uniqueness
+  confirmed? → A: Yes, all three: (1) a product's global key counts as its key in every language where it
+  has no language key; (2) an orphaned channel × language key override keeps reserving its key in that
+  language; (3) a redirecting (old) key belongs to at most one product per language and may not equal any
+  product's current key in that language (FR-070, FR-072, FR-015).
+- Q: (round 4, K1) What does a request at (C, L) for a key that is the same product's key in another
+  language answer? → A: Not-found — cross-language redirects are dropped (option C). At (C, L) only keys of
+  L resolve: a product's current keys in L and its redirecting keys in L (FR-071, US7).
+- Q: (round 4, K2) What happens when an import or a PIM connector writes a URL key that is already taken in
+  that language? → A: The record's key is refused and reported in the run's issue list; an import or
+  connector never takes over another product's redirecting key — the confirmation of FR-072 is an operator
+  action only (option A; FR-093, A-11).
+- Q: (round 4, K3) Does the completeness gate's "URL key" item require a key in the language itself? → A:
+  No — the global key satisfies it, so no warning or refusal is raised for a missing language key
+  (option A; FR-060, US6). Name and required language-scoped attributes are unaffected.
+- Q: (round 4, K4) Is the publication window's end inclusive? → A: Yes — the product is live while
+  start ≤ now ≤ end (option B). Rationale: it matches the existing commerce windows in the codebase — price
+  lists expire only when `ends_at < now`
+  (`packages/modules/price_lists/src/backend/services/price-list-status-worker.ts:67`) and promotions stop
+  when `now > validUntil` (`packages/modules/promotions/src/backend/services/promotion-service.ts:412`);
+  both are date-time instants entered via `datetime-local` in the admin (FR-023, US2, Terms).
 
 ## Current state (origin/master cde5563ea)
 
@@ -207,7 +228,8 @@ runtime, unless stated.
   organization list. It is the only visibility concept in this spec (clarify round 2 dropped a separate
   display visibility).
 - **Publication window** — an optional from / to period per channel inside which the product may be live;
-  both bounds are date-time instants, entered and shown in the operator's local time (FR-023).
+  both bounds are date-time instants, entered and shown in the operator's local time, and both are
+  inclusive: live while start ≤ now ≤ end (FR-023).
 - **Effectively available** at (channel, language, buyer, now) — see FR-001.
 
 ## User Scenarios & Testing *(mandatory)*
@@ -278,6 +300,8 @@ other channels are unaffected.
 4. **Given** an operator in UTC+1 who enters a start of 1 December 08:00, **When** a second operator in
    UTC+2 opens the editor, **Then** they see 09:00, and the product becomes live at 07:00 UTC for every
    buyer (FR-023).
+5. **Given** a window whose end is 31 December 23:59:00, **When** a buyer browses at exactly that instant,
+   **Then** the product is still live; one instant later it is not (end inclusive, FR-023).
 
 ---
 
@@ -359,7 +383,9 @@ at that scope and no other, the audit entries, and undo.
 
 When an operator switches a product on for (C, L) — directly, in bulk, or by changing the global switch so
 that (C, L) becomes live — the system checks that the values required to sell there exist in L: name, URL
-key and every required language-scoped attribute. Missing values are listed.
+key and every required language-scoped attribute. Missing values are listed. The URL key is satisfied by
+the product's global key when it has no key in L (clarify round 4, K3); the name is not — a missing German
+name is exactly what the gate is for.
 
 **Why this priority**: Prevents half-translated products going live in a market — the motivating example of
 #385 — but the feature works without it.
@@ -379,6 +405,8 @@ response per FR-060.
 4. **Given** the gate setting is *refuse* and a bulk selection in which some products fail the gate,
    **When** the bulk action runs, **Then** the passing products are changed and the failing ones are
    skipped and reported per product (FR-061, FR-051).
+5. **Given** a product with a German name, a global URL key and no German URL key, **When** the operator
+   enables it at (B2C, de), **Then** the gate reports nothing for the URL key (FR-060).
 
 ---
 
@@ -392,19 +420,21 @@ answers with a permanent redirect to the new one.
 separate phase (3) that the availability work does not need.
 
 **Independent Test**: Set keys at L and C×L; resolve each URL per (C, L); try to give a second product a key
-already held in the same language in any channel and assert the refusal; change one key and assert the old
-URL redirects permanently to the new one in every (C, L) where it used to resolve.
+already held in the same language in any channel and assert the refusal; request a key of another language
+and assert not-found; change one key and assert the old URL redirects permanently to the new one at every
+(C, L) of that language.
 
 **Acceptance Scenarios**:
 
 1. **Given** keys per language, **When** a buyer requests the product page by the key of (C, L), **Then**
-   the product is found; a key from another language resolves according to FR-071.
+   the product is found; **when** the buyer requests at (C, pl) the product's English-only key
+   `impact-drill`, **Then** the answer is not-found — no cross-language redirect (FR-071).
 2. **Given** a key that is another product's key in the same language — its language key, its global key
    where it has no language key, or a channel × language override in **any** channel, whether or not the
    two products share a channel (FR-070) — **When** the operator saves it, **Then** the save is refused
    naming the product that holds it.
-3. **Given** a changed key, **When** a buyer requests the old URL at a (C, L) where it used to resolve,
-   **Then** they receive a permanent redirect to the current URL for that (C, L).
+3. **Given** a changed key, **When** a buyer requests the old URL at any (C, L) of the key's language
+   where the product is available, **Then** they receive a permanent redirect to the current URL for that (C, L).
 4. **Given** a key changed twice, **Then** both old URLs redirect directly to the current one (no chain).
 5. **Given** a key that is another product's old, redirecting key in the same language (in any channel),
    **When** the operator saves it, **Then** they are asked to confirm, the confirmation names the product
@@ -415,6 +445,13 @@ URL redirects permanently to the new one in every (C, L) where it used to resolv
    member of channel B only — the Polish key `drill` or a (B, pl) override `drill`, **Then** the save is
    refused naming P; consequently adding Q to A later, or adding Polish to a channel that offers neither,
    can never produce two products resolving to `drill` in Polish (FR-070, SC-008).
+8. **Given** a product with only the global key `drill` and no Polish key, **When** the operator gives it
+   the Polish key `wiertarka`, **Then** at every (C, pl) `drill` redirects permanently to `wiertarka`, and in
+   every other language without a language key `drill` still serves the page (FR-072).
+9. **Given** a PIM synchronisation or an import whose record carries a Polish key that is another product's
+   current or redirecting key in Polish, **When** the run applies the record, **Then** that key is not
+   written, the run's issue list names the record and the product holding the key, and no redirect is taken
+   over (FR-093).
 
 ---
 
@@ -507,7 +544,12 @@ the minimum and the return eligibility.
   orphaned by a product leaving a channel keeps holding its key in that language, so re-joining cannot
   clash either.
 - **Redirect to a product that is now unavailable** at (C, L): the redirect target answers as unavailable
-  (not-found), the redirect does not leak that the product exists.
+  (not-found), the redirect does not leak that the product exists. An old key of an **archived** product
+  answers as the product's current URL does — "gone" (FR-005) — since archiving is already disclosed there.
+- **Key of another language**: a request at (C, L) for a key that the product holds only in another
+  language answers not-found; no cross-language redirect is made (FR-071).
+- **Import or PIM writes a taken key**: the key is refused and listed in the run's issue list; the run never
+  takes over another product's redirecting key (FR-093).
 - **Attribute scope flag changed** after values exist (e.g. a language-scoped attribute made global):
   defined by FR-090.
 - **Module off**: with `seo` off, redirects and SEO overrides are not served, but the data persists
@@ -628,8 +670,10 @@ the minimum and the return eligibility.
 - **FR-023**: A publication window MUST be an optional start, an optional end, or both, per channel; each
   bound MUST be a date-time instant, entered and shown in the admin in the operator's local time, and the
   start MUST be before the end. No time-zone setting is introduced; every buyer and every consumer of
-  FR-004 sees the window open and close at the same instant (clarify 2026-10-21 round 3, C3). Outside the window the product MUST NOT be effectively available in that
-  channel, and the transition MUST take effect without operator action and within the time stated in
+  FR-004 sees the window open and close at the same instant (clarify 2026-10-21 round 3, C3). Both bounds
+  MUST be inclusive: the product is inside the window while start ≤ now ≤ end (clarify 2026-10-21 round 4,
+  K4 — the convention of the existing price-list and promotion windows). Outside the window the product MUST
+  NOT be effectively available in that channel, and the transition MUST take effect without operator action and within the time stated in
   SC-005.
 - **FR-024**: Entering or leaving a window MUST update every consumer of FR-004 (search, sitemap, feeds)
   the same way a status change does.
@@ -677,7 +721,13 @@ the minimum and the return eligibility.
   product on in several (channel, language) pairs — a change of the global switch, or a channel-level
   override that turns on every language of that channel — MUST be refused **as a whole** if any one pair
   fails, naming every missing field per pair; no pair is turned on partially (clarify 2026-10-21 round 2,
-  N3).
+  N3). The "URL key" item MUST be satisfied by the product's effective key at (C, L) as defined in FR-070,
+  so a global key satisfies it where the product has no key in L, and no warning or refusal is raised for a
+  missing language key (clarify 2026-10-21 round 4, K3). This does not extend to the name or to required
+  language-scoped attributes: for them a value counts only if it is set at (C, L), at C, or for L itself —
+  the resolver's cross-language fallback (see *Current state*) to the primary language's or any other
+  language's value MUST NOT satisfy the gate, otherwise a
+  missing German name would pass as the Polish one (US6, scenario 1).
 - **FR-061**: The gate MUST apply equally to single edits, bulk edits and changes of the global switch that
   turn on scopes without overrides, and MUST NOT apply to imports and PIM synchronisation (A-6, confirmed in
   clarify 2026-10-21). In *refuse* mode a bulk edit MUST change the products that pass and skip and report
@@ -697,17 +747,32 @@ the minimum and the return eligibility.
   Because the rule does not depend on channel membership or on a channel's languages, adding a product to a
   channel, removing it, or adding or removing a channel language MUST NOT be checked or refused for URL
   keys, and can never produce two products resolving to the same key at one (C, L) (SC-008).
-- **FR-071**: A request at (C, L) for a key that belongs to the same product in another language of C MUST
-  redirect permanently to the (C, L) URL; a key of no product MUST answer not-found.
-- **FR-072**: Changing a URL key MUST keep the previous key as a permanent redirect, in its language, from
-  every (C, L) where it used to resolve to the product's current URL in that (C, L); redirects MUST never
+  The three consequences of this rule — the global key counts as the key in every language without a
+  language key; an orphaned channel × language override keeps reserving its key; a redirecting key belongs
+  to at most one product per language and never equals a current key there — were confirmed in clarify
+  round 4. A product's **effective key at (C, L)** is its channel × language override for (C, L), else its
+  language key for L, else its global key.
+- **FR-071**: At (C, L) only **keys of L** MUST resolve (clarify 2026-10-21 round 4, K1, option C): a
+  request for a product's effective key at (C, L) serves the product; a request for one of that product's
+  other current keys in L (its language or global key where a (C, L) override exists, or an override of
+  another channel) or for one of its redirecting keys in L (FR-072) MUST redirect permanently to its
+  (C, L) URL. A key that the product holds only in another language MUST answer not-found — there are no
+  cross-language redirects — and so MUST a key of no product. Availability (FR-001, FR-005) is evaluated
+  for the product the key resolves to.
+- **FR-072**: Changing a URL key MUST keep the previous key as a permanent redirect, in its language, at
+  every (C, L) of that language, to the product's current URL in that (C, L) — availability is evaluated
+  when the redirect is resolved (FR-071), not when the key changed; redirects MUST never
   chain (an old URL always points directly at the current one), MUST have no expiry (they last until
   deleted), and MUST be removed when the product is deleted. The operator MUST be able to delete an
   individual redirect. An old, redirecting key MUST belong to at most one product per language across all
   channels, and MUST NOT equal any product's current key in that language. A new key equal to **another**
   product's old, redirecting key in the same language — in any channel — MUST be accepted only after an
   explicit confirmation that names the product losing the redirect; on confirmation that redirect is removed
-  and the key is saved (clarify 2026-10-21, takeover rule evaluated per language since round 3).
+  and the key is saved (clarify 2026-10-21, takeover rule evaluated per language since round 3). A change
+  of the effective key at (C, L) counts as a change for this requirement, including giving a product its
+  first language key for L: its global key then becomes a redirecting key **in L only**, and keeps serving
+  the page in every language where the product still has no language key (consequence 1, round 4). Only an
+  operator may confirm a takeover; imports and connectors never do (FR-093).
 - **FR-073**: Existing slugs MUST become the global URL key at deployment, so every existing URL keeps
   resolving unchanged (SC-001).
 - **FR-074**: The sitemap and every alternate-language link MUST use the effective key per (C, L).
@@ -748,6 +813,12 @@ the minimum and the return eligibility.
   state which scope they read and write for every field of FR-009; a connector that writes only global
   values MUST NOT remove overrides set by operators.
 - **FR-092**: Import / export MUST be able to round-trip status per scope.
+- **FR-093** *(added in clarify round 4, K2)*: When a catalogue import or a PIM connector writes a URL key
+  that FR-070 or FR-072 forbids — another product's current key or redirecting key in that language — that
+  key MUST NOT be written, the product MUST keep its previous key at that scope, and the record MUST be
+  reported in the run's issue list naming the record, the language and the product holding the key. An
+  import or connector MUST NOT take over a redirecting key and MUST NOT ask for the FR-072 confirmation.
+  The rest of the record's fields are applied or refused by the run's existing per-record rules (A-11).
 
 #### Order constraints
 
@@ -773,7 +844,8 @@ the minimum and the return eligibility.
   their languages.
 - **Override** — a value of one field at one scope; absent means inherit.
 - **URL redirect** — an old URL key in one language, held by one product across all channels, pointing
-  permanently at that product's current URL in the requesting (C, L).
+  permanently at that product's current URL in the requesting (C, L) of the same language; it never
+  resolves in another language (FR-071).
 - **Channel membership** — unchanged yes / no bridge; a precondition for every channel-scoped value.
 
 ## Success Criteria *(mandatory)*
@@ -820,6 +892,15 @@ the minimum and the return eligibility.
   every scoped field — confirmed in clarify 2026-10-21 round 2 (FR-013).
 - **A-10**: Publication-window bounds are stored as absolute instants (UTC) and converted to and from the
   operator's local time only in the admin (clarify 2026-10-21 round 3, C3; FR-023).
+- **A-11**: FR-093 refuses only the key, not the record: a key is a single field of the record, and
+  whether the other fields of a record with a refused key are applied follows each run's existing rules
+  (the catalogue CSV import rejects a whole file on any row error before writing,
+  `packages/modules/catalog/src/backend/services/catalog-bulk-import.service.ts:155-159`; connectors report
+  through the shared run / issue vocabulary of `pim_connector`, `packages/modules/pim_connector/src/manifest.ts:14`). A product **created** by a connector gets its global key the way a product
+  created today does — derived and suffixed until free (`allocateUniqueSlug`,
+  `packages/modules/catalog/src/backend/services/catalog-admin.service.ts:1075`) — with "free" now meaning
+  not a current or redirecting key of another product in any language (FR-070, FR-072); so a created
+  product never lacks a global key (FR-011). The CSV import creates no products today (same file, `:152-154`).
 
 ### Deferred to `/speckit.clarify` (not decided; interim reading only)
 
