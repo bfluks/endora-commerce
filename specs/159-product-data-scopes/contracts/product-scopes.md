@@ -119,6 +119,6 @@ asserts the SQL-selected id set equals `isProductEffectivelyAvailable` over the 
 
 ## 5. Read-port additions (`CatalogProductReadPort`, additive)
 
-`CatalogProductRecord` gains `publishFrom: Date | null`, `publishUntil: Date | null` (global). No other
+`CatalogProductRecord` gains optional `publishFrom?: Date | null`, `publishUntil?: Date | null` (global; optional permanently so consumer fixtures that build record literals keep compiling). No other
 record field changes meaning; channel-effective MOQ/returnable come from `effectiveOrderRules` (FR-100), so
 feature 155's record fields keep meaning "global".
