@@ -522,7 +522,7 @@ the minimum, the return eligibility and the displayed price mode.
   (a) quick search, matching and returning names, and its consumer quick order;
   (b) the storefront listing's free-text search, attribute filters, filter option counts and name sort;
   (c) comparisons — product names and compared attribute values;
-  (d) product names written into baskets, including batch-add outcomes;
+  (d) basket line names and batch-add outcome messages;
   (e) product names snapshotted into quote-request lines.
   A snapshot MUST keep the value it was taken with. The same holds for every field of FR-009 as its story
   lands. Search-result card names are fixed under #384 (A-1). Matching, filtering, counting and sorting on
@@ -647,10 +647,10 @@ the minimum, the return eligibility and the displayed price mode.
 - **FR-101**: The price display mode chain MUST gain a channel-level product override. Today's chain, first
   match wins, is **product → category → organization → settings defaults**
   (`packages/modules/price_lists/src/backend/services/display-mode-resolver.ts`) — a product override beats
-  an organization override. [NEEDS CLARIFICATION: where does product × channel sit — (A) product × channel →
-  product → category → organization → settings, which extends today's order unchanged; or (B) organization →
-  product × channel → product → category → settings, which inverts today's order by making organization win
-  over product? — D-5]
+  an organization override. [NEEDS CLARIFICATION: where does product × channel sit — (A) organization →
+  product × channel → product → category → settings, which **inverts** today's order by making organization
+  win over product; or (B) product × channel → product → category → organization → settings, which extends
+  today's order unchanged? — D-5]
 
 #### Deployment and module activation
 
@@ -724,8 +724,8 @@ longer listed.
 - **D-3**: "Not visible individually" semantics — reachable by direct link (issue) or not reachable at all
   except through its parent (Magento) (FR-022). Open; the owner asked for more context.
 - **D-5**: Where the product × channel step sits in the price display mode chain, given today's order
-  product → category → organization → settings (FR-101): (A) first, extending today's order; (B) after
-  organization, which inverts today's product-over-organization precedence. Open; the owner asked for more
+  product → category → organization → settings (FR-101): (A) after organization (organization first),
+  which inverts today's product-over-organization precedence; (B) first, extending today's order. Open; the owner asked for more
   context.
 
 ## Out of Scope
