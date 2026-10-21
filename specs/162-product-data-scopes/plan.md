@@ -1,17 +1,14 @@
 # Implementation Plan: product data scopes per sales channel and language
 
-**Branch**: `feat/159-product-data-scopes` (from `origin/master`) | **Date**: 2026-10-21 | **Spec**:
-`specs/159-product-data-scopes/spec.md` (clarify rounds 1–4)
-**Input**: Feature specification from `specs/159-product-data-scopes/spec.md`; issue #385; depends on #384
+**Branch**: `feat/162-product-data-scopes` (from `origin/master`) | **Date**: 2026-10-21 | **Spec**:
+`specs/162-product-data-scopes/spec.md` (clarify rounds 1–4)
+**Input**: Feature specification from `specs/162-product-data-scopes/spec.md`; issue #385; depends on #384
 (`fork/fix/storefront-channel-value-overrides`, `f855ffc8a`, not yet on `master`).
 **Measured on**: `origin/master` `aa6891d63`.
 
-> **Number collision (new).** `origin/master` now holds `specs/159-quote-request-item-groups/`, and its
-> `.specify/feature.json` pointed there (resolved to this directory during the rebase). Per `AGENTS.md`
-> § *Feature workflow* a shared number is legal but every citation of this feature must use the slug
-> (`specs/159-product-data-scopes/`). Renumbering is the coordinator's call, not this plan's; every
-> artefact here cites the slug. `.specify/feature.json` will conflict again on every rebase — keep this
-> directory's value.
+> **Renumbered from 159.** `origin/master` holds `specs/159-quote-request-item-groups/`, so this feature
+> was renumbered to 162 before its first push. `.specify/feature.json` on this branch is left at
+> `origin/master`'s value so that merging never repoints master's feature pointer.
 
 ## Summary
 
@@ -157,7 +154,7 @@ fail closed (XII); deploy changes no storefront behaviour except the two listed 
 ### Documentation (this feature)
 
 ```text
-specs/159-product-data-scopes/
+specs/162-product-data-scopes/
 ├── spec.md, checklists/requirements.md
 ├── plan.md            # this file
 ├── research.md        # R0–R28
