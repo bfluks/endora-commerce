@@ -22,7 +22,8 @@ both, with a Polish and an English name and **no German name**. Run one `search_
 2. B2C × `pl-PL`: status **active**. B2C in Polish lists P; B2C in German does not.
 3. B2C: *Use inherited* on the channel row. B2C follows the global status again; the C×L row still wins
    in Polish.
-4. Audit log: one entry per change naming the scope with before/after; *Undo* restores the previous state.
+4. Audit log: one entry per change naming the scope with before/after; re-applying the before-state restores
+   it (single-write undo per `research.md` R29 — pending owner Q-D).
 5. As a buyer of B2C in German, try to add P to a basket by id (API) → `404 PRODUCT_NOT_FOUND`; raise a quote
    request containing P → refused; as an operator create a quote request for a B2C customer → accepted with
    a warning naming P.
@@ -63,7 +64,9 @@ Give P the Polish key `wiertarka-udarowa` and English `impact-drill`; B2B × Eng
 - `/p/impact-drill` with `Accept-Language: pl` → not-found (K1).
 - Give product Q the Polish key `wiertarka-udarowa` → refused naming P.
 - Give Q the Polish key `wiertarka` (P's redirect) → confirmation naming P; on confirm P loses it.
-- Turn `seo` off on `/platform/modules` → old keys answer not-found; turn it on → they redirect again.
+- Turn `seo` off on `/platform/modules` → old keys answer not-found and the product editor shows no redirect
+  list (a key clash with another product's redirect still asks for takeover confirmation naming it); turn it
+  on → they redirect again and the list is back.
 
 ## 8. US8–US10
 
