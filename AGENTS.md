@@ -289,6 +289,7 @@ never a copy — `.agents/skills/ux-laws/SKILL.md` is one. Update it in place.
 See "Repo map" above.
 
 ## Recent Changes
+- feat/159-product-data-scopes
 - 162-custom-fields-value-carry
 - 157-custom-fields-list-filters
 - 155-catalog-order-constraints
