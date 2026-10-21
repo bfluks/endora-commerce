@@ -2,7 +2,7 @@
 
 **Feature Branch**: `feat/159-product-data-scopes`
 **Created**: 2026-10-20
-**Status**: Draft — clarify rounds 1 and 2 recorded 2026-10-21; no open clarification marker remains.
+**Status**: Draft — clarify rounds 1, 2 and 3 recorded 2026-10-21; no open clarification marker remains.
 D-1 (draft preview by direct link) stays deferred with an interim reading; the status value set (FR-010) is
 re-asked by the coordinator before acceptance
 **Issues**: #385 (source), depends on #384; adjacent to #377 and #241
@@ -43,10 +43,12 @@ spec records the owner's binding decisions so far and leaves the rest open for c
   them? → A: A platform-level setting choosing *warn* or *refuse*, default *warn* (option C). Assumption A-6
   is confirmed: the gate does not apply to imports or PIM synchronisation (FR-060, FR-061).
 - Q: Within which space must a URL key be unique? → A: Per (channel, language) (option A; FR-070).
+  *(Superseded in round 3: unique per language across all channels, option B.)*
 - Q: How long does an old URL key keep redirecting? → A: Forever; the operator can delete individual
   redirects (option C; FR-072).
 - Q: May a new URL key equal another product's old, redirecting key? → A: Yes, but only after a confirmation
-  that names the product that loses the redirect (option C; FR-072).
+  that names the product that loses the redirect (option C; FR-072). *(Still binding; since round 3 it is
+  evaluated per language across all channels.)*
 - Q: (D-2) Which fields need channel × language rather than channel only? → A: Status and display
   visibility at channel × language (and channel); audience and publication window at channel only — the
   table in FR-009 as written (option A).
@@ -91,10 +93,30 @@ spec records the owner's binding decisions so far and leaves the rest open for c
   language? → A: Joining a channel where another product already has the same effective key at some
   (channel, language) is refused, naming the clash. A channel adding a language that creates a clash is
   allowed; the clashing key is marked orphaned (FR-015) and shown in the scope overview with a warning
-  (FR-070, FR-015).
+  (FR-070, FR-015). *(Superseded in round 3: under per-language uniqueness neither situation can produce a
+  clash; the refusal and the orphaned-by-clash key are removed.)*
 - Q: (round 2, N5) Must quote requests respect effective availability? → A: Quote requests created by a
   buyer refuse lines whose product is not effectively available at the quote request's channel and
   language; quote requests created by an operator only warn (option a; FR-018).
+- Q: (round 3, Q3a re-opened by the owner) Within which space must a URL key be unique? → A: **Per language
+  across all channels** (option B), replacing the round-1 answer "per (channel, language)". A product's
+  language key, and every channel × language override key, MUST be unique within that language across all
+  channels and against every other product's key in that language, so a clash can never arise from channel
+  membership or from a channel gaining a language. Uniqueness is checked when a key is written (refused,
+  naming the product holding it). The redirect-takeover rule (confirmation naming the product that loses the
+  redirect) stays, now evaluated per language across all channels. This **supersedes N4** (clash on joining
+  a channel or on a channel gaining a language) and **C2** (clash handling on the membership write paths):
+  those situations cannot occur, and their requirements, scenarios (former US7 #7–8), edge cases and the
+  orphaned-by-clash key (FR-015, FR-041, SC-008) are removed. **C1 is moot** — resolved by this change.
+  (FR-070, FR-072, SC-008.)
+- Q: (round 3, C3) Is the publication window a pair of dates or of date-times, and in which time zone? → A:
+  Date-time instants, entered and shown in the operator's local time and stored as absolute instants (UTC);
+  no new time-zone setting (option A; Terms, US2, FR-023, A-10).
+- Q: (round 3, C4) How does a per-channel audience override combine with the global rule, and may its
+  organization list name organizations that are not members of that channel? → A: (a) The channel override
+  replaces the whole rule — mode and organization list — as one value; nothing is merged with the global
+  list. (b) The list may name organizations that are not members of the channel: the save is allowed and
+  the editor shows a warning naming them (recommended option; FR-030, US3).
 
 ## Current state (origin/master cde5563ea)
 
@@ -184,7 +206,8 @@ runtime, unless stated.
 - **Audience visibility** — who may see a product: public / logged-in only / organization-restricted with an
   organization list. It is the only visibility concept in this spec (clarify round 2 dropped a separate
   display visibility).
-- **Publication window** — an optional from / to period per channel inside which the product may be live.
+- **Publication window** — an optional from / to period per channel inside which the product may be live;
+  both bounds are date-time instants, entered and shown in the operator's local time (FR-023).
 - **Effectively available** at (channel, language, buyer, now) — see FR-001.
 
 ## User Scenarios & Testing *(mandatory)*
@@ -233,8 +256,9 @@ compare against the expected matrix; then remove one override and repeat.
 
 ### User Story 2 - Publication window per channel (Priority: P2)
 
-For a seasonal product an operator sets a publication window from 1 to 31 December in B2C; outside it the
-product is not live there, without anybody having to switch it on and off.
+For a seasonal product an operator sets a publication window in B2C from 1 December 08:00 to 31 December
+23:59, in their own local time; outside it the product is not live there, without anybody having to switch
+it on and off.
 
 **Why this priority**: Completes "when is it live" — the second half of phase 2 — and replaces manual on/off
 toggling for scheduled launches. (Clarify round 2 dropped the display-visibility half of this story.)
@@ -251,6 +275,9 @@ other channels are unaffected.
 2. **Given** a window that has ended, **Then** the product is no longer live in that channel and its status
    value is unchanged.
 3. **Given** no window, **Then** the product is not time-limited.
+4. **Given** an operator in UTC+1 who enters a start of 1 December 08:00, **When** a second operator in
+   UTC+2 opens the editor, **Then** they see 09:00, and the product becomes live at 07:00 UTC for every
+   buyer (FR-023).
 
 ---
 
@@ -272,6 +299,12 @@ channel.
 1. **Given** the B2B override above, **When** a buyer of organization Y opens the product in B2B, **Then**
    it is indistinguishable from a non-existent product; in B2C the same buyer sees it.
 2. **Given** "use inherited" on the B2B audience, **Then** B2B follows the global audience rule.
+3. **Given** a global rule organization-restricted to orgs X and Y and a B2B override
+   organization-restricted to org Z, **When** a buyer of org X opens the product in B2B, **Then** it is
+   indistinguishable from a non-existent product — the override replaces the whole rule and is not merged
+   with the global list (FR-030).
+4. **Given** a B2B override whose organization list names org W, which is not a member of B2B, **When** the
+   operator saves it, **Then** the save succeeds and the editor shows a warning naming W (FR-030).
 
 ---
 
@@ -279,7 +312,7 @@ channel.
 
 In the product editor an operator opens one overview showing channels × languages for the product. Each
 cell shows the effective status and marks every field overridden at that cell (and at the channel row and
-the language column), plus any orphaned override or orphaned URL key with a warning (FR-015). From a cell
+the language column), plus any orphaned override with a warning (FR-015). From a cell
 they jump to the field, or reset any override to inherited.
 
 **Why this priority**: The main UX improvement over Magento's per-field "Use Default Value" checkbox;
@@ -358,29 +391,30 @@ answers with a permanent redirect to the new one.
 **Why this priority**: Localised URLs matter for SEO in multilingual channels (Constitution VII) but are a
 separate phase (3) that the availability work does not need.
 
-**Independent Test**: Set keys at L and C×L; resolve each URL per (C, L); change one key and assert the old
-URL redirects permanently to the new one in the same (C, L).
+**Independent Test**: Set keys at L and C×L; resolve each URL per (C, L); try to give a second product a key
+already held in the same language in any channel and assert the refusal; change one key and assert the old
+URL redirects permanently to the new one in every (C, L) where it used to resolve.
 
 **Acceptance Scenarios**:
 
 1. **Given** keys per language, **When** a buyer requests the product page by the key of (C, L), **Then**
    the product is found; a key from another language resolves according to FR-071.
-2. **Given** a key that is another product's current key in the same (C, L) (FR-070), **When** the operator
-   saves it, **Then** the save is refused naming the conflicting product.
-3. **Given** a changed key, **When** a buyer requests the old URL, **Then** they receive a permanent
-   redirect to the current URL for that (C, L).
+2. **Given** a key that is another product's key in the same language — its language key, its global key
+   where it has no language key, or a channel × language override in **any** channel, whether or not the
+   two products share a channel (FR-070) — **When** the operator saves it, **Then** the save is refused
+   naming the product that holds it.
+3. **Given** a changed key, **When** a buyer requests the old URL at a (C, L) where it used to resolve,
+   **Then** they receive a permanent redirect to the current URL for that (C, L).
 4. **Given** a key changed twice, **Then** both old URLs redirect directly to the current one (no chain).
-5. **Given** a key that is another product's old, redirecting key in the same (C, L), **When** the operator
-   saves it, **Then** they are asked to confirm, the confirmation names the product that loses the redirect,
-   and only on confirmation is the key saved and that redirect removed (FR-072).
+5. **Given** a key that is another product's old, redirecting key in the same language (in any channel),
+   **When** the operator saves it, **Then** they are asked to confirm, the confirmation names the product
+   that loses the redirect, and only on confirmation is the key saved and that redirect removed (FR-072).
 6. **Given** an existing redirect, **When** the operator deletes it, **Then** the old URL answers not-found
    and the product's current URL is unchanged.
-7. **Given** product P in channel A with effective key `drill` at (A, pl) and product Q, not a member of A,
-   with effective key `drill` at pl, **When** the operator adds Q to channel A, **Then** the membership
-   change is refused and the message names P, the key and (A, pl) (FR-070).
-8. **Given** products P and Q in channel A whose keys clash only in German, which A does not offer, **When**
-   German is added to A, **Then** the change is saved, the clashing key is marked orphaned at (A, de) and
-   the scope overview shows it with a warning (FR-070, FR-015).
+7. **Given** product P in channel A with key `drill` in Polish, **When** the operator gives product Q — a
+   member of channel B only — the Polish key `drill` or a (B, pl) override `drill`, **Then** the save is
+   refused naming P; consequently adding Q to A later, or adding Polish to a channel that offers neither,
+   can never produce two products resolving to `drill` in Polish (FR-070, SC-008).
 
 ---
 
@@ -466,17 +500,23 @@ the minimum and the return eligibility.
 - **Unresolved channel** (no header, no host mapping and no default): no scoped value matches and no
   product is live — fail closed (Constitution XII).
 - **URL key collision with a redirect**: a new key equal to another product's *old* (redirecting) key in
-  the same (C, L) is saved only after a confirmation naming the product that loses the redirect (FR-072).
+  the same language, in any channel, is saved only after a confirmation naming the product that loses the
+  redirect (FR-072).
+- **Channel membership or channel languages change**: cannot create a URL-key clash — keys are unique per
+  language across all channels, whatever the membership (FR-070). A channel × language key override left
+  orphaned by a product leaving a channel keeps holding its key in that language, so re-joining cannot
+  clash either.
 - **Redirect to a product that is now unavailable** at (C, L): the redirect target answers as unavailable
   (not-found), the redirect does not leak that the product exists.
 - **Attribute scope flag changed** after values exist (e.g. a language-scoped attribute made global):
   defined by FR-090.
 - **Module off**: with `seo` off, redirects and SEO overrides are not served, but the data persists
   (FR-111).
-- **Joining a channel with a clashing URL key**: refused, naming the clashing product, key and (C, L)
-  (FR-070).
-- **A channel gaining a language that creates a URL-key clash**: allowed; the clashing key is orphaned and
-  flagged in the overview (FR-070, FR-015).
+- **Audience override naming non-member organizations**: the save is allowed and the editor shows a warning
+  naming them; the list is not pruned, so the entry applies if the organization later joins the channel
+  (FR-030).
+- **Publication window across a daylight-saving change**: the bounds are absolute instants, so a window
+  entered before a clock change takes effect at the same instant after it (FR-023).
 - **`inactive` set below the global scope**: plain "off" there, not-found like `draft`; it never archives
   (FR-010).
 - **Concurrent edits** at the same scope by two operators: last write wins, each audited.
@@ -562,8 +602,8 @@ the minimum and the return eligibility.
   refused with a validation error naming the scope.
 - **FR-015**: Overrides made invalid later (product leaves a channel, a language leaves a channel, an
   attribute's scope flags change) MUST be retained and ignored by resolution, and MUST be listed as orphaned
-  in the scope overview with a way to delete them. A URL key orphaned by a clash (FR-070) MUST be listed
-  the same way, with a warning that the product is not reachable by that key at that (C, L).
+  in the scope overview with a way to delete them. An orphaned channel × language URL-key override keeps
+  holding its key in that language for uniqueness (FR-070) until it is deleted.
 - **FR-016**: Effective status (and therefore effective availability) MUST be filterable when listing, searching and generating
   sitemaps and feeds, without resolving every product's overrides one by one (performance target SC-004).
 - **FR-017**: Every storefront and buyer-facing consumer MUST use the **effective (C, L) value** of every
@@ -585,8 +625,10 @@ the minimum and the return eligibility.
 
 - **FR-020**, **FR-021**, **FR-022**: *Removed — clarify 2026-10-21 round 2 (display visibility dropped;
   D-3 moot).*
-- **FR-023**: A publication window MUST be an optional start, an optional end, or both, per channel; the
-  start MUST be before the end. Outside the window the product MUST NOT be effectively available in that
+- **FR-023**: A publication window MUST be an optional start, an optional end, or both, per channel; each
+  bound MUST be a date-time instant, entered and shown in the admin in the operator's local time, and the
+  start MUST be before the end. No time-zone setting is introduced; every buyer and every consumer of
+  FR-004 sees the window open and close at the same instant (clarify 2026-10-21 round 3, C3). Outside the window the product MUST NOT be effectively available in that
   channel, and the transition MUST take effect without operator action and within the time stated in
   SC-005.
 - **FR-024**: Entering or leaving a window MUST update every consumer of FR-004 (search, sitemap, feeds)
@@ -596,7 +638,12 @@ the minimum and the return eligibility.
 
 - **FR-030**: The audience rule (public / logged-in only / organization-restricted with its organization
   list) MUST be settable per channel, inheriting the global rule; evaluation MUST stay the existing read-time
-  rule, and an out-of-audience answer MUST be indistinguishable from "does not exist".
+  rule, and an out-of-audience answer MUST be indistinguishable from "does not exist". A channel override
+  MUST replace the whole rule — mode and organization list — as one value; it MUST NOT be merged with the
+  global list, and "use inherited" removes both together. The override's organization list MAY name
+  organizations that are not members of that channel: the save MUST NOT be refused, and the editor MUST show
+  a warning naming them (clarify 2026-10-21 round 3, C4). This differs from FR-014, which still refuses an
+  override for a channel the product itself is not a member of.
 
 #### Product editor
 
@@ -604,7 +651,7 @@ the minimum and the return eligibility.
   and to "use inherited", and MUST show the source of the effective value.
 - **FR-041**: The editor MUST offer a scope overview: channels × languages for the product's channels, with
   the channel and language levels, marking per cell the overridden fields, the effective status and any
-  orphaned override or orphaned URL key (FR-015), and offering "reset to inherited" per field per cell.
+  orphaned override (FR-015), and offering "reset to inherited" per field per cell.
 - **FR-042**: The overview and scope controls MUST be read-only for an operator without the product-edit
   permission, and MUST be reachable from the product editor and discoverable in the command palette
   (Constitution XVI) as part of the product editor.
@@ -639,22 +686,28 @@ the minimum and the return eligibility.
 #### URL key and redirects
 
 - **FR-070**: The URL key MUST be settable per language (for every channel) and overridable per
-  channel × language, and its **effective** value MUST be unique per (channel, language): no two products
-  may resolve to the same key at the same (C, L). A save that would break this MUST be refused naming the
-  conflicting product. The same key MAY be used by different products in different channels or languages.
-  The rule MUST also hold when the space of (C, L) pairs changes (clarify 2026-10-21 round 2, N4):
-  adding a product to a channel where another product already resolves to the same effective key at any
-  (C, L) of that channel MUST be refused by the membership write, naming the clashing product, the key and
-  the (C, L); adding a language to a channel that creates a clash MUST be allowed, and the clashing key MUST
-  be marked orphaned at that (C, L) (FR-015) and shown in the scope overview with a warning.
+  channel × language, and it MUST be **unique per language across all channels** (clarify 2026-10-21
+  round 3, superseding the per-(channel, language) rule). A product's **keys in language L** are: its
+  language key for L — or, where it has none, its global key; and every channel × language override key it
+  has for L in any channel, including overrides orphaned under FR-015. No key MAY be among the keys in L of
+  two different products, whether or not they share a channel. Uniqueness MUST be checked when a key is
+  written, and a write that would break it MUST be refused naming the product that holds the key. A global
+  key therefore MUST NOT equal any other product's key in any language. The same key MAY be used by
+  different products in different languages, and by one product in several channels of the same language.
+  Because the rule does not depend on channel membership or on a channel's languages, adding a product to a
+  channel, removing it, or adding or removing a channel language MUST NOT be checked or refused for URL
+  keys, and can never produce two products resolving to the same key at one (C, L) (SC-008).
 - **FR-071**: A request at (C, L) for a key that belongs to the same product in another language of C MUST
   redirect permanently to the (C, L) URL; a key of no product MUST answer not-found.
-- **FR-072**: Changing a URL key MUST keep the previous URL as a permanent redirect to the current URL in
-  the same (C, L); redirects MUST never chain (an old URL always points directly at the current one), MUST
-  have no expiry (they last until deleted), and MUST be removed when the product is deleted. The operator
-  MUST be able to delete an individual redirect. A new key equal to **another** product's old, redirecting
-  key in the same (C, L) MUST be accepted only after an explicit confirmation that names the product losing
-  the redirect; on confirmation that redirect is removed and the key is saved.
+- **FR-072**: Changing a URL key MUST keep the previous key as a permanent redirect, in its language, from
+  every (C, L) where it used to resolve to the product's current URL in that (C, L); redirects MUST never
+  chain (an old URL always points directly at the current one), MUST have no expiry (they last until
+  deleted), and MUST be removed when the product is deleted. The operator MUST be able to delete an
+  individual redirect. An old, redirecting key MUST belong to at most one product per language across all
+  channels, and MUST NOT equal any product's current key in that language. A new key equal to **another**
+  product's old, redirecting key in the same language — in any channel — MUST be accepted only after an
+  explicit confirmation that names the product losing the redirect; on confirmation that redirect is removed
+  and the key is saved (clarify 2026-10-21, takeover rule evaluated per language since round 3).
 - **FR-073**: Existing slugs MUST become the global URL key at deployment, so every existing URL keeps
   resolving unchanged (SC-001).
 - **FR-074**: The sitemap and every alternate-language link MUST use the effective key per (C, L).
@@ -719,7 +772,8 @@ the minimum and the return eligibility.
 - **Scope** — Global, Language, Channel, or Channel × language; valid only for the product's channels and
   their languages.
 - **Override** — a value of one field at one scope; absent means inherit.
-- **URL redirect** — an old URL key at (C, L) pointing permanently at a product's current URL there.
+- **URL redirect** — an old URL key in one language, held by one product across all channels, pointing
+  permanently at that product's current URL in the requesting (C, L).
 - **Channel membership** — unchanged yes / no bridge; a precondition for every channel-scoped value.
 
 ## Success Criteria *(mandatory)*
@@ -742,9 +796,10 @@ the minimum and the return eligibility.
   change of 1 000 products can be undone in one action.
 - **SC-007**: Zero products reachable at a (channel, language) where their effective status is off, measured
   by automated tests across all FR-004 consumers.
-- **SC-008**: Zero (channel, language) pairs in which two products resolve to the same effective URL key,
-  across product edits, channel-membership changes and channel-language changes (FR-070); a clash created by
-  a channel gaining a language is visible in the scope overview of every product concerned.
+- **SC-008**: Zero languages in which one URL key — current or redirecting — belongs to two products, and
+  therefore zero (channel, language) pairs in which two products resolve to the same key, after any sequence
+  of key edits, channel-membership changes and channel-language changes (FR-070, FR-072), measured by
+  automated tests that exercise each of those changes.
 
 ## Assumptions
 
@@ -763,6 +818,8 @@ the minimum and the return eligibility.
 - **A-8**: Out-of-audience and out-of-channel answers keep their current not-found semantics (#227).
 - **A-9**: Owner decision 3 (no warning about overrides on a global change) is extended from status to
   every scoped field — confirmed in clarify 2026-10-21 round 2 (FR-013).
+- **A-10**: Publication-window bounds are stored as absolute instants (UTC) and converted to and from the
+  operator's local time only in the admin (clarify 2026-10-21 round 3, C3; FR-023).
 
 ### Deferred to `/speckit.clarify` (not decided; interim reading only)
 
