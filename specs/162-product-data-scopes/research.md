@@ -310,9 +310,14 @@ as `{ data: { redirect: { key, language } } }` with HTTP 200 on a dedicated reso
 `url-keys-and-redirects.md`); the storefront calls `permanentRedirect()`. Every emitted URL (sitemap,
 canonical, `hreflang` alternates, the redirect target, the admin preview URL) is `/p/<effective key>` plus
 `?lang=<L>` when L ≠ channel default (F3), produced by **one** pure helper, `productPath({ key,
-languageCode, channelDefaultLanguage })` in `packages/contracts/src/product-url-keys.ts`, which the
-storefront, `seo`'s sitemap generator and catalog's admin/resolve responses all import — so the later
-language-path-prefix change (owner, Q-B → C, a separate issue) edits one seam.
+languageCode, channelDefaultLanguage })` in `packages/contracts/src/product-url-keys.ts`, called only on the
+backend — `seo`'s sitemap generator, catalog's admin `effective[].url`, the resolve answer's `path` and the
+PDP response's `paths` (canonical + alternates). The storefront receives ready paths: it does not know the
+channel's default language (`storefront/lib/api/client.ts` `RequestContext` carries a locale and a channel
+code; `i18n/config` answers the platform default). So the later language-path-prefix change (owner, Q-B →
+C, a separate issue) edits one function for every emitted URL. In-page links (32 `/p/` sites in 23
+storefront and `cms-components` files today) stay `/p/<effective key>` without `?lang` — the clicking
+browser is already in L — and are the prefix issue's to change.
 
 **Q-B decided (owner, 2026-10-21): option C, out of scope for 162.** A language prefix in the storefront
 path (`/en/p/drill`) is a separate issue. For 162 the interim stands: `?lang=<L>` on every URL the
