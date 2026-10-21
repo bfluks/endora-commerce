@@ -1,6 +1,6 @@
 # Research: product data scopes per sales channel and language
 
-**Feature**: `specs/159-product-data-scopes/` | **Spec**: `spec.md` (clarify rounds 1–4) | **Measured on**:
+**Feature**: `specs/162-product-data-scopes/` | **Spec**: `spec.md` (clarify rounds 1–4) | **Measured on**:
 `origin/master` `aa6891d63` (2026-10-21), with #384 read from `fork/fix/storefront-channel-value-overrides`
 `f855ffc8a`.
 

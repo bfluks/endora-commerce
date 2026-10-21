@@ -1,6 +1,6 @@
 # Feature Specification: Product data scopes per sales channel and language
 
-**Feature Branch**: `feat/159-product-data-scopes`
+**Feature Branch**: `feat/162-product-data-scopes`
 **Created**: 2026-10-20
 **Status**: Draft — clarify rounds 1, 2, 3 and 4 recorded 2026-10-21; no open clarification marker remains.
 D-1 (draft preview by direct link) stays deferred with an interim reading; the status value set (FR-010) is

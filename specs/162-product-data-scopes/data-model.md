@@ -1,6 +1,6 @@
 # Data model: product data scopes
 
-**Feature**: `specs/159-product-data-scopes/` | Decisions: `research.md` (R#). Every table here is
+**Feature**: `specs/162-product-data-scopes/` | Decisions: `research.md` (R#). Every table here is
 **platform-global** (`@GlobalEntity()`), as `products` and `product_value_overrides` are (FR-083,
 Constitution XI): catalogue data, with audience evaluated at read time against the buyer's organization.
 
