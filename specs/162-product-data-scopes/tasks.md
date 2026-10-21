@@ -1,7 +1,6 @@
 # Tasks: product data scopes per sales channel and language
 
-**Feature**: `specs/159-product-data-scopes/` (cite the slug — `159` is shared with
-`specs/159-quote-request-item-groups/`) | **Issues**: #385, depends on #384
+**Feature**: `specs/162-product-data-scopes/` | **Issues**: #385, depends on #384
 **Input**: `spec.md` (clarify rounds 1–4), `plan.md`, `research.md` (R0–R28), `data-model.md`,
 `contracts/{product-scopes,admin-scopes-api,url-keys-and-redirects,consumers,seo-media-attachments,error-codes}.md`,
 `quickstart.md`. Measured on `origin/master` `aa6891d63`.
@@ -29,7 +28,7 @@ suffix (`T056a`), never a renumbering.
 ## Rules for every phase (read once)
 
 - **Every commit `git commit -s`** (the `dco` job). Never add `Co-Authored-By` or any AI trailer. English,
-  conventional commits: `feat(catalog): …`, `test(search): …`, `docs(159): …`.
+  conventional commits: `feat(catalog): …`, `test(search): …`, `docs(162): …`.
 - After editing anything under `packages/`, rebuild it (`pnpm --filter <package> run build`) **before**
   running any backend, admin or storefront test — tests read `dist`, `tsc` reads sources.
 - **Test helpers import services from `dist`** through the package specifier
@@ -62,23 +61,23 @@ suffix (`T056a`), never a renumbering.
 
 ## Streams and file ownership
 
-Up to three builders, each in its own worktree (`git worktree add ../wt-159-<stream> -b
-feat/159-product-data-scopes-<stream> <S1 tip>` then `bash ../wt-159-<stream>/scripts/setup-worktree.sh`;
-never a symlinked `node_modules`). Stream branches are cherry-picked onto `feat/159-product-data-scopes` at
+Up to three builders, each in its own worktree (`git worktree add ../wt-162-<stream> -b
+feat/162-product-data-scopes-<stream> <S1 tip>` then `bash ../wt-162-<stream>/scripts/setup-worktree.sh`;
+never a symlinked `node_modules`). Stream branches are cherry-picked onto `feat/162-product-data-scopes` at
 phase boundaries by the coordinator.
 
 | Stream | Branch | Phases | Owns (may edit freely) |
 | --- | --- | --- | --- |
-| **S1** backend availability | `feat/159-product-data-scopes` (primary checkout) | 1–12, 21, 22, 24, 25 | `packages/contracts/src/product-scopes.ts`; catalog scope entities/services/migrations (`product-channel-*`, `product-availability*`, `effective-value.sql.ts`, `scope-*`, `publication-window-sweep.ts`, media/attachment/packaging changes); consumer seams in `search`, `carts`, `orders`, `quote_requests`, `comparisons`, `shopping_lists`, `quick_order`, `product_feeds`, `import_export`; `backend/test/**` files it creates |
-| **S2** URL keys + SEO | `feat/159-product-data-scopes-urlkeys` | 16–19, 20 (backend half) | `packages/contracts/src/product-url-keys.ts`; catalog `url-key*.ts`, `product-url-*.entity.ts`, the `product_url_keys` migration, `routes.admin.url-keys.ts`, `routes.public.url-keys.ts`; everything under `packages/modules/seo/`; `storefront/app/(catalog)/p/[slug]/**`, `storefront/lib/api/catalog.ts` |
-| **S3** admin UI | `feat/159-product-data-scopes-admin` | 13–15, 20 (UI half), 23 | `packages/modules/catalog/src/admin/**`, `packages/modules/seo/src/admin/**` (Phase 20 only, after S2 hands `seo` back), `admin/test/modules/catalog/**` |
+| **S1** backend availability | `feat/162-product-data-scopes` (primary checkout) | 1–12, 21, 22, 24, 25 | `packages/contracts/src/product-scopes.ts`; catalog scope entities/services/migrations (`product-channel-*`, `product-availability*`, `effective-value.sql.ts`, `scope-*`, `publication-window-sweep.ts`, media/attachment/packaging changes); consumer seams in `search`, `carts`, `orders`, `quote_requests`, `comparisons`, `shopping_lists`, `quick_order`, `product_feeds`, `import_export`; `backend/test/**` files it creates |
+| **S2** URL keys + SEO | `feat/162-product-data-scopes-urlkeys` | 16–19, 20 (backend half) | `packages/contracts/src/product-url-keys.ts`; catalog `url-key*.ts`, `product-url-*.entity.ts`, the `product_url_keys` migration, `routes.admin.url-keys.ts`, `routes.public.url-keys.ts`; everything under `packages/modules/seo/`; `storefront/app/(catalog)/p/[slug]/**`, `storefront/lib/api/catalog.ts` |
+| **S3** admin UI | `feat/162-product-data-scopes-admin` | 13–15, 20 (UI half), 23 | `packages/modules/catalog/src/admin/**`, `packages/modules/seo/src/admin/**` (Phase 20 only, after S2 hands `seo` back), `admin/test/modules/catalog/**` |
 
 **Single-owner shared files — S1 only.** `packages/contracts/src/index.ts`, `errors.ts`, `catalog.ts`;
 `packages/modules/catalog/src/manifest.ts`, `src/backend/index.ts`, `routes.admin.ts`, `routes.public.ts`;
 `packages/modules/catalog/i18n/{en,pl}.json`; `backend/test/fixtures/error-code-routing/reference-ledgers.ts`;
 every generated artefact (`backend/src/db/*.generated.ts`, `manifest-index.generated.ts`, module-reference
 pages, package manifests), `pnpm-lock.yaml`, the `AGENTS.md` appendix, `.changeset/`. S2 and S3 put any
-line they need in such a file into **one separate commit per phase**, titled `chore(159): <stream> handover
+line they need in such a file into **one separate commit per phase**, titled `chore(162): <stream> handover
 P<n>`, touching only shared files; the coordinator applies it on S1 at the boundary. A stream that adds a migration, entity or error code
 **also regenerates and commits the generated artefacts on its own branch** (so its own `ci-pg` run has them
 registered); when the coordinator applies the stream's commits to S1, the generated files are **not**
@@ -151,7 +150,7 @@ consumer still compiles.
 - [ ] T009 [S1] Create `product-url-keys.ts` with the shapes of `contracts/url-keys-and-redirects.md` §1–§5 and `CatalogProductUrlKeyReadPort` (S2 owns the file from Phase 16 on) — `packages/contracts/src/product-url-keys.ts`
 - [ ] T010 [S1] Additive edits: bulk `scopedStatus` + reasons `scope_invalid`, `completeness_gate` (`catalog.ts:791`, `:817`); `CatalogProductRecord.publishFrom?/publishUntil?` (optional, permanently — fixtures build record literals); `SeoProductMetaPort` in `seo.ts`; barrel exports — `packages/contracts/src/{catalog,seo,index}.ts`
 - [ ] T011 [S1] Mint `SCOPE_INVALID`, `SCOPE_INCOMPLETE`, `URL_KEY_TAKEN`, `URL_KEY_REDIRECT_TAKEOVER_REQUIRED`, `URL_REDIRECT_NOT_FOUND` in one commit per `contracts/error-codes.md` (ERROR_CODES, `MINTED_ERROR_CODES`, catalog manifest `errorCodes`, `errors.<CODE>` en+pl, `composer:generate` + Polish module-reference refresh) — `packages/contracts/src/errors.ts`, `backend/test/fixtures/error-code-routing/reference-ledgers.ts`, `packages/modules/catalog/src/manifest.ts`, `packages/modules/catalog/i18n/{en,pl}.json`
-- [ ] T012 [S1] Changeset: `@endora-commerce/contracts` `minor` (new exports `product-scopes`, `product-url-keys`, `SeoProductMetaPort`) — `.changeset/159-product-scopes-contracts.md`
+- [ ] T012 [S1] Changeset: `@endora-commerce/contracts` `minor` (new exports `product-scopes`, `product-url-keys`, `SeoProductMetaPort`) — `.changeset/162-product-scopes-contracts.md`
 - [ ] T013 [S1] Build contracts; type-check consumers by name
 
 **Verification** (one invocation per line):
@@ -304,7 +303,7 @@ undoable, evented. No read path changes yet.
 - [ ] T063 [S1] `effectiveNames` on the port; carts, quote_requests, comparisons consume it / #384's helpers — `product-availability.service.ts`, `cart-service.ts:1251`, `rfq-service.ts:462`, `:635`, `comparison-service.ts:607`, `:623`
 - [ ] T064 [S1] Search: `localizedNames.<L>` in documents + `attributesToSearchOn` (FR-017 b on the Meilisearch path) — `search-indexer.ts`, `search-query.service.ts`
 - [ ] T065 [S1] Benchmark: a scoped variant of `backend/test/perf/catalog-list.bench.ts` and `backend/test/perf/catalog/listing-filtered-page.bench.ts` (20% of products with C and C×L rows, windows, audience overrides, effective-name sort) and record before/after in the PR; **> 10% regression stops the block** and goes back to the architect (R1 fallback) — `backend/test/perf/catalog/listing-scoped-availability.bench.ts`
-- [ ] T066 [S1] Release note entry: name sort order (D6), reindex per channel (R21) — `.changeset/159-…` bodies of the touched packages
+- [ ] T066 [S1] Release note entry: name sort order (D6), reindex per channel (R21) — `.changeset/162-…` bodies of the touched packages
 
 **Verification** (one invocation per line):
 - `[PG] backend/test/integration/catalog/effective-text-parity.test.ts`
