@@ -269,7 +269,10 @@ webhook registry entry.
   per (product, channel, language) otherwise.
 - **`product_url_redirects`** (catalog): `product_id`, `language_code` (nullable; `NULL` = a former
   *global* key, redirecting in every language where the product has no language key), `key`. Partial
-  unique `(language_code, key)` where not null and `(key)` where null.
+  unique `(language_code, key)` where not null and `(key)` where null. A `NULL`-language redirect resolves
+  in **every** language of every channel (analyze H1, 2026-10-21): conditioning it on "where the product has
+  no L key" made a former global key stop resolving in L the day the product got its first L key — an
+  expiry FR-072 forbids. A current key always wins over a redirect with the same key.
 - **Uniqueness is enforced in the write service, inside the Command, under
   `pg_advisory_xact_lock(hashtextextended('catalog.url-key:' || key, 0))`** taken for every key the write
   touches, in sorted order (no deadlock). The check is the closed list of FR-070/072: another product's
@@ -298,14 +301,34 @@ save on unrelated conflicts.
 **Decision.** `catalog` owns the redirect data (R11) and the resolution; `seo` owns whether redirects
 are **served**. Resolution of key `k` at (C, L): (1) a `product_url_keys` row of L or a global slug of a
 product with no L key → that product; serve if `k` is its effective key at (C, L), else 301 to it;
-(2) else a redirect row of L, or a global redirect (`language_code NULL`) of a product with no L key → 301
-to the product's effective key at (C, L), **only if `seo` is effectively present**; (3) else not-found.
+(2) else a redirect row of L, else a global redirect (`language_code NULL`) of any product — regardless of
+the language keys that product holds (H1) — → 301 to the product's effective key at (C, L), **only if `seo`
+is effectively present**; (3) else not-found.
 Availability (FR-001) is then evaluated for the product the key resolved to (FR-071) — an unavailable
 target answers not-found, an archived one answers "gone" (edge cases). The public route answers a redirect
 as `{ data: { redirect: { key, language } } }` with HTTP 200 on a dedicated resolve endpoint (contract
 `url-keys-and-redirects.md`); the storefront calls `permanentRedirect()`. Every emitted URL (sitemap,
-canonical, `hreflang` alternates) is `/p/<effective key>` plus `?lang=<L>` when L ≠ channel default
-(F3).
+canonical, `hreflang` alternates, the redirect target, the admin preview URL) is `/p/<effective key>` plus
+`?lang=<L>` when L ≠ channel default (F3), produced by **one** pure helper, `productPath({ key,
+languageCode, channelDefaultLanguage })` in `packages/contracts/src/product-url-keys.ts`, which the
+storefront, `seo`'s sitemap generator and catalog's admin/resolve responses all import — so the later
+language-path-prefix change (owner, Q-B → C, a separate issue) edits one seam.
+
+**Q-B decided (owner, 2026-10-21): option C, out of scope for 162.** A language prefix in the storefront
+path (`/en/p/drill`) is a separate issue. For 162 the interim stands: `?lang=<L>` on every URL the
+platform emits when L is not the channel default, and **no** cross-language rendering (option B rejected).
+**Accepted residual gap until the path-prefix issue lands:** a link to a language key without `?lang` —
+typically a default-language link — opened by a browser whose `Accept-Language` resolves to another channel
+language answers not-found under K1, once the product holds a key of its own in that other language
+(before any language key exists the global key serves every language, so nothing changes at deploy).
+
+**Q-C decided (owner, 2026-10-21): hide.** With `seo` off the redirect list is not part of any admin
+surface: `GET …/url-keys` omits `redirects` when `seo` is not effectively present (the admin renders the
+section only when the field is present, so the server's probe is the only one), consistent with
+Constitution XVII. The data stays in catalog and keeps reserving keys; the takeover confirmation belongs to
+the catalog URL-key editor and keeps working with `seo` off, naming the product that loses the redirect.
+`DELETE …/url-redirects/:id` stays catalog's write and is not gated (writes never are), but nothing in the
+admin reaches it while `seo` is off.
 
 The `seo` presence decision is a declared edge: catalog resolves `seoProductMetaPort` (R13) and lists it
 in `nonBindingDependencies` as **`degrades-without`**, `whenAbsent`: "product pages show metadata derived
@@ -333,14 +356,29 @@ channelId, languageCode, fallback })`** walking C×L → C → L → fallback pe
 its `seo` block through it (degrade: today's name/description derivation). The admin SEO panel gains the
 channel dimension.
 
+**Writes become Commands (analyze C1, Constitution XIII).** Today
+`meta-tag-resolver.service.ts:57-152` audits by hand through `recordAuditFromContext` with
+`stateBefore: null` on update, and `routes.ts:410-425` deletes by `locale` alone, defaulting to `en-US`.
+Before the channel dimension lands, `seo` gains `src/backend/commands/seo-meta-override.commands.ts`
+(the `delivery_methods/src/backend/commands/delivery-method.commands.ts` shape): `makeUpsertSeoMetaOverrideCommand`
+and `makeDeleteSeoMetaOverrideCommand`, actions kept as `seo_meta_override.upsert` / `.delete`
+(audit history stays continuous; no label references them), `objectType: 'seo_meta_override'`,
+`objectId` = the existing row id or a fresh uuid (`existingId` pattern, so a row appearing in between is
+refused rather than duplicated); `before` = the full row projection (entity type/id, channel, locale, the
+five fields) or `null` on create, `after` = the full projection or `null` on delete. `MetaTagResolverService`
+receives `commandBus` instead of `auditLog` and loses `#audit` **in the same change** (no hand audit left;
+`check:command-coverage` keeps `seo` in its converted list). A row is addressed by (entity, channel?,
+locale?): PUT carries `channelId?` in the body, GET and DELETE in the query; at least one of the two is
+required, except that a request naming **neither** keeps today's meaning (`locale = 'en-US'`) so no existing
+caller breaks (Principle II). Undo: per R29.
+
 **Rationale.** F2: overrides were never served, so wiring the read is required for US8 #1 to be
 observable at all. The port keeps `seo_meta_overrides` `seo`'s alone.
 
-**Product question (not decided here, `plan.md` § Questions, Q-A).** Serving overrides changes the
-metadata of every product that **already** has a per-language override, which US8 #2 ("no page's
-metadata changes") forbids if read as observed behaviour. Recommendation: read US8 #2 as "stored values
-are preserved unchanged" and accept the change, because those overrides were entered precisely to be
-served.
+**Q-A decided (owner, 2026-10-21): serve.** Serving overrides changes the metadata of every product that
+**already** has a per-language override; this is an intended behaviour change, recorded beside SC-001's
+others in `plan.md` § Intended behaviour changes. US8 #2 reads as "stored values are preserved unchanged
+as the language scope".
 
 ## R14 — Gallery roles and hiding per channel (FR-076)
 
@@ -445,9 +483,11 @@ be combined with the global `status` field in one request (one meaning per actio
 
 **Decision.** **No data backfill.** Every new table starts empty, which is "inherit everywhere"; the
 global values already hold today's status, audience, MOQ and returnable; `products.slug` is the global key;
-existing SEO rows become the L scope by having a `NULL` channel. The two intended behaviour changes at
-deploy are written into SC-001's test: a `draft` (or member, non-`active`) product is no longer reachable
-by URL (FR-005), and no longer addable to a basket (F1). Search documents gain fields; documents without
+existing SEO rows become the L scope by having a `NULL` channel. The intended behaviour changes at deploy
+(`plan.md` § Intended behaviour changes) are written into SC-001's test: a `draft` (or member,
+non-`active`) product is no longer reachable by URL (FR-005) and no longer addable to a basket (F1);
+listing name sort follows the effective name, not the slug (D6); existing per-language SEO overrides are
+served (Q-A). Search documents gain fields; documents without
 them are treated as before (R8), and the release note asks for one `search_reindex` per channel (the
 existing bulk operation), which the window filter needs to become exact.
 
@@ -509,9 +549,46 @@ orphan (by channel); the existing attribute update is unchanged and already reta
 skipped by the resolver, `spec.md` *Current state*). Widening creates nothing. The overview lists such rows
 as orphaned with a delete action (FR-015).
 
+**Admin (analyze H2).** No admin surface edits `channelScoped` / `languageScoped` today
+(`catalog/src/admin/pages/AttributesManager.tsx` toggles only the eight search/filter flags), so the preview
+needs a home: the attribute edit form gains the two scope flags for user-defined attributes (system
+attributes stay pinned and read-only, `getAttributeScope`), and a save that narrows either flag first calls
+the preview and asks the operator to confirm, showing how many overrides become orphaned per channel /
+language; widening saves without asking.
+
 ## R28 — URL keys for whole-channel readers
 
 **Decision.** `catalog` publishes `catalogProductUrlKeyReadPort.effectiveKeys(productIds, channelId):
 Map<productId, Map<languageCode, key>>` for `seo`'s sitemap generator (and any later reader); catalog's own
 listing summary sets `ProductSummary.slug` to the effective key at (C, L), which carries every storefront
 link and `storefront/app/sitemap.ts` without a storefront change beyond the PDP.
+
+**Stable handle for API lookups (analyze M1 follow-through).** CMS product blocks store product slugs
+(`packages/cms-components/src/utils/catalog-block-data.ts` `products-by-slugs`) and fetch them through
+`GET /api/v1/catalog/products/:idOrSlug` (`storefront/lib/page-builder/catalog-block-data.ts`). Once a
+product holds a key of L, its global slug is no longer one of its keys in L, so "current keys at (C, L)
+only" would empty those blocks. The JSON lookup therefore answers, in order: an id; a current key at
+(C, L); else a product's **global key** (`products.slug`, unique platform-wide) — an API handle, not a URL, so
+K1 (which governs the PDP route through `resolve`) is untouched. It never answers a redirect.
+
+## R29 — What "undo" means for a single scoped write (analyze C1 follow-through)
+
+**Finding.** The only reversible surface in the tree is the bulk operation: `RevertRecord[]` on
+`catalog_bulk_operations` and `POST /api/v1/admin/catalog/bulk-operations/:id/undo`
+(`bulk-operation.service.ts:584`, `docs/docs/architecture/command-bus.md` § Reversibility & undo). Nothing
+undoes a single Command; `delivery_methods/src/backend/commands/delivery-method.commands.ts` documents the
+convention — a single-row Command is not `reversible`, and its audit `stateBefore` is what an operator
+restores from by re-sending it. This plan's earlier "undo handler registered for `product.scopes.update`"
+named machinery that does not exist.
+
+**Decision (interim, `plan.md` Q-D).** Bulk scoped writes are undone by the existing bulk-operation undo
+(all-or-nothing per product, conflict report — T073). Single scoped writes (`product.scopes.update`,
+`product.url_keys.update`, `product.url_redirect.delete`, `product.media.update`, the attachment and
+packaging-unit updates, `seo_meta_override.upsert/.delete`) are Commands whose `before` / `after` are the
+**complete** projection of every row touched, so re-applying `before` through the same route restores it;
+tests assert that projection, not an undo endpoint. No new machinery.
+
+**Alternative rejected (for now).** A generic single-Command undo (revert records on the audit row or a
+new table, a generic undo route, conflict detection per object type) is platform work owned by
+`audit_logs`/the platform, a new phase, and a Complexity Tracking entry. It becomes the plan only if the
+owner answers Q-D that one-click undo of a single scoped write is required.

@@ -17,7 +17,7 @@ returnable settable per scope (global / language / channel / channel × language
 inheritance along the existing chain, and make **every** storefront and buyer-facing consumer read the
 effective (channel, language) value.
 
-Technical approach (research R1–R28):
+Technical approach (research R1–R29):
 
 - **Typed scope tables owned by `catalog`** — `product_channel_scopes` (one row per product × channel:
   status, window pair, audience pair, MOQ, returnable; `NULL` = inherit) and
@@ -34,7 +34,8 @@ Technical approach (research R1–R28):
   `product_url_redirects` (catalog-owned); uniqueness per language across all channels enforced in the write
   Command under per-key advisory locks; redirects never chain; serving a redirect requires `seo` to be
   present (FR-111) while writes keep the invariant regardless.
-- **SEO per C×L** in `seo` (channel column + port), wired into the PDP for the first time (R0 F2).
+- **SEO per C×L** in `seo` (channel column + port), wired into the PDP for the first time (R0 F2); `seo`'s
+  override writes move from hand auditing onto the Command Bus first (R13, analyze C1).
 - **Media, attachments, packaging units** — additive per-channel tables and per-language JSONB columns.
 - **Effective names** (FR-017) — #384's walk restated as SQL for listing search/filter/count/sort, and a
   port method for snapshots.
@@ -62,7 +63,8 @@ catalogue size with overrides on 20% of products (benches `backend/test/perf/cat
 `backend/test/perf/catalog/listing-scoped-availability.bench.ts`); SC-005 — window reflected on the storefront within 5 min (immediate by construction) and in
 search within 15 min (immediate by query-time filter)
 **Constraints**: every refusal at a buyer seam stays the single `PRODUCT_NOT_FOUND`; channel resolved or
-fail closed (XII); deploy changes no storefront behaviour except the two listed in SC-001's test (R21)
+fail closed (XII); deploy changes no storefront behaviour except the four listed under *Intended behaviour
+changes* (R21)
 **Scale/Scope**: 12 modules touched (`catalog`, `search`, `seo`, `product_feeds`, `comparisons`, `carts`,
 `orders`, `quote_requests`, `shopping_lists`, `quick_order`, `cms` (verify only), `import_export`), plus
 `packages/contracts`, `admin`, `storefront`
@@ -83,7 +85,7 @@ fail closed (XII); deploy changes no storefront behaviour except the two listed 
 | X. Queues | The window sweep is a BullMQ Job Scheduler through `ctx.worker` (`price-list-status-worker.ts` shape); bulk scoped status rides `BulkOperationService` |
 | XI. Tenancy (NN) | New tables platform-global like `products`; audience evaluated at read time against the buyer's organization; no no-organization path introduced |
 | XII. Channel scoping (NN) | Membership read only through the kernel accessor (subquery / filter); unresolved channel matches nothing (FR-007); cross-channel tests for every FR-004 consumer |
-| XIII. Command Bus (NN) | Every scoped write, URL-key write, redirect delete, takeover and bulk run is a Command, one audit entry per product, standard undo (FR-080, FR-081) |
+| XIII. Command Bus (NN) | Every scoped write, URL-key write, redirect delete, takeover, SEO override upsert/delete (converted from today's hand audit, R13) and bulk run is a Command, one audit entry per product with a complete before/after projection (FR-080); bulk runs undo through the existing bulk-operation undo, single writes restore from the audit before-state (R29, Q-D) |
 | XIV. Extensibility | Typed columns are justified (filterability, R1) — these are core commerce fields, not "add a field" requests |
 | XV. Untouched core | Core feature; no overlay |
 | XVI. Palette | Overview and scope controls are part of the product editor, reached by the existing `open-products` action (keywords extended); `targetRoute` cannot carry a product id (R23) |
@@ -95,7 +97,7 @@ fail closed (XII); deploy changes no storefront behaviour except the two listed 
 
 - **D1 — SEO overrides start being served (R0 F2, R13).** US8 #2's "no page's metadata changes" cannot
   hold literally for products that already have per-language overrides, because none are served today.
-  Plan: wire them; Q-A below asks the owner to confirm.
+  **Decided by the owner (Q-A → serve, 2026-10-21)**; listed under *Intended behaviour changes*.
 - **D2 — Basket add gains a status check (R0 F1).** SC-001's parity statement is extended to name it.
 - **D3 — Alt text is product-scoped per language (R15)**, falling back to the asset's own alt text, which is
   what "the global alt text" means in US9 #3.
@@ -107,30 +109,53 @@ fail closed (XII); deploy changes no storefront behaviour except the two listed 
   effective name at (C, L), which changes the order wherever slug and name disagree. Recorded in the
   release note.
 - **D7 — Emitted product URLs carry `?lang=<L>`** when L is not the channel default (R0 F3), so K1's
-  not-found for a key of another language does not hit links the platform itself produces.
+  not-found for a key of another language does not hit links the platform itself produces. Every emitter
+  goes through one helper, `productPath()` in `packages/contracts/src/product-url-keys.ts` (R12), so the
+  owner's language-path-prefix issue (Q-B → C) replaces one function.
+- **D8 — "Standard undo" of a single scoped write (R29).** The tree has undo only for bulk operations.
+  Bulk scoped writes use it; single writes are Commands whose audit before-state is complete and is
+  restored by re-sending it. FR-081 and US1 #8 promise more; Q-D asks the owner.
+- **D9 — The admin attribute editor gains the two scope flags (R27, analyze H2).** No admin surface edits
+  `channelScoped` / `languageScoped` today; FR-090's preview needs the control it previews.
+
+## Intended behaviour changes (listed beside SC-001; the deploy-parity test T144 asserts exactly these)
+
+1. **A `draft` product can no longer be added to a basket** (D2, R0 F1) — basket add checks no status today.
+2. **A `draft` product is no longer reachable by URL** (FR-005) — its slug answers not-found (T038).
+3. **Listing "name sort" sorts by the effective name** at (C, L), not by slug (D6), wherever slug and name
+   disagree.
+4. **Existing per-language SEO overrides start being served** on product pages (D1, Q-A): those products'
+   title, description and Open Graph tags change to the values operators entered.
 
 ## Questions for the owner (not decided here)
 
 - **Q1 (from clarify, re-asked before acceptance)** — status values A (`draft`/`active`/`inactive`) vs B
   (enabled/disabled per scope + global archive). The design keeps B a data migration + enum change (R3).
-- **Q-A** — serving existing per-language SEO overrides changes those products' page metadata on deploy
-  (D1). *Options*: (a) serve them — recommended, they were entered to be served; (b) serve only overrides
-  created after the deploy (requires a marker column; YAGNI); (c) keep US8 admin-only. Interim: (a).
-- **Q-B** — a shared link to a key of language L opened by a reader whose browser asks for another channel
-  language answers not-found (K1 + R0 F3). *Options*: (a) keep K1 strictly, emitted URLs carry `?lang`
-  (D7) — interim; (b) when the request language came from `Accept-Language` (no `?lang`), and the key is
-  held in exactly one other channel language, answer in that language instead; (c) redirect across
-  languages (reverses K1). Recommendation: (a) now, (b) as a follow-up if analytics show 404s.
-- **Q-C** — with `seo` off, should the product editor still show the redirect list (catalog data that
-  still constrains new keys)? Recommendation: show it, with a note that redirects are not served while SEO
-  is off — hiding it would leave an operator unable to see why a key is refused.
+- **Q-A — decided 2026-10-21: serve** existing per-language SEO overrides (D1; *Intended behaviour
+  changes* 4).
+- **Q-B — decided 2026-10-21: option C, as a separate issue.** A language prefix in the storefront path
+  (`/en/p/drill`) is out of scope for 162. 162 keeps the interim: `?lang=<L>` on every URL the platform
+  emits (canonical, alternates, sitemap, redirect targets, admin preview) when L is not the channel default,
+  through the one `productPath()` seam (D7); **no** cross-language rendering. **Accepted residual gap**
+  until the prefix issue lands: a link without `?lang` (typically a default-language link) opened by a
+  browser whose language resolves to another channel language answers not-found under K1, once the product
+  holds its own key in that language (R12).
+- **Q-C — decided 2026-10-21: hide.** With `seo` off the redirect list is not shown (`GET …/url-keys` omits
+  `redirects`); redirect data stays in catalog and keeps reserving keys; the takeover confirmation is part of
+  the catalog URL-key editor, keeps working with `seo` off and names the product that loses the redirect
+  (R12).
+- **Q-D [NEEDS CLARIFICATION] — single-write undo (D8, R29).** Is restoring a single scoped write from its
+  audit before-state (re-sending it) enough for FR-081, or must a single scoped write have a one-click undo
+  with a conflict report? *Options*: (a) as designed — bulk undo for bulk writes, before-state restore for
+  single writes, no new machinery (recommended); (b) a generic single-Command undo in the platform — a new
+  phase in `audit_logs`/platform before Phase 4, and a Complexity Tracking entry. Interim: (a).
 
 ## Requirement → test (abridged; every FR maps to at least one test in `tasks.md`)
 
 | FR / SC | Test |
 | --- | --- |
 | FR-001, FR-002, FR-016 | `packages/contracts/src/product-scopes.test.ts`; `backend/test/integration/catalog/availability-parity.test.ts` [PG] |
-| FR-004, FR-005, FR-007, SC-007 | `backend/test/contract/catalog/scoped-availability-matrix.test.ts` [PG] (list, facets, PDP, search, quick search, links, bundle × 2 channels × 2 languages); consumer tests per row of `contracts/consumers.md` |
+| FR-004, FR-005, FR-007, SC-007 | `backend/test/contract/catalog/scoped-availability-matrix.test.ts` [PG] (listing, facets, PDP, quick search, links/related, bundle configuration × 2 channels × 2 languages, plus the search-backend-off case); Meilisearch search in `backend/test/integration/search/scoped-availability.test.ts`; CMS product blocks in `backend/test/contract/cms/product-block-scoped-availability.test.ts`; consumer tests per row of `contracts/consumers.md`; `…/scoped-availability-all-consumers.test.ts` |
 | FR-006, FR-018 | `backend/test/integration/carts/scoped-availability.test.ts`, `backend/test/integration/quote_requests/scoped-availability.test.ts` [PG] |
 | FR-008–FR-015 | `backend/test/contract/catalog/product-scopes-api.test.ts` [PG] |
 | FR-017 | `backend/test/integration/catalog/effective-text-parity.test.ts`, `…/listing-effective-names.test.ts`, carts/RFQ snapshot tests [PG] |
@@ -141,9 +166,10 @@ fail closed (XII); deploy changes no storefront behaviour except the two listed 
 | FR-060, FR-061 | `packages/modules/catalog/src/backend/services/scope-completeness.test.ts`; `…/contract/catalog/scope-completeness-gate.test.ts` [PG] |
 | FR-070–FR-074, FR-093, SC-008 | `backend/test/integration/catalog/url-key-uniqueness.test.ts`, `…/url-key-resolution.test.ts` [PG]; `storefront/test/catalog/pdp-redirect.test.ts` |
 | FR-075 | `backend/test/integration/seo/meta-channel-scope.test.ts` [PG] |
+| FR-080 (SEO writes) | `backend/test/contract/seo/meta-override-commands.test.ts` [PG] |
 | FR-076–FR-079 | `backend/test/contract/catalog/media-scopes.test.ts`, `…/attachment-packaging-translations.test.ts` [PG] |
-| FR-080–FR-082 | Command/audit/undo assertions inside each write test; `product-scopes-events.test.ts` |
-| FR-090–FR-092 | `attribute-scope-change-preview.test.ts`, `scope-write-port.test.ts`, `bulk-import-scoped-status.test.ts` [PG] |
+| FR-080–FR-082 | Command/audit before-after assertions inside each write test; bulk undo in `products-bulk-scoped-status.test.ts`; events in `product-scopes-api.test.ts` |
+| FR-090–FR-092 | `attribute-scope-change-preview.test.ts`, `admin/test/modules/catalog/AttributesManager.scope-flags.test.tsx`, `scope-write-port.test.ts`, `bulk-import-scoped-status.test.ts` [PG] |
 | FR-100 | `backend/test/integration/carts/channel-order-rules.test.ts`, `…/orders/channel-returnable.test.ts` [PG] |
 | FR-110, SC-001 | `backend/test/integration/catalog/deploy-parity.test.ts` [PG] |
 | FR-111 | `backend/test/integration/catalog/url-redirects-seo-off.test.ts` [PG] |
@@ -157,7 +183,7 @@ fail closed (XII); deploy changes no storefront behaviour except the two listed 
 specs/162-product-data-scopes/
 ├── spec.md, checklists/requirements.md
 ├── plan.md            # this file
-├── research.md        # R0–R28
+├── research.md        # R0–R29
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
@@ -210,10 +236,10 @@ invariant it belongs to (R12).
 ## Migrations (by owner; order by manifest graph, never by number)
 
 1. `catalog` `product_scopes` — two tables + two `products` columns (Phase 3).
-2. `catalog` `product_url_keys` — two tables (Phase 13).
-3. `seo` `meta_override_channel_scope` — column, nullable locale, uniques (Phase 15). `seo` already
+2. `catalog` `product_url_keys` — two tables (Phase 16).
+3. `seo` `meta_override_channel_scope` — column, nullable locale, uniques (Phase 18). `seo` already
    depends on what its FK needs, or the drift test names it.
-4. `catalog` `product_media_scopes` (Phase 17) and `attachment_packaging_translations` (Phase 18).
+4. `catalog` `product_media_scopes` (Phase 21) and `attachment_packaging_translations` (Phase 22).
 
 Each: scaffold → entity → `composer:generate` → `manifests:generate` → `pnpm install --lockfile-only` →
 commit artefacts together.
@@ -237,13 +263,21 @@ commit artefacts together.
 2. **Search reindex.** New document fields need one reindex per channel; until then the `NOT EXISTS`
    clause keeps pre-deploy behaviour (R8) — but C×L status and windows are not applied by search until the
    reindex runs. Release note + operator step.
-3. **Shared links across languages (Q-B).**
+3. **Shared links across languages (Q-B → C, accepted).** Until the language-path-prefix issue lands, a
+   link without `?lang` opened in another channel language answers not-found once the product holds a key
+   in that language. Every emitted URL carries `?lang`; the fix lands in `productPath()` alone.
 4. **#384 drift.** #384 may change before merging; the gated phases re-read its final API.
 5. **Name sort order change (D6).**
 6. **Concurrency of key writes** — advisory locks per key; covered by a two-connection test.
 7. **External connectors** must adopt the new write port to honour FR-091/FR-093 (D5).
 8. **The status value set (Q1)** may change at acceptance — cheap by construction (R3), but it touches the
    admin control, contracts and a data migration late in the feature.
+9. **Single-write undo (Q-D).** If the owner chooses one-click undo, a platform phase is inserted before
+   Phase 4 and every single-write test gains an undo assertion.
+10. **CMS blocks by slug.** Blocks store global slugs; the JSON lookup keeps answering them (R28). If a
+   product's global slug is later taken over in L by another product's L key, a block naming that slug at L
+   shows the other product — an edge the operator caused by confirming a takeover; blocks moving to product
+   ids is a follow-up.
 
 ## Complexity Tracking
 
@@ -256,3 +290,7 @@ first phase: `research.md` R1–R12 and `contracts/product-scopes.md`. Non-negot
 a status value other than through the port or the pure rule; no SQL against another module's table;
 availability narrowing goes **in the statement**, never after the page is cut; every write is a Command;
 every buyer seam keeps one not-found answer; do not start a #384-gated phase before #384 is on `master`.
+Owner decisions since planning: Q-A serve, Q-B interim `?lang` only (prefix is a separate issue; every
+emitted URL through `productPath()`), Q-C hide redirects with `seo` off. Open: Q1 (re-asked at acceptance)
+and Q-D (single-write undo; build interim (a)). Phase 18 converts `seo`'s hand-audited override writes to
+Commands **before** adding the channel dimension — do not extend the hand audit.
