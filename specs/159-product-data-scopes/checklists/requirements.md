@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain
+- [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -33,11 +33,15 @@
 
 - Clarify session 1 (2026-10-21) resolved the original three markers (FR-010 value set, FR-060 gate,
   FR-070/FR-072 URL keys and redirects) and D-2, D-4, D-6, and added FR-017 (effective scoped values in
-  every storefront consumer). Four [NEEDS CLARIFICATION] markers remain, for the owner:
-  FR-010 (meaning of `inactive` set below the global scope), FR-013 (A-9, no-warning rule beyond status),
-  FR-022 (D-3, "not visible individually") and FR-101 (D-5, price display mode precedence).
-  D-1 (draft preview reachability) stays deferred with an interim reading. The FR-010 value set is
-  provisional and is re-asked before acceptance.
+  every storefront consumer).
+- Clarify round 2 (2026-10-21) resolved the remaining four markers: display visibility dropped (FR-003,
+  FR-020, FR-021, FR-022 removed, D-3 moot, FR-050 status only); price display mode per channel removed
+  (FR-101, D-5); the no-warning rule covers every scoped field (FR-013, A-9); `inactive` below global is
+  plain "off" (FR-010). It also added FR-018 (quote requests honour availability) and extended FR-017
+  (snapshot language), FR-060/FR-061 (refuse-mode granularity), FR-070/FR-015 (URL-key clashes on
+  membership and language changes), and SC-008. No [NEEDS CLARIFICATION] marker remains. D-1 (draft preview
+  reachability) stays deferred with an interim reading, by owner choice; the FR-010 value set is provisional
+  and is re-asked before acceptance.
 - "No implementation details": the *Current state* section cites code paths deliberately (house style of
   specs 156/157) to anchor the baseline; requirements themselves are stated as behaviour. FR-016 and FR-052
   name a performance property and the existing bulk path, not a technology.
