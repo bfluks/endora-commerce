@@ -2,7 +2,7 @@
 
 **Feature Branch**: `feat/159-product-data-scopes`
 **Created**: 2026-10-20
-**Status**: Draft — clarify rounds 1 and 2 recorded 2026-10-21; no [NEEDS CLARIFICATION] marker remains.
+**Status**: Draft — clarify rounds 1 and 2 recorded 2026-10-21; no open clarification marker remains.
 D-1 (draft preview by direct link) stays deferred with an interim reading; the status value set (FR-010) is
 re-asked by the coordinator before acceptance
 **Issues**: #385 (source), depends on #384; adjacent to #377 and #241
@@ -509,10 +509,11 @@ the minimum and the return eligibility.
   shown as unavailable and MUST block placement, reusing the existing unavailable-line behaviour.
 - **FR-007**: An unresolved request channel MUST NOT match any scoped value or any product (fail closed,
   Constitution XII); channel membership MUST be read only through the sanctioned membership service.
-- **FR-018**: A quote request created by a **buyer** MUST refuse every line whose product is not
-  effectively available (FR-001) at the quote request's channel and language, with an answer that does not
-  reveal the product's existence beyond what FR-005 allows. A quote request created by an **operator** in
-  the admin MUST accept such a line and show a warning naming it.
+- **FR-018** *(numbered after FR-017; added in clarify round 2)*: A quote request created by a **buyer**
+  MUST refuse every line whose product is not effectively available (FR-001) at the quote request's channel
+  and language, with an answer that does not reveal the product's existence beyond what FR-005 allows. A
+  quote request created by an **operator** in the admin MUST accept such a line and show a warning naming
+  it.
 
 #### Scope model and inheritance
 
@@ -765,7 +766,7 @@ the minimum and the return eligibility.
 
 ### Deferred to `/speckit.clarify` (not decided; interim reading only)
 
-These carry an interim reading used above so the spec is complete, but they are **open**. D-2, D-4 and D-6
+This item carries an interim reading used above so the spec is complete, but it is **open**. D-2, D-4 and D-6
 were decided on 2026-10-21 in round 1, D-3 became moot and D-5 was removed from the feature in round 2 (see
 *Clarifications*); they are no longer listed. Only D-1 remains, without a marker: the owner deferred it.
 
