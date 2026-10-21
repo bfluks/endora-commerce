@@ -38,7 +38,7 @@ spec records the owner's binding decisions so far and leaves the rest open for c
   archived), or enabled / disabled per scope with archiving as its own global action? → A: Keep `draft` /
   `active` / `inactive` for now (option A). The owner may switch to enabled / disabled per scope plus a
   separate global archive action (option B); the coordinator re-asks this at the end of the feature, before
-  acceptance. What `inactive` means when set below the global scope is not yet decided (FR-010).
+  acceptance. What `inactive` means when set below the global scope was decided in round 2, N1 (FR-010).
 - Q: How does the completeness gate behave — warn and save, refuse the save, or a setting choosing between
   them? → A: A platform-level setting choosing *warn* or *refuse*, default *warn* (option C). Assumption A-6
   is confirmed: the gate does not apply to imports or PIM synchronisation (FR-060, FR-061).
@@ -855,7 +855,9 @@ the minimum and the return eligibility.
 - **SC-001**: After deployment, for every channel and language, the set of products listed, searchable,
   reachable by URL (all existing URLs) and in the sitemap and feeds is identical to the set before
   deployment, except that products that are not "on" (today: `draft`) are no longer reachable by URL
-  (FR-005; FR-010 is decided, the final wording follows the D-1 decision on preview reachability).
+  (FR-005; FR-010 is decided, the final wording follows the D-1 decision on preview reachability) and no
+  longer addable to a basket — basket add honours FR-001 (FR-004), where today it checks no status at all
+  (`research.md` R0 F1).
 - **SC-002**: An operator can take a product live in one market and offline in another in under one minute
   from the product editor, without touching other markets.
 - **SC-003**: For any product, an operator can tell from one screen why it is or is not live in every
