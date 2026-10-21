@@ -2,7 +2,8 @@
 
 **Feature Branch**: `feat/159-product-data-scopes`
 **Created**: 2026-10-20
-**Status**: Draft — awaiting `/speckit.clarify`
+**Status**: Draft — clarify session 1 recorded 2026-10-21; D-1, D-3, D-5, A-9 and the per-scope meaning of
+`inactive` (FR-010) still open
 **Issues**: #385 (source), depends on #384; adjacent to #377 and #241
 **Input**: Issue #385 — *Catalog: Magento-style scopes for product data — status, visibility, URL, SEO,
 media per sales channel and language.* An operator cannot set a product's status or visibility per sales
@@ -26,6 +27,37 @@ spec records the owner's binding decisions so far and leaves the rest open for c
    analysis; the improvements over Magento listed in the issue are welcome.
 5. #384 (the storefront ignores the channel overrides that already exist) is a separate bug, fixed on its
    own branch; this spec assumes it lands first.
+
+## Clarifications
+
+### Session 2026-10-21
+
+- Q: Which value set does the scoped status hold — keep `draft` / `active` / `inactive` (with `inactive` =
+  archived), or enabled / disabled per scope with archiving as its own global action? → A: Keep `draft` /
+  `active` / `inactive` for now (option A). The owner may switch to enabled / disabled per scope plus a
+  separate global archive action (option B); the coordinator re-asks this at the end of the feature, before
+  acceptance. What `inactive` means when set below the global scope is not yet decided (FR-010).
+- Q: How does the completeness gate behave — warn and save, refuse the save, or a setting choosing between
+  them? → A: A platform-level setting choosing *warn* or *refuse*, default *warn* (option C). Assumption A-6
+  is confirmed: the gate does not apply to imports or PIM synchronisation (FR-060, FR-061).
+- Q: Within which space must a URL key be unique? → A: Per (channel, language) (option A; FR-070).
+- Q: How long does an old URL key keep redirecting? → A: Forever; the operator can delete individual
+  redirects (option C; FR-072).
+- Q: May a new URL key equal another product's old, redirecting key? → A: Yes, but only after a confirmation
+  that names the product that loses the redirect (option C; FR-072).
+- Q: (D-2) Which fields need channel × language rather than channel only? → A: Status and display
+  visibility at channel × language (and channel); audience and publication window at channel only — the
+  table in FR-009 as written (option A).
+- Q: (D-4) Does the bulk edit cover the other channel-scoped fields? → A: No — status and display
+  visibility only in this feature; the other channel-scoped fields are a follow-up (option A; FR-050,
+  *Out of Scope*).
+- Q: (D-6) May the image set itself differ per channel? → A: No — per channel only image roles and hidden
+  images; the image set stays global; per-variant galleries stay with #377 (option A; FR-076).
+- Q: (owner decision on the #384 follow-ups) Which storefront consumers must use the effective
+  (channel, language) value of scoped fields? → A: Every one, including those that still read the baseline
+  after #384: quick search (consumer `quick_order`), listing free-text search, attribute filters, filter
+  option counts and name sort, comparisons, and line names snapshotted into baskets and quote requests.
+  Search-result card names are fixed under #384 itself (FR-017, FR-004, A-1).
 
 ## Current state (origin/master cde5563ea)
 
@@ -76,6 +108,16 @@ runtime, unless stated.
 - System attributes with a scope: `name`, `description` (`SYSTEM_ATTRIBUTE_SCOPES`,
   `packages/contracts/src/catalog.ts:2649`); user attributes carry `channelScoped` / `languageScoped`.
 - Admin editor: `packages/modules/catalog/src/admin/components/ProductScopeEditor.tsx`.
+- Places that still read the **baseline** rather than the effective (C, L) value after #384 (owner decision
+  2026-10-21; FR-017): quick search returns the baseline `name`
+  (`packages/modules/catalog/src/backend/services/catalog-quick-search.service.ts:153`, consumer
+  `quick_order`); the storefront listing's free-text search, attribute filters, filter option counts and
+  name sort run over the baseline JSONB (`catalog-query.service.ts`); comparisons read the baseline name and
+  attribute values (`packages/modules/comparisons/src/backend/services/comparison-service.ts:607`, `:623`);
+  basket batch-add outcomes name the product from the baseline
+  (`packages/modules/carts/src/backend/services/cart-service.ts:1251`); quote-request lines snapshot the
+  baseline name in any locale (`packages/modules/quote_requests/src/backend/services/rfq-service.ts:462`,
+  `:629`).
 
 ### Other product data
 
@@ -102,7 +144,8 @@ runtime, unless stated.
 - **Inheritance** — the effective value at a scope is the nearest override along the existing fallback
   chain (C×L → C → L → Global), restricted to the scopes the field supports.
 - **Use inherited** — removes the override at that scope; it does not store an empty value.
-- **Status** — whether the product is switched on at a scope (value set: see FR-010).
+- **Status** — `draft` / `active` / `inactive` at a scope (FR-010); the product is switched **on** at a
+  scope when its effective status there is `active`, and **off** otherwise.
 - **Display visibility** — *where* a live product is listed: not visible individually / catalog only /
   search only / catalog and search. Distinct from **audience visibility** (who may see it: public /
   logged-in only / organization-restricted). Every requirement names which one it means.
@@ -285,11 +328,16 @@ URL redirects permanently to the new one in the same (C, L).
 
 1. **Given** keys per language, **When** a buyer requests the product page by the key of (C, L), **Then**
    the product is found; a key from another language resolves according to FR-071.
-2. **Given** a key in use by another product in the same uniqueness space (FR-070), **When** the operator
+2. **Given** a key that is another product's current key in the same (C, L) (FR-070), **When** the operator
    saves it, **Then** the save is refused naming the conflicting product.
 3. **Given** a changed key, **When** a buyer requests the old URL, **Then** they receive a permanent
    redirect to the current URL for that (C, L).
 4. **Given** a key changed twice, **Then** both old URLs redirect directly to the current one (no chain).
+5. **Given** a key that is another product's old, redirecting key in the same (C, L), **When** the operator
+   saves it, **Then** they are asked to confirm, the confirmation names the product that loses the redirect,
+   and only on confirmation is the key saved and that redirect removed (FR-072).
+6. **Given** an existing redirect, **When** the operator deletes it, **Then** the old URL answers not-found
+   and the product's current URL is unchanged.
 
 ---
 
@@ -375,8 +423,8 @@ the minimum, the return eligibility and the displayed price mode.
 - **Parent off, child on**: the child does not make the parent reachable.
 - **Unresolved channel** (no header, no host mapping and no default): no scoped value matches and no
   product is live — fail closed (Constitution XII).
-- **URL key collision with a redirect**: a new key equal to another product's *old* (redirecting) key —
-  resolved by FR-072.
+- **URL key collision with a redirect**: a new key equal to another product's *old* (redirecting) key in
+  the same (C, L) is saved only after a confirmation naming the product that loses the redirect (FR-072).
 - **Redirect to a product that is now unavailable** at (C, L): the redirect target answers as unavailable
   (not-found), the redirect does not leak that the product exists.
 - **Attribute scope flag changed** after values exist (e.g. a language-scoped attribute made global):
@@ -403,7 +451,9 @@ the minimum, the return eligibility and the displayed price mode.
 - **FR-004**: The following consumers MUST honour FR-001 and FR-003 for their (C, L): storefront product
   list and filter facets; product page (including links, related products and bundle configuration);
   search indexing and search results; sitemap; product feeds; quick order; comparisons; CMS product blocks;
-  basket add and order placement.
+  basket add and order placement. Every one of them, and in addition quick search, the listing's free-text
+  search, attribute filters, filter option counts and name sort, basket line names and quote-request line
+  names, MUST read scoped field values at their effective (C, L) value (FR-017).
 - **FR-005**: A product page request at (C, L) for a product not effectively available there MUST answer
   exactly as for a product that does not exist (no status-specific response that reveals existence),
   except for the archived case, which MUST keep its current "gone" answer. Interim reading: this also stops
@@ -419,7 +469,7 @@ the minimum, the return eligibility and the displayed price mode.
 - **FR-008**: Every scoped field MUST resolve through the existing fallback chain (C×L → C → L → Global),
   restricted to the scopes that field supports (table in FR-009); a second fallback chain MUST NOT be
   introduced.
-- **FR-009**: Supported scopes per field (interim, per the issue's table; see *Deferred to clarify* D-2):
+- **FR-009**: Supported scopes per field (the issue's table, confirmed in clarify 2026-10-21, D-2):
 
   | Field | Global | Language | Channel | Channel × language |
   | --- | --- | --- | --- | --- |
@@ -441,17 +491,23 @@ the minimum, the return eligibility and the displayed price mode.
 
   SKU, type, attribute set, stock flags, fulfilment strategy, product links, bundle / grouped / variant
   structure, prices, promotions and warehouses MUST remain as they are.
-- **FR-010**: Status MUST hold [NEEDS CLARIFICATION: status value set — keep `draft` / `active` /
-  `inactive` (with `inactive` = archived) as the scoped value, or make the scoped status enabled / disabled
-  and move archiving (and draft?) to a separate global product state?]. Whatever the value set, archiving
-  MUST remain a global, product-wide state (FR-001), not a per-scope one.
+- **FR-010**: Status MUST hold one of `draft` / `active` / `inactive` at every scope it supports (FR-009);
+  the product is "on" at (C, L) exactly when its effective status there is `active`. The **global** value
+  keeps today's semantics in full: setting it to `inactive` archives the product (sets `archivedAt`, emits
+  `product.archived.v1` once per transition, product page answers "gone"), and moving away clears
+  `archivedAt`. Archiving MUST remain a global, product-wide state (FR-001), not a per-scope one.
+  [NEEDS CLARIFICATION: what `inactive` set as an override at C or C×L means — plain "off" there, identical
+  in effect to `draft`; or refused below the global scope, so overrides hold only `draft` / `active`?]
+  This value set is provisional: the owner may replace it with enabled / disabled per scope plus a separate
+  global archive action, and the coordinator re-asks before acceptance (Clarifications 2026-10-21).
 - **FR-011**: Every scoped field MUST have a global value; an override MUST exist only at a scope where an
   operator (or an integration) set one.
 - **FR-012**: "Use inherited" MUST remove the override at that scope; the effective value MUST then be the
   inherited one. Storing an empty value MUST NOT be the way to inherit.
 - **FR-013**: Changing a global value MUST NOT alter or remove any override, and the product editor MUST
-  NOT warn about existing overrides when the global status is changed (owner decision 3). The same
-  no-warning rule is assumed for every other global value (assumption A-9).
+  NOT warn about existing overrides when the global status is changed (owner decision 3).
+  [NEEDS CLARIFICATION: does the no-warning rule extend to every other global value of a scoped field, or
+  only to status? — assumption A-9]
 - **FR-014**: An override MUST be accepted only for a scope valid for the product (FR-009 and *Terms*); an
   override for a channel the product is not a member of, or a language the channel does not offer, MUST be
   refused with a validation error naming the scope.
@@ -460,6 +516,17 @@ the minimum, the return eligibility and the displayed price mode.
   in the scope overview with a way to delete them.
 - **FR-016**: Status and display visibility MUST be filterable when listing, searching and generating
   sitemaps and feeds, without resolving every product's overrides one by one (performance target SC-004).
+- **FR-017**: Every storefront and buyer-facing consumer MUST use the **effective (C, L) value** of every
+  scoped field (FR-008) — never the baseline — wherever it matches, filters, counts, sorts, displays or
+  snapshots that field (owner decision 2026-10-21 on the #384 follow-ups). This explicitly covers:
+  (a) quick search, matching and returning names, and its consumer quick order;
+  (b) the storefront listing's free-text search, attribute filters, filter option counts and name sort;
+  (c) comparisons — product names and compared attribute values;
+  (d) product names written into baskets, including batch-add outcomes;
+  (e) product names snapshotted into quote-request lines.
+  A snapshot MUST keep the value it was taken with. The same holds for every field of FR-009 as its story
+  lands. Search-result card names are fixed under #384 (A-1). Matching, filtering, counting and sorting on
+  effective values MUST meet SC-004.
 
 #### Display visibility and publication window
 
@@ -469,8 +536,9 @@ the minimum, the return eligibility and the displayed price mode.
   variant, bundle-slot option or grouped item of an effectively available parent.
 - **FR-022**: Interim reading (the issue's): a product that is *not visible individually* at (C, L) and
   effectively available there MUST keep a product page reachable by direct link, and MUST NOT appear in the
-  sitemap or feeds for (C, L). The alternative (no own page at all, Magento-style) is open — *Deferred to
-  clarify* D-3.
+  sitemap or feeds for (C, L). [NEEDS CLARIFICATION: is a product that is *not visible individually*
+  reachable by direct link (the issue's reading, above), or does it have no own page at all and is reachable
+  only through its parent (Magento)? — D-3]
 - **FR-023**: A publication window MUST be an optional start, an optional end, or both, per channel; the
   start MUST be before the end. Outside the window the product MUST NOT be effectively available in that
   channel, and the transition MUST take effect without operator action and within the time stated in
@@ -499,7 +567,8 @@ the minimum, the return eligibility and the displayed price mode.
 #### Bulk edit
 
 - **FR-050**: The product list MUST offer a bulk action that sets, or resets to inherited, status and display
-  visibility at one chosen scope for the selected products.
+  visibility at one chosen scope for the selected products. It covers those two fields only; bulk edit of
+  the other channel-scoped fields is a follow-up (clarify 2026-10-21, D-4; *Out of Scope*).
 - **FR-051**: Products not valid for the chosen scope MUST be skipped and reported per product.
 - **FR-052**: The bulk action MUST run on the existing durable bulk-operation path and be audited per product
   and reversible as a whole (FR-080, FR-081).
@@ -508,25 +577,28 @@ the minimum, the return eligibility and the displayed price mode.
 
 - **FR-060**: When a product becomes effectively "on" at (C, L) through an operator action, the system MUST
   check that name, URL key and every required language-scoped attribute resolve to a non-empty value at
-  (C, L), and MUST [NEEDS CLARIFICATION: gate behaviour — warn and save; refuse the save; or a setting
-  choosing between warn and refuse (and its default and level: global or per channel)?]. Missing fields MUST
-  be named.
+  (C, L), and MUST name every missing field. What follows is decided by one **platform-level setting**
+  (one value for the whole platform, not per channel) with two values: *warn* — the change is saved and the
+  missing fields are shown — and *refuse* — the change is not saved. The default MUST be *warn*. The setting
+  MUST have Polish and English labels (FR-043).
 - **FR-061**: The gate MUST apply equally to single edits, bulk edits and changes of the global switch that
-  turn on scopes without overrides, and MUST NOT apply to imports and PIM synchronisation unless decided in
-  clarify (assumption A-6).
+  turn on scopes without overrides, and MUST NOT apply to imports and PIM synchronisation (A-6, confirmed in
+  clarify 2026-10-21).
 
 #### URL key and redirects
 
 - **FR-070**: The URL key MUST be settable per language (for every channel) and overridable per
-  channel × language, and MUST be unique within [NEEDS CLARIFICATION: URL key uniqueness and redirect
-  rules — unique per (channel, language), per language across all channels, or globally as today; how long
-  old URLs redirect (forever vs a retention period); and whether a key that is another product's redirect
-  source may be reused (taking the URL over) or is refused?].
+  channel × language, and its **effective** value MUST be unique per (channel, language): no two products
+  may resolve to the same key at the same (C, L). A save that would break this MUST be refused naming the
+  conflicting product. The same key MAY be used by different products in different channels or languages.
 - **FR-071**: A request at (C, L) for a key that belongs to the same product in another language of C MUST
   redirect permanently to the (C, L) URL; a key of no product MUST answer not-found.
 - **FR-072**: Changing a URL key MUST keep the previous URL as a permanent redirect to the current URL in
-  the same (C, L); redirects MUST never chain (an old URL always points directly at the current one), and
-  MUST be removed when the product is deleted.
+  the same (C, L); redirects MUST never chain (an old URL always points directly at the current one), MUST
+  have no expiry (they last until deleted), and MUST be removed when the product is deleted. The operator
+  MUST be able to delete an individual redirect. A new key equal to **another** product's old, redirecting
+  key in the same (C, L) MUST be accepted only after an explicit confirmation that names the product losing
+  the redirect; on confirmation that redirect is removed and the key is saved.
 - **FR-073**: Existing slugs MUST become the global URL key at deployment, so every existing URL keeps
   resolving unchanged (SC-001).
 - **FR-074**: The sitemap and every alternate-language link MUST use the effective key per (C, L).
@@ -536,7 +608,8 @@ the minimum, the return eligibility and the displayed price mode.
 - **FR-075**: SEO meta title, description and OG fields MUST be settable per channel × language with the
   chain of FR-008; existing per-language overrides MUST become language-scope values without change.
 - **FR-076**: Gallery image roles (base, small, thumbnail) and "hide image" MUST be settable per channel;
-  a hidden image MUST NOT be served in that channel; role uniqueness MUST hold per channel.
+  a hidden image MUST NOT be served in that channel; role uniqueness MUST hold per channel. The set of
+  images itself MUST stay global — a channel cannot add an image of its own (clarify 2026-10-21, D-6).
 - **FR-077**: Gallery label / alt text MUST be translatable per language.
 - **FR-078**: Attachment name and description MUST be translatable per language, and an attachment MUST be
   hideable per channel; a hidden attachment MUST NOT be listed or downloadable from the product page in
@@ -548,7 +621,8 @@ the minimum, the return eligibility and the displayed price mode.
 
 - **FR-080**: Every write of a scoped value (set, change, use inherited) MUST run as an audited Command
   carrying the product, the field, the scope and the before / after value (Constitution XIII), with exactly
-  one audit entry per product per command.
+  one audit entry per product per command. Deleting a URL redirect and taking over another product's
+  redirecting key (FR-072) are admin writes and MUST run the same way.
 - **FR-081**: Single and bulk scoped writes MUST be reversible with the standard undo (all-or-nothing per
   product, conflict report for products changed since).
 - **FR-082**: Status, display-visibility, window, audience and URL-key changes MUST emit domain events so
@@ -570,9 +644,13 @@ the minimum, the return eligibility and the displayed price mode.
 
 - **FR-100**: Minimum order quantity and "returnable" MUST be settable per channel, inheriting the global
   value, and every feature-155 check MUST use the value of the basket's or order's channel.
-- **FR-101**: The price display mode chain MUST gain a channel-level product override, with precedence
-  (most specific first): organization → product × channel → product → category → global default (interim
-  reading; see *Deferred to clarify* D-5).
+- **FR-101**: The price display mode chain MUST gain a channel-level product override. Today's chain, first
+  match wins, is **product → category → organization → settings defaults**
+  (`packages/modules/price_lists/src/backend/services/display-mode-resolver.ts`) — a product override beats
+  an organization override. [NEEDS CLARIFICATION: where does product × channel sit — (A) product × channel →
+  product → category → organization → settings, which extends today's order unchanged; or (B) organization →
+  product × channel → product → category → settings, which inverts today's order by making organization win
+  over product? — D-5]
 
 #### Deployment and module activation
 
@@ -601,7 +679,7 @@ the minimum, the return eligibility and the displayed price mode.
 - **SC-001**: After deployment, for every channel and language, the set of products listed, searchable,
   reachable by URL (all existing URLs) and in the sitemap and feeds is identical to the set before
   deployment, except that products that are not "on" (today: `draft`) are no longer reachable by URL
-  (FR-005; the final wording follows the FR-010 / D-1 decision).
+  (FR-005; FR-010 is decided, the final wording follows the D-1 decision on preview reachability).
 - **SC-002**: An operator can take a product live in one market and offline in another in under one minute
   from the product editor, without touching other markets.
 - **SC-003**: For any product, an operator can tell from one screen why it is or is not live in every
@@ -617,7 +695,9 @@ the minimum, the return eligibility and the displayed price mode.
 
 ## Assumptions
 
-- **A-1**: #384 lands first; the storefront already resolves name / description overrides per (C, L).
+- **A-1**: #384 lands first; the storefront already resolves name / description overrides per (C, L) on
+  the surfaces #384 covers, including search-result card names. The places #384 leaves on the baseline (see
+  *Current state*) are this spec's FR-017.
 - **A-2**: The language-only scope for fields that already have one (name, description, language-scoped
   attributes) is the existing per-language baseline; no new storage is implied by this spec.
 - **A-3**: A buyer's language at (C, L) is the request language resolved today; an unsupported language
@@ -625,34 +705,36 @@ the minimum, the return eligibility and the displayed price mode.
 - **A-4**: The publication window does not change the stored status; it is a separate condition.
 - **A-5**: Prices, promotions and warehouses are already channel-aware and are untouched.
 - **A-6**: The completeness gate (US6) applies to operator actions in the admin, not to imports or PIM
-  synchronisation, unless clarify decides otherwise.
+  synchronisation (confirmed in clarify 2026-10-21).
 - **A-7**: Scoped values are edited by operators with the existing product-edit permission (FR-084).
 - **A-8**: Out-of-audience and out-of-channel answers keep their current not-found semantics (#227).
 - **A-9**: Owner decision 3 (no warning about overrides on a global change) is extended from status to
-  every scoped field; clarify may restrict it to status.
+  every scoped field; clarify may restrict it to status. **Open** — the owner asked for more context
+  (FR-013).
 
 ### Deferred to `/speckit.clarify` (not decided; interim reading only)
 
-These have a reasonable interim reading taken from the issue's table, used above so the spec is complete,
-but they are **open** and the owner decides them in clarify:
+These carry an interim reading used above so the spec is complete, but they are **open** and the owner
+decides them in clarify. D-2, D-4 and D-6 were decided on 2026-10-21 (see *Clarifications*) and are no
+longer listed.
 
-- **D-1**: Whether `draft` survives as a status value, and whether a never-published product stays
-  reachable by direct link (e.g. as a preview) or answers not-found like any unavailable product (tied to
-  FR-005 and FR-010).
-- **D-2**: Which fields really need channel × language rather than channel only — notably display
-  visibility (interim: C×L) and audience / window (interim: channel only) (FR-009).
+- **D-1**: Whether a never-published (`draft`) product stays reachable by direct link (e.g. as a preview) or
+  answers not-found like any unavailable product (FR-005; interim: not-found). That `draft` survives as a
+  status value was decided on 2026-10-21 (FR-010).
 - **D-3**: "Not visible individually" semantics — reachable by direct link (issue) or not reachable at all
-  except through its parent (Magento) (FR-022).
-- **D-4**: Whether bulk edit (US5) also covers the other scoped fields (window, audience, MOQ) or only status
-  and display visibility.
-- **D-5**: Price display mode precedence between organization and product × channel (FR-101).
-- **D-6**: Whether gallery images themselves (not only roles / hide) can differ per channel, and the
-  relation to per-variant galleries (#377).
+  except through its parent (Magento) (FR-022). Open; the owner asked for more context.
+- **D-5**: Where the product × channel step sits in the price display mode chain, given today's order
+  product → category → organization → settings (FR-101): (A) first, extending today's order; (B) after
+  organization, which inverts today's product-over-organization precedence. Open; the owner asked for more
+  context.
 
 ## Out of Scope
 
 - #384 (storefront honouring existing overrides) — separate fix, a dependency.
-- Per-variant galleries (#377), beyond not contradicting them.
+- Per-variant galleries (#377), beyond not contradicting them; channel-specific image sets (the image set
+  stays global, FR-076).
+- Bulk edit of channel-scoped fields other than status and display visibility — publication window, audience,
+  minimum order quantity, returnable, price display mode — a follow-up (FR-050).
 - Making catalogue bulk writes other than those of US5 audited (#241).
 - Per-channel prices, promotions, warehouses, stock, SKU, product type or structure.
 - A Magento-style "store view" entity; the two existing axes are kept.
@@ -661,7 +743,7 @@ but they are **open** and the owner decides them in clarify:
 ## Constitution constraints
 
 - **I / XVII** — catalogue owns the scoped product data; `seo`, `search`, `product_feeds`, `quick_order`,
-  `comparisons`, `cms`, `carts` consume effective availability through catalogue's exported surface; each
+  `comparisons`, `cms`, `carts`, `quote_requests` consume effective availability through catalogue's exported surface; each
   consumer's surface disappears when its module is off, the data persists.
 - **XI** — new data platform-global; audience evaluated at read time; out-of-scope answers indistinguishable
   from not-found.
