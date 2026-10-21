@@ -11,11 +11,17 @@ productUrlKeysResponseSchema = z.object({ data: z.object({
   languageKeys: z.array(z.object({ languageCode, key })),
   channelKeys: z.array(z.object({ channelId, languageCode, key, orphaned: z.boolean() })),
   effective: z.array(z.object({ channelId, languageCode, key, source: z.enum(['channel_language', 'language', 'global']), url: z.string() })),
-  redirects: z.array(z.object({ id: uuid, languageCode: z.string().nullable(), key, createdAt: iso })),
+  redirects: z.array(z.object({ id: uuid, languageCode: z.string().nullable(), key, createdAt: iso })).optional(),
 })})
 ```
 
-`url` is the storefront path as emitted (R12): `/p/<key>` plus `?lang=<L>` when L ≠ channel default.
+`redirects` is **omitted** when `seo` is not effectively present (Q-C, Constitution XVII); the admin renders
+the redirect list only when the field is present. The takeover confirmation (§2) is unaffected.
+
+`url` is the storefront path as emitted (R12): `productPath({ key, languageCode, channelDefaultLanguage })`
+from `product-url-keys.ts` — `/p/<key>` plus `?lang=<L>` when L ≠ channel default. Every emitter (this
+field, the resolve answer's redirect target, canonical, alternates, sitemap) calls that one helper, so the
+language-path-prefix issue (Q-B → C) changes one function.
 
 ## 2. Admin — write — `PUT /api/v1/admin/catalog/products/:id/url-keys` (`catalog:write`)
 
@@ -29,8 +35,9 @@ putProductUrlKeysRequestSchema = z.object({
 ```
 
 One Command `product.url_keys.update`, one audit entry (before/after keys and every redirect inserted or
-deleted, including another product's redirect taken over — FR-080). Undo restores keys and redirects,
-reporting a conflict when a restored key has since been taken.
+deleted, including another product's redirect taken over — FR-080). The audit `before` holds every key and
+redirect row touched, so re-applying it restores them; a re-applied key that has since been taken is refused
+with `URL_KEY_TAKEN` like any other write (R29).
 
 Refusals (nothing saved):
 - `409 URL_KEY_TAKEN` `details: { conflicts: [{ languageCode: string | null, key, heldByProductId, heldByProductName }] }`.
@@ -43,7 +50,8 @@ Emits `product.updated.v1` `changedFields: ['urlKeys']`.
 
 ## 3. Admin — delete a redirect — `DELETE /api/v1/admin/catalog/products/:id/url-redirects/:redirectId` (`catalog:write`)
 
-Command `product.url_redirect.delete`, audited, undoable (refuses undo when the key has since been used).
+Command `product.url_redirect.delete`, audited with the deleted row as `before` (R29). Not gated on `seo`
+(writes never are), but no admin surface reaches it while `seo` is off (Q-C).
 `204`; `404 URL_REDIRECT_NOT_FOUND` when the row is not the product's.
 
 ## 4. Public — resolve — `GET /api/v1/catalog/products/resolve/:key` (storefront, channel resolved by middleware)
@@ -61,9 +69,9 @@ productKeyResolutionSchema = z.discriminatedUnion('kind', [
   product it resolves to is not effectively available at (C, L, buyer, now), or the key is a redirect and
   `seo` is not effectively present (FR-111).
 - `410 PRODUCT_ARCHIVED` — the key (current or redirect) resolves to an archived product (edge case).
-- The existing `GET /api/v1/catalog/products/:idOrSlug` keeps answering ids and **current** keys at
-  (C, L) (so existing callers keep working) and never answers a redirect; the storefront PDP switches to
-  `resolve` then reads by id.
+- The existing `GET /api/v1/catalog/products/:idOrSlug` answers, in order, an id, a **current** key at
+  (C, L), else a product's **global key** (`products.slug`) — an API handle CMS product blocks store
+  (R28) — and never answers a redirect; the storefront PDP switches to `resolve` then reads by id.
 
 ## 5. Connectors and import — `catalogProductScopeWritePort.applyScopes(…).urlKeys`
 
@@ -73,7 +81,9 @@ Never takes over, never asks; the product keeps its previous key at that scope (
 ## 6. Storefront
 
 - `storefront/app/(catalog)/p/[slug]/page.tsx`: resolve first; `kind: 'redirect'` → `permanentRedirect()`
-  to the emitted URL; 404/410 as today.
+  to `productPath(…)`; 404/410 as today. No cross-language rendering (Q-B option B rejected); a key without
+  `?lang` is resolved in `resolveScopeLanguage(channel, Accept-Language)` only — the accepted residual gap
+  of R12.
 - `generateMetadata`: `alternates.canonical` is the effective URL for (C, L); `alternates.languages` lists
   the effective URL per channel language where the product is available to the anonymous audience
   (FR-074).
