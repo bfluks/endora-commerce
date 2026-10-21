@@ -1,7 +1,7 @@
 # Tasks: product data scopes per sales channel and language
 
 **Feature**: `specs/162-product-data-scopes/` | **Issues**: #385, depends on #384
-**Input**: `spec.md` (clarify rounds 1–4), `plan.md`, `research.md` (R0–R28), `data-model.md`,
+**Input**: `spec.md` (clarify rounds 1–4), `plan.md`, `research.md` (R0–R29), `data-model.md`,
 `contracts/{product-scopes,admin-scopes-api,url-keys-and-redirects,consumers,seo-media-attachments,error-codes}.md`,
 `quickstart.md`. Measured on `origin/master` `aa6891d63`.
 
@@ -69,8 +69,8 @@ phase boundaries by the coordinator.
 | Stream | Branch | Phases | Owns (may edit freely) |
 | --- | --- | --- | --- |
 | **S1** backend availability | `feat/162-product-data-scopes` (primary checkout) | 1–12, 21, 22, 24, 25 | `packages/contracts/src/product-scopes.ts`; catalog scope entities/services/migrations (`product-channel-*`, `product-availability*`, `effective-value.sql.ts`, `scope-*`, `publication-window-sweep.ts`, media/attachment/packaging changes); consumer seams in `search`, `carts`, `orders`, `quote_requests`, `comparisons`, `shopping_lists`, `quick_order`, `product_feeds`, `import_export`; `backend/test/**` files it creates |
-| **S2** URL keys + SEO | `feat/162-product-data-scopes-urlkeys` | 16–19, 20 (backend half) | `packages/contracts/src/product-url-keys.ts`; catalog `url-key*.ts`, `product-url-*.entity.ts`, the `product_url_keys` migration, `routes.admin.url-keys.ts`, `routes.public.url-keys.ts`; everything under `packages/modules/seo/`; `storefront/app/(catalog)/p/[slug]/**`, `storefront/lib/api/catalog.ts` |
-| **S3** admin UI | `feat/162-product-data-scopes-admin` | 13–15, 20 (UI half), 23 | `packages/modules/catalog/src/admin/**`, `packages/modules/seo/src/admin/**` (Phase 20 only, after S2 hands `seo` back), `admin/test/modules/catalog/**` |
+| **S2** URL keys + SEO | `feat/162-product-data-scopes-urlkeys` | 16–19 | `packages/contracts/src/product-url-keys.ts`; catalog `url-key*.ts`, `product-url-*.entity.ts`, the `product_url_keys` migration, `routes.admin.url-keys.ts`, `routes.public.url-keys.ts`; everything under `packages/modules/seo/`; `storefront/app/(catalog)/p/[slug]/**`, `storefront/lib/api/catalog.ts` |
+| **S3** admin UI | `feat/162-product-data-scopes-admin` | 13–15, 20, 23 | `packages/modules/catalog/src/admin/**`, `packages/modules/seo/src/admin/**` (Phase 20 only, after S2 hands `seo` back), `admin/test/modules/catalog/**` |
 
 **Single-owner shared files — S1 only.** `packages/contracts/src/index.ts`, `errors.ts`, `catalog.ts`;
 `packages/modules/catalog/src/manifest.ts`, `src/backend/index.ts`, `routes.admin.ts`, `routes.public.ts`;
@@ -91,13 +91,13 @@ cherry-picked — S1 regenerates them on its tip and commits the result.
 | — | **Review checkpoint A** (code review + security review, parallel) | | | |
 | B | 5–8 | S1 | backend | ⛔384 merged, branch rebased |
 | — | **Review checkpoint B** | | | |
-| C | 9–12 | S1 | backend | Block B |
+| C | 9–12 | S1 | backend | Block B, **and P16 applied on S1** (T069 reads `product_url_keys`); P12 also after P18 is applied (`catalog-query.service.ts` sequence) |
 | — | **Review checkpoint C** | | | |
-| D | 13–15 | S3 | admin UI | P13 after Block A; P14 after P9; P15 after P10–P11 |
+| D | 13–15 | S3 | admin UI | P13 after Block A; P14 after P9 (T093 needs T070, T095a–b need T071); P15 after P10–P11 |
 | — | **Review checkpoint D** (code review + designer UX audit) | | | |
 | E | 16–19 | S2 | backend + storefront | P16 after Block A; P17–P19 after **Block B complete** (⛔384; P8 and P17 both edit `catalog-query.service.ts`, P7 and P17 both edit `sitemap-generator.service.ts`) |
 | — | **Review checkpoint E** | | | |
-| F | 20–23 | S2 (20 backend), S3 (20 UI, 23), S1 (21, 22) | mixed | P21–P22 after Block B; P20 after P17–P18 |
+| F | 20–23 | S3 (20, 23), S1 (21, 22) | mixed | P21–P22 after Block B **and P18 applied on S1** (P21 hosts the SEO overview tasks T118a/T118c, and `catalog-query.service.ts` runs in sequence); P20 after P17–P18; P23 after P21–P22 |
 | — | **Review checkpoint F** (backend: 21–22; UI: 20, 23 with designer) | | | |
 | G | 24–25 | S1 | cross-cutting | every block merged |
 | — | **Final review pack** + green remote CI; coordinator re-asks Q1 (T156) | | | |
@@ -115,6 +115,8 @@ P8 ─► P10 (bulk) ─► P11 (gate) ─► P15 (bulk + gate UI)              
 P8 ─► P12 (order rules per channel)
 P8 ─► P21 (media) ─► P22 (attachments, packaging) ─► P23 (media UI)                             [S3]
 P17, P18 ─► P20 (URL-key + SEO UI)
+P18 ─► P21 (SEO in the overview: T118a/T118c)
+P9 ─► P14 (attribute scope-flag preview UI: T095a/T095b)
 all ─► P24 (off-state, parity, docs, changesets) ─► P25 (final gate)
 ```
 
@@ -145,9 +147,9 @@ consumer still compiles.
 
 - [ ] T005 [P] [S1] RED unit test of the rule — every row of `data-model.md` §4; `inactive` at C/C×L is off and never "gone" (FR-010); inclusive window edges to the millisecond (K4, US2 #5); overridden open window beats a bounded global one; audience override replaces the whole rule (US3 #3); orphans ignored (non-member, language not offered); `effectiveOrderRules`; `pairsTurningOn` (global switch, channel row covering all languages, C×L row, non-members ignored — N3) — `packages/contracts/src/product-scopes.test.ts`
 - [ ] T006 [P] [S1] RED unit test of `resolveScopeLanguage` — exact, case-insensitive, base-language (`pl` → `pl-PL`), unknown → channel default, `null` → default (A-3, R7) — same file
-- [ ] T007 [P] [S1] RED schema tests — `patchProductScopesRequestSchema` (absent vs `null`, window `from < until` refused at service not schema, MOQ range), `productScopesResponseSchema`, `scopeOverviewResponseSchema`, `bulkUpdateFieldsObject.scopedStatus` (refine counts it; combined with `status` refused), `productKeyResolutionSchema`, `putProductUrlKeysRequestSchema` — `packages/contracts/src/product-scopes-shapes.test.ts`, `packages/contracts/src/product-url-keys.test.ts`
+- [ ] T007 [P] [S1] RED schema tests — `patchProductScopesRequestSchema` (absent vs `null`, window `from < until` refused at service not schema, MOQ range), `productScopesResponseSchema`, `scopeOverviewResponseSchema`, `bulkUpdateFieldsObject.scopedStatus` (refine counts it; combined with `status` refused), `productKeyResolutionSchema`, `putProductUrlKeysRequestSchema`; **`productPath({ key, languageCode, channelDefaultLanguage })`** — `/p/<key>` for the default language, `/p/<key>?lang=<L>` otherwise, key URL-encoded, case of L preserved (D7, Q-B: the one URL seam) — `packages/contracts/src/product-scopes-shapes.test.ts`, `packages/contracts/src/product-url-keys.test.ts`
 - [ ] T008 [S1] Implement `product-scopes.ts` per `contracts/product-scopes.md` §1–§3 and `admin-scopes-api.md` (shapes), incl. `CatalogProductAvailabilityPort`, `CatalogProductScopeWritePort` types — `packages/contracts/src/product-scopes.ts`
-- [ ] T009 [S1] Create `product-url-keys.ts` with the shapes of `contracts/url-keys-and-redirects.md` §1–§5 and `CatalogProductUrlKeyReadPort` (S2 owns the file from Phase 16 on) — `packages/contracts/src/product-url-keys.ts`
+- [ ] T009 [S1] Create `product-url-keys.ts` with the shapes of `contracts/url-keys-and-redirects.md` §1–§5, `CatalogProductUrlKeyReadPort` and the pure `productPath()` helper — the **only** place a product URL is composed; storefront, `seo`'s sitemap and catalog's admin/resolve answers import it, so the owner's later language-path-prefix issue edits this function alone (S2 owns the file from Phase 16 on) — `packages/contracts/src/product-url-keys.ts`
 - [ ] T010 [S1] Additive edits: bulk `scopedStatus` + reasons `scope_invalid`, `completeness_gate` (`catalog.ts:791`, `:817`); `CatalogProductRecord.publishFrom?/publishUntil?` (optional, permanently — fixtures build record literals); `SeoProductMetaPort` in `seo.ts`; barrel exports — `packages/contracts/src/{catalog,seo,index}.ts`
 - [ ] T011 [S1] Mint `SCOPE_INVALID`, `SCOPE_INCOMPLETE`, `URL_KEY_TAKEN`, `URL_KEY_REDIRECT_TAKEOVER_REQUIRED`, `URL_REDIRECT_NOT_FOUND` in one commit per `contracts/error-codes.md` (ERROR_CODES, `MINTED_ERROR_CODES`, catalog manifest `errorCodes`, `errors.<CODE>` en+pl, `composer:generate` + Polish module-reference refresh) — `packages/contracts/src/errors.ts`, `backend/test/fixtures/error-code-routing/reference-ledgers.ts`, `packages/modules/catalog/src/manifest.ts`, `packages/modules/catalog/i18n/{en,pl}.json`
 - [ ] T012 [S1] Changeset: `@endora-commerce/contracts` `minor` (new exports `product-scopes`, `product-url-keys`, `SeoProductMetaPort`) — `.changeset/162-product-scopes-contracts.md`
@@ -185,12 +187,12 @@ exist, registered, with entities (data-model §1–§3).
 undoable, evented. No read path changes yet.
 
 - [ ] T021 [P] [US1] [S1] RED unit test of `ProductScopesService.apply` — upsert / inherit (`null` deletes; all-inherit row deleted, FR-012); FR-014 refusals with `SCOPE_INVALID` reasons; removing an orphaned override always allowed (FR-015); window `from >= until` → `VALIDATION_FAILED`; audience whole-rule (C4a) and `nonMemberOrganizationIds` computed (C4b); global change never touches overrides (FR-013) — `packages/modules/catalog/src/backend/services/product-scopes.service.test.ts`
-- [ ] T022 [P] [US1] [PG] [S1] RED contract test of both routes: `catalog:read` / `catalog:write` gates (401/403 before validation), one audit row per request with before/after per scope row (FR-080), undo restores and reports conflict (FR-081), `product.updated.v1` with `changedFields` `scopedStatus` / `publicationWindow` / `audience` / `orderRules` after commit (FR-082), global status `inactive` still archives once and a scope `inactive` never does (FR-010) — `backend/test/contract/catalog/product-scopes-api.test.ts`
+- [ ] T022 [P] [US1] [PG] [S1] RED contract test of both routes: `catalog:read` / `catalog:write` gates (401/403 before validation), one audit row per request whose before/after hold the complete projection of every touched scope row — re-sending `before` through the route restores the previous state exactly (FR-080, FR-081 interim per R29 / Q-D), `product.updated.v1` with `changedFields` `scopedStatus` / `publicationWindow` / `audience` / `orderRules` after commit (FR-082), global status `inactive` still archives once and a scope `inactive` never does (FR-010) — `backend/test/contract/catalog/product-scopes-api.test.ts`
 - [ ] T023 [US1] [S1] Implement `ProductScopesService` (Command `product.scopes.update`, `objectType: 'product'`, membership via `SalesChannelMembershipPort.listChannelIdsForEntity`, channel languages from `SalesChannel`) — `packages/modules/catalog/src/backend/services/product-scopes.service.ts`
 - [ ] T024 [US1] [S1] Routes `GET|PATCH /api/v1/admin/catalog/products/:id/scopes` (`requireAdmin` as `preHandler`) — `packages/modules/catalog/src/backend/routes.admin.ts`
 - [ ] T025 [US1] [S1] Compose the service in the container; emit events after commit — `packages/modules/catalog/src/backend/index.ts`
 - [ ] T026 [US1] [S1] `PATCH /products/:id` accepts the global window (`publishFrom/publishUntil`) through the existing `product.update` Command — `catalog-admin.service.ts`, `packages/contracts/src/catalog.ts` (update schema, additive)
-- [ ] T027 [US1] [S1] Audit reference resolver labels the new action (`audit-references.ts`) and the undo handler is registered for `product.scopes.update`
+- [ ] T027 [US1] [S1] Audit reference resolver labels the new action (`audit-references.ts`). No undo handler: single-write undo machinery does not exist in the tree (R29); if the owner answers Q-D (b), a platform phase is inserted before this one
 - [ ] T028 [S1] Delete propagation: product soft-delete leaves scope rows (edge case) — assert in T022, no code expected
 - [ ] T029 [S1] Build `mod-catalog`; type-check
 
@@ -213,13 +215,13 @@ undoable, evented. No read path changes yet.
 **Goal**: FR-001/002/005/007/016 on catalog's listing, facets and PDP; the port published.
 
 - [ ] T030 [P] [US1] [PG] [S1] RED parity test over the generated grid of R5 (status G/C/C×L × window none/before/at-start/inside/at-end/after × audience override × anonymous/org X/org Y) — SQL id set equals `isProductEffectivelyAvailable` — `backend/test/integration/catalog/availability-parity.test.ts`
-- [ ] T031 [P] [US1] [PG] [S1] RED matrix test (Independent Test of US1): one product, two channels × two languages, overrides at C and C×L → listing, facets, PDP per pair; "use inherited"; a `draft` member answers 404 by slug (FR-005); archived answers 410; unresolved channel matches nothing (FR-007) — `backend/test/contract/catalog/scoped-availability-matrix.test.ts`
+- [ ] T031 [P] [US1] [PG] [S1] RED matrix test (Independent Test of US1): one product, two channels × two languages, overrides at C and C×L → listing, facets, PDP, **quick search** (`GET …/products/quick-search`), **links/related** of a visible product naming the off one, and **bundle configuration** with an off child, per pair; "use inherited"; a `draft` member answers 404 by slug (FR-005); archived answers 410; unresolved channel matches nothing (FR-007) — `backend/test/contract/catalog/scoped-availability-matrix.test.ts`
 - [ ] T032 [US1] [S1] `availabilityCondition` as a description (no `raw()` here) per `contracts/product-scopes.md` §4 — `packages/modules/catalog/src/backend/services/product-availability.sql.ts`
 - [ ] T033 [US1] [S1] `ProductAvailabilityService` implementing `CatalogProductAvailabilityPort` (`filterAvailable`, `describeChannelAvailability`, `effectiveNames` stub → filled in P8, `effectiveOrderRules`); `providePort('catalogProductAvailabilityPort', …)` — `services/product-availability.service.ts`, `src/backend/index.ts`
 - [ ] T034 [US1] [S1] `listProducts` + both price paths: replace `status: 'active'` and the membership/audience conditions in `#listingNarrowing` with `availabilityCondition`; `#passesPageFilters` evaluates the pure rule over the page's scope rows (one batched read) — `catalog-query.service.ts` (`:661`, `#listingNarrowing`, `#passesPageFilters`, `#visibleProductsInOrder`)
 - [ ] T035 [US1] [S1] Facets (`:1840`) on the same condition — `catalog-query.service.ts`
 - [ ] T036 [US1] [S1] `getProductByIdOrSlug`: 410 iff archived; else 404 unless available at (C, `resolveScopeLanguage`) (FR-005) — `catalog-query.service.ts:1286`; the route passes the scope language — `routes.public.ts` `readContext`
-- [ ] T037 [US1] [S1] Links/related and bundle-configuration validate apply the port to linked/child ids (edge case *child off*) — `product-link.service.ts:360`, `bundle.service.ts`
+- [ ] T037 [US1] [S1] Links/related and bundle-configuration validate apply the port to linked/child ids (edge case *child off*); quick search replaces its own `p.status = 'active'` + audience predicate with `availabilityCondition` (availability only — its effective names are T062) — `product-link.service.ts:360`, `bundle.service.ts`, `catalog-quick-search.service.ts:118`
 - [ ] T038 [S1] The existing `public-read-visibility.test.ts`, `products-status-inactive.test.ts`, `product-acquisition-visibility.test.ts` still pass or are updated **only** where FR-005 changes the answer (draft by slug → 404); note each change in the PR
 
 **Verification**:
@@ -241,6 +243,7 @@ undoable, evented. No read path changes yet.
 - [ ] T043 [US1] [S1] orders placement + preview: `placement-minimums.ts:48` and `preview-line-availability.ts` treat port-excluded as unavailable; reorder unchanged (exempt) — `packages/modules/orders/src/backend/services/`
 - [ ] T044 [US1] [S1] quote_requests: `rfq-service.ts:223-225`, `:758` buyer refusal; `createOnBehalf` warnings; contract shape `warnings` additive — `packages/modules/quote_requests/src/backend/services/rfq-service.ts`, `packages/contracts/src/quote-requests.ts`
 - [ ] T045 [US1] [S1] comparisons (`:374`, `:530`, `:617`), shopping_lists (`:236-249`, `:462`), quick_order (`catalog-lookup.ts:56`) — swap to the port, keep single not-found
+- [ ] T045a [P] [US1] [PG] [S1] Verify test (consumers.md row 19): a CMS product block — the `products-by-slugs` and category-list requests `storefront/lib/page-builder/catalog-block-data.ts` makes (`GET /api/v1/catalog/products?categorySlug=&limit=`, `GET /api/v1/catalog/products/:slug`) — omits a product off at (C, L) and shows it where on; `catalog-block-data.ts` and `packages/cms-components/src/utils/catalog-block-data.ts` carry no predicate of their own (grep, note in the PR). Expected green after P5; red means a seam P5 missed — fix it in this phase — `backend/test/contract/cms/product-block-scoped-availability.test.ts`
 - [ ] T046 [S1] Each module's manifest already lists `catalog`; `check:port-dependencies` green; changesets for touched packages (`patch`)
 - [ ] T047 [S1] Grep `backend/test/**` for `outOfRequestChannel` / `productIdsInRequestChannel` expectations that changed meaning; update or justify (AGENTS.md trap: derived expectations)
 
@@ -250,6 +253,7 @@ undoable, evented. No read path changes yet.
 - `[PG] backend/test/integration/comparisons/scoped-availability.test.ts`
 - `[PG] backend/test/integration/shopping_lists/scoped-availability.test.ts`
 - `[PG] backend/test/integration/quick_order/scoped-availability.test.ts`
+- `[PG] backend/test/contract/cms/product-block-scoped-availability.test.ts`
 - `[PG] backend/test/contract/catalog/product-acquisition-visibility.test.ts`
 - `pnpm --filter @endora-commerce/mod-carts run typecheck`
 - `pnpm --filter @endora-commerce/mod-orders run typecheck`
@@ -332,7 +336,7 @@ undoable, evented. No read path changes yet.
 
 - [ ] T067 [P] [US4] [PG] [S1] RED overview: cells name overridden fields and the effective source (cell/channel/language/global); channel rows and language columns; orphans (non-member, language removed, attribute scope narrowed); product in no channel → only global and language scopes (US4 #4); `catalog:read` gets it, writes need `catalog:write` (US4 #3) — `backend/test/contract/catalog/scope-overview.test.ts`
 - [ ] T068 [P] [PG] [S1] RED FR-090 preview counts orphaned overrides per channel; widening reports 0; the attribute update still retains rows — `backend/test/contract/catalog/attribute-scope-change-preview.test.ts`
-- [ ] T069 [US4] [S1] `ScopeOverviewService` over scope rows, `product_value_overrides` and URL keys (P16 is merged before Block C — see the chain); media/attachment fields join in T134a/T139a and SEO in T118a — `services/scope-overview.service.ts`
+- [ ] T069 [US4] [S1] `ScopeOverviewService` over scope rows, `product_value_overrides` and URL keys (P16 is merged before Block C — see the chain); media/attachment fields join in T134a–T134b / T139a–T139b and SEO in T118a / T118c (all Phase 21–22, S1) — `services/scope-overview.service.ts`
 - [ ] T070 [US4] [S1] Route `GET …/products/:id/scope-overview` — `routes.admin.ts`
 - [ ] T071 [S1] Preview route `GET …/attributes/:idOrKey/scope-change-preview` — `routes.admin.ts`, `attribute-set.service.ts` or a new `attribute-scope-preview.ts`
 - *T072 moved to Phase 18 as T118b — a port must be declared in the phase that provides it, or `check:port-dependencies` reports a port resolved and registered by nobody.*
@@ -350,7 +354,9 @@ undoable, evented. No read path changes yet.
 - [ ] T076 [S1] `bulk-operation-undo.contract.test.ts` and `products-bulk-update*.test.ts` stay green (no behaviour change for existing fields)
 
 **Verification**:
-- `[PG]` T073; `[PG] backend/test/contract/catalog/bulk-operation-undo.contract.test.ts`; `[PG] backend/test/contract/catalog/products-bulk-update.test.ts`
+- `[PG] backend/test/contract/catalog/products-bulk-scoped-status.test.ts`
+- `[PG] backend/test/contract/catalog/bulk-operation-undo.contract.test.ts`
+- `[PG] backend/test/contract/catalog/products-bulk-update.test.ts`
 - `pnpm --filter @endora-commerce/mod-catalog run typecheck`
 
 ### Phase 11: [backend] Completeness gate (US6, FR-060, FR-061)
@@ -363,7 +369,7 @@ undoable, evented. No read path changes yet.
 
 **Verification**:
 - `pnpm --filter @endora-commerce/mod-catalog exec vitest run src/backend/services/scope-completeness.test.ts`
-- `[PG]` T078
+- `[PG] backend/test/contract/catalog/scope-completeness-gate.test.ts`
 - `pnpm --filter backend exec vitest run --config vitest.unit.config.ts test/unit/_i18n/registered-bundles-shape.test.ts`
 
 ### Phase 12: [backend] ⛔384 Order rules per channel (US10, FR-100)
@@ -405,13 +411,19 @@ undoable, evented. No read path changes yet.
 - `pnpm --filter admin run typecheck && pnpm --filter backend run i18n:hardcoded`
 - `pnpm --filter backend exec vitest run --config vitest.unit.config.ts test/unit/_i18n/registered-bundles-shape.test.ts`
 
-### Phase 14: [admin UI] Scope overview (US4) — after Phase 9
+### Phase 14: [admin UI] Scope overview (US4) and attribute scope-flag preview (FR-090) — after Phase 9
 
 - [ ] T093 [P] [US4] [S3] RED: matrix renders cells/rows/columns per the response; source per cell; orphans with a warning and delete; "reset to inherited" calls the owning endpoint with `null` for one field only (US4 #2); read-only for `catalog:read` (US4 #3); no channels → global + language only (US4 #4); keyboard navigation and accessible names (WCAG 2.2 AA, `ux-laws`) — `admin/test/modules/catalog/product-scope-overview.test.tsx`
 - [ ] T094 [US4] [S3] `ProductScopeOverview.tsx` as a product-editor tab — `src/admin/components/ProductScopeOverview.tsx`, `ProductEditor.tsx`
-- [ ] T095 [S3] i18n keys (handover)
+- [ ] T095a [P] [S3] RED (FR-090, analyze H2): the attribute edit form shows `channelScoped` / `languageScoped` for user-defined attributes (system attributes read-only, `getAttributeScope`); saving a **narrowing** first calls `GET …/attributes/:key/scope-change-preview` and shows a confirmation with the orphaned-override count, total and per channel, before the PATCH is sent; cancel sends nothing; a widening saves without the preview; a 0-count narrowing still confirms ("no overrides affected"); read-only without `catalog:write`; accessible dialog (focus trap, labelled) — `admin/test/modules/catalog/AttributesManager.scope-flags.test.tsx`
+- [ ] T095b [S3] Scope flags + narrowing preview confirmation in the attribute edit form (admin-kit dialog primitives, IX) — `packages/modules/catalog/src/admin/pages/AttributesManager.tsx`
+- [ ] T095 [S3] i18n keys for T094 and T095b (handover)
 
-**Verification**: `pnpm --filter admin exec vitest run test/modules/catalog/product-scope-overview.test.tsx`; `pnpm --filter admin run typecheck`
+**Verification** (one invocation per line):
+- `pnpm --filter admin exec vitest run test/modules/catalog/product-scope-overview.test.tsx`
+- `pnpm --filter admin exec vitest run test/modules/catalog/AttributesManager.scope-flags.test.tsx test/modules/catalog/AttributesManager.test.tsx`
+- `pnpm --filter admin run typecheck`
+- `pnpm --filter backend run i18n:hardcoded`
 
 ### Phase 15: [admin UI] Bulk scoped status and the gate (US5, US6) — after Phases 10–11
 
@@ -435,8 +447,8 @@ undoable, evented. No read path changes yet.
 
 ### Phase 16: [backend] URL-key storage and writes (US7) — after Block A
 
-- [ ] T100 [P] [US7] [PG] [S2] RED uniqueness, every row of `data-model.md` §5's table incl. US7 #2, #5, #7, #8; global-key writes checked in every language; redirects never chain (US7 #4); self-redirect removed; FR-014 on C×L keys; orphaned C×L key keeps reserving; membership/channel-language changes never refuse (SC-008); **two-connection concurrency** — exactly one winner — `backend/test/integration/catalog/url-key-uniqueness.test.ts`
-- [ ] T101 [P] [US7] [PG] [S2] RED admin API: `GET|PUT …/url-keys`, `DELETE …/url-redirects/:id`; `URL_KEY_TAKEN` names the holder; takeover requires `confirmTakeover` and names the loser; audit + undo (conflict when the key was since taken); `changedFields: ['urlKeys']` — `backend/test/contract/catalog/url-keys-api.test.ts`
+- [ ] T100 [P] [US7] [PG] [S2] RED uniqueness, every row of `data-model.md` §5's table incl. US7 #2, #5, #7, #8; global-key writes checked in every language; redirects never chain (US7 #4); self-redirect removed; **H1**: a `NULL`-language redirect of Q requires takeover for an L key in every L, even where Q holds an L key, and the confirmation says it is removed in every language; P writing its own `NULL`-language redirect as an L key keeps the `NULL` row; P writing it back as its global key replaces it with `(L, k)` rows for every L where P holds a language or C×L key; FR-014 on C×L keys; orphaned C×L key keeps reserving; membership/channel-language changes never refuse (SC-008); **two-connection concurrency** — exactly one winner — `backend/test/integration/catalog/url-key-uniqueness.test.ts`
+- [ ] T101 [P] [US7] [PG] [S2] RED admin API: `GET|PUT …/url-keys`, `DELETE …/url-redirects/:id`; `URL_KEY_TAKEN` names the holder; takeover requires `confirmTakeover` and names the loser; one audit entry whose before/after hold every key and redirect row touched, and re-applying `before` restores them (`URL_KEY_TAKEN` if a key was since taken — R29); `DELETE …/url-redirects/:id` audits the deleted row; `GET` includes `redirects` while `seo` is present; `changedFields: ['urlKeys']` — `backend/test/contract/catalog/url-keys-api.test.ts`
 - [ ] T102 [S2] Migration `--module catalog --name product_url_keys`; entities `ProductUrlKey`, `ProductUrlRedirect` — `packages/modules/catalog/src/{migrations,backend/entities}/`
 - [ ] T103 [US7] [S2] `UrlKeyService` (advisory locks in sorted order, the closed check list, redirect bookkeeping, Commands `product.url_keys.update`, `product.url_redirect.delete`) — `services/url-key.service.ts`
 - [ ] T104 [US7] [S2] `allocateUniqueSlug` widened (A-11) and the product delete Command removes redirects (FR-072) — **handover commit** for `catalog-admin.service.ts`
@@ -451,13 +463,13 @@ undoable, evented. No read path changes yet.
 
 ### Phase 17: [backend + storefront] ⛔384 Key resolution, redirects, alternates (US7, FR-071–FR-074, FR-111) — after Block B
 
-- [ ] T107 [P] [US7] [PG] [S2] RED resolution at (C, L): current key serves; other current key of the product in L → redirect to effective key; redirect key → redirect at every (C, L) of its language (US7 #3); key of another language → 404 (K1, US7 #1); unavailable target → 404; archived → 410; global redirect (`NULL` language) only where the product has no L key (US7 #8) — `backend/test/integration/catalog/url-key-resolution.test.ts`
-- [ ] T108 [P] [US7] [PG] [S2] RED `seo` off: redirects answer 404, rows persist, writes still enforce the invariant; `seo` on again → served (FR-111) — `backend/test/integration/catalog/url-redirects-seo-off.test.ts`
-- [ ] T109 [P] [US7] [S2] RED storefront: PDP calls `resolve`, `permanentRedirect` on `kind: 'redirect'` with `?lang` rule; canonical + `alternates.languages` use effective keys (FR-074) — `storefront/test/catalog/pdp-redirect.test.ts`
-- [ ] T110 [US7] [S2] `UrlKeyResolutionService` + `GET /api/v1/catalog/products/resolve/:key` in `routes.public.url-keys.ts`; `getProductByIdOrSlug` accepts current keys at (C, L) only — `services/url-key-resolution.service.ts`, `catalog-query.service.ts` (PDP method only)
+- [ ] T107 [P] [US7] [PG] [S2] RED resolution at (C, L): current key serves; other current key of the product in L → redirect to effective key; redirect key → redirect at every (C, L) of its language (US7 #3); key of another language → 404 (K1, US7 #1); unavailable target → 404; archived → 410; **H1**: a `NULL`-language redirect resolves at every (C, L) — including an L in which its product **gained its first L key after** the redirect was written (seed: slug s0 → s1 writes `(NULL, s0)`, then the first L key; `s0` at (C, L) → 301 to the L key) — and a product's own current L key wins over its own `NULL` redirect with the same key; `GET /api/v1/catalog/products/:idOrSlug` by **global slug** still answers after the product gains an L key (CMS blocks, R28), and never answers a redirect; the resolve answer's target equals `productPath()` — `backend/test/integration/catalog/url-key-resolution.test.ts`
+- [ ] T108 [P] [US7] [PG] [S2] RED `seo` off: redirects answer 404, rows persist, writes still enforce the invariant (a takeover still requires confirmation naming the loser), `GET …/url-keys` omits `redirects` (Q-C); `seo` on again → served and listed (FR-111) — `backend/test/integration/catalog/url-redirects-seo-off.test.ts`
+- [ ] T109 [P] [US7] [S2] RED storefront: PDP calls `resolve`, `permanentRedirect` on `kind: 'redirect'` to `productPath()`; canonical + `alternates.languages` use effective keys through `productPath()` (FR-074); no URL is composed outside `productPath()` (a grep assertion over `storefront/app/(catalog)/p/` and `storefront/lib/api/catalog.ts` for `` `/p/${`` ) — `storefront/test/catalog/pdp-redirect.test.ts`
+- [ ] T110 [US7] [S2] `UrlKeyResolutionService` + `GET /api/v1/catalog/products/resolve/:key` in `routes.public.url-keys.ts` (resolution order of data-model §5, H1); `getProductByIdOrSlug` accepts an id, a current key at (C, L), else a global slug (R28) — never a redirect; `GET …/url-keys` omits `redirects` unless `effectiveState.isPresent('seo')`; admin `effective[].url` via `productPath()` — `services/url-key-resolution.service.ts`, `catalog-query.service.ts` (PDP method only)
 - [ ] T111 [US7] [S2] `ProductSummary.slug` = effective key at (C, L) on listing and PDP (R28); `catalogProductUrlKeyReadPort` provided
-- [ ] T112 [US7] [S2] Sitemap: one `<loc>` per live language with effective key and `?lang` rule — `seo/src/backend/services/sitemap-generator.service.ts`
-- [ ] T113 [US7] [S2] Storefront PDP + metadata — `storefront/app/(catalog)/p/[slug]/page.tsx`, `storefront/lib/api/catalog.ts`
+- [ ] T112 [US7] [S2] Sitemap: one `<loc>` per live language with effective key, composed by `productPath()` — `seo/src/backend/services/sitemap-generator.service.ts`
+- [ ] T113 [US7] [S2] Storefront PDP + metadata, every URL through `productPath()` — `storefront/app/(catalog)/p/[slug]/page.tsx`, `storefront/lib/api/catalog.ts`. *(Q-B is decided as option C, a separate issue: no cross-language rendering task belongs here; the path prefix later replaces `productPath()`.)*
 
 **Verification** (one invocation per line):
 - `[PG] backend/test/integration/catalog/url-key-resolution.test.ts`
@@ -468,22 +480,28 @@ undoable, evented. No read path changes yet.
 - `pnpm --filter @endora-commerce/mod-catalog run typecheck`
 - `pnpm --filter backend run check:storefront-indexability`
 
-### Phase 18: [backend] ⛔384 SEO per channel × language (US8, FR-075) — after Phase 17
+### Phase 18: [backend] ⛔384 SEO writes as Commands, then per channel × language (US8, FR-075, FR-080) — after Phase 17
 
-- [ ] T114 [P] [US8] [PG] [S2] RED schema + resolution: C×L → C → L → derived per field; existing rows are L scope unchanged (US8 #2 as stored data); unique per shape; `channelId` refused for non-product entity types — `backend/test/integration/seo/meta-channel-scope.test.ts`
-- [ ] T115 [P] [US8] [PG] [S2] RED PDP metadata per (C, L) (US8 #1) and derived metadata with `seo` off — `backend/test/contract/catalog/product-seo-scoped.test.ts`
+**Goal**: `seo`'s override writes leave the hand audit for the Command Bus (analyze C1, Constitution XIII)
+**before** the channel dimension is added; then C×L resolution and the PDP wiring.
+
+- [ ] T114a [P] [US8] [PG] [S2] RED (C1): `PUT /api/v1/admin/seo/meta/:entityType/:entityId` writes exactly one audit row per request with action `seo_meta_override.upsert`, `before` = the full previous row projection on update (**non-null**) and `null` on create, `after` = the full projection; `DELETE` writes one `seo_meta_override.delete` row with the deleted projection as `before`, and **no** row when nothing was deleted; DELETE addressed by (entity, `channelId?`, `locale?`) removes exactly the addressed L / C / C×L row and leaves the other two; neither parameter → today's `locale = 'en-US'`; re-sending `before` restores the row (R29); the write and its audit roll back together on failure — `backend/test/contract/seo/meta-override-commands.test.ts`
+- [ ] T114 [P] [US8] [PG] [S2] RED schema + resolution: C×L → C → L → derived per field; existing rows are L scope unchanged (US8 #2 as stored data); unique per shape; `channelId` refused for non-product entity types; `channelId` of a non-member channel / unoffered locale → `SCOPE_INVALID` on PUT, allowed on DELETE (FR-014/015) — `backend/test/integration/seo/meta-channel-scope.test.ts`
+- [ ] T115 [P] [US8] [PG] [S2] RED PDP metadata per (C, L) (US8 #1), including a product whose pre-existing per-language override is now served (Q-A, *Intended behaviour changes* 4), and derived metadata with `seo` off — `backend/test/contract/catalog/product-seo-scoped.test.ts`
 - [ ] T116 [S2] Migration `--module seo --name meta_override_channel_scope`; entity changes — `packages/modules/seo/src/{migrations,backend/entities/seo-meta-override.entity.ts}`
-- [ ] T117 [US8] [S2] `MetaTagResolverService` scope walk; admin routes accept `channelId`; `seoProductMetaPort` provided — `packages/modules/seo/src/backend/{services/meta-tag-resolver.service.ts,routes.ts,index.ts}`
+- [ ] T117 [US8] [S2] (C1) Commands `makeUpsertSeoMetaOverrideCommand` / `makeDeleteSeoMetaOverrideCommand` in the `delivery_methods/src/backend/commands/delivery-method.commands.ts` shape (`existingId` pattern, full projection, `skipAudit` on a no-op delete); `MetaTagResolverService` takes `commandBus` (wired in `seo/src/backend/index.ts` the way catalog's `index.ts` hands it to `ProductOverridesService`) instead of `auditLog`, and its `#audit` / `recordAuditFromContext` calls are **deleted in the same commit**; routes accept `channelId` (PUT body, GET/DELETE query) with the addressing rule of `contracts/seo-media-attachments.md` §1 — `packages/modules/seo/src/backend/{commands/seo-meta-override.commands.ts,services/meta-tag-resolver.service.ts,routes.ts,index.ts}`, `packages/contracts/src/seo.ts` (request schemas, additive)
+- [ ] T117a [US8] [S2] `MetaTagResolverService` scope walk C×L → C → L → derived; `seoProductMetaPort` (`resolveForProduct`, `listScopesForProduct`) provided — `packages/modules/seo/src/backend/{services/meta-tag-resolver.service.ts,index.ts}`
 - [ ] T118 [US8] [S2] PDP `seo` block through the port behind the `seo` presence probe — `catalog-query.service.ts` (`:1437` block)
-- [ ] T118a [US4] [S2] `ScopeOverviewService` lists SEO scopes through `seoProductMetaPort.listScopesForProduct` behind `effectiveState.isPresent('seo')`; extend `scope-overview.test.ts` with an SEO override and the `seo`-off case — `services/scope-overview.service.ts` (**handover**: S1 owns the file; deliver as the phase's handover commit)
-- [ ] T118b [S2] Declare `seoProductMetaPort` in catalog `nonBindingDependencies` as `degrades-without` with the R12 `whenAbsent` sentence (handover commit to `packages/modules/catalog/src/manifest.ts`) — same phase as the provider (T117)
-- [ ] T119 [S2] `seo` docs page + PL mirror; `seo` changeset (`patch`)
+- [ ] T118b [S2] Declare `seoProductMetaPort` in catalog `nonBindingDependencies` as `degrades-without` with the R12 `whenAbsent` sentence (handover commit to `packages/modules/catalog/src/manifest.ts`) — same phase as the provider (T117a)
+- [ ] T119 [S2] `seo` docs page + PL mirror (scopes, addressing, audit); `seo` changeset (`patch`)
+- *T118a (overview lists SEO scopes) moved to Phase 21 with its implementation T118c: the file is S1's, and S1 runs Phase 21 after this phase is applied — no handover needed.*
 
 **Verification** (one invocation per line):
+- `[PG] backend/test/contract/seo/meta-override-commands.test.ts`
 - `[PG] backend/test/integration/seo/meta-channel-scope.test.ts`
 - `[PG] backend/test/contract/catalog/product-seo-scoped.test.ts`
-- `[PG] backend/test/contract/catalog/scope-overview.test.ts`
 - `[PG] backend/test/contract/seo/meta-override.test.ts`
+- `pnpm --filter backend run check:command-coverage`
 - `pnpm --filter @endora-commerce/mod-seo run typecheck`
 - `pnpm --filter @endora-commerce/mod-catalog run typecheck`
 - `pnpm --filter backend run check:port-dependencies`
@@ -514,10 +532,10 @@ undoable, evented. No read path changes yet.
 
 ### Phase 20: [admin UI] URL keys, redirects and per-scope SEO (US7, US8) — after Phases 17–18
 
-- [ ] T125 [P] [US7] [S3] RED: URL-keys panel edits global / per-language / C×L keys with "use inherited"; shows effective URL per (C, L); `URL_KEY_TAKEN` names the holder; takeover confirmation dialog names the losing product and retries with `confirmTakeover`; redirect list with delete; with `seo` off a note says redirects are not served (Q-C interim) — `admin/test/modules/catalog/product-url-keys-panel.test.tsx`
-- [ ] T126 [P] [US8] [S3] RED: SEO panel gains a channel selector beside the language one, shows source per field — `admin/test/modules/seo/seo-meta-scope.test.tsx`
+- [ ] T125 [P] [US7] [S3] RED: URL-keys panel edits global / per-language / C×L keys with "use inherited"; shows effective URL per (C, L); `URL_KEY_TAKEN` names the holder; takeover confirmation dialog names the losing product and retries with `confirmTakeover`; redirect list with delete when the response carries `redirects`; **with `seo` off (`redirects` absent) no redirect list, no note and no redirect affordance is rendered (Q-C), while the takeover confirmation still appears and names the losing product**; effective URLs shown as the response's `url` (never composed in the admin) — `admin/test/modules/catalog/product-url-keys-panel.test.tsx`
+- [ ] T126 [P] [US8] [S3] RED: SEO panel gains a channel selector beside the language one, shows source per field, and "use inherited" deletes exactly the selected scope's row — `admin/test/modules/seo/seo-meta-scope.test.tsx`
 - [ ] T127 [US7] [S3] `ProductUrlKeysPanel.tsx` in the product editor — `src/admin/components/ProductUrlKeysPanel.tsx`
-- [ ] T128 [US8] [S3] SEO panel per scope — `packages/modules/seo/src/admin/**`
+- [ ] T128 [US8] [S3] SEO panel per scope, deleting a scope row by (`channelId?`, `locale?`) — `packages/modules/seo/src/admin/**`
 - [ ] T129 [S3] i18n keys in `catalog` and `seo` bundles (handover for catalog)
 
 **Verification** (one invocation per line):
@@ -534,7 +552,10 @@ undoable, evented. No read path changes yet.
 - [ ] T132 [US9] [S1] Gallery service + routes (`channel-roles`, item `altText`, `hiddenInChannels`), Command `product.media.update`, `changedFields: ['media']` — `services/gallery.service.ts`, `routes.admin.ts`
 - [ ] T133 [US9] [S1] Effective gallery in C and alt at L on PDP, listing card (`#listingCardReadsFor`), OG image — `catalog-query.service.ts`, `primary-asset-url.ts`
 - [ ] T134 [S1] Regenerate artefacts
-- [ ] T134a [US4] [S1] `ScopeOverviewService` + `scope-overview.test.ts` cover gallery role/hidden overrides per channel, per-language alt, and their orphans (FR-041 "every field")
+- [ ] T134a [P] [US4] [PG] [S1] RED: extend `backend/test/contract/catalog/scope-overview.test.ts` — gallery role/hidden overrides per channel, per-language alt, and their orphans (FR-041 "every field")
+- [ ] T134b [US4] [S1] `ScopeOverviewService` lists them — `services/scope-overview.service.ts`
+- [ ] T118a [P] [US4] [PG] [S1] RED (moved from Phase 18): extend `scope-overview.test.ts` with an SEO override at L, C and C×L, and the `seo`-off case (no SEO cells, no error)
+- [ ] T118c [US4] [S1] `ScopeOverviewService` lists SEO scopes through `seoProductMetaPort.listScopesForProduct` behind `effectiveState.isPresent('seo')` — `services/scope-overview.service.ts`
 
 **Verification** (one invocation per line):
 - `[PG] backend/test/contract/catalog/media-scopes.test.ts`
@@ -547,13 +568,14 @@ undoable, evented. No read path changes yet.
 
 - [ ] T135 [P] [US9] [PG] [S1] RED: attachment hidden in B2C neither listed nor referenced from the B2C PDP (US9 #4); names/descriptions per language with global fallback; packaging-unit names per language on PDP, basket and order line; placed line keeps its name after a rename (US9 #5) — `backend/test/contract/catalog/attachment-packaging-translations.test.ts`, `backend/test/integration/carts/packaging-unit-name-snapshot.test.ts`
 - [ ] T136 [S1] Migration `--module catalog --name attachment_packaging_translations`; entities — data-model §8
-- [ ] T137 [US9] [S1] Attachment + packaging services/routes accept translations and `hiddenInChannels` (admin packaging schemas stay `.strict()` with the key added) — `services/{attachment,packaging-unit}.service.ts`, `packages/contracts/src/catalog.ts`
+- [ ] T137 [US9] [S1] Attachment + packaging services/routes accept translations and `hiddenInChannels` (admin packaging schemas stay `.strict()` with the key added). Writes ride the **existing** Commands — `product_attachment.update` (`objectType: 'product_attachment'`) and `packaging_unit.update` (`objectType: 'packaging_unit'`) — one audit entry per request, i.e. one per product (FR-080); their `before`/`after` projections gain `productId`, the translations and `hiddenInChannels`; events `changedFields: ['attachments']` / `['packagingUnits']` — `services/{attachment,packaging-unit}.service.ts`, `packages/contracts/src/catalog.ts`
 - [ ] T138 [US9] [S1] PDP DTO and basket/RFQ snapshot take the effective name at the scope language — `catalog-query.service.ts`, `cart-service.ts`, `rfq-service.ts`
 - [ ] T139 [S1] Regenerate artefacts; changesets
-- [ ] T139a [US4] [S1] `ScopeOverviewService` + `scope-overview.test.ts` cover attachment translations / hidden per channel and packaging-unit name translations
+- [ ] T139a [P] [US4] [PG] [S1] RED: extend `backend/test/contract/catalog/scope-overview.test.ts` — attachment translations / hidden per channel and packaging-unit name translations
+- [ ] T139b [US4] [S1] `ScopeOverviewService` lists them — `services/scope-overview.service.ts`
 
 **Verification** (one invocation per line):
-- `[PG] backend/test/contract/catalog/attachment-packaging-translations.test.ts`
+- `[PG] backend/test/contract/catalog/attachment-packaging-translations.test.ts` (asserts the audit projections of T137)
 - `[PG] backend/test/integration/carts/packaging-unit-name-snapshot.test.ts`
 - `[PG] backend/test/contract/catalog/scope-overview.test.ts`
 - `[PG] backend/test/contract/catalog/packaging-units.contract.test.ts`
@@ -584,15 +606,16 @@ undoable, evented. No read path changes yet.
 
 ### Phase 24: Off-state, deploy parity, docs, changesets
 
-- [ ] T144 [P] [PG] [S1] RED deploy parity (FR-110, SC-001): on a seeded pre-feature dataset, listed / searchable / reachable-by-URL / sitemap / feed sets per channel × language are identical before and after the migrations, except non-`active` products (not reachable by URL, not addable to a basket — R21, D2) — `backend/test/integration/catalog/deploy-parity.test.ts`
-- [ ] T145 [P] [PG] [S1] SC-007 sweep: every FR-004 consumer refuses a product off at (C, L) — one table-driven test reusing each seam's fixture — `backend/test/contract/catalog/scoped-availability-all-consumers.test.ts`
-- [ ] T146 [S1] Off-state: `seo` off (redirects + SEO overrides not served, data persists, re-enable restores) covered by T108/T115; `search` off → Postgres listing applies the same predicate — assert in `scoped-availability-matrix.test.ts` with the search backend off
+- [ ] T144 [P] [PG] [S1] RED deploy parity (FR-110, SC-001): on a seeded pre-feature dataset, listed / searchable / reachable-by-URL / sitemap / feed sets per channel × language are identical before and after the migrations, except the four *Intended behaviour changes* of `plan.md` (non-`active` products not reachable by URL and not addable to a basket; name sort by effective name; existing per-language SEO overrides served — R21, D2, D6, Q-A) — `backend/test/integration/catalog/deploy-parity.test.ts`
+- [ ] T145 [P] [PG] [S1] SC-007 sweep: every FR-004 consumer (every row of `contracts/consumers.md`, CMS product blocks included) refuses a product off at (C, L) — one table-driven test reusing each seam's fixture — `backend/test/contract/catalog/scoped-availability-all-consumers.test.ts`
+- [ ] T146 [P] [PG] [S1] Test: `search` off → the Postgres listing applies the same predicate — add the search-backend-off case to `backend/test/contract/catalog/scoped-availability-matrix.test.ts` (`seo` off is already covered by T108/T115). Run it before T146a
+- [ ] T146a [S1] Make T146 pass if it is red (the degrade path's narrowing goes in the statement, issue #151); if green, record "no change" here
 - [ ] T147 [S1] Docs (EN): extend `packages/modules/catalog/docs/catalog/per-channel-per-language-overrides.md` (scopes, inheritance, status semantics, window, audience, overview, bulk, gate, order rules); new `url-keys-and-redirects.md`; `seo` and `search` pages updated
 - [ ] T148 [S1] Docs (PL): translation cache entries and materialised pages for every page above; `pnpm --filter backend run check:docs-translations`; `pnpm --filter backend run check:module-docs`
 - [ ] T149 [S1] Changesets: one per meaning for every published package touched (`contracts` minor; modules patch/minor as their exports changed); `pnpm changeset:status`
 - [ ] T150 [S1] AGENTS.md traps: grep `backend/test/**` for every file path renamed or deleted in this feature; re-derive anything derived from moved files (e.g. `module-removal.test.ts` ledger); re-record a read size **only** if the band refuses it, after reading `specs/conventions/check-estate.md`
 
-**Verification** (one invocation per line): `[PG] backend/test/integration/catalog/deploy-parity.test.ts`; `[PG] backend/test/contract/catalog/scoped-availability-all-consumers.test.ts`; `pnpm --filter backend run check:docs-translations`; `pnpm --filter backend run check:module-docs`; `pnpm changeset:status`; `pnpm run check:naming && pnpm run check:language` (in Docker Ubuntu on the macOS host — the BSD-tool gap)
+**Verification** (one invocation per line): `[PG] backend/test/integration/catalog/deploy-parity.test.ts`; `[PG] backend/test/contract/catalog/scoped-availability-all-consumers.test.ts`; `[PG] backend/test/contract/catalog/scoped-availability-matrix.test.ts`; `pnpm --filter backend run check:docs-translations`; `pnpm --filter backend run check:module-docs`; `pnpm changeset:status`; `pnpm run check:naming && pnpm run check:language` (in Docker Ubuntu on the macOS host — the BSD-tool gap)
 
 ### Phase 25: Final gate and acceptance hand-off
 
@@ -612,17 +635,17 @@ undoable, evented. No read path changes yet.
 | FR | Task(s) | FR | Task(s) |
 | --- | --- | --- | --- |
 | FR-001/002/016 | T005, T030 | FR-050–052 | T073 |
-| FR-004 | T031, T039–T041, T048–T049, T145 | FR-060/061 | T077, T078 |
+| FR-004 | T031, T039–T041, T045a, T048–T049, T145 | FR-060/061 | T077, T078 |
 | FR-005/007 | T031 | FR-070/072 | T100, T101 |
 | FR-006 | T039 | FR-071/074 | T107, T109 |
 | FR-008–012 | T005, T021 | FR-073 | T144 |
 | FR-013 | T021, T087 | FR-075 | T114, T115 |
 | FR-014/015 | T021, T067 | FR-076/077 | T130 |
 | FR-017 | T057–T059 | FR-078/079 | T135 |
-| FR-018 | T040 | FR-080–082 | T022, T101 |
+| FR-018 | T040 | FR-080–082 | T022, T101, T114a, T135 |
 | FR-023/024 | T005, T048, T050 | FR-083 | T019 |
 | FR-030 | T021, T087 | FR-084 | T022 (permission inventory) |
-| FR-040–043 | T087, T093, T091 | FR-090 | T068 |
+| FR-040–043 | T087, T093, T091 | FR-090 | T068, T095a |
 | FR-091–093 | T120, T121 | FR-100 | T082, T083 |
 | FR-110 | T144 | FR-111 | T108, T115 |
 | SC-004 | T065 | SC-005 | T048, T050 |

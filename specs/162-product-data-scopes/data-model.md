@@ -115,11 +115,18 @@ Partial uniques: `(product_id, language_code) where sales_channel_id is null`;
 | --- | --- | --- | --- |
 | `id` | uuid | no | PK |
 | `product_id` | uuid | no | the product the old key redirects to; FK `products` cascade (FR-072 "removed when the product is deleted" — soft delete also removes them in the delete Command) |
-| `language_code` | varchar(16) | yes | the key's language; `NULL` = a former global key (redirects in every language where the product has no language key) |
+| `language_code` | varchar(16) | yes | the key's language; `NULL` = a former global key, which redirects in **every** language of every channel (H1 — never conditional on the product's language keys, so it never expires) |
 | `key` | varchar(160) | no | the old key |
 | `created_at` | timestamptz | no | |
 
 Partial uniques: `(language_code, key) where language_code is not null`; `(key) where language_code is null`.
+
+**Resolution order for key `k` at (C, L)** (R12): a current key of L (a `product_url_keys` row of L, or a
+global slug of a product with no L key) **always wins** over a redirect with the same key; then a redirect
+row of L; then a redirect with `language_code NULL` — in any L, whatever language keys its product holds.
+The write rules below guarantee that a current key and a redirect of **another** product never share a key
+in one language, so "wins" only ever arbitrates between a product's own current key and its own
+`NULL`-language redirect (which keeps serving the other languages).
 
 **Keys of product P in language L** (FR-070): `product_url_keys` rows of P with `language_code = L`
 (any channel, orphans included) ∪ { `P.slug` if P has no language key for L }.
@@ -132,12 +139,14 @@ Partial uniques: `(language_code, key) where language_code is not null`; `(key) 
 | Writing key `k` for P in language L | Outcome |
 | --- | --- |
 | `k` is another product's key in L (language key, C×L key of any channel incl. orphans, or global slug where it has no L key) | refused `URL_KEY_TAKEN`, names the holder |
-| `k` is another product Q's redirect in L, or Q's global redirect while Q has no L key | `URL_KEY_REDIRECT_TAKEOVER_REQUIRED` naming Q, unless the request carries `confirmTakeover: [k]` (operator only) → Q's redirect row deleted, key saved |
-| `k` is P's own redirect in L | that redirect row deleted (no self-redirect), key saved |
+| `k` is another product Q's redirect in L, or **any** global (`NULL`-language) redirect of Q (H1: no "while Q has no L key" condition) | `URL_KEY_REDIRECT_TAKEOVER_REQUIRED` naming Q, unless the request carries `confirmTakeover: [k]` (operator only) → Q's redirect row deleted, key saved. Taking over Q's `NULL`-language redirect removes it in every language, and the confirmation says so |
+| `k` is P's own redirect in L (`language_code = L`) | that redirect row deleted (no self-redirect), key saved |
+| `k` is P's own `NULL`-language redirect, written as an L or C×L key | the redirect row is **kept** (it still serves every other language); in L the current key wins (resolution order) |
 | P's previous key at that scope was `k0 ≠ k` | redirect `(L, k0) → P` inserted (if not already P's current key in L) |
 | P gets its **first** language key for L | redirect `(L, P.slug) → P` inserted (FR-072 consequence 1) |
 | P's language key for L is removed ("use inherited") | the removed key becomes redirect `(L, k)`; a redirect `(L, P.slug)` of P is deleted (slug is current again) |
 | Writing a **global** key (`products.slug`) | checked against every language: any other product's key in any L → refused; another product's redirect with that key in any language → takeover required (confirmation names every losing product); old slug becomes redirect `(NULL, old)` |
+| Writing P's own `NULL`-language redirect `k` back as P's global key | the `NULL` row is deleted and replaced by a redirect `(L, k) → P` for every language L in which P holds a language or C×L key (there the slug is not P's key, so without it `k` would stop resolving in L — H1) |
 
 Import / connector writes take the same checks and **never** take over: the refused key is reported and
 the previous key kept (FR-093).
@@ -152,6 +161,10 @@ the previous key kept (FR-093).
 
 Scope of a row: `locale` only = L; channel only = C; both = C×L. Resolution per field (title,
 description, ogTitle, ogDescription, ogImageUrl): C×L → C → L → the PDP's derived fallback (FR-075).
+
+Writes (R13, analyze C1): Commands `seo_meta_override.upsert` / `seo_meta_override.delete` with the full
+row projection as `before` / `after`; a row is addressed by (entity, channel?, locale?) — neither given keeps
+today's `locale = 'en-US'`.
 
 ## 7. Media (catalog) — R14, R15
 
@@ -209,3 +222,4 @@ searchable attributes.
 | product leaves channel / channel drops a language | rows retained, ignored, listed as orphaned (FR-015); C×L URL keys keep reserving (FR-070) |
 | channel deleted | rows removed by cascade |
 | product soft-deleted | redirects removed in the delete Command (FR-072); scope rows retained with the product row |
+| product gets its first language key for L | redirect `(L, slug)` inserted; any `NULL`-language redirect of P keeps resolving in L (H1) |
