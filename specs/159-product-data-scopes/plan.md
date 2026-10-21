@@ -61,8 +61,8 @@ admin in `admin/test/modules/catalog/`; storefront in `storefront/test/`
 **Target Platform**: Linux server; backend, admin SPA, storefront
 **Project Type**: web application — monorepo
 **Performance Goals**: SC-004 — storefront listing and search within +10% at the performance targets'
-catalogue size with overrides on 20% of products (bench `backend/test/perf/catalog/catalog-list.bench.ts`
-extended); SC-005 — window reflected on the storefront within 5 min (immediate by construction) and in
+catalogue size with overrides on 20% of products (benches `backend/test/perf/catalog-list.bench.ts` and
+`backend/test/perf/catalog/listing-scoped-availability.bench.ts`); SC-005 — window reflected on the storefront within 5 min (immediate by construction) and in
 search within 15 min (immediate by query-time filter)
 **Constraints**: every refusal at a buyer seam stays the single `PRODUCT_NOT_FOUND`; channel resolved or
 fail closed (XII); deploy changes no storefront behaviour except the two listed in SC-001's test (R21)
@@ -150,7 +150,7 @@ fail closed (XII); deploy changes no storefront behaviour except the two listed 
 | FR-100 | `backend/test/integration/carts/channel-order-rules.test.ts`, `…/orders/channel-returnable.test.ts` [PG] |
 | FR-110, SC-001 | `backend/test/integration/catalog/deploy-parity.test.ts` [PG] |
 | FR-111 | `backend/test/integration/catalog/url-redirects-seo-off.test.ts` [PG] |
-| SC-004 | `backend/test/perf/catalog/catalog-list.bench.ts` (+ scoped variant) |
+| SC-004 | `backend/test/perf/catalog/listing-scoped-availability.bench.ts` against `backend/test/perf/catalog-list.bench.ts` |
 
 ## Project Structure
 
