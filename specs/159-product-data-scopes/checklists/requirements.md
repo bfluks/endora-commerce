@@ -39,7 +39,7 @@
   (FR-101, D-5); the no-warning rule covers every scoped field (FR-013, A-9); `inactive` below global is
   plain "off" (FR-010). It also added FR-018 (quote requests honour availability) and extended FR-017
   (snapshot language), FR-060/FR-061 (refuse-mode granularity), FR-070/FR-015 (URL-key clashes on
-  membership and language changes), and SC-008. No [NEEDS CLARIFICATION] marker remains. D-1 (draft preview
+  membership and language changes), and SC-008. No open clarification marker remains. D-1 (draft preview
   reachability) stays deferred with an interim reading, by owner choice; the FR-010 value set is provisional
   and is re-asked before acceptance.
 - "No implementation details": the *Current state* section cites code paths deliberately (house style of
