@@ -50,7 +50,9 @@ Response `200 { data: <§1 shape>, warnings: ScopeWarning[] }` where
 
 Behaviour:
 - One Command `product.scopes.update` (`objectType: 'product'`), one audit entry with `before`/`after` of
-  every touched scope row (FR-080), undoable by the standard undo (FR-081).
+  every touched scope row, complete enough that re-sending `before` restores it (FR-080; undo per
+  `research.md` R29 — bulk writes are undone by the bulk-operation undo, single writes are restored from the
+  audit's before-state until the owner answers Q-D).
 - **FR-014**: a channel the product is not a member of → `422 SCOPE_INVALID`
   `details: { channelId, reason: 'not_a_member' }`; a language the channel does not offer →
   `reason: 'language_not_offered', languageCode` — **except** `null` (removing an orphaned override is
