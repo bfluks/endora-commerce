@@ -1,0 +1,211 @@
+# Data model: product data scopes
+
+**Feature**: `specs/159-product-data-scopes/` | Decisions: `research.md` (R#). Every table here is
+**platform-global** (`@GlobalEntity()`), as `products` and `product_value_overrides` are (FR-083,
+Constitution XI): catalogue data, with audience evaluated at read time against the buyer's organization.
+
+Migrations are **scaffolded, never numbered** (`pnpm --filter backend run migration:new -- --module <id>
+--name <slug>`); the names below are the `--name` slugs. Ownership decides the module; nothing here writes
+another module's table (`check:module-boundary` R2).
+
+| Migration (`--module`, `--name`) | Owner | Story | Tables / columns |
+| --- | --- | --- | --- |
+| `catalog`, `product_scopes` | catalog | US1–US3, US10 | `product_channel_scopes`, `product_channel_language_scopes`, `products.publish_from`, `products.publish_until` |
+| `catalog`, `product_url_keys` | catalog | US7 | `product_url_keys`, `product_url_redirects` |
+| `seo`, `meta_override_channel_scope` | seo | US8 | `seo_meta_overrides.sales_channel_id`, `locale` nullable, uniques |
+| `catalog`, `product_media_scopes` | catalog | US9 | `gallery_item_channel_labels`, `gallery_item_channel_hidden`, `gallery_items.alt_text` |
+| `catalog`, `attachment_packaging_translations` | catalog | US9 | `product_attachments.name_translations`, `.description_translations`, `product_attachment_channel_hidden`, `product_packaging_units.name_translations` |
+
+Foreign keys to `sales_channels` (a kernel table) need no manifest edge beyond the `sales_channels`
+dependency catalog already declares (`packages/modules/catalog/src/manifest.ts`); `seo`'s manifest is
+checked by `test/unit/db/fk-dependency-drift.test.ts` in its phase. **No backfill anywhere** (R21).
+
+---
+
+## 1. `product_channel_scopes` (catalog) — R1, R3, R4
+
+One row per (product, channel) holding the channel overrides of the channel-scoped scalar fields.
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `product_id` | uuid | no | PK part; FK `products(id)` on delete cascade |
+| `sales_channel_id` | uuid | no | PK part; FK `sales_channels(id)` on delete cascade |
+| `status` | varchar(16) | yes | `NULL` = inherit global; else `draft`/`active`/`inactive` (`CHECK`) |
+| `window_overridden` | boolean | no, default false | the window pair below replaces the global pair |
+| `publish_from` | timestamptz | yes | inclusive; meaningful only when `window_overridden` |
+| `publish_until` | timestamptz | yes | inclusive; meaningful only when `window_overridden` |
+| `visibility` | varchar(32) | yes | `NULL` = inherit the whole global audience rule; else `public`/`logged_in_only`/`organization_restricted` |
+| `allowed_organization_ids` | jsonb | yes | non-null exactly when `visibility` is non-null (`CHECK`); array of uuids, may name non-members (C4) |
+| `min_order_quantity` | integer | yes | `NULL` = inherit; 1…1 000 000 (`CHECK`); `1` = "no minimum here" |
+| `returnable` | boolean | yes | `NULL` = inherit |
+| `created_at`, `updated_at` | timestamptz | no | |
+
+Constraints: `CHECK (publish_from is null or publish_until is null or publish_from < publish_until)`;
+`CHECK (window_overridden or (publish_from is null and publish_until is null))` — bounds exist only on an
+overridden window, while an overridden fully-open window (flag true, both `NULL`) is a legitimate value. Index
+`(sales_channel_id, status)`. Invariant kept by the write service: a row whose every field inherits is
+deleted (FR-012).
+
+## 2. `product_channel_language_scopes` (catalog) — R2
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `product_id` | uuid | no | PK part; FK `products` cascade |
+| `sales_channel_id` | uuid | no | PK part; FK `sales_channels` cascade |
+| `language_code` | varchar(16) | no | PK part; a code of `sales_channels.languages` at write time (FR-014) |
+| `status` | varchar(16) | no | `draft`/`active`/`inactive` (`CHECK`) |
+| `created_at`, `updated_at` | timestamptz | no | |
+
+"Use inherited" deletes the row. Rows for a language later removed from the channel are retained and
+ignored (FR-015); the overview lists them as orphaned.
+
+## 3. `products` additions (catalog)
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `publish_from` | timestamptz | yes | global window start, inclusive |
+| `publish_until` | timestamptz | yes | global window end, inclusive; `CHECK (from < until)` |
+
+`status`, `visibility`, `allowed_organization_ids`, `min_order_quantity`, `returnable`, `slug` keep their
+meaning as the **global** values. `archived_at` stays set only by the global `inactive` transition.
+
+## 4. Effective values (the rule, `packages/contracts/src/product-scopes.ts`) — R5
+
+```text
+effectiveStatus(p, C, L)   = cl(p,C,L).status ?? c(p,C).status ?? p.status
+on(p, C, L)                = effectiveStatus(p, C, L) = 'active'
+window(p, C)               = c(p,C).window_overridden ? (c.from, c.until) : (p.from, p.until)
+inWindow(w, now)           = (w.from is null or w.from <= now) and (w.until is null or now <= w.until)
+audienceRule(p, C)         = c(p,C).visibility != null ? (c.visibility, c.allowed) : (p.visibility, p.allowed)
+admits(rule, buyer)        = isProductVisibleTo(rule, buyer)          -- unchanged predicate
+available(p, C, L, buyer, now) =
+    p.deleted_at is null and p.archived_at is null
+    and member(p, C)                                   -- kernel membership accessor
+    and L ∈ C.languages
+    and on(p, C, L) and inWindow(window(p, C), now) and admits(audienceRule(p, C), buyer)
+moq(p, C)                  = c(p,C).min_order_quantity ?? p.min_order_quantity
+returnable(p, C)           = c(p,C).returnable ?? p.returnable
+```
+
+Orphans (FR-015) are ignored because `member(p, C)` and `L ∈ C.languages` are evaluated against the
+present membership and channel languages — rows are never consulted for a pair that fails them.
+
+`resolveScopeLanguage(channel, tag)`: exact (case-insensitive) match in `channel.languages`, else the first
+entry sharing the base language, else `channel.defaultLanguage` (R7).
+
+## 5. `product_url_keys` and `product_url_redirects` (catalog) — R11, R12
+
+`product_url_keys`
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `id` | uuid | no | PK |
+| `product_id` | uuid | no | FK `products` cascade |
+| `language_code` | varchar(16) | no | the key's language |
+| `sales_channel_id` | uuid | yes | `NULL` = the language key; else the C×L override; FK `sales_channels` cascade |
+| `key` | varchar(160) | no | same format as `products.slug` (lower-case slug grammar) |
+
+Partial uniques: `(product_id, language_code) where sales_channel_id is null`;
+`(product_id, sales_channel_id, language_code) where sales_channel_id is not null`. Index
+`(language_code, key)`.
+
+`product_url_redirects`
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `id` | uuid | no | PK |
+| `product_id` | uuid | no | the product the old key redirects to; FK `products` cascade (FR-072 "removed when the product is deleted" — soft delete also removes them in the delete Command) |
+| `language_code` | varchar(16) | yes | the key's language; `NULL` = a former global key (redirects in every language where the product has no language key) |
+| `key` | varchar(160) | no | the old key |
+| `created_at` | timestamptz | no | |
+
+Partial uniques: `(language_code, key) where language_code is not null`; `(key) where language_code is null`.
+
+**Keys of product P in language L** (FR-070): `product_url_keys` rows of P with `language_code = L`
+(any channel, orphans included) ∪ { `P.slug` if P has no language key for L }.
+**Effective key at (C, L)**: P's row for (C, L) → P's language key for L → `P.slug`.
+
+**Write rules** (all inside one Command, after `pg_advisory_xact_lock(hashtextextended('catalog.url-key:'
+|| key, 0))` per touched key in sorted order — the lock idiom of
+`catalog/src/backend/services/product-list-view-service.ts:190`):
+
+| Writing key `k` for P in language L | Outcome |
+| --- | --- |
+| `k` is another product's key in L (language key, C×L key of any channel incl. orphans, or global slug where it has no L key) | refused `URL_KEY_TAKEN`, names the holder |
+| `k` is another product Q's redirect in L, or Q's global redirect while Q has no L key | `URL_KEY_REDIRECT_TAKEOVER_REQUIRED` naming Q, unless the request carries `confirmTakeover: [k]` (operator only) → Q's redirect row deleted, key saved |
+| `k` is P's own redirect in L | that redirect row deleted (no self-redirect), key saved |
+| P's previous key at that scope was `k0 ≠ k` | redirect `(L, k0) → P` inserted (if not already P's current key in L) |
+| P gets its **first** language key for L | redirect `(L, P.slug) → P` inserted (FR-072 consequence 1) |
+| P's language key for L is removed ("use inherited") | the removed key becomes redirect `(L, k)`; a redirect `(L, P.slug)` of P is deleted (slug is current again) |
+| Writing a **global** key (`products.slug`) | checked against every language: any other product's key in any L → refused; another product's redirect with that key in any language → takeover required (confirmation names every losing product); old slug becomes redirect `(NULL, old)` |
+
+Import / connector writes take the same checks and **never** take over: the refused key is reported and
+the previous key kept (FR-093).
+
+## 6. `seo_meta_overrides` changes (seo) — R13
+
+| Change | Detail |
+| --- | --- |
+| add `sales_channel_id uuid null` | FK `sales_channels` on delete cascade |
+| `locale` becomes nullable | `CHECK (locale is not null or sales_channel_id is not null)` |
+| drop `uniq_seo_meta_overrides_entity_locale` | replaced by three partial uniques: `(entity_type, entity_id, locale) where sales_channel_id is null`; `(entity_type, entity_id, sales_channel_id) where locale is null`; `(entity_type, entity_id, sales_channel_id, locale) where both not null` |
+
+Scope of a row: `locale` only = L; channel only = C; both = C×L. Resolution per field (title,
+description, ogTitle, ogDescription, ogImageUrl): C×L → C → L → the PDP's derived fallback (FR-075).
+
+## 7. Media (catalog) — R14, R15
+
+`gallery_item_channel_labels`: `product_id` (FK cascade), `sales_channel_id` (FK cascade), `label`
+(`base_image`/`small_image`/`thumbnail`), `gallery_item_id` (FK `gallery_items` cascade). PK
+`(product_id, sales_channel_id, label)`.
+
+`gallery_item_channel_hidden`: `gallery_item_id` (FK cascade), `sales_channel_id` (FK cascade),
+`product_id`. PK `(gallery_item_id, sales_channel_id)`; index `(product_id, sales_channel_id)`.
+
+`gallery_items.alt_text jsonb not null default '{}'` — `{ "<lang>": "<text>" }`.
+
+Effective in C: items = global items minus hidden-in-C; role R = channel row for R ?? global row for R,
+then `none` if that item is hidden in C. Alt at L = `item.alt_text[L]` ?? asset alt (existing pick).
+
+## 8. Attachments and packaging units (catalog) — R16
+
+`product_attachments.name_translations jsonb not null default '{}'`,
+`product_attachments.description_translations jsonb not null default '{}'`,
+`product_packaging_units.name_translations jsonb not null default '{}'`.
+`product_attachment_channel_hidden`: `attachment_id` (FK `product_attachments` cascade),
+`sales_channel_id` (FK cascade), `product_id`; PK `(attachment_id, sales_channel_id)`.
+
+Effective name at L = `name_translations[L]` (non-empty) ?? `name`. Snapshots (`cart_items.packaging_unit_name`,
+`quote_request_items.packaging_unit_name`, then the order line) take the effective name at the snapshot's
+scope language (N2) and are never re-resolved.
+
+## 9. Setting (catalog) — R18
+
+| Key | Type | Default | Labels |
+| --- | --- | --- | --- |
+| `catalog.scope_completeness_gate` | string enum `warn` \| `refuse` | `warn` | `settingLabels.catalog.scope_completeness_gate.{name,description}` in `catalog/i18n/{en,pl}.json` |
+
+## 10. Bulk operation payload — R20
+
+`BulkUpdateProductsRequest.fields.scopedStatus?: { channelId: uuid; languageCode: string | null; value:
+'draft' | 'active' | 'inactive' | 'inherit' }`; result reasons gain `scope_invalid`, `completeness_gate`.
+Revert records store the per-product before-state of the one scope row touched.
+
+## 11. Search document (search) — R8
+
+`IndexedDocument` gains `liveLanguages: string[]`, `publishFromMs: number`, `publishUntilMs: number`,
+`allowedOrganizationIds: string[]` (channel-effective; `visibility` becomes channel-effective too) and
+`localizedNames: Record<string, string>` (effective name per channel language). `liveLanguages`,
+`publishFromMs`, `publishUntilMs` are added to the index's filterable attributes; `localizedNames.*` to its
+searchable attributes.
+
+## 12. State transitions
+
+| Transition | Effect |
+| --- | --- |
+| global `status` → `inactive` | unchanged: `archived_at` set, `product.archived.v1` once (FR-010) |
+| scope `status` set/changed/removed | row upsert/delete; `product.updated.v1` `changedFields: ['scopedStatus']`; one audit entry per product per command |
+| window bound crossed (no write) | sweep emits `product.updated.v1` `['publicationWindow']` (R9) |
+| product leaves channel / channel drops a language | rows retained, ignored, listed as orphaned (FR-015); C×L URL keys keep reserving (FR-070) |
+| channel deleted | rows removed by cascade |
+| product soft-deleted | redirects removed in the delete Command (FR-072); scope rows retained with the product row |
