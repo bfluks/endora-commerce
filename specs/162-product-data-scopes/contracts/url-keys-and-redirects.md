@@ -20,8 +20,10 @@ the redirect list only when the field is present. The takeover confirmation (§2
 
 `url` is the storefront path as emitted (R12): `productPath({ key, languageCode, channelDefaultLanguage })`
 from `product-url-keys.ts` — `/p/<key>` plus `?lang=<L>` when L ≠ channel default. Every emitter (this
-field, the resolve answer's redirect target, canonical, alternates, sitemap) calls that one helper, so the
-language-path-prefix issue (Q-B → C) changes one function.
+field, the resolve answer's `path`, the PDP's `paths`, the sitemap) is a **backend** call of that one helper,
+so the language-path-prefix issue (Q-B → C) changes one function. In-page storefront links (cards, rows,
+basket lines — 32 `/p/` sites in 23 files today) keep `/p/<effective key>` without `?lang`: the browser that
+clicks them is already in L; the prefix issue will have to touch them (plan risk 3).
 
 ## 2. Admin — write — `PUT /api/v1/admin/catalog/products/:id/url-keys` (`catalog:write`)
 
@@ -61,7 +63,7 @@ Language: `resolveScopeLanguage(channel, first Accept-Language tag)`.
 ```ts
 productKeyResolutionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('product'), productId: uuid, key: z.string() }),          // key is the effective key at (C, L)
-  z.object({ kind: z.literal('redirect'), key: z.string(), languageCode: z.string() }), // 200; storefront permanentRedirect('/p/'+key(+?lang))
+  z.object({ kind: z.literal('redirect'), key: z.string(), languageCode: z.string(), path: z.string() }), // 200; path = productPath(…) built by catalog; storefront permanentRedirect(path)
 ])
 ```
 
@@ -81,12 +83,17 @@ Never takes over, never asks; the product keeps its previous key at that scope (
 ## 6. Storefront
 
 - `storefront/app/(catalog)/p/[slug]/page.tsx`: resolve first; `kind: 'redirect'` → `permanentRedirect()`
-  to `productPath(…)`; 404/410 as today. No cross-language rendering (Q-B option B rejected); a key without
+  to the answer's `path`; 404/410 as today. No cross-language rendering (Q-B option B rejected); a key without
   `?lang` is resolved in `resolveScopeLanguage(channel, Accept-Language)` only — the accepted residual gap
   of R12.
 - `generateMetadata`: `alternates.canonical` is the effective URL for (C, L); `alternates.languages` lists
   the effective URL per channel language where the product is available to the anonymous audience
-  (FR-074).
+  (FR-074). Both come **ready-made** from the PDP response's new additive field
+  `paths: { canonical: string; alternates: { languageCode: string; path: string }[] }`, which catalog builds
+  with `productPath()`: the storefront does not know the channel's default language (`RequestContext`
+  carries a locale and a channel code only, and `i18n/config` answers the platform default), and only
+  catalog knows where the product is available, so the storefront composes no product URL of its own on
+  these surfaces.
 - Sitemap: per product, one `<loc>` per channel language where available (anonymous), each with its
   effective key and `?lang=` rule; `seo`'s sitemap generator gets the keys from
   `catalogProductUrlKeyReadPort.effectiveKeys(productIds, channelId)` (owner `catalog`).
