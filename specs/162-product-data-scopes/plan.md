@@ -110,8 +110,9 @@ changes* (R21)
   release note.
 - **D7 — Emitted product URLs carry `?lang=<L>`** when L is not the channel default (R0 F3), so K1's
   not-found for a key of another language does not hit links the platform itself produces. Every emitter
-  goes through one helper, `productPath()` in `packages/contracts/src/product-url-keys.ts` (R12), so the
-  owner's language-path-prefix issue (Q-B → C) replaces one function.
+  goes through one backend-called helper, `productPath()` in `packages/contracts/src/product-url-keys.ts`
+  (R12); the storefront receives ready paths (resolve `path`, PDP `paths`), so the owner's
+  language-path-prefix issue (Q-B → C) replaces one function for every emitted URL.
 - **D8 — "Standard undo" of a single scoped write (R29).** The tree has undo only for bulk operations.
   Bulk scoped writes use it; single writes are Commands whose audit before-state is complete and is
   restored by re-sending it. FR-081 and US1 #8 promise more; Q-D asks the owner.
@@ -219,7 +220,8 @@ packages/modules/catalog/
   src/admin/components/{ProductScopeEditor,ProductScopeOverview,ProductUrlKeysPanel,ProductsBulkEditDialog,
                         ProductOrderRulesCard,PackagingUnitsEditor}.tsx, src/admin/pages/{ProductEditor,ProductsList}.tsx
   i18n/{en,pl}.json; docs/catalog/{per-channel-per-language-overrides,url-keys-and-redirects}.md
-packages/modules/seo/        migration, entity, meta-tag-resolver, port, sitemap-generator, admin SEO panel, i18n, docs
+packages/modules/seo/        migration, entity, commands/seo-meta-override.commands.ts (new), meta-tag-resolver, routes, port,
+                             sitemap-generator, admin SEO panel, i18n, docs
 packages/modules/search/     search-indexer.ts, search-query.service.ts, docs
 packages/modules/{carts,orders,quote_requests,comparisons,shopping_lists,quick_order,product_feeds}/  seam swaps
 packages/modules/import_export/ (+ catalog-bulk-import)  scoped status columns
@@ -265,7 +267,9 @@ commit artefacts together.
    reindex runs. Release note + operator step.
 3. **Shared links across languages (Q-B → C, accepted).** Until the language-path-prefix issue lands, a
    link without `?lang` opened in another channel language answers not-found once the product holds a key
-   in that language. Every emitted URL carries `?lang`; the fix lands in `productPath()` alone.
+   in that language. Every emitted URL carries `?lang`; the prefix issue changes `productPath()` for every
+   emitted URL, **plus** the in-page storefront links (32 `/p/` sites in 23 files of `storefront/` and
+   `packages/cms-components/` today), which stay `/p/<key>` in 162 — size that issue accordingly.
 4. **#384 drift.** #384 may change before merging; the gated phases re-read its final API.
 5. **Name sort order change (D6).**
 6. **Concurrency of key writes** — advisory locks per key; covered by a two-connection test.
