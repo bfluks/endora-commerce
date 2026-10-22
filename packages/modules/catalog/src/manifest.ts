@@ -366,10 +366,11 @@ export const manifest = defineModuleManifest({
       'different product, not a reduced one.',
   },
   /**
-   * The error codes this module owns — forty-seven from feature 090 Phase 3
+   * The error codes this module owns, fifty-six in all — forty-seven from
+   * feature 090 Phase 3
    * (`specs/090-module-owned-error-codes/contracts/error-code-declaration.md`
-   * §1.1) and six more from D-129's remaining sweep, MR 4, described at the end
-   * of this block. This is where the sentence for each is looked up from:
+   * §1.1), six more from D-129's remaining sweep, MR 4, and three minted by
+   * feature 155, both described at the end of this block. This is where the sentence for each is looked up from:
    * `errors.<CODE>` in this module's own `i18n/{en,pl}.json`. Every code with
    * no sentence there is an entry in `check-error-translations.ts`'s
    * `UNTRANSLATED_ERROR_CODES` ledger and stays one — declaring a code writes no
@@ -451,6 +452,23 @@ export const manifest = defineModuleManifest({
    * that pass a `details` object pass `{ maxBatchSize, recommendedSplitInto }`
    * and `{ total, maxSelectionSize }` — neither holds a `code`, which is the
    * only key `refusalToken` reads.
+   *
+   * **Three were minted by feature 155** (`specs/155-catalog-order-constraints/`
+   * `contracts/error-codes.md`): `PRODUCT_BELOW_MINIMUM_QUANTITY`,
+   * `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` and `PACKAGING_UNIT_MISMATCH`.
+   * D-121 T1 again: the minimums are columns on this module's products and
+   * packaging units, so the sentence lives here whichever module refuses the
+   * line — `carts`, `orders` and `quote_requests` raise them, and none of them
+   * owns the noun. Each arrives with its sentence in both bundles. No token:
+   * their `details` carry the line's product, minimum and `lines[]`, no `code`.
+   *
+   * **Five were minted by feature 163** (`specs/163-product-data-scopes/`
+   * `contracts/error-codes.md`): `SCOPE_INVALID`, `SCOPE_INCOMPLETE`,
+   * `URL_KEY_TAKEN`, `URL_KEY_REDIRECT_TAKEOVER_REQUIRED` and
+   * `URL_REDIRECT_NOT_FOUND`. D-121 T1: the nouns are product scopes, URL keys
+   * and URL redirects, all rows of this module, and every raise site is one of
+   * its admin writes. Each arrives with a token-free sentence in both bundles —
+   * their `details` carry channel ids, keys and product names, never a `code`.
    */
   errorCodes: [
     { code: 'ASSET_KIND_NOT_SUPPORTED' },
@@ -479,12 +497,15 @@ export const manifest = defineModuleManifest({
     { code: 'MIN_NOT_MET' },
     { code: 'NESTED_COMPOSITE_NOT_ALLOWED' },
     { code: 'OPTION_ALREADY_EXISTS' },
+    { code: 'PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY' },
+    { code: 'PACKAGING_UNIT_MISMATCH' },
     { code: 'PACKAGING_UNIT_NAME_CONFLICT' },
     { code: 'PACKAGING_UNIT_NOT_FOUND' },
     { code: 'PACKAGING_UNIT_NOT_SUPPORTED_FOR_TYPE' },
     { code: 'PRICE_ORDERING_UNAVAILABLE' },
     { code: 'PRICE_RANGE_INVALID' },
     { code: 'PRODUCT_ARCHIVED' },
+    { code: 'PRODUCT_BELOW_MINIMUM_QUANTITY' },
     { code: 'PRODUCT_DELETE_BLOCKED' },
     { code: 'PRODUCT_FEED_CONFIRMATION_REQUIRED' },
     { code: 'PRODUCT_FEED_DISABLED' },
@@ -498,6 +519,8 @@ export const manifest = defineModuleManifest({
     { code: 'PRODUCT_SAVED_VIEW_NAME_TAKEN' },
     { code: 'PRODUCT_TYPE_MISMATCH' },
     { code: 'PRODUCT_UNMANAGED_STOCK' },
+    { code: 'SCOPE_INCOMPLETE' },
+    { code: 'SCOPE_INVALID' },
     { code: 'SELECTION_TOO_LARGE' },
     { code: 'SELF_LINK_NOT_ALLOWED' },
     { code: 'SKU_ALREADY_EXISTS' },
@@ -505,6 +528,9 @@ export const manifest = defineModuleManifest({
     { code: 'SYSTEM_ATTRIBUTE_SET_IMMUTABLE' },
     { code: 'TARGET_PRODUCT_NOT_FOUND' },
     { code: 'UNKNOWN_OPTION' },
+    { code: 'URL_KEY_REDIRECT_TAKEOVER_REQUIRED' },
+    { code: 'URL_KEY_TAKEN' },
+    { code: 'URL_REDIRECT_NOT_FOUND' },
     { code: 'VARIANT_AXIS_MISSING' },
     { code: 'VARIANT_COMBINATION_EXISTS' },
   ],
@@ -583,7 +609,19 @@ export const manifest = defineModuleManifest({
       icon: 'Package',
       targetRoute: '/catalog/products',
       requiredPermission: 'catalog:read',
-      keywords: ['products', 'catalog', 'items', 'produkty', 'katalog'],
+      // Feature 163 (R23, FR-042) — the scope controls and overview are part of the
+      // product editor, which a palette route cannot open by id; these find it.
+      keywords: [
+        'products',
+        'catalog',
+        'items',
+        'produkty',
+        'katalog',
+        'scope',
+        'zakres',
+        'visibility per channel',
+        'publication window',
+      ],
       weight: 200,
     },
     {

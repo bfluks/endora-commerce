@@ -10,6 +10,8 @@ import {
 import { ApiError, apiClient, cn } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardHeader, CardTitle, Input } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import type { ProductScopeStatus } from '@endora-commerce/contracts';
+import { ProductScopeControls } from './ProductScopeControls.js';
 
 /**
  * Feature 022 — Product Scope Editor panel (read-only first slice).
@@ -134,6 +136,11 @@ interface Props {
   baselineDescription: Record<string, string>;
   onBaselineNameChange: (next: Record<string, string>) => void;
   onBaselineDescriptionChange: (next: Record<string, string>) => void;
+  /**
+   * Feature 163 — the global status as the page form holds it, so the scope
+   * controls' inherited labels follow it (and never warn about it, FR-013).
+   */
+  globalStatus?: ProductScopeStatus;
 }
 
 /**
@@ -164,6 +171,7 @@ export const ProductScopeEditor = forwardRef<ProductScopeEditorHandle, Props>(
       baselineDescription,
       onBaselineNameChange,
       onBaselineDescriptionChange,
+      globalStatus,
     },
     ref,
   ): ReactNode {
@@ -435,8 +443,8 @@ export const ProductScopeEditor = forwardRef<ProductScopeEditorHandle, Props>(
       setInfo(parts.join(' • ') || t('productEditor.scopeEditor.applied.none'));
     } catch (err) {
       if (err instanceof ApiError) {
-        const msg = `${err.envelope.error.code}: ${err.envelope.error.message}`;
-        setError(msg);
+        // The operator reads the sentence, never the code.
+        setError(err.envelope.error.message);
         throw err;
       }
       setError(t('productEditor.scopeEditor.saveFailed'));
@@ -649,6 +657,16 @@ export const ProductScopeEditor = forwardRef<ProductScopeEditorHandle, Props>(
               </Alert>
             ) : null}
           </div>
+
+          {/* Feature 163 — status, publication window and audience for the
+              channel picked above (US1–US3). */}
+          <hr className="b2b-hr" />
+          <ProductScopeControls
+            productId={productId}
+            channels={scope.channels}
+            activeChannelId={activeChannelId}
+            {...(globalStatus ? { globalStatus } : {})}
+          />
         </div>
       </CardContent>
     </Card>

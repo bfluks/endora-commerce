@@ -88,10 +88,18 @@ export class OrderCommentService {
     return em.find(OrderComment, { orderId }, { orderBy: { createdAt: 'asc' } });
   }
 
-  /** Only customer-visible comments (FR-031). */
+  /**
+   * Only customer-visible comments (FR-031) — and never a system note
+   * (feature 162), whatever its visibility flag says: two filters, so one
+   * mistaken flag cannot show the buyer an internal note.
+   */
   async listForCustomer(orderId: string): Promise<OrderComment[]> {
     const em = this.emFactory();
-    return em.find(OrderComment, { orderId, isCustomerVisible: true }, { orderBy: { createdAt: 'asc' } });
+    return em.find(
+      OrderComment,
+      { orderId, isCustomerVisible: true, systemNote: null },
+      { orderBy: { createdAt: 'asc' } },
+    );
   }
 
   private async loadNonTerminalOrder(em: EntityManager, orderId: string): Promise<Order> {

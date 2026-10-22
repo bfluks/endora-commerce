@@ -57,6 +57,7 @@ export function MessagesTab(props: OpportunityTabProps): ReactNode {
       opportunityId={opportunityId}
       organizationId={props.opportunity.organization.id}
       kind="message"
+      orderStatuses={props.orderStatuses}
       onEntries={onEntries}
       copy={{
         title: t('opportunity.tabs.messages'),

@@ -26,6 +26,8 @@ interface Harness {
   service: BuyerLinePriceService;
   deps: BuyerLinePriceServiceDeps;
   calls: PricingResolutionInput[];
+  /** One entry per `resolveLinePrices` call: how many lines it carried. */
+  batches: number[];
   spies: {
     findByIds: ReturnType<typeof vi.fn>;
     findCustomer: ReturnType<typeof vi.fn>;
@@ -42,6 +44,7 @@ function harness(options: {
 } = {}): Harness {
   const known = new Set(options.knownProducts ?? [productId(1), productId(2), productId(3)]);
   const calls: PricingResolutionInput[] = [];
+  const batches: number[] = [];
   const findByIds = vi.fn(async (ids: readonly string[]) =>
     ids.filter((id) => known.has(id)).map((id) => ({ id, attributeValues: {} })),
   );
@@ -54,18 +57,28 @@ function harness(options: {
   const deps: BuyerLinePriceServiceDeps = {
     pricingService: {
       // A bracket table: 1–9 pieces at 100, 10+ at 90, priced on the channel's
-      // currency unless the caller names one.
-      resolveLinePrice: async (input) => {
-        calls.push(input);
-        const amount = input.context.quantity >= 10 ? '90.0000' : '100.0000';
-        return {
-          amount,
-          currency: input.context.currencyCode ?? input.context.salesChannel.defaultCurrency,
-          priceListId: `list-${input.context.salesChannel.id}`,
-          isSale: false,
-          bracketStartQuantity: input.context.quantity >= 10 ? 10 : 1,
-          displayMode: 'net',
-        };
+      // currency unless the caller names one. Batched (D-287 P0): each line is
+      // recorded as the single resolution it stands for.
+      resolveLinePrices: async (input) => {
+        batches.push(input.lines.length);
+        const out = new Map();
+        for (const line of input.lines) {
+          const single: PricingResolutionInput = {
+            product: line.product,
+            variantId: line.variantId ?? null,
+            context: { ...input.context, quantity: line.quantity },
+          };
+          calls.push(single);
+          out.set(line.key, {
+            amount: line.quantity >= 10 ? '90.0000' : '100.0000',
+            currency: input.context.currencyCode ?? input.context.salesChannel.defaultCurrency,
+            priceListId: `list-${input.context.salesChannel.id}`,
+            isSale: false,
+            bracketStartQuantity: line.quantity >= 10 ? 10 : 1,
+            displayMode: 'net_only' as const,
+          });
+        }
+        return out;
       },
     },
     catalogProductRead: { findByIds },
@@ -77,6 +90,7 @@ function harness(options: {
     service: new BuyerLinePriceService(deps),
     deps,
     calls,
+    batches,
     spies: { findByIds, findCustomer, findOrganization, findChannel, findDefaultChannel },
   };
 }
@@ -283,5 +297,8 @@ describe('BuyerLinePriceService.resolveForBuyer (T019)', () => {
       expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
       expect(spy.mock.calls.length).toBeLessThanOrEqual(chunks);
     }
+    // D-287 P0 — one batched pricing call per chunk, not one per line.
+    expect(h.batches).toHaveLength(chunks);
+    expect(h.batches.reduce((a, b) => a + b, 0)).toBe(250);
   });
 });

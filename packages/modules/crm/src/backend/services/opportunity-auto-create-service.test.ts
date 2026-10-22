@@ -17,7 +17,8 @@ const order = {
   salesChannelId: CHANNEL_ID,
   currency: 'PLN',
   sourceQuoteRequestId: null,
-} as OrderRecord;
+  customFieldValues: { order_source: 'fair' },
+} as unknown as OrderRecord;
 
 function service(overrides: Partial<OpportunityAutoCreateServiceDeps> = {}) {
   const deps = {
@@ -27,7 +28,12 @@ function service(overrides: Partial<OpportunityAutoCreateServiceDeps> = {}) {
     quoteRequests: {
       isPresent: vi.fn(() => true),
       load: vi.fn(async () => ({
-        record: { id: QUOTE_ID, businessId: 'QR-1', organizationId: ORGANIZATION_ID },
+        record: {
+          id: QUOTE_ID,
+          businessId: 'QR-1',
+          organizationId: ORGANIZATION_ID,
+          customFieldValues: { order_source: 'web' },
+        },
         lines: [],
         amount: '10.00',
         currency: 'EUR',
@@ -60,7 +66,11 @@ describe('OpportunityAutoCreateService — a placed Order', () => {
       salesChannelId: CHANNEL_ID,
       source: 'order',
       document: { kind: 'order', id: ORDER_ID },
+      // Feature 162 — the Order's values, for the carry into the Opportunity.
+      carry: { sourceType: 'order', recordId: ORDER_ID, sourceValues: { order_source: 'fair' } },
     });
+    // The join hands on the Order exactly as it was read (feature 162).
+    expect(deps.links.linkOrderPlacedFromQuoteRequest).toHaveBeenCalledWith(order);
     expect(deps.events.emit).toHaveBeenCalledWith(
       'crm.opportunity.document_linked.v1',
       expect.objectContaining({ opportunityId: 'opp', documentKind: 'order', documentId: ORDER_ID, linkSource: 'auto' }),
@@ -180,6 +190,8 @@ describe('OpportunityAutoCreateService — a submitted Quote Request', () => {
       salesChannelId: null,
       source: 'quote_request',
       document: { kind: 'quote_request', id: QUOTE_ID },
+      // Feature 162 — the Quote Request's values, for the carry into the Opportunity.
+      carry: { sourceType: 'quote_request', recordId: QUOTE_ID, sourceValues: { order_source: 'web' } },
     });
   });
 

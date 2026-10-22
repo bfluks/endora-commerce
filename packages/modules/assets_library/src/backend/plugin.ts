@@ -10,6 +10,13 @@ import { FoldersService } from './services/folders.service.js';
 import { AssetReferenceRegistry } from './services/reference-registry.js';
 import { HmacSigner } from './services/hmac.js';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { CommandBus } from '@endora-commerce/platform/commands';
+import type { AdminUserReadPort } from '@endora-commerce/contracts';
+import type { PlatformLogger } from '@endora-commerce/platform/kernel';
+import {
+  createAssetRetentionSweeper,
+  type AssetRetentionSweeper,
+} from './jobs/retention-sweeper.js';
 import { createSettingsView } from './services/storage/settings-view.js';
 import { Setting } from '@endora-commerce/platform/kernel';
 import { SettingValue } from '@endora-commerce/platform/kernel';
@@ -43,6 +50,17 @@ export interface AssetsLibraryModuleOptions {
   publicApiBaseUrl: string;
   /** Feature 054 — audits asset/folder writes co-transactionally when provided. */
   auditLog?: AuditPort;
+  /**
+   * Runs the Commands of feature 156 (`asset.replace`). Optional: a
+   * composition without it serves everything except a replace.
+   */
+  commandBus?: CommandBus;
+  /** Where a failed replace compensation is reported. */
+  logError?: (message: string, context: Record<string, unknown>) => void;
+  /** Names who replaced an asset's previous version; `replacedBy: null` without it. */
+  adminUserReadPort?: Pick<AdminUserReadPort, 'findById'>;
+  /** Where the retention sweep writes its one line per tick. */
+  log?: Pick<PlatformLogger, 'info'>;
 }
 
 export interface AssetsLibraryModuleHandle {
@@ -50,6 +68,10 @@ export interface AssetsLibraryModuleHandle {
   folders: FoldersService;
   referenceRegistry: AssetReferenceRegistry;
   adapters: AdapterRegistry;
+  /** `assets.soft_delete_retention_days` as read now (at least one day). */
+  loadRetentionDays(): Promise<number>;
+  /** The retention sweep (specs/156-asset-stable-url/), as the module's clock runs it. */
+  sweeper: AssetRetentionSweeper;
 }
 
 
@@ -98,6 +120,9 @@ export function assetsLibraryModule(options: AssetsLibraryModuleOptions): {
     loadUploadPolicy: () => loadUploadPolicy(options.emFactory),
     loadRetentionDays,
     ...(options.auditLog ? { auditLog: options.auditLog } : {}),
+    ...(options.commandBus ? { commandBus: options.commandBus } : {}),
+    ...(options.logError ? { logError: options.logError } : {}),
+    ...(options.adminUserReadPort ? { adminUsers: options.adminUserReadPort } : {}),
   });
   const folders = new FoldersService(
     options.emFactory, referenceRegistry, options.auditLog, loadRetentionDays,
@@ -151,5 +176,23 @@ export function assetsLibraryModule(options: AssetsLibraryModuleOptions): {
     });
   };
 
-  return { plugin, handle: { service, folders, referenceRegistry, adapters } };
+  const sweeper = createAssetRetentionSweeper({
+    emFactory: options.emFactory,
+    adapters,
+    referenceRegistry,
+    loadRetentionDays,
+    ...(options.log ? { log: options.log } : {}),
+  });
+
+  return {
+    plugin,
+    handle: {
+      service,
+      folders,
+      referenceRegistry,
+      adapters,
+      loadRetentionDays,
+      sweeper,
+    },
+  };
 }

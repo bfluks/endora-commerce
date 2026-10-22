@@ -59,7 +59,7 @@ describe('ProductRow — a zero price is a price', () => {
 describe('ProductCard — a zero price keeps its gross line', () => {
   it('renders the derived gross line for a price of zero', () => {
     const html = renderToString(
-      <ProductCard product={summary({ amount: 0, currency: 'PLN' })} locale="pl-PL" />,
+      <ProductCard product={summary({ amount: 0, currency: 'PLN' })} locale="pl-PL" salesChannelCode="retail" />,
     );
     expect(html).toContain('brutto');
   });
@@ -70,6 +70,7 @@ describe('ProductCard — a zero price keeps its gross line', () => {
         product={summary({ amount: 100, currency: 'PLN' })}
         locale="pl-PL"
         vatRate={0.05}
+        salesChannelCode="retail"
       />,
     );
     expect(html).toMatch(/105/);

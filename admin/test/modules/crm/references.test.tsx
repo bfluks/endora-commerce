@@ -13,6 +13,7 @@ import {
   en,
   renderCrm,
   caretAt,
+  returningHere,
   storedText,
 } from './crm-fixtures';
 
@@ -123,9 +124,9 @@ describe('a text with references, as it is read', () => {
     expect(product).toHaveAttribute('href', `/catalog/products/${PRODUCT_ID}`);
     // The description is a section of the Overview tab, no longer one row of a list.
     const description = product.closest('section') as HTMLElement;
-    expect(within(description).getByRole('link', { name: /ORD-1001/ })).toHaveAttribute(
+    expect(within(description).getByRole('link', { name: /^Order:\s*ORD-1001$/ })).toHaveAttribute(
       'href',
-      `/orders/${ORDER_ID}`,
+      returningHere(`/orders/${ORDER_ID}`),
     );
     // The token itself is not on screen.
     expect(panel).not.toHaveTextContent(`[[product:${PRODUCT_ID}]]`);
@@ -154,6 +155,85 @@ describe('a text with references, as it is read', () => {
     notes = [note(`About [[product:${PRODUCT_ID}]].`, [])];
     const panel = await open(en('opportunity.tabs.notes'));
     expect(await within(panel).findByText(en('references.unavailable.product'))).toBeInTheDocument();
+  });
+});
+
+describe('a formatted text, as it is read (specs/158-crm-opportunity-inline-editing/, FR-010)', () => {
+  it('draws bold, italic, strikethrough, lists and links as elements, and the markers not at all', async () => {
+    notes = [note('**Deal** _soon_ ~~maybe~~\n- one\n- two\n3. three\n[offer](https://example.com/offer)')];
+    const panel = await open(en('opportunity.tabs.notes'));
+    const strong = await within(panel).findByText('Deal');
+    const entry = strong.closest('li') as HTMLElement;
+    expect(strong.tagName).toBe('STRONG');
+    expect(within(entry).getByText('soon').tagName).toBe('EM');
+    expect(within(entry).getByText('maybe').tagName).toBe('S');
+    expect(entry.querySelectorAll('ul > li')).toHaveLength(2);
+    expect(entry.querySelector('ol')).toHaveAttribute('start', '3');
+    const link = within(entry).getByRole('link', { name: 'offer' });
+    expect(link).toHaveAttribute('href', 'https://example.com/offer');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link.getAttribute('rel')).toContain('noopener');
+    expect(entry).not.toHaveTextContent(/\*\*|~~|\]\(/);
+  });
+
+  it('draws no link for an address a reader may not follow — it stays the characters it is', async () => {
+    notes = [note('[click](javascript:alert(1))')];
+    const panel = await open(en('opportunity.tabs.notes'));
+    expect(await within(panel).findByText('[click](javascript:alert(1))')).toBeInTheDocument();
+    expect(within(panel).queryByRole('link', { name: 'click' })).toBeNull();
+  });
+});
+
+describe('an Order a text refers to (specs/158-crm-opportunity-inline-editing/, FR-012)', () => {
+  const RICH_ORDER: OpportunityReference = {
+    type: 'order',
+    id: ORDER_ID,
+    available: true,
+    label: 'ORD-1001',
+    url: `/orders/${ORDER_ID}`,
+    order: {
+      status: 'paid',
+      total: '1234.50',
+      currency: 'PLN',
+      placedAt: '2026-10-01T09:30:00.000Z',
+      customerName: 'Acme sp. z o.o.',
+    },
+  };
+
+  it('says its status, total, date and customer beside its number', async () => {
+    notes = [note(`See [[order:${ORDER_ID}]].`, [RICH_ORDER])];
+    const panel = await open(en('opportunity.tabs.notes'));
+    const number = await within(panel).findByRole('link', { name: /^Order:\s*ORD-1001$/ });
+    const chip = number.closest('[data-crm-order-reference]') as HTMLElement;
+    expect(chip).toHaveTextContent('Paid');
+    expect(chip).toHaveTextContent(/1[\s\u00a0\u202f]?234[.,]50/);
+    expect(chip).toHaveTextContent(new Date('2026-10-01T09:30:00.000Z').toLocaleDateString('en'));
+    expect(chip).toHaveTextContent('Acme sp. z o.o.');
+  });
+
+  it('opens the Order here with the way back to the Opportunity, or in a new tab from its own button', async () => {
+    notes = [note(`See [[order:${ORDER_ID}]].`, [RICH_ORDER])];
+    const panel = await open(en('opportunity.tabs.notes'));
+    const number = await within(panel).findByRole('link', { name: /^Order:\s*ORD-1001$/ });
+    expect(number).toHaveAttribute('href', returningHere(`/orders/${ORDER_ID}`));
+    expect(number).not.toHaveAttribute('target');
+    const newTab = within(panel).getByRole('link', {
+      name: en('references.order.openInNewTab', { number: 'ORD-1001' }),
+    });
+    expect(newTab).toHaveAttribute('href', `/orders/${ORDER_ID}`);
+    expect(newTab).toHaveAttribute('target', '_blank');
+    expect(newTab.getAttribute('rel')).toContain('noopener');
+  });
+
+  it('names the status by its code when the statuses cannot be read', async () => {
+    const original = getSpy.getMockImplementation();
+    getSpy.mockImplementation((path: string) =>
+      path === '/api/v1/admin/orders/statuses' ? Promise.reject(new Error('403')) : original?.(path),
+    );
+    notes = [note(`See [[order:${ORDER_ID}]].`, [RICH_ORDER])];
+    const panel = await open(en('opportunity.tabs.notes'));
+    const number = await within(panel).findByRole('link', { name: /^Order:\s*ORD-1001$/ });
+    expect(number.closest('[data-crm-order-reference]')).toHaveTextContent('paid');
   });
 });
 
@@ -195,7 +275,10 @@ describe('the textarea that inserts references', () => {
     await userEvent.click(within(panel).getByRole('button', { name: en('comments.notes.composer.submit') }));
     await waitFor(() => expect(postSpy).toHaveBeenCalledWith(COMMENTS_PATH, { kind: 'note', body: expected }));
     // Once saved, the reference reads as the Order's number.
-    expect(await within(panel).findByRole('link', { name: /ORD-1001/ })).toHaveAttribute('href', `/orders/${ORDER_ID}`);
+    expect(await within(panel).findByRole('link', { name: /^Order:\s*ORD-1001$/ })).toHaveAttribute(
+      'href',
+      returningHere(`/orders/${ORDER_ID}`),
+    );
   });
 
   it('inserts a Product chosen in the catalogue`s picker', async () => {

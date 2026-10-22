@@ -15,6 +15,7 @@ import { S3StorageAdapter } from './s3-adapter.js';
 import { GcsStorageAdapter } from './gcs-adapter.js';
 import { createLegacyAssetResolver, type LegacyAssetResolver } from './legacy-resolver.js';
 import { ConfigurationError } from './errors.js';
+import { resolvePublicUrlBase } from './public-url-base.js';
 import type { HmacSigner } from '../hmac.js';
 
 /**
@@ -69,6 +70,18 @@ export class AdapterRegistry {
   private cached: { code: StorageBackendCode; adapter: StorageAdapter } | null = null;
 
   constructor(private readonly opts: AdapterRegistryOptions) {}
+
+  /**
+   * The base `/assets/file/...` URLs are served under — what the local adapter
+   * resolves public URLs on — read from the settings view directly, without
+   * building an adapter (specs/156-asset-stable-url/ contracts/file-serving.md §3).
+   */
+  async localPublicBase(): Promise<string> {
+    return resolvePublicUrlBase(
+      await this.opts.settings.localPublicUrlBase(),
+      this.opts.publicApiBaseUrl,
+    );
+  }
 
   /** Drop the cached active adapter. Called when settings change. */
   invalidate(): void {

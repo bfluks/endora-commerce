@@ -22,6 +22,12 @@ export const CUSTOMER_ITEM_KEYS = [
   'taxRate',
   'packagingUnitName',
   'packagingUnitBaseQuantity',
+  // Feature 155 — the catalogue unit the line resolved to (analyze F14).
+  'packagingUnitId',
+  // Feature 159 — the line's group (one of the reply's non-empty `itemGroups`)
+  // and its order within its section.
+  'groupId',
+  'position',
 ] as const;
 
 /** The event keys a customer reply carries; `payload` is filtered on its own. */
@@ -64,18 +70,23 @@ export const CUSTOMER_PAYLOAD_KEYS = new Set([
  * quote PDF to — possibly someone other than the requester — and is the
  * administrators' record of the send, shown on the admin History only.
  */
-export const ADMIN_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set(['pdf-sent']);
+export const ADMIN_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set(['pdf-sent', 'custom-field-carry-skipped']);
 
 /** The stored events a customer may see. */
 export function customerEventsOf<T extends { readonly eventType: string }>(events: readonly T[]): T[] {
   return events.filter((event) => !ADMIN_ONLY_EVENT_TYPES.has(event.eventType));
 }
 
-/** The keys of one `payload.diff` entry (`RfqDiffEntry`). */
+/**
+ * The keys of one `payload.diff` entry (`RfqDiffEntry`). `groupName` (feature
+ * 159, research N-32) names the group of a product on several lines — a group
+ * the customer was shown on that revision.
+ */
 export const CUSTOMER_DIFF_KEYS = new Set([
   'kind',
   'productId',
   'productName',
+  'groupName',
   'quantity',
   'agreedUnitPrice',
   'before',

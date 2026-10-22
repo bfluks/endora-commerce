@@ -17,15 +17,25 @@ import {
   convertCartToQrSchema,
   ERROR_CODES,
   OrganizationCannotTransactError,
+  pickLocalized,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
+  type CatalogProductRecord,
   type PromotionApplication,
 } from '@endora-commerce/contracts';
-import type { CartService } from './services/cart-service.js';
+import { availableRecords, basketScopeLanguage, firstLanguageTag } from './services/cart-availability.js';
+import { cartAudience, type CartActor, type CartService } from './services/cart-service.js';
 import type { CartUpsellService } from './services/cart-upsell-service.js';
 import type { CartCouponService } from './services/cart-coupon-service.js';
 import type { CartConversionService } from './services/cart-conversion-service.js';
-import type { CartPricingRecompute } from './services/cart-pricing-recompute.js';
+import type { CartPricingRecompute, RecomputeRefusal } from './services/cart-pricing-recompute.js';
+import { agreementOf } from './services/cart-line-pricing.js';
 import { derivePrimaryCta } from './services/cart-state-machine.js';
+import {
+  evaluateCartViewMinimums,
+  toCartMinimumItem,
+  type CartLineMinimumView,
+} from './services/cart-minimums.js';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { Cart } from './entities/cart.entity.js';
 
@@ -33,7 +43,11 @@ import type { CartItem } from './entities/cart-item.entity.js';
 
 import { HttpError } from '@endora-commerce/platform/http';
 import { productAudienceOf } from '@endora-commerce/platform/http';
-import { rethrowIfModuleDisabled, type RequireCustomerGuard } from '@endora-commerce/platform/kernel';
+import {
+  getResolvedChannel,
+  rethrowIfModuleDisabled,
+  type RequireCustomerGuard,
+} from '@endora-commerce/platform/kernel';
 
 const ANON_COOKIE = 'b2b_cart_anon';
 
@@ -105,10 +119,13 @@ export interface CartsDeps {
     customerAccountId: string;
     organizationId: string | null;
     shoppingListId: string;
+    /** The channel whose basket the lines go into — the request's. */
+    salesChannelId: string;
   }) => Promise<{
     cartId: string;
     appendedLineCount: number;
-    droppedLines: Array<{ productId: string; productName: string; reason: string }>;
+    /** Feature 155 — `minimum` on a `below_minimum` line. */
+    droppedLines: Array<{ productId: string; productName: string; reason: string; minimum?: number }>;
   }>;
   resolveCartActor: (request: FastifyRequest) => {
     customer?: { customerAccountId: string; organizationId: string | null };
@@ -123,6 +140,13 @@ export interface CartsDeps {
    */
   catalogProducts: CatalogProductReadPort;
   /**
+   * Feature 163 — `catalog`'s availability answer, which the full view marks
+   * a line `unavailable` by (FR-006): a product switched off at the basket's
+   * (channel, language), outside its window or outside its audience reads as
+   * a product with no record.
+   */
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveNames'>;
+  /**
    * Optional gate — when provided, signed-in customers whose Organization
    * is not `active` (pending_verification / blocked / rejected) cannot add
    * lines to the cart. Anonymous users are always permitted.
@@ -134,15 +158,56 @@ export interface CartsDeps {
 }
 
 /**
+ * The caller of a storefront cart route, on the request's channel: the basket a
+ * route addresses is always the one of the channel it is used on
+ * (`specs/154-sales-channel-access/`, contracts/basket-attribution.md §1).
+ */
+function cartActorOnRequestChannel(
+  resolveCartActor: CartsDeps['resolveCartActor'],
+  request: FastifyRequest,
+): CartActor & { salesChannelId: string } {
+  const actor = resolveCartActor(request);
+  const salesChannelId = getResolvedChannel(request).id;
+  // Feature 163 — the request's language tag; the basket's scope language is
+  // it resolved against the channel's own languages.
+  const languageTag = firstLanguageTag(request.headers['accept-language']);
+  return {
+    ...(actor.customer ? { customer: { ...actor.customer, salesChannelId } } : {}),
+    ...(actor.anonymousToken
+      ? { anonymousToken: actor.anonymousToken, anonymousSalesChannelId: salesChannelId }
+      : {}),
+    ...(languageTag !== undefined ? { languageTag } : {}),
+    salesChannelId,
+  };
+}
+
+/**
  * Cart routes — open to anonymous users too. The resolver picks the right
- * cart based on (authenticated session, anonymous cookie, neither).
+ * cart based on (authenticated session, anonymous cookie, neither), on the
+ * request's channel.
  *
  * Anonymous callers receive a Set-Cookie for `b2b_cart_anon` on first add so
- * later requests target the same cart.
+ * later requests target the same cart — and a new one when the cookie they hold
+ * names a basket of another channel.
  */
 export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps): Promise<void> {
-  const { cartService, resolveCartActor, emFactory } = deps;
+  const { cartService, emFactory } = deps;
   const { assertOrganizationCanTransact } = deps;
+  const resolveCartActor = (request: FastifyRequest) =>
+    cartActorOnRequestChannel(deps.resolveCartActor, request);
+
+  /**
+   * The basket a read addresses, or `null` for none: a customer's is created on
+   * first read as it always was; an anonymous token names no basket on a
+   * channel its basket is not of.
+   */
+  const basketFor = async (actor: ReturnType<typeof resolveCartActor>): Promise<Cart | null> => {
+    if (actor.customer) return cartService.getOrCreateForCustomer(actor.customer);
+    if (actor.anonymousToken) {
+      return cartService.getOrCreateForAnon(emFactory(), actor.anonymousToken, actor.salesChannelId);
+    }
+    return null;
+  };
 
   /**
    * Refuses to mutate a cart when the signed-in Customer's Organization is
@@ -175,13 +240,8 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
 
   app.get<{ Querystring: { view?: string } }>('/api/v1/cart', async (request) => {
     const actor = resolveCartActor(request);
-    const em = emFactory();
-    let cart: Cart | null = null;
-    if (actor.customer) {
-      cart = await cartService.getOrCreateForCustomer(actor.customer);
-    } else if (actor.anonymousToken) {
-      cart = await cartService.getOrCreateForAnon(em, actor.anonymousToken);
-    } else {
+    const cart = await basketFor(actor);
+    if (!cart) {
       return request.query?.view === 'mini'
         ? { data: emptyMiniCart() }
         : { data: emptyCart() };
@@ -200,29 +260,46 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
 
     // Resolve per-line display name + slug so the storefront does not
     // have to fan out one fetch per line. Bulk lookup keyed by
-    // productId; locale comes from Accept-Language (first tag wins),
-    // English/Polish are the documented fallback chain.
-    const preferredLanguage = parsePreferredLanguage(
-      request.headers['accept-language'],
+    // productId; the name is in the response's language (the same answer
+    // an error sentence is translated into), with `pickLocalized`'s fallback
+    // chain behind it.
+    const preferredLanguage = await request.responseLanguage();
+    // Feature 155 (R11, D7) — the same records also feed the minimum flags, so
+    // this read is no longer wrapped in a tolerant `catch`. It used to fall back
+    // to empty meta on any failure, which for the flags is the fail-open answer
+    // FR-037 rules out: a cart that hides a below-minimum line because the
+    // catalogue did not answer. A failed read now fails the view; a product row
+    // that is simply gone is not a failure — its line reads `unavailable`.
+    const records = await loadCartProducts(deps.catalogProducts, items.map((it) => it.productId));
+    // Feature 163 (FR-006) — a line whose product is no longer available here
+    // stays in the basket and reads `unavailable`; its name stays known.
+    const products = await availableRecords(deps.catalogAvailability, records, {
+      channelId: actor.salesChannelId,
+      languageCode: basketScopeLanguage(actor.salesChannelId, actor.languageTag),
+      audience: cartAudience(actor),
+    });
+    // Feature 163 (FR-017 d) — each line named as the storefront shows the
+    // product in this basket's (channel, language), not in the baseline alone.
+    const effectiveNames = await deps.catalogAvailability.effectiveNames(
+      records.map((p) => p.id),
+      {
+        channelId: actor.salesChannelId,
+        languageCode: basketScopeLanguage(actor.salesChannelId, actor.languageTag),
+      },
     );
-    // Never block a cart read on a product-meta lookup hiccup (schema drift,
-    // a malformed product row, a since-deleted product): fall back to empty
-    // meta so lines still render with null names rather than 500ing the whole
-    // cart. Mirrors the recompute/coupon/promotion guards below.
-    let productMeta: Map<string, ProductMeta>;
-    try {
-      productMeta = await loadProductMeta(
-        deps.catalogProducts,
-        items.map((it) => it.productId),
-        preferredLanguage,
-      );
-    } catch (err) {
-      request.log.warn({ err, cartId: cart.id }, 'cart product-meta lookup failed; rendering without names');
-      productMeta = new Map();
-    }
+    const productMeta = productMetaOf(records, preferredLanguage, effectiveNames);
+    const minimumViews = await evaluateCartViewMinimums(
+      deps.catalogProducts,
+      { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
+      items.map(toCartMinimumItem),
+      products,
+    );
 
-    // Feature 027 §R5 — re-pricing on read (FR-008).
+    // Feature 027 §R5 — re-pricing on read (FR-008), through the chain
+    // placement charges by (issue #168): the agreed price, the price list, the
+    // Product's own price, and a refusal for a line placement would refuse.
     let recomputedPrices: Map<string, { amount: number; currency: string }> | null = null;
+    let pricingRefusals: Map<string, RecomputeRefusal> | null = null;
     if (deps.cartPricingRecompute && items.length > 0) {
       try {
         const lines = items.map((it) => ({
@@ -230,12 +307,16 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
           productId: it.productId,
           variantId: it.variantId ?? null,
           quantity: it.quantity,
+          agreed: agreementOf(it),
         }));
         const resolved = await deps.cartPricingRecompute.recompute(
           {
             cartId: cart.id,
             organizationId: cart.organizationId ?? null,
-            salesChannelId: cart.salesChannelId ?? null,
+            // The basket was looked up on this channel, so it is the basket's.
+            salesChannelId: actor.salesChannelId,
+            // D-287 P0 — the customer's own group, as on the add path.
+            customerAccountId: cart.customerAccountId ?? null,
           },
           lines,
         );
@@ -243,6 +324,11 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
           resolved
             .filter((r) => r.amount !== null)
             .map((r) => [r.cartItemId, { amount: r.amount as number, currency: r.currency }]),
+        );
+        pricingRefusals = new Map(
+          resolved
+            .filter((r) => r.amount === null && r.refusal)
+            .map((r) => [r.cartItemId, r.refusal as RecomputeRefusal]),
         );
       } catch (err) {
         // The tolerance is narrow and stays: a resolver hiccup on one read must
@@ -258,6 +344,7 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
         rethrowIfModuleDisabled(err);
         request.log.warn({ err, cartId: cart.id }, 'cart repricing failed; rendering snapshots');
         recomputedPrices = null;
+        pricingRefusals = null;
       }
     }
 
@@ -296,7 +383,16 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
       }
     }
     return {
-      data: serializeCart(cart, items, recomputedPrices, couponDroppedThisRead, productMeta, application),
+      data: serializeCart(
+        cart,
+        items,
+        recomputedPrices,
+        couponDroppedThisRead,
+        productMeta,
+        application,
+        minimumViews,
+        pricingRefusals,
+      ),
     };
   });
 
@@ -305,20 +401,36 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
     { schema: { body: addCartItemRequestSchema } },
     async (request, reply) => {
       let actor = resolveCartActor(request);
-      // If neither side identified, mint an anonymous token and echo it back.
-      if (!actor.customer && !actor.anonymousToken) {
+      // If neither side identified, mint an anonymous token and echo it back —
+      // and the same for a token whose basket is another channel's: the token is
+      // unique across baskets, so it can start none here, and the first write on
+      // this channel starts a basket under a new one (contract §1).
+      const mintAnonymousToken =
+        !actor.customer &&
+        (!actor.anonymousToken ||
+          !(await cartService.anonymousTokenUsableOn(actor.anonymousToken, actor.salesChannelId)));
+      if (mintAnonymousToken) {
         const token = `anon-${crypto.randomUUID()}`;
         reply.setCookie(ANON_COOKIE, token, { path: '/', sameSite: 'lax', httpOnly: true });
-        actor = { anonymousToken: token };
+        actor = {
+          anonymousToken: token,
+          anonymousSalesChannelId: actor.salesChannelId,
+          salesChannelId: actor.salesChannelId,
+        };
       }
       await guardOrganizationTransact(actor);
       const body = addCartItemRequestSchema.parse(request.body);
-      const result = await cartService.addItem(actor, {
-        productId: body.productId,
-        ...(body.variantId ? { variantId: body.variantId } : {}),
-        quantity: body.quantity,
-        ...(body.packagingUnitId ? { packagingUnitId: body.packagingUnitId } : {}),
-      });
+      const language = await request.responseLanguage();
+      const result = await cartService.addItem(
+        actor,
+        {
+          productId: body.productId,
+          ...(body.variantId ? { variantId: body.variantId } : {}),
+          quantity: body.quantity,
+          ...(body.packagingUnitId ? { packagingUnitId: body.packagingUnitId } : {}),
+        },
+        { language },
+      );
       return { data: serializeCart(result.cart, result.items) };
     },
   );
@@ -329,7 +441,13 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
     async (request) => {
       const actor = resolveCartActor(request);
       const body = updateCartItemRequestSchema.parse(request.body);
-      const result = await cartService.updateItem(actor, request.params.itemId, body.quantity);
+      const language = await request.responseLanguage();
+      const result = await cartService.updateItem(
+        actor,
+        request.params.itemId,
+        body.quantity,
+        { language },
+      );
       return { data: serializeCart(result.cart, result.items) };
     },
   );
@@ -418,18 +536,18 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
     { schema: { body: applyCartCouponSchema } },
     async (request) => {
       const actor = resolveCartActor(request);
-      const em = emFactory();
-      let cart: Cart | null = null;
-      if (actor.customer) {
-        cart = await cartService.getOrCreateForCustomer(actor.customer);
-      } else if (actor.anonymousToken) {
-        cart = await cartService.getOrCreateForAnon(em, actor.anonymousToken);
-      } else {
+      if (!actor.customer && !actor.anonymousToken) {
         throw new HttpError(
           401,
           ERROR_CODES.UNAUTHORIZED,
           'Cart not found.',
         );
+      }
+      // A token of another channel's basket names no basket here: nothing to
+      // apply a code to.
+      const cart = await basketFor(actor);
+      if (!cart) {
+        throw new HttpError(422, ERROR_CODES.CART_EMPTY, 'cart_empty');
       }
       const items = await cartService.getItems(cart.id);
       if (items.length === 0) {
@@ -477,15 +595,11 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
    */
   app.delete('/api/v1/cart/coupon', async (request) => {
     const actor = resolveCartActor(request);
-    const em = emFactory();
-    let cart: Cart | null = null;
-    if (actor.customer) {
-      cart = await cartService.getOrCreateForCustomer(actor.customer);
-    } else if (actor.anonymousToken) {
-      cart = await cartService.getOrCreateForAnon(em, actor.anonymousToken);
-    } else {
+    if (!actor.customer && !actor.anonymousToken) {
       throw new HttpError(401, ERROR_CODES.UNAUTHORIZED, 'Cart not found.');
     }
+    const cart = await basketFor(actor);
+    if (!cart) return { data: emptyCart() };
     await deps.cartCouponService.clear(cart);
     const items = await cartService.getItems(cart.id);
     return { data: serializeCart(cart, items) };
@@ -525,6 +639,7 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
           isOrgAdmin: false,
         },
         body.note,
+        { language: await request.responseLanguage() },
       );
       return {
         data: {
@@ -548,9 +663,11 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
       if (!actor.customer) {
         throw new HttpError(401, ERROR_CODES.UNAUTHORIZED, 'Sign-in required.');
       }
+      const language = await request.responseLanguage();
       const result = await deps.cartConversionService.createCartFromQuoteRequest(
         request.params.quoteRequestId,
         actor.customer,
+        { language },
       );
       return { data: result };
     },
@@ -572,6 +689,7 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
         customerAccountId: actor.customer.customerAccountId,
         organizationId: actor.customer.organizationId,
         shoppingListId: request.params.shoppingListId,
+        salesChannelId: actor.salesChannelId,
       });
       return { data: result };
     },
@@ -587,21 +705,14 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
       return { data: [] };
     }
     const actor = resolveCartActor(request);
-    const em = emFactory();
-    let cart: Cart | null = null;
-    if (actor.customer) {
-      cart = await cartService.getOrCreateForCustomer(actor.customer);
-    } else if (actor.anonymousToken) {
-      cart = await cartService.getOrCreateForAnon(em, actor.anonymousToken);
-    }
+    const cart = await basketFor(actor);
     if (!cart) return { data: [] };
     const parsed = cartUpsellsQuerySchema.parse(request.query ?? {});
     const limit = parsed.limit ?? 12;
-    const candidates = await deps.cartUpsellService.forCart(
-      cart.id,
-      limit,
-      productAudienceOf(request),
-    );
+    const candidates = await deps.cartUpsellService.forCart(cart.id, limit, productAudienceOf(request), {
+      channelId: actor.salesChannelId,
+      languageCode: basketScopeLanguage(actor.salesChannelId, actor.languageTag),
+    });
     return { data: candidates };
   });
 }
@@ -686,10 +797,11 @@ function serializeCartMini(cart: Cart, items: CartItem[]) {
  * Feature 027 fields are additive: `salesChannelId`, `status`,
  * `approvalStatus`, `discount`, `grandTotal`, `primaryCta`,
  * `droppedLines`, `couponDroppedThisRead`, `lastActivityAt`, and per-line
- * `lineTotal`. Re-pricing-on-read is a follow-up — the snapshotted
- * `unitPrice` on `cart_items` is returned as the current price for now;
- * the CartPricingRecompute helper (foundation T014) will be wired into
- * this serializer when the read path lands.
+ * `lineTotal`. The full view passes `recomputedPrices` — each line priced by
+ * the chain placement charges by (`CartPricingRecompute`, issue #168) — and
+ * `pricingRefusals`, the lines placement would refuse, which read as
+ * unavailable at their stored price; the mutation answers pass neither and
+ * return the stored `unitPrice`.
  */
 interface ProductMeta {
   name: string;
@@ -704,6 +816,13 @@ function serializeCart(
   couponDroppedThisRead: { code: string; reason: string } | null = null,
   productMeta: Map<string, ProductMeta> = new Map(),
   application: PromotionApplication | null = null,
+  /** Feature 155 — the full view's per-line minimum flags; absent on the mutation answers. */
+  minimumViews: Map<string, CartLineMinimumView> | null = null,
+  /**
+   * Issue #168 — lines the placement chain gives no orderable price: they read
+   * as unavailable, because placement refuses them.
+   */
+  pricingRefusals: Map<string, RecomputeRefusal> | null = null,
 ) {
   let subtotal = 0;
   let currency = items[0]?.currency ?? 'PLN';
@@ -714,6 +833,8 @@ function serializeCart(
     if (currency === 'PLN' && lineCurrency !== 'PLN') currency = lineCurrency;
     subtotal += unitPriceAmount * it.quantity;
     const meta = productMeta.get(it.productId) ?? null;
+    const minimum = minimumViews?.get(it.id) ?? null;
+    const refusal = pricingRefusals?.get(it.id);
     // Feature 043 — append the packaging-unit name to the display name when the
     // line was added as a packaging unit (e.g. "<name> (Paleta)").
     const packagingUnitName = it.packagingUnitName ?? null;
@@ -729,8 +850,20 @@ function serializeCart(
       quantity: it.quantity,
       unitPrice: { amount: unitPriceAmount, currency: lineCurrency },
       lineTotal: { amount: unitPriceAmount * it.quantity, currency: lineCurrency },
-      unavailable: false,
-      unavailableReason: null,
+      unavailable: (minimum?.unavailable ?? false) || refusal !== undefined,
+      // FR-037 — a line whose product record is gone, in the vocabulary the
+      // storefront already renders. Issue #168 — a line placement would refuse
+      // reads the same way: sold on request only is `not_purchasable`, no
+      // price for this buyer is `no_price_in_customer_list`.
+      unavailableReason:
+        minimum?.unavailable || refusal === 'quote_only' || refusal === 'product_missing'
+          ? ('not_purchasable' as const)
+          : refusal === 'unpriced'
+            ? ('no_price_in_customer_list' as const)
+            : null,
+      ...(minimum
+        ? { minOrderQuantity: minimum.minOrderQuantity, belowMinimum: minimum.belowMinimum }
+        : {}),
       productName: baseName,
       productSlug: meta?.slug ?? null,
       productSku: meta?.sku ?? null,
@@ -796,67 +929,39 @@ function resolvePrimaryCta(cart: Cart) {
 }
 
 /**
- * Resolves the storefront's preferred language from `Accept-Language`.
- * Falls back to undefined when the header is missing — the caller
- * then walks the product record's `name` locale chain in serializeCart's helper.
+ * Bulk-fetches the product records for every productId on the cart — one read
+ * the display names and the minimum flags share (feature 155, R11). Deliberately
+ * the wide read: a soft-deleted product still names the line it is on.
  */
-function parsePreferredLanguage(header: string | string[] | undefined): string | undefined {
-  const raw = Array.isArray(header) ? header[0] : header;
-  if (!raw) return undefined;
-  const first = raw.split(',')[0]?.trim();
-  return first || undefined;
+async function loadCartProducts(
+  catalogProducts: CatalogProductReadPort,
+  productIds: string[],
+): Promise<CatalogProductRecord[]> {
+  if (productIds.length === 0) return [];
+  return catalogProducts.findByIds(Array.from(new Set(productIds)));
 }
 
 /**
- * Bulk-fetches product metadata for every productId on the cart and
- * resolves a display name from the record's `name` (per-locale JSONB) using
- * the `Accept-Language` tag with a `pl` → `pl-PL` → `en-US` → first
- * available fallback chain. Empty list returns an empty map (the
- * serializer treats `null` name as "unknown" and the storefront falls
- * back to the productId).
+ * Per-product display metadata, the name resolved from the record's per-locale
+ * `name` in the response's language, through the `pickLocalized` fallback chain.
+ * A product without a record has no entry (the serializer treats it as an
+ * unknown name and the storefront falls back to the productId).
  */
-async function loadProductMeta(
-  catalogProducts: CatalogProductReadPort,
-  productIds: string[],
+function productMetaOf(
+  products: readonly CatalogProductRecord[],
   preferredLanguage: string | undefined,
-): Promise<Map<string, ProductMeta>> {
+  /** Feature 163 — the effective names at the basket's (channel, language), where known. */
+  effectiveNames: ReadonlyMap<string, string> = new Map(),
+): Map<string, ProductMeta> {
   const meta = new Map<string, ProductMeta>();
-  if (productIds.length === 0) return meta;
-  const unique = Array.from(new Set(productIds));
-  const products = await catalogProducts.findByIds(unique);
   for (const p of products) {
     meta.set(p.id, {
-      name: pickLocalized(p.name, preferredLanguage),
+      name: effectiveNames.get(p.id) || pickLocalized(p.name, preferredLanguage),
       slug: p.slug,
       sku: p.sku,
     });
   }
   return meta;
-}
-
-/**
- * Walks the locale-fallback chain for a per-locale JSONB field. Tries:
- *   1. exact match on the preferred language (e.g. `pl-PL`)
- *   2. language-only match (`pl` → first `pl-*` key)
- *   3. `en-US`, then `en`
- *   4. first available value
- *   5. empty string
- */
-function pickLocalized(
-  field: Record<string, string> | null | undefined,
-  preferredLanguage: string | undefined,
-): string {
-  if (!field) return '';
-  if (preferredLanguage && field[preferredLanguage]) return field[preferredLanguage];
-  const langOnly = preferredLanguage?.split('-')[0];
-  if (langOnly) {
-    const match = Object.keys(field).find((k) => k === langOnly || k.startsWith(`${langOnly}-`));
-    if (match) return field[match] ?? '';
-  }
-  if (field['en-US']) return field['en-US'];
-  if (field['en']) return field['en'];
-  const first = Object.values(field)[0];
-  return first ?? '';
 }
 
 declare const crypto: { randomUUID: () => string };

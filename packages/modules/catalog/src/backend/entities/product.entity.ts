@@ -31,7 +31,11 @@ export class Product {
     | 'lowStockThreshold'
     | 'lowStockThresholdMode'
     | 'fulfilmentStrategy'
-    | 'fulfilmentStrategyWarehouseOrder';
+    | 'fulfilmentStrategyWarehouseOrder'
+    | 'minOrderQuantity'
+    | 'returnable'
+    | 'publishFrom'
+    | 'publishUntil';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -191,4 +195,33 @@ export class Product {
    *  of warehouse UUIDs to walk. */
   @Property({ type: 'json', nullable: true })
   fulfilmentStrategyWarehouseOrder?: string[] | null;
+
+  /**
+   * Feature 155 (FR-001) — the minimum order quantity in pieces, 1…1 000 000,
+   * or `null` for none; `1` is equivalent to none. Meaningful for `simple`
+   * and `configurable` products only, and inherited by their variants.
+   */
+  @Property({ type: 'integer', nullable: true })
+  minOrderQuantity?: number | null;
+
+  /**
+   * Feature 155 (FR-003, FR-004) — whether the product may be returned.
+   * `false` unless an operator turns it on; snapshotted onto each order line
+   * at placement.
+   */
+  @Property({ type: 'boolean' })
+  returnable: boolean = false;
+
+  /**
+   * Feature 163 (FR-023) — the global publication window, inclusive at both
+   * ends; `null` = open on that side. A channel may replace the pair
+   * (`product_channel_scopes.window_overridden`). Never changes `status`: the
+   * window is evaluated at read time (A-4).
+   */
+  @Property({ type: 'datetime', nullable: true })
+  publishFrom?: Date | null;
+
+  /** Feature 163 (FR-023) — the end of the global publication window, inclusive. */
+  @Property({ type: 'datetime', nullable: true })
+  publishUntil?: Date | null;
 }

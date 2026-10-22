@@ -10,6 +10,7 @@ import {
   OTHER_TEST_ORGANIZATION_ID,
   TEST_ORGANIZATION_ID,
 } from './test-actors.js';
+import { bindOrganizationsToFixtureChannelsSql } from './sales-channel-access.js';
 
 /**
  * Seeds the Organization + CustomerAccount rows that back the stub-session
@@ -64,6 +65,9 @@ export async function seedOtherTestOrganization(em: EntityManager): Promise<void
       },
     }),
   );
+  // Feature 154 — an Organization with no sales channel may not shop anywhere;
+  // bind the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(em, [OTHER_TEST_ORGANIZATION_ID]);
 }
 
 /**
@@ -116,6 +120,9 @@ export async function seedTestOrganizations(em: EntityManager): Promise<void> {
     },
   });
   await em.persistAndFlush(org);
+  // Feature 154 — an Organization with no sales channel may not shop anywhere;
+  // bind the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(em, [TEST_ORGANIZATION_ID]);
 
   const admin = em.create(CustomerAccount, {
     id: TEST_CUSTOMER_ID,
@@ -180,5 +187,8 @@ export async function seedAdHocOrganization(
     },
   });
   await em.persistAndFlush(org);
+  // Feature 154 — an Organization with no sales channel may not shop anywhere;
+  // bind the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(em, [org.id]);
   return org;
 }

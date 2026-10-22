@@ -1,5 +1,88 @@
 # @endora-commerce/mod-invoices
 
+## 0.107.0
+
+### Minor Changes
+
+- dd939be: **Breaking:** invoice templates moved into _Document templates_ (`specs/152-compare-pdf-template/`).
+  This is a breaking change released as `minor` because the package is in `0.x` (D-225).
+
+  - **Withdrawn API.** `GET/POST /api/v1/admin/invoice-templates`, `GET /api/v1/admin/invoice-templates/:id`,
+    `PUT /api/v1/admin/invoice-templates/:id/content/:language`,
+    `GET /api/v1/admin/invoice-templates/page-builder/config` and the two
+    `/api/v1/admin/invoice-templates/:id/preview` routes are removed. Use
+    `/api/v1/admin/document-templates` with `documentType: 'invoices.invoice'`:
+    `POST /api/v1/admin/document-templates` (create), `PUT …/:id/content/pl-PL` (save, with
+    `{ tree, expectedVersion }`), `POST …/:id/set-default`, `POST …/preview`,
+    `GET …/types/invoices.invoice/builder-config`.
+  - **No data is carried over.** The `invoice_templates` table is dropped by a migration; the
+    invoice document type's built-in layout (the former generic template) is used until an operator
+    sets an invoice template as default.
+  - **E-mailed invoice PDFs now follow the configured template**: the attachment of the invoice
+    e-mail is rendered exactly like the download. **PDF layouts can change** with this release.
+  - The module now depends on `document_templates` (which cannot be switched off while invoicing is
+    on) and `admin_roles`. A one-time, audited boot step gives every role holding `invoices:read`
+    the `document_templates:read` permission and every role holding `invoices:write` also
+    `document_templates:write`; it records itself in the hidden setting
+    `invoices.document_templates_grant_done` and never runs again.
+  - Removed: the `invoicePdfRenderer` container registration (invoice PDFs are produced by
+    `document_templates`' `documentRenderPort`), the `invoice-templates` palette action, and the
+    invoice template admin pages; `/invoices/templates` and `/invoices/templates/:id` redirect to
+    _Document templates_. `invoicePdfBlockRegistry` and its contributor contract are unchanged.
+  - `invoices:write` is relabelled _Issue/correct invoices and configure invoicing_.
+
+### Patch Changes
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [ad55813]
+- Updated dependencies [ad55813]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+  - @endora-commerce/page-builder-admin@0.107.0
+  - @endora-commerce/page-builder-core@0.107.0
+  - @endora-commerce/email-components@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

@@ -94,11 +94,18 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // sitemap that is short — the crawler keeps the URLs it already knows either
   // way, and a 500 on this path is a signal search engines act on.
   let ctx: Ctx;
+  let anonymousAccess: boolean | undefined;
   try {
-    ({ ctx } = await getServerContext());
+    ({ ctx, anonymousAccess } = await getServerContext());
   } catch {
     return entries;
   }
+
+  // A store closed to anonymous visitors (`specs/154-sales-channel-access/`)
+  // sends every crawler — which never signs in — to its sign-in page, and its
+  // backend refuses the catalogue to them. A sitemap would advertise only
+  // redirects, so it advertises nothing and asks nothing.
+  if (anonymousAccess === false) return [];
 
   for (const url of await productUrls(ctx)) entries.push({ url, lastModified: now, priority: 0.8 });
   for (const url of await categoryUrls(ctx)) entries.push({ url, lastModified: now, priority: 0.6 });

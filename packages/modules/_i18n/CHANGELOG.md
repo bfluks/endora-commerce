@@ -1,5 +1,201 @@
 # @endora-commerce/mod-i18n
 
+## 0.107.0
+
+### Minor Changes
+
+- 70bb5e5: New `core` strings, in English and Polish, for the admin quote-request screen: `rfq.detail.reference.*` (reference price, proposal and difference columns; _price at request_ / _current price_ / _no price_; _per base unit_), `rfq.detail.history.*` (history entries, changes, actors, roles, loading, error and truncation notices; the truncation notice takes the event window as `{count}`) and `rfq.detail.modify.lineGroup` (_Line {number}_, the accessible name of a Modify line that has no product name yet). Removed: `rfq.detail.column.desired` and `rfq.detail.modify.desiredPrice`, which the screen no longer renders; the proposal column is now labelled by `rfq.detail.reference.column.proposed`.
+- bf9881f: The command palette finds records as well as screens and actions.
+
+  On every open the palette asks `GET /api/v1/admin/global-search/capability`; when the answer names
+  at least one record type, typing at least the minimum search length searches records after a 250 ms
+  pause (the previous request aborted, a stale answer ignored) and shows one group per record type
+  after _Actions_, with server-resolved titles, a status badge, a "more results" hint and a note for a
+  type that could not be searched. Records join the palette's one Arrow/Enter list; a final row opens
+  `/global-search?q=…`. A refused or failed probe — global search switched off or not installed —
+  leaves the palette exactly as it was. A live region announces the number of records found.
+
+  The `core` bundle gains five keys in English and Polish: `appShell.palette.records.searching`,
+  `.more`, `.unavailable`, `.seeAll` and `.announce`, so a host needs `@endora-commerce/mod-i18n` at
+  this version.
+
+- dd939be: The shared admin bundle drops the `invoiceTemplates.*` keys and `appShell.nav.invoiceTemplates`
+  (the invoice template screens moved to the `document_templates` module, which ships its own
+  strings), and relabels `adminRoles.permission.invoices:write` in English and Polish
+  (`specs/152-compare-pdf-template/`).
+- 2933bf0: `@endora-commerce/admin-kit/components` publishes two new components. `ModalDialog` (with `ModalDialogProps`) is the dialog primitive `crm` used to keep to itself: a titled panel over a scrim with an accessible name, a focus trap, Escape and scrim to close, and a `busy` flag that makes both inert. It gains two optional props, `initialFocusRef` (focused on open instead of the first focusable element) and `finalFocusRef` (focused after close instead of the opener, read at close time); without them it behaves as before. `useFocusTrap` accepts the same two refs through a new optional third argument (`FocusTrapOptions`). `SavedViewsControl` (with `SavedViewsControlProps` and `SavedViewState`) is the saved-views selector with _Save view_ and _Delete view_, both through dialogs rather than the browser's native prompts: the caller passes the list's saved-view endpoint, its current state and an `onApply` callback, and the control lists, creates and deletes views through the kit's `apiClient`. A name the server refuses as taken (`409`) is shown in the save dialog with the name field marked invalid until the next keystroke. It never sends an update.
+
+  `crm` imports `ModalDialog` from the kit instead of its own copy, which is deleted. No behaviour changes.
+
+  The `core` bundle gains eighteen `savedViews.*` keys in English and Polish — the copy `SavedViewsControl` and its dialogs render.
+
+- 5865c59: The API description is available to administrators with the `platform.api_description.read` permission and to API keys with the `platform.api_description.read` scope.
+
+  **`@endora-commerce/platform`.**
+
+  - New permission `platform.api_description.read` (_Read the API description_), declared by `_lifecycle`'s manifest with English and Polish labels. The platform administrator grants it through an admin role.
+  - `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` now answer only an administrator holding the code or an API key whose scopes include it. Anybody else is answered `401 UNAUTHORIZED` (no administrator session or key, a customer session included) or `403 FORBIDDEN` (an administrator or a key without the code). Both stay outside the sales-channel access rule (`salesChannelAccess: 'open'`). Responses carry `Cache-Control: private, no-store`.
+  - New admin route `GET /api/v1/admin/api-description`, gated on the same code, serving the same document to the Admin UI.
+  - `buildServer` no longer mounts the two routes. It decorates the root instance with `apiDescription(): OpenAPIV3_1.Document` (built on first call, as before), and `_lifecycle` mounts the routes where `auth`'s `requireAdmin` port is available. A composition that mounts no `_lifecycle` serves no API description; one that called `buildServer` and read `/api/v1/_openapi.json` in-process reads `app.apiDescription()` instead, or sends credentials. `registerOpenApiRoutes` is removed; it was reachable only through the host-internal `./http/openapi` subpath.
+  - The reference page loads `swagger-ui-dist@5.33.3` from jsDelivr with Subresource Integrity on both files (`swagger-ui.css` `sha384-Ov4/wv3j2bmct8cDc5X4ngJZohVPzEmc6uDPH8WeljUxO5vtoykvMEfbu9Vh6RaW`, `swagger-ui-bundle.js` `sha384-h00llMzD1afyNow1pDmnZKlHsUZgp9KE9HXLFXF2CvbwsBY0+WBO4f75SfGwvM4K`) and `crossorigin="anonymous"`; it used to load an unpinned version.
+  - A command-palette action, _API description_, targets `/api-description` and requires the new code.
+
+  **`@endora-commerce/contracts`.** `apiKeyScopeSchema` gains `'platform.api_description.read'`, so an administrator who holds the code can issue an API key that reads the API description.
+
+  **`@endora-commerce/admin-shell`.** New kernel-served screen `/api-description` (_System → API description_, gated on `platform.api_description.read`): the document's title, version and endpoint count, a JSON download, and a link that opens the interactive reference on the API's own address in a new tab, carrying the administrator session.
+
+  **`@endora-commerce/mod-i18n`.** The screen's strings and its navigation label in English and Polish (`platform.apiDescription.*`, `appShell.nav.platformApiDescription`).
+
+  **`@endora-commerce/mod-api-keys`.** The module page lists the new scope.
+
+### Patch Changes
+
+- 2420ff9: The `core` bundle gains, in English and Polish, the strings of the price list's bulk add through
+  the product browser: `priceLists.detail.picker.alreadyOnList`, `priceLists.detail.bulkAdd.error`,
+  the cause-specific `priceLists.detail.bulkAdd.error.conflict`,
+  `priceLists.detail.bulkAdd.error.forbidden`, `priceLists.detail.bulkAdd.error.invalid` and
+  `priceLists.detail.bulkAdd.error.notFound`, `priceLists.detail.bulkAdd.failed` (with `{count}`
+  and `{products}`), `priceLists.detail.bulkAdd.failed.product_not_found` and
+  `priceLists.detail.products.add.noPermission`. `priceLists.detail.picker.title` now reads "Add
+  products" / "Dodaj produkty". The single-product drawer's `priceLists.detail.picker.empty`,
+  `priceLists.detail.picker.error.load`, `priceLists.detail.picker.searchPlaceholder` and
+  `priceLists.detail.picker.subtitle` are removed, as are `priceLists.detail.picker.cancel`,
+  `priceLists.detail.products.error.add` and `priceLists.detail.products.loadingProduct`; nothing
+  reads them any more.
+- 97d24cf: The `core` bundle gains the `productBrowser.*` strings in English and Polish, used by the admin
+  kit's `ProductBrowserDialog`, `ProductBrowserTrigger` and the rule-aware `ProductPicker`: the
+  trigger and its missing-permission hint, the status tabs, the type filter, the search
+  placeholder, the column headers, translated product statuses and types, the reasons a product
+  cannot be selected, the selection footer (`productBrowser.action.confirm` is "Add {count}" /
+  "Dodaj {count}"), the per-confirm limit notice, and the loading, empty, load-error and
+  confirm-error states. No existing key changes.
+- 519fecb: **Create order** shows **Items** and **Order summary** only once both the customer and the sales
+  channel are chosen — the two inputs pricing needs; payment method, delivery method and addresses
+  do not gate them. Until then one hint names what is missing. The summary still appears only after
+  the first priced line. Clearing either field hides both sections without discarding the lines,
+  which come back when the field is set again and still count as unsaved work for the
+  leave-the-page prompt. A page opened with `customerAccountId` and `salesChannelId` in the query
+  string shows **Items** at once.
+
+  The `core` bundle gains `orderCreate.gate.missingCustomer`, `orderCreate.gate.missingChannel` and
+  `orderCreate.gate.missingBoth` in English and Polish. No existing key changes.
+
+- 708a3e3: The admin order preview says why a line cannot be ordered, and refuses a sales channel that does not exist.
+
+  **Two new message codes on `POST /api/v1/admin/orders/preview`.** A line is now also unavailable
+  when the customer's Organization may not see the product (`PRODUCT_NOT_VISIBLE_TO_CUSTOMER`) or
+  when the product is not in the assortment of the sales channel named by the request body's
+  `salesChannelId` (`PRODUCT_NOT_IN_SALES_CHANNEL`). Each unavailable line carries exactly one
+  `messages` entry, the first that applies in the order `PRODUCT_NOT_FOUND`,
+  `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`, `PRODUCT_NOT_IN_SALES_CHANNEL`, `QUOTE_ONLY`
+  (`ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE` in `@endora-commerce/contracts`). An unavailable line
+  keeps the existing shape — `unitPrice: '0'`, `lineTotal: 0`, `unavailable: true` — and adds
+  nothing to the subtotal or VAT. The request and response schemas are unchanged; `messages[].code`
+  stays a string, so a client that does not know a code keeps parsing the response. A soft-deleted
+  product is priced as before.
+
+  **Behaviour change: an unknown `salesChannelId` is now refused.** The preview used to fall back
+  silently to any active channel when the body's `salesChannelId` named none, and priced the
+  basket on that other channel. It now answers **404 `NOT_FOUND`** (the route's existing
+  not-found error) before any line is evaluated, so the channel a preview is priced on
+  and the channel its assortment is checked against are always the one the operator chose. The
+  route is admin-only (`orders:write`); an admin client that sends a stale channel id now receives
+  the error instead of a preview priced on a different channel. Order creation
+  (`POST /api/v1/admin/orders`) is not changed by this release.
+
+  **Create order adds products through the product browser.** Inside **Items** — shown once the
+  customer and the sales channel are chosen — **Browse products** opens the shared picker on the
+  Active tab, where grouped and bundle parents, draft and inactive products, and products already on
+  the order are listed with their reason and cannot be ticked; up to 200 ticked products, across
+  pages and filters, are added in one step as lines of quantity 1. Beside it a quick search by name
+  or SKU appends one product under the same rules. The per-line product search and **Add item** are
+  gone: each line shows the product's name and SKU, an editable quantity (a whole number of 1 or
+  more — anything else marks the line, keeps it out of the preview and blocks submit), the unit
+  price, the line total and a remove action. A line the preview reports unavailable shows that
+  cause's reason instead of a price — "The customer cannot see this product" for
+  `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`, "Not in this sales channel's assortment" for
+  `PRODUCT_NOT_IN_SALES_CHANNEL`, and **No price** for `PRODUCT_NOT_FOUND`, `QUOTE_ONLY` and any code
+  the screen does not know — and blocks submit until it is removed; a refused preview (such as a
+  sales channel deleted meanwhile) shows **Could not calculate prices** and marks no line. The
+  created order still carries exactly the lines and quantities on screen, in the unchanged payload
+  shape. The `core` bundle gains `orderCreate.items.browse`, `orderCreate.items.quickSearch`,
+  `orderCreate.items.empty`, `orderCreate.line.notVisible`, `orderCreate.line.notInChannel` and
+  `orderCreate.line.quantityInvalid` in English and Polish, and loses `orderCreate.addItem`, which
+  nothing reads any more.
+
+- b4fbb1c: **Create quote request** adds lines through **Browse products** — the admin kit's shared product
+  browser, many products at once — and a quick search by name or SKU beside it; the per-row product
+  search and **Add line** are gone. Draft and inactive products can be added; grouped and bundle
+  parents are shown with a reason and cannot; a product already on the request is marked as already
+  added. Each line shows name and SKU, an editable whole-number quantity (default 1), an editable
+  agreed unit price and remove.
+
+  The agreed unit price is prefilled from the customer's price lists through a queue with at most
+  four requests in flight, and a response is applied only while it still answers the line's current
+  product, quantity and customer. **A hand-typed agreed price is no longer overwritten** — before,
+  changing the quantity or the customer replaced it. A prefilled price answers one quantity, so
+  once the quantity is no longer a valid one that price is cleared and the line is marked. On a
+  customer change every price not typed by hand is cleared and resolved again for the new
+  customer, so it may become empty; lines added before a customer is chosen are prefilled once one
+  with an organization is.
+
+  **Incomplete lines block submit instead of being dropped**: a line with no agreed price or an
+  invalid quantity is marked and the request cannot be sent until it is fixed or removed; every line
+  on screen is sent. The running total counts the lines with both a valid quantity and a price.
+
+  The `core` bundle gains `rfqCreate.items.browse`, `rfqCreate.items.quickSearch`,
+  `rfqCreate.items.empty`, `rfqCreate.line.priceMissing` and `rfqCreate.line.quantityInvalid` in
+  English and Polish, and loses `rfqCreate.addItem`, which nothing reads any more.
+
+- d571d8c: The quote request History gains the _PDF sent to the customer_ entry and its recipients, template,
+  language and message lines, in English and Polish (`specs/153-quote-request-pdf-template/`).
+- ad55813: E-mail HTML previews are drawn in sandboxed frames that do not run scripts: the e-mail editor's full preview and the newsletter campaign preview carry `sandbox=""`, and the e-mail editor's inline preview of an embedded block or template is drawn in a script-less frame sized to its content instead of being injected into the editor's document. The inline frame's title is the new `core` key `pageBuilder.emailPreview.embedTitle` (English and Polish).
+- 882e88f: The order list's saved views now run on the admin kit's `SavedViewsControl` (#288).
+
+  - Saving a view opens one in-app dialog that asks for the name and whether to share the view, instead of two browser prompts. The name is checked as it is submitted — empty, too long, containing characters that cannot be used, or already used by one of your own views — and a server refusal is shown inside the dialog with what you typed kept.
+  - Deleting a view asks for confirmation in an in-app dialog that names the view and, for a shared view, warns that it disappears for every admin who can open the list. _Delete view_ is offered only for a view you may delete.
+  - Both dialogs are keyboard-operable (focus moves into the dialog, stays there and returns to the control afterwards; Escape cancels) and translated in English and Polish. A shared view is announced as shared in the selector, in words rather than a star.
+  - Loading a view saved without a sort applies the list's default sort (newest first) instead of failing.
+  - Loading a view returns the list to its first page and clears the row selection, without first requesting the old page under the view's filters.
+
+  `@endora-commerce/mod-i18n` drops the four `orders.views.*` keys the replaced component read; the control reads the `savedViews.*` keys added earlier in this feature.
+
+- Updated dependencies [fcf4d09]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

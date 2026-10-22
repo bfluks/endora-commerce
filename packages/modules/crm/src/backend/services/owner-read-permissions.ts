@@ -15,6 +15,13 @@ export const QUOTE_REQUESTS_READ_PERMISSION = 'rfqs:handle';
 /** The permission `catalog` gates its admin product reads with. */
 export const CATALOG_READ_PERMISSION = 'catalog:read';
 
+/**
+ * The permission `custom_fields` gates its definitions and values with — what
+ * an Opportunity's history asks before it serves custom-field values
+ * (feature 162, owner ruling P2 = a).
+ */
+export const CUSTOM_FIELDS_READ_PERMISSION = 'custom_fields:read';
+
 /** Whether whoever is behind the request may read what one other module owns. */
 export type OwnerReadCheck = () => Promise<boolean>;
 
@@ -26,6 +33,8 @@ export interface OwnerReadChecks {
   quoteRequests: OwnerReadCheck;
   /** `catalog:read` — a Product's name. */
   products: OwnerReadCheck;
+  /** `custom_fields:read` — an Opportunity's custom-field values in its history. */
+  customFields: OwnerReadCheck;
 }
 
 /**
@@ -75,5 +84,6 @@ export function createOwnerReadChecks(permissions: PermissionReadPort): OwnerRea
     orders: createOwnerReadCheck(permissions, ORDERS_READ_PERMISSION),
     quoteRequests: createOwnerReadCheck(permissions, QUOTE_REQUESTS_READ_PERMISSION),
     products: createOwnerReadCheck(permissions, CATALOG_READ_PERMISSION),
+    customFields: createOwnerReadCheck(permissions, CUSTOM_FIELDS_READ_PERMISSION),
   };
 }

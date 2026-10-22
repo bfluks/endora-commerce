@@ -1,5 +1,144 @@
 # @endora-commerce/mod-price-lists
 
+## 0.107.0
+
+### Minor Changes
+
+- cad6a6e: Add many products to a price list in one request.
+
+  **New route: `POST /api/v1/admin/price-lists-engine/:id/products/bulk-add`**, gated by
+  `price_lists:write`.
+
+  - Body: `{ productIds: uuid[] }` with 1 to 200 ids (`bulkAddPriceListProductsRequestSchema` from
+    `@endora-commerce/contracts`). Duplicates are collapsed, the first occurrence kept.
+  - Answer `200 { data: { added, unchanged, failed } }` (`bulkAddPriceListProductsResponseSchema`).
+    An id already on the list is `unchanged` and its brackets are left exactly as they were; an id
+    the catalogue does not hold as a live product (unknown or soft-deleted) is
+    `failed: [{ productId, reason: 'product_not_found' }]`; every other product is `added`, in
+    request order, whatever its status or type. Nothing is ever removed.
+  - Refusals write nothing: `403 FORBIDDEN` for the system Default price list (its roster is seeded
+    from each product's default price) and for a caller without `price_lists:write`,
+    `404 NOT_FOUND` for an unknown or deleted price list, `400 VALIDATION_FAILED` for an invalid
+    body (not an object, no ids, more than 200, a non-uuid id). Two requests racing to add the same
+    new product: one adds it; the other may answer `409 VERSION_CONFLICT` (or report it
+    `unchanged`), and retrying reports the product `unchanged`.
+  - One request is one Command, `price_list.products_add`, and writes **one** audit entry whose
+    after-state holds counts only — `{ name, added, unchanged, failed }`, never the id list — and
+    **no** entry when nothing was added, so a retry of an accepted request is silent.
+  - The manifest's `recentActivity` declares `price_list.products_add`, so the dashboard's recent
+    activity shows a bulk add as "added products to price list" / "dodał(a) produkty do cennika";
+    the module's own bundle gains `activity.verb.price_list.products_add` in English and Polish.
+
+  `PriceListService.addProducts(priceListId, productIds, auditCtx?)` is the service method behind
+  it. The single-product `POST …/products` and the replacing `PUT …/products` are unchanged.
+
+  **Admin screen.** On a price list's _Products & brackets_ tab, **Add** now opens the shared product
+  browser over the whole catalogue: it opens on _All_, every status and type can be ticked, products
+  already on the list are shown as _Already on this price list_ and cannot be ticked, and one confirm
+  sends one bulk-add request. A refused or lost request keeps the browser open with the selection, a
+  message naming the cause where the answer gives one (the Default list or a missing permission, a
+  price list deleted meanwhile, an invalid request, a concurrent change) and a **Retry** that
+  re-sends the same products; an accepted one closes it, reloads the roster, opens the first added
+  product's bracket editor and names any product that could not be added with the reason. The
+  roster now resolves product names for a list of any size (`batch-by-id`, 500 ids per request, at
+  most two in flight, shared by every roster change while names are still loading) instead of
+  reading the catalogue's newest 20, and the bracket editor opens for every roster product — one
+  whose name is unknown shows its id prefix rather than staying on _Loading product…_. **Add** is
+  disabled, with a hint, for an operator without `price_lists:write`, and stays disabled on the
+  system Default list. The single-product picker drawer is removed.
+
+- 70bb5e5: New `buyerLinePricePort` (container name; type `BuyerLinePricePort` in `@endora-commerce/contracts`): `resolveForBuyer({ buyer, salesChannelId, currencyCode?, lines })` answers, per line, the net unit price a buyer would pay on a normal order on that sales channel now — the account's customer group before the organization's, quantity brackets and active sale prices included. `salesChannelId: null` is the system default channel; a product that does not exist answers `price: null`; an unknown channel throws `400 VALIDATION_FAILED`. Lines are resolved in bounded chunks. The port carries no authority check — the caller passes a buyer it has already authorised — but a `customerAccountId` named together with an `organizationId` it does not belong to throws `400 VALIDATION_FAILED`.
+
+  The admin probe `GET /api/v1/admin/products/:id/resolved-price` is served by the same implementation and accepts a new `salesChannelId` query parameter (absent = system default channel; an unknown or malformed id is `400 VALIDATION_FAILED`, without echoing the id).
+
+- 70bb5e5: **The admin probe `GET /api/v1/admin/products/:id/resolved-price` now checks the buyer before pricing.** An `organizationId` or `customerAccountId` that does not exist — and, for a sales representative, one outside the organizations they may see — answers `404` with one shared body. It used to be answered with the anonymous price. A customer account that is not a member of the named `organizationId` is `400 VALIDATION_FAILED`. A request naming neither is still the anonymous price, and a platform administrator still reaches every organization.
+- 76f9757: Price lists gain a **price matrix**: one entry prices a selection of products for an optional organization and a quantity window, at a fixed unit price or a percentage discount.
+
+  - **Selections**: one product (with an organization), a category, an attribute value, a category
+    and an attribute value, or every product. Attribute selections accept only attributes flagged
+    _Price list rules_ (`isPriceRule`) whose values are a single choice, multiple choices or yes/no
+    and that are neither per-language nor per-channel; clearing the flag deactivates the entries
+    without a pricing error.
+  - **Resolution**: list selection, the Base/Sale partitions and fall-through are unchanged. Inside
+    the picked list, the list's own bracket and its entries compete — organization-specific first
+    (nearest organization in the inheritance chain first), then product > category ∩ attribute >
+    attribute > category > all products, then the higher starting quantity, the lower price and the
+    entry id. A percentage is taken off the list's own bracket, else the system Default list's,
+    rounded half-up to four decimals; without a reference it is skipped.
+  - **Every surface agrees**: `resolveLinePrice`, `resolveListingPrices`, the storefront price sort
+    and filter (`orderByUnitPrice`, `pricedProductIds`), the quantity-tier ladder
+    (`listBracketMinQuantities`) and the admin resolved-price probe, which now answers
+    `resolvedPrice.matrixEntryId`. `namedListPrices` (pinned feeds) still reads brackets only.
+    `PricingLineResult` gains an optional `matrixEntryId`; the published `LinePricePort`,
+    `LinePriceResult` and `BuyerLinePriceAnswer` are unchanged.
+  - **Admin API** behind the existing `price_lists:read` / `price_lists:write`:
+    `GET|POST /api/v1/admin/price-lists-engine/:id/matrix`,
+    `GET|PATCH|DELETE /api/v1/admin/price-lists-engine/:id/matrix/:entryId` and
+    `GET /api/v1/admin/pricing/rule-targets/attributes`. Writes are audited as
+    `price_list.matrix_entry_create|update|delete` (declared for Recent activity), tenant-scoped,
+    limited to 5 000 entries per list, and refuse overlaps. Duplicating a list copies its matrix.
+  - **Admin UI**: a _Price matrix_ tab on the price-list editor (`?tab=matrix`), English and Polish.
+  - **Schema**: one migration creates `price_list_matrix_entries`.
+  - **Composition**: `PriceListTargetReads` gains a required `catalogAttributeRead`
+    (`CatalogAttributeReadPort`); the module resolves it as `catalogAttributeReadPort`. A deployment
+    constructing `PriceListService` or `PricingService` by hand must pass it.
+
+- 3d5a203: A product sold on request only is refused by the cart whether or not a price list holds it. `CartService.addItem` read the display mode off the resolved list price, so a product no price list prices — priced from the catalogue attribute — resolved nothing, the `CART_PRODUCT_QUOTE_ONLY` guard was skipped, and `POST /api/v1/cart/items` added the line with `200`. It now answers `400 CART_PRODUCT_QUOTE_ONLY` for it too.
+
+  `@endora-commerce/contracts` publishes `ProductDisplayModePort` — `resolveDisplayMode({ productId, organizationId, salesChannelId, customerKind })` — and `@endora-commerce/mod-price-lists` provides it as `productDisplayModePort`, over the same Product → Category → Organization → Settings chain its storefront display-mode route answers with. `CartService` takes it as a new required constructor argument, after `channelMembership`; the module's own composition wires it.
+
+### Patch Changes
+
+- d76291d: Storefront catalogue reads can be priced in the currency the shopper selected. `GET /api/v1/catalog/products`, `GET /api/v1/catalog/products/:idOrSlug` and `GET /api/v1/catalog/products/:idOrSlug/links` accept `?currency=` (an ISO 4217 code, any case). The listing price, the price ordering, the price-range filter, the link tiles and the Meilisearch-served listing are all resolved in that currency when the request's sales channel lists it in its `currencies`, and in the channel's `defaultCurrency` otherwise. A malformed code answers `400 VALIDATION_FAILED`. Without the parameter, every read asks the pricing engine exactly what it asked before.
+
+  `@endora-commerce/contracts` exports the pieces both modules use: `listingCurrencyQuerySchema` (the parameter), `resolveListingCurrency(requested, channel)` (requested if the channel offers it, else its default) and `listingPriceChannelContext(channel, currency)` (the `salesChannel` and `currencyCode` half of a `ListingPriceViewerContext`, with the default currency left implicit). `SearchQueryContext` gains an optional `currency`.
+
+  `@endora-commerce/mod-price-lists`: a listing priced in a currency other than the channel's default no longer falls back to the Product's own `defaultPrice` / `price` attribute. That attribute has no currency of its own and was entered in the default one, so the fallback would have quoted, for example, 100 PLN as 100 EUR; such a product now has no listing price in that currency (`source: 'none'`). In the default currency nothing changes.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

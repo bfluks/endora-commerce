@@ -30,15 +30,17 @@ function stubDownload(): { fetch: ReturnType<typeof vi.fn> } {
 describe('exportComparisonPdf', () => {
   it('sends the storefront language and the hide-empty-rows switch', async () => {
     const { fetch } = stubDownload();
-    await exportComparisonPdf({ locale: 'pl-PL', hideEmptyRows: true });
+    await exportComparisonPdf({ locale: 'pl-PL', hideEmptyRows: true, channelCode: 'retail' });
     const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
     expect(url).toMatch(/\/api\/v1\/comparisons\/me\/pdf\?hideEmptyRows=true$/);
     expect((init.headers as Record<string, string>)['Accept-Language']).toBe('pl-PL');
+    // `specs/154-sales-channel-access/` — a browser call names the store it is made on.
+    expect((init.headers as Record<string, string>)['X-Sales-Channel']).toBe('retail');
   });
 
   it('sends hideEmptyRows=false when the switch is off', async () => {
     const { fetch } = stubDownload();
-    await exportComparisonPdf({ locale: 'en-US', hideEmptyRows: false });
+    await exportComparisonPdf({ locale: 'en-US', hideEmptyRows: false, channelCode: undefined });
     expect((fetch.mock.calls[0] as [string])[0]).toMatch(/\?hideEmptyRows=false$/);
   });
 });

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useState,
   type CSSProperties,
@@ -20,6 +21,10 @@ import { useTranslation } from '@endora-commerce/admin-kit/i18n';
  * starts in an "untouched" state — only modified fields are sent to the
  * backend. Attributes flagged `mass_editable=true` are fetched once on
  * open via `/attributes/by-flag?flag=isMassEditable`.
+ *
+ * Feature 155 (US5; FR-003, FR-004, FR-034) — a "Returnable" group sets the flag on every
+ * selected product. Products are not returnable until marked, existing ones included, so
+ * the group carries a standing hint saying so: this is where an operator fixes that.
  */
 
 type BulkStatus = 'draft' | 'active' | 'inactive';
@@ -115,6 +120,9 @@ const PANEL_STYLE: CSSProperties = {
 export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): ReactNode {
   const t = useTranslation('catalog');
   const { productIds, selectionScope, onClose, onApplied } = props;
+  const formId = useId();
+  const returnableRadioName = `${formId}-returnable`;
+  const returnableHintId = `${formId}-returnable-hint`;
 
   // Touched flags — a field is sent to the backend only when its touched
   // flag is true. Default values are placeholders that are NOT sent.
@@ -131,6 +139,10 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
   const [touchCategories, setTouchCategories] = useState(false);
   const [categoriesMode, setCategoriesMode] = useState<BulkMode>('add');
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
+
+  const [touchReturnable, setTouchReturnable] = useState(false);
+  // Defaults to "returnable": marking products returnable is what the group is for.
+  const [returnable, setReturnable] = useState(true);
 
   const [touchAttributeSet, setTouchAttributeSet] = useState(false);
   // '' represents "no attribute set" (cleared); a uuid assigns that set.
@@ -195,9 +207,18 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
       touchVisibility ||
       touchChannels ||
       touchCategories ||
+      touchReturnable ||
       touchAttributeSet ||
       touchedAttrs.size > 0,
-    [touchStatus, touchVisibility, touchChannels, touchCategories, touchAttributeSet, touchedAttrs],
+    [
+      touchStatus,
+      touchVisibility,
+      touchChannels,
+      touchCategories,
+      touchReturnable,
+      touchAttributeSet,
+      touchedAttrs,
+    ],
   );
 
   const submit = useCallback(async (): Promise<void> => {
@@ -217,6 +238,7 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
       if (touchCategories) {
         fields.categories = { mode: categoriesMode, categoryIds };
       }
+      if (touchReturnable) fields.returnable = returnable;
       if (touchAttributeSet) {
         // '' clears the set (null); a uuid assigns it.
         fields.attributeSetId = attributeSetId === '' ? null : attributeSetId;
@@ -277,6 +299,8 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
     touchCategories,
     categoriesMode,
     categoryIds,
+    touchReturnable,
+    returnable,
     touchAttributeSet,
     attributeSetId,
     touchedAttrs,
@@ -421,6 +445,48 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
                 onChange={setCategoryIds}
                 disabled={!touchCategories}
               />
+            </FieldGroup>
+
+            <FieldGroup
+              label={t('productsList.bulkEdit.section.returnable')}
+              touched={touchReturnable}
+              onToggle={setTouchReturnable}
+              t={t}
+            >
+              <div
+                role="radiogroup"
+                aria-label={t('productsList.bulkEdit.section.returnable')}
+                aria-describedby={returnableHintId}
+                style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}
+              >
+                {([true, false] as const).map((value) => (
+                  <label
+                    key={String(value)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      fontSize: 13,
+                      minHeight: 32,
+                      cursor: touchReturnable ? 'pointer' : 'default',
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name={returnableRadioName}
+                      checked={returnable === value}
+                      disabled={!touchReturnable}
+                      onChange={(): void => setReturnable(value)}
+                    />
+                    {value
+                      ? t('productsList.bulkEdit.returnable.yes')
+                      : t('productsList.bulkEdit.returnable.no')}
+                  </label>
+                ))}
+              </div>
+              <div id={returnableHintId} className="b2b-help">
+                {t('productsList.bulkEdit.returnable.hint')}
+              </div>
             </FieldGroup>
 
             <FieldGroup

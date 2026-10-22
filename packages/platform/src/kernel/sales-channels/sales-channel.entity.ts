@@ -41,6 +41,7 @@ export class SalesChannel {
     | 'languages'
     | 'currencies'
     | 'active'
+    | 'anonymousAccess'
     | 'systemDefault'
     | 'version';
 
@@ -76,6 +77,16 @@ export class SalesChannel {
 
   @Property({ type: 'boolean' })
   active: boolean = true;
+
+  /**
+   * May an anonymous request use this channel (feature 154, FR-001)? When
+   * false, the kernel's access step refuses anonymous requests with
+   * `SALES_CHANNEL_SIGN_IN_REQUIRED`; customers are decided by their
+   * Organization's channel assignment either way. Not `isPublic`, which is the
+   * anonymous price-visibility flag and only matters on an open channel.
+   */
+  @Property({ type: 'boolean' })
+  anonymousAccess: boolean = true;
 
   /** True for exactly one row platform-wide (partial unique index in migration 025). */
   @Property({ type: 'boolean' })

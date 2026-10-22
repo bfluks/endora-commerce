@@ -10,6 +10,9 @@ import {
   safeRetryTarget,
 } from './lib/service-unavailable';
 import { readRobotsPolicy } from './lib/seo/crawler-policy';
+import { readChannelIdentity, type ChannelIdentity } from './lib/channel/channel-identity';
+import { SALES_CHANNEL_REQUEST_HEADER } from './lib/channel/channel-header';
+import { closedStoreRedirect } from './lib/channel/closed-store';
 import {
   forwardRobotsDefault,
   isDocumentPath,
@@ -68,18 +71,40 @@ import {
  * question only the transport can answer, so an application defect keeps
  * throwing and keeps answering `500` — see the discrimination section of
  * `backend-reachability.ts`.
+ *
+ * ## It names the sales channel, and keeps anonymous visitors off closed stores
+ *
+ * Every backend call names the channel it is made on
+ * (`specs/154-sales-channel-access/contracts/storefront-ux.md` §1, owner
+ * decision D1), because the backend decides who may use a store from that
+ * name. A proxy may stamp `x-sales-channel` per host; when none did, this
+ * function stamps the code of the channel the backend resolves for this
+ * storefront, read through a per-process cache (`lib/channel/channel-identity.ts`)
+ * on the crawler policy's terms. From here on the render, route handlers and
+ * server actions all read one code, and the transport sends it on every call.
+ *
+ * The same read says whether the store is open to anonymous visitors. A document
+ * requested without a session on a store that is not is redirected to the
+ * sign-in page (§2) — rather than rendered from reads the backend refuses one by
+ * one into an empty shop. Files are never redirected; the outage gate runs
+ * first, so a backend that cannot be reached is still answered `503`.
  */
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   const pathname = request.nextUrl.pathname;
-  const channelCode = request.headers.get('x-sales-channel') ?? undefined;
+  const channelCode = request.headers.get(SALES_CHANNEL_REQUEST_HEADER) || undefined;
   const requestHeaders = new Headers(request.headers);
 
   if (!isDocumentPath(pathname)) {
-    // A file, not a page. The directive, and the same care with the request
-    // header as below — a missing file is answered by the not-found page, which
-    // the root layout renders — and nothing else.
-    const directive = robotsDirective(await readRobotsPolicy(channelCode));
+    // A file, not a page. The directive, the channel, and the same care with
+    // the request header as below — a missing file is answered by the not-found
+    // page, which the root layout renders — and nothing else.
+    const [policy, identity] = await Promise.all([
+      readRobotsPolicy(channelCode),
+      identityOf(channelCode),
+    ]);
+    const directive = robotsDirective(policy);
     forwardRobotsDefault(requestHeaders, directive);
+    stampChannel(requestHeaders, channelCode, identity);
     return withRobots(NextResponse.next({ request: { headers: requestHeaders } }), directive);
   }
 
@@ -89,16 +114,18 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     pathname,
     prefetch: request.headers.get('next-router-prefetch') !== null,
   });
-  // Asked together: neither waits for the other, so a document costs one round
-  // of latency however many questions the middleware has for the backend.
-  const [policy, reachability] = await Promise.all([
+  // Asked together: none waits for another, so a document costs one round of
+  // latency however many questions the middleware has for the backend.
+  const [policy, reachability, identity] = await Promise.all([
     readRobotsPolicy(channelCode),
     decision === 'ask' ? backendReachability() : Promise.resolve(null),
+    identityOf(channelCode),
   ]);
   const directive = robotsDirective(policy);
   // Written or deleted on every request, so the layout never reads a value a
   // client supplied.
   forwardRobotsDefault(requestHeaders, directive);
+  stampChannel(requestHeaders, channelCode, identity);
 
   if (decision === 'unavailable' || reachability === 'unreachable') {
     // The outage notice is a document of this channel like any other: it
@@ -106,7 +133,40 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     return withRobots(unavailable(request, requestHeaders), directive);
   }
 
+  const signIn = closedStoreRedirect({
+    pathname,
+    search: request.nextUrl.search,
+    hasSession: Boolean(request.cookies.get(SESSION_COOKIE)?.value),
+    anonymousAccess: identity?.anonymousAccess ?? null,
+  });
+  if (signIn !== null) {
+    return withRobots(NextResponse.redirect(new URL(signIn, request.url), 307), directive);
+  }
+
   return withRobots(NextResponse.next({ request: { headers: requestHeaders } }), directive);
+}
+
+/** The cookie a signed-in customer's session rides in (`lib/session.ts`). */
+const SESSION_COOKIE = 'b2b_session';
+
+/** The channel identity, or `null` when it could not be read. Never rejects. */
+async function identityOf(channelCode: string | undefined): Promise<ChannelIdentity | null> {
+  const read = await readChannelIdentity(channelCode);
+  return read.kind === 'value' ? read.value : null;
+}
+
+/**
+ * Stamps the resolved channel on a request no proxy stamped. A proxy's value is
+ * left exactly as it arrived; with nothing known, nothing is stamped and the
+ * backend resolves its default as it always did.
+ */
+function stampChannel(
+  requestHeaders: Headers,
+  inbound: string | undefined,
+  identity: ChannelIdentity | null,
+): void {
+  if (inbound !== undefined || identity === null) return;
+  requestHeaders.set(SALES_CHANNEL_REQUEST_HEADER, identity.code);
 }
 
 function withRobots(response: NextResponse, directive: RobotsDirective | null): NextResponse {

@@ -23,12 +23,11 @@
  * `toAbsoluteAssetUrl` from `@endora-commerce/admin-kit/lib`, which is where
  * `LibraryPage` was already taking it from two files away.
  *
- * **No palette action, and that is asserted rather than skipped.** This module
- * declares none in its `manifest.ts` and this batch does not invent one:
- * choosing a landing action for a screen is a product decision, not a file
- * move — the reasoning batch 8 recorded for `seo` and `taxes`. The off-state
- * test drives the empty answer in both states, so an action added later without
- * a test fails.
+ * **One palette action, "Assets library".** Choosing a landing action for a
+ * screen is a product decision rather than a file move, which is why batch 9
+ * declared none; `specs/156-asset-stable-url/` made it (research R-16, round 3
+ * Q2): `open-assets-library` → `/assets-library`, gated by `assets.read`, in
+ * `manifest.ts`. The off-state tests drive it in both states.
  *
  * **`nonDeactivatable`, so the operator axis is the platform's** (`plan.md`
  * Ruling 2). Media storage is a platform primitive — product images, CMS media

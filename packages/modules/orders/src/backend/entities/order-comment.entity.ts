@@ -1,6 +1,7 @@
 import { Entity, Index, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
+import type { OrderCommentSystemNote } from '@endora-commerce/contracts';
 
 /**
  * OrderComment — feature 038 (US5).
@@ -20,6 +21,7 @@ export class OrderComment {
     | 'authorCustomerAccountId'
     | 'isCustomerVisible'
     | 'notifyCustomer'
+    | 'systemNote'
     | 'createdAt';
 
   @PrimaryKey({ type: 'uuid' })
@@ -43,6 +45,15 @@ export class OrderComment {
 
   @Property({ type: 'boolean' })
   notifyCustomer: boolean = false;
+
+  /**
+   * Present ⇒ an author-less **system note** the platform wrote
+   * (`specs/162-custom-fields-value-carry/`, data-model §2): both authors
+   * `null`, never customer-visible, never notifying, and `body` an English
+   * fallback of what the note says. Never listed to the buyer.
+   */
+  @Property({ type: 'json', nullable: true })
+  systemNote?: OrderCommentSystemNote | null;
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   @Index()

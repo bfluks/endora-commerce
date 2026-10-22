@@ -14,6 +14,7 @@ function render(props: {
   modulePresent: boolean | undefined;
   availableProviders: readonly FederatedProvider[] | undefined;
   locale?: string;
+  salesChannelCode?: string | undefined;
 }): string {
   return renderToString(
     <SocialLoginButtons
@@ -22,6 +23,7 @@ function render(props: {
       locale={props.locale ?? 'en-US'}
       modulePresent={props.modulePresent}
       availableProviders={props.availableProviders}
+      salesChannelCode={props.salesChannelCode}
     />,
   );
 }
@@ -35,6 +37,16 @@ describe('SocialLoginButtons', () => {
       'http://api.example/api/v1/auth/customer/oauth/google/start?next=%2Faccount%2Forders',
     );
     expect(html).toContain('/api/v1/auth/customer/oauth/microsoft/start');
+  });
+
+  it('names the active sales channel on the start link (`specs/154-sales-channel-access/`)', () => {
+    // A browser navigation to the backend carries no `X-Sales-Channel`; the
+    // query parameter is how the OAuth transaction learns which store the
+    // sign-in is for, and so which store's access rule the callback applies.
+    const html = render({ modulePresent: true, availableProviders: ['google'], salesChannelCode: 'trade eu' });
+    expect(html).toContain(
+      'http://api.example/api/v1/auth/customer/oauth/google/start?next=%2Faccount%2Forders&amp;salesChannel=trade%20eu',
+    );
   });
 
   it('renders only the enabled provider when the other one is not available', () => {

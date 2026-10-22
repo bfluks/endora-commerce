@@ -20,6 +20,35 @@ import {
 } from './system-attribute-scopes.js';
 
 /**
+ * The one read of `product_value_overrides`: every override row for a set of
+ * products, in one statement, bucketed by product id. `channelId` narrows the
+ * read to one sales channel's rows — what a storefront read needs (issue #384);
+ * without it every channel's rows come back, as the admin scope editor needs.
+ */
+export async function loadOverridesByProduct(
+  em: EntityManager,
+  args: { productIds: readonly string[]; channelId?: string },
+): Promise<Map<string, OverrideRow[]>> {
+  const out = new Map<string, OverrideRow[]>();
+  if (args.productIds.length === 0) return out;
+  const rows = await em.find(ProductValueOverride, {
+    productId: { $in: [...new Set(args.productIds)] },
+    ...(args.channelId !== undefined ? { channelId: args.channelId } : {}),
+  });
+  for (const r of rows) {
+    const list = out.get(r.productId) ?? [];
+    list.push({
+      attributeKey: r.attributeKey,
+      channelId: r.channelId,
+      languageCode: r.languageCode ?? null,
+      value: r.value,
+    });
+    out.set(r.productId, list);
+  }
+  return out;
+}
+
+/**
  * Feature 022 — backend wrapper around the pure resolver in
  * `@endora-commerce/contracts`. Handles the EM-side concerns:
  *   - fetching the override map for a product in a single SELECT,
@@ -38,16 +67,10 @@ export class ProductValueResolverService {
     private readonly attributeRead?: CatalogAttributeReadService,
   ) {}
 
-  /** Load every override row for a product in one query. */
+  /** Load every override row for a product — every channel's — in one query. */
   async loadOverrides(productId: string): Promise<OverrideRow[]> {
-    const em = this.emFactory();
-    const rows = await em.find(ProductValueOverride, { productId });
-    return rows.map((r) => ({
-      attributeKey: r.attributeKey,
-      channelId: r.channelId,
-      languageCode: r.languageCode ?? null,
-      value: r.value,
-    }));
+    const byProduct = await loadOverridesByProduct(this.emFactory(), { productIds: [productId] });
+    return byProduct.get(productId) ?? [];
   }
 
   /** Resolve the platform's primary admin language. */

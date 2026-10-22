@@ -70,6 +70,8 @@ function productRecord(
     lowStockThresholdMode: 'cumulative',
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: null,
+    returnable: false,
     ...overrides,
   };
 }
@@ -282,7 +284,8 @@ describe('seo — the sitemap reads memberships through the sanctioned bridge ac
 
     const catalogProducts = {
       findByIds: async (ids: readonly string[], opts?: Record<string, boolean>) => {
-        expect(opts).toEqual({ liveOnly: true, activeOnly: true });
+        // Feature 163 — no status narrowing in the read: availability is `catalog`'s answer.
+        expect(opts).toEqual({ liveOnly: true });
         return ids.map((id) =>
           id === 'p-private'
             ? productRecord(id, { visibility: 'logged_in_only' })
@@ -316,6 +319,24 @@ describe('seo — the sitemap reads memberships through the sanctioned bridge ac
       catalogProducts,
       catalogCategories,
       cmsPages,
+      // Feature 163 — the anonymous crawler's answer per member: the private
+      // product's channel-effective rule is `logged_in_only`.
+      {
+        describeChannelAvailability: async (ids: readonly string[]) =>
+          new Map(
+            ids.map((id) => [
+              id,
+              {
+                liveLanguages: ['en-US'],
+                window: { from: null, until: null },
+                audience: {
+                  visibility: id === 'p-private' ? ('logged_in_only' as const) : ('public' as const),
+                  allowedOrganizationIds: [],
+                },
+              },
+            ]),
+          ),
+      },
       { baseUrl: 'https://shop.test', staleAfterMs: 0 },
     );
 
@@ -353,6 +374,7 @@ describe('seo — the sitemap reads memberships through the sanctioned bridge ac
       catalogProducts,
       { findByIds: async () => [] } as unknown as CatalogCategoryReadPort,
       { findByIds: async () => [] } as unknown as CmsPageReadPort,
+      { describeChannelAvailability: async () => new Map() },
       { baseUrl: 'https://shop.test', staleAfterMs: 0 },
     );
 

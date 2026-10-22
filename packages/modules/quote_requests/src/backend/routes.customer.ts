@@ -16,6 +16,7 @@ import {
 } from '@endora-commerce/contracts';
 import type { RfqService, CustomerContext } from './services/rfq-service.js';
 import { HttpError } from '@endora-commerce/platform/http';
+import { getResolvedChannel } from '@endora-commerce/platform/kernel';
 
 /**
  * Draft edits per quote request per minute (research R16).
@@ -153,7 +154,7 @@ export async function registerQuoteRequestsCustomerRoutes(
       const ctx = await resolveCustomerContext(request);
       await guardCanTransact(ctx.organizationId);
       const body = createQuoteRequestSchema.parse(request.body);
-      const rfq = await rfqService.createForCustomer(ctx, body);
+      const rfq = await rfqService.createForCustomer(ctx, body, { language: await request.responseLanguage() });
       setEtag(reply, rfq.version);
       reply.code(201);
       return { data: rfq };
@@ -177,7 +178,9 @@ export async function registerQuoteRequestsCustomerRoutes(
       const ctx = await resolveCustomerContext(request);
       const body = patchQuoteRequestSchema.parse(request.body);
       const expectedVersion = parseIfMatch(request);
-      const rfq = await rfqService.patchDraft(request.params.id, ctx, body, expectedVersion);
+      const rfq = await rfqService.patchDraft(request.params.id, ctx, body, expectedVersion, {
+        language: await request.responseLanguage(),
+      });
       setEtag(reply, rfq.version);
       return { data: rfq };
     },
@@ -224,7 +227,13 @@ export async function registerQuoteRequestsCustomerRoutes(
     { preHandler: requireCustomer },
     async (request, reply) => {
       const ctx = await resolveCustomerContext(request);
-      const result = await rfqService.convertToOrder(request.params.id, ctx);
+      // Into the basket of the storefront the buyer converts on
+      // (`specs/154-sales-channel-access/`): a customer holds one per channel.
+      const result = await rfqService.convertToOrder(
+        request.params.id,
+        ctx,
+        getResolvedChannel(request).id,
+      );
       reply.code(200);
       return { data: result };
     },
@@ -237,7 +246,9 @@ export async function registerQuoteRequestsCustomerRoutes(
     async (request, reply) => {
       const ctx = await resolveCustomerContext(request);
       const body = resubmitQuoteRequestSchema.parse(request.body ?? {});
-      const rfq = await rfqService.resubmit(request.params.id, ctx, body);
+      const rfq = await rfqService.resubmit(request.params.id, ctx, body, {
+        language: await request.responseLanguage(),
+      });
       setEtag(reply, rfq.version);
       reply.code(201);
       return { data: rfq };

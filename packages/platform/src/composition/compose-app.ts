@@ -722,6 +722,7 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     emFactory: em,
     eventBus,
     redis,
+    redisSubscriber,
     auditLogService,
   });
 
@@ -861,6 +862,13 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     // T129 and neither root registered it, so the channel-scoped storefront
     // stock read threw `AwilixResolutionError` on its first call.
     salesChannelResolutionPort: salesChannels.resolver,
+    // Feature 154 — the sales-channel access rule, for the paths that decide
+    // it before a request exists for the session in question (sign-in, second
+    // factor, federated callback) and for the storefront's access read.
+    salesChannelAccessPort: salesChannels.accessPolicy,
+    // Feature 154 — the per-Organization permitted-channel cache, which
+    // `sales_channels` drops when a channel delete rebinds or drops assignments.
+    salesChannelAccessCache: salesChannels.accessCache,
     /**
      * The channel a **channel-scoped** settings read resolves against outside a
      * request (worker, boot hook, CLI): the deployment's system-default sales

@@ -482,21 +482,6 @@ export const HARDCODED_STRINGS_BASELINE: Readonly<Record<string, number>> = {
   // operator chose. Translating them is a screen's worth of keys and belongs to
   // whoever repairs this screen, not to a batch whose subject is where the file
   // lives.
-  // Feature 091, Phase 4, the plan's batch 9 — the same four findings under a
-  // new key. `custom_fields`' definition screen moved into its module's
-  // package; the ratchet is two-way and keyed by path, so both halves fired in
-  // one run, a regression at the new key and a drain at the old one. The debt
-  // is untouched and is real: `Label (EN)`, `Options (comma-separated)`, its
-  // `gold, silver` placeholder and the `Add field` button are the create form's
-  // English-only half, beside a screen whose other six strings do resolve
-  // through this module's own bundle. Translating them is one form's worth of
-  // keys and belongs to whoever repairs the form, not to a batch whose subject
-  // is where the file lives.
-  //
-  // `assets_library` moved in the same batch and gets no entry, because its
-  // four files carry no finding — the library screen, its folder tree and its
-  // detail drawer render every sentence through `useTranslation`.
-  'packages/modules/custom_fields/src/admin/pages/CustomFieldsPage.tsx': 4,
   // Feature 091, Phase 4 batch 10 — three entries **re-keyed**, not raised and
   // not dropped: the same 17, 22 and 1 findings at new addresses, which the
   // two-way ratchet reported in one run as three regressions at the new keys

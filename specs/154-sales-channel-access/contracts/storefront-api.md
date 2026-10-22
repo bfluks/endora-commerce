@@ -45,7 +45,7 @@ component.
 | `POST /api/v1/auth/customer/login` | after a correct password and a non-blocked account: 403 `SALES_CHANNEL_NOT_PERMITTED` when the request's channel is not permitted; **no** `Set-Cookie`, no MFA challenge, `lastLoginAt` untouched. Wrong password still answers 401 first (no information about channel assignments to someone without the password). |
 | `POST /api/v1/auth/customer/mfa/verify` | refuses the same way if the assignment was removed between the two steps |
 | `GET /api/v1/auth/customer/oauth/:provider/start` | carries the channel in the OAuth transaction (already the case); the storefront appends `?salesChannel=<code>` to the start URL because it is a browser navigation without the header |
-| `GET /api/v1/auth/customer/oauth/:provider/callback` | before `createSession`: refusal redirects to `<storefront>/login?error=sales_channel_not_permitted` |
+| `GET /api/v1/auth/customer/oauth/:provider/callback` | before `createSession`: refusal redirects to `<storefront>/login?error=sales_channel_not_permitted`. When no account matches, an account is created only on a channel open to anonymous visitors, with its personal Organization assigned exactly the started-on channel; on a closed channel nothing is created and the browser is redirected to `<storefront>/login?error=sales_channel_sign_in_required` |
 
 ## §5 Registration (owner decision D6)
 

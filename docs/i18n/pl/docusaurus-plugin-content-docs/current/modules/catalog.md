@@ -205,6 +205,89 @@ w całości; ścisłe schematy to `CATALOG_WEBHOOK_EVENT_SCHEMAS` w `@endora-com
   między językami staną się problemem, nadpisz mechanizm tworzenia slugów w
   `catalog-admin.service.ts`.
 
+## Zasady zamawiania: minimalna ilość zamówienia i zwroty
+
+Dwie zasady na produkcie decydują o tym, jak można go zamówić i czy można go odesłać. Obie edytuje
+się na karcie **Zasady zamawiania** w zakładce **Inventory** edytora produktu.
+
+> **Aktualizacja: każdy istniejący produkt zaczyna jako niepodlegający zwrotowi.** Produkt, na
+> którym nikt nie ustawił **Podlega zwrotowi**, nie podlega zwrotowi — dotyczy to również każdego
+> produktu, który istniał przed wprowadzeniem tego ustawienia. Pozycje zamówień złożonych po
+> aktualizacji nie podlegają więc zwrotowi, dopóki nie oznaczysz ich produktów. Aby oznaczyć wiele
+> naraz, zaznacz je na liście produktów i użyj **Edycja masowa → Podlega zwrotowi → Tak — podlega
+> zwrotowi**. Zamówienia złożone przed aktualizacją pozostają bez zmian: ich pozycje podlegają
+> zwrotowi na dotychczasowych zasadach.
+
+### Minimalna ilość zamówienia
+
+- **Minimalna ilość zamówienia (szt.)** — najmniejsza liczba sztuk produktu, jaką kupujący może
+  zamówić w jednym zamówieniu. Opcjonalna; liczba całkowita od **1 do 1 000 000** albo puste pole,
+  gdy minimum nie ma. Dotyczy tylko produktów `simple` i `configurable`: na produkcie `grouped`,
+  `bundle` lub `virtual` karta o tym informuje, a API odrzuca to pole z kodem
+  `422 VALIDATION_FAILED` wskazującym `minOrderQuantity`, przy tworzeniu i przy aktualizacji.
+  Wartość spoza zakresu jest odrzucana z kodem `400 VALIDATION_FAILED`.
+- **Minimum dla jednostki opakowania** — każda jednostka opakowania może mieć własną minimalną
+  liczbę jednostek; zob. [Jednostki opakowania](./catalog/packaging-units.md).
+
+Minimum ocenia się na **łącznej ilości produktu**: liczy się każda pozycja produktu w koszyku —
+pozycje z pojedynczymi sztukami i z jednostkami opakowania, wszystkie warianty. Minimum jednostki
+opakowania liczy jednostki tej jednostki zamówione dla produktu, we wszystkich wariantach. Oba
+sprawdzenia są niezależne; koszyk musi spełnić każde ustawione minimum. Warianty dziedziczą
+minimum produktu.
+
+Stosuje je każda droga do koszyka, zapytania ofertowego albo zamówienia — koszyk, checkout, szybkie
+zamówienie, zakup jednym kliknięciem, listy zakupowe, zapytania ofertowe, ekran tworzenia
+zamówienia w panelu administracyjnym i zewnętrzne API zamówień. Strona każdego z tych modułów opisuje,
+co jego ścieżka robi z pozycją poniżej minimum. Odmowa to `422 PRODUCT_BELOW_MINIMUM_QUANTITY`
+(sztuki) albo `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` (jednostka opakowania), z komunikatem w
+języku kupującego podającym produkt i minimum. Usunięcie pozycji jest zawsze dozwolone.
+
+Produkt, którego kupujący nie może zobaczyć albo którego kanał sprzedaży z żądania nie publikuje,
+jest na każdej ścieżce zgłaszany jako nieznany produkt — jego nazwa i minimum nigdy nie są
+ujawniane.
+
+Szczegóły produktu w storefroncie, lista produktów, wyniki wyszukiwania i porównanie niosą
+`minOrderQuantity` (`null`, gdy minimum nie ma albo typ produktu go nie przyjmuje); tablica
+`packagingUnits[]` w szczegółach produktu niesie `minOrderUnits` każdej jednostki. Storefront
+zaczyna ilość od minimum i nie pozwala wybrać mniej.
+
+### Podlega zwrotowi
+
+**Podlega zwrotowi** (tak / nie, na każdym typie produktu) określa, czy kupujący może ująć produkt
+w **zwrocie**. Nie ogranicza **reklamacji**. Domyślnie: nie.
+
+Wartość jest **zapisywana na każdej pozycji zamówienia w chwili jego złożenia**
+(`order_items.returnable_at_purchase`); późniejsza zmiana flagi nie zmienia żadnego złożonego już
+zamówienia. Pozycja, której produktu nie dało się odczytać przy składaniu zamówienia, jest
+zapisywana jako niepodlegająca zwrotowi. To, co moduł Returns robi z zapisaną wartością, opisuje
+jego własna strona.
+
+### Audyt i kopie
+
+Ustawienie lub usunięcie którejkolwiek zasady trafia do dziennika audytu jak każda edycja
+produktu, ze starą i nową wartością. **Edycja masowa → Podlega zwrotowi** zapisuje jeden wpis
+audytu na każdy zmieniony produkt — do 200 produktów w jednym synchronicznym żądaniu, powyżej tej
+liczby przez kolejkowaną edycję masową. Zmiana zasady nigdy nie zmienia istniejącego koszyka,
+zamówienia, zapytania ofertowego ani zwrotu. **Duplicate** nie kopiuje żadnej z zasad: kopia
+zaczyna bez minimum i jako niepodlegająca zwrotowi.
+
+### API
+
+| Pole | Gdzie | Wartości |
+| --- | --- | --- |
+| `minOrderQuantity` | `POST` / `PATCH /api/v1/admin/catalog/products[/:id]`, odpowiedź produktu w panelu | liczba całkowita `1…1000000` albo `null`, aby usunąć |
+| `returnable` | to samo oraz `POST /api/v1/admin/catalog/products/bulk-update` | boolean |
+| `minOrderUnits` | `POST` / `PATCH …/packaging-units[/:unitId]`, odpowiedź jednostki opakowania | liczba całkowita `1…1000000` albo `null`, aby usunąć |
+
+Port odczytu katalogu (`CatalogProductReadPort`) podaje `minOrderQuantity` i `returnable` na każdym
+rekordzie produktu oraz `minOrderUnits` na każdej jednostce opakowania, a do odczytów zbiorczych
+dostaje metodę `listPackagingUnitsByProductIds`. Jak każda metoda tego portu nie stosuje żadnej
+polityki widoczności: wywołujący przekazuje tylko identyfikatory produktów, które już sprawdził.
+
+Migracja `20261016T082008_catalog_order_rules.ts` dodaje `products.min_order_quantity` (dopuszcza
+`null`, `CHECK` 1–1 000 000), `products.returnable` (not null, domyślnie `false`) oraz
+`product_packaging_units.min_order_units` (dopuszcza `null`, `CHECK` 1–1 000 000).
+
 ## Struktura i kompozycja produktu
 
 Katalog zyskał kilka dodatkowych możliwości, każda z własną stroną:

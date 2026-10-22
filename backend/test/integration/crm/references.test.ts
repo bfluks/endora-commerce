@@ -77,6 +77,20 @@ describe('crm references to Products and Orders (US12)', () => {
     await teardownBackendServer(h);
   });
 
+  /**
+   * What an available Order reference says beyond its number
+   * (`specs/158-crm-opportunity-inline-editing/`, FR-012), for an Order as
+   * `seedCrmOrder` places it: its status, its total, when, and the billing
+   * recipient — the seed's billing address carries no company.
+   */
+  const orderFacts = (): unknown => ({
+    status: expect.any(String),
+    total: '123.00',
+    currency: 'PLN',
+    placedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    customerName: 'A',
+  });
+
   describe('in the description', () => {
     it('resolves a Product and an Order to named links, in the order they are mentioned', async () => {
       const order = await seedCrmOrder(h.em());
@@ -94,7 +108,7 @@ describe('crm references to Products and Orders (US12)', () => {
           label: expect.stringMatching(/\S/),
           url: `/catalog/products/${SEED_PRODUCT_101_ID}`,
         },
-        { type: 'order', id: order.id, available: true, label: order.businessId, url: `/orders/${order.id}` },
+        { type: 'order', id: order.id, available: true, label: order.businessId, url: `/orders/${order.id}`, order: orderFacts() },
       ]);
       expect(Object.values(PRODUCT_NAMES)).toContain(read.references[0]?.label);
       expect(await storedReferences(opportunity.id)).toEqual(
@@ -169,7 +183,7 @@ describe('crm references to Products and Orders (US12)', () => {
         const read = OpportunityDetailResponseSchema.parse(response.json()).data;
         expect(read.references).toEqual([
           { type: 'order', id: foreignOrder.id, available: false, label: null, url: null },
-          { type: 'order', id: ownOrder.id, available: true, label: ownOrder.businessId, url: `/orders/${ownOrder.id}` },
+          { type: 'order', id: ownOrder.id, available: true, label: ownOrder.businessId, url: `/orders/${ownOrder.id}`, order: orderFacts() },
         ]);
         expect(response.body).not.toContain(String(foreignOrder.businessId));
       } finally {
@@ -203,7 +217,7 @@ describe('crm references to Products and Orders (US12)', () => {
       expect(note.body).toBe(body);
       expect(note.references).toEqual([
         expect.objectContaining({ type: 'product', id: SEED_PRODUCT_101_ID, available: true }),
-        { type: 'order', id: order.id, available: true, label: order.businessId, url: `/orders/${order.id}` },
+        { type: 'order', id: order.id, available: true, label: order.businessId, url: `/orders/${order.id}`, order: orderFacts() },
       ]);
       expect(await storedReferences(opportunity.id)).toEqual(
         [`comment:${note.id}:order:${order.id}`, `comment:${note.id}:product:${SEED_PRODUCT_101_ID}`].sort(),

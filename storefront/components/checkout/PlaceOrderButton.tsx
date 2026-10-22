@@ -41,6 +41,7 @@ export function PlaceOrderButton({
   label,
   pendingLabel,
   title,
+  describedBy,
 }: {
   blocked: PlaceOrderBlock;
   label: string;
@@ -53,6 +54,11 @@ export function PlaceOrderButton({
    * `exactOptionalPropertyTypes`.
    */
   title?: string | undefined;
+  /**
+   * Feature 155 — the id of the on-page explanation of `blocked`, linked while blocked: a
+   * `title` alone reaches neither a keyboard nor a screen-reader user.
+   */
+  describedBy?: string | undefined;
 }): ReactNode {
   const { pending } = useFormStatus();
   const disabled = blocked !== null || pending;
@@ -66,6 +72,7 @@ export function PlaceOrderButton({
       aria-busy={pending || undefined}
       aria-live="polite"
       title={blocked !== null ? title : undefined}
+      aria-describedby={blocked !== null ? describedBy : undefined}
       data-blocked={blocked ?? undefined}
       style={style}
       onClick={capturePlaceOrder}

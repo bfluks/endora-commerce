@@ -23,7 +23,7 @@ import {
 import { EmailVerificationService } from './services/email-verification-service.js';
 import { InvitationService } from './services/invitation-service.js';
 import { noopOrgTemplateEmail, type OrgTemplateEmail } from './services/org-template-email.js';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AuditPort, SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { registerOrganizationsPublicRoutes } from './routes.public.js';
 import { registerOrganizationsCustomerRoutes } from './routes.customer.js';
 import { registerOrganizationsStorefrontRoutes } from './routes.storefront.js';
@@ -148,6 +148,16 @@ export interface OrganizationsModuleOptions {
    * `requireAdmin`, the hierarchy admin endpoints are mounted (Principle XIII).
    */
   commandBus?: CommandBus;
+  /**
+   * Feature 154 — the kernel's channel-membership writer, which binds a
+   * registered Organization to the channel of the store it registered on (the
+   * system default without one), and backs the admin *Sales channels*
+   * endpoints and the admin create.
+   */
+  salesChannelMembership?: Pick<
+    SalesChannelMembershipPort,
+    'bindToDefaultIfEmpty' | 'replaceChannelsForEntity' | 'listChannelsForEntity'
+  >;
 }
 
 export function organizationsModule(options: OrganizationsModuleOptions) {
@@ -170,6 +180,7 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
       accountPorts,
       options.dictionaryValidator,
       options.auditLogService,
+      options.salesChannelMembership,
     );
     const verificationService = new EmailVerificationService(
       options.emFactory,
@@ -262,6 +273,12 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
           ? { taxIdValidationService: options.taxIdValidationService }
           : {}),
         ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
+        // Feature 154 — the Organization's *Sales channels* endpoints and the
+        // admin create.
+        ...(options.salesChannelMembership
+          ? { salesChannelMembership: options.salesChannelMembership }
+          : {}),
+        ...(options.dictionaryValidator ? { dictionaryValidator: options.dictionaryValidator } : {}),
         ...(options.commandBus
           ? {
               commandBus: options.commandBus,

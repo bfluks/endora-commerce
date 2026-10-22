@@ -13,13 +13,20 @@ import { PageViewTracker } from './PageViewTracker';
  * page-view tracker, and installs a single delegated click listener that powers
  * the `button_click_by_id` custom-event trigger. Renders no visible UI.
  */
-export function AnalyticsProvider({ config }: { config: GaStorefrontConfig }): ReactNode {
+export function AnalyticsProvider({
+  config,
+  salesChannelCode,
+}: {
+  config: GaStorefrontConfig;
+  /** The active sales channel, named on the collect beacon. */
+  salesChannelCode: string | undefined;
+}): ReactNode {
   // Publish synchronously on first render so interaction hooks that fire before
   // effects run still see the config.
-  configureGa(config);
+  configureGa(config, salesChannelCode);
 
   useEffect(() => {
-    configureGa(config);
+    configureGa(config, salesChannelCode);
     if (!config.enabled) return;
 
     const cleanups: Array<() => void> = [];
@@ -43,7 +50,7 @@ export function AnalyticsProvider({ config }: { config: GaStorefrontConfig }): R
     return () => {
       for (const fn of cleanups) fn();
     };
-  }, [config]);
+  }, [config, salesChannelCode]);
 
   return (
     <Suspense fallback={null}>

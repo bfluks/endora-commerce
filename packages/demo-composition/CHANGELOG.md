@@ -1,5 +1,82 @@
 # @endora-commerce/demo-composition
 
+## 0.107.0
+
+### Minor Changes
+
+- cc623f7: `demo reset` withdraws the demo organisation's rows in `pwa`'s new
+  `push_notification_preferences` table (a customer's account-wide push choices), as it already did
+  for `push_subscriptions`. The section is skipped, and reported as such, on an instance where `pwa`
+  was never installed.
+
+### Patch Changes
+
+- 5d52b9f: The demo organisation is assigned the system-default sales channel the retail store adopts, so
+  the demo buyer may shop there once sales-channel access is enforced; the reset withdraws the
+  assignment with the buyer.
+- Updated dependencies [fcf4d09]
+- Updated dependencies [cad6a6e]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [76f9757]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [bf9881f]
+- Updated dependencies [bf9881f]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [ac24f80]
+- Updated dependencies [ac24f80]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [649fe8d]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/mod-price-lists@0.107.0
+  - @endora-commerce/platform@0.107.0
+  - @endora-commerce/mod-catalog@0.107.0
+  - @endora-commerce/mod-customer-accounts@0.107.0
+  - @endora-commerce/mod-crm@0.107.0
+  - @endora-commerce/mod-organizations@0.107.0
+  - @endora-commerce/mod-admin-users@0.107.0
+  - @endora-commerce/mod-admin-roles@0.107.0
+  - @endora-commerce/mod-credit-limits@0.107.0
+  - @endora-commerce/mod-custom-fields@0.107.0
+  - @endora-commerce/mod-inventory@0.107.0
+  - @endora-commerce/mod-megamenu@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

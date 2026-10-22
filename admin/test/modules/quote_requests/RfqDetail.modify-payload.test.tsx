@@ -149,6 +149,8 @@ describe('RfqDetail Modify — reference, proposal, live difference, payload', (
     await userEvent.click(screen.getByRole('button', { name: 'rfq.detail.modify.saveRevision' }));
     await waitFor(() => expect(patchSpy).toHaveBeenCalled());
     const [, body] = patchSpy.mock.calls[0]! as [string, { items: Array<Record<string, unknown>> }];
+    // Feature 159 — a quote with no group sends no grouping at all (FR-033).
+    expect(body).not.toHaveProperty('groups');
     expect(body.items).toEqual([
       {
         id: ITEM_ID,

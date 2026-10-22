@@ -199,6 +199,7 @@ export default async function CategoryPage({ params, searchParams }: PageProps):
             locale={locale}
             columns={3}
             view={parsed.view}
+            salesChannelCode={ctx.salesChannelCode}
           />
           <Pagination
             basePath={`/c/${node.slug}`}

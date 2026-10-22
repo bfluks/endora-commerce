@@ -63,7 +63,12 @@ export type ResolveAttributeArgs = {
   ctx: ResolverContext;
 };
 
-function isNonEmpty(v: unknown): boolean {
+/**
+ * Whether a value counts as present: not `undefined`/`null`, and not an empty
+ * string, array or object. Shared with `storefront-value-overrides`, whose
+ * walk stops where the baseline holds a value by this same definition.
+ */
+export function isNonEmpty(v: unknown): boolean {
   if (v === undefined || v === null) return false;
   if (typeof v === 'string') return v.length > 0;
   if (Array.isArray(v)) return v.length > 0;

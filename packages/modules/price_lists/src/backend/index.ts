@@ -23,6 +23,10 @@ import { registerPriceListAuditReferences } from './services/audit-references.js
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import { priceListsModule, type PriceListsModuleOptions } from './plugin.js';
 import { DEFAULT_PRICING_CACHE_TTL_MS } from './services/pricing-cache.js';
+import type {
+  PricingGenerationPublisher,
+  PricingGenerationSubscriber,
+} from './services/pricing-generation.js';
 import { PriceListReadService, toPriceListRecord } from './services/price-list-read-port.js';
 import type { PricingServiceContract } from './services/pricing-service.interface.js';
 import { registerPriceListCurrencyReferences } from './services/price-list-currency-reference.js';
@@ -77,6 +81,10 @@ import { PriceList } from './entities/price-list.entity.js';
 /** What `price_lists` resolves from the container, and the names it owns. */
 export interface PriceListsCradle {
   readonly emFactory: () => EntityManager;
+  /** D-287 P0 — publishes the pricing generation bump to every process. */
+  readonly redis: PricingGenerationPublisher;
+  /** The composition's one shared subscriber connection (see `custom_fields`). */
+  readonly redisSubscriber: PricingGenerationSubscriber;
   readonly auditLogService: AuditPort;
   readonly commandBus: CommandBus;
   readonly requireAdmin: RequireAdminFactory;
@@ -124,6 +132,7 @@ export function registerModule(ctx: ModuleContext): void {
       .asFunction(
         ({
           emFactory,
+          redis,
           auditLogService,
           commandBus,
           priceListsEnableStatusSweeper,
@@ -135,6 +144,7 @@ export function registerModule(ctx: ModuleContext): void {
             commandBus,
             enableStatusSweeper: priceListsEnableStatusSweeper,
             pricingCacheTtlMs: priceListsPricingCacheTtlMs,
+            pricingGenerationPublisher: redis,
             requireAdmin: (permission) => async (req, reply) =>
               ctx.cradle<PriceListsCradle>().requireAdmin(permission)(req, reply),
             resolveAdminAuditContext: (req: FastifyRequest) =>
@@ -280,6 +290,23 @@ export function registerModule(ctx: ModuleContext): void {
 
   ctx.routes(async (app) => {
     await ctx.cradle<PriceListsCradle>().priceLists.plugin(app);
+  });
+
+  /**
+   * D-287 P0 — every process clears its pricing LRU when any process bumps the
+   * pricing generation (a price write after commit, a status sweep that flipped
+   * a list). The subscriber is the composition's one shared connection, as for
+   * `custom_fields`' definition cache: ioredis puts a connection in subscriber
+   * mode, so a per-module one would cost a socket per module. `start` is
+   * idempotent and only adds a listener for this module's channel.
+   *
+   * Armed whatever the activation state: the module is `nonDeactivatable`, and
+   * a stale cache in a process that missed a bump is worse than a listener
+   * that clears an empty one.
+   */
+  ctx.onBoot(async () => {
+    const { priceLists, redisSubscriber } = ctx.cradle<PriceListsCradle>();
+    await priceLists.handle.pricingGeneration.start(redisSubscriber);
   });
 
   /**

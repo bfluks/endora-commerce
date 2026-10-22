@@ -625,10 +625,25 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
       role: 'regular_user',
     });
     await add('organization_sales_rep_assignments', { organization_id: organizationId });
-    await add('sales_channel_organizations', {
-      organization_id: organizationId,
-      sales_channel_id: salesChannelId,
-    });
+    // Feature 154 — the demo seed binds its organisation to the default channel
+    // itself (the buyer could not shop without it), so for the demo the row is
+    // already there: it is tracked rather than written a second time.
+    const [bound] = await query<{ present: number }>(
+      `select 1 as present from sales_channel_organizations
+       where organization_id = $1 and sales_channel_id = $2`,
+      [organizationId, salesChannelId],
+    );
+    if (bound) {
+      tracked.get(owner)!.push({
+        table: 'sales_channel_organizations',
+        where: { organization_id: organizationId, sales_channel_id: salesChannelId },
+      });
+    } else {
+      await add('sales_channel_organizations', {
+        organization_id: organizationId,
+        sales_channel_id: salesChannelId,
+      });
+    }
     await add('sales_channel_customer_accounts', {
       customer_account_id: customerAccountId,
       sales_channel_id: salesChannelId,
@@ -919,10 +934,22 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
     });
   }
 
-  /** Every usage counter of `promotions`, as `<scope type> <scope key>` → count. */
+  /**
+   * Every usage counter of the operator's promotion, as `<scope type> <scope
+   * key>` → count.
+   *
+   * Of **that promotion**, not of the table: `setupBackendServer` does not
+   * truncate `promotion_usage_counters`, so counters other files left on this
+   * database are still there, and which ones depends on which files ran here
+   * first. A counter's key is the promotion id, alone for the `global` scope
+   * and followed by `:` for every other, so the promotion's own are exactly
+   * the keys below — and the assertion is still "only those", over them.
+   */
   async function promotionCounters(): Promise<Record<string, number>> {
     const rows = await query<{ scope_type: string; scope_key: string; count: number }>(
-      `select scope_type, scope_key, count from promotion_usage_counters`,
+      `select scope_type, scope_key, count from promotion_usage_counters
+        where scope_key = $1 or starts_with(scope_key, $1 || ':')`,
+      [operatorPromotionId],
     );
     return Object.fromEntries(
       rows.map((row) => [`${row.scope_type} ${row.scope_key}`, Number(row.count)]),
@@ -1063,6 +1090,12 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
   let demoRowsStillThere: string[];
   let realRowsMissing: string[];
   let demoOrganizationsAfterReset: number;
+/** Feature 154 — the demo organisation's sales channels after seeding, by code. */
+let demoChannelsAfterSeed: string[];
+/** Feature 154 — its channel rows once the reset has run. */
+let demoChannelRowsAfterReset: number;
+/** The system-default channel's code after seeding. */
+let demoDefaultChannelCode: string;
   let reservedAfterReset: Record<string, number>;
   let reseeded: DemoRun;
   let orderAfterReseed: string;
@@ -1116,6 +1149,17 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
     // The demo is used, and so is the instance around it.
     demoOrderId = await buyOnCredit();
     const demoIs = await demoTenant(demoOrderId);
+    demoDefaultChannelCode = (
+      await query<{ code: string }>(`select code from sales_channels where system_default`)
+    )[0]!.code;
+    demoChannelsAfterSeed = (
+      await query<{ code: string }>(
+        `select sc.code from sales_channel_organizations sco
+         join sales_channels sc on sc.id = sco.sales_channel_id
+         where sco.organization_id = $1 order by sc.code`,
+        [demoIs.organizationId],
+      )
+    ).map((row) => row.code);
     await useEverythingElse('demo', demoIs);
     const real = await realTenant();
     await useEverythingElse('real', real);
@@ -1245,6 +1289,14 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
     demoRowsStillThere = await trackedRows('demo', true);
     realRowsMissing = await trackedRows('real', false);
     nobodysRowsMissing = await trackedRows('nobody', false);
+    demoChannelRowsAfterReset = Number(
+      (
+        await query<{ n: string }>(
+          `select count(*)::text as n from sales_channel_organizations where organization_id = $1`,
+          [demoIs.organizationId],
+        )
+      )[0]!.n,
+    );
     demoOrganizationsAfterReset = Number(
       (
         await query<{ n: string }>(
@@ -1433,6 +1485,11 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
     expect(demoOrderId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  it('assigns the demo organisation the system-default sales channel when it seeds it (feature 154)', () => {
+    // The demo's retail store adopts the instance's system-default channel.
+    expect(demoChannelsAfterSeed).toEqual([demoDefaultChannelCode]);
+  });
+
   describe.each(['orders', 'organizations', 'products'])(
     'a reset refused by a foreign key onto %s',
     (parent) => {
@@ -1535,6 +1592,10 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
 
     it('removes the demo organisation', () => {
       expect(demoOrganizationsAfterReset).toBe(0);
+    });
+
+    it("removes the demo organisation's sales-channel assignment with it (feature 154)", () => {
+      expect(demoChannelRowsAfterReset).toBe(0);
     });
 
     it('leaves no column anywhere naming a row it deleted, beyond the kept records', () => {

@@ -10,7 +10,7 @@ import {
   Label,
 } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
-import { crmApi } from '../api.js';
+import { crmApi, type OrderStatusOption } from '../api.js';
 import { errorMessage } from '../lib/labels.js';
 import { COMMENT_MAX_LENGTH, CommentComposer } from './CommentComposer.js';
 import { ModalDialog } from '@endora-commerce/admin-kit/components';
@@ -47,6 +47,8 @@ export interface CommentThreadProps {
    * keeps something about them, as the Messages tab keeps what was read.
    */
   onEntries?: (entries: readonly OpportunityComment[]) => void;
+  /** `orders`' statuses, for naming the status of an Order a text refers to. */
+  orderStatuses?: readonly OrderStatusOption[];
 }
 
 /**
@@ -268,9 +270,13 @@ export function CommentThread(props: CommentThreadProps): ReactNode {
                     </div>
                   </div>
                 ) : (
-                  <p className="mt-2 whitespace-pre-wrap break-words text-sm">
-                    <ReferenceText text={item.body} references={item.references} />
-                  </p>
+                  <div className="mt-2 text-sm">
+                    <ReferenceText
+                      text={item.body}
+                      references={item.references}
+                      {...(props.orderStatuses ? { orderStatuses: props.orderStatuses } : {})}
+                    />
+                  </div>
                 )}
               </li>
             );

@@ -171,8 +171,18 @@ angielsku:
   uzgodnioną ceną) i usunięte, ilość, uzgodnioną cenę, cenę proponowaną przez klienta, notatkę
   pozycji, notatkę nagłówka i termin ważności — każdą jako stara → nowa wartość. Pozycje są
   nazywane produktem i wariantem. Zmiany jednostki opakowania i pól niestandardowych nie są
-  wymieniane. Rewizja bez wymienionej zmiany brzmi *oferta wysłana ponownie bez zmian*. Powód lub
+  wymieniane. Wymieniane są też zmiany grup pozycji — *dodano grupę*, *usunięto grupę*, *zmieniono
+  nazwę grupy* (z → na), pozycja *przeniesiona* z jednej grupy do innej (*Bez grupy* oznacza brak
+  grupy) oraz *zmieniono kolejność pozycji*, gdy pozycje lub grupy jedynie przestawiono — zob.
+  *Grupy pozycji*. Rewizja bez wymienionej zmiany brzmi *oferta wysłana ponownie bez zmian*. Powód lub
   notatka podane przy anulowaniu, odrzuceniu albo zatwierdzeniu są pokazywane.
+- **Wartości nieprzeniesione z szansy sprzedażowej.** Gdy zapytanie utworzone z szansy
+  sprzedażowej nie mogło przyjąć części jej wartości pól niestandardowych (zob. *Pola
+  niestandardowe*), historia zawiera jeden wpis autorstwa *System*, *Nie przeniesiono wartości pól
+  niestandardowych z szansy sprzedażowej*, który podaje numer szansy i wymienia każde pominięte
+  pole — nazwą pola szansy z chwili pominięcia — wraz z powodem. Wpis nie pokazuje żadnej wartości i może go
+  przeczytać każdy, kto może otworzyć zapytanie. Jest **widoczny tylko dla administratorów**: widok
+  zapytania u klienta nigdy go nie pokazuje. Przeniesione wartości nie mają osobnego wpisu.
 - **Ograniczona.** Historia odczytuje **100 najnowszych zdarzeń**. Gdy istnieją starsze, odpowiedź
   zawiera `truncated: true`, a zakładka informuje, że starsze wpisy nie są wyświetlane.
 
@@ -196,6 +206,161 @@ jednostkę opakowania, propozycję klienta i zapisaną cenę referencyjną każd
 pozycji, o ile sprzedawca ich nie zmienił. Zapisana cena referencyjna zostaje także wtedy, gdy
 sprzedawca zmienia ilość pozycji: rewizja sprzedawcy nigdy nie ustala jej ponownie. Pozycja dodana
 przez sprzedawcę ma wybrany przez niego wariant i notatkę, a jednostki opakowania nie ma.
+
+## Grupy pozycji
+
+Operator może podzielić pozycje oferty na **nazwane grupy** — *Parter*, *Piętro*, *Opcje* — tak aby
+długa oferta czytała się tak, jak klient myśli o zleceniu. Grupy służą **wyłącznie prezentacji**: nie
+zmieniają żadnej ceny, rabatu, ilości ani sumy, a pogrupowana oferta daje dokładnie te same sumy co
+te same pozycje bez grup.
+
+**Gdzie.** Zakładka **Modyfikacja** oferty i ekran **Utwórz zapytanie ofertowe**, dopóki pozycje
+oferty można edytować — w statusach *Created from admin* i *Pending*. W każdym innym statusie
+grupowanie jest pokazywane tylko do odczytu, a zapis, który je przesyła, jest odrzucany jak każda
+inna edycja pozycji (`409 RFQ_NOT_QUOTED`). Nie dochodzi żadne nowe uprawnienie: grupowanie wymaga
+`rfqs:handle` i dostępu handlowca do organizacji oferty, tak jak edycja jej pozycji.
+
+**Co może zrobić operator.**
+
+- **Dodaj grupę** tworzy grupę i ustawia fokus w polu jej nazwy. Nazwa jest przycinana i ma od 1 do
+  120 znaków; dwie grupy mogą mieć tę samą nazwę. Oferta ma najwyżej **50** grup — wtedy *Dodaj
+  grupę* jest nieaktywne i mówi dlaczego. Pusta nazwa daje komunikat *Wpisz nazwę grupy.* i blokuje
+  zapis.
+- **Zmiana nazwy** grupy odbywa się w polu jej nazwy, **usunięcie** — jej przyciskiem usuwania.
+  Usunięcie grupy nigdy nie usuwa pozycji: jej pozycje przechodzą, w swojej kolejności, do sekcji
+  **Bez grupy**.
+- **Przeniesienie pozycji** do innej grupy albo na wybrane miejsce we własnej: przeciągnięciem za
+  uchwyt, z klawiatury — fokus na uchwycie, Spacja lub Enter, przesuwanie strzałkami (za ostatnią
+  pozycją grupy pozycja wchodzi do następnej sekcji), Spacja lub Enter, aby upuścić, Escape, aby
+  anulować — albo menu **Przenieś do grupy** pozycji, które nie wymaga przeciągania. Każde
+  przeniesienie jest ogłaszane czytnikom ekranu.
+- **Kolejność grup** zmienia się przeciągnięciem, z klawiatury albo przyciskami przesuwania grupy w
+  górę i w dół. Sekcja **Bez grupy** jest zawsze ostatnia i nie można jej przesunąć, zmienić jej
+  nazwy ani jej usunąć.
+- Produkt dodany przyciskiem **Dodaj produkt** danej grupy trafia do tej grupy; każda inna dodana
+  pozycja trafia do sekcji *Bez grupy*.
+- Grupa opróżniona z pozycji **pozostaje**, dopóki nie zostanie usunięta, i jest pokazywana jako
+  puste pole upuszczania (*Przeciągnij tu pozycje lub użyj opcji Przenieś do grupy.*). Puste grupy
+  nigdy nie są pokazywane klientowi, drukowane ani przenoszone do zamówienia.
+- **Jeden produkt w kilku pozycjach.** Ten sam produkt może być w kilku pozycjach — w różnych
+  grupach albo dwa razy w jednej: *5 sztuk w Hali A, 3 w Hali B*. W zakładce *Modyfikacja* przycisk
+  **Podziel pozycję** (obok *Przenieś do grupy*, przy pozycji o ilości 2 lub większej) pyta o ilość
+  do przeniesienia na nową pozycję (od 1 do ilości pozycji minus 1) i o grupę nowej pozycji —
+  domyślnie tę samą — po czym dodaje pozycję tego samego produktu, wariantu, jednostki opakowania,
+  uzgodnionej ceny i propozycji klienta, zmniejszając pierwotną. Na ekranie tworzenia zapytania
+  produkt, który już jest w zapytaniu, można po prostu dodać ponownie.
+
+**Podsumowania.** Każda sekcja pokazuje liczbę pozycji oraz wartość netto, VAT i brutto — według tej
+samej zasady, której używają sumy oferty — a tam, gdzie ekran pokazuje ceny katalogowe, także rabat
+względem ceny katalogowej. Są przeliczane przy każdej edycji i przeniesieniu pozycji. Ekran
+tworzenia nie pokazuje VAT, więc jego sekcje pokazują liczbę pozycji i wartość netto.
+
+**Zapis.** Grupowanie zapisuje ten sam przycisk, który zapisuje pozycje — **Zapisz rewizję** albo
+przycisk tworzenia — w tym samym zapisie, z tym samym sprawdzeniem współbieżności, i jest ono
+utrwalane we wpisie audytu tego zapisu (`quote_request.modify` albo
+`quote_request.create_on_behalf`, z nazwami grup i liczbą ich pozycji przed zmianą i po niej).
+**Zapis, który zmienia tylko grupowanie, jest rewizją jak każda inna**: klient dostaje powiadomienie
+i prośbę o jej akceptację. Zakładka **Historia** wymienia zmiany grupowania w każdej rewizji (zob.
+*Historia*).
+
+**Co widzi klient.** Oferta w storefroncie pokazuje każdą grupę, która ma pozycję, jako sekcję z
+nagłówkiem, w kolejności, z jej pozycjami i podsumowaniem, a następnie pozycje bez grupy pod
+nagłówkiem **Pozostałe pozycje**; oferta bez grup wygląda dokładnie tak jak wcześniej. Klient nie
+może tworzyć, zmieniać nazw, usuwać ani przestawiać grup, a żadne żądanie klienta nie przyjmuje
+grupowania. Porównanie z ostatnią rewizją, którą klient widział, mówi w jednym wpisie, że *zmieniono
+układ pozycji*, i nie wymienia niczego więcej. Każda pozycja jest porównywana z własną: przy
+produkcie w kilku pozycjach wpis wymienia grupę pozycji, której dotyczy — *Śruba (Hala B): ilość 3 →
+2* — i tak samo robi *Historia* w panelu administracyjnym. Akceptacja i odrzucenie rewizji działają jak
+wcześniej: grupowanie nigdy nie jest powodem odmowy akceptacji.
+
+**Co zachowuje grupę pozycji.** Edycja szkicu przez klienta zachowuje w grupie każdą pozycję, którą
+zachowuje. Klient API, który zapisuje pozycje oferty bez przesłania `groups`, zachowuje w grupie
+każdą zachowaną pozycję, a nowe pozycje umieszcza w sekcji *Bez grupy*. Pozycja bez identyfikatora
+jest dopasowywana do zapisanej pozycji tego samego produktu najpierw według grupy, potem według
+ilości, a dopiero potem według kolejności — dlatego usunięcie jednej z dwóch pozycji produktu
+zostawia drugą w jej grupie. **Ponowne złożenie** zaczyna
+się bez grup: to nowe zapytanie, wycenione na nowo, które handlowiec grupuje ponownie. **Zamiana w
+zamówienie** wypełnia koszyk w kolejności oferty, a zamówienie złożone z tego koszyka zachowuje grupy
+— zob. stronę modułu zamówień.
+
+**PDF** drukuje grupy — zob. *PDF oferty*.
+
+**API.** `PATCH /api/v1/admin/quote-requests/:id` i `POST /api/v1/admin/quote-requests` przyjmują
+opcjonalną listę `groups` — całe grupowanie, w kolejności wyświetlania, każda grupa jako
+`{ key, id?, name }` (`id` zachowuje istniejącą grupę, grupa bez niego jest tworzona, a zapisana
+grupa pominięta na liście jest usuwana) — oraz dla każdej pozycji opcjonalny `groupKey` (`null` =
+bez grupy); pozycje przesyła się w kolejności wyświetlania. `groups` bez `items` daje odpowiedź
+`400`; `id`, które nie jest grupą tej oferty, daje `422 VALIDATION_FAILED`. Nowa pozycja wydzielona
+z zapisanej ma `splitFromId` (identyfikator zapisanej pozycji): zachowuje wtedy jej jednostkę
+opakowania, propozycję klienta, uwagę i cenę referencyjną; `splitFromId`, które nie wskazuje pozycji
+tej oferty, jest pomijane. Każda odpowiedź zawiera
+`itemGroups` (`{ id, name, position }`) oraz dla każdej pozycji `groupId` i `position`, z pozycjami
+w kolejności wyświetlania — odpowiedź dla administratora wymienia także puste grupy, odpowiedź dla
+klienta tylko grupy, które mają pozycję. Publikowany port odczytu `quoteRequestReadPort.listItems`
+zwraca `group` i `position` każdej pozycji, w kolejności wyświetlania.
+
+## Minimalne ilości zamówienia i jednostki opakowania
+
+Zapytania ofertowe stosują minimalne ilości zamówienia z katalogu — minimum produktu w sztukach i
+minimum każdej jednostki opakowania w jednostkach, liczone ze wszystkich pozycji produktu w
+zapytaniu (oba definiuje strona modułu Catalog). **Reguła zależy od tego, kto zapisuje, a nie od
+trasy.**
+
+**Jednostki opakowania wskazuje się identyfikatorem.** Pozycja klienta (utworzenie, edycja szkicu,
+koszyk → zapytanie ofertowe) może nieść `packagingUnitId`. Musi to być bieżąca jednostka produktu
+z tej pozycji; serwer zapisuje jej nazwę i base quantity z katalogu i ignoruje nazwę ani base
+quantity przesłane w pozycji. Pozycja, która przesyła nazwę jednostki i base quantity bez
+identyfikatora, jest przyjmowana tylko wtedy, gdy oba pasują do jednej z jednostek produktu.
+Wszystko inne jest odrzucane w całości z kodem `422 PACKAGING_UNIT_MISMATCH`, bez zapisu;
+`details.lines[]` podaje `index` i `reason` każdej błędnej pozycji. Każdy błąd identyfikatora —
+nieznany, usunięty albo jednostka innego produktu — ma ten sam powód, `unknown_unit`, więc
+odpowiedź nie zdradza niczego o innych produktach; nazwa dostaje `name_unknown` albo
+`base_quantity_mismatch`. Odrzucana jest też edycja szkicu, która odsyła pozycję z zapisaną nazwą
+jednostki niepasującą już do żadnej jednostki w katalogu. `packagingUnitId` jest zwracane w
+odczycie dla panelu i dla klienta, a rewizja administratora zachowuje je na pozycjach, które
+zostawia.
+
+**Zapis klienta poniżej minimum jest odrzucany.** Utworzenie (`POST /api/v1/quote-requests` —
+bezpośrednio, z koszyka, z szybkiego zamówienia, z listy zakupów albo przez sklonowanie jednego z
+jego zamówień), edycja szkicu (`PATCH /api/v1/quote-requests/:id`) i ponowne złożenie
+(`POST /api/v1/quote-requests/:id/resubmit`) odpowiadają kodem
+`422 PRODUCT_BELOW_MINIMUM_QUANTITY` albo `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` z
+`details.lines[]` dla każdej odrzuconej pozycji i niczego nie zapisują; zdanie i nazwy produktów są
+w języku odpowiedzi (z nagłówka `Accept-Language` żądania, z uwzględnieniem wag q, a w przeciwnym
+razie w domyślnym języku kanału). Kolejność sprawdzeń:
+najpierw produkt, którego klient nie widzi albo którego kanał nie publikuje, jest odrzucany jako
+nieznany, więc nic o nim nie zostaje ujawnione; potem jednostka opakowania, potem minima —
+wszystko, zanim zostanie wyznaczona jakakolwiek cena referencyjna.
+
+- **Edycja szkicu.** Pozycja, której klient nie zmienił — ten sam produkt, wariant, jednostka
+  opakowania i ilość co w zapisanej pozycji — nie jest odrzucana, nawet poniżej minimum; jej sztuki
+  nadal liczą się do łącznej ilości produktu, gdy sprawdzana jest inna pozycja tego produktu.
+  Pozycja wskazuje jednostkę opakowania jej identyfikatorem, więc jednostka, której nazwę zmieniono
+  w katalogu po zapisaniu pozycji, nadal jest tą samą jednostką, a pozycja pozostaje niezmieniona
+  (i zachowuje zapisaną cenę referencyjną).
+- **Ponowne złożenie** jest oceniane jak nowe zapytanie, bez zwolnienia, w sztukach (nie przenosi
+  jednostki opakowania). Zapytanie, którego produkt już nie istnieje, jest odrzucane z kodem `404`.
+- **Akceptacja albo odrzucenie rewizji** nigdy nie jest odrzucane z powodu minimów.
+
+**Zapis administratora nigdy nie jest odrzucany z powodu minimum.** Utworzenie w imieniu klienta,
+**Modyfikacja** (łącznie z wynegocjowanymi ilościami), sklonowanie zamówienia do zapytania
+ofertowego z panelu i zbudowanie zapytania ofertowego z szybkiego zamówienia w panelu zapisują
+pozycje poniżej minimum. Odczyt w panelu (`GET /api/v1/admin/quote-requests/:id`) daje każdej takiej
+pozycji `minimumWarning` (`{ kind, minimum, packagingUnitName? }`), ocenione na bieżących pozycjach
+zapytania, a ekran zapytania ofertowego pokazuje je jako plakietkę *Poniżej minimum* na pozycji, na
+zakładkach **Przegląd** i **Modyfikacja**. Ostrzeżenie informuje i niczego nie blokuje; nigdy nie
+trafia do odczytu klienta. Klonowanie do zapytania i budowanie z szybkiego zamówienia w panelu
+nadal sprawdzają jednostkę opakowania.
+
+**Zamówienie zaakceptowanego zapytania zachowuje jego ilości.** `convert-to-order` wypełnia koszyk
+uzgodnionymi ilościami bez sprawdzania minimów; w koszyku każda pozycja wypełniona z zapytania jest
+zwolniona, dopóki jej ilość równa się ilości z zapytania, a checkout honoruje to tylko wtedy, gdy
+to zapytanie jest nadal ważne (strony modułów Carts i Orders). Gdy ten moduł jest wyłączony, nic
+nie może potwierdzić zapytania, więc taki koszyk traci zwolnienia przy checkoucie.
+
+Migracja `20261018T122118_quote_requests_item_packaging_unit_id.ts` dodaje
+`quote_request_items.packaging_unit_id` (dopuszcza `null`, bez klucza obcego — nazwa i base
+quantity jednostki pozostają skopiowane w pozycji).
 
 ## Blokada negocjacji cen
 
@@ -273,6 +438,62 @@ odpowiadała `403`, co zdradzało, że zapytanie istnieje).
 Klient z rolą `org_admin` we własnej organizacji widzi każde zapytanie ofertowe tej organizacji, a
 nie tylko własne.
 
+## Pola niestandardowe
+
+Zapytania ofertowe przyjmują pola niestandardowe, definiowane na ekranie **Pola niestandardowe**.
+Pola te podążają za tym modułem: gdy `quote_requests` jest wyłączony, nie są tam wyświetlane, nie
+można ich tworzyć ani edytować i nie zwraca ich API definicji; pola, ich opcje i zapisane wartości
+są zachowane i wracają bez zmian po ponownym włączeniu modułu.
+
+### Wartości przenoszone do zapytania i z niego
+
+Pole zapytania ofertowego może przekazywać swoją wartość dalej, a pole szansy sprzedażowej — do
+zapytania ofertowego; ustawia się to dla każdego pola opcją **Przenoś wartość do: …** na ekranie
+**Pola niestandardowe**, którego strona opisuje reguły (ten sam klucz, zgodny typ i opcje, zasada
+widoczności). Wypełniane jest tylko puste pole i tylko raz:
+
+- **Do zamówienia** złożonego z zaakceptowanego zapytania, przy składaniu — zob. stronę modułu
+  zamówień.
+- **Do szansy sprzedażowej**, którą moduł CRM otwiera dla zapytania albo do której dołącza
+  zamówienie złożone z zapytania — zob. stronę modułu CRM.
+- **Z szansy sprzedażowej** do zapytania, które administrator tworzy przyciskiem **Utwórz zapytanie
+  ofertowe** na karcie *Powiązania* szansy. Wartości trafiają do zapytania, gdy moduł CRM powiąże je
+  z szansą, w zmianie przypisanej **systemowi** (`quote_request.custom_fields.carry` w dzienniku
+  audytu); utworzenie zapytania pozostaje przypisane administratorowi. Wartość, której nie da się
+  przenieść, jest pomijana i wymieniana w *Historii* zapytania (zob. *Historia*), a zapytanie i tak
+  powstaje. Zapytanie powiązane z szansą ręcznie nie otrzymuje niczego, podobnie jak zapytanie,
+  które klient utworzył jako kopię zamówienia.
+
+  **Wersja zmienia się tuż po utworzeniu.** Przeniesienie, które wypełnia pole, jest zmianą
+  zapytania jak każda inna i podnosi jego `version`, a następuje tuż po tym, jak żądanie utworzenia
+  odpowiedziało. Klient, który edytuje nowe zapytanie z wersją zwróconą w odpowiedzi na utworzenie,
+  dostaje więc `409 VERSION_CONFLICT`, gdy wartości zostały już przeniesione: odczytaj zapytanie
+  ponownie i wyślij wersję, którą zwraca teraz. Przeniesienie, które niczego nie wypełnia, nie
+  zmienia wersji. Na czas odczytu i zapisu przeniesienie blokuje wiersz zapytania, więc nigdy nie
+  nadpisuje edycji administratora wykonanej w tej samej chwili.
+
+Gdy ten moduł jest wyłączony, nic nie jest przenoszone do zapytania ofertowego ani z niego i nic nie
+jest odtwarzane po jego powrocie. Dla integratorów: zapisane zdarzenie ma typ
+`custom-field-carry-skipped`; w `GET /api/v1/admin/quote-requests/:id/history` jest to wpis o
+`kind` `custom_field_carry_skipped`, którego `customFieldCarry` zawiera `source` (`entityType:
+"opportunity"`, `recordId`, `reference`) i `skipped` (`key`, `reason`, `label`).
+
+### Filtry pól niestandardowych na liście
+
+Pole zapytania ofertowego z włączoną opcją **Używaj jako filtra listy** jest dostępne jako filtr na
+liście zapytań ofertowych, opisany w twoim języku: tekst, który zawiera, zakres liczb lub dat, tak
+lub nie albo jedna lub więcej opcji. Zapytanie bez wartości tego pola nigdy nie pasuje. Filtr
+stosuje serwer, więc zawęża całą listę — sumę i każdą stronę — a nie tylko już wczytane zapytania;
+status, wyszukiwanie, sortowanie i stronicowanie działają obok niego. Każdy filtr jest pokazany jako
+usuwalna etykieta, zapisuje się w adresie strony i w zapisanych widokach, a jego zmiana wraca do
+pierwszej strony listy.
+
+Jeśli adres zawiera filtr, który nie jest już dostępny, lista mówi o tym, podając nazwę pola, i
+oferuje **Usuń ten filtr**. Zapisany widok z takim filtrem pomija go przy wczytaniu, z komunikatem,
+który go nazywa. Wywołujący API przesyłają filtry jako `customFieldFilters` w
+`GET /api/v1/admin/quote-requests`, a dostępne pola odczytują z
+`GET /api/v1/admin/quote-requests/custom-field-filters` (`rfqs:handle`). Odwrócony zakres (`min` większe niż `max`, `from` późniejsze niż `to`) lub operator niepasujący do typu pola daje `400` `VALIDATION_FAILED`.
+
 ## Zapisane widoki
 
 Zapisany widok to nazwane ustawienie listy zapytań ofertowych — jej filtrów, sortowania i kolumn —
@@ -283,11 +504,13 @@ które administrator może ponownie zastosować jednym wyborem.
 Na pasku narzędzi listy zapytań ofertowych jest lista wyboru **Zapisane widoki**, której pierwsza
 pozycja to **— Wybierz widok —**, a obok niej dwa przyciski: **Zapisz widok** i **Usuń widok**.
 
-- **Co zapamiętuje widok.** Sześć rzeczy: zakres **Widoczność**, organizację, wybrane statusy,
-  wyszukiwany tekst, sortowanie i widoczne kolumny. Wybranie widoku zastępuje wszystkie sześć
-  wartościami z widoku, odrzuca to, co zmieniono i nie zapisano, i wraca na pierwszą stronę.
-  Status lub kolumna, których lista już nie zna, są pomijane; widok bez kolumn pokazuje kolumny
-  domyślne; widok bez poprawnego zakresu otwiera się w twoim domyślnym zakresie.
+- **Co zapamiętuje widok.** Siedem rzeczy: zakres **Widoczność**, organizację, wybrane statusy,
+  wyszukiwany tekst, filtry pól niestandardowych, sortowanie i widoczne kolumny. Wybranie widoku
+  zastępuje wszystkie siedem wartościami z widoku, odrzuca to, co zmieniono i nie zapisano, i wraca
+  na pierwszą stronę. Status lub kolumna, których lista już nie zna, są pomijane; filtr pola
+  niestandardowego, który nie jest już dostępny, jest pomijany z komunikatem, który go nazywa;
+  widok bez kolumn pokazuje kolumny domyślne; widok bez poprawnego zakresu otwiera się w twoim
+  domyślnym zakresie.
 - **Widok nigdy nie poszerza tego, co widzisz.** Przechowuje wartości filtrów, nigdy wyniki. Po
   wczytaniu widoku lista jest odczytywana z *twoimi* uprawnieniami i *twoimi* organizacjami,
   niezależnie od tego, kto widok zapisał. *Moje organizacje* oznacza organizacje przypisane do
@@ -445,6 +668,16 @@ Układ wbudowany drukuje liczbę porządkową, produkt, SKU, ilość, opakowanie
 (obie tylko wtedy, gdy któraś pozycja ma rabat), cenę po rabacie, stawkę VAT, wartość netto i
 brutto, uwagi pod pozycją oraz sumy — po angielsku i po polsku.
 
+**Grupy w PDF.** Pogrupowana oferta drukuje każdą grupę, która ma pozycję, jako wiersz nagłówka — jej
+nazwę i liczbę pozycji — potem jej pozycje, a następnie wiersz sumy częściowej dla każdej sumy
+tabeli, policzonej po pozycjach grupy; pozycje bez grupy następują pod nagłówkiem **Pozostałe
+pozycje** (*Other items*), a po nich jak dotąd sumy oferty. Liczba porządkowa biegnie 1…n przez
+wszystkie grupy. Układ wbudowany i każdy szablon zapisany, zanim powstały grupy, drukują je bez
+żadnej zmiany; szablon może zamiast tego drukować ofertę bez podziału albo grupować ją według pola
+(ustawienie *Grupowanie* tabeli pozycji, opisane na stronie Szablonów dokumentów). Oferta bez grup
+drukuje się dokładnie tak jak wcześniej. Gdy **Szablony dokumentów** są wyłączone, PDF nie powstaje,
+jak opisano wyżej, a grupowanie na wszystkich ekranach działa bez zmian.
+
 **Wysyłka.** *Wyślij PDF do klienta* podpowiada adres e-mail klienta, który złożył zapytanie.
 Handlowiec może go usunąć i dodać inne adresy — dowolne poprawne adresy, najwyżej **5**, powtórzenia
 są łączone — oraz opcjonalną wiadomość osobistą do 2 000 znaków. Każdy adres otrzymuje osobny e-mail
@@ -601,6 +834,13 @@ informuje. Zapis zmienia `updated_at`, ale nie `version`. Wiersz `quote_request_
 `pdf-sent` zapisuje każdą udaną wysyłkę *Wyślij PDF do klienta*; jest widoczny tylko w historii w
 panelu administracyjnym.
 
+`quote_request_item_groups` przechowuje grupy pozycji oferty — `name` i `position` każdej grupy,
+usuwane razem z zapytaniem ofertowym. `quote_request_items` przechowuje `group_id` każdej pozycji
+(`null` = bez grupy; usunięcie grupy ustawia go na `null`) i jej `position` w obrębie sekcji. Migawka
+pozycji w każdej rewizji zapisuje także grupę i miejsce pozycji, więc historia i porównanie klienta
+opisują grupowanie tak, jak pokazano je klientowi. Oferta utworzona, zanim powstały grupy, jest
+odczytywana jako niepogrupowana, z pozycjami w pierwotnej kolejności.
+
 `quote_request_list_saved_views` przechowuje zapisane widoki listy (zob. *Zapisane widoki*). Jest
 globalna dla platformy, a nie przypisana do organizacji: przechowuje wartości filtrów, nigdy
 zapytania ofertowe, i nie jest usuwana, gdy moduł zostaje wyłączony.
@@ -735,8 +975,8 @@ sposoby:
   filtrem typu i wyszukiwaniem po SKU, slugu lub nazwie. Zaznaczenie przetrwa zmianę strony,
   rozmiaru strony i filtrów, a **Dodaj N** dodaje każdy zaznaczony produkt jako pozycję o ilości 1
   — najwyżej 200 naraz. Produkty robocze i nieaktywne można dodać; produkty nadrzędne typu grouped
-  i bundle są widoczne z powodem i nie da się ich zaznaczyć; produkt, który już jest w zapytaniu,
-  jest oznaczony jako już dodany.
+  i bundle są widoczne z powodem i nie da się ich zaznaczyć. Produkt, który już jest w zapytaniu,
+  można dodać ponownie jako osobną pozycję — na przykład, by umieścić go w drugiej grupie.
 - **Szybkie dodawanie po nazwie lub SKU**, obok, dopisuje jeden produkt według tych samych zasad.
 
 Bez uprawnienia `catalog:read` obie te opcje są nieaktywne i każda pokazuje podpowiedź.

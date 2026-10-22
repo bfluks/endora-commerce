@@ -117,6 +117,7 @@ function channel(overrides: Partial<SalesChannelDetail> = {}): SalesChannelDetai
     code: 'pl_retail',
     name: { 'en-US': 'PL retail' },
     active: true,
+    anonymousAccess: true,
     systemDefault: false,
     defaultLanguage: 'pl-PL',
     defaultCurrency: 'PLN',
@@ -458,6 +459,7 @@ describe('the submitted value', () => {
         currencies: ['PLN', 'EUR'],
         defaultCurrency: 'PLN',
         active: true,
+        anonymousAccess: true,
       },
     ]);
   });

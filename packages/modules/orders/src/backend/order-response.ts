@@ -1,9 +1,9 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { CustomFieldValuePort, Order as OrderResponse } from '@endora-commerce/contracts';
 import type { Order } from './entities/order.entity.js';
-import { OrderItem } from './entities/order-item.entity.js';
 import { OrderStatus } from './entities/order-status.entity.js';
 import { OrderAppliedPromotion } from './entities/order-applied-promotion.entity.js';
+import { loadArrangedOrderLines } from './services/order-line-order.js';
 
 /**
  * Which keys of an order's custom-field bag a non-administrator may read.
@@ -71,7 +71,9 @@ async function serializeShared(
   em: EntityManager,
   order: Order,
 ): Promise<Omit<OrderResponse, 'customFieldValues' | 'placedOnBehalfByAdminUserId'>> {
-  const items = await em.find(OrderItem, { orderId: order.id });
+  // Feature 159 (FR-011, FR-087) — the lines in display order and the order's
+  // groups; this read had no order before (research R-1).
+  const { groups: itemGroups, lines: items } = await loadArrangedOrderLines(em, order.id);
   // Status label payload (feature 039 follow-up): the localized name map + the
   // language-independent default name, so any client resolves
   // name[language] → defaultName → code in the viewer's language.
@@ -105,6 +107,7 @@ async function serializeShared(
       kind: order.paymentMethodSnapshot.kind,
     },
     sourceQuoteRequestId: order.sourceQuoteRequestId ?? null,
+    itemGroups,
     items: items.map((it) => ({
       id: it.id,
       productId: it.productId,
@@ -115,6 +118,8 @@ async function serializeShared(
       unitPrice: Number(it.unitPrice),
       taxRate: Number(it.taxRate),
       lineTotal: Number(it.lineTotal),
+      groupId: it.groupId ?? null,
+      position: it.position,
     })),
     subtotal: Number(order.subtotal),
     taxTotal: Number(order.taxTotal),

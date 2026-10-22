@@ -1,0 +1,10 @@
+---
+'@endora-commerce/mod-carts': minor
+---
+
+Cart pricing is batched, on the customer's own group, and in the basket's currency (D-287 P0).
+
+- **Batched.** `CartLinePricing` takes `LinePricesPort` and gains `orderablePrices(ctx, lines)`; a basket's lines are priced in one `resolveLinePrices` call on the login/reorder reprice, the batch add and the placement price-drift check (each was one `resolveLinePrice` per line). `CartPricingRecompute` (the `GET /api/v1/cart` re-pricing) takes `LinePricesPort` and resolves every line in one call. `CartService`'s `pricingService` is now `LinePricesPort`.
+- **Customer group.** `CartLinePricing.contextFor` and `CartPricingRecomputeContext` accept `customerAccountId`; adds, quantity changes, the read re-pricing and the placement check price on the customer's own group.
+- **Behaviour change — currency of the own-price fallback.** A line priced from the product's own `defaultPrice` attribute is labelled with the basket channel's default currency, as the catalogue listing labels it; it was hard-coded `PLN` (issue #303's cart half). A basket whose channel no longer exists is now unpriced for such a product instead of being priced in `PLN`.
+- **Behaviour change — `GET /api/v1/cart` shows the price placement charges (issue #168).** The read re-prices every line through `CartLinePricing.orderablePrices`, the chain order placement's price-drift check runs, instead of a plain list price per line: a line seeded from an accepted quote shows its agreed price at the agreed quantity (it showed the list price), a product priced only by its own price attribute shows that price (it showed its stored snapshot), and a line placement would refuse — sold on request only, no price for this buyer, product gone — reads `unavailable: true` with `unavailableReason` `not_purchasable` / `no_price_in_customer_list` at its stored price (it read as orderable). Still one batched pricing call per read. `CartPricingRecompute`'s constructor now takes `(emFactory, linePricing: CartLinePricing, cache, catalogProducts)`; `RecomputeLineRequest` gains `agreed`, `RecomputedLinePrice` gains `refusal`, and cached entries carry it.

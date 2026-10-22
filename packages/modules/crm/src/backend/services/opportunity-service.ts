@@ -12,6 +12,10 @@ import {
   type AdminUserReadPort,
   type CreateOpportunityRequest,
   type CustomerAccountReadPort,
+  type CustomFieldFilters,
+  type CustomFieldListFilterField,
+  type CustomFieldListFilterPort,
+  type CustomFieldCarryPort,
   type CustomFieldValuePort,
   type OpportunityCreatedEvent,
   type OpportunityBoardCardField,
@@ -34,6 +38,7 @@ import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { getTenantContext, isOrgInScope } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
 import { isDeepStrictEqual } from 'util';
+import { carryIntoOpportunity, type OpportunityCarrySource } from './opportunity-custom-field-carry.js';
 import {
   OpportunityWorkflowConfigError,
   resolveOpportunityStatusName,
@@ -81,6 +86,24 @@ export interface OpportunityServiceDeps {
   unresolvedPropagations: (opportunityId: string) => Promise<PropagationOutcome[]>;
   /** Operator-defined fields (US15): `custom_fields` validates, this service writes. */
   customFields: CustomFieldValuePort;
+  /**
+   * `custom_fields`' carry port (feature 162): the document's values an
+   * Opportunity created for it receives. Lazy, like every port here.
+   */
+  customFieldCarry: CustomFieldCarryPort;
+  /**
+   * The list's custom-field filters (`specs/157-custom-fields-list-filters/`):
+   * `custom_fields`' `customFieldListFilterPort`, which offers the fields and
+   * turns them into one condition.
+   *
+   * Required, unlike the Orders and Quote Request hosts' optional argument:
+   * this service is built in one place only, the module's composition, which
+   * always binds it — `custom_fields` is non-deactivatable and `customFields`
+   * above is already a required edge to it. Those two hosts' list services are
+   * also built by callers that never filter on custom fields (the Orders
+   * prompt tools), which is the only reason theirs may be absent.
+   */
+  customFieldListFilter: CustomFieldListFilterPort;
   /** Recalculates a computed Opportunity's value — asked when its mode becomes `computed`. */
   recalculateValue: (opportunityId: string) => Promise<unknown>;
   /**
@@ -126,6 +149,12 @@ export interface AutomaticOpportunityInput {
   source: Exclude<OpportunitySource, 'manual'>;
   /** The document it is created for, linked in the same Command. */
   document: { kind: OpportunityDocumentKind; id: string };
+  /**
+   * The document's custom-field values, carried into the new Opportunity
+   * (feature 162). Absent for a document created **from** an Opportunity: that
+   * carry goes the other way.
+   */
+  carry?: OpportunityCarrySource;
 }
 
 /** What the create Command writes beside the request's own fields. */
@@ -133,6 +162,8 @@ interface CreateOptions {
   source: OpportunitySource;
   /** A document linked to the Opportunity in the same transaction (`link_source = 'auto'`). */
   document?: { kind: OpportunityDocumentKind; id: string };
+  /** Feature 162 — what the custom-field carry adds to the audit entry (`customFieldCarry`). */
+  carryAfter?: Record<string, unknown>;
 }
 
 /** What an edit that changed the assignee hands on: the announcement, and whom to tell. */
@@ -323,6 +354,14 @@ export class OpportunityService {
         ? input.salesChannelId
         : null;
 
+    // Feature 162 (US2; research R-9) — the document's carried custom-field
+    // values, planned before the Command: the Opportunity is new, so every
+    // carried field is empty. Not validated against the Opportunity's other
+    // fields — a required one must not stop the creation.
+    const carry = input.carry
+      ? await carryIntoOpportunity(this.deps.customFieldCarry, input.carry, {})
+      : null;
+
     let created: { id: string; organizationId: string; number: string } | null = null;
     // The create Command refuses when the start status it was handed has gone
     // by the time it holds it (research N-R12). A person retries; nobody is
@@ -341,9 +380,10 @@ export class OpportunityService {
               salesChannelId,
               assignedAdminUserId,
               valueMode: 'computed',
+              ...(carry && carry.carried.length > 0 ? { customFieldValues: carry.values } : {}),
             },
             initial.code,
-            { source: input.source, document: input.document },
+            { source: input.source, document: input.document, ...(carry ? { carryAfter: carry.after } : {}) },
           ),
         );
       } catch (error) {
@@ -452,6 +492,7 @@ export class OpportunityService {
             ...(options.document
               ? { linkedDocument: { documentKind: options.document.kind, documentId: options.document.id } }
               : {}),
+            ...(options.carryAfter ?? {}),
           },
         };
       },
@@ -600,7 +641,28 @@ export class OpportunityService {
       end.setUTCDate(end.getUTCDate() + 1);
       conditions.push({ createdAt: { $lt: end } });
     }
-    if (cardFields) conditions.push(...boardFieldFilterConditions(cardFields, query.fieldFilters));
+    // `cardValues` (or a card handed in by the board) is a **mode switch, never
+    // a security boundary**: both modes narrow the same tenant-scoped,
+    // assignment-scoped statement, so choosing the board's rule only ever
+    // chooses its narrower set of filters, never a wider result.
+    if (card !== undefined || query.cardValues) {
+      // The board, and a board lane continued in the list: the card rule.
+      if (cardFields) conditions.push(...boardFieldFilterConditions(cardFields, query.fieldFilters));
+    } else if (query.fieldFilters) {
+      // The list (FR-011a): built-in references keep the card rule; a `custom:`
+      // reference follows the definition's list-filter option, all of them as
+      // one record through the port — refused when a field is not offered.
+      const builtin = (cardFields ?? []).filter((field) => field.source === 'builtin');
+      conditions.push(...boardFieldFilterConditions(builtin, query.fieldFilters));
+      const custom = Object.create(null) as CustomFieldFilters;
+      for (const [ref, filter] of Object.entries(query.fieldFilters)) {
+        if (ref.startsWith('custom:')) custom[ref.slice('custom:'.length)] = filter;
+      }
+      const condition = await this.deps.customFieldListFilter.condition('opportunity', custom);
+      if (condition !== null) {
+        conditions.push({ id: { $in: raw(`(${condition.sql})`, [...condition.params]) } });
+      }
+    }
 
     const direction = (query.order ?? 'desc') === 'asc' ? QueryOrder.ASC_NULLS_LAST : QueryOrder.DESC_NULLS_LAST;
     const sort = query.sort ?? 'createdAt';
@@ -639,6 +701,11 @@ export class OpportunityService {
   async summarize(rows: readonly CrmOpportunity[]): Promise<OpportunitySummary[]> {
     if (rows.length === 0) return [];
     return this.#summaries(rows, await this.deps.workflowRead.loadGraph(this.deps.emFactory()));
+  }
+
+  /** The Opportunity custom fields the list offers as filters (feature 157). */
+  async customFieldFilterFields(): Promise<CustomFieldListFilterField[]> {
+    return this.deps.customFieldListFilter.listFilterable('opportunity');
   }
 
   async get(id: string): Promise<OpportunityDetail> {

@@ -10,6 +10,7 @@ import {
 import type { FulfilmentStrategy } from './inventory.js';
 import type { BulkImportReport } from './import-export.js';
 import type { AttributeScope } from './product-value-resolver.js';
+import { ORDER_MINIMUM_MAX } from './order-minimums.js';
 
 /**
  * Catalog module contracts — Source of truth per Principle V.
@@ -223,6 +224,33 @@ export type ProductPriceTier = z.infer<typeof productPriceTierSchema>;
 
 // --- Product summary (list response) ----------------------------------------
 
+/**
+ * D-287 P0 — the price a storefront surface renders, from the **same**
+ * resolution that produced `ProductSummary.price`: the regular (base) price,
+ * the sale price when a sale list priced the product, and the display mode.
+ *
+ * The product page used to fetch this separately from
+ * `GET /api/v1/storefront/products/:id/resolved-price` after the catalogue had
+ * already priced the product for `price`, so every product page resolved its
+ * product twice, and the home page's cards fanned out one such request per card
+ * (`specs/pricing/read-paths-and-performance.md` §2.1). Carrying it here makes
+ * a catalogue read the one resolution those surfaces need.
+ *
+ * `basePrice` is the base partition's figure, else the Product's own price
+ * when that is what `price` came from; `salePrice` is set only when a sale list
+ * priced the product (it is then also `price`). Both are `null` when nothing
+ * prices the product; `displayMode` is still the viewer's, so a page can tell
+ * "sold on request only" (`none`) from "no price". The display-mode values are
+ * `displayModeSchema`'s (`price-lists.ts`, which imports this file and checks
+ * the two agree at compile time).
+ */
+export const productResolvedPriceSchema = z.object({
+  basePrice: z.object({ amount: z.string(), currency: z.string().length(3) }).nullable(),
+  salePrice: z.object({ amount: z.string(), currency: z.string().length(3) }).nullable(),
+  displayMode: z.enum(['gross_only', 'net_only', 'both', 'none']),
+});
+export type ProductResolvedPrice = z.infer<typeof productResolvedPriceSchema>;
+
 export const productSummarySchema = z.object({
   id: uuidSchema,
   sku: z.string().min(1).max(255),
@@ -245,6 +273,19 @@ export const productSummarySchema = z.object({
    * indication (band + in-stock flag), present for bound and unbound keys.
    */
   availability: productAvailabilitySchema.optional(),
+  /**
+   * Feature 155 — the product's pieces minimum; `null` = none. Emitted only for
+   * `simple` / `configurable` products (else `null`). Optional so every producer
+   * written before it still compiles.
+   */
+  minOrderQuantity: z.number().int().positive().nullable().optional(),
+  /**
+   * D-287 P0 — base + sale + display mode from the resolution behind `price`
+   * ({@link productResolvedPriceSchema}). `null` where the channel withholds
+   * prices; absent from producers that do not resolve one (optional so every
+   * producer written before it still compiles).
+   */
+  resolvedPrice: productResolvedPriceSchema.nullable().optional(),
 });
 export type ProductSummary = z.infer<typeof productSummarySchema>;
 
@@ -467,6 +508,8 @@ export const productDetailSchema = productSummarySchema.extend({
         baseQuantity: z.number().int().positive(),
         position: z.number().int().nonnegative(),
         isDefault: z.boolean(),
+        /** Feature 155 — minimum units of this unit per order of the product; `null` = none. */
+        minOrderUnits: z.number().int().positive().nullable().optional(),
       }),
     )
     .optional(),
@@ -646,6 +689,13 @@ const baseProductRequestObject = z.object({
     .nullable()
     .optional(),
   fulfilmentStrategyWarehouseOrder: z.array(uuidSchema).nullable().optional(),
+  /**
+   * Feature 155 — pieces minimum; `null` clears. Simple / configurable only (else
+   * 422 VALIDATION_FAILED, `details.field`, from the service).
+   */
+  minOrderQuantity: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
+  /** Feature 155 — may `return`-kind cases include this product? Every type. */
+  returnable: z.boolean().optional(),
 });
 
 export const createProductRequestSchema = baseProductRequestObject.refine(
@@ -670,7 +720,16 @@ export type CreateProductRequest = z.infer<typeof createProductRequestSchema>;
 // frozen at snapshot time.
 export const updateProductRequestSchema = baseProductRequestObject
   .partial()
-  .omit({ type: true });
+  .omit({ type: true })
+  .extend({
+    /**
+     * Feature 163 (FR-023) — the global publication window, inclusive at both
+     * ends; `null` opens that side. A start not before the end is refused by the
+     * service (`422 VALIDATION_FAILED`, `details.field = 'window'`).
+     */
+    publishFrom: isoDateTimeSchema.nullable().optional(),
+    publishUntil: isoDateTimeSchema.nullable().optional(),
+  });
 export type UpdateProductRequest = z.infer<typeof updateProductRequestSchema>;
 
 // Admin batch-by-id lookup. The body carries the id set (deduped server-
@@ -734,6 +793,19 @@ const bulkUpdateFieldsObject = z.object({
   // selected product.
   attributeSetId: uuidSchema.nullable().optional(),
   attributeValues: z.record(z.string(), z.unknown()).optional(),
+  /** Feature 155 — set (or unset) the returnable flag on every selected product. */
+  returnable: z.boolean().optional(),
+  /**
+   * Feature 163 (FR-050) — the status at one channel (`languageCode: null`) or one
+   * channel × language; `inherit` removes the override. Never combined with `status`.
+   */
+  scopedStatus: z
+    .object({
+      channelId: uuidSchema,
+      languageCode: z.string().min(1).max(16).nullable(),
+      value: z.enum([...productStatusSchema.options, 'inherit']),
+    })
+    .optional(),
 });
 
 export const bulkUpdateProductsRequestSchema = z.object({
@@ -751,9 +823,14 @@ export const bulkUpdateProductsRequestSchema = z.object({
       f.salesChannels !== undefined ||
       f.categories !== undefined ||
       f.attributeSetId !== undefined ||
+      f.returnable !== undefined ||
+      f.scopedStatus !== undefined ||
       (f.attributeValues !== undefined && Object.keys(f.attributeValues).length > 0),
     { message: 'at least one field must be present' },
-  ),
+  ).refine((f) => f.scopedStatus === undefined || f.status === undefined, {
+    message: 'scopedStatus cannot be combined with status',
+    path: ['scopedStatus'],
+  }),
 });
 export type BulkUpdateProductsRequest = z.infer<typeof bulkUpdateProductsRequestSchema>;
 
@@ -767,6 +844,10 @@ export const bulkUpdateProductResultSchema = z.object({
       'permission_denied',
       'concurrent_modification',
       'product_not_found',
+      // Feature 163 — a scope the product cannot hold (FR-051), and the
+      // completeness gate in `refuse` mode (FR-061).
+      'scope_invalid',
+      'completeness_gate',
     ])
     .optional(),
   details: z
@@ -1563,6 +1644,11 @@ export const packagingUnitSchema = z.object({
   baseQuantity: z.number().int().positive(),
   position: z.number().int().nonnegative(),
   isDefault: z.boolean(),
+  /**
+   * Feature 155 — minimum units of this unit per order of the product; `null` = none.
+   * Always emitted by `catalog`; optional so other builders of the DTO keep compiling.
+   */
+  minOrderUnits: z.number().int().positive().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -1574,6 +1660,8 @@ export const createPackagingUnitRequestSchema = z
     baseQuantity: z.number().int().positive(),
     isDefault: z.boolean().optional(),
     position: z.number().int().nonnegative().optional(),
+    /** Feature 155 — minimum number of this unit per order of the product; `null` clears. */
+    minOrderUnits: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
   })
   .strict();
 export type CreatePackagingUnitRequest = z.infer<typeof createPackagingUnitRequestSchema>;
@@ -1584,6 +1672,8 @@ export const updatePackagingUnitRequestSchema = z
     baseQuantity: z.number().int().positive().optional(),
     isDefault: z.boolean().optional(),
     position: z.number().int().nonnegative().optional(),
+    /** Feature 155 — minimum number of this unit per order of the product; `null` clears. */
+    minOrderUnits: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
   })
   .strict();
 export type UpdatePackagingUnitRequest = z.infer<typeof updatePackagingUnitRequestSchema>;
@@ -1836,6 +1926,17 @@ export interface CatalogProductRecord {
   lowStockThresholdMode: 'cumulative' | 'per_warehouse';
   fulfilmentStrategy: FulfilmentStrategy | null;
   fulfilmentStrategyWarehouseOrder: string[] | null;
+  /** Feature 155 — pieces minimum; `null` = none. Stored for any type, applied to simple/configurable only. */
+  minOrderQuantity: number | null;
+  /** Feature 155 — the product's current flag; order lines record their own copy at placement. */
+  returnable: boolean;
+  /**
+   * Feature 163 — the global publication window, inclusive at both ends; `null` =
+   * open on that side. Optional for good, so a record literal built without it keeps
+   * compiling; the channel-effective window comes from `catalogProductAvailabilityPort`.
+   */
+  publishFrom?: Date | null;
+  publishUntil?: Date | null;
 }
 
 /**
@@ -1860,6 +1961,15 @@ export interface ProductAudience {
   readonly organizationId: string | null;
   /** `true` for any caller the platform has identified; `false` for the public. */
   readonly authenticated: boolean;
+  /**
+   * D-287 P0 — the signed-in customer account, when the caller is one. **Not a
+   * visibility input**: `isProductVisibleTo` never reads it. It travels with
+   * the audience because the audience is the one sanctioned answer to "who is
+   * asking", and the price beside a product depends on the customer's own
+   * customer group, which overrides the organisation's (feature 040 R6). Absent
+   * for every other caller.
+   */
+  readonly customerAccountId?: string | null;
 }
 
 /**
@@ -2078,6 +2188,8 @@ export interface CatalogPackagingUnitRecord {
   isDefault: boolean;
   createdAt: Date;
   updatedAt: Date;
+  /** Feature 155 — minimum units of this packaging unit per order of the product; `null` = none. */
+  minOrderUnits: number | null;
 }
 
 /** A directed product↔product relation (cross-sell, up-sell, related). */
@@ -2087,6 +2199,12 @@ export interface CatalogProductLinkRow {
   targetProductId: string;
   kind: ProductLinkKind;
   position: number;
+}
+
+/** {@link CatalogProductReadPort.listValueOverridesByProductIds}' narrowing. */
+export interface CatalogValueOverrideLookupOptions {
+  /** One sales channel's rows only; absent, every channel's. */
+  channelId?: string;
 }
 
 /** A per-channel / per-language override of one attribute value (feature 022). */
@@ -2165,6 +2283,18 @@ export interface CatalogProductReadPort {
     productId: string,
     packagingUnitId: string,
   ): Promise<CatalogPackagingUnitRecord | null>;
+  /**
+   * Feature 155 — the packaging units of the given products, ordered by product id, then
+   * `position`, then `name`. The batch twin of `listVariantsByProductIds`. Unknown ids contribute
+   * nothing.
+   *
+   * **No policy, like every method of this port: it answers for any id.** Callers MUST pass only
+   * product ids they have already vetted — resolved through the buyer-visibility and channel checks
+   * (`isProductVisibleTo`, the request-channel filter) or taken from a document the caller owns on the
+   * buyer's behalf (their basket, quote request or order). Passing an id straight from a request body
+   * turns this method into a catalogue enumeration oracle.
+   */
+  listPackagingUnitsByProductIds(productIds: readonly string[]): Promise<CatalogPackagingUnitRecord[]>;
 
   /** Links out of the given products, optionally narrowed to one kind. */
   listLinksBySourceIds(
@@ -2172,9 +2302,14 @@ export interface CatalogProductReadPort {
     kind?: ProductLinkKind,
   ): Promise<CatalogProductLinkRow[]>;
 
-  /** Attribute-value overrides for the given products. */
+  /**
+   * Attribute-value overrides for the given products — every channel's, or
+   * only `options.channelId`'s rows when it is given (issue #384: a storefront
+   * read shows one sales channel's overrides and reads only those).
+   */
   listValueOverridesByProductIds(
     productIds: readonly string[],
+    options?: CatalogValueOverrideLookupOptions,
   ): Promise<CatalogProductValueOverrideRecord[]>;
 
   /**
@@ -2515,6 +2650,13 @@ export interface CatalogQuickSearchParams {
    * See {@link CatalogQuickSearchPort} for what it restricts.
    */
   organizationId: string;
+  /**
+   * Feature 163 — the request's language tag (its first `Accept-Language`
+   * pick). Resolved against the channel's own languages by
+   * `resolveScopeLanguage`; absent means the channel's default language. A
+   * product switched off at (channel, that language) is not a hit.
+   */
+  languageCode?: string | undefined;
 }
 
 export interface CatalogQuickSearchHit {
@@ -2523,6 +2665,12 @@ export interface CatalogQuickSearchHit {
   slug: string;
   /** Per-locale JSONB as stored — the caller picks its own language. */
   name: Record<string, string>;
+  /**
+   * Feature 163 (FR-017 a) — the Name the storefront shows at the request's
+   * (channel, language): the channel's override where one applies, else the
+   * baseline pick. What a type-ahead should display.
+   */
+  effectiveName?: string;
   status: ProductStatus;
   matchedOn: CatalogQuickSearchField[];
 }
@@ -3238,6 +3386,16 @@ export interface CatalogSellableProductQuery {
   afterId?: string | null;
   /** Page size. Defaults to 500, the size the feed pipeline already walks in. */
   limit?: number;
+  /**
+   * Feature 163 — where the products are sold: the feed's sales channel and
+   * its language tag (resolved by `catalog` against the channel's own
+   * languages; absent or unknown = the channel's default). When given, the
+   * floor is **effective availability** there for the anonymous audience, now
+   * (`isProductEffectivelyAvailable`: the scoped status at (channel, language),
+   * the publication window and the channel's audience rule) instead of the
+   * global `status` and audience columns — still not overridable by `filter`.
+   */
+  scope?: { channelId: string; languageTag?: string | null | undefined } | undefined;
 }
 
 /**

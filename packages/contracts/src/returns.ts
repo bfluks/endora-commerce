@@ -103,6 +103,15 @@ export const returnCaseItemSchema = z.object({
   inspectionOutcome: inspectionOutcomeSchema.nullable(),
   defaultRefundAmount: z.number().finite(),
   approvedRefundAmount: z.number().finite(),
+  /**
+   * Feature 155 (owner ruling R1) — whether the order line was returnable when
+   * it was bought, as recorded at placement (`OrderReturnContextLine`); `null`
+   * for a line placed before the record existed (treated as returnable) or one
+   * the order no longer lists. A complaint line recorded `false` starts with an
+   * approved refund of 0 and is marked in the admin case view. Optional on the
+   * wire, so an older producer still parses.
+   */
+  returnableAtPurchase: z.boolean().nullable().optional(),
 });
 export type ReturnCaseItemDto = z.infer<typeof returnCaseItemSchema>;
 
@@ -192,11 +201,24 @@ export const returnableLineSchema = z.object({
   remainingReturnableQty: z.number().int().nonnegative(),
   paidUnitAmount: z.number().finite(),
   currency: z.string().length(3),
+  /**
+   * Feature 155 — may this line be included in a `return` case? (complaints are never
+   * restricted). From the value recorded at placement; a line placed before the feature
+   * is returnable (FR-025).
+   */
+  returnable: z.boolean(),
+  notReturnableReason: z.enum(['product_not_returnable']).optional(),
 });
 
 export const returnableResponseSchema = z.object({
+  /**
+   * `false` = no `return`-kind case can be opened. With `reason: 'no_returnable_lines'`
+   * (feature 155) a `complaint` is still accepted.
+   */
   eligible: z.boolean(),
-  reason: z.enum(['order_not_completing', 'window_passed', 'fully_returned']).optional(),
+  reason: z
+    .enum(['order_not_completing', 'window_passed', 'fully_returned', 'no_returnable_lines'])
+    .optional(),
   freeReturnEligible: z.boolean(),
   lines: z.array(returnableLineSchema),
 });
@@ -586,6 +608,12 @@ export interface OrderReturnContextLine {
   paidUnitAmount: number;
   /** Amount paid for the whole purchased line, including tax. */
   paidLineAmount: number;
+  /**
+   * Feature 155 (FR-016a) — the product's returnable flag recorded when the order was placed.
+   * `null`: the order was placed before the flag was recorded. `orders` reports the fact; the
+   * policy for `null` (returnable, FR-025) is `returns`'.
+   */
+  returnableAtPurchase: boolean | null;
 }
 
 export interface OrderReturnContext {

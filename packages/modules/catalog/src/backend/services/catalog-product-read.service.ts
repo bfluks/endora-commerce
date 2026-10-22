@@ -7,6 +7,7 @@ import type {
   CatalogProductReadPort,
   CatalogProductRecord,
   CatalogProductValueOverrideRecord,
+  CatalogValueOverrideLookupOptions,
   CatalogProductVariantRecord,
   ProductLinkKind,
 } from '@endora-commerce/contracts';
@@ -136,6 +137,23 @@ export class CatalogProductReadService implements CatalogProductReadPort {
     return unit ? toCatalogPackagingUnitRecord(unit) : null;
   }
 
+  /**
+   * Feature 155 — one query over every given product, ordered by product id,
+   * then position, then name (`contracts/catalog-api.md` §5). No policy: the
+   * caller passes ids it has already vetted (threat F12).
+   */
+  async listPackagingUnitsByProductIds(
+    productIds: readonly string[],
+  ): Promise<CatalogPackagingUnitRecord[]> {
+    if (productIds.length === 0) return [];
+    const units = await this.emFactory().find(
+      ProductPackagingUnit,
+      { productId: { $in: [...productIds] } },
+      { orderBy: { productId: 'asc', position: 'asc', name: 'asc' } },
+    );
+    return units.map(toCatalogPackagingUnitRecord);
+  }
+
   async listLinksBySourceIds(
     sourceProductIds: readonly string[],
     kind?: ProductLinkKind,
@@ -154,10 +172,12 @@ export class CatalogProductReadService implements CatalogProductReadPort {
 
   async listValueOverridesByProductIds(
     productIds: readonly string[],
+    options: CatalogValueOverrideLookupOptions = {},
   ): Promise<CatalogProductValueOverrideRecord[]> {
     if (productIds.length === 0) return [];
     const overrides = await this.emFactory().find(ProductValueOverride, {
       productId: { $in: [...productIds] },
+      ...(options.channelId !== undefined ? { channelId: options.channelId } : {}),
     });
     return overrides.map(toCatalogProductValueOverrideRecord);
   }
@@ -229,6 +249,10 @@ export function toCatalogProductRecord(product: Product): CatalogProductRecord {
     lowStockThresholdMode: product.lowStockThresholdMode,
     fulfilmentStrategy: product.fulfilmentStrategy ?? null,
     fulfilmentStrategyWarehouseOrder: product.fulfilmentStrategyWarehouseOrder ?? null,
+    minOrderQuantity: product.minOrderQuantity ?? null,
+    returnable: product.returnable,
+    publishFrom: product.publishFrom ?? null,
+    publishUntil: product.publishUntil ?? null,
   };
 }
 
@@ -259,6 +283,7 @@ export function toCatalogPackagingUnitRecord(
     isDefault: unit.isDefault,
     createdAt: unit.createdAt,
     updatedAt: unit.updatedAt,
+    minOrderUnits: unit.minOrderUnits ?? null,
   };
 }
 

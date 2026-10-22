@@ -23,7 +23,7 @@ import {
  *
  * Patterns mirror the prefixes each module's cache service writes with:
  *   - settings:        `settings:v1:*`        (SettingsCache)
- *   - sales_channels:  `sales-channels:v2:*`  (SalesChannelsCache)
+ *   - sales_channels:  `sales-channels:v3:*`  (SalesChannelsCache)
  *   - blog:            `blog:v1:*`            (BlogCacheService)
  *   - cms:             `cms:v1:*`             (CmsCache)
  *   - megamenu:        `megamenu:v1:*`        (MegamenuCache)

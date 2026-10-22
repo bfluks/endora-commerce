@@ -14,7 +14,7 @@ dowiadują się o całym sklepie danego kanału sprzedaży.
 | --- | --- | --- |
 | `GET /api/v1/catalog/sitemap.xml` | roboty wyszukiwarek | Mapa witryny XML z pamięci podręcznej; gdy jest nieaktualna, jest generowana od razu w trakcie żądania |
 | `GET /api/v1/storefront/seo/robots-policy` | sklep | Domyślna polityka robots kanału sprzedaży, którego dotyczy żądanie, w postaci `{ index, follow }` |
-| `GET /api/v1/storefront/seo/crawler-files` | sklep | To, z czego powstają pliki `robots.txt` i `llms.txt` kanału sprzedaży, którego dotyczy żądanie: jego własne instrukcje i dodatkowa treść wraz z polityką i nazwą sklepu |
+| `GET /api/v1/storefront/seo/crawler-files` | sklep | To, z czego powstają pliki `robots.txt` i `llms.txt` kanału sprzedaży, którego dotyczy żądanie: jego własne instrukcje i dodatkowa treść wraz z polityką, nazwą sklepu i informacją, czy sklep jest otwarty dla anonimowych odwiedzających. Odpowiada także w sklepie dla nich zamkniętym |
 | `GET /api/v1/admin/seo/crawler-files/preview` | administrator (`settings:read`) | Podgląd pliku `robots.txt` albo `llms.txt` kanału sprzedaży — domyślnego kanału systemowego, gdy żaden nie został wskazany: część generowana przez jego sklep, pobrana z tego sklepu, obok zapisanego tekstu |
 | `GET /api/v1/admin/seo/sitemap` | administrator (`catalog:write`) | Jeden wiersz na kanał sprzedaży: adres sklepu, czas ostatniego wygenerowania, rozmiar, liczba adresów URL |
 | `POST /api/v1/admin/seo/sitemap/:channelCode/regenerate` | administrator (`catalog:write`) | Wymuszenie ponownego wygenerowania dla tego kanału |
@@ -350,7 +350,8 @@ serwuje same reguły generowane z kodem `200` — to są odpowiedzi, a nie błę
     "follow": true,
     "robotsTxtCustom": "User-agent: GPTBot\nDisallow: /\n",
     "llmsTxtAdditional": "## About\n\nWe sell bolts.\n",
-    "shop": { "name": "Endora Demo" }
+    "shop": { "name": "Endora Demo" },
+    "anonymousAccess": true
   }
 }
 ```
@@ -358,6 +359,10 @@ serwuje same reguły generowane z kodem `200` — to są odpowiedzi, a nie błę
 `robotsTxtCustom` i `llmsTxtAdditional` to teksty ustalone dla kanału, dokładnie w zapisanej
 postaci — backend nie zmienia w nich żadnego znaku, także końców wierszy. `index` i `follow`
 powtarzają politykę kanału, a `shop.name` to skonfigurowana nazwa sklepu albo pusty ciąg znaków.
+`anonymousAccess` ma wartość `false` w sklepie zamkniętym dla anonimowych odwiedzających — zob.
+[w sklepie zamkniętym dla anonimowych odwiedzających](#w-sklepie-zamkniętym-dla-anonimowych-odwiedzających);
+backend sprzed tego ustawienia go nie wysyła, a jego brak oznacza `true`. W odróżnieniu od
+wszystkich innych anonimowych odczytów takiego sklepu na ten odczyt jest udzielana odpowiedź.
 Schemat to `storefrontCrawlerFilesResponseSchema` w `@endora-commerce/contracts`; pakiet
 eksportuje też `composeCrawlerFile(base, extra)` — funkcję, którą referencyjny sklep łączy to, co
 generuje, z tekstem — oraz `CRAWLER_TEXT_MAX_BYTES`.
@@ -502,6 +507,45 @@ Sklep, który raz odczytał konfigurację kanału, serwuje tę wersję pliku dal
 niedostępny. Sklep, który jej nie odczytał, odpowiada na `/llms.txt` kodem `503` z nagłówkiem
 `Retry-After: 120` aż do pierwszego udanego odczytu — nigdy plikiem bez Twojego tekstu i nigdy
 plikiem w kanale, który mógł zostać ustawiony na `NOINDEX`.
+
+## W sklepie zamkniętym dla anonimowych odwiedzających
+
+Kanał sprzedaży z wyłączonym przełącznikiem *otwarty dla anonimowych odwiedzających* każdemu
+anonimowemu odwiedzającemu — a robot nim jest — pokazuje stronę logowania. Nie ma w nim niczego do
+pobrania, umieszczenia w wynikach ani przeczytania, a jego mapa witryny jest pusta. Pliki
+`robots.txt` i `llms.txt` są mimo to serwowane i mówią dokładnie to:
+
+- **`robots.txt`** zamyka cały sklep dla wszystkich robotów i nie wskazuje mapy witryny:
+
+  ```text
+  User-Agent: *
+  Disallow: /
+  ```
+
+- **`llms.txt`** podaje nazwę sklepu, tak jak część generowana, i informuje, że jego treść jest
+  dostępna tylko dla zalogowanych klientów. Nie wymienia żadnej strony ani mapy witryny:
+
+  ```text
+  # Endora Trade
+
+  > The content of this store is available to signed-in customers only.
+  ```
+
+**Zamknięty sklep ma pierwszeństwo przed ustawieniami.** W zamkniętym sklepie nie są serwowane ani
+własne instrukcje `robots.txt`, ani dodatkowa treść `llms.txt`: grupa napisana dla jednego robota
+zastąpiłaby dla niego `Disallow: /` i otworzyła mu sklep, a dodatkowa treść wskazywałaby strony,
+których nikt anonimowo nie przeczyta. Oba teksty są zachowywane i wracają do plików, gdy tylko
+sklep zostanie otwarty dla anonimowych odwiedzających. Z tego samego powodu *Domyślne robots* nie
+ma tu wpływu na żaden z plików: zamknięty sklep ustawiony na `NOINDEX` nadal ma swój `llms.txt`,
+bo ten plik nikogo do niczego nie zaprasza.
+
+Zmiana przełącznika dociera do plików na tych samych zasadach co każda inna zmiana — w ciągu
+około dwóch minut. Sklep otwarty dla anonimowych odwiedzających serwuje oba pliki dokładnie tak,
+jak opisano wyżej. Gdy moduł `seo` jest wyłączony, sklep nie odróżnia sklepu zamkniętego od
+otwartego i — jak w każdym sklepie — serwuje generowany `robots.txt` i nie serwuje `llms.txt`.
+
+Podglądy na ekranie Ustawień nie uwzględniają jeszcze zamkniętego sklepu: pokazują Twój tekst
+połączony z częścią generowaną, a zamknięty sklep serwuje powyższy plik bez niego.
 
 ## Wyznaczanie meta tagów
 

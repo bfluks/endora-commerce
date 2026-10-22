@@ -14,7 +14,7 @@ a sales channel's storefront as a whole.
 | --- | --- | --- |
 | `GET /api/v1/catalog/sitemap.xml` | crawlers | Cached XML sitemap; falls through to inline regenerate when stale |
 | `GET /api/v1/storefront/seo/robots-policy` | storefront | The request's sales channel's default robots policy, as `{ index, follow }` |
-| `GET /api/v1/storefront/seo/crawler-files` | storefront | What the request's sales channel's `robots.txt` and `llms.txt` are built from: its custom instructions and additional content, with the policy and the shop name |
+| `GET /api/v1/storefront/seo/crawler-files` | storefront | What the request's sales channel's `robots.txt` and `llms.txt` are built from: its custom instructions and additional content, with the policy, the shop name and whether the store is open to anonymous visitors. Answered on a store closed to them as well |
 | `GET /api/v1/admin/seo/crawler-files/preview` | admin (`settings:read`) | The preview of a sales channel's `robots.txt` or `llms.txt` — the system default channel when none is named: the part its storefront generates, asked of that storefront, beside the saved text |
 | `GET /api/v1/admin/seo/sitemap` | admin (`catalog:write`) | One row per sales channel: storefront address, last-generated timestamp, size, URL count |
 | `POST /api/v1/admin/seo/sitemap/:channelCode/regenerate` | admin (`catalog:write`) | Force a fresh build for that channel |
@@ -336,14 +336,19 @@ answers, not failures.
     "follow": true,
     "robotsTxtCustom": "User-agent: GPTBot\nDisallow: /\n",
     "llmsTxtAdditional": "## About\n\nWe sell bolts.\n",
-    "shop": { "name": "Endora Demo" }
+    "shop": { "name": "Endora Demo" },
+    "anonymousAccess": true
   }
 }
 ```
 
 `robotsTxtCustom` and `llmsTxtAdditional` are the texts resolved for the channel, exactly as
 stored — the backend changes no character of them, line breaks included. `index` and `follow`
-repeat the channel's policy, and `shop.name` is its configured shop name or an empty string. The
+repeat the channel's policy, and `shop.name` is its configured shop name or an empty string.
+`anonymousAccess` is `false` on a store closed to anonymous visitors — see
+[on a store closed to anonymous visitors](#on-a-store-closed-to-anonymous-visitors); a backend
+from before that setting does not send it, and its absence means `true`. Unlike every other
+anonymous read of such a store, this one is answered. The
 schema is `storefrontCrawlerFilesResponseSchema` in `@endora-commerce/contracts`, which also
 exports `composeCrawlerFile(base, extra)` — the function the reference storefront joins what it
 generates and the text with — and `CRAWLER_TEXT_MAX_BYTES`.
@@ -485,6 +490,44 @@ A storefront that has read a channel's configuration once goes on serving that v
 file while the backend cannot be reached. One that has not answers `/llms.txt` with `503` and
 `Retry-After: 120` until its first successful read — never a file without your text, and never a
 file on a channel that may have been set to `NOINDEX`.
+
+## On a store closed to anonymous visitors
+
+A sales channel whose *open to anonymous visitors* switch is off answers every anonymous visitor
+with the sign-in page — a crawler is one. There is nothing on it to fetch, list or read, and its
+sitemap is empty. Its `robots.txt` and `llms.txt` are still served, and say exactly that:
+
+- **`robots.txt`** closes the whole store to every crawler, and names no sitemap:
+
+  ```text
+  User-Agent: *
+  Disallow: /
+  ```
+
+- **`llms.txt`** names the store, as the generated part does, and says that its content is for
+  signed-in customers. It lists no page and no sitemap:
+
+  ```text
+  # Endora Trade
+
+  > The content of this store is available to signed-in customers only.
+  ```
+
+**The closed store wins over the settings.** Neither the custom `robots.txt` instructions nor the
+additional `llms.txt` content is served on a closed store: a group written for one crawler would
+replace `Disallow: /` for that crawler and open the store to it, and the additional content
+would point at pages nobody can read anonymously. Both texts are kept, and are served again as
+soon as the store is opened to anonymous visitors. For the same reason *Default robots* has no
+say in either file here: a `NOINDEX` closed store still has its `llms.txt`, because that file
+invites nobody anywhere.
+
+The switch reaches the files on the same terms as any other change — within about two minutes.
+A store that is open to anonymous visitors serves both files exactly as described above. While
+the `seo` module is switched off the storefront cannot tell a closed store from an open one, and
+serves the generated `robots.txt` and no `llms.txt`, as it does on every store.
+
+The previews on the Settings screen do not take a closed store into account yet: they show your
+text joined to the generated part, while a closed store serves the file above without it.
 
 ## Meta-tag resolution
 

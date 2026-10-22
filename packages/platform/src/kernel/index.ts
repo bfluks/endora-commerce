@@ -189,6 +189,12 @@ export {
   SALES_CHANNELS_CACHE_NAMESPACE,
   type SalesChannelsCacheInvalidation,
 } from './sales-channels/sales-channels-cache.js';
+/**
+ * Feature 154 — the invalidating half of the per-Organization permitted-channel
+ * cache, for the one module write that moves every Organization's set at once
+ * (a channel delete). The cache itself is the kernel's.
+ */
+export { type SalesChannelAccessCacheInvalidation } from './sales-channels/sales-channel-access-cache.js';
 // `SalesChannelResolverService` itself is **not** published (§1.4e): a consumer
 // resolves `salesChannelResolutionPort` and types on `SalesChannelResolutionPort`.
 // `parseHostMap` is the host-map parser a composition root calls, and
@@ -257,6 +263,7 @@ export { type RequireCustomerGuard } from './ports/require-customer.js';
 export { type SettingsReadPort, type SettingsReadResult } from './ports/settings.js';
 export {
   type ResolvedChannel,
+  type SalesChannelAccessPort,
   type SalesChannelMembershipPort,
   type SalesChannelResolutionPort,
 } from './ports/sales-channel.js';

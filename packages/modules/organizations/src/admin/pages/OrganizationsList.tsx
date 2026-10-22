@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
-import { ApiError, apiClient, formatDateTime } from '@endora-commerce/admin-kit/lib';
+import { ApiError, apiClient, formatDateTime, useAuth } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Button, Card, CardContent, Input, Label, PageHeader, Select } from '@endora-commerce/admin-kit/ui';
 import { OrganizationStatusBadge, ResponsiveTable } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
@@ -19,6 +19,11 @@ const STATUSES = ['pending_verification', 'active', 'blocked', 'rejected'] as co
 
 export function OrganizationsList(): ReactNode {
   const t = useTranslation('core');
+  const own = useTranslation('organizations');
+  // Feature 154 — creating an Organization is `customers:manage`, as the
+  // `/organizations/new` route is; a read-only operator is not shown a button
+  // that would open a screen they cannot use.
+  const canCreate = useAuth().hasPermission('customers:manage');
   const [rows, setRows] = useState<AdminOrganization[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +57,13 @@ export function OrganizationsList(): ReactNode {
       <PageHeader
         title={t('organizations.page.title')}
         description={t('organizations.page.description')}
+        actions={
+          canCreate ? (
+            <Button asChild>
+              <Link to="/organizations/new">{own('list.newOrganization')}</Link>
+            </Button>
+          ) : null
+        }
       />
 
       {error ? (

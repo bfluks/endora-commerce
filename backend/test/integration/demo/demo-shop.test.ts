@@ -86,41 +86,18 @@
  * file is run by hand — which is how its ledger sat stale for a day after the
  * escape-hatch audit landed.
  */
-import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { migratedDatabase, type MigratedDatabase } from '../../helpers/migrated-database.js';
+
 const BACKEND_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-/** ~90 s of migrations, one reset, three seeds and a second reset. */
+/** A migrated database, one reset, three seeds and a second reset. */
 const SUITE_TIMEOUT_MS = 900_000;
-
-/**
- * The DSN this run was given, with its database replaced.
- *
- * `DATABASE_URL` — never `TEST_DATABASE_URL` — is the run's own database since
- * issue #189, and it is read for its **host, port and credentials** only: the
- * databases below are created and dropped by this file and are nobody else's.
- */
-function dsnFor(database: string): string {
-  const declared = process.env['DATABASE_URL'];
-  if (declared === undefined || declared === '') {
-    throw new Error(
-      'demo shop: DATABASE_URL is not set. This test provisions its own throwaway ' +
-        'databases from the running invocation’s DSN and cannot invent one.',
-    );
-  }
-  const url = new URL(declared);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
-
-function maintenanceClient(): Client {
-  return new Client({ connectionString: dsnFor('postgres') });
-}
 
 /**
  * Run a command with one environment variable overridden, and fail loudly.
@@ -328,6 +305,8 @@ const SEED_DELTA: Readonly<Record<string, number>> = {
   // 4 — the stock spread across the two warehouses
   stock_levels: 406,
   // 5 — the demo buyer joins the demo organisation
+  // (feature 154) and the demo organisation is assigned the retail store's channel
+  sales_channel_organizations: 1,
   customer_accounts: 1,
   // 6 — the product attributes: a `custom_fields` definition per `catalog` row
   custom_field_definitions: 7,
@@ -399,10 +378,6 @@ const BOOT_RECONCILED: Readonly<Record<string, string>> = {
     'the channel the first run created, and the third run’s finds nothing left to bind.',
 };
 
-/** Names must fit PostgreSQL's 63-byte identifier limit and end in `_test`. */
-const RUN = randomBytes(4).toString('hex');
-const TEMPLATE_DB = `ds_${RUN}_tpl_test`;
-const SHOP_DB = `ds_${RUN}_shop_test`;
 const DEMO_SEED = ['pnpm', 'exec', 'tsx', 'src/cli.ts', 'demo', 'seed'];
 const DEMO_RESET = ['pnpm', 'exec', 'tsx', 'src/cli.ts', 'demo', 'reset'];
 
@@ -428,36 +403,19 @@ describe('T226 — `endora demo seed` builds this shop', () => {
   let seedReports: string[];
   /** What each of the three seed runs recorded in the escape-hatch audit. */
   let seedScopeEntries: ScopeEntry[][];
+  let database: MigratedDatabase | undefined;
   let shop: Client;
 
   beforeAll(async () => {
-    const admin = maintenanceClient();
-    await admin.connect();
-    try {
-      for (const database of [TEMPLATE_DB, SHOP_DB]) {
-        await admin.query(`drop database if exists "${database}" with (force)`);
-      }
-      await admin.query(`create database "${TEMPLATE_DB}"`);
-    } finally {
-      await admin.end();
-    }
+    // No migration run of its own: a clone of the template this invocation was
+    // cloned from, with the one row that template holds beyond its migrations
+    // withdrawn — exactly what `migration:up` from empty leaves, in about a
+    // second. See the helper, and the parity file that holds the claim.
+    database = await migratedDatabase('ds', async (migrateUrl) => {
+      await run('migration:up', ['pnpm', 'exec', 'tsx', 'src/db/migrate.ts', 'up'], migrateUrl);
+    });
 
-    // One migration run, one clone. `create database … template` is the same
-    // ~1 s trick `test/global-setup.ts` uses per invocation.
-    await run(
-      'migration:up',
-      ['pnpm', 'exec', 'tsx', 'src/db/migrate.ts', 'up'],
-      dsnFor(TEMPLATE_DB),
-    );
-    const cloner = maintenanceClient();
-    await cloner.connect();
-    try {
-      await cloner.query(`create database "${SHOP_DB}" template "${TEMPLATE_DB}"`);
-    } finally {
-      await cloner.end();
-    }
-
-    const url = dsnFor(SHOP_DB);
+    const url = database.url;
     const reading = new Client({ connectionString: url });
     await reading.connect();
     try {
@@ -497,15 +455,7 @@ describe('T226 — `endora demo seed` builds this shop', () => {
 
   afterAll(async () => {
     if (shop !== undefined) await shop.end();
-    const admin = maintenanceClient();
-    await admin.connect();
-    try {
-      for (const database of [SHOP_DB, TEMPLATE_DB]) {
-        await admin.query(`drop database if exists "${database}" with (force)`);
-      }
-    } finally {
-      await admin.end();
-    }
+    await database?.drop();
   }, SUITE_TIMEOUT_MS);
 
   /** What the seed actually moved, over the baseline. */

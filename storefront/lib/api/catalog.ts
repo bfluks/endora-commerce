@@ -123,6 +123,53 @@ export async function getProductBySlug(
   return res.data;
 }
 
+/** Feature 155 — the most product reads `getProductMinimumsBySlugs` makes (the draft's 200 lines). */
+export const DRAFT_MINIMUM_MAX_SLUGS = 200;
+
+/**
+ * Feature 155 (FR-032, research R15) — the current pieces minimum of each product, by slug,
+ * read through the existing public product detail (no new route). For the quote-request
+ * draft page, whose lines live in `localStorage` and may predate a minimum (US4 #14).
+ *
+ * Threat S8: distinct non-empty slugs only, at most {@link DRAFT_MINIMUM_MAX_SLUGS}, at most
+ * `concurrency` reads in flight (the `getResolvedPricesBulk` pattern). Plan I5: any failure —
+ * a 404 for a product the buyer may not see, a 5xx, the network — leaves the slug out ("minimum
+ * unknown"); it never fails the whole read. `null` = the product has no minimum.
+ *
+ * A plain object, not a `Map`, because a server action hands it to the browser.
+ */
+export async function getProductMinimumsBySlugs(
+  slugs: readonly unknown[],
+  ctx: RequestContext,
+  concurrency = 8,
+): Promise<Record<string, number | null>> {
+  const distinct = [
+    ...new Set(
+      slugs
+        .filter((s): s is string => typeof s === 'string')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    ),
+  ].slice(0, DRAFT_MINIMUM_MAX_SLUGS);
+  const out: Record<string, number | null> = {};
+  const queue = [...distinct];
+  async function worker(): Promise<void> {
+    while (queue.length > 0) {
+      const slug = queue.shift();
+      if (slug === undefined) return;
+      try {
+        const product = await getProductBySlug(slug, ctx);
+        const minimum = product.minOrderQuantity;
+        out[slug] = typeof minimum === 'number' && minimum > 1 ? minimum : null;
+      } catch {
+        // Minimum unknown: the API refusal at submission stays the binding rule.
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, distinct.length) }, worker));
+  return out;
+}
+
 /**
  * Feature 002 US4 — public Product Links read for cart cross-sell.
  * Returns the storefront-shape link summaries (drops archived /

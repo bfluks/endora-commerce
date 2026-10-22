@@ -1078,6 +1078,16 @@ const STEPS: readonly CompositionStep[] = [
       ]);
       const organization = await em.findOne(Organization, { taxId: DEMO_ORG_TAX_ID });
       if (organization === null) return;
+      // Feature 154 — a buyer may shop only on the sales channels its
+      // Organization is assigned, so the demo organisation is assigned the
+      // system-default channel the retail store adopts. A bridge row like the
+      // channel↔product ones above, and idempotent the same way.
+      await em.execute(
+        `insert into sales_channel_organizations (sales_channel_id, organization_id)
+           select id, ? from sales_channels where system_default = true
+           on conflict do nothing`,
+        [organization.id],
+      );
       const existing = await em.findOne(CustomerAccount, { email: DEMO_BUYER_EMAIL });
       if (existing !== null) {
         existing.organizationId = organization.id;
@@ -1104,6 +1114,14 @@ const STEPS: readonly CompositionStep[] = [
       // The buyer this step created, and only that one. Whoever joined the
       // demo organisation since, and everything any of its accounts was used
       // to create, is withdrawn before any step (`demo-usage.ts`).
+      const { Organization } = await organizationRows();
+      const organization = await em.findOne(Organization, { taxId: DEMO_ORG_TAX_ID });
+      if (organization !== null) {
+        await em.execute(
+          `delete from sales_channel_organizations where organization_id = ?`,
+          [organization.id],
+        );
+      }
       const { CustomerAccount } = await customerAccountRows();
       const buyer = await em.findOne(CustomerAccount, { email: DEMO_BUYER_EMAIL });
       if (buyer === null) return;

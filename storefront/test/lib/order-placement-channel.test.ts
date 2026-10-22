@@ -20,10 +20,27 @@ import type { RequestContext } from '../../lib/api/client';
  *
  * `ctx` is a **required** parameter on each of them now, so the header cannot be
  * forgotten by a caller; this file holds the other half, that the parameter is
- * actually forwarded. A deployment that stamps no channel (one storefront, one
- * channel) passes a context without a code, sends no header, and gets the
- * default — which the last case holds, because that path must not change.
+ * actually forwarded.
+ *
+ * A context without a code no longer means "no header" inside a request: the
+ * middleware stamps the channel the backend resolves for this storefront, and
+ * the transport sends it (`specs/154-sales-channel-access/`). Only outside a
+ * request scope — which a single-channel deployment never places an order from
+ * — is no header sent, and the backend then resolves its default.
  */
+
+/**
+ * The channel `middleware.ts` stamped on the request being served, as
+ * `next/headers` answers it — or `null` for no request scope at all
+ * (`specs/154-sales-channel-access/contracts/storefront-ux.md` §1.3).
+ */
+const stamped: { code: string | null } = { code: null };
+vi.mock('next/headers', () => ({
+  headers: async () => {
+    if (stamped.code === null) throw new Error('`headers` was called outside a request scope.');
+    return new Headers({ 'x-sales-channel': stamped.code });
+  },
+}));
 
 interface Sent {
   url: string;
@@ -36,6 +53,7 @@ const originalFetch = globalThis.fetch;
 let sent: Sent[] = [];
 
 beforeEach(() => {
+  stamped.code = null;
   sent = [];
   globalThis.fetch = vi.fn(async (url: unknown, init: unknown) => {
     const request = init as { method?: string; headers?: Record<string, string>; body?: string };
@@ -122,7 +140,14 @@ describe('order placement carries the sales channel', () => {
     );
   });
 
-  it('sends no channel header when the deployment stamps none, leaving the backend its default', async () => {
+  it('sends the channel the middleware stamped when the context names none', async () => {
+    stamped.code = 'default';
+    await placeOrder('session', ORDER, { locale: 'en-US' });
+
+    expect(requestTo('/api/v1/orders').headers['X-Sales-Channel']).toBe('default');
+  });
+
+  it('sends no channel header outside a request, leaving the backend its default', async () => {
     await placeOrder('session', ORDER, { locale: 'en-US' });
 
     expect(requestTo('/api/v1/orders').headers).not.toHaveProperty('X-Sales-Channel');

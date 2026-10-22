@@ -656,6 +656,8 @@ export const manifest = defineModuleManifest({
     { code: 'IDEMPOTENCY_KEY_REUSED' },
     { code: 'ORDER_NOT_CANCELLABLE' },
     { code: 'ORDER_NOT_FOUND' },
+    // Feature 154 — placement refuses a basket of another sales channel.
+    { code: 'ORDER_SALES_CHANNEL_MISMATCH' },
     { code: 'ORDER_SAVED_VIEW_NAME_TAKEN' },
   ],
   settings,

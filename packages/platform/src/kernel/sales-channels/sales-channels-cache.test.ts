@@ -4,8 +4,10 @@ import {
   SalesChannelsCache,
   SALES_CHANNELS_CACHE_KEY_PREFIX,
   SALES_CHANNELS_LRU_TTL_MS,
+  toCachedChannel,
   type CachedChannel,
 } from './sales-channels-cache.js';
+import { SalesChannel } from './sales-channel.entity.js';
 
 /**
  * `SalesChannelsCache` is the second of the two caches that keep a per-process
@@ -34,6 +36,7 @@ function channel(name: string): CachedChannel {
     code: CODE,
     name: { en: name },
     active: true,
+    anonymousAccess: true,
     isPublic: true,
     systemDefault: true,
     defaultLanguage: 'en',
@@ -208,5 +211,41 @@ describe('SalesChannelsCache in-process staleness is bounded', () => {
     now += SALES_CHANNELS_LRU_TTL_MS;
     const hit = await cache.get(CODE);
     expect(hit.hit && hit.value?.name['en']).toBe('Renamed');
+  });
+});
+
+/**
+ * Feature 154 — the access step reads `anonymousAccess` off the cached channel,
+ * so the anonymous decision costs no read of its own. An entry cached before the
+ * field existed must not be served: it would answer `undefined`, which is
+ * neither open nor closed.
+ */
+describe('SalesChannelsCache carries anonymousAccess', () => {
+  it('maps the entity flag into the cached shape', () => {
+    const entity = new SalesChannel();
+    entity.code = 'trade';
+    entity.name = { en: 'Trade' };
+    entity.defaultLanguage = 'en';
+    entity.defaultCurrency = 'PLN';
+    entity.anonymousAccess = false;
+    expect(toCachedChannel(entity).anonymousAccess).toBe(false);
+    expect(
+      toCachedChannel(Object.assign(new SalesChannel(), entity, { anonymousAccess: true }))
+        .anonymousAccess,
+    ).toBe(true);
+  });
+
+  it('defaults a new channel to open', () => {
+    expect(new SalesChannel().anonymousAccess).toBe(true);
+  });
+
+  it('keys v3, so an entry cached in the v2 shape is ignored', async () => {
+    expect(SALES_CHANNELS_CACHE_KEY_PREFIX).toBe('sales-channels:v3:');
+    const controls = fakeRedis();
+    const legacy = { ...channel('Retail') } as Partial<CachedChannel>;
+    delete legacy.anonymousAccess;
+    controls.store.set(`sales-channels:v2:${CODE}`, JSON.stringify(legacy));
+    const cache = new SalesChannelsCache(controls.redis);
+    expect(await cache.get(CODE)).toEqual({ hit: false });
   });
 });

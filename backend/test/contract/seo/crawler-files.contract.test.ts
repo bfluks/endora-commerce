@@ -9,6 +9,7 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { setChannelAnonymousAccess } from '../../helpers/sales-channel-access.js';
 
 /**
  * `GET /api/v1/storefront/seo/crawler-files`
@@ -98,12 +99,14 @@ describe('GET /api/v1/storefront/seo/crawler-files', () => {
         robotsTxtCustom: 'User-agent: GPTBot\nDisallow: /\n',
         llmsTxtAdditional: '## About\n\nWe sell bolts.\n',
         shop: { name: 'Endora Demo' },
+        anonymousAccess: true,
       },
     });
     // The schema drops what it does not know, so it cannot see an extra member.
     const raw = res.json() as { data: Record<string, unknown> & { shop: Record<string, unknown> } };
     expect(Object.keys(raw)).toEqual(['data']);
     expect(Object.keys(raw.data).sort()).toEqual([
+      'anonymousAccess',
       'follow',
       'index',
       'llmsTxtAdditional',
@@ -146,6 +149,52 @@ describe('GET /api/v1/storefront/seo/crawler-files', () => {
     expect(anonymous.statusCode).toBe(200);
     expect(signedIn.statusCode).toBe(200);
     expect(anonymous.json()).toEqual(signedIn.json());
+  });
+
+  /**
+   * `specs/154-sales-channel-access/`: a store closed to anonymous visitors
+   * refuses their reads with `SALES_CHANNEL_SIGN_IN_REQUIRED` — but its
+   * crawler files are still served, built for a store with nothing public, so
+   * this read is open and says which kind of store the channel is.
+   */
+  describe('on a store closed to anonymous visitors', () => {
+    afterEach(async () => {
+      await setChannelAnonymousAccess(h, 'default', true);
+    });
+
+    it('answers an anonymous read on an open channel, saying it is open', async () => {
+      const res = await h.app.inject({ method: 'GET', url: URL });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(storefrontCrawlerFilesResponseSchema.parse(res.json()).data.anonymousAccess).toBe(true);
+    });
+
+    it('answers an anonymous read on a closed channel, saying it is closed', async () => {
+      await store('seo.robots_txt_custom', 'User-agent: GPTBot\nAllow: /\n');
+      await store('shop.name', 'Endora Trade');
+      await setChannelAnonymousAccess(h, 'default', false);
+
+      for (const headers of [{}, { 'x-sales-channel': 'default' }]) {
+        const res = await h.app.inject({ method: 'GET', url: URL, headers });
+        expect(res.statusCode, res.body).toBe(200);
+        const body = storefrontCrawlerFilesResponseSchema.parse(res.json());
+        expect(body.data.anonymousAccess).toBe(false);
+        // What the operator configured is answered as stored; what a closed
+        // store's files do with it is the storefront's to say.
+        expect(body.data.robotsTxtCustom).toBe('User-agent: GPTBot\nAllow: /\n');
+        expect(body.data.shop.name).toBe('Endora Trade');
+        expect(res.headers['cache-control']).toBe('no-store');
+      }
+    });
+
+    it('leaves a closed channel’s other anonymous reads refused', async () => {
+      // The control: the channel really is closed, and only this read is open.
+      await setChannelAnonymousAccess(h, 'default', false);
+      const res = await h.app.inject({ method: 'GET', url: '/api/v1/catalog/sitemap.xml' });
+      expect(res.statusCode).toBe(403);
+      expect((res.json() as { error: { code: string } }).error.code).toBe(
+        'SALES_CHANNEL_SIGN_IN_REQUIRED',
+      );
+    });
   });
 
   /**

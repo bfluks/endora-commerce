@@ -11,11 +11,14 @@ import {
   modulesInTheApplicationTree,
   packagedModuleIds,
   planSplitRelocation,
+  prefetchChecks,
   routedModuleIds,
   runCheckInThisCheckout,
+  type CheckRequest,
   type EndoraSpecifierResolution,
   type MovedModuleTreeFixture,
 } from '../../helpers/moved-module-tree-fixture.js';
+import { spawnConcurrency } from '../../helpers/bounded-pool.js';
 import {
   modulesWithoutSources,
   moduleIdOf,
@@ -185,13 +188,57 @@ const CHECKS: readonly MovedTreeCheck[] = [
   { script: 'check-test-ownership.ts', args: [], prefix: '[test-ownership]' },
 ];
 
+/**
+ * Every spawn this file makes is independent of every other — each check reads
+ * a fixture nothing writes to — so the hooks below spawn them side by side
+ * through one bounded pool and the cases read the results back. Each case still
+ * asserts on the output of exactly the spawn it used to make itself: the same
+ * script, arguments and tree, and a request two cases share (the § 3.1 and § 4
+ * cases below re-read a check `CHECKS` already ran) is spawned once. Run one at
+ * a time this file took ~460 s, almost all of it waiting on one child after
+ * another.
+ */
+const SPAWN_CONCURRENCY = spawnConcurrency();
+
+/**
+ * A hook's budget is the per-spawn budget the cases carried — 120 s, sized on
+ * the slowest member, see the agreeing-registry control below — once per round
+ * of the pool, so a one-at-a-time run under CI gets exactly what it had.
+ */
+function prefetchBudget(spawns: number): number {
+  return Math.ceil(spawns / SPAWN_CONCURRENCY) * 120_000 + 120_000;
+}
+
+const CHECK_REQUESTS: readonly CheckRequest[] = CHECKS.map((check) => ({
+  script: check.script,
+  args: check.args,
+}));
+
+/**
+ * A request for a check spawned outside `CHECKS`, by its own block below.
+ *
+ * Spelled through this rather than as `{ script: '…' }`, because that spelling
+ * is how `check-inventory.test.ts` reads `CHECKS`' membership — and
+ * `check-admin-surface` is kept out of it on a measurement, see its block.
+ */
+const extra = (script: string): CheckRequest => ({ script });
+
+const MOVED_REQUESTS: readonly CheckRequest[] = [...CHECK_REQUESTS, extra('check-admin-zones.ts')];
+
 let moved: MovedModuleTreeFixture;
 let agreeing: MovedModuleTreeFixture;
 
-beforeAll(() => {
+beforeAll(async () => {
   moved = createMovedModuleTreeFixture();
   agreeing = createMovedModuleTreeFixture({ registeredIds: [KEPT_MODULE] });
-});
+  await prefetchChecks(
+    [
+      { fixture: moved, requests: MOVED_REQUESTS },
+      { fixture: agreeing, requests: CHECK_REQUESTS },
+    ],
+    SPAWN_CONCURRENCY,
+  );
+}, prefetchBudget(MOVED_REQUESTS.length + CHECK_REQUESTS.length));
 
 afterAll(() => {
   moved?.cleanup();
@@ -491,7 +538,17 @@ describe('a split module tree is read in full, not in half (feature 080, T040a)'
   let split: MovedModuleTreeFixture;
   let halfMoved: MovedModuleTreeFixture;
 
-  beforeAll(() => {
+  const SPLIT_REQUESTS: readonly CheckRequest[] = [
+    ...CHECK_REQUESTS,
+    extra('check-admin-zones.ts'),
+    extra('check-admin-surface.ts'),
+  ];
+  const HALF_MOVED_REQUESTS: readonly CheckRequest[] = [
+    ...CHECK_REQUESTS,
+    extra('check-admin-zones.ts'),
+  ];
+
+  beforeAll(async () => {
     split = createSplitModuleTreeFixture({ packaged: PACKAGED_MODULES });
     // One module moved to the same address with no `package.json` beside it —
     // the state a half-finished `git mv` leaves. Nothing declares it, so no
@@ -500,7 +557,14 @@ describe('a split module tree is read in full, not in half (feature 080, T040a)'
       packaged: PACKAGED_MODULES,
       stranded: [STRANDED_MODULE],
     });
-  }, 120_000);
+    await prefetchChecks(
+      [
+        { fixture: split, requests: SPLIT_REQUESTS },
+        { fixture: halfMoved, requests: HALF_MOVED_REQUESTS },
+      ],
+      SPAWN_CONCURRENCY,
+    );
+  }, prefetchBudget(SPLIT_REQUESTS.length + HALF_MOVED_REQUESTS.length));
 
   afterAll(() => {
     split?.cleanup();

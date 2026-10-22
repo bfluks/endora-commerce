@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { CustomFieldValidationError as CustomFieldValidationErrorDto, SupportedEntityType } from '@endora-commerce/contracts';
 import type { CachedDefinition } from './custom-field-definitions-cache.js';
+import { hostStorageBinding } from './host-storage-binding.js';
 
 /**
  * Provides the live definitions (with options) for an entity type. Implemented
@@ -19,22 +20,6 @@ export class CustomFieldValidationError extends Error {
     this.name = 'CustomFieldValidationError';
   }
 }
-
-/**
- * Host-table binding for the change-guard probes (read-only introspection,
- * feature 055; generalized to a per-host `{table, column}` pair by feature 061
- * — the `product` host stores its value bag in `products.attribute_values`).
- * Purely a storage binding: no host logic lives here.
- */
-const HOST_TABLE_BY_ENTITY: Record<SupportedEntityType, { table: string; column: string }> = {
-  category: { table: 'categories', column: 'custom_field_values' },
-  order: { table: 'orders', column: 'custom_field_values' },
-  organization: { table: 'organizations', column: 'custom_field_values' },
-  customer: { table: 'customer_accounts', column: 'custom_field_values' },
-  quote_request: { table: 'quote_requests', column: 'custom_field_values' },
-  product: { table: 'products', column: 'attribute_values' },
-  opportunity: { table: 'crm_opportunities', column: 'custom_field_values' },
-};
 
 const DEFAULT_TEXT_MAX = 10_000;
 
@@ -143,7 +128,7 @@ export class CustomFieldValueService {
     entityType: SupportedEntityType,
     key: string,
   ): Promise<boolean> {
-    const { table, column } = HOST_TABLE_BY_ENTITY[entityType];
+    const { table, column } = hostStorageBinding(entityType);
     const rows = await em.getConnection().execute<{ one: number }[]>(
       `select 1 as one from "${table}" where jsonb_exists("${column}", ?) limit 1`,
       [key],
@@ -164,7 +149,7 @@ export class CustomFieldValueService {
     key: string,
     optionValue: string,
   ): Promise<boolean> {
-    const { table, column } = HOST_TABLE_BY_ENTITY[entityType];
+    const { table, column } = hostStorageBinding(entityType);
     const rows = await em.getConnection().execute<{ one: number }[]>(
       `select 1 as one from "${table}" ` +
         `where "${column}"->>? = ? ` +
@@ -177,15 +162,18 @@ export class CustomFieldValueService {
 }
 
 /** A value is "empty" (⇒ absent) when undefined, null, '', or an empty array. */
-function isEmpty(v: unknown): boolean {
+export function isEmpty(v: unknown): boolean {
   return v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
 }
 
 type CoerceOk = { value: unknown };
 type CoerceErr = { code: CustomFieldValidationErrorDto['code']; message: string };
 
-/** Validate + coerce one value by its declared type. Returns the stored value or a typed error. */
-function coerce(
+/**
+ * Validate + coerce one value by its declared type. Returns the stored value or a typed error.
+ * Exported for the carry port (feature 162), which judges a carried value by the same rule.
+ */
+export function coerce(
   valueType: string,
   raw: unknown,
   options: { value: string }[],

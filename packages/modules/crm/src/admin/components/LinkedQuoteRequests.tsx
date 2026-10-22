@@ -26,6 +26,7 @@ import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { crmApi } from '../api.js';
 import { CreateDocumentButton, CreatedDocumentNotice } from './CreateFromOpportunity.js';
 import { errorMessage, moneyLabel } from '../lib/labels.js';
+import { useReturnHere } from '../lib/return-here.js';
 
 const SEARCH_DEBOUNCE_MS = 250;
 
@@ -80,6 +81,7 @@ export interface LinkedQuoteRequestsProps {
  * shows nothing of the request and stays with `crm:write`.
  */
 export function LinkedQuoteRequests(props: LinkedQuoteRequestsProps): ReactNode {
+  const returnHere = useReturnHere();
   const { opportunity, canWrite, reload } = props;
   const t = useTranslation('crm');
   const { isPresent } = useModulePresence();
@@ -234,7 +236,7 @@ export function LinkedQuoteRequests(props: LinkedQuoteRequestsProps): ReactNode 
                   <TableCell>
                     {shown ? (
                       <Link
-                        to={`/quote-requests/${item.documentId}`}
+                        to={returnHere(`/quote-requests/${item.documentId}`)}
                         className="font-medium text-primary underline-offset-4 hover:underline"
                       >
                         {item.number}

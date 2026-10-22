@@ -1,8 +1,10 @@
+import { arrangeLineGroups, DOCUMENT_UNGROUPED_SECTION_KEY } from '@endora-commerce/contracts';
 import type {
   CatalogAttributeView,
   DocumentCollectionDeclaration,
   DocumentFieldDefinition,
   DocumentItem,
+  DocumentItemSection,
   DocumentValue,
   DocumentValueKind,
   QuoteRequestDocumentData,
@@ -181,6 +183,28 @@ export function quoteSummary(data: QuoteRequestDocumentData): Record<string, Doc
   };
 }
 
+/**
+ * Feature 159 — the quote's groups as sections of its lines
+ * (`specs/159-quote-request-item-groups/contracts/document-sections.md` §5).
+ * `data.lines` is already in display order and `data.groups` holds the groups
+ * with a line (the data builder), so each section is a contiguous run of
+ * indexes into `quoteLineItems(data)`. Each section's totals follow the
+ * document's own rule over the section's lines — an unpriced line leaves its
+ * section without net, VAT and gross, and a discount shows only where one
+ * applies. A quote with no group is one ungrouped section, which the table
+ * prints flat.
+ */
+export function quoteLineSections(data: QuoteRequestDocumentData): DocumentItemSection[] {
+  const indexOf = new Map(data.lines.map((line, index) => [line, index]));
+  return arrangeLineGroups(data.groups ?? [], data.lines).map((section) => ({
+    key: section.group?.id ?? DOCUMENT_UNGROUPED_SECTION_KEY,
+    kind: section.kind,
+    label: section.group?.name ?? null,
+    itemIndexes: section.lines.map((line) => indexOf.get(line)!),
+    summary: quoteSummary({ ...data, lines: [...section.lines] }),
+  }));
+}
+
 export interface QuoteLinesCollectionDeps {
   /** The attributes shown on the product page — read once per catalogue request. */
   readonly attributes: () => Promise<readonly CatalogAttributeView[]>;
@@ -216,5 +240,6 @@ export function createQuoteLinesCollection(
       return SUMMARY_FIELDS.map((field) => definitionOf(field, texts.totals[field.path] ?? field.path));
     },
     summary: quoteSummary,
+    sections: quoteLineSections,
   };
 }

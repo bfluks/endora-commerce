@@ -41,7 +41,7 @@ Obie grupy korzystają z tej samej struktury. Sekcje oznaczone jako _Developers_
 
 ## Szybkie linki
 
-- OpenAPI na żywo (gdy API działa, na domyślnym porcie): `http://localhost:3001/api/v1/_openapi.json`.
+- OpenAPI na żywo (gdy API działa, na domyślnym porcie): `http://localhost:3001/api/v1/_openapi.json` — dla administratorów z uprawnieniem *Odczyt opisu API* i kluczy API z zakresem `platform.api_description.read`; zobacz [Kontrakty API](./contracts/README.md#openapi-na-żywo).
 
 ## Status
 

@@ -292,7 +292,10 @@ into a placement on B → 422 `ORDER_SALES_CHANNEL_MISMATCH`.
   trade store; with manual moderation (the default) it is an *application* store. The admin hint on
   the toggle says so.
 - **Sitemap / crawler reads of a closed store**: the catalogue sitemap is refused like any anonymous
-  content read and the storefront serves an empty sitemap; the crawler policy read stays open.
+  content read and the storefront serves an empty sitemap; the crawler policy read stays open, and
+  so does the crawler-files read: a closed store's `robots.txt` disallows everything and names no
+  sitemap, and its `llms.txt` names the store, says its content is for signed-in customers and lists
+  nothing — the operator's custom crawler texts are not served on it.
 - **Basket of a channel the customer has since lost**: it is unreachable on that store (Story 2) and
   untouched; it becomes reachable again if the channel is re-assigned.
 

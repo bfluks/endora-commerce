@@ -36,7 +36,7 @@ Both audiences read the same tree. Sections marked _Developers_ vs _Usage_ let y
 
 ## Quick links
 
-- Live OpenAPI (when the API is running, on its default port): `http://localhost:3001/api/v1/_openapi.json`.
+- Live OpenAPI (when the API is running, on its default port): `http://localhost:3001/api/v1/_openapi.json` — for administrators with the *Read the API description* permission and API keys with the `platform.api_description.read` scope; see [API contracts](./contracts/README.md#live-openapi).
 
 ## Status
 

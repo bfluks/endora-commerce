@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-crm",
-  "version": "0.106.0",
+  "version": "0.107.0",
   "type": "module",
   "sideEffects": false,
   "description": "Sales opportunities with a configurable status workflow that linked orders follow.",
@@ -61,6 +61,8 @@
     "@mikro-orm/core": "^6",
     "@mikro-orm/migrations": "^6",
     "@mikro-orm/postgresql": "^6",
+    "@tiptap/react": "^3",
+    "@tiptap/starter-kit": "^3",
     "bullmq": "^5",
     "fastify": "^5.11.0",
     "ioredis": "^5",
@@ -71,6 +73,12 @@
   },
   "peerDependenciesMeta": {
     "@endora-commerce/admin-kit": {
+      "optional": true
+    },
+    "@tiptap/react": {
+      "optional": true
+    },
+    "@tiptap/starter-kit": {
       "optional": true
     },
     "lucide-react": {
@@ -92,6 +100,8 @@
     "@mikro-orm/core": "^6.6.13",
     "@mikro-orm/migrations": "^6.6.13",
     "@mikro-orm/postgresql": "^6.6.13",
+    "@tiptap/react": "^3.22.5",
+    "@tiptap/starter-kit": "^3.22.5",
     "@types/node": "^22.9.0",
     "@types/react": "^19.2.14",
     "bullmq": "^5.76.1",

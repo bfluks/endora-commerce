@@ -63,6 +63,19 @@ export const ERROR_CODES = {
   PACKAGING_UNIT_NAME_CONFLICT: 'PACKAGING_UNIT_NAME_CONFLICT',
   PACKAGING_UNIT_NOT_SUPPORTED_FOR_TYPE: 'PACKAGING_UNIT_NOT_SUPPORTED_FOR_TYPE',
 
+  // Catalog 155 — minimum order quantities (owned by `catalog`, raised by the
+  // modules that accept order lines: carts, orders, quote_requests)
+  PRODUCT_BELOW_MINIMUM_QUANTITY: 'PRODUCT_BELOW_MINIMUM_QUANTITY',
+  PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY: 'PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY',
+  PACKAGING_UNIT_MISMATCH: 'PACKAGING_UNIT_MISMATCH',
+
+  // Catalog 163 — product data scopes and URL keys (owned by `catalog`)
+  SCOPE_INVALID: 'SCOPE_INVALID',
+  SCOPE_INCOMPLETE: 'SCOPE_INCOMPLETE',
+  URL_KEY_TAKEN: 'URL_KEY_TAKEN',
+  URL_KEY_REDIRECT_TAKEOVER_REQUIRED: 'URL_KEY_REDIRECT_TAKEOVER_REQUIRED',
+  URL_REDIRECT_NOT_FOUND: 'URL_REDIRECT_NOT_FOUND',
+
   // Catalog 002 — Product Links (US4)
   SELF_LINK_NOT_ALLOWED: 'SELF_LINK_NOT_ALLOWED',
   LINK_ALREADY_EXISTS: 'LINK_ALREADY_EXISTS',
@@ -171,6 +184,8 @@ export const ERROR_CODES = {
   ORGANIZATION_SUSPENDED: 'ORGANIZATION_SUSPENDED',
   ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
   ORDER_NOT_CANCELLABLE: 'ORDER_NOT_CANCELLABLE',
+  /** 422 — the basket handed to placement belongs to another sales channel (feature 154). */
+  ORDER_SALES_CHANNEL_MISMATCH: 'ORDER_SALES_CHANNEL_MISMATCH',
   // Saved list views (`specs/147-saved-views/`, FR-022) — an admin already
   // holds a view on the order list whose name differs only by case or
   // surrounding spaces.
@@ -184,6 +199,11 @@ export const ERROR_CODES = {
   INVOICE_NUMBER_PATTERN_COLLIDES: 'INVOICE_NUMBER_PATTERN_COLLIDES',
   INVOICE_NUMBER_ALREADY_ISSUED: 'INVOICE_NUMBER_ALREADY_ISSUED',
   INVALID_TRANSITION: 'INVALID_TRANSITION',
+
+  // Returns 155 — a `return`-kind case naming an order line recorded as not
+  // returnable at purchase (owned and raised by `returns`; complaints are
+  // never refused by it).
+  RETURN_LINE_NOT_RETURNABLE: 'RETURN_LINE_NOT_RETURNABLE',
 
   // Credit Limit
   CREDIT_LIMIT_NOT_GRANTED: 'CREDIT_LIMIT_NOT_GRANTED',
@@ -301,6 +321,12 @@ export const ERROR_CODES = {
   STALE_SALES_CHANNEL_WRITE: 'STALE_SALES_CHANNEL_WRITE',
   SALES_CHANNEL_ATTRIBUTION_IMMUTABLE: 'SALES_CHANNEL_ATTRIBUTION_IMMUTABLE',
   SALES_CHANNEL_CODE_IMMUTABLE: 'SALES_CHANNEL_CODE_IMMUTABLE',
+  // Sales-channel access (feature 154). Raised by the kernel's access step
+  // after a request's channel is resolved; `details.channelCode` names it.
+  /** 403 — an anonymous request on a channel closed to anonymous visitors. */
+  SALES_CHANNEL_SIGN_IN_REQUIRED: 'SALES_CHANNEL_SIGN_IN_REQUIRED',
+  /** 403 — a customer request on a channel its Organization is not assigned to. */
+  SALES_CHANNEL_NOT_PERMITTED: 'SALES_CHANNEL_NOT_PERMITTED',
 
   // Compare (feature 007)
   COMPARISON_FULL: 'COMPARISON_FULL',
@@ -340,6 +366,14 @@ export const ERROR_CODES = {
   ASSET_FILE_MISSING: 'ASSET_FILE_MISSING',
   ASSET_GONE: 'ASSET_GONE',
   ASSET_ACCESS_DENIED: 'ASSET_ACCESS_DENIED',
+  // Assets Library — stable asset URLs (specs/156-asset-stable-url/)
+  ASSET_REPLACE_KIND_MISMATCH: 'ASSET_REPLACE_KIND_MISMATCH',
+  ASSET_LEGACY_CANNOT_REPLACE: 'ASSET_LEGACY_CANNOT_REPLACE',
+  ASSET_REPLACE_CONFLICT: 'ASSET_REPLACE_CONFLICT',
+  ASSET_NO_PREVIOUS_VERSION: 'ASSET_NO_PREVIOUS_VERSION',
+  ASSET_PERMALINK_TAKEN: 'ASSET_PERMALINK_TAKEN',
+  ASSET_PERMALINK_PREVIOUSLY_USED: 'ASSET_PERMALINK_PREVIOUSLY_USED',
+  ASSET_PERMALINK_INVALID: 'ASSET_PERMALINK_INVALID',
 
   // CMS (feature 014)
   CMS_PAGE_NOT_FOUND: 'CMS_PAGE_NOT_FOUND',
@@ -487,6 +521,23 @@ export const ERROR_CODES = {
   // definitions are mutated only through the owning host module's surface
   // (generic admin mutations refuse with 409 "host_managed").
   CUSTOM_FIELD_HOST_MANAGED: 'CUSTOM_FIELD_HOST_MANAGED',
+  // Feature 157 — an admin list was asked to filter on a custom field it does
+  // not offer as a list filter (the definition's list-filter option is off,
+  // the definition is gone, or its entity type is not served).
+  CUSTOM_FIELD_FILTER_UNAVAILABLE: 'CUSTOM_FIELD_FILTER_UNAVAILABLE',
+  // Feature 157 — three 409 refusals of a definition change that used to share
+  // `CUSTOM_FIELD_DEFINITION_INVALID` and an English message: an option records
+  // still hold (`details.value`, `details.label`), a value type records hold
+  // values under (`details.key`), and a customer-visible field over values a
+  // deleted field left (`details.key`).
+  CUSTOM_FIELD_OPTION_IN_USE: 'CUSTOM_FIELD_OPTION_IN_USE',
+  CUSTOM_FIELD_VALUE_TYPE_LOCKED: 'CUSTOM_FIELD_VALUE_TYPE_LOCKED',
+  CUSTOM_FIELD_STORED_VALUES_EXIST: 'CUSTOM_FIELD_STORED_VALUES_EXIST',
+  // Feature 162 — turning on a definition's "carry value to" option for a
+  // target that cannot take the values: no same-key field, another value type,
+  // missing options, an internal value into a customer-visible field, a pair the
+  // registry does not offer, or a target whose module is off (`details.code`).
+  CUSTOM_FIELD_CARRY_INCOMPATIBLE: 'CUSTOM_FIELD_CARRY_INCOMPATIBLE',
 
   // Feature 058 — Credentials (reusable credential configurations).
   CREDENTIAL_NOT_FOUND: 'CREDENTIAL_NOT_FOUND',
@@ -641,6 +692,13 @@ export const ERROR_CODES = {
   DOCUMENT_TEMPLATE_NOT_SELECTABLE: 'DOCUMENT_TEMPLATE_NOT_SELECTABLE',
   /** Producing the document failed. */
   DOCUMENT_RENDER_FAILED: 'DOCUMENT_RENDER_FAILED',
+
+  // Admin feedback (issue #379) — declared in the `admin_feedback` module's
+  // manifest; the same spellings as `ADMIN_FEEDBACK_ERROR_CODES`.
+  /** The relay address is empty or not an http(s) URL: sending is switched off. */
+  ADMIN_FEEDBACK_NOT_CONFIGURED: 'ADMIN_FEEDBACK_NOT_CONFIGURED',
+  /** The relay could not be reached in time, refused the message, or redirected. */
+  ADMIN_FEEDBACK_DELIVERY_FAILED: 'ADMIN_FEEDBACK_DELIVERY_FAILED',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

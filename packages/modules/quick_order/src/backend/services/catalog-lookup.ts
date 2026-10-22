@@ -1,6 +1,9 @@
-import { isProductVisibleTo, type CatalogProductReadPort } from '@endora-commerce/contracts';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
-import { productIdsInRequestChannel } from '@endora-commerce/platform/kernel';
+import {
+  isProductVisibleTo,
+  type CatalogProductAvailabilityPort,
+  type CatalogProductReadPort,
+} from '@endora-commerce/contracts';
+import { currentSalesChannel } from '@endora-commerce/platform/kernel';
 import type {
   ProductLike,
   QuickOrderCatalogLookup,
@@ -27,10 +30,12 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
   constructor(
     private readonly catalogProducts: CatalogProductReadPort,
     /**
-     * The sanctioned bridge accessor (Constitution XII), for the channel half
-     * of the same answer (issue #259).
+     * Feature 163 — `catalog`'s availability answer, which holds the channel
+     * half of the same answer (issue #259, through the sanctioned bridge
+     * accessor) together with the effective status at (channel, L), the
+     * window and the effective audience.
      */
-    private readonly channelMembership: SalesChannelMembershipPort,
+    private readonly availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
   ) {}
 
   /**
@@ -53,7 +58,18 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
     productIds: string[],
   ): Promise<ReadonlySet<string> | null> {
     if (audience === 'unrestricted') return null;
-    return productIdsInRequestChannel(this.channelMembership, productIds);
+    // Outside a request there is no channel to ask about (FR-007); the audience
+    // filter the callers apply first is the whole answer there, as before.
+    const channel = currentSalesChannel();
+    if (channel === null) return null;
+    if (productIds.length === 0) return new Set();
+    // Feature 163 — the request channel's default language: a pasted list
+    // carries no language of its own.
+    return this.availability.filterAvailable(productIds, {
+      channelId: channel.id,
+      languageCode: null,
+      audience,
+    });
   }
 
   async findProductsBySku(
@@ -75,6 +91,9 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
         sku: p.sku,
         status: p.status,
         deletedAt: p.deletedAt,
+        // Feature 155 (R12.1) — what the preview's minimum evaluation reads.
+        type: p.type,
+        minOrderQuantity: p.minOrderQuantity,
       }));
   }
 
@@ -84,21 +103,31 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
   ): Promise<VariantBySku[]> {
     if (skus.length === 0) return [];
     const variants = await this.catalogProducts.findVariantsBySkus(skus);
-    if (variants.length === 0 || audience === 'unrestricted') {
-      return variants.map((v) => ({
+    if (variants.length === 0) return [];
+    // The parents are read for every audience: feature 155 (R12.1) judges a
+    // row naming a variant against its product's minimum, so the preview needs
+    // the parent's rule even where `'unrestricted'` waives the filters below.
+    const parents = await this.catalogProducts.findByIds(
+      Array.from(new Set(variants.map((v) => v.parentProductId))),
+    );
+    const ruleOf = new Map(
+      parents.map((p) => [p.id, { type: p.type, minOrderQuantity: p.minOrderQuantity }]),
+    );
+    const toVariant = (v: (typeof variants)[number]): VariantBySku => {
+      const parent = ruleOf.get(v.parentProductId);
+      return {
         id: v.id,
         sku: v.sku,
         parentProductId: v.parentProductId,
-      }));
-    }
+        ...(parent ? { parent } : {}),
+      };
+    };
+    if (audience === 'unrestricted') return variants.map(toVariant);
     // A variant carries no visibility of its own — its parent's answer is the
     // whole answer (issue #227). Without this pass a pasted *variant* SKU
     // resolved a restricted parent's id, which is the same oracle by one more
     // hop; the parents are fetched here rather than left to the pipeline
     // because only the record carries the two columns.
-    const parents = await this.catalogProducts.findByIds(
-      Array.from(new Set(variants.map((v) => v.parentProductId))),
-    );
     const visibleParents = parents.filter((p) => isProductVisibleTo(p, audience));
     // Issue #259 — and the channel answer is the parent's too. A variant SKU
     // that resolved a parent this channel does not publish is the same oracle
@@ -112,9 +141,7 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
         .filter((p) => publishedHere === null || publishedHere.has(p.id))
         .map((p) => p.id),
     );
-    return variants
-      .filter((v) => acquirableParents.has(v.parentProductId))
-      .map((v) => ({ id: v.id, sku: v.sku, parentProductId: v.parentProductId }));
+    return variants.filter((v) => acquirableParents.has(v.parentProductId)).map(toVariant);
   }
 
   async findVariantsByParent(

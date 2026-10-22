@@ -111,7 +111,7 @@ function rfqPayload(status: string): Record<string, unknown> {
   };
 }
 
-function renderDetail(status = 'Pending'): void {
+function renderDetail(status = 'Pending', entry = `/quote-requests/${RFQ_ID}`): void {
   getSpy.mockImplementation((url: string) => {
     if (url === '/api/v1/admin/custom-fields/definitions?entityType=quote_request') {
       return Promise.resolve({ data: [DEFINITION] });
@@ -125,7 +125,7 @@ function renderDetail(status = 'Pending'): void {
     // The screen ends with a zone other modules may contribute to, so it is
     // rendered under the session providers; nobody contributes here.
     withSession(
-      <MemoryRouter initialEntries={[`/quote-requests/${RFQ_ID}`]}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route path="/quote-requests/:id" element={<RfqDetail />} />
         </Routes>
@@ -185,5 +185,19 @@ describe('RfqDetail — custom fields, through the published panel', () => {
       ),
     );
     expect(screen.queryByText(CORE_EN['customFields.title'] as string)).toBeNull();
+  });
+});
+
+describe('RfqDetail — the way back (specs/158-crm-opportunity-inline-editing/, FR-020)', () => {
+  it('leads to the Quote Requests list when it was opened from nowhere in particular', async () => {
+    renderDetail();
+    const back = await screen.findByRole('link', { name: CORE_EN['rfq.list.title'] as string });
+    expect(back).toHaveAttribute('href', '/quote-requests');
+  });
+
+  it('leads back to the screen that opened it, and says only "Back"', async () => {
+    renderDetail('Pending', `/quote-requests/${RFQ_ID}?returnTo=${encodeURIComponent('/crm/opportunities/abc?tab=links')}`);
+    const back = await screen.findByRole('link', { name: CORE_EN['common.action.back'] as string });
+    expect(back).toHaveAttribute('href', '/crm/opportunities/abc?tab=links');
   });
 });

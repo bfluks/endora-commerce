@@ -65,6 +65,8 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 | `newsletter.rate_limit_per_second` | Send rate limit (per second) | `number` |
 | `newsletter.sender.from_email` | Sender email | `string` |
 | `newsletter.sender.from_name` | Sender name | `string` |
+| `newsletter.tracking.clicks_enabled` | Track campaign link clicks | `boolean` |
+| `newsletter.tracking.opens_enabled` | Track campaign opens | `boolean` |
 
 ## Tłumaczenia
 

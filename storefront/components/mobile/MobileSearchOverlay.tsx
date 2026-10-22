@@ -18,7 +18,8 @@ const DEBOUNCE_MS = 200;
 export function MobileSearchOverlay(props: {
   apiBaseUrl: string;
   locale: string;
-  salesChannelCode?: string;
+  /** Forwarded as `X-Sales-Channel`; required for the reason `SearchAutocomplete` gives. */
+  salesChannelCode: string | undefined;
   placeholder: string;
   seeAllResultsLabel: string;
   /** Category/brand shortcut pills (top departments from the megamenu). */
@@ -61,9 +62,7 @@ export function MobileSearchOverlay(props: {
           const next = await getSuggestions({
             apiBaseUrl: props.apiBaseUrl,
             q: trimmed,
-            ...(props.salesChannelCode !== undefined
-              ? { salesChannelCode: props.salesChannelCode }
-              : {}),
+            salesChannelCode: props.salesChannelCode,
             signal: ac.signal,
           });
           setResponse(next);

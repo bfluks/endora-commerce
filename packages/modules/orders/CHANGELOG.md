@@ -1,5 +1,196 @@
 # @endora-commerce/mod-orders
 
+## 0.107.0
+
+### Minor Changes
+
+- 708a3e3: The admin order preview says why a line cannot be ordered, and refuses a sales channel that does not exist.
+
+  **Two new message codes on `POST /api/v1/admin/orders/preview`.** A line is now also unavailable
+  when the customer's Organization may not see the product (`PRODUCT_NOT_VISIBLE_TO_CUSTOMER`) or
+  when the product is not in the assortment of the sales channel named by the request body's
+  `salesChannelId` (`PRODUCT_NOT_IN_SALES_CHANNEL`). Each unavailable line carries exactly one
+  `messages` entry, the first that applies in the order `PRODUCT_NOT_FOUND`,
+  `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`, `PRODUCT_NOT_IN_SALES_CHANNEL`, `QUOTE_ONLY`
+  (`ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE` in `@endora-commerce/contracts`). An unavailable line
+  keeps the existing shape — `unitPrice: '0'`, `lineTotal: 0`, `unavailable: true` — and adds
+  nothing to the subtotal or VAT. The request and response schemas are unchanged; `messages[].code`
+  stays a string, so a client that does not know a code keeps parsing the response. A soft-deleted
+  product is priced as before.
+
+  **Behaviour change: an unknown `salesChannelId` is now refused.** The preview used to fall back
+  silently to any active channel when the body's `salesChannelId` named none, and priced the
+  basket on that other channel. It now answers **404 `NOT_FOUND`** (the route's existing
+  not-found error) before any line is evaluated, so the channel a preview is priced on
+  and the channel its assortment is checked against are always the one the operator chose. The
+  route is admin-only (`orders:write`); an admin client that sends a stale channel id now receives
+  the error instead of a preview priced on a different channel. Order creation
+  (`POST /api/v1/admin/orders`) is not changed by this release.
+
+  **Create order adds products through the product browser.** Inside **Items** — shown once the
+  customer and the sales channel are chosen — **Browse products** opens the shared picker on the
+  Active tab, where grouped and bundle parents, draft and inactive products, and products already on
+  the order are listed with their reason and cannot be ticked; up to 200 ticked products, across
+  pages and filters, are added in one step as lines of quantity 1. Beside it a quick search by name
+  or SKU appends one product under the same rules. The per-line product search and **Add item** are
+  gone: each line shows the product's name and SKU, an editable quantity (a whole number of 1 or
+  more — anything else marks the line, keeps it out of the preview and blocks submit), the unit
+  price, the line total and a remove action. A line the preview reports unavailable shows that
+  cause's reason instead of a price — "The customer cannot see this product" for
+  `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`, "Not in this sales channel's assortment" for
+  `PRODUCT_NOT_IN_SALES_CHANNEL`, and **No price** for `PRODUCT_NOT_FOUND`, `QUOTE_ONLY` and any code
+  the screen does not know — and blocks submit until it is removed; a refused preview (such as a
+  sales channel deleted meanwhile) shows **Could not calculate prices** and marks no line. The
+  created order still carries exactly the lines and quantities on screen, in the unchanged payload
+  shape. The `core` bundle gains `orderCreate.items.browse`, `orderCreate.items.quickSearch`,
+  `orderCreate.items.empty`, `orderCreate.line.notVisible`, `orderCreate.line.notInChannel` and
+  `orderCreate.line.quantityInvalid` in English and Polish, and loses `orderCreate.addItem`, which
+  nothing reads any more.
+
+- 05d0650: `orderReadPort` implements `findStatusDefinition(code)`: the configured order status with that
+  code — its per-language names and default name — or `null` for an unknown code. Consumers use it
+  to label a status the way the shop does.
+- bf9881f: Each module contributes its record type to admin global search (`@endora-commerce/mod-admin-search`).
+
+  | Package              | Record type                           | Fields offered (default in bold)                                                 | Permission                             |
+  | -------------------- | ------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------- |
+  | `mod-orders`         | `orders.order`                        | **number**, **organizationName**, **customer**, billingCompanyName, billingTaxId | `orders:read`                          |
+  | `mod-quote-requests` | `quote_requests.quote_request`        | **number**, **organizationName**, **customer**, customerNote                     | `rfqs:handle`                          |
+  | `mod-crm`            | `crm.opportunity`                     | **number**, **title**, **organizationName**, description                         | `crm:read`                             |
+  | `mod-organizations`  | `organizations.organization`          | **name**, **taxId**, legalName                                                   | `customers:read` or `customers:manage` |
+  | `mod-customers`      | `customers.customer`                  | **email**, **name**                                                              | `customers:read`                       |
+  | `mod-catalog`        | `catalog.product`, `catalog.category` | **sku**, **name**, slug, quickSearchAttributes; **name**, **slug**               | `catalog:read`                         |
+
+  Every provider applies its own admin list's visibility: sales representatives see only their
+  organizations' orders, quote requests, opportunities and customers; organizations follow the
+  Organizations list, with a representative's assigned organizations ranked first. Each module declares
+  a `contributes-to` edge on `adminSearchProviderRegistry`, so none of them depends on global search and
+  none loses its switch. `mod-quote-requests`, `mod-organizations`, `mod-customers` and `mod-catalog`
+  now declare `_i18n` in `dependencies` (status labels in the admin's language), and each module's
+  bundle gains `adminSearch.*` keys in English and Polish.
+
+- 4469ca2: `order.cancelled.v1` is emitted. It was declared in `OrderEvents` and documented, and nothing emitted it, so a subscriber written against it never ran. An order moved to `cancelled` is now announced as `order.cancelled.v1` after `order.status_changed.v1`, once the cancelling write has committed, whichever path cancelled it — an administrator, the customer, or `payments` / `shipments` through `orderStatusAnnouncePort`.
+
+  The payload grows from `{ orderId }` to `orderId`, `organizationId`, `salesChannelId`, `from` (the status it was cancelled from), `actor`, `reason` and `businessId`. The event stays on the in-process event bus: outbound webhooks keep delivering a cancellation as `order.status_changed.v1` and do not offer `order.cancelled.v1`.
+
+- 3acae57: Behaviour change for API clients of the order list's saved views (`/api/v1/admin/orders/list-views`).
+
+  - Names are stored trimmed. One admin can no longer hold two saved views on the order list whose names differ only by letter case or surrounding spaces: `POST`, and a `PATCH` that changes a view's name, answer `409 ORDER_SAVED_VIEW_NAME_TAKEN` with a translated message (English and Polish). The rule binds the view's owner — a platform admin renaming a colleague's shared view is refused when the colleague already uses that name. Duplicates saved before this release are kept, and a `PATCH` that does not change the name is never refused for one.
+  - Every item returned by `GET`, `POST` and `PATCH` carries two booleans computed for the caller: `ownedByCaller`, and `canModify` (the caller owns the view, or the view is shared and the caller is a platform admin).
+  - A `PATCH` that changes nothing — an empty body, or every value as already stored — writes nothing and logs nothing; it answers `200` with the current view. It is still refused (`403`/`404`) to a caller who may not modify the view.
+  - `PATCH` and `DELETE /api/v1/admin/orders/list-views/{id}` answer an `id` that is not a UUID with the same `404 NOT_FOUND` as a view that does not exist, instead of `500`.
+  - All four routes answer `401 UNAUTHORIZED` when no admin session resolves, instead of acting under an empty owner id.
+  - Who counts as a platform admin for saved views is now read from the request's tenant context (`mode === 'all'`: any role except `sales_representative`), as on the product and quote request lists. It fails closed: an admin whose reach cannot be resolved — no admin tenant scope composed, or no resolvable role — is no longer treated as a platform admin, so `canModify` is `false` on other admins' shared views and modifying or deleting one answers `403`.
+  - When a platform admin changes or deletes another admin's view, the `orders` module logs one `info` record (`event: 'saved_view.updated' | 'saved_view.deleted'`, `list`, `viewId`, `ownerAdminUserId`, `actorAdminUserId`).
+
+  `@endora-commerce/contracts` gains the `ERROR_CODES.ORDER_SAVED_VIEW_NAME_TAKEN` member.
+
+- 882e88f: The order list's saved views now run on the admin kit's `SavedViewsControl` (#288).
+
+  - Saving a view opens one in-app dialog that asks for the name and whether to share the view, instead of two browser prompts. The name is checked as it is submitted — empty, too long, containing characters that cannot be used, or already used by one of your own views — and a server refusal is shown inside the dialog with what you typed kept.
+  - Deleting a view asks for confirmation in an in-app dialog that names the view and, for a shared view, warns that it disappears for every admin who can open the list. _Delete view_ is offered only for a view you may delete.
+  - Both dialogs are keyboard-operable (focus moves into the dialog, stays there and returns to the control afterwards; Escape cancels) and translated in English and Polish. A shared view is announced as shared in the selector, in words rather than a star.
+  - Loading a view saved without a sort applies the list's default sort (newest first) instead of failing.
+  - Loading a view returns the list to its first page and clears the row selection, without first requesting the old page under the view's filters.
+
+  `@endora-commerce/mod-i18n` drops the four `orders.views.*` keys the replaced component read; the control reads the `savedViews.*` keys added earlier in this feature.
+
+### Patch Changes
+
+- 519fecb: **Create order** shows **Items** and **Order summary** only once both the customer and the sales
+  channel are chosen — the two inputs pricing needs; payment method, delivery method and addresses
+  do not gate them. Until then one hint names what is missing. The summary still appears only after
+  the first priced line. Clearing either field hides both sections without discarding the lines,
+  which come back when the field is set again and still count as unsaved work for the
+  leave-the-page prompt. A page opened with `customerAccountId` and `salesChannelId` in the query
+  string shows **Items** at once.
+
+  The `core` bundle gains `orderCreate.gate.missingCustomer`, `orderCreate.gate.missingChannel` and
+  `orderCreate.gate.missingBoth` in English and Polish. No existing key changes.
+
+- 34f97ae: An order is placed from the customer's basket of the order's sales channel
+  (`specs/154-sales-channel-access/`, User Story 6). A basket recording another channel is refused
+  with 422 `ORDER_SALES_CHANNEL_MISMATCH` inside the placement transaction, before anything is
+  reserved or written, and the basket is kept. The total preview reads the basket of the previewed
+  channel. Reorder seeds the basket of the storefront request's channel, and an operator's reorder
+  the basket of the order's own channel; admin order creation and the API-key intake seed the
+  basket of the channel the order is placed on.
+- 248a9df: Declares the `ORDER_SALES_CHANNEL_MISMATCH` error code with English and Polish sentences, for
+  order placement with a basket of another sales channel.
+- edac0be: `POST /api/v1/admin/orders` now honours the sales channel the operator chose for the order.
+
+  - A `salesChannelId` that names no sales channel is refused with `404 NOT_FOUND` before anything is written; the customer's basket is left as it was. It used to be accepted and the order was placed on the system-default channel.
+  - The ordered products are checked against the assortment of the order's channel rather than the channel the admin request itself resolved (the system default, unless a channel header is sent). A product the chosen channel sells is now accepted even when the default channel does not sell it, and a product the chosen channel does not sell is refused with `404 PRODUCT_NOT_FOUND` even when the default channel sells it.
+
+  `CartWritePort.addItem` accepts an optional `salesChannelId` in its input: the channel whose assortment decides whether the product may be added. Without it the request's resolved channel decides, as before. Buyer-facing cart, shopping-list and quick-order paths do not pass it and behave exactly as before.
+
+- 7d2d00f: Order placement refuses a cart whose stored line prices are no longer current.
+
+  `OrderService.placeOrder` asks `carts` (`cartPlacementApplyPort.findPriceDrift`) whether every
+  line's stored unit price is still the price it may be ordered at for its current quantity,
+  organization and the agreed quantity of a quote line. When one is not, the placement answers
+  `409 CART_PRICE_CHANGED` with `details.lines` (`productId`, `variantId`, `quantity`,
+  `previousUnitPrice`, `currentUnitPrice` — `null` when the line may no longer be ordered —
+  and `currency`), writes nothing, and has the cart brought up to date, so placing again after
+  reviewing the cart succeeds at the current prices.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [649fe8d]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [31175b7]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [ad55813]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/mod-carts@0.107.0
+  - @endora-commerce/platform@0.107.0
+  - @endora-commerce/mod-invoices@0.107.0
+  - @endora-commerce/email-components@0.107.0
+  - @endora-commerce/mod-credit-limits@0.107.0
+  - @endora-commerce/mod-inventory@0.107.0
+  - @endora-commerce/mod-promotions@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

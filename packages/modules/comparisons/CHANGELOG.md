@@ -1,5 +1,73 @@
 # @endora-commerce/mod-comparisons
 
+## 0.107.0
+
+### Minor Changes
+
+- dd939be: The comparison PDF can be designed in _Document templates_ (`specs/152-compare-pdf-template/`).
+
+  - The module registers the `comparisons.comparison` document type with three blocks
+    (`comparisons.ComparisonHeader`, `ComparisonTable`, `ComparisonShareLink`), every
+    general-purpose block, and a built-in layout in English and Polish.
+  - `GET /api/v1/comparisons/me/pdf` produces the PDF through `documentRenderPort` while
+    `document_templates` is present: the language is the first `Accept-Language` tag the channel
+    offers, else the channel's default; the new optional query `hideEmptyRows=true|false` drops rows
+    with no value, as the storefront switch does. The response adds `content-language`. With
+    `document_templates` off the fixed layout is printed, unchanged. File name, owner-only access and
+    `409 COMPARISON_EMPTY` are unchanged.
+  - **PDF layouts can change**: a buyer browsing in Polish now gets a Polish PDF with Polish product
+    names, dates and prices.
+  - Admin: a _PDF template_ button on the comparisons list (with `document_templates:read`), and the
+    canvas renderers of the three blocks as `document` block contributions.
+
+### Patch Changes
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+  - @endora-commerce/page-builder-core@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

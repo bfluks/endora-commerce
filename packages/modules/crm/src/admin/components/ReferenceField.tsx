@@ -4,37 +4,40 @@ import {
   useId,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
-  type ClipboardEvent,
   type CSSProperties,
-  type KeyboardEvent,
+  type FormEvent,
   type ReactNode,
 } from 'react';
-import { AtSign, Package, ShoppingCart } from 'lucide-react';
+import { EditorContent, useEditor, type Editor } from '@tiptap/react';
+import StarterKit from '@tiptap/starter-kit';
+import {
+  AtSign,
+  Bold,
+  Italic,
+  Link2,
+  List,
+  ListOrdered,
+  Package,
+  ShoppingCart,
+  Strikethrough,
+} from 'lucide-react';
 import {
   extractOpportunityReferenceTokens,
   foldDiacritics,
-  formatOpportunityReferenceToken,
+  isSafeOpportunityRichHref,
   type OpportunityReference,
-  type OpportunityReferenceToken,
   type OpportunityReferenceType,
 } from '@endora-commerce/contracts';
 import { useAuth } from '@endora-commerce/admin-kit/lib';
-import { Button, Combobox, type ComboboxOption } from '@endora-commerce/admin-kit/ui';
+import { Button, Combobox, Input, type ComboboxOption } from '@endora-commerce/admin-kit/ui';
 import { useAppLanguage, useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { crmApi } from '../api.js';
-import { applyMention, findMentionTrigger, type MentionTrigger } from '../lib/mention-trigger.js';
-import {
-  chipBeside,
-  isCanonical,
-  readReferenceText,
-  rectOfOffset,
-  renderReferenceText,
-  selectionOffsets,
-  selectOffsets,
-  type ChipFace,
-} from '../lib/reference-editor-dom.js';
+import { findMentionTrigger, type MentionTrigger } from '../lib/mention-trigger.js';
+import { editorDocOf, REFERENCE_NODE, textOfEditorDoc, type EditorDoc } from '../lib/rich-text-doc.js';
+import { ReferenceNode } from './editor/reference-node.js';
 
 const SEARCH_DEBOUNCE_MS = 250;
 /**
@@ -44,12 +47,11 @@ const SEARCH_DEBOUNCE_MS = 250;
  * mentioned.
  */
 const FIRST_SEARCH_DELAY_MS = 200;
-/** Keystrokes closer together than this are one step of undo. */
-const UNDO_COALESCE_MS = 800;
-const UNDO_DEPTH = 200;
 /** The gap between the line being typed and the list that opens at it. */
 const LIST_GAP_PX = 4;
 const VIEWPORT_MARGIN_PX = 8;
+/** What an inline atom — a chip — counts as in the text the `@` shortcuts read. */
+const ATOM_CHARACTER = '￼';
 
 /**
  * The codes of the lists a reference is chosen from. Two are their owners' —
@@ -70,11 +72,6 @@ interface Suggestion {
   description?: string;
 }
 
-interface Snapshot {
-  text: string;
-  caret: number;
-}
-
 /** A Product's name in the language on screen, then any name it has, then its SKU. */
 function productLabel(name: Record<string, string>, sku: string, language: string): string {
   const base = language.split('-')[0] ?? language;
@@ -82,12 +79,43 @@ function productLabel(name: Record<string, string>, sku: string, language: strin
   return name[language] || (sameLanguage ? name[sameLanguage] : undefined) || Object.values(name).find(Boolean) || sku;
 }
 
-const keyOf = (token: OpportunityReferenceToken): string => `${token.type}:${token.id}`;
+const keyOf = (type: OpportunityReferenceType, id: string): string => `${type}:${id}`;
+
+/**
+ * The editor while its view is mounted, else `null`. React may run this
+ * field's effects with an editor the hook has already destroyed — effects
+ * reconnected after a lazy tab is revealed, or a Suspense boundary resolves,
+ * later than the hook's one-tick grace — and a destroyed editor's `view`
+ * throws (seen on CI). An effect that finds none waits for the editor that
+ * replaces it: the editor is in its dependencies.
+ */
+function mounted(editor: Editor | null): Editor | null {
+  return editor && !editor.isDestroyed ? editor : null;
+}
+
+/**
+ * The caret's textblock up to the caret, as the `@` shortcuts read it: its
+ * characters, and one placeholder per chip — so that a position in this string
+ * is a position in the document, counted from the block's start.
+ */
+function textBeforeCaret(editor: Editor): { text: string; blockStart: number } | null {
+  const { selection } = editor.state;
+  if (!selection.empty) return null;
+  const { $from } = selection;
+  if (!$from.parent.isTextblock) return null;
+  let text = '';
+  $from.parent.forEach((child, offset) => {
+    if (offset >= $from.parentOffset) return;
+    if (child.isText) text += (child.text ?? '').slice(0, $from.parentOffset - offset);
+    else text += ATOM_CHARACTER.repeat(Math.min(child.nodeSize, $from.parentOffset - offset));
+  });
+  return { text, blockStart: $from.start() };
+}
 
 export interface ReferenceFieldProps {
-  /** The id a `<Label htmlFor>` names: the label is tied to the field and focuses it, as with a textarea. */
+  /** The id a `<Label htmlFor>` names: the label is tied to the field and focuses it. */
   id: string;
-  /** The stored text — tokens and all. */
+  /** The stored text — formatting, tokens and all. */
   value: string;
   onValueChange: (next: string) => void;
   /**
@@ -100,6 +128,11 @@ export interface ReferenceFieldProps {
    * this reader — the `references` returned beside the text being edited.
    */
   references?: readonly OpportunityReference[];
+  /**
+   * Whether people, Orders and Products may be referred to. An Event's
+   * description is formatted text without references.
+   */
+  mentions?: boolean;
   maxLength?: number;
   disabled?: boolean;
   required?: boolean;
@@ -109,40 +142,34 @@ export interface ReferenceFieldProps {
   autoFocus?: boolean;
   'aria-invalid'?: boolean;
   'aria-describedby'?: string;
+  /** Ctrl/Cmd + Enter — the surrounding form's *Save*. */
+  onSubmitShortcut?: () => void;
 }
 
 /**
- * The field a description, a note or a message is written in (User Stories 12
- * and 18; FR-045, FR-081, FR-082) — **and in which a reference is always read
- * as what it names, never as its token** (owner ruling, 2026-10-07; research
- * N-M11).
+ * The field a description, a note, a message or an Event's description is
+ * written in — **formatted text, in which a reference is read as what it
+ * names** (`specs/158-crm-opportunity-inline-editing/`, FR-010 – FR-011;
+ * `specs/143-crm-sales-opportunities/` User Stories 12 and 18).
  *
- * What is stored and sent is the text with its tokens — `[[admin_user:<id>]]`,
- * `[[order:<id>]]`, `[[product:<id>]]`, the one grammar of the contracts
- * package. What is on screen is that text with each token drawn as a chip:
- * `@Tomasz Nowak`, an Order's number, a Product's name. That holds for a
- * mention just chosen and for one already in a text opened for editing, whose
- * names arrive in `references`. A target this reader may not see is a chip that
- * says *unavailable*, and its token goes back unchanged; a token the field has
- * no name for — typed or pasted by hand — stays the characters it is.
+ * **What is stored is still text.** The editor is TipTap — already in the tree
+ * for the CMS — holding paragraphs, bulleted and numbered lists, bold, italic,
+ * strikethrough and links, and the reference chip; every change is written
+ * back to the text grammar of `@endora-commerce/contracts` before it leaves
+ * the field (`lib/rich-text-doc.ts`). The server never stores HTML, and a
+ * screen draws the text with elements of its own.
  *
- * **The field is plain text.** It is a `contenteditable` element, and nothing
- * the browser can put into one survives: a paste arrives as its text, a line
- * break is a line break, formatting commands do nothing. Its content is drawn
- * from the text and read back by `lib/reference-editor-dom.ts`; every edit
- * that is more than typing a character — choosing a mention, a paste, Enter,
- * removing a chip, undo — is made on the text and drawn again. A chip is one
- * character to the keyboard: the arrows step over it, Backspace and Delete take
- * it whole. Undo and redo are the field's own, a step per pause in the typing.
+ * The toolbar above the field formats what is selected, and its buttons say
+ * which formatting the caret is in; the usual keys do the same (Ctrl/Cmd + B,
+ * I, Shift + S, Shift + 7, Shift + 8), and a line beginning `- ` or `1. ` is a
+ * list.
  *
  * **While typing**: `@` opens a list of people, `@@` of the Organization's
  * Orders, `@@@` of Products, **at the place it was typed** — under that line,
  * above it when there is no room below, never outside the window — narrowed by
  * whatever is typed next (`lib/mention-trigger.ts` says exactly when). Arrow
  * keys move through it, Enter or Tab puts the chip where the `@`s and the
- * letters were, Escape closes it and leaves them as typed; the option the
- * arrows reach is kept in view, and an input method composing a character
- * keeps Enter for itself. While the list is
+ * letters were, Escape closes it and leaves them as typed. While the list is
  * open the field is a combobox to assistive technology; closed, it is a
  * multi-line text box under its label.
  *
@@ -161,6 +188,7 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
     onValueChange,
     organizationId,
     references,
+    mentions = true,
     maxLength,
     disabled = false,
     required,
@@ -169,6 +197,7 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
     autoFocus,
     'aria-invalid': invalid,
     'aria-describedby': describedBy,
+    onSubmitShortcut,
   } = props;
   const t = useTranslation('crm');
   const tCore = useTranslation('core');
@@ -176,20 +205,16 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
   const { hasPermission } = useAuth();
   const baseId = useId();
   const wrapper = useRef<HTMLDivElement>(null);
-  const field = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
-  /** The text the field shows now: what was last drawn into it or read out of it. */
-  const model = useRef<string | null>(null);
   /** What the field can name: the server's references, and everything chosen here. */
   const known = useRef(new Map<string, { label: string | null; available: boolean }>());
-  /** The last selection the field had — where a button's choice goes. */
-  const lastSelection = useRef<{ start: number; end: number } | null>(null);
-  const history = useRef<{ entries: Snapshot[]; index: number; typedAt: number }>({
-    entries: [],
-    index: -1,
-    typedAt: 0,
-  });
-  const composing = useRef(false);
+  /** The text last handed up — a `value` equal to it is the field's own echo. */
+  const emitted = useRef<string>(value);
+  /** Set while a value from outside is drawn. */
+  const silent = useRef(false);
+  /** The editor's last state within the length limit — what an edit past it goes back to. */
+  const goodState = useRef<Editor['state'] | null>(null);
+  const [, rerender] = useReducer((count: number) => count + 1, 0);
   const [labelId, setLabelId] = useState<string | undefined>(undefined);
   const [picker, setPicker] = useState<OpportunityReferenceType | null>(null);
   const [options, setOptions] = useState<ComboboxOption<string>[]>([]);
@@ -197,15 +222,16 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
   const [searchFailed, setSearchFailed] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
+  const [linkDraft, setLinkDraft] = useState<string | null>(null);
+  const [linkInvalid, setLinkInvalid] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sequence = useRef(0);
 
   // --- Typing: the `@` shortcuts ------------------------------------------------
-  /** The caret, as a place in the text, while the field has focus and nothing is selected. */
-  const [typingAt, setTypingAt] = useState<number | null>(null);
+  /** The run of `@`s the caret is typing after, as a stretch of the document. */
+  const [typing, setTyping] = useState<(MentionTrigger & { from: number; to: number }) | null>(null);
   /** The run Escape closed: it stays closed until its `@` is gone. */
   const [dismissed, setDismissed] = useState<number | null>(null);
-  /** The last answer, and the search it answers — which may no longer be the one in the field. */
   const [answer, setAnswer] = useState<{
     kind: OpportunityReferenceType;
     query: string;
@@ -219,136 +245,112 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
   const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suggestSequence = useRef(0);
 
-  const canProducts = hasPermission(PRODUCT_LIST_PERMISSION);
-  const canOrders = hasPermission(ORDER_LIST_PERMISSION) && organizationId !== null;
-  const canPeople = hasPermission(PEOPLE_LIST_PERMISSION);
+  const canProducts = mentions && hasPermission(PRODUCT_LIST_PERMISSION);
+  const canOrders = mentions && hasPermission(ORDER_LIST_PERMISSION) && organizationId !== null;
+  const canPeople = mentions && hasPermission(PEOPLE_LIST_PERMISSION);
   const offered = useCallback(
     (kind: OpportunityReferenceType): boolean =>
       kind === 'admin_user' ? canPeople : kind === 'order' ? canOrders : canProducts,
     [canPeople, canOrders, canProducts],
   );
 
-  // --- Drawing the text ----------------------------------------------------------
-  const describe = useCallback(
-    (token: OpportunityReferenceToken): ChipFace | null => {
-      const entry = known.current.get(keyOf(token));
-      if (!entry) return null;
-      if (!entry.available || entry.label === null) {
-        return { type: token.type, available: false, text: t(`references.unavailable.${token.type}`) };
-      }
-      return {
-        type: token.type,
-        available: true,
-        text: token.type === 'admin_user' ? `@${entry.label}` : entry.label,
-      };
+  const describe = useCallback((type: OpportunityReferenceType, refId: string) => {
+    return known.current.get(keyOf(type, refId)) ?? null;
+  }, []);
+
+  /** Things the editor's handlers reach that change between renders. */
+  const latest = useRef({
+    maxLength,
+    onValueChange,
+    onKey: (_event: KeyboardEvent): boolean => false,
+    follow: (_editor: Editor): void => undefined,
+    onSubmitShortcut,
+    mentions,
+  });
+
+  const editor = useEditor(
+    {
+      extensions: [
+        StarterKit.configure({
+          heading: false,
+          blockquote: false,
+          code: false,
+          codeBlock: false,
+          horizontalRule: false,
+          underline: false,
+          // The text has no way to say "and an empty line after the list".
+          trailingNode: false,
+          link: {
+            openOnClick: false,
+            autolink: true,
+            defaultProtocol: 'https',
+            protocols: ['http', 'https', 'mailto'],
+            isAllowedUri: (url) => isSafeOpportunityRichHref(url),
+          },
+        }),
+        ReferenceNode.configure({
+          unavailableLabel: (type) => t(`references.unavailable.${type}`),
+        }),
+      ],
+      content: editorDocOf(value, describe),
+      editable: !disabled,
+      immediatelyRender: true,
+      shouldRerenderOnTransaction: false,
+      editorProps: {
+        handleKeyDown: (_view, event) => latest.current.onKey(event),
+        // A pasted token is a reference, as a chosen one is.
+        handlePaste: (_view, event) => {
+          const html = event.clipboardData?.getData('text/html') ?? '';
+          const text = event.clipboardData?.getData('text/plain') ?? '';
+          if (
+            !latest.current.mentions ||
+            html.includes('data-crm-token') ||
+            extractOpportunityReferenceTokens(text).length === 0
+          ) {
+            return false;
+          }
+          const doc = editorDocOf(text.replace(/\r\n?/g, '\n'), describe);
+          editorRef.current?.chain().insertContent(doc.content ?? []).run();
+          return true;
+        },
+      },
+      onTransaction: ({ editor: current, transaction }) => {
+        if (transaction.docChanged) {
+          const next = textOfEditorDoc(current.getJSON() as EditorDoc);
+          const limit = latest.current.maxLength;
+          if (typeof limit === 'number' && next.length > limit && goodState.current) {
+            // Past the limit: the field goes back to what it held, keystroke or chip.
+            current.view.updateState(goodState.current);
+            setProblem(t('references.error.tooLong'));
+            rerender();
+            return;
+          }
+          setProblem(null);
+          // A value drawn from outside is not an edit: nothing is handed up.
+          if (!silent.current && next !== emitted.current) {
+            emitted.current = next;
+            latest.current.onValueChange(next);
+          }
+        }
+        goodState.current = current.state;
+        latest.current.follow(current);
+        rerender();
+      },
+      onCreate: ({ editor: current }) => {
+        goodState.current = current.state;
+      },
+      onBlur: () => setTyping(null),
     },
-    [t],
+    [],
   );
-
-  /** Draw `text`; with `caret`, take the focus and put the caret there. */
-  const draw = useCallback(
-    (text: string, caret?: number): void => {
-      const element = field.current;
-      if (!element) return;
-      renderReferenceText(element, text, describe);
-      element.dataset['empty'] = text === '' ? 'true' : 'false';
-      model.current = text;
-      if (caret === undefined) return;
-      if (element.ownerDocument.activeElement !== element) element.focus();
-      selectOffsets(element, caret);
-      lastSelection.current = { start: caret, end: caret };
-      setTypingAt(caret);
-    },
-    [describe],
-  );
-
-  const remember = (text: string, caret: number, typed: boolean): void => {
-    const log = history.current;
-    const now = Date.now();
-    const top = log.entries[log.index];
-    if (top && top.text === text) {
-      top.caret = caret;
-      return;
-    }
-    // A run of keystrokes is one step: the step is replaced while it grows.
-    const growing = typed && log.typedAt !== 0 && now - log.typedAt < UNDO_COALESCE_MS && log.index > 0;
-    log.entries = log.entries.slice(0, growing ? log.index : log.index + 1);
-    log.entries.push({ text, caret });
-    if (log.entries.length > UNDO_DEPTH) log.entries.shift();
-    log.index = log.entries.length - 1;
-    log.typedAt = typed ? now : 0;
-  };
-
-  const fits = (next: string): boolean => {
-    if (typeof maxLength === 'number' && next.length > maxLength) {
-      setProblem(t('references.error.tooLong'));
-      return false;
-    }
-    setProblem(null);
-    return true;
-  };
-
-  /** An edit made on the text: checked, drawn, remembered and handed up. */
-  const commit = (next: string, caret: number): boolean => {
-    if (!fits(next)) return false;
-    draw(next, caret);
-    remember(next, caret, false);
-    onValueChange(next);
-    return true;
-  };
-
-  /** The selection in the text — the field's own, else the last one it had, else the end. */
-  const selectionNow = (): { start: number; end: number } => {
-    const element = field.current;
-    const text = model.current ?? '';
-    return (
-      (element ? selectionOffsets(element) : null) ??
-      lastSelection.current ?? { start: text.length, end: text.length }
-    );
-  };
-
-  const replaceSelection = (insert: string): boolean => {
-    const text = model.current ?? '';
-    const at = selectionNow();
-    let piece = insert;
-    let cut = false;
-    if (typeof maxLength === 'number') {
-      // A paste that does not fit is cut to what does, as a textarea cuts it.
-      const room = maxLength - (text.length - (at.end - at.start));
-      if (piece.length > room) {
-        piece = piece.slice(0, Math.max(room, 0));
-        cut = true;
-      }
-    }
-    const done =
-      piece === '' && at.start === at.end
-        ? false
-        : commit(`${text.slice(0, at.start)}${piece}${text.slice(at.end)}`, at.start + piece.length);
-    if (cut) setProblem(t('references.error.tooLong'));
-    return done;
-  };
-
-  const removeStretch = (start: number, end: number): void => {
-    const text = model.current ?? '';
-    commit(`${text.slice(0, start)}${text.slice(end)}`, start);
-  };
-
-  const travel = (step: -1 | 1): void => {
-    const log = history.current;
-    const target = log.entries[log.index + step];
-    if (!target) return;
-    log.index += step;
-    log.typedAt = 0;
-    setProblem(null);
-    draw(target.text, target.caret);
-    onValueChange(target.text);
-  };
+  const editorRef = useRef<Editor | null>(editor);
+  editorRef.current = editor;
 
   // What the server resolved is what the field can name from the start.
   useLayoutEffect(() => {
     let learned = false;
     for (const reference of references ?? []) {
-      const key = keyOf(reference);
+      const key = keyOf(reference.type, reference.id);
       const entry = { label: reference.label, available: reference.available };
       const previous = known.current.get(key);
       if (!previous || previous.label !== entry.label || previous.available !== entry.available) {
@@ -358,27 +360,44 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
         learned = true;
       }
     }
-    const element = field.current;
-    if (!element) return;
-    if (model.current !== value) {
-      // A value from outside: the first one, a form reset, a reload.
-      const focused = element.ownerDocument.activeElement === element;
-      draw(value, focused ? Math.min(lastSelection.current?.start ?? value.length, value.length) : undefined);
-      const log = history.current;
-      if (log.entries[log.index]?.text !== value) {
-        history.current = { entries: [{ text: value, caret: value.length }], index: 0, typedAt: 0 };
+    const live = mounted(editor);
+    if (!live) return;
+    if (value !== emitted.current) {
+      // A value from outside: a form reset, a reload, a draft sent and cleared.
+      emitted.current = value;
+      silent.current = true;
+      try {
+        live.commands.setContent(editorDocOf(value, describe), { emitUpdate: false });
+      } finally {
+        silent.current = false;
       }
-    } else if (learned && extractOpportunityReferenceTokens(value).length > 0) {
-      const focused = element.ownerDocument.activeElement === element;
-      draw(value, focused ? selectionNow().start : undefined);
+      return;
     }
-    // `draw` and `selectionNow` read refs; the text and its names are what this follows.
-  }, [value, references, draw]);
+    if (!learned) return;
+    // Names that arrived: every chip that can say more now does.
+    const { tr } = live.state;
+    let changed = false;
+    live.state.doc.descendants((node, position) => {
+      if (node.type.name !== REFERENCE_NODE) return;
+      const entry = known.current.get(keyOf(node.attrs['refType'] as OpportunityReferenceType, node.attrs['refId'] as string));
+      if (!entry) return;
+      const available = entry.available && entry.label !== null;
+      if (node.attrs['label'] === entry.label && node.attrs['available'] === available) return;
+      tr.setNodeMarkup(position, undefined, { ...node.attrs, label: available ? entry.label : null, available });
+      changed = true;
+    });
+    if (changed) live.view.dispatch(tr.setMeta('addToHistory', false));
+  }, [value, references, editor, describe]);
+
+  useEffect(() => {
+    mounted(editor)?.setEditable(!disabled);
+  }, [editor, disabled]);
 
   // The label of the form: tied to the field by id, and a click on it focuses the field.
   useEffect(() => {
-    const element = field.current;
-    if (!element) return undefined;
+    const live = mounted(editor);
+    if (!live) return undefined;
+    const element = live.view.dom;
     const label = Array.from(element.ownerDocument.querySelectorAll('label')).find(
       (candidate) => candidate.htmlFor === id,
     );
@@ -389,145 +408,17 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
     if (!label.id) label.id = `${id}-label`;
     setLabelId(label.id);
     const focus = (): void => {
-      if (element.isContentEditable || element.getAttribute('contenteditable') === 'true') element.focus();
+      if (!live.isDestroyed && live.isEditable) live.commands.focus();
     };
     label.addEventListener('click', focus);
     return (): void => label.removeEventListener('click', focus);
-  }, [id]);
+  }, [id, editor]);
 
   useEffect(() => {
-    if (!autoFocus) return;
-    const text = model.current ?? '';
-    draw(text, text.length);
+    if (autoFocus) mounted(editor)?.commands.focus('end');
     // Once, when the field appears.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // The caret, followed wherever it goes — a key, a click, a drag.
-  useEffect(() => {
-    const element = field.current;
-    if (!element) return undefined;
-    const document = element.ownerDocument;
-    const follow = (): void => {
-      if (document.activeElement !== element) return;
-      const selection = selectionOffsets(element);
-      if (!selection) return;
-      lastSelection.current = selection;
-      setTypingAt(selection.start === selection.end ? selection.start : null);
-    };
-    document.addEventListener('selectionchange', follow);
-    return (): void => document.removeEventListener('selectionchange', follow);
-  }, []);
-
-  // --- What the browser is about to do, and what is done instead -----------------
-  const actions = useRef({ replaceSelection, removeStretch, travel });
-  actions.current = { replaceSelection, removeStretch, travel };
-  useEffect(() => {
-    const element = field.current;
-    if (!element) return undefined;
-    const before = (event: InputEvent): void => {
-      const type = event.inputType;
-      if (type === 'insertParagraph' || type === 'insertLineBreak') {
-        event.preventDefault();
-        actions.current.replaceSelection('\n');
-        return;
-      }
-      if (type === 'historyUndo' || type === 'historyRedo') {
-        event.preventDefault();
-        actions.current.travel(type === 'historyUndo' ? -1 : 1);
-        return;
-      }
-      // Plain text: no bold, no lists, nothing dropped in from elsewhere.
-      if (type.startsWith('format') || type === 'insertFromDrop') {
-        event.preventDefault();
-        return;
-      }
-      if (type === 'deleteContentBackward' || type === 'deleteContentForward') {
-        const selection = selectionOffsets(element);
-        if (!selection || selection.start !== selection.end) return;
-        const chip = chipBeside(
-          element,
-          selection.start,
-          type === 'deleteContentBackward' ? 'before' : 'after',
-        );
-        if (!chip) return;
-        event.preventDefault();
-        actions.current.removeStretch(chip.start, chip.end);
-      }
-    };
-    element.addEventListener('beforeinput', before as EventListener);
-    return (): void => element.removeEventListener('beforeinput', before as EventListener);
-  }, []);
-
-  /** After the browser typed or deleted: read the text back, and keep the field in its three kinds of node. */
-  const input = (): void => {
-    const element = field.current;
-    if (!element || composing.current) return;
-    const text = readReferenceText(element);
-    const selection = selectionOffsets(element);
-    const caret = selection?.start ?? text.length;
-    if (typeof maxLength === 'number' && text.length > maxLength) {
-      // Past the limit: the field goes back to what it held.
-      const previous = model.current ?? '';
-      setProblem(t('references.error.tooLong'));
-      draw(previous, Math.min(lastSelection.current?.start ?? previous.length, previous.length));
-      return;
-    }
-    setProblem(null);
-    element.normalize();
-    // A token standing in the text as characters, that the field has a name for.
-    const nameable = Array.from(element.childNodes).some(
-      (node) =>
-        node.nodeType === 3 &&
-        extractOpportunityReferenceTokens(node.nodeValue ?? '').some((token) => known.current.has(keyOf(token))),
-    );
-    if (!isCanonical(element) || nameable) {
-      // Something the browser put there, or a token typed or pasted by hand that has a name.
-      draw(text, caret);
-    } else {
-      model.current = text;
-      element.dataset['empty'] = text === '' ? 'true' : 'false';
-      lastSelection.current = { start: caret, end: selection?.end ?? caret };
-      setTypingAt(selection && selection.start !== selection.end ? null : caret);
-    }
-    remember(text, caret, true);
-    onValueChange(text);
-  };
-
-  /** Where the caret is now, for a platform that does not announce every move of it. */
-  const follow = (): void => {
-    const element = field.current;
-    const selection = element ? selectionOffsets(element) : null;
-    if (!selection) return;
-    lastSelection.current = selection;
-    setTypingAt(selection.start === selection.end ? selection.start : null);
-  };
-
-  const paste = (event: ClipboardEvent<HTMLDivElement>): void => {
-    event.preventDefault();
-    const text = event.clipboardData.getData('text/plain').replace(/\r\n?/g, '\n');
-    if (text !== '') replaceSelection(text);
-  };
-
-  /** What leaves the field is the text itself, so a chip copied here is a chip where it is pasted. */
-  const copy = (event: ClipboardEvent<HTMLDivElement>, cut: boolean): void => {
-    const element = field.current;
-    const selection = element ? selectionOffsets(element) : null;
-    if (!selection || selection.start === selection.end) return;
-    event.preventDefault();
-    event.clipboardData.setData('text/plain', (model.current ?? '').slice(selection.start, selection.end));
-    if (cut) removeStretch(selection.start, selection.end);
-  };
-
-  const insert = (type: OpportunityReferenceType, chosen: string, label: string): void => {
-    known.current.set(keyOf({ type, id: chosen }), { label, available: true });
-    const text = model.current ?? '';
-    const at = lastSelection.current ?? { start: text.length, end: text.length };
-    const token = formatOpportunityReferenceToken(type, chosen);
-    if (!commit(`${text.slice(0, at.start)}${token}${text.slice(at.end)}`, at.start + token.length)) return;
-    setPicker(null);
-    setNotice(t(`references.inserted.${type}`));
-  };
+  }, [editor]);
 
   // --- By button: a search under the field -------------------------------------
   const search = useCallback(
@@ -583,16 +474,67 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
     setPicker((current) => (current === type ? null : type));
   };
 
+  /**
+   * A chip over `range` or at the selection. One chosen while typing is
+   * followed by a space unless one already follows, so the sentence is simply
+   * carried on; one inserted by button goes in as it is.
+   */
+  const putChip = (
+    type: OpportunityReferenceType,
+    chosen: string,
+    label: string,
+    range?: { from: number; to: number },
+  ): boolean => {
+    if (!editor) return false;
+    known.current.set(keyOf(type, chosen), { label, available: true });
+    const at = range ?? { from: editor.state.selection.from, to: editor.state.selection.to };
+    const following = editor.state.doc.textBetween(at.to, Math.min(at.to + 1, editor.state.doc.content.size), '\n', '\n');
+    const before = emitted.current;
+    editor
+      .chain()
+      .focus()
+      .insertContentAt(at, [
+        { type: REFERENCE_NODE, attrs: { refType: type, refId: chosen, label, available: true } },
+        ...(range === undefined || /^\s/.test(following) ? [] : [{ type: 'text', text: ' ' }]),
+      ])
+      .run();
+    return emitted.current !== before;
+  };
+
+  const insert = (type: OpportunityReferenceType, chosen: string, label: string): void => {
+    if (!putChip(type, chosen, label)) return;
+    setPicker(null);
+    setNotice(t(`references.inserted.${type}`));
+  };
+
   // --- While typing: the list at the caret ---------------------------------------
-  const trigger = useMemo<MentionTrigger | null>(() => {
-    if (disabled || typingAt === null) return null;
-    const found = findMentionTrigger(value, typingAt);
-    return found && offered(found.kind) ? found : null;
-  }, [disabled, typingAt, value, offered]);
-  const triggerKind = trigger?.kind ?? null;
-  const triggerStart = trigger?.start ?? null;
-  const triggerQuery = trigger?.query ?? null;
-  const live = trigger !== null && triggerStart !== dismissed;
+  latest.current.follow = (current: Editor): void => {
+    if (!current.isFocused || !current.isEditable) {
+      setTyping(null);
+      return;
+    }
+    const before = textBeforeCaret(current);
+    const found = before ? findMentionTrigger(before.text, before.text.length) : null;
+    if (!before || !found || !offered(found.kind)) {
+      setTyping(null);
+      return;
+    }
+    const next = { ...found, from: before.blockStart + found.start, to: before.blockStart + found.end };
+    setTyping((previous) =>
+      previous &&
+      previous.from === next.from &&
+      previous.to === next.to &&
+      previous.kind === next.kind &&
+      previous.query === next.query
+        ? previous
+        : next,
+    );
+  };
+
+  const triggerKind = disabled ? null : (typing?.kind ?? null);
+  const triggerStart = disabled ? null : (typing?.from ?? null);
+  const triggerQuery = disabled ? null : (typing?.query ?? null);
+  const live = typing !== null && !disabled && triggerStart !== dismissed;
 
   // A run that is gone takes its dismissal with it: the next `@` opens again.
   useEffect(() => {
@@ -681,7 +623,7 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
   // arrow keys reach is brought into view within a list longer than its window.
   useEffect(() => {
     if (activeOptionId === null) return;
-    field.current?.ownerDocument.getElementById(activeOptionId)?.scrollIntoView?.({ block: 'nearest' });
+    wrapper.current?.ownerDocument.getElementById(activeOptionId)?.scrollIntoView?.({ block: 'nearest' });
   }, [activeOptionId]);
 
   /**
@@ -690,13 +632,19 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
    * Measured against the field's own box, so it moves with the field.
    */
   const settle = useCallback((): void => {
-    const element = field.current;
     const box = wrapper.current;
     const popup = list.current;
-    if (!element || !box || !popup || triggerStart === null) return;
+    const live = mounted(editor);
+    if (!live || !box || !popup || triggerStart === null) return;
     const frame = box.getBoundingClientRect();
-    const anchor = rectOfOffset(element, triggerStart) ?? element.getBoundingClientRect();
-    const view = element.ownerDocument.defaultView;
+    let anchor: { top: number; bottom: number; left: number } = live.view.dom.getBoundingClientRect();
+    try {
+      const coords = live.view.coordsAtPos(triggerStart);
+      if (coords.top !== 0 || coords.left !== 0 || coords.bottom !== 0) anchor = coords;
+    } catch {
+      // No layout (a test's DOM): the field's own box.
+    }
+    const view = box.ownerDocument.defaultView;
     const viewWidth = view?.innerWidth ?? frame.right;
     const viewHeight = view?.innerHeight ?? anchor.bottom + popup.offsetHeight + LIST_GAP_PX;
     const width = popup.offsetWidth;
@@ -714,7 +662,7 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
       const next = { top: Math.round(top - frame.top), left: Math.round(left - frame.left) };
       return previous && previous.top === next.top && previous.left === next.left ? previous : next;
     });
-  }, [triggerStart]);
+  }, [editor, triggerStart]);
 
   useLayoutEffect(() => {
     if (!open) {
@@ -722,9 +670,8 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
       return undefined;
     }
     settle();
-    const element = field.current;
-    const view = element?.ownerDocument.defaultView;
-    if (!element || !view) return undefined;
+    const view = wrapper.current?.ownerDocument.defaultView;
+    if (!view) return undefined;
     view.addEventListener('resize', settle);
     // Any scroll moves the line: the page's, a panel's, the field's own.
     view.addEventListener('scroll', settle, true);
@@ -735,70 +682,62 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
   }, [open, settle, suggestions.length, triggerQuery, failed, answered]);
 
   const choose = (suggestion: Suggestion): void => {
-    if (!trigger) return;
-    known.current.set(keyOf({ type: trigger.kind, id: suggestion.id }), {
-      label: suggestion.label,
-      available: true,
-    });
-    const next = applyMention(model.current ?? value, trigger, suggestion.id);
-    if (!commit(next.text, next.caret)) return;
+    if (!typing) return;
+    if (!putChip(typing.kind, suggestion.id, suggestion.label, { from: typing.from, to: typing.to })) return;
     setAnswer(null);
-    setNotice(t(`references.inserted.${trigger.kind}`));
+    setNotice(t(`references.inserted.${typing.kind}`));
   };
 
-  const keyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.nativeEvent.isComposing) return;
+  latest.current.maxLength = maxLength;
+  latest.current.onValueChange = onValueChange;
+  latest.current.onSubmitShortcut = onSubmitShortcut;
+  latest.current.mentions = mentions;
+  latest.current.onKey = (event: KeyboardEvent): boolean => {
+    if (event.isComposing) return false;
     if (open) {
       if (event.key === 'Escape') {
         // Closes the list and nothing else: a dialog around the field stays open.
         event.preventDefault();
         event.stopPropagation();
         setDismissed(triggerStart);
-        return;
+        return true;
       }
       if (listed && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
         event.preventDefault();
         const step = event.key === 'ArrowDown' ? 1 : -1;
         setActive((activeIndex + step + suggestions.length) % suggestions.length);
-        return;
+        return true;
       }
       if (listed && (event.key === 'Enter' || event.key === 'Tab')) {
         const chosen = suggestions[activeIndex];
         if (chosen) {
           event.preventDefault();
           choose(chosen);
-          return;
+          return true;
         }
       }
     }
-    const command = event.ctrlKey || event.metaKey;
-    if (command && !event.altKey && event.key.toLowerCase() === 'z') {
-      event.preventDefault();
-      travel(event.shiftKey ? 1 : -1);
-      return;
+    if ((event.key === 'Backspace' || event.key === 'Delete') && editor && editor.state.selection.empty) {
+      // A chip is one character: Backspace after it and Delete before it take
+      // it whole, the same in every browser.
+      const { $from } = editor.state.selection;
+      const node = event.key === 'Backspace' ? $from.nodeBefore : $from.nodeAfter;
+      if (node?.type.name === REFERENCE_NODE) {
+        event.preventDefault();
+        const from = event.key === 'Backspace' ? $from.pos - node.nodeSize : $from.pos;
+        editor.chain().deleteRange({ from, to: from + node.nodeSize }).run();
+        return true;
+      }
     }
-    if (command && !event.altKey && event.key.toLowerCase() === 'y') {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && latest.current.onSubmitShortcut) {
       event.preventDefault();
-      travel(1);
-      return;
+      latest.current.onSubmitShortcut();
+      return true;
     }
-    if (event.key === 'Enter') {
-      // A line break is a character of the text, never a paragraph element.
-      event.preventDefault();
-      replaceSelection('\n');
-      return;
-    }
-    if (event.key === 'Backspace' || event.key === 'Delete') {
-      const element = field.current;
-      const selection = element ? selectionOffsets(element) : null;
-      if (!element || !selection || selection.start !== selection.end) return;
-      const chip = chipBeside(element, selection.start, event.key === 'Backspace' ? 'before' : 'after');
-      if (!chip) return;
-      event.preventDefault();
-      removeStretch(chip.start, chip.end);
-    }
+    return false;
   };
 
+  // --- The field's attributes, which ProseMirror owns on its element ------------
   const shortcuts = [
     canPeople ? t('references.shortcut.person') : null,
     canOrders ? t('references.shortcut.order') : null,
@@ -806,64 +745,187 @@ export function ReferenceField(props: ReferenceFieldProps): ReactNode {
   ].filter((item): item is string => item !== null);
   const anything = shortcuts.length > 0;
   const description = [describedBy, anything ? hintId : null].filter(Boolean).join(' ');
+  const empty = editor ? editor.isEmpty : value === '';
+  const attributes: Record<string, string> = {
+    id,
+    role: listed ? 'combobox' : 'textbox',
+    spellcheck: 'true',
+    style: `min-height: ${rows * 1.25 + 1}rem`,
+    class: [
+      'relative max-h-96 w-full overflow-y-auto break-words rounded-md border border-input bg-transparent px-3 py-2 text-sm leading-5 shadow-sm',
+      'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+      'aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
+      'aria-invalid:border-destructive',
+      '[&_p]:min-h-5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_a]:text-primary [&_a]:underline',
+      'data-[empty=true]:before:pointer-events-none data-[empty=true]:before:absolute data-[empty=true]:before:text-muted-foreground data-[empty=true]:before:content-[attr(data-placeholder)]',
+    ].join(' '),
+    'data-empty': empty ? 'true' : 'false',
+    // A combobox has no `aria-multiline` and no `aria-placeholder`; the text
+    // box it is the rest of the time has both.
+    ...(listed ? {} : { 'aria-multiline': 'true' }),
+    ...(labelId ? { 'aria-labelledby': labelId } : {}),
+    ...(placeholder ? { 'data-placeholder': placeholder } : {}),
+    ...(placeholder && !listed ? { 'aria-placeholder': placeholder } : {}),
+    ...(description ? { 'aria-describedby': description } : {}),
+    ...(invalid ? { 'aria-invalid': 'true' } : {}),
+    ...(required ? { 'aria-required': 'true' } : {}),
+    ...(disabled ? { 'aria-disabled': 'true' } : {}),
+    ...(listed
+      ? {
+          'aria-expanded': 'true',
+          'aria-haspopup': 'listbox',
+          'aria-autocomplete': 'list',
+          'aria-controls': listId,
+          'aria-activedescendant': optionId(activeIndex),
+        }
+      : {}),
+  };
+  const attributeKey = JSON.stringify(attributes);
+  useLayoutEffect(() => {
+    const live = mounted(editor);
+    if (!live) return;
+    live.setOptions({ editorProps: { ...live.options.editorProps, attributes: JSON.parse(attributeKey) } });
+  }, [editor, attributeKey]);
+
+  // --- Formatting ----------------------------------------------------------------
   const kindKey = triggerKind ? KIND_KEY[triggerKind] : 'person';
+  const format = (run: (chain: ReturnType<Editor['chain']>) => ReturnType<Editor['chain']>): void => {
+    if (!editor) return;
+    run(editor.chain().focus()).run();
+  };
+  const formats: Array<{ key: string; icon: typeof Bold; active: boolean; apply: () => void }> = editor
+    ? [
+        { key: 'bold', icon: Bold, active: editor.isActive('bold'), apply: () => format((c) => c.toggleBold()) },
+        { key: 'italic', icon: Italic, active: editor.isActive('italic'), apply: () => format((c) => c.toggleItalic()) },
+        { key: 'strike', icon: Strikethrough, active: editor.isActive('strike'), apply: () => format((c) => c.toggleStrike()) },
+        { key: 'bulletList', icon: List, active: editor.isActive('bulletList'), apply: () => format((c) => c.toggleBulletList()) },
+        { key: 'orderedList', icon: ListOrdered, active: editor.isActive('orderedList'), apply: () => format((c) => c.toggleOrderedList()) },
+      ]
+    : [];
+  const linkActive = editor?.isActive('link') ?? false;
+
+  const openLink = (): void => {
+    if (!editor) return;
+    setLinkInvalid(false);
+    setLinkDraft((editor.getAttributes('link')['href'] as string | undefined) ?? '');
+  };
+  const applyLink = (event?: FormEvent): void => {
+    event?.preventDefault();
+    if (!editor || linkDraft === null) return;
+    const href = linkDraft.trim();
+    if (href === '') {
+      editor.chain().focus().extendMarkRange('link').unsetLink().run();
+      setLinkDraft(null);
+      return;
+    }
+    const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(href) ? href : `https://${href}`;
+    if (!isSafeOpportunityRichHref(withScheme)) {
+      setLinkInvalid(true);
+      return;
+    }
+    const chain = editor.chain().focus().extendMarkRange('link');
+    if (editor.state.selection.empty && !linkActive) {
+      chain.insertContent({ type: 'text', text: href, marks: [{ type: 'link', attrs: { href: withScheme } }] }).run();
+    } else {
+      chain.setLink({ href: withScheme }).run();
+    }
+    setLinkDraft(null);
+  };
 
   return (
     <div className="space-y-2">
+      <div
+        role="toolbar"
+        aria-label={t('editor.toolbar')}
+        aria-controls={id}
+        className="flex flex-wrap items-center gap-1"
+      >
+        {formats.map((item) => (
+          <Button
+            key={item.key}
+            type="button"
+            variant={item.active ? 'secondary' : 'ghost'}
+            size="sm"
+            className="min-h-11 min-w-11 px-2 sm:min-h-8 sm:min-w-8"
+            disabled={disabled}
+            aria-pressed={item.active}
+            aria-label={t(`editor.format.${item.key}`)}
+            title={t(`editor.format.${item.key}`)}
+            // The field keeps its selection: the button formats it.
+            onMouseDown={(event): void => event.preventDefault()}
+            onClick={item.apply}
+          >
+            <item.icon aria-hidden="true" className="size-4" />
+          </Button>
+        ))}
+        <Button
+          type="button"
+          variant={linkActive ? 'secondary' : 'ghost'}
+          size="sm"
+          className="min-h-11 min-w-11 px-2 sm:min-h-8 sm:min-w-8"
+          disabled={disabled}
+          aria-pressed={linkActive}
+          aria-expanded={linkDraft !== null}
+          aria-label={t('editor.format.link')}
+          title={t('editor.format.link')}
+          onMouseDown={(event): void => event.preventDefault()}
+          onClick={(): void => (linkDraft === null ? openLink() : setLinkDraft(null))}
+        >
+          <Link2 aria-hidden="true" className="size-4" />
+        </Button>
+      </div>
+
+      {linkDraft !== null ? (
+        <div className="flex flex-wrap items-start gap-2">
+          <div className="min-w-48 flex-1 space-y-1">
+            <Input
+              aria-label={t('editor.link.url')}
+              placeholder={t('editor.link.placeholder')}
+              value={linkDraft}
+              autoFocus
+              aria-invalid={linkInvalid}
+              onChange={(event): void => {
+                setLinkDraft(event.target.value);
+                setLinkInvalid(false);
+              }}
+              onKeyDown={(event): void => {
+                if (event.key === 'Enter') applyLink(event);
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setLinkDraft(null);
+                  editor?.commands.focus();
+                }
+              }}
+            />
+            {linkInvalid ? (
+              <p role="alert" className="text-xs text-destructive">
+                {t('editor.link.invalid')}
+              </p>
+            ) : null}
+          </div>
+          <Button type="button" size="sm" className="min-h-11 sm:min-h-9" onClick={(): void => applyLink()}>
+            {t('editor.link.apply')}
+          </Button>
+          {linkActive ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="min-h-11 sm:min-h-9"
+              onClick={(): void => {
+                editor?.chain().focus().extendMarkRange('link').unsetLink().run();
+                setLinkDraft(null);
+              }}
+            >
+              {t('editor.link.remove')}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
       <div ref={wrapper} className="relative">
-        <div
-          ref={field}
-          id={id}
-          role={listed ? 'combobox' : 'textbox'}
-          // A combobox has no `aria-multiline` and no `aria-placeholder`; the
-          // text box it is the rest of the time has both.
-          {...(listed ? {} : { 'aria-multiline': true })}
-          {...(labelId ? { 'aria-labelledby': labelId } : {})}
-          {...(placeholder ? { 'data-placeholder': placeholder } : {})}
-          {...(placeholder && !listed ? { 'aria-placeholder': placeholder } : {})}
-          {...(description ? { 'aria-describedby': description } : {})}
-          {...(invalid ? { 'aria-invalid': true } : {})}
-          {...(required ? { 'aria-required': true } : {})}
-          {...(disabled ? { 'aria-disabled': true } : {})}
-          {...(listed
-            ? {
-                'aria-expanded': true,
-                'aria-haspopup': 'listbox' as const,
-                'aria-autocomplete': 'list' as const,
-                'aria-controls': listId,
-                'aria-activedescendant': optionId(activeIndex),
-              }
-            : {})}
-          contentEditable={!disabled}
-          suppressContentEditableWarning
-          tabIndex={disabled ? -1 : 0}
-          spellCheck
-          style={{ minHeight: `${rows * 1.25 + 1}rem` }}
-          className={[
-            'max-h-96 w-full overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-input bg-transparent px-3 py-2 text-sm leading-5 shadow-sm',
-            'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-            'aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
-            'aria-invalid:border-destructive',
-            'data-[empty=true]:before:pointer-events-none data-[empty=true]:before:text-muted-foreground data-[empty=true]:before:content-[attr(data-placeholder)]',
-          ].join(' ')}
-          onInput={input}
-          onKeyDown={keyDown}
-          onPaste={paste}
-          onCopy={(event): void => copy(event, false)}
-          onCut={(event): void => copy(event, true)}
-          onDrop={(event): void => event.preventDefault()}
-          onCompositionStart={(): void => {
-            composing.current = true;
-          }}
-          onCompositionEnd={(): void => {
-            composing.current = false;
-            input();
-          }}
-          onFocus={follow}
-          onKeyUp={follow}
-          onMouseUp={follow}
-          onBlur={(): void => setTypingAt(null)}
-        />
+        <EditorContent editor={editor} />
 
         {open ? (
           <div

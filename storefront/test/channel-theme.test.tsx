@@ -73,6 +73,19 @@ interface RecordedCall {
 }
 
 let calls: RecordedCall[] = [];
+/**
+ * The channel `middleware.ts` stamped on the request being served, as
+ * `next/headers` answers it — or `null` for no request scope at all
+ * (`specs/154-sales-channel-access/contracts/storefront-ux.md` §1.3).
+ */
+const stamped: { code: string | null } = { code: null };
+vi.mock('next/headers', () => ({
+  headers: async () => {
+    if (stamped.code === null) throw new Error('`headers` was called outside a request scope.');
+    return new Headers({ 'x-sales-channel': stamped.code });
+  },
+}));
+
 const originalFetch = globalThis.fetch;
 
 /** Serves `GET /api/v1/storefront/sales-channel` with the given `themeCode`. */
@@ -158,6 +171,19 @@ describe('a channel theme reaches the storefront', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toContain('/api/v1/storefront/sales-channel');
     expect(calls[0]!.headers['X-Sales-Channel']).toBe('serwis-a');
+  });
+
+  it('names the channel the middleware stamped when the caller passed none (`specs/154-sales-channel-access/`)', async () => {
+    // The identity read is what tells a storefront with no proxy which channel
+    // it is on; it reads the stamped one, never the system default by omission.
+    stamped.code = 'serwis-a';
+    try {
+      stubChannel('serwis-a', 'industria');
+      await getPublicSalesChannel({});
+      expect(calls[0]!.headers['X-Sales-Channel']).toBe('serwis-a');
+    } finally {
+      stamped.code = null;
+    }
   });
 
   it('renders the reference theme when the channel names none', async () => {

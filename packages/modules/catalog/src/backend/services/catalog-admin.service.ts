@@ -3,6 +3,8 @@ import { randomUUID } from 'crypto';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import {
   ERROR_CODES,
+  isOrderMinimumEligibleType,
+  isValidOrderMinimum,
   // Aliased: the private method below keeps the name, so the shared function
   // needs one the class body cannot shadow.
   slugify as slugifyText,
@@ -54,6 +56,8 @@ export type CatalogWarehouseThresholdCopy = (input: {
 import { HttpError } from '@endora-commerce/platform/http';
 import { Category } from '../entities/category.entity.js';
 import { Product } from '../entities/product.entity.js';
+import { ProductUrlRedirect } from '../entities/product-url-redirect.entity.js';
+import { isUrlKeyFree, lockUrlKeys } from './url-key.service.js';
 import { ProductVariant } from '../entities/product-variant.entity.js';
 import {
   assertVirtualDownloadFields,
@@ -87,6 +91,13 @@ import {
 // Feature 061 — the API-form mapping helpers moved next to the R7 map; the
 // re-exports keep the long-standing import site (routes, tests) stable.
 export { dbToApiAttributeType, resolveAttributeApiType } from './attribute-type-mapping.js';
+
+
+/**
+ * How many free-looking slug candidates `allocateUniqueSlug` locks at once (Phase 16
+ * review): enough that a concurrent writer winning one does not fail the allocation.
+ */
+const SLUG_CANDIDATE_LOCKS = 3;
 
 /*
  * `CatalogCustomFieldsPort` used to stand here — this module's own widening of
@@ -281,6 +292,9 @@ export class CatalogAdminService {
       }
       throw err;
     }
+    // Feature 155 (FR-001, D5) — the range and the type rule hold for every
+    // caller, not only for the ones a route schema stands in front of.
+    assertOrderMinimumAllowed(req.type, req.minOrderQuantity);
 
     // The id is allocated up front so the Command can name its audit target
     // before the row exists (same shape as `duplicateProduct`).
@@ -337,6 +351,9 @@ export class CatalogAdminService {
             ? { downloadAssetId: req.downloadAssetId }
             : {}),
           ...(req.downloadUrl !== undefined ? { downloadUrl: req.downloadUrl } : {}),
+          // Feature 155 (FR-001, FR-003) — the order rules, when the request names them.
+          ...(req.minOrderQuantity !== undefined ? { minOrderQuantity: req.minOrderQuantity } : {}),
+          ...(req.returnable !== undefined ? { returnable: req.returnable } : {}),
         });
         // Feature 002 (T023): the keys in `attributeValues` MUST belong to
         // the Product's AttributeSet. The entity defaults `attributeSetId`
@@ -369,6 +386,8 @@ export class CatalogAdminService {
             visibility: product.visibility,
             stockMode: product.stockMode,
             categoryIds,
+            minOrderQuantity: product.minOrderQuantity ?? null,
+            returnable: product.returnable,
           },
         };
       },
@@ -533,6 +552,8 @@ export class CatalogAdminService {
     if (!product) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
+    // Feature 155 (FR-001, D5) — refused before anything on the row changes.
+    assertOrderMinimumAllowed(product.type, req.minOrderQuantity);
     const stateBefore: Record<string, unknown> = {
       sku: product.sku,
       name: { ...product.name },
@@ -543,6 +564,13 @@ export class CatalogAdminService {
       archivedAt: product.archivedAt ?? null,
       attributeValues: { ...product.attributeValues },
       allowedOrganizationIds: [...product.allowedOrganizationIds],
+      // Feature 155 (FR-005) — always present, so a row records the value
+      // whether or not this write touched it.
+      minOrderQuantity: product.minOrderQuantity ?? null,
+      returnable: product.returnable,
+      // Feature 163 (FR-023) — the global publication window.
+      publishFrom: product.publishFrom?.toISOString() ?? null,
+      publishUntil: product.publishUntil?.toISOString() ?? null,
     };
     const changedFields: string[] = [];
     let archived = false;
@@ -676,6 +704,48 @@ export class CatalogAdminService {
       product.fulfilmentStrategyWarehouseOrder = req.fulfilmentStrategyWarehouseOrder;
       changedFields.push('fulfilmentStrategyWarehouseOrder');
     }
+    // Feature 155 (FR-001, FR-003, D5) — the pieces minimum and the returnable flag.
+    if (req.minOrderQuantity !== undefined) {
+      product.minOrderQuantity = req.minOrderQuantity;
+      changedFields.push('minOrderQuantity');
+    }
+    if (req.returnable !== undefined) {
+      product.returnable = req.returnable;
+      changedFields.push('returnable');
+    }
+    // Feature 163 (FR-023) — the global publication window, written as a pair:
+    // an omitted bound keeps its stored value, and the pair that results must
+    // start before it ends. It never touches a channel's window (FR-013).
+    if (req.publishFrom !== undefined || req.publishUntil !== undefined) {
+      const from =
+        req.publishFrom === undefined
+          ? (product.publishFrom ?? null)
+          : req.publishFrom === null
+            ? null
+            : new Date(req.publishFrom);
+      const until =
+        req.publishUntil === undefined
+          ? (product.publishUntil ?? null)
+          : req.publishUntil === null
+            ? null
+            : new Date(req.publishUntil);
+      if (from !== null && until !== null && from.getTime() >= until.getTime()) {
+        throw new HttpError(
+          422,
+          ERROR_CODES.VALIDATION_FAILED,
+          'The publication window must start before it ends.',
+          { field: 'window' },
+        );
+      }
+      if (
+        (from?.getTime() ?? null) !== (product.publishFrom?.getTime() ?? null) ||
+        (until?.getTime() ?? null) !== (product.publishUntil?.getTime() ?? null)
+      ) {
+        product.publishFrom = from;
+        product.publishUntil = until;
+        changedFields.push('publicationWindow');
+      }
+    }
     const stateAfter: Record<string, unknown> = {
       name: { ...product.name },
       description: { ...product.description },
@@ -685,6 +755,10 @@ export class CatalogAdminService {
       archivedAt: product.archivedAt ?? null,
       attributeValues: { ...product.attributeValues },
       allowedOrganizationIds: [...product.allowedOrganizationIds],
+      minOrderQuantity: product.minOrderQuantity ?? null,
+      returnable: product.returnable,
+      publishFrom: product.publishFrom?.toISOString() ?? null,
+      publishUntil: product.publishUntil?.toISOString() ?? null,
     };
     return { product, stateBefore, stateAfter, changedFields, archived };
   }
@@ -775,10 +849,13 @@ export class CatalogAdminService {
     if (this.commandBus) {
       return this.commandBus.run({ action, objectType, objectId, run: ({ em }) => write(em) });
     }
-    const em = this.emFactory();
-    const w = await write(em);
-    await em.flush();
-    return w.result;
+    // Unaudited without a Command Bus, but still one transaction: the URL-key
+    // advisory locks a write takes (`allocateUniqueSlug`) hold only inside one.
+    return this.emFactory().transactional(async (em) => {
+      const w = await write(em);
+      await em.flush();
+      return w.result;
+    });
   }
 
   async duplicateProduct(id: string): Promise<Product> {
@@ -788,14 +865,15 @@ export class CatalogAdminService {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
 
-    const newSku = await this.allocateCopySku(em, source.sku);
-    const newSlug = await this.allocateCopySlug(em, source.slug);
-
     // The dup product row + its audit are co-transactional; the bridge copies
     // run AFTER on this em (matches the pre-054 two-step) — the dup FK target
     // exists once committed, and a partially-copied dup is no worse than today.
     const dupId = randomUUID();
     const dup = await this.#auditedWrite('product.duplicate', 'product', dupId, async (cem) => {
+      // Inside the Command's transaction (Phase 16 review): the slug's URL-key lock is
+      // a transaction lock, so on a bare em it was released before the insert.
+      const newSku = await this.allocateCopySku(cem, source.sku);
+      const newSlug = await this.allocateCopySlug(cem, source.slug);
       const created = cem.create(Product, {
         id: dupId,
         sku: newSku,
@@ -1044,13 +1122,33 @@ export class CatalogAdminService {
    * Feature 068 — used by the create path as well as the duplication path; a
    * name collision on create used to reach the database and be reported as a
    * SKU conflict.
+   *
+   * Feature 163 (A-11) — a new product's slug is its key in every language, so
+   * "free" means free as a URL key: no product's global key, and no live
+   * product's current or redirecting key in any language.
+   *
+   * Must run inside the caller's transaction (the Command's): the decisive check is
+   * made under the candidates' URL-key locks, which are transaction locks. The first
+   * {@link SLUG_CANDIDATE_LOCKS} candidates that look free without a lock are locked
+   * together, **once and in sorted order** — the order every key writer locks in, so
+   * the two cannot deadlock — and re-checked under the locks in index order; the first
+   * still free wins. A held lock is never released before the transaction ends, so
+   * locking candidates one at a time after a lost race would acquire them out of
+   * sorted order (`root-10` sorts before `root-9`). Losing every candidate of the set
+   * to concurrent writers is refused like an exhausted search.
    */
   private async allocateUniqueSlug(em: EntityManager, source: string): Promise<string> {
     const root = this.slugify(source);
-    for (let i = 0; i < 1000; i += 1) {
+    const probes: string[] = [];
+    for (let i = 0; i < 1000 && probes.length < SLUG_CANDIDATE_LOCKS; i += 1) {
       const candidate = i === 0 ? root : this.slugify(`${root}-${i + 1}`);
-      const hit = await em.findOne(Product, { slug: candidate });
-      if (!hit) return candidate;
+      if (!probes.includes(candidate) && (await isUrlKeyFree(em, candidate))) probes.push(candidate);
+    }
+    if (probes.length > 0) {
+      await lockUrlKeys(em, probes);
+      for (const candidate of probes) {
+        if (await isUrlKeyFree(em, candidate)) return candidate;
+      }
     }
     throw new HttpError(
       409,
@@ -1142,11 +1240,18 @@ export class CatalogAdminService {
           name: { ...product.name },
           deletedAt: product.deletedAt ?? null,
         };
+        // Feature 163 (FR-072) — a deleted product's old URL keys stop redirecting.
+        const urlRedirects = (await em.find(ProductUrlRedirect, { productId: id })).map((row) => ({
+          id: row.id,
+          languageCode: row.languageCode ?? null,
+          key: row.key,
+        }));
+        if (urlRedirects.length > 0) await em.nativeDelete(ProductUrlRedirect, { productId: id });
         product.deletedAt = new Date();
         await em.flush();
         return {
           result: { id: product.id },
-          before: stateBefore,
+          before: { ...stateBefore, urlRedirects },
           after: {
             ...stateBefore,
             deletedAt: product.deletedAt?.toISOString() ?? null,
@@ -2073,5 +2178,32 @@ export class CatalogAdminService {
   private anyValue(blob: Record<string, string>): string {
     const key = Object.keys(blob)[0];
     return key ? (blob[key] ?? '') : '';
+  }
+}
+
+/**
+ * Feature 155 (FR-001, threat F5, D5) — a pieces minimum is an integer in
+ * 1…1 000 000 and only a `simple` or `configurable` product may carry one;
+ * `null` (clear) and an absent key are always allowed. Refused
+ * `422 VALIDATION_FAILED` with `details.field`, the answer an in-process caller
+ * gets where no route schema stood in front of it.
+ */
+function assertOrderMinimumAllowed(type: string, value: number | null | undefined): void {
+  if (value === undefined || value === null) return;
+  if (!isValidOrderMinimum(value)) {
+    throw new HttpError(
+      422,
+      ERROR_CODES.VALIDATION_FAILED,
+      'The minimum order quantity must be a whole number from 1 to 1000000.',
+      { field: 'minOrderQuantity' },
+    );
+  }
+  if (!isOrderMinimumEligibleType(type)) {
+    throw new HttpError(
+      422,
+      ERROR_CODES.VALIDATION_FAILED,
+      `A minimum order quantity applies to simple or configurable products only; got "${type}".`,
+      { field: 'minOrderQuantity' },
+    );
   }
 }

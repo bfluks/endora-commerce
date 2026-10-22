@@ -405,16 +405,25 @@ describe('OrderCreatePage — Browse products and the quick search (US1)', () =>
     expect(lineNames()).toEqual(['Widget 01', 'Widget 02']);
   });
 
-  it('shows a product that is already a line as already added, not selectable (sc. 5)', async () => {
+  it('a product already a line can be picked again, as a line of its own (feature 159, N-31)', async () => {
     const user = userEvent.setup();
     renderPage();
     await addThroughPicker(user, ['Widget 01']);
 
     const dialog = await openPicker(user);
     const box = rowCheckbox(dialog, 'Widget 01');
-    expect(box.disabled).toBe(true);
-    expect(document.getElementById(box.getAttribute('aria-describedby') ?? '')?.textContent).toBe('Already added');
-    expect(rowCheckbox(dialog, 'Widget 02').disabled).toBe(false);
+    expect(box.disabled).toBe(false);
+    await user.click(box);
+    await user.click(within(dialog).getByRole('button', { name: 'Add 1' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(lineNames()).toEqual(['Widget 01', 'Widget 01']);
+    // Each line is priced on its own.
+    await waitFor(() =>
+      expect(previewBodies().at(-1)?.items).toEqual([
+        { productId: 'a01', quantity: 1 },
+        { productId: 'a01', quantity: 1 },
+      ]),
+    );
   });
 
   it('adds nothing on cancel and keeps the existing lines (sc. 10)', async () => {
@@ -459,13 +468,15 @@ describe('OrderCreatePage — Browse products and the quick search (US1)', () =>
     const draft = await screen.findByRole('option', { name: /Draft widget/ });
     expect(draft).toHaveAttribute('aria-disabled', 'true');
     expect(draft.textContent).toContain(CORE['productBrowser.reason.notActive']);
-    expect(screen.getByRole('option', { name: /Widget 01/ }).textContent).toContain('Already added');
+    // Feature 159 (N-31) — a product already a line is offered again.
+    expect(screen.getByRole('option', { name: /Widget 01/ }).textContent).not.toContain('Already added');
     await user.clear(quick);
 
     await user.type(quick, 'SKU-A07');
     await user.click(await screen.findByRole('option', { name: /Widget 07/ }));
 
-    expect(lineNames()).toEqual(['Widget 01', 'Widget 07']);
+    // The line is added after the click settles; asserting at once raced the render.
+    await waitFor(() => expect(lineNames()).toEqual(['Widget 01', 'Widget 07']));
     expect(within(lineRow('Widget 07')).getByText('SKU-A07')).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
     await waitFor(() =>

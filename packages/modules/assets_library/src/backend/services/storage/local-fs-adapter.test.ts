@@ -1,11 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fsPromises from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 
 import { LocalFsStorageAdapter } from './local-fs-adapter.js';
 import { HmacSigner } from '../hmac.js';
+import { BackendUnavailableError, isObjectNotFound } from './errors.js';
+
+// Pass-through spies, so a case can see the copy go through a temporary file
+// and a rename (specs/156-asset-stable-url/ T017).
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, copyFile: vi.fn(actual.copyFile), rename: vi.fn(actual.rename) };
+});
 
 const KEY_HEX = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff';
 const ASSET_ID = 'aabbccdd-1111-2222-3333-444455556666';
@@ -179,5 +188,72 @@ describe('LocalFsStorageAdapter.delete', () => {
 
   it('throws when the file is already missing (signal for FR-031 retry)', async () => {
     await expect(adapter.delete({ locator: `aa/bb/${ASSET_ID}.txt` })).rejects.toThrow();
+  });
+});
+
+describe('LocalFsStorageAdapter.copy (feature 156)', () => {
+  const from = `aa/bb/${ASSET_ID}.stage-${'1'.repeat(32)}.txt`;
+  const to = `aa/bb/${ASSET_ID}.txt`;
+
+  async function putText(locator: string, text: string): Promise<void> {
+    await adapter.put({
+      locator,
+      mimeType: 'text/plain',
+      visibility: 'public',
+      stream: Readable.from([text]),
+      sizeBytes: text.length,
+    });
+  }
+
+  it('overwrites the destination with the source bytes through a temporary file and a rename', async () => {
+    await putText(to, 'old bytes');
+    await putText(from, 'new bytes');
+    vi.mocked(fsPromises.copyFile).mockClear();
+    vi.mocked(fsPromises.rename).mockClear();
+
+    await adapter.copy({ from, to, visibility: 'public', mimeType: 'text/plain' });
+
+    expect(await readFile(join(baseDir, to), 'utf8')).toBe('new bytes');
+    expect(await readFile(join(baseDir, from), 'utf8')).toBe('new bytes');
+    const copyCalls = vi.mocked(fsPromises.copyFile).mock.calls;
+    expect(copyCalls).toHaveLength(1);
+    const [src, tmp] = copyCalls[0]!;
+    expect(src).toBe(join(baseDir, from));
+    expect(String(tmp).startsWith(`${join(baseDir, to)}.tmp-`)).toBe(true);
+    expect(vi.mocked(fsPromises.rename).mock.calls).toEqual([[tmp, join(baseDir, to)]]);
+    expect((await readdir(join(baseDir, 'aa/bb'))).filter((n) => n.includes('.tmp-'))).toEqual([]);
+  });
+
+  it('fails on a missing source, leaving the destination untouched and no temporary file', async () => {
+    await putText(to, 'old bytes');
+    await expect(
+      adapter.copy({ from, to, visibility: 'public', mimeType: 'text/plain' }),
+    ).rejects.toBeInstanceOf(BackendUnavailableError);
+    expect(await readFile(join(baseDir, to), 'utf8')).toBe('old bytes');
+    expect((await readdir(join(baseDir, 'aa/bb'))).filter((n) => n.includes('.tmp-'))).toEqual([]);
+  });
+});
+
+describe('isObjectNotFound (feature 156)', () => {
+  it('is true for the error delete throws on a missing file', async () => {
+    const err = await adapter.delete({ locator: `aa/bb/${ASSET_ID}.txt` }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BackendUnavailableError);
+    expect(isObjectNotFound(err)).toBe(true);
+  });
+
+  it('is true for a GCS-shaped 404 cause', () => {
+    expect(isObjectNotFound(new BackendUnavailableError('x', Object.assign(new Error('No such object'), { code: 404 })))).toBe(true);
+  });
+
+  it('is true for an S3-shaped NoSuchKey', () => {
+    const noSuchKey = Object.assign(new Error('The specified key does not exist.'), { name: 'NoSuchKey' });
+    expect(isObjectNotFound(noSuchKey)).toBe(true);
+    expect(isObjectNotFound(new BackendUnavailableError('x', noSuchKey))).toBe(true);
+  });
+
+  it('is false for a permission error', () => {
+    const eacces = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    expect(isObjectNotFound(new BackendUnavailableError('x', eacces))).toBe(false);
+    expect(isObjectNotFound(eacces)).toBe(false);
   });
 });

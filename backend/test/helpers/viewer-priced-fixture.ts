@@ -7,6 +7,7 @@ import { GalleryItemLabel } from './package-entities.js';
 import { Product } from './package-entities.js';
 import { ProductLink } from './package-entities.js';
 import { OTHER_TEST_ORGANIZATION_ID, TEST_ORGANIZATION_ID } from './test-actors.js';
+import { bindOrganizationsToFixtureChannelsSql } from './sales-channel-access.js';
 
 /**
  * One product, three prices, three viewers — the fixture behind the ruling that
@@ -161,6 +162,9 @@ export async function seedViewerPricedFixture(em: EntityManager): Promise<void> 
     });
     await em.persistAndFlush(other);
   }
+  // Feature 154 — an Organization with no sales channel may not shop anywhere;
+  // bind the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(em, [OTHER_TEST_ORGANIZATION_ID]);
 
   const product = em.create(Product, {
     id: VIEWER_PRICED_PRODUCT_ID,

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CatalogAttributeView, DocumentValue, QuoteRequestDocumentData } from '@endora-commerce/contracts';
-import { createQuoteLinesCollection, quoteLineItems, quoteSummary } from './quote-lines.js';
+import { createQuoteLinesCollection, quoteLineItems, quoteLineSections, quoteSummary } from './quote-lines.js';
+import { sampleQuoteRequestData } from './sample.js';
+import { isValidSectionPartition } from '@endora-commerce/contracts';
 import { QUOTE_DOCUMENT_TEXTS } from './texts.js';
 import { summarize } from '../services/summarize.js';
 import type { QuoteRequest } from '../entities/quote-request.entity.js';
@@ -29,6 +31,8 @@ const line = (over: Partial<Line> = {}): Line => ({
   lineCurrency: 'PLN',
   lineNote: null,
   attributes: {},
+  groupId: null,
+  position: 0,
   ...over,
 });
 
@@ -51,6 +55,7 @@ const data = (lines: Line[], taxRate = 0.23): QuoteRequestDocumentData => ({
   buyer: { organizationName: 'Acme', legalName: null, taxId: null, address: null, customerName: null, customerEmail: null },
   salesRep: null,
   details: [],
+  groups: [],
   lines,
 });
 
@@ -238,5 +243,85 @@ describe('SC-008 — the PDF totals equal the quote screens’ (summarize)', () 
       const gross = Math.round(screen.totalAtAgreedPrice * 1.23 * 100) / 100;
       expect((pdf['grossTotal'] as { amount: number }).amount).toBeCloseTo(gross, 2);
     }
+  });
+});
+
+describe('feature 159 — the quote’s sections (document-sections.md §5)', () => {
+  const groups = [
+    { id: 'g-a', name: 'Ground floor', position: 0 },
+    { id: 'g-b', name: 'First floor', position: 1 },
+  ];
+  const grouped = (lines: Line[]): QuoteRequestDocumentData => ({ ...data(lines), groups });
+
+  it('a quote with no group is one ungrouped section over every line — the table prints flat', () => {
+    const doc = data([line({ id: 'a' }), line({ id: 'b' })]);
+    const sections = quoteLineSections(doc);
+    expect(sections).toEqual([{ key: 'ungrouped', kind: 'ungrouped', label: null, itemIndexes: [0, 1], summary: quoteSummary(doc) }]);
+    expect(quoteLineSections(data([]))).toEqual([]);
+  });
+
+  it('partitions the lines in display order: groups by position, then the ungrouped lines', () => {
+    const doc = grouped([
+      line({ id: 'a1', groupId: 'g-a', position: 0 }),
+      line({ id: 'a2', groupId: 'g-a', position: 1 }),
+      line({ id: 'b1', groupId: 'g-b', position: 0 }),
+      line({ id: 'u1', groupId: null, position: 0 }),
+    ]);
+    const sections = quoteLineSections(doc);
+    expect(sections.map((s) => [s.key, s.kind, s.label, s.itemIndexes])).toEqual([
+      ['g-a', 'group', 'Ground floor', [0, 1]],
+      ['g-b', 'group', 'First floor', [2]],
+      ['ungrouped', 'ungrouped', null, [3]],
+    ]);
+    expect(isValidSectionPartition(sections, doc.lines.length)).toBe(true);
+  });
+
+  it('each section’s totals by the document’s rule over its own lines', () => {
+    const doc = grouped([
+      line({ id: 'a1', groupId: 'g-a', agreedUnitPrice: 8, referenceUnitPrice: 10, quantity: 10 }),
+      line({ id: 'b1', groupId: 'g-b', agreedUnitPrice: 5, referenceUnitPrice: 5, quantity: 2 }),
+      line({ id: 'b2', groupId: 'g-b', agreedUnitPrice: null, quantity: 1, position: 1 }),
+    ]);
+    const [a, b] = quoteLineSections(doc);
+    expect(a!.summary).toMatchObject({
+      netTotal: money(80),
+      vatTotal: money(18.4),
+      grossTotal: money(98.4),
+      discountTotal: money(20),
+      listTotal: money(100),
+    });
+    // An unpriced line leaves the section without net, VAT and gross; no discount where none applies.
+    expect(b!.summary).toMatchObject({ netTotal: null, vatTotal: null, grossTotal: null, discountTotal: null });
+  });
+
+  it('SC-002 — the section nets add up to the document net', () => {
+    const lines = Array.from({ length: 40 }, (_, i) =>
+      line({
+        id: `l${i}`,
+        groupId: i < 15 ? 'g-a' : i < 30 ? 'g-b' : null,
+        position: i,
+        quantity: (i % 7) + 1,
+        agreedUnitPrice: Math.round((1 + i * 0.37) * 100) / 100,
+      }),
+    );
+    const doc = grouped(lines);
+    const total = quoteLineSections(doc).reduce((sum, s) => sum + (s.summary['netTotal'] as { amount: number }).amount, 0);
+    expect(Math.round(total * 100) / 100).toBe((quoteSummary(doc)['netTotal'] as { amount: number }).amount);
+  });
+
+  it('the lines collection declares its sections', () => {
+    const collection = createQuoteLinesCollection({ attributes: async () => [] });
+    expect(collection.sections).toBe(quoteLineSections);
+  });
+
+  it('the sample quote has two groups and an ungrouped line, in both languages (FR-044)', () => {
+    for (const language of ['en-US', 'pl-PL']) {
+      const sample = sampleQuoteRequestData(language);
+      const sections = quoteLineSections(sample);
+      expect(sections.map((s) => s.kind)).toEqual(['group', 'group', 'ungrouped']);
+      expect(isValidSectionPartition(sections, quoteLineItems(sample).length)).toBe(true);
+      expect(sample.groups).toHaveLength(2);
+    }
+    expect(sampleQuoteRequestData('pl-PL').groups[0]!.name).not.toBe(sampleQuoteRequestData('en-US').groups[0]!.name);
   });
 });

@@ -84,6 +84,12 @@ export interface ChannelIdentityFormValue {
   currencies: string[];
   defaultCurrency: string;
   active: boolean;
+  /**
+   * Feature 154 — whether visitors who are not signed in may use the store.
+   * Off makes the channel a members-only store: a visitor must sign in, and only
+   * customers whose Organization is assigned to the channel get in.
+   */
+  anonymousAccess: boolean;
 }
 
 export interface ChannelIdentityFormProps {
@@ -124,6 +130,7 @@ export function ChannelIdentityForm({
     initial?.defaultCurrency ?? 'PLN',
   );
   const [active, setActive] = useState(initial?.active ?? true);
+  const [anonymousAccess, setAnonymousAccess] = useState(initial?.anonymousAccess ?? true);
   const [dictionaryLanguages, setDictionaryLanguages] = useState<DictionaryLanguage[]>([]);
   const [dictionaryCurrencies, setDictionaryCurrencies] = useState<DictionaryCurrency[]>([]);
   const [dictionaryStatus, setDictionaryStatus] = useState<DictionaryStatus>('loading');
@@ -140,6 +147,7 @@ export function ChannelIdentityForm({
     setCurrencies(initial.currencies);
     setDefaultCurrency(initial.defaultCurrency);
     setActive(initial.active);
+    setAnonymousAccess(initial.anonymousAccess);
   }, [initial]);
 
   useEffect(() => {
@@ -217,6 +225,7 @@ export function ChannelIdentityForm({
         currencies,
         defaultCurrency: defaultCurrency.trim(),
         active,
+        anonymousAccess,
       });
     },
     [
@@ -230,6 +239,7 @@ export function ChannelIdentityForm({
       currencies,
       defaultCurrency,
       active,
+      anonymousAccess,
     ],
   );
 
@@ -443,6 +453,35 @@ export function ChannelIdentityForm({
                 {t('identity.cannotDeactivateDefault')}
               </span>
             )}
+          </div>
+
+          {/*
+            Feature 154 — the second presence fact about a channel, placed under
+            *Active* because it answers the neighbouring question: who may use
+            this store. A checkbox rather than a switch because that is what
+            *Active* above is, and admin-kit carries no switch primitive; two
+            on/off facts of one channel reading differently would be the
+            inconsistency. Unlike *Active* it stays editable on the system
+            default, which may well be a members-only store.
+
+            The hint is the operator's only warning of the consequences, so it
+            is attached to the control rather than left beside it.
+          */}
+          <div className="grid gap-1">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="sc-anonymous-access"
+                checked={anonymousAccess}
+                onChange={(e) => setAnonymousAccess(e.target.checked)}
+                aria-describedby="sc-anonymous-access-hint"
+              />
+              <Label htmlFor="sc-anonymous-access" className="cursor-pointer">
+                {t('identity.anonymousAccess.label')}
+              </Label>
+            </div>
+            <p id="sc-anonymous-access-hint" className="text-xs text-muted-foreground">
+              {t('identity.anonymousAccess.hint')}
+            </p>
           </div>
 
           <div className="flex justify-end gap-2">

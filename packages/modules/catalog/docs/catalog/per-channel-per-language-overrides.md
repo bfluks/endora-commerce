@@ -159,7 +159,7 @@ additive.
 
 ## Read paths
 
-Three consumers go through the resolver:
+These consumers go through the resolver:
 
 - **Admin endpoint** — `GET /api/v1/admin/catalog/products/:id?channelId=&languageCode=&includeOverridesMap=true`
   returns the baseline product PLUS, when context params are passed, a
@@ -168,13 +168,40 @@ Three consumers go through the resolver:
   is attached for client-side switcher previews.
 - **Storefront public read** — pulls the channel from the
   `x-sales-channel` header (the existing convention) and
-  the language from `Accept-Language`. The override layer is invisible
-  to the public client.
+  the language from `Accept-Language`, else the channel's default
+  language. The override layer is invisible to the public client: it
+  receives the effective value. The product page (name, description,
+  SEO fields, attribute values, the product-page attribute list, grouped
+  children and bundle options) and every listing card walk the storefront's own baseline language pick — requested
+  language, then the channel's default language, then `en-US`, `en` and
+  the first stored language — and at each language take the
+  `(channel + language)` slot if it is filled, else stop there if the
+  baseline has text for that language. An override therefore answers
+  only for the language whose baseline text the page would show, or an
+  earlier one in that order: a request in `en-US` on a channel whose
+  default is `pl-PL` shows the `en-US` baseline, not the `pl-PL`
+  override, while a `de-DE` request for a product with no `de-DE` text
+  falls through to `pl-PL` and shows its override. The `(channel-only)`
+  slot is asked last and wins over the baseline wherever the walk
+  stopped. Product-link tiles keep their own language pick, which has
+  no channel-default leg, and walk the override slots over it, so a
+  tile can show the `en-US` baseline where the listing card shows the
+  channel default's override. A product without overrides shows exactly what
+  it showed before. Listing filters, attribute filters and name sorting
+  still read the baseline.
 - **Search indexer (Meilisearch)** — builds one document per
   `(product, channel)` pair. Each document's `name` and `description`
   fields are run through the resolver with `channel.defaultLanguage`
   as the active language, so per-channel overrides flow into
-  storefront search ranking.
+  storefront search ranking and name sorting.
+- **Search result cards** — the search module re-reads every hit from
+  Postgres before it answers, and the card name it shows is resolved
+  there, not taken from the index: the request's sales channel override
+  rows are read once per results page and the card walks the same
+  languages and slots, in the same order, as a listing card above. The indexed name is
+  resolved for the channel's default language only, so it would be
+  wrong for a request in any other language. A product without an
+  override for the channel shows exactly what it showed before.
 
 ## Admin UI
 
@@ -223,11 +250,11 @@ exact inverse — drop the two tables and the two columns.
   surfaces only the system Name + Description today. User attribute
   overrides are accepted by the PATCH endpoint and resolved on read,
   but the admin SPA does not yet expose a write affordance for them.
-- **Storefront public read shape change** — `products.name` and
-  `products.description` still ship as `Record<lang, string>` JSONB
-  on the public catalog endpoint. Switching to a resolved scalar is
-  a breaking change for storefront consumers and is scoped as a
-  follow-up.
+- **Override-aware listing filters and sorting** — the public catalog
+  endpoint returns `name` and `description` as the resolved string for
+  the request's sales channel and language (see *Read paths* above), but
+  listing filters, attribute filters and name sorting still read the
+  baseline values. Making them follow the overrides is a follow-up.
 - **Channel-aware reindex enqueue** — the PATCH endpoint does not
   yet enqueue a Meilisearch reindex job per touched channel; the
   next per-product upsert (driven by any catalog mutation) picks it

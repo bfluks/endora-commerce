@@ -6,6 +6,7 @@ import { Storage, type Bucket } from '@google-cloud/storage';
 import type {
   StorageAdapter,
   StorageAdapterSelfCheck,
+  StorageCopyInput,
   StorageNewLocatorInput,
   StoragePutInput,
   StorageResolveUrlInput,
@@ -36,6 +37,21 @@ export interface GcsAdapterConfig {
    */
   publicApiBaseUrl: string;
   privateUrlTtlSec: number;
+}
+
+/** The object metadata written on put and copy; the optional headers only when given. */
+function objectMetadata(input: {
+  mimeType: string;
+  cacheControl?: string;
+  contentDisposition?: string;
+}): Record<string, string> {
+  return {
+    contentType: input.mimeType,
+    ...(input.cacheControl !== undefined ? { cacheControl: input.cacheControl } : {}),
+    ...(input.contentDisposition !== undefined
+      ? { contentDisposition: input.contentDisposition }
+      : {}),
+  };
 }
 
 export class GcsStorageAdapter implements StorageAdapter {
@@ -88,7 +104,7 @@ export class GcsStorageAdapter implements StorageAdapter {
     if (!input.locator) throw new LocatorMissingError('GcsStorageAdapter.put: empty locator');
     return new Promise<void>((resolve, reject) => {
       const writeStream = this.bucket.file(input.locator).createWriteStream({
-        metadata: { contentType: input.mimeType },
+        metadata: objectMetadata(input),
         ...(input.visibility === 'public' ? { predefinedAcl: 'publicRead' } : { predefinedAcl: 'private' }),
         resumable: false,
       });
@@ -132,6 +148,25 @@ export class GcsStorageAdapter implements StorageAdapter {
     } catch (e) {
       throw new BackendUnavailableError(
         `GcsStorageAdapter.delete: failed to remove ${input.locator}`,
+        e,
+      );
+    }
+  }
+
+  /**
+   * One server-side copy — atomic at the destination — with the metadata
+   * replaced and the ACL always given, so the copy never lands with the
+   * bucket's default ACL whatever the row says.
+   */
+  async copy(input: StorageCopyInput): Promise<void> {
+    try {
+      await this.bucket.file(input.from).copy(this.bucket.file(input.to), {
+        predefinedAcl: input.visibility === 'public' ? 'publicRead' : 'private',
+        metadata: objectMetadata(input),
+      });
+    } catch (e) {
+      throw new BackendUnavailableError(
+        `GcsStorageAdapter.copy: failed to copy ${input.from} to ${input.to}`,
         e,
       );
     }

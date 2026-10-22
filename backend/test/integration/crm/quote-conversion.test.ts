@@ -13,8 +13,8 @@ import {
   TEST_ORGANIZATION_ID,
 } from '../../helpers/test-actors.js';
 import { seedOtherTestCustomer } from '../../helpers/seed-organizations.js';
-import { Cart, Order, QuoteRequest } from '../../helpers/package-entities.js';
-import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
+import { Cart, Order, QuoteRequest, StockLevel } from '../../helpers/package-entities.js';
+import { SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID } from '../../helpers/seed-catalog.js';
 import { CRM_SETTING_CODES } from '../../../../packages/modules/crm/src/manifest.js';
 import {
   CRM_ADMIN,
@@ -108,7 +108,17 @@ describe('crm — an order placed from a linked quote request (the real road)', 
   beforeAll(async () => {
     h = await setupBackendServer();
     await restoreDefaultCrmWorkflow(h.em());
-    await h.em().execute(`update "stock_levels" set "on_hand" = 100000`);
+    // The seed stocks one product; the case that adds a second line from the
+    // list needs it to be orderable too.
+    const em = h.em();
+    em.create(StockLevel, {
+      productId: SEED_PRODUCT_102_ID,
+      warehouseId: '00000000-0000-4000-8000-00000000d017',
+      onHand: 100,
+      reserved: 0,
+    });
+    await em.flush();
+    await em.execute(`update "stock_levels" set "on_hand" = 100000`);
     // Both documents count in the state the road leaves them in, so a value
     // that added the request to its Order would show it.
     const counting = await setCrmCountingStatuses(h, {
@@ -142,21 +152,20 @@ describe('crm — an order placed from a linked quote request (the real road)', 
     expect((await detail(opportunity.id)).value).toBe('78.75');
 
     await convertQuoteRequestToCart(h, rfq.id);
-    // The buyer orders five of the seven: the Order's figure differs from the
-    // request's, so "counted once" can be told from "counted twice" and from
-    // "the request counted instead".
-    const basket = await h.app.inject({ method: 'GET', url: '/api/v1/cart', cookies: CRM_CUSTOMER });
-    const line = (basket.json() as { data: { items: Array<{ id: string; productId: string }> } }).data.items.find(
-      (item) => item.productId === SEED_PRODUCT_101_ID,
-    );
-    if (!line) throw new Error('the converted basket holds no line of the quoted product');
-    const changed = await h.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/cart/items/${line.id}`,
+    // The buyer keeps the seven agreed and adds one of another product from
+    // the list: the Order's figure differs from the request's, so "counted
+    // once" can be told from "counted twice" and from "the request counted
+    // instead". The agreed line stays at its agreed quantity on purpose — off
+    // it the line is priced from the list (`carts`' `cart-line-pricing.ts`),
+    // the basket then holds nothing the request agreed, and the Order rightly
+    // names no request (`orders`' `judgeQuoteRequestSource`, `no-agreed-line`).
+    const added = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/cart/items',
       cookies: CRM_CUSTOMER,
-      payload: { quantity: 5 },
+      payload: { productId: SEED_PRODUCT_102_ID, quantity: 1 },
     });
-    expect(changed.statusCode, changed.body).toBe(200);
+    expect(added.statusCode, added.body).toBe(200);
     const placed = await place();
 
     const order = await h.em().findOneOrFail(Order, { id: placed.id }, { filters: false });
@@ -167,7 +176,8 @@ describe('crm — an order placed from a linked quote request (the real road)', 
     expect(links).toHaveLength(1);
     expect(links[0]).toMatchObject({ documentId: placed.id, linkSource: 'quote_conversion', available: true });
     expect(Number(read.value)).toBe(Number(order.total));
-    expect(Number(read.value)).toBe(56.25);
+    // 7 × 11.25 agreed, plus 1 × 24.50 from the list.
+    expect(Number(read.value)).toBe(103.25);
 
     const quote = await h.em().findOneOrFail(QuoteRequest, { id: rfq.id }, { filters: false });
     expect(quote.status).toBe('Completed');
@@ -177,7 +187,7 @@ describe('crm — an order placed from a linked quote request (the real road)', 
     await announceAgain(placed.id);
     await announceAgain(placed.id);
     expect(await orderLinks(opportunity.id)).toHaveLength(1);
-    expect(Number((await detail(opportunity.id)).value)).toBe(56.25);
+    expect(Number((await detail(opportunity.id)).value)).toBe(103.25);
   });
 
   it('follows the Order-status mapping like any linked Order', async () => {

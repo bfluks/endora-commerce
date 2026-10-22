@@ -22,6 +22,7 @@ import { twoFactorEnrolmentsFor } from './two-factor-enrolments.js';
 import { OrganizationDetailsService } from '../../../packages/modules/organizations/src/backend/services/organization-details-port.js';
 import { OrganizationRestrictionService } from '../../../packages/modules/organizations/src/backend/services/organization-restriction-service.js';
 import { CatalogProductReadService } from '../../../packages/modules/catalog/dist/backend/services/catalog-product-read.service.js';
+import { ProductAvailabilityService } from '../../../packages/modules/catalog/dist/backend/services/product-availability.service.js';
 import { AddressReadService } from '../../../packages/modules/addresses/src/backend/services/address-ports.js';
 import { DeliveryMethodReadService } from '../../../packages/modules/delivery_methods/src/backend/services/delivery-method-read-port.js';
 import { PaymentMethodReadService } from '../../../packages/modules/payment_methods/src/backend/services/payment-method-read-port.js';
@@ -49,6 +50,7 @@ import type { OrderServiceNeighbourPorts } from '../../../packages/modules/order
 import type { BackendServerHandle } from './test-server.js';
 import { EventBus } from '@endora-commerce/platform/events';
 import { SalesChannelMembershipService } from '../../src/kernel/sales-channels/sales-channel-membership.service.js';
+import { SalesChannel, type ResolvedChannel } from '@endora-commerce/platform/kernel';
 
 /**
  * The neighbouring modules' ports an `orders` service needs when a test builds
@@ -121,6 +123,17 @@ export function orderServiceNeighbours(
     organizationDetails: base.organizationDetails,
     customerAccountRead: base.customerAccountRead,
     catalogProductRead: base.catalogProductRead,
+    // Feature 163 — the real availability service over this rig's
+    // `EntityManager`, so a hand-built placement refuses an unavailable line as
+    // the composed one does. The channel record is read off the same manager.
+    catalogProductAvailability: new ProductAvailabilityService(emFactory, channelMembership, {
+      getById: async (id: string) => {
+        const channel = await emFactory().findOne(SalesChannel, { id });
+        return channel
+          ? ({ ...channel, languages: [...channel.languages] } as unknown as ResolvedChannel)
+          : null;
+      },
+    }),
     addressRead,
     deliveryMethodRead: () => deliveryMethodRead,
     paymentMethodRead: () => paymentMethodRead,
@@ -140,7 +153,15 @@ export function orderServiceNeighbours(
     cartPlacementApply: new CartPlacementApplyService(
       emFactory,
       new CartLinePricing(
-        new PricingService(emFactory, undefined, undefined, neighbourReadPorts(emFactory)),
+        // D-287 P0 — the engine reads the basket customer's own group, so the
+        // rig hands it `customer_accounts`' read port as the composition does.
+        new PricingService(
+          emFactory,
+          undefined,
+          undefined,
+          neighbourReadPorts(emFactory),
+          new CustomerAccountReadService(emFactory, twoFactorEnrolmentsFor(emFactory, 'customer')),
+        ),
         {
           resolveDisplayMode: (input) =>
             new PriceListService(
@@ -164,6 +185,11 @@ export function orderServiceNeighbours(
     // degrade and the default here: these rigs place orders from baskets no
     // quote filled, so there is no claim to vouch for.
     quoteRequestRead: () => null,
+    // Feature 162 — asked only for a vouched quote source, which these rigs
+    // never have; it answers the target bag unchanged.
+    customFieldCarry: () => ({
+      plan: async ({ targetValues }) => ({ values: { ...targetValues }, carried: [], skipped: [] }),
+    }),
     // A value and not an accessor, because `payments` has no degrade even though
     // it is switchable (D-179): there is no order without a record of what is
     // owed. A rig that wants the absent owner hands in a double that throws

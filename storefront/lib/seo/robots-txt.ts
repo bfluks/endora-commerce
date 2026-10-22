@@ -18,13 +18,14 @@
  * feed, the text ends with exactly one, and a byte order mark at its very
  * start is not served.
  *
- * ## The four answers
+ * ## The five answers
  *
  * | What is known about the channel | Served |
  * | --- | --- |
  * | its custom instructions, read now or remembered from an earlier read | `200`, the system rules and the instructions |
  * | that there are none — `seo` is switched off, or the backend has no such feature | `200`, the system rules alone |
  * | nothing: the backend could not be asked and never has been | **`503`** with `Retry-After` |
+ * | that the store is closed to anonymous visitors | `200`, `Disallow: /` for every crawler and nothing else |
  * | `?part=system`, whatever is known | `200`, the system rules alone, **without asking**, and `no-store` |
  *
  * ## Why the third row is a failure and not the system rules
@@ -85,7 +86,7 @@ import {
   requestChannelCode,
 } from './crawler-file-response';
 import type { CrawlerFiles, CrawlerFilesRead } from './crawler-policy';
-import { renderRobotsSystemRules } from './robots-system-rules';
+import { renderClosedStoreRobotsTxt, renderRobotsSystemRules } from './robots-system-rules';
 
 export { CRAWLER_FILES_CAPABILITY_HEADER } from './crawler-file-response';
 
@@ -132,6 +133,10 @@ export async function robotsTxtResponse(request: Request, deps: RobotsTxtDeps): 
   if (read.kind === 'unknown') return crawlerFileUnavailable('robots.txt');
 
   if (read.kind === 'none') return crawlerFileServed(systemRules);
+  // A store closed to anonymous visitors has nothing a crawler may fetch. The
+  // closed-store file wins over the operator's instructions, which are not
+  // served on it — see `renderClosedStoreRobotsTxt`.
+  if (read.value.anonymousAccess === false) return crawlerFileServed(renderClosedStoreRobotsTxt());
   // `read.value.unreadable` is not looked at: what the backend can name there
   // — the default robots policy, the `llms.txt` content — is nothing this
   // file is made of.

@@ -234,6 +234,10 @@ narrowness above exists so that a rule about *comments* is not used to reject a 
   unsigned commit.
 - Branch from `origin/master` — never from a local `master`, which goes stale — and deliver
   through a pull request. Nothing is committed to `master` directly.
+- **Fork, unless you have write access.** An external contributor forks the repository and
+  opens the pull request from the fork; leave *Allow edits by maintainers* on, so a maintainer
+  can push a fix-up to your branch. Maintainers and contributors with write access push the
+  branch to this repository instead, which lets several people work on it.
 
 ## Sign your commits
 

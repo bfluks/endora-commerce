@@ -14,6 +14,7 @@ import {
 import { z } from 'zod';
 import { HttpError } from '@endora-commerce/platform/http';
 import { orgConstraintFor, ruleVisibleForScope } from '@endora-commerce/platform/tenancy';
+import type { PriceListStatusWorker } from './services/price-list-status-worker.js';
 import type { PriceListService } from './services/price-list-service.js';
 import { extractRuleOrgTargets } from './services/rule-org-targets.js';
 import type { PriceList } from './entities/price-list.entity.js';
@@ -67,6 +68,12 @@ export interface PricingRoutesDeps {
    * admin may ask the probe about. Owned by `organizations`.
    */
   salesRepScope: SalesRepAssignmentPort;
+  /**
+   * The module's status worker — the same instance the timer drives, so the
+   * test-only sweep route invalidates the pricing cache exactly as a tick does
+   * (D-287 P0).
+   */
+  statusWorker: Pick<PriceListStatusWorker, 'sweep'>;
   /** Feature 024 — resolves admin actor identity for audit entries. */
   resolveAdminAuditContext?: (req: FastifyRequest) => {
     actorAdminUserId: string;
@@ -706,12 +713,9 @@ export async function registerPricingRoutes(
     '/api/v1/admin/price-lists-engine/internal/sweep',
     { preHandler: writeGate },
     async () => {
-      // The worker reads/writes through the same EM as the rest of the
-      // module; constructed here so the route doesn't pin the worker to
-      // the module-level construction.
-      const { PriceListStatusWorker } = await import('./services/price-list-status-worker.js');
-      const worker = new PriceListStatusWorker(emFactory);
-      const result = await worker.sweep();
+      // The module's own worker, so a route-driven sweep tells the pricing
+      // cache what a timer-driven one tells it (D-287 P0).
+      const result = await deps.statusWorker.sweep();
       return { data: result };
     },
   );

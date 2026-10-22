@@ -8,7 +8,6 @@ import type {
 } from '@endora-commerce/contracts';
 import { ModuleDisabledError } from '../../../src/kernel/lifecycle/plugin-helpers.js';
 import type { SettingsService } from '../../../src/kernel/settings/settings.service.js';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { ComparableAttributeProjection } from '../../../../packages/modules/comparisons/src/backend/services/comparable-attribute-projection.js';
 import { ComparisonService } from '../../../../packages/modules/comparisons/src/backend/services/comparison-service.js';
 import { ShareTokenGenerator } from '../../../../packages/modules/comparisons/src/backend/services/share-token-generator.js';
@@ -61,6 +60,8 @@ function productRecord(id: string): CatalogProductRecord {
     lowStockThresholdMode: 'cumulative',
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: null,
+    returnable: false,
   } as unknown as CatalogProductRecord;
 }
 
@@ -91,14 +92,14 @@ const attributePortStub: CatalogAttributeReadPort = {
   optionLabelIndex: async () => new Map(),
 };
 
-const refusingChannelMembership = new Proxy(
-  {},
-  {
-    get: (_target, property) => () => {
-      throw new Error(`comparisons unexpectedly called the channel bridge.${String(property)}`);
-    },
-  },
-) as SalesChannelMembershipPort;
+/**
+ * Feature 163 — `catalog`'s availability answer, which replaced the channel
+ * bridge in this service: every column is available, so the cases here read
+ * as they did.
+ */
+const availableEverywhere = {
+  filterAvailable: async (ids: readonly string[]) => new Set(ids),
+};
 
 const catalogProducts = {
   findById: async () => null,
@@ -111,6 +112,7 @@ const catalogProducts = {
   findVariantsBySkus: async () => [],
   findVariantInProduct: async () => null,
   findPackagingUnitInProduct: async () => null,
+  listPackagingUnitsByProductIds: async () => [],
   listLinksBySourceIds: async () => [],
   listValueOverridesByProductIds: async () => [],
 } as unknown as CatalogProductReadPort;
@@ -121,7 +123,7 @@ function serviceWith(gallery: CatalogGalleryPort, bridgeRows: unknown[]): Compar
     new ComparableAttributeProjection(),
     new ShareTokenGenerator(),
     catalogProducts,
-    refusingChannelMembership,
+    availableEverywhere,
     gallery,
     settingsStub,
     attributePortStub,

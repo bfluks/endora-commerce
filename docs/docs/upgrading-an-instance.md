@@ -101,8 +101,9 @@ names and run `pnpm install`.
 ### Adding a module that is new in a release {#adding-a-new-module}
 
 The upgrade moves the packages your instance already declares. A module that first appears in the
-release is not among them, so after the upgrade it is neither installed nor listed on **Modules**.
-To have it, declare its package in the root `package.json` and run `setup`, in the root of the
+release is not among them, so after the upgrade it is neither installed nor listed on **Modules** —
+unless a module the instance installed requires it: `setup`'s first step, `endora generate`,
+declares and installs such a module itself. To have any other one, declare its package in the root `package.json` and run `setup`, in the root of the
 instance:
 
 ```bash
@@ -1586,6 +1587,712 @@ platform migration, the contracts, the reference storefront's files and the ngin
 instance had been upgraded from `0.105.0` with `pnpm run upgrade 0.106.0`, and no storefront
 created by an earlier release had the three groups of files above applied to it, when this
 section was written; the order of the steps, the proxy line and the storefront edits are untried.
+
+### After upgrading to 0.107.0 {#after-0-107-0}
+
+`pnpm run upgrade 0.107.0` moves the packages of the release from `0.106.0` and applies its
+migrations — fifteen, one of them the new document templates module's. The release brings three
+packages that did not exist before —
+`@endora-commerce/mod-document-templates`, `@endora-commerce/mod-admin-search` and
+`@endora-commerce/llm-client` — and **one of them is not optional**: an instance that declares
+`@endora-commerce/mod-invoices` needs `@endora-commerce/mod-document-templates` as well, and the
+upgrade's `setup` step declares and installs it. It adds no environment variable. It adds five
+permissions (`platform.api_description.read`, `document_templates:read`,
+`document_templates:write`, `admin_search:configure` and `cms.translate`), and it moves the
+permissions of import and export onto the modules that own the rows.
+
+What the release changes most is who may use a sales channel. Every channel now has an *Open to
+anonymous visitors* switch, which is on after the upgrade, and a signed-in customer is served on a
+channel only when the customer's Organization is assigned to it. A data migration makes those
+assignments for the Organizations that exist, so nothing changes for a customer who has ordered
+where they shop — but the assignments are worth reading before the instance takes traffic again.
+Baskets belong to the channel they were filled on, order placement checks the prices of a basket,
+the API description is no longer public, and several screens and answers change. This section
+says what to do, in order, and then what behaves differently for each reader:
+[operators](#after-0-107-0-operators), [API clients and integrators](#after-0-107-0-api),
+[module and overlay authors](#after-0-107-0-authors) and the owner of
+[an existing storefront](#after-0-107-0-storefront).
+
+#### What to do, in order {#after-0-107-0-steps}
+
+Before the upgrade:
+
+1. **If you designed invoice templates, write down what they hold.** Invoice templates moved into
+   the new *Document templates* module, and nothing is carried over:
+   `Migration20261017T075839InvoicesDropInvoiceTemplates` drops the `invoice_templates` table, and
+   invoice PDFs — downloads and e-mail attachments alike — use the invoice document type's built-in
+   layout (the former generic template) until an operator sets an invoice template as the default
+   in **Document templates**. Reverting the migration recreates an empty table, not its rows; a
+   database backup is the only copy.
+2. **Read `assets.soft_delete_retention_days`** — *Soft-delete retention before hard-delete
+   (days)* in the *Storage* group of **Settings**, 30 by default. From
+   this release, assets moved to the trash are deleted for good by an hourly sweep once that many
+   days have passed since their deletion, and **its first runs after the upgrade delete every asset
+   that has been in the trash for longer than that**, up to 500 per run. Lengthen the setting
+   before upgrading if you want to keep those assets. A value below one is read as one day.
+3. **On an instance with more than one sales channel, read `quote_requests.expiry_days`** —
+   *Auto-expire pending after (days)* on the Quote Requests tab of **Settings** — for each channel
+   that has a value of its own. The expiry sweep now holds every quote request to the value of its
+   own channel, where it used to apply the default channel's value to all of them: on its first
+   runs a channel with a lower value than the default expires its backlog of requests that have
+   been quiet that long, and a channel set to `0` stops expiring.
+
+The upgrade itself:
+
+4. **Run `pnpm run upgrade 0.107.0`.** `invoices` now lists `document_templates` among its
+   manifest `dependencies`, and **if the instance declares `@endora-commerce/mod-invoices`** the
+   upgrade's `setup` step adds `@endora-commerce/mod-document-templates` to the root
+   `package.json`, at the version the platform is declared at, and installs it before anything
+   else. Its first step, `endora generate`, comes from the release just installed, and it prints
+   the line:
+
+   ```text
+   declared @endora-commerce/mod-document-templates 0.107.0 in package.json — invoices needs document_templates (dependencies)
+   ```
+
+   Commit the changed `package.json` and `pnpm-lock.yaml` with the rest of the upgrade. If the
+   `setup` step did not finish, run `pnpm run setup` again: it continues from there. Only an
+   instance whose `setup` was skipped, or that runs no `generate`, has to declare it by hand:
+
+   ```bash
+   pnpm add -w -E @endora-commerce/mod-document-templates@0.107.0
+   pnpm run setup
+   ```
+
+   Without the module a deployment that composes `invoices` refuses to start, naming it:
+
+   ```text
+   This deployment will not boot: it composes modules whose declarations it does not satisfy.
+
+     document_templates — not shipped by this deployment, and it is needed:
+         invoices — dependencies
+   ```
+
+   The rest of [Adding a module that is new in a release](#adding-a-new-module) applies — the
+   flags, and what to restart. *Document templates* comes up switched on, and it cannot be switched
+   off while `invoices` is on. The other dependencies the release adds — `quote_requests` on
+   `price_lists` and `transactional_emails`, `invoices` and `api_keys` on `admin_roles`,
+   `assets_library` on `admin_users` — name modules that cannot be switched off and that every
+   instance already declares, so they need nothing.
+
+   The migrations `setup` applies, in the order of their stamps:
+
+   | Migration | Module | What it does |
+   | --- | --- | --- |
+   | `Migration20261014T115049QuoteRequestsItemReferencePrice` | `quote_requests` | Three nullable columns on `quote_request_items` for the reference price |
+   | `Migration20261014T115053QuoteRequestsNegotiationPolicies` | `quote_requests` | Two tables, `quote_request_org_policies` and `quote_request_account_policies` |
+   | `Migration20261014T170531CatalogProductListSavedViews` | `catalog` | Table `product_list_saved_views` |
+   | `Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews` | `quote_requests` | Table `quote_request_list_saved_views` |
+   | `Migration20261016T131148PriceListsPriceMatrixEntries` | `price_lists` | Table `price_list_matrix_entries` |
+   | `Migration20261016T172243PwaPushNotificationPreferences` | `pwa` | Table `push_notification_preferences` |
+   | `Migration20261017T071754DocumentTemplatesInit` | `document_templates` | Table `document_templates`, once the module is declared |
+   | `Migration20261017T075839InvoicesDropInvoiceTemplates` | `invoices` | Drops `invoice_templates` — see step 1 |
+   | `Migration20261017T142116QuoteRequestsQuoteRequestDocumentTemplate` | `quote_requests` | Nullable `quote_requests.document_template_id` |
+   | `Migration20261017T142121QuoteRequestsQuoteRequestEventPdfSent` | `quote_requests` | Admits the `pdf-sent` event type |
+   | `Migration20261018T074021CartsCartItemAgreedPrice` | `carts` | Three nullable `cart_items` columns for a quote's agreed quantity and price |
+   | `Migration20261018T101912CoreSalesChannelsAnonymousAccess` | platform | `sales_channels.anonymous_access boolean not null default true` |
+   | `Migration20261018T104644OrganizationsChannelAccessBackfill` | `organizations` | Assigns every Organization its sales channels — see step 7 |
+   | `Migration20261018T141739AssetsLibraryAssetVersionsPermalinks` | `assets_library` | Eleven columns on `assets`, two tables for permalinks and storage clean-up |
+   | `Migration20261019T043854CartsChannelBackfill` | `carts` | Records a basket with no channel on the system-default channel |
+
+   An instance that declares `@endora-commerce/mod-admin-search` applies no migration for it: the
+   module owns no table.
+
+After the upgrade, before the instance takes traffic again:
+
+5. **Re-grant import and export.** Each entity on the Import / Export screen now asks for the
+   permission that guards the same rows in the module that owns them, where every entity used to ask
+   for `catalog:write`:
+
+   | Entity | Export | Import |
+   | --- | --- | --- |
+   | `products`, `categories` | `catalog:read` | `catalog:write` |
+   | `stock` | `inventory:read` | `inventory:write` |
+   | `customers` | `customers:read` | — |
+   | `orders` | `orders:read` | — |
+
+   A role that exported customers, orders or stock, or imported stock, on the strength of
+   `catalog:write` needs `customers:read`, `orders:read`, `inventory:read` or `inventory:write`
+   granted on **Admin roles** (`/admin-roles`). A role holding `catalog:read` can now export
+   products and categories. The screen and its sidebar entry open for a role holding any of the
+   codes in the table, and each entity card shows only the controls the role permits.
+6. **Grant `platform.api_description.read` to whoever reads the API description.**
+   `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` answer only an administrator whose role
+   holds the code, or an API key issued with it among its scopes; anybody else gets `401` (no
+   administrator session or key) or `403` (a session or key without the code). The platform
+   administrator's role holds every permission and needs nothing. A script or a build that fetches
+   the document — a client generator, a contract test — needs an API key with the
+   `platform.api_description.read` scope, issued by an administrator who holds the code, and sends
+   it as it sends any key. In the Admin UI the document is on the new **System → API description**
+   screen.
+7. **Read the sales-channel assignments of your Organizations, and keep every channel open until
+   the storefront is updated.** After the upgrade, every channel is open to anonymous visitors, as
+   every channel was before, and a signed-in customer is served on a channel only when the
+   customer's Organization is assigned to it. The migration
+   `Migration20261018T104644OrganizationsChannelAccessBackfill` assigned each Organization the
+   system-default channel and every channel it has at least one order on. On an instance with one
+   sales channel that is everybody, and nothing changes. On an instance with more than one, **an
+   Organization whose customers use another channel without having ordered there** — one that
+   registered on a second store and has not ordered yet, or one that only sent quote requests there
+   — is now refused on that channel at sign-in, with *"This account does not have access to this
+   store."* Open each such Organization in the admin and tick the channel in its **Sales channels**
+   panel. Then decide, per channel, whether it stays open to anonymous visitors —
+   [Sales channels and who may use them](#after-0-107-0-channel-access) says what each choice does —
+   but **switch *Open to anonymous visitors* off only once the storefront has the files under
+   [In an existing storefront](#after-0-107-0-storefront)**, and on the system-default channel only
+   once you know how the payment and carrier callbacks of modules from outside the release arrive.
+8. **On a storefront that serves more than one sales channel through the `X-Sales-Channel` header**
+   rather than `SALES_CHANNEL_HOST_MAP`, update the storefront before customers fill baskets again.
+   A basket now belongs to the channel it is filled on, and a storefront created by an earlier
+   release names the channel only on the backend calls that pass it explicitly; every other call is
+   resolved by the backend itself — the host map, else the system-default channel. Until this
+   release that made no difference to the basket, which lived on the default channel whatever store
+   it was used on. From now on the default channel's basket and the store's basket are two baskets.
+9. **Check who may hand out which permission.** An administrator now grants only permissions their
+   own role holds — in a role, in an administrator account's role, in an API key's scopes — and a
+   role the platform or a module seeds, `platform_admin` included, is changed only by a holder of
+   the wildcard `*`. If a delegated administrator manages roles, users or API keys for others, give
+   their role the permissions they hand out, or leave those changes to a holder of `*`.
+
+Whenever it suits you:
+
+10. **Decide about the quote push notifications.** On a shop with push notifications enabled, quote
+    requests now send them: when an administrator creates a request for a customer, modifies,
+    approves or cancels one, and when one expires. They never did, although the switch existed.
+    Turn the category off with `pwa.push_quote_status_enabled` on the PWA screen if you do not want
+    it.
+11. **Install `@endora-commerce/mod-admin-search` if you want the command palette to find
+    records** — orders, quote requests, opportunities, organizations, customers, products and
+    categories. It is optional; without it the palette finds screens and actions as before. Declare
+    it as [Adding a module that is new in a release](#adding-a-new-module) describes; it comes up
+    switched on.
+12. **Rebuild your own modules against this release.** Source that implements or constructs one of
+    the ports and shapes listed under [For module and overlay authors](#after-0-107-0-authors) does
+    not compile until it is changed, and a module that receives a provider's callback has a
+    declaration to add.
+13. **Update the storefront**, as [In an existing storefront](#after-0-107-0-storefront) describes.
+    The checkout, the product page and the sign-in work as before without it; closed stores, the
+    no-access screen, push choices, the price-negotiation lock and the comparison PDF's language do
+    not.
+
+#### For operators {#after-0-107-0-operators}
+
+##### Sales channels and who may use them {#after-0-107-0-channel-access}
+
+**Each sales channel has an *Open to anonymous visitors* switch**, on the channel form under
+**Sales channels**. It is on for every existing channel and for a new one.
+
+- **On** — anyone may browse the store; a signed-in customer may use it when their Organization is
+  assigned to the channel.
+- **Off** — the store serves signed-in customers only. An updated storefront takes a visitor who is
+  not signed in to the sign-in page from every page, with a notice that the store is for signed-in
+  business customers; nothing of the catalogue, the prices or the content is served to them, its
+  sitemap is empty, its `robots.txt` disallows everything and names no sitemap, and its `llms.txt`
+  names the store and says its content is for signed-in customers only. Business registration stays
+  on the sign-in page, and an Organization registered there is assigned the channel — so with
+  automatic moderation anyone who registers a business gets in, and with manual moderation nobody
+  does until an operator approves the Organization. Individual (B2C) self-registration is not
+  offered, and a federated sign-in (Google, Microsoft) creates no new account there. The list of
+  channels marks a closed channel with a *Sign-in required* badge. Showing prices to anonymous
+  visitors is a separate setting and only matters on an open store.
+
+The backend applies the rule to every request outside `/api/v1/admin/` once its channel is resolved:
+an anonymous request on a closed channel is answered `403 SALES_CHANNEL_SIGN_IN_REQUIRED`, and a
+customer request — an administrator acting as the customer included — on a channel its
+Organization is not assigned to `403 SALES_CHANNEL_NOT_PERMITTED`. Administrators and API keys are
+not subject to it. A few routes are reachable on every active channel because their caller has to
+reach them to become a shopper, or is not one: sign-in and sign-out, the second factor and
+federated sign-in, password reset, e-mail verification, business registration, invitations, the
+channel's identity, the language configuration, the dictionaries the registration form reads, the
+robots policy and crawler files, product-feed downloads and the newsletter links in e-mails.
+
+**Which Organizations may use a channel is set on the Organization**, in the new **Sales channels**
+panel of its page: read with `customers:read` or `customers:manage`, changed with
+`customers:manage`. An Organization keeps at least one channel. Each channel added or removed is
+one row in the audit log, and a change applies at once on the server that made it and on every
+other within 30 seconds. A customer whose Organization is not assigned is refused at sign-in —
+password, second factor or federated sign-in — before a session is created; one whose assignment is
+removed while signed in sees, on an updated storefront, a *No access to this store* screen listing
+the stores they may use, each linked when the channel's **Storefront URL** setting is filled in.
+
+**Which channel a new Organization gets.** A business registered on a store gets that store's
+channel; a personal Organization created for an individual registration or a federated sign-in gets
+the channel the visitor registered on; an Organization created in the admin gets the channels chosen
+on its form; any other creation path gets the system-default channel. Accepting an invitation
+changes no assignment. **New organization** (`/organizations/new`, a button on the roster and the
+palette action `new-organization`, `customers:manage`) creates an Organization in the admin — a
+duplicate tax id is refused, as in registration.
+
+**Before closing the system-default channel**, know where your provider callbacks arrive. A payment
+gateway's notification, a carrier's webhook or a provider's return URL arrives without a session and
+usually without a channel, so it is an anonymous request on the system-default channel: unless the
+module that receives it declares the route open, it is refused with `403` once that channel is
+closed, and the provider's notifications stop arriving. `POST /api/v1/payments/receive` and
+`POST /api/v1/shipments/receive` are called with an administrator's session or an API key, which the
+rule does not apply to; a gateway or carrier module that receives the provider's own request must
+declare that route, as [For module and overlay authors](#after-0-107-0-authors) describes.
+
+See [Opening and closing a store to anonymous visitors](./modules/sales_channels/admin-usage.md#anonymous-access)
+and [Sales channels](./modules/organizations.md#sales-channels) on the Organizations page.
+
+##### Baskets, prices and order placement
+
+**A basket belongs to the store it is filled on.** A customer holds one active basket per sales
+channel, priced, promoted and checked for "sold on request only" on that channel, where every basket
+used to be created and priced on the system-default channel. An anonymous visitor's basket token
+names a basket on one store only, and filling a basket on another store starts a new one. Merging
+at sign-in merges only the anonymous basket of the store signed in on. Placing an order with a
+basket of another channel is refused with `422 ORDER_SALES_CHANNEL_MISMATCH` before anything is
+reserved or written, and the basket is kept. The migration
+`Migration20261019T043854CartsChannelBackfill` recorded every basket that had no channel on the
+system-default one; where a customer already had an active basket there, the channel-less one is
+left as it was and is no longer reached. See
+[One basket per store](./modules/carts.md#one-basket-per-store).
+
+**A basket line's price is always the price for its current quantity**, and order placement checks
+it:
+
+- adding more of a product, changing a quantity, merging a basket at sign-in and reordering store
+  the price for the resulting quantity, so a quantity bracket applies to the quantity ordered, and
+  a reorder is priced at today's prices;
+- a product that no price list and no price of its own prices is refused with
+  `422 CART_PRODUCT_UNPRICED`, where it used to be added at `0.00`; a product sold on request only
+  is refused with `400 CART_PRODUCT_QUOTE_ONLY` whether or not a price list holds it;
+- a line seeded from an accepted quote request keeps the agreed price only at the agreed quantity,
+  and is priced from the list at any other. A basket converted from a quote **before** this release
+  carries no agreed quantity, so its lines are priced from the list at placement; converting the
+  quote again restores the agreed prices;
+- at placement, a line whose stored price is no longer the price it may be ordered at answers
+  `409 CART_PRICE_CHANGED`. Nothing is written, the basket is brought up to date, and the buyer
+  places the order again after reviewing it. An existing storefront shows the refusal on its
+  checkout failure page with the error code in front of the sentence; an updated one shows the
+  sentence alone.
+
+See [Line prices](./modules/carts.md#line-prices).
+
+**Create order in the admin uses the channel you choose.** `POST /api/v1/admin/orders` checks the
+products against the assortment of the order's channel, not the admin request's, and refuses a
+sales channel that does not exist with `404`, where it used to place the order on the system-default
+channel. The **Create order** screen shows *Items* and the summary once the customer and the channel
+are chosen, adds products through the shared product browser (up to 200 at once) or a quick search,
+and says per line why a product cannot be ordered: the customer may not see it, or it is not in the
+channel's assortment. The order preview likewise refuses an unknown channel with `404`.
+
+##### Permissions and who may grant them
+
+- **Import and export** follow the owning modules' permissions — step 5 has the table.
+- **The API description** is read with `platform.api_description.read` — step 6. The new screen
+  **System → API description** (`/api-description`, also in the command palette) shows the
+  document's title, version and number of endpoints, downloads it as JSON, and opens the
+  interactive reference on the API's own address. The reference page loads a pinned
+  `swagger-ui-dist` release, `5.33.3`, from jsDelivr, with an integrity digest on each file, where
+  it used to load whichever release was current.
+- **An administrator grants only what their role holds.** Saving a role that holds a permission the
+  actor lacks, or changing a role that already does, answers `403 ADMIN_ROLE_GRANT_EXCEEDED`, naming
+  the codes; a seeded role is changed only by a holder of `*` (`409 ADMIN_ROLE_PROTECTED`
+  otherwise). Assigning a role answers `403 ADMIN_ROLE_GRANT_EXCEEDED` unless the actor holds every
+  permission it grants, and an administrator whose role holds something the actor lacks is not
+  edited, given a password, deactivated or deleted by them (`403 ADMIN_USER_OUTRANKS_ACTOR`). An
+  API key is issued only with scopes the issuing administrator's role holds
+  (`403 API_KEY_SCOPE_NOT_HELD`).
+- **New permissions.** `document_templates:read` and `document_templates:write` (a one-time step at
+  the first start gives every role holding `invoices:read` the first, and every role holding
+  `invoices:write` the second as well, and records it in the audit log), `admin_search:configure`
+  (which fields global search reads, when that module is installed), `cms.translate` (the Page
+  Builder's *Translate* action) and `platform.api_description.read`. `invoices:write` is now
+  labelled *Issue/correct invoices and configure invoicing*.
+
+##### Sign-in and accounts
+
+- **The `mfa` module cannot be switched off while administrators are required to use a second
+  factor.** Switching it off on **Modules** answers `409 MFA_DEACTIVATION_BLOCKED` while
+  `mfa.admin.totp_enforced` is on, and changes nothing; turn the requirement off first. Switching
+  `mfa` back on is never refused.
+- **Changing where a stored credential sends its secrets requires entering the secrets again.**
+  Saving a credential whose endpoint field changed — an LLM's *Base URL*, an SMTP host — answers
+  `422 CREDENTIAL_SECRET_REENTRY_REQUIRED` unless every stored secret of the record is entered again
+  in the same save; the form marks those fields as soon as the endpoint is edited. A credential
+  saved without changing its endpoint keeps its secrets as before.
+- **Customer sign-in, the customer second factor and password-reset requests are limited per
+  account**, as administrator sign-in already was: 50 wrong passwords in 30 minutes from a device
+  the account has not signed in on, 10 from one it has; 20 wrong second-factor codes in 30 minutes,
+  10 from a known device; 5 reset requests an hour. Beyond the limit the answer is
+  `429 CUSTOMER_AUTHENTICATION_THROTTLED` with `Retry-After`. A completed sign-in sets the
+  `b2b_customer_device` cookie that marks a known device — an existing storefront does not forward
+  it, so its shoppers are counted on the first budget until the storefront is updated. Asking for a
+  new reset link retires the earlier unused ones.
+- **Federated sign-in follows the password sign-in's rules**, in the storefront and the Admin UI:
+  it completes only in the browser that started it, an account with a second factor is handed to
+  the second-step screen instead of being signed in, and a blocked customer account is refused with
+  the password sign-in's sentence. A customer session whose account is blocked, deleted or gone is
+  treated as signed out.
+- **A wrong code or password on the signed-in two-factor screens no longer signs the administrator
+  out.** Confirming the set-up, switching the second factor off and regenerating recovery codes
+  answer a wrong code with `403 MFA_INVALID_CODE` and a wrong password with
+  `403 CURRENT_PASSWORD_INVALID`; they answered `401`, which the Admin UI treats as an expired
+  session.
+
+##### Media library
+
+- **HTML, XHTML, XML (XSL included) and JavaScript files cannot be uploaded**, whatever
+  `assets.allowed_file_types` says: `415 ASSET_UPLOAD_TYPE_NOT_ALLOWED`, judged by the declared type
+  and by the extension. SVG is still accepted, and is stored as `image/svg+xml`. A file of these
+  types uploaded earlier stays in the library and is served as a download.
+- **Files are served with a fixed content policy header** and `X-Content-Type-Options: nosniff`;
+  raster images, SVG, video, audio, PDF and plain text are shown in the browser, every other type
+  is downloaded. A private asset on S3 or GCS is redirected to its storage only with a valid signed
+  link, as a local one already was (`403 ASSET_ACCESS_DENIED` otherwise).
+- **An asset's file can be replaced in place**, keeping its id, folder, label, visibility, every
+  reference and every URL already handed out; the replaced file stays restorable as the previous
+  version for `assets.soft_delete_retention_days`. An asset can have a **permalink**, served at
+  `/assets/file/<permalink>`. Both are in the asset's drawer, behind `assets.write`; the library is
+  also in the command palette as *Assets library*.
+- **Embedded asset URLs carry `?v=<content version>`**, so a replaced file is picked up and the
+  embed can be cached for a year; `GET /assets/file/<id>` is now sent `Cache-Control: public,
+  no-cache`. A CMS page cached before a replace can serve the previous version for up to five
+  minutes.
+- **Assets in the trash are deleted for good** after `assets.soft_delete_retention_days` — step 2.
+  Each run of the sweep writes one `assets_library.retention.sweep` log line.
+
+See [Which URLs are stable](./modules/assets-library/index.md#which-urls-are-stable) and
+[Retention and purge](./modules/assets-library/index.md#retention-and-purge).
+
+##### Documents and PDFs
+
+- **Document templates** (`document_templates`) is where PDF layouts are designed, in the Page
+  Builder, per document type and per sales channel, one layout per language. It serves the invoice,
+  the product comparison and the quote request. The invoice template screens moved there:
+  `/invoices/templates` redirects to it, and the e-mailed invoice PDF is now rendered exactly like
+  the download. See [Document templates](./modules/document-templates.md).
+- **The quote request screen offers *Export PDF* and *Send PDF to customer*** in every state while
+  document templates are switched on. A send e-mails the PDF to up to five addresses through the new
+  transactional e-mail `quote_request_pdf`, editable and switchable like every other, and appears on
+  the quote's history.
+- **The comparison PDF** follows the template, in the language the buyer browses in when the
+  channel offers it: a buyer browsing in Polish now gets a Polish PDF.
+
+##### Quote requests
+
+- **Every quote line records a reference price** — what the customer would pay on a normal order on
+  the request's channel — shown in the admin beside the customer's proposal and the agreed price.
+  A cart converted into a quote request no longer records the cart's prices as the customer's
+  proposal.
+- **A price negotiation lock per customer.** On the organization (allowed by default) and, as an
+  override, on the customer account, an administrator decides whether customers may propose prices.
+  A create or draft edit that proposes a price while the request owner may not is refused with
+  `422 RFQ_PRICE_PROPOSAL_NOT_ALLOWED`. The panels need `customers:read` to be seen and
+  `customers:manage` to be changed.
+- **A readable history** on the quote request screen, merging the records of one decision and
+  naming who acted.
+- **A sales representative outside a request's organization gets `404`**, as for a request that
+  does not exist, where it got `403`.
+- **At most 200 lines** on a customer create or draft edit (`400` beyond). A customer may edit a
+  pending draft repeatedly until an administrator modifies it, up to 30 edits a minute per request.
+
+##### Pricing, catalogue and lists
+
+- **Price lists gain a price matrix** (*Price matrix* tab on a price list): one entry prices a
+  product, a category, an attribute value, a category and an attribute value, or every product,
+  for an optional organization and a quantity window, at a fixed price or a percentage. Attribute
+  selections use attributes flagged *Price list rules*. See [Price lists](./modules/price_lists.md).
+- **Adding products to a price list** opens the shared product browser and adds up to 200 products
+  in one step. The system *Default* price list still takes no products this way.
+- **Storefront catalogue reads can be priced in the shopper's currency** when the channel lists it.
+  In another currency than the channel's default, a product that no price list prices has no listing
+  price, rather than its own price quoted in the wrong currency.
+- **Saved views** on the product list and the quote request list, and on the order list a save and
+  delete through dialogs instead of browser prompts. Two of one administrator's views on one list
+  may not differ only in letter case.
+- **A newly created product is searchable at once**, without a first edit.
+- **The CMS lists** — Pages, Blocks, Templates, Hooks — are in the command palette.
+
+##### Notifications, newsletter and AI
+
+- **Status push notifications.** Two settings, `pwa.push_order_status_enabled` and
+  `pwa.push_quote_status_enabled` (on by default, global and per channel), switch the two
+  categories; a customer chooses for their own account on an updated storefront. Order pushes are in
+  the channel's language, name the status as the shop does and open the order. Quote pushes start —
+  step 10.
+- **Newsletter open and click tracking** is switched by two new settings,
+  `newsletter.tracking.opens_enabled` and `newsletter.tracking.clicks_enabled`, both off by default.
+  With them off, campaigns are sent untracked, as before.
+- **The Page Builder can translate** the canvas of a language tab, or a selection, with the LLM
+  configured under *Settings → Page Builder* (`cms.page_builder.translation.enabled`, off by
+  default), behind `cms.translate`. Every request is recorded in the audit log.
+- **LLM configurations reach DeepSeek and any OpenAI-compatible endpoint**, through the new provider
+  *OpenAI-compatible (custom endpoint)*; every LLM *Base URL* must be an absolute `http://` or
+  `https://` URL.
+
+##### Everything else an operator can see
+
+- **Admin global search**, when `@endora-commerce/mod-admin-search` is installed (step 11): the
+  palette searches records after the minimum length (`admin_search.minimum_query_length`, 3 by
+  default), each type following the visibility of its own admin list; `/global-search` shows the
+  full results. See [Admin search](./modules/admin-search.md).
+- **The Settings screen** no longer shows one sales channel's values under another channel's heading
+  when the list was still loading as "Editing for" changed.
+- **The sidebar** shows the release number in a section of its own, under the logo.
+- **E-mail previews** in the e-mail editor and the newsletter campaign preview are drawn in frames
+  that run no scripts.
+- **`order.cancelled.v1` is emitted** when an order is cancelled, so a subscriber written against it
+  now runs.
+
+#### For API clients and integrators {#after-0-107-0-api}
+
+- **The API description is gated.** `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` need an
+  administrator session whose role holds `platform.api_description.read` or an API key with that
+  scope: `401 UNAUTHORIZED` without either, a customer session included, `403 FORBIDDEN` without the
+  code. Both answers carry `Cache-Control: private, no-store`. `GET /api/v1/admin/api-description`
+  serves the same document on the admin namespace. `apiKeyScopeSchema` accepts the new scope.
+- **Sales-channel access.** Every storefront request is decided after its channel is resolved:
+  `403 SALES_CHANNEL_SIGN_IN_REQUIRED` for an anonymous request on a closed channel,
+  `403 SALES_CHANNEL_NOT_PERMITTED` for a customer whose Organization is not assigned, both with
+  `details.channelCode`. `POST /api/v1/auth/customer/login` answers the second after a correct
+  password (a wrong one is still `401` first) and sets no cookie.
+  `GET /api/v1/storefront/sales-channel`
+  carries `anonymousAccess`, and the new `GET /api/v1/storefront/sales-channel/access` tells the
+  caller whether it may use the store and, for a refused customer, which stores it may use; it never
+  refuses. Admin: `GET`/`PUT /api/v1/admin/organizations/:id/sales-channels`,
+  `GET /api/v1/admin/organizations/sales-channel-options`, `POST /api/v1/admin/organizations`;
+  `anonymousAccess` on the sales channel admin shapes (`true` by default on create).
+  `GET /api/v1/storefront/seo/crawler-files` carries an optional `anonymousAccess` — read its
+  absence as `true`.
+- **Baskets per channel.** Every storefront cart route addresses the basket of the request's channel;
+  a line of another channel's basket answers `404`. Order placement with a basket of another channel
+  answers `422 ORDER_SALES_CHANNEL_MISMATCH`.
+- **Order placement checks prices.** `409 CART_PRICE_CHANGED` with `details.lines` — `productId`,
+  `variantId`, `quantity`, `previousUnitPrice`, `currentUnitPrice` (`null` when the line may no
+  longer be ordered) and `currency`. Re-read the basket and place again. Adding a product with no
+  price answers `422 CART_PRODUCT_UNPRICED`.
+- **Admin orders.** `POST /api/v1/admin/orders` and `POST /api/v1/admin/orders/preview` answer an
+  unknown `salesChannelId` with `404 NOT_FOUND`. The preview reports two more reasons a line is
+  unavailable, `PRODUCT_NOT_VISIBLE_TO_CUSTOMER` and `PRODUCT_NOT_IN_SALES_CHANNEL`, one per line in
+  the order `ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE` gives; `messages[].code` stays a string, so map
+  a code you do not know to a generic "unavailable".
+- **Import and export.** `GET /api/v1/admin/import-export/entities` lists only what the caller may
+  export or import, each entry with `canExport` and `canImport`; the export and import routes answer
+  `403` without the entity's own permission, and `405` for an import of an export-only entity the
+  caller may export.
+- **Changed status codes.**
+  - The two-factor self-service routes (`…/activate`, `…/disable`, `…/recovery-codes/regenerate`
+    under `/api/v1/admin/account/mfa` and `/api/v1/account/mfa`) answer `403 MFA_INVALID_CODE` and
+    `403 CURRENT_PASSWORD_INVALID`, where they answered `401`. Sign-in challenges keep their `401`.
+  - A sales representative outside a quote request's organization gets `404` on every admin quote
+    request route.
+  - A rate-limited request answers `429 RATE_LIMITED` in the standard error envelope, with
+    `Retry-After`, where it answered `500 INTERNAL`.
+  - A body the server cannot parse answers `400` (empty with `Content-Type: application/json`, or
+    malformed), `413` (over the body limit) or `415` (no parser for the type), each with
+    `VALIDATION_FAILED`, where it answered `500`.
+  - `PATCH /api/v1/admin/cms/hooks/:id/attachments/:blockId` for a block not attached answers
+    `404 CMS_BLOCK_NOT_FOUND`.
+  - `POST /api/v1/admin/assets` with two file parts answers `201` for the first one.
+- **New refusals.** `415 ASSET_UPLOAD_TYPE_NOT_ALLOWED` for an HTML, XHTML, XML or JavaScript
+  upload; `409 MFA_DEACTIVATION_BLOCKED` on switching `mfa` off while admin TOTP is enforced;
+  `422 CREDENTIAL_SECRET_REENTRY_REQUIRED` (`details.fields`) on changing a credential's endpoint
+  without its secrets; `403 ADMIN_ROLE_GRANT_EXCEEDED`, `409 ADMIN_ROLE_PROTECTED`,
+  `403 ADMIN_USER_OUTRANKS_ACTOR` and `403 API_KEY_SCOPE_NOT_HELD` from the grant rule;
+  `429 CUSTOMER_AUTHENTICATION_THROTTLED` and `503 CUSTOMER_AUTHENTICATION_UNAVAILABLE` on customer
+  sign-in; `422 RFQ_PRICE_PROPOSAL_NOT_ALLOWED`; and `400` for more than 200 lines on a customer
+  quote request create or draft edit.
+- **Analytics ingest.** `POST /api/v1/analytics/events` stores the identity the server resolved —
+  the signed-in customer, the request's channel — and ignores `customerAccountId`, `organizationId`
+  and `salesChannelId` in the body, which still validate. It is limited to 60 batches a minute per
+  client address.
+- **Newsletter tracking links** are `GET /api/v1/newsletter/open.gif?token=…` and
+  `GET /api/v1/newsletter/click?token=…&u=…`. The former path forms, which a signed token was too
+  long to reach, are gone.
+- **Asset URLs.** `url` and `storageUrl` of a public asset carry `?v=<contentVersion>`; the stable
+  form is the new `fileUrl`. Summaries and details gain `fileUrl`, `permalink`, `permalinkUrl` and
+  `contentVersion`; details gain `previousVersion`, `retentionDays` and `replaceable`. New routes:
+  `POST /api/v1/admin/assets/:id/replace`, `POST …/previous-version/restore`,
+  `PUT`/`DELETE …/permalink`, `GET /api/v1/admin/assets/folders/:folderId/permalink-count`.
+- **Removed: the invoice template API.** `/api/v1/admin/invoice-templates` and its routes are gone;
+  use `/api/v1/admin/document-templates` with `documentType: 'invoices.invoice'`.
+- **New in this release**, all additive: the quote request history
+  (`GET /api/v1/admin/quote-requests/:id/history`), price negotiation
+  (`…/organizations/:id/quote-price-negotiation`, `…/customers/:id/quote-price-negotiation`,
+  `GET /api/v1/quote-requests/price-negotiation`), the quote request PDF
+  (`/api/v1/admin/quote-requests/:id/pdf`, `…/pdf/send`, `…/document-templates`,
+  `…/document-template`), the price matrix (`/api/v1/admin/price-lists-engine/:id/matrix`) and bulk
+  add (`…/:id/products/bulk-add`), saved views (`/api/v1/admin/catalog/products/list-views`,
+  `/api/v1/admin/quote-requests/list-views`), push preferences
+  (`GET`/`PUT /api/v1/storefront/pwa/preferences`), global search
+  (`/api/v1/admin/global-search…`), Page Builder translation
+  (`/api/v1/admin/cms/page-builder/translat…`), `?currency=` on the catalogue reads, and
+  `salesChannelId` on `GET /api/v1/admin/products/:id/resolved-price`, which now answers `404` for a
+  buyer that does not exist or that a sales representative may not see.
+- **Order saved views.** Items carry `ownedByCaller` and `canModify`; a name taken by another of the
+  owner's views answers `409 ORDER_SAVED_VIEW_NAME_TAKEN`; a `PATCH` that changes nothing writes
+  nothing; a non-UUID id answers `404`; no admin session answers `401`.
+
+#### For module and overlay authors {#after-0-107-0-authors}
+
+**Declare every route a visitor reaches before signing in, or that arrives with no storefront
+channel, open to the sales-channel access rule.** That covers sign-in, registration and recovery
+routes, links in e-mails, feed downloads and — the case easiest to miss — **payment-provider and
+carrier callbacks and provider return URLs**:
+
+```ts
+app.post(
+  '/api/v1/payments/acme/notify',
+  { config: { salesChannelAccess: 'open' } },
+  async (request, reply) => {
+    // Still resolved to a channel, and still behind this route's own guards.
+  },
+);
+```
+
+Without it the route is refused with `403` the moment an operator closes the channel it resolves
+to — for a callback, the system-default channel. The option is typed on Fastify's
+`FastifyContextConfig` through the platform's `./http` barrel. It skips the access step only: the
+route is still resolved to a channel and keeps its own guards. Do not declare it on anything that
+shows or changes a store's catalogue, prices, basket or orders. `SalesChannelAccessPort`
+(`salesChannelAccessPort`, `./kernel`) decides the rule for a path that has no session yet. See
+[Channel access: routes that must stay open](./modules/sales_channels/developer-guide.md#channel-access-routes-that-must-stay-open).
+
+**Changes that stop code compiling or composing.** Source that implements, constructs or calls one
+of these has to change:
+
+| What | Change |
+| --- | --- |
+| `CartCustomerContext` (`@endora-commerce/contracts`) | `salesChannelId` is **required**: every caller of `CartReadPort` / `CartWritePort` names the channel whose basket it means |
+| `PersonalOrganizationProvisionInput` (`@endora-commerce/mod-organizations/ports`) | required `salesChannelId: string \| null` |
+| `CatalogProductReadPort` | new required `listProductIdsByAttributeValue({ key, value, match })` |
+| `OrderReadPort` | new required `findStatusDefinition(code)` |
+| `DocumentRenderPort` | new required `listChoices({ documentType, salesChannelId })` |
+| `CartPlacementApplyPort` (`@endora-commerce/mod-carts/ports`) | new `findPriceDrift` and `refreshLinePrices` |
+| `CartService` | new required `ProductDisplayModePort` constructor argument after `channelMembership`; `getOrCreateForAnon(em, token, salesChannelId)` returns `Cart \| null` |
+| `CartsDeps` | `cartCouponService`, `cartConversionService`, `pushLineToShoppingList` and `appendShoppingListToCart` are required |
+| `PriceListTargetReads` | required `catalogAttributeRead` — for a hand-built `PriceListService` or `PricingService` |
+| `MfaModuleOptions` | required `customerChannelAccess` |
+| `AnalyticsIngestService.ingest` | required `context` (`IngestContext`) |
+| `customerOrgResolver` (`mod-customer-accounts`) | answers `{ organizationId, active }` or `null`; upgrade `mod-auth` with it |
+| `customerSocialLoginPort` | `resolveByEmail` answers `{ id, organizationId, blocked }`, `autoCreate(email, { salesChannelId })` answers `{ id, organizationId }` |
+| `AssetSummary`, `AssetDetail`, `AssetRecord` | new required members (`fileUrl`, `permalink`, `permalinkUrl`, `contentVersion`; `retentionDays`, `replaceable`) for code that builds one |
+| `OrderSavedView` | required `ownedByCaller` and `canModify` for code that builds one |
+| `buildServer` | no longer mounts the API description routes; read `app.apiDescription()` in-process, and `registerOpenApiRoutes` is gone |
+
+**New ports and seams.** `BuyerLinePricePort` (`buyerLinePricePort`, from `price_lists`) — the
+net unit price a buyer would pay per line on a channel; `ProductDisplayModePort`
+(`productDisplayModePort`); `MfaDeactivationGuardPort`; `CustomerAuthenticationThrottlePort` and,
+on `./kernel`, `AuthenticationAttemptThrottle`; `AdminSearchProviderRegistryPort`
+(`adminSearchProviderRegistry`) — push a provider from a contribution-only boot hook to make a
+module's records findable; `DocumentTypeRegistryPort` (`documentTypeRegistry`) and
+`DocumentRenderPort` (`documentRenderPort`) — register a document type and render it;
+`AdminRolePort.upsertByCode(input, { grantor })` — pass the grantor for a write made on an
+administrator's behalf; `@endora-commerce/llm-client`'s `createLlmAdapter`, moved out of
+`mod-prompt-actions`. `BlockDefinition` gains optional `translatable` paths, and a block without
+them is never sent to a model. A credential field that names where secrets are sent declares
+`endpoint: true` unless it is a `format: 'url'` field, which counts by default.
+
+**`order.cancelled.v1` is emitted**, with a payload grown from `{ orderId }` to `orderId`,
+`organizationId`, `salesChannelId`, `from`, `actor`, `reason` and `businessId`. It stays on the
+in-process bus; outbound webhooks keep delivering a cancellation as `order.status_changed.v1`.
+
+**Admin kit.** `ProductBrowserDialog`, `ProductBrowserTrigger` and `productSelectability`;
+`ModalDialog` and `SavedViewsControl`; `AssetUploader` gains `upload` and `accept`. Their strings
+are in the `core` bundle of `@endora-commerce/mod-i18n` at this release.
+
+**Peer dependencies.** `mod-quote-requests` declares `@fastify/rate-limit` (`^10`), which the
+platform host already registers; `mod-cms` and `mod-prompt-actions` declare
+`@endora-commerce/llm-client`, which pnpm installs with them as it does the other peers.
+
+#### In an existing storefront {#after-0-107-0-storefront}
+
+**An existing storefront is not changed by upgrading.** `endora new storefront` copies the
+reference once and the project owns it afterwards; the upgrade moves its packages, which the files
+below need at `0.107.0`. Until its files are updated it keeps working against the upgraded backend
+on a store open to anonymous visitors: catalogue, basket, checkout and sign-in behave as before,
+within the limits named in each group. What it does not do is listed per group. Create a storefront
+to copy from the way [Module blocks in an existing storefront](#storefront-block-renderers) does,
+and take the groups in this order. Where you have edited a file, apply its difference by hand;
+`diff -ru` between your storefront and the new one shows each difference beside your own changes.
+Several files belong to more than one group — take the new version once.
+
+**1. Sales-channel access — required before any channel is closed to anonymous visitors, and on a
+storefront that serves several channels through `X-Sales-Channel`.** The storefront names its
+channel on every backend call, sends a visitor of a closed store to the sign-in page, shows a
+refused sign-in and the no-access screen, and stops offering individual registration on a closed
+store. Without it a closed store answers the storefront's pages with `403` and a refused customer
+has no screen that says why.
+
+- **new**: `components/ChannelAccessDenied.tsx`, `lib/api/channel-headers.ts`,
+  `lib/auth/sign-in-errors.ts`, `lib/channel/channel-header.ts`, `lib/channel/channel-identity.ts`,
+  `lib/channel/closed-store.ts`, `lib/actions/sign-out.ts`, `lib/dictionary/browser.ts`,
+  `lib/dictionary/types.ts`, `components/account/SignOutButton.tsx`, `lib/cart-action-failure.ts`;
+- **changed**: `middleware.ts` — it stamps `x-sales-channel` with the channel the backend resolves
+  for this storefront when no proxy did, and sends a visitor of a closed store to sign in;
+  `app/layout.tsx`, `app/page.tsx`, `app/sitemap.ts`, `app/globals.css`;
+  `app/(auth)/login/page.tsx`, `app/(auth)/login/mfa/page.tsx`,
+  `app/(auth)/register-customer/page.tsx`; `app/(catalog)/c/[slug]/page.tsx`,
+  `app/(catalog)/catalog/page.tsx`, `app/(catalog)/p/[slug]/page.tsx`,
+  `app/(catalog)/search/page.tsx`; `app/compare/page.tsx`, `app/compare/share/[token]/page.tsx`;
+  `app/pwa/subscriptions/route.ts`; the components `CompareToggle`, `ComparisonTable`, `Header`,
+  `MfaCodeForm`, `ProductCard`, `ProductCardActions`, `ProductGrid`, `SearchAutocomplete`,
+  `SharedComparisonTable`, `SocialLoginButtons`, `analytics/AnalyticsProvider`,
+  `analytics/GtmProvider`, `inventory/NotifyWhenAvailableDialog` and
+  `mobile/MobileSearchOverlay`; and under `lib/`: `analytics/gtag.ts`, `analytics/gtm/dataLayer.ts`,
+  `api/cart.ts`, `api/client.ts`, `api/comparisons.ts`, `api/mutations.ts`, `api/newsletter.ts`,
+  `api/pwa-server.ts`, `api/rfq.ts`, `api/sales-channel.ts`, `api/search.ts`,
+  `api/speculation-rules.ts`, `dictionary/DictionaryProvider.tsx`, `dictionary/client.ts`,
+  `i18n/messages.ts` and `server-context.ts`. The same change touches `lib/seo/crawler-policy.ts`
+  and `lib/seo/crawler-file-response.ts`, which exist only in a storefront that took the SEO groups
+  of 0.106.0; group 2 replaces them.
+
+The reference holds every backend call to a channel helper with a static test; copy the
+storefront's tests under `test/` with the files if you keep them.
+
+**2. Crawler files on a closed store — assumes the three SEO groups of
+[0.106.0](#after-0-106-0-storefront) and group 1 above.** Replace `lib/seo/crawler-policy.ts`,
+`lib/seo/crawler-file-response.ts`, `lib/seo/robots-txt.ts`, `lib/seo/llms-txt.ts` and
+`lib/seo/llms-txt-base.ts`, and add the new function `renderClosedStoreRobotsTxt` to
+`lib/seo/robots-system-rules.ts` — the rest of that file, `ROBOTS_SYSTEM_RULES` with any rules of
+your own, does not change. On a closed store `robots.txt` then disallows everything and names no
+sitemap, and `llms.txt` names the store and says its content is for signed-in customers only; the
+operator's custom instructions and additional content are kept and come back when the store is
+opened. An open store's files do not change.
+
+**3. Customer sign-in limits.** `lib/session.ts`, `lib/api/auth.ts`, `lib/api/mfa.ts` and
+`app/(auth)/password-reset/request/page.tsx`: the storefront forwards the `b2b_customer_device`
+cookie with the sign-in, the second step and the reset request, and keeps the one the backend sets.
+Without them every attempt is counted on the budget of a device the account has not signed in on.
+
+**4. Push notification choices and sign-out.** `app/(account)/account/page.tsx`,
+`app/(account)/layout.tsx`, `components/account/SignOutButton.tsx`,
+`components/pwa/PushNotificationsToggle.tsx` (new), `components/pwa/PushPreferencesForm.tsx` (new),
+`components/pwa/PushOptIn.tsx`, `lib/api/pwa.ts` and `lib/api/pwa-server.ts`. The account profile
+gains the order and quote push choices and a switch to turn pushes off; signing out releases the
+browser's push subscription. Without them a customer receives both categories the operator offers.
+
+**5. Price-negotiation lock on the quote request draft.** `app/(commerce)/quote-request/actions.ts`,
+`app/(commerce)/quote-request/page.tsx`, `components/rfq/RfqDraftView.tsx` and `lib/api/rfq.ts`.
+Without them a customer whose proposals are locked is shown the proposal field and is refused with
+`422` on sending one.
+
+**6. Smaller fixes.** `app/(commerce)/checkout/page.tsx` — the failure page shows the backend's
+sentence, `CART_PRICE_CHANGED` included, without the code in front; `app/(catalog)/p/[slug]/page.tsx`,
+`lib/cart-action-failure.ts` and `lib/i18n/messages.ts` — the product page words its basket failures
+in the shopper's language; `app/compare/page.tsx`, `components/ComparisonTable.tsx` and
+`lib/api/comparisons.ts` — the comparison PDF is asked for in the shown language and rows;
+`lib/api/catalog.ts` — catalogue reads in the selected currency; `components/Breadcrumbs.tsx` and
+`app/(catalog)/p/[slug]/page.tsx` — the product and breadcrumb structured data rendered through
+`JsonLd`.
+
+Then run `pnpm run typecheck`, `pnpm test` and `pnpm run build`, and delete the directory you copied
+from. **A custom storefront** that is not derived from the reference has three things to do to
+work with a closed store: name its channel on every backend call, browser calls included; send a
+visitor to sign in on `403 SALES_CHANNEL_SIGN_IN_REQUIRED`; and show
+`403 SALES_CHANNEL_NOT_PERMITTED`, reading `GET /api/v1/storefront/sales-channel/access` for the
+stores the customer may use.
+
+How far this has been exercised: what this section says is what the release's changesets state,
+read against the source of the release — the manifests, the migrations, the routes and the
+reference storefront's history between `v0.106.0` and `0.107.0`. No instance had been upgraded from
+`0.106.0` with `pnpm run upgrade 0.107.0`, no instance declaring `mod-invoices` had had
+`mod-document-templates` added after it, and no storefront created by an earlier release had the
+groups of files above applied to it, when this section was written; the order of the steps and the
+storefront edits are untried.
 
 ## An instance that is mixed from the start
 

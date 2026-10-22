@@ -1,5 +1,411 @@
 # @endora-commerce/contracts
 
+## 0.107.0
+
+### Minor Changes
+
+- fcf4d09: New shapes for selecting many products at once in the admin, and named codes for the admin order preview.
+
+  **For a consumer of the contracts.**
+
+  - `ADMIN_PRODUCT_SELECTION_MAX` (`200`) is the most products one admin selection may carry. The
+    admin product browser stops at it, and every request that submits such a selection in one call
+    uses it as its upper bound.
+  - Bulk add to a price list: `bulkAddPriceListProductsRequestSchema` (`{ productIds }`, 1 to
+    `ADMIN_PRODUCT_SELECTION_MAX` uuids), `bulkAddPriceListProductsResultSchema`
+    (`{ added, unchanged, failed: [{ productId, reason }] }`),
+    `bulkAddPriceListProductFailureReasonSchema` (`'product_not_found'`),
+    `bulkAddPriceListProductsResponseSchema` (the result under `data`), and
+    `priceListIdParamsSchema` (`{ id }`) for the price-list routes, each with its inferred type.
+    They describe `POST /api/v1/admin/price-lists-engine/:id/products/bulk-add`, which adds the
+    products to the list in one audited write and reports a product already on the list as
+    `unchanged`, so sending the same request again is safe.
+  - Admin order preview: `adminOrderPreviewMessageCodeSchema`, its type
+    `AdminOrderPreviewMessageCode`, and `ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE` name the four
+    reasons a preview line can be unavailable, in the order they are decided: `PRODUCT_NOT_FOUND`,
+    `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`, `PRODUCT_NOT_IN_SALES_CHANNEL`, `QUOTE_ONLY`. A line carries
+    at most one message, the first that applies. The two middle codes are new answers of the
+    preview.
+
+  **Nothing changes on the wire for existing fields.** `adminOrderPreviewResponseSchema`'s
+  `messages[].code` is still a plain string, not narrowed to the new enum, so a client built
+  against this version keeps parsing an answer that carries a code it does not know yet — map an
+  unknown code to a generic "unavailable" reason rather than failing.
+
+  The documentation of `isProductVisibleTo` now records why the admin order preview may report
+  visibility and sales-channel assortment as two distinct codes while every buyer-facing answer
+  keeps a single "product not found".
+
+- 70bb5e5: New quote-request shapes for reference prices, a readable history and a per-customer price negotiation lock. The new shapes and fields are additive, and existing callers and structural stubs compile unchanged — with **one behaviour change**: the customer create and draft-edit schemas now cap `items`.
+
+  - **Behaviour change — at most 200 items.** `createQuoteRequestSchema` and `patchQuoteRequestSchema` accept at most 200 `items`; a longer list, which validated before, now fails validation (the API answers `400`). A caller that sends more than 200 lines must split the request. Their strictness is unchanged — an unknown key in the create body is still stripped.
+
+  - **Quote request items** (`quoteRequestItemSchema`) gain optional `referencePrice` (`{ amount, currency, capturedAt } | null`), `customerProposedUnitPrice`, `packagingUnitName` and `packagingUnitBaseQuantity`. `referencePrice` and `customerProposedUnitPrice` are sent in admin replies only; `quoteRequestSchema` likewise gains an admin-only optional `salesChannelId`.
+  - **History**: `QUOTE_REQUEST_HISTORY_EVENT_WINDOW` (`100`, how many of the most recent events a history is built from), `quoteRequestHistorySchema` (`{ entries, truncated }`), `quoteRequestHistoryEntrySchema`, `quoteRequestHistoryEntryKindSchema`, `quoteRequestHistoryChangeSchema`, `quoteRequestHistoryActorSchema`, `quoteRequestHistoryLineRefSchema` and their types, for `GET /api/v1/admin/quote-requests/:id/history`.
+  - **Price negotiation**: `quoteRequestOrgNegotiationSchema`, `setQuoteRequestOrgNegotiationSchema`, `quoteRequestNegotiationOverrideSchema` (`'inherit' | 'allowed' | 'not_allowed'`), `quoteRequestAccountNegotiationSchema`, `setQuoteRequestAccountNegotiationSchema` and `storefrontQuoteRequestNegotiationSchema`, with their types. The two `set*` admin bodies are strict.
+  - **Error code** `RFQ_PRICE_PROPOSAL_NOT_ALLOWED` in `ERROR_CODES`.
+  - **`QuoteRequestLineRecord`** gains optional `referenceUnitPrice` and `referenceCurrency` (decimal string and ISO code, both `null` when no reference is stored). Export readers of `quoteRequestReadPort.listItems` should read a cart-converted line's price from `referenceUnitPrice`: those lines now carry `desiredUnitPrice = null`.
+  - **`RfqCustomerPort.createForCustomer`** takes an optional third argument, `CreateForCustomerOptions` (`{ lineReferencePrices? }`): server-side reference prices index-aligned with `input.items`, for in-process callers that hold a snapshot the buyer could not have forged. Two-argument callers and implementations stay valid.
+  - **`BuyerLinePricePort`** with `BuyerLinePriceQuery`, `BuyerLinePriceLine` and `BuyerLinePriceAnswer`: the net unit price a buyer would pay for many lines on a given sales channel. A new port, so `LinePricePort` and its stubs are unchanged.
+
+- 76f9757: Price matrix contracts and a product read for attribute selections.
+
+  - `price-lists`: `priceMatrixEntryInputSchema`, `priceMatrixEntryPatchSchema`,
+    `priceMatrixListQuerySchema`, `priceMatrixEntrySchema`, `priceMatrixListResponseSchema`,
+    `priceMatrixEntryResponseSchema`, `priceMatrixAttributeTargetSchema`, the price, selection-kind
+    and inactive-reason enums, `priceMatrixSelectionKind()`, `priceMatrixEntryShapeIssues()` and
+    `PRICE_MATRIX_MAX_ENTRIES_PER_LIST` (5 000), with their types.
+  - `ERROR_CODES` gains `PRICE_MATRIX_ENTRY_NOT_FOUND`, `PRICE_MATRIX_ENTRY_OVERLAP`,
+    `PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE` and `PRICE_MATRIX_ENTRY_LIMIT`.
+  - `CatalogProductReadPort` gains `listProductIdsByAttributeValue({ key, value, match })`
+    (`CatalogAttributeValueQuery`, `match: 'scalar' | 'array' | 'boolean'`). This is a new required
+    member: a hand-written implementation or test stub of the port must add it.
+
+- 05d0650: Additive contract surface for order and quote status push notifications.
+
+  - `PWA_SETTING_CODES.PUSH_ORDER_STATUS_ENABLED` (`pwa.push_order_status_enabled`) and
+    `PWA_SETTING_CODES.PUSH_QUOTE_STATUS_ENABLED` (`pwa.push_quote_status_enabled`).
+  - `PwaPublicConfigSchema` gains the required booleans `orderStatusPushEnabled` and
+    `quoteStatusPushEnabled` — the effective values for the request's channel.
+    `PwaAdminConfigSchema` gains the same two fields (raw values for the scope) and
+    `UpdatePwaConfigRequestSchema` accepts both as optional booleans.
+  - New `PushPreferencesSchema` / `PushPreferences` (`{ orderStatus, quoteStatus }`) and
+    `UpdatePushPreferencesRequestSchema` / `UpdatePushPreferencesRequest` (strict, at least one
+    field) for `GET`/`PUT /api/v1/storefront/pwa/preferences`.
+  - `OrderReadPort.findStatusDefinition(code)` returning the new `OrderStatusDefinitionRecord`
+    (`{ code, name, defaultName }`) or `null`. A test double that implements `OrderReadPort` in
+    full must add the method.
+  - `QuoteRequestRecord.salesChannelId: string | null` — the channel the request was raised on.
+
+- bf9881f: New `admin-search` exports for admin global search, and two optional criteria on the customer admin search.
+
+  - Schemas: `AdminSearchEntityTypeSchema`, `AdminSearchFieldCodeSchema`, `AdminSearchLabelKeySchema`,
+    `AdminSearchQuerySchema`, `AdminSearchHitSchema`, `AdminSearchTargetRouteSchema`,
+    `AdminSearchGroupSchema`, `AdminSearchResultSchema`, `AdminSearchResponseSchema`,
+    `AdminSearchCapabilitySchema`, `AdminSearchCapabilityQuerySchema`,
+    `AdminSearchConfigurationViewSchema`, `UpdateAdminSearchConfigurationRequestSchema`,
+    `AdminSearchStoredConfigurationSchema` and their inferred types, plus
+    `ADMIN_SEARCH_DEFAULT_STORED_CONFIGURATION` and the limits `ADMIN_SEARCH_MAX_FIELDS`,
+    `ADMIN_SEARCH_MAX_ENTITY_TYPES`, `ADMIN_SEARCH_MAX_QUERY_LENGTH`, `ADMIN_SEARCH_MAX_LIMIT`.
+  - Provider contract: `AdminSearchProvider`, `AdminSearchFieldDescriptor`, `AdminSearchProviderQuery`,
+    `AdminSearchProviderHit`, `AdminSearchProviderResult`, `AdminSearchAbortSignal` and
+    `AdminSearchProviderRegistryPort` (container name `adminSearchProviderRegistry`, owner
+    `admin_search`). A module makes its records findable by pushing a provider into that registry from a
+    contribution-only boot hook.
+  - `CustomerAccountAdminSearchCriteria` gains `qFields?: ('email' | 'name')[]` — match `q` only against
+    those fields, literally, most relevant first — and `excludeDeleted?: boolean` — leave out deleted and
+    anonymized accounts. Both are optional; a caller that sets neither gets exactly what it got before.
+
+- 8397b0f: LLM configurations can now reach DeepSeek and any OpenAI-compatible endpoint. The `llm` credential type gains the provider `openai_compatible` ("OpenAI-compatible (custom endpoint)"), whose Base URL is required; every `llm` provider's Base URL is validated on save as an absolute `http://` or `https://` URL through the new optional `FieldDefinition.format: 'url'`, and the credential form renders such a field as a URL input. `createLlmAdapter` honours the Base URL for `openai`, `deepseek` (default `https://api.deepseek.com`) and `openai_compatible`, and throws `LlmConfigurationError` for a missing or invalid one. `LlmProviderSchema` in `@endora-commerce/contracts` is the one provider list (`PromptActionsProviderSchema` is now its alias), and the AI assistant accepts DeepSeek and OpenAI-compatible configurations where it used to report them as not configured.
+- 8397b0f: Page Builder translation. A **Translate** action in the Page Builder toolbar translates the canvas of the language tab being edited — or only the selected component or text — with the LLM configured in Settings → Page Builder (`cms.page_builder.translation.enabled`, `…llm_credentials`, `…max_source_characters`; off by default), behind the new permission `cms.translate`, through `GET /api/v1/admin/cms/page-builder/translation` and `POST /api/v1/admin/cms/page-builder/translate`. The result is an unsaved change with _Restore previous content_; every request that sent text is audited as `cms.page_builder.translate`.
+
+  For block authors: `BlockDefinition` gains an optional `translatable: [{ path, format? }]` (`format` `plain` | `tiptap` | `html`, paths like `items[].title`) naming the props that are prose; it is served on the Page Builder descriptor. A block without it is never sent to a model. Every CMS-context block of `cms` and `catalog` declares it. `PageBuilderHeaderActions` gains an optional `extraActions` slot, and the blog post and category editors pass the editor what the action needs.
+
+- dd939be: Document templates — the shapes of `specs/152-compare-pdf-template/`.
+
+  **New in `@endora-commerce/contracts`** (`document-templates.ts`):
+
+  - The template content envelope and its limits: `documentTemplateContentSchema`
+    (`{ schemaVersion: 1, languages: { <lang>: <tree> } }`), `documentTemplateTreeSchema`,
+    `documentRootPropsSchema`, `DOCUMENT_TEMPLATE_LIMITS`, `GENERIC_DOCUMENT_PAGE_DEFAULTS`,
+    `documentContentByteSize`, `CORE_BLOCK_NAMES`, `documentTypeCodeSchema`, `mergeFieldKeyRe`.
+  - The host seams: `DocumentTypeRegistration<TData, TPrepared>` (blocks, `coreBlocks`, `selection`,
+    `languages`, `variables`/`resolveVariables`, `defaultContent`, `renderBuiltIn`, `pageDefaults`,
+    `suggestOrientation`, `prepareRender`, `sampleData`), `DocumentBlockRenderer`,
+    `DocumentTypeRegistryPort` (container name `documentTypeRegistry`), `DocumentRenderPort`
+    (`documentRenderPort`) with `DocumentRenderInput` / `DocumentRenderResult`.
+  - The admin API DTOs of `/api/v1/admin/document-templates`, and six error codes in `ERROR_CODES`:
+    `DOCUMENT_TEMPLATE_NOT_FOUND`, `DOCUMENT_TYPE_NOT_AVAILABLE`, `DOCUMENT_TEMPLATE_INVALID`,
+    `DOCUMENT_TEMPLATE_IS_DEFAULT`, `DOCUMENT_TEMPLATE_NOT_SELECTABLE`, `DOCUMENT_RENDER_FAILED`.
+  - `comparisonDocumentDataSchema` / `ComparisonDocumentData` and `invoiceDocumentDataSchema` /
+    `InvoiceDocumentData` — what `comparisons` and `invoices` hand the render port.
+
+  **Widened enums** (additive): `pageBuilderContextSchema` gains `'document'`, and
+  `AdminBlockContributionSchema.context` gains `'document'` — a module contributes the canvas
+  renderer of its document blocks with `context: 'document'`.
+
+- d571d8c: Line collections, the Line items table and the quote request PDF (`specs/153-quote-request-pdf-template/`).
+
+  **New** (`document-templates.ts`, `document-values.ts`, re-exported from the package root):
+
+  - Typed document values and the functions shared by the PDF renderer and the editor canvas:
+    `DocumentValue`, `documentValueSchema`, `documentValueHasValue`, `formatDocumentValue`,
+    `evaluateDocumentCondition` (`DocumentCondition`: `always`, `never`, `has_value`,
+    `any_has_value`, over a scope of items, one item or the totals), `sumDocumentValues`,
+    `resolveDocumentAlign`, `documentFieldPathRe`, `isReservedFieldPath`, `DOCUMENT_POSITION_FIELD`.
+  - `DocumentCollectionDeclaration`, `DocumentFieldDefinition`, `DocumentItem`; the optional
+    `collections` member of `DocumentTypeRegistration`; `COLLECTION_BLOCK_NAMES`,
+    `ITEMS_TABLE_BLOCK_NAME`, `ITEMS_TABLE_LIMITS` and `itemsTablePropsSchema` (the stored settings of
+    `document_templates.ItemsTable`).
+  - `documentTypeDetailSchema` gains `collections` (defaults to `[]`).
+  - **`DocumentRenderPort` gains a required `listChoices({ documentType, salesChannelId })`**
+    answering `DocumentTemplateChoices` (`documentTemplateChoicesSchema`). An implementation of the
+    port outside `document_templates` must add it; callers are unaffected.
+  - Quote requests: `QUOTE_REQUEST_DOCUMENT_TYPE`, `QUOTE_REQUEST_PDF_LIMITS`,
+    `quoteRequestDocumentDataSchema`, `quoteRequestDocumentChoicesSchema`,
+    `setQuoteRequestDocumentTemplateSchema`, `quoteRequestPdfQuerySchema`,
+    `quoteRequestPdfSendRequestSchema`, `quoteRequestPdfSendResultSchema`; `quoteRequestSchema` gains
+    the optional admin-only `documentTemplateId`; `rfqEventTypeSchema` gains `'pdf-sent'` and the
+    history entry kind `'pdf_sent'` with an optional `delivery`.
+  - Error codes `QUOTE_REQUEST_PDF_TOO_LARGE`, `QUOTE_REQUEST_PDF_EMAIL_UNAVAILABLE`,
+    `QUOTE_REQUEST_PDF_SEND_FAILED`.
+
+- 34f97ae: `CartCustomerContext.salesChannelId` is now **required** (`specs/154-sales-channel-access/`, User
+  Story 6). A customer holds one active basket per sales channel, so every caller of
+  `CartReadPort` and `CartWritePort` names the channel whose basket it means — the channel of its
+  own request, or the channel an operator-created order names.
+
+  Before: `cartWritePort.getOrCreateForCustomer({ customerAccountId, organizationId })`.
+  After: `cartWritePort.getOrCreateForCustomer({ customerAccountId, organizationId, salesChannelId })`.
+
+- f61fea3: `storefrontCrawlerFilesSchema` gains an optional `anonymousAccess` boolean: `false` on a sales
+  channel closed to anonymous visitors, whose `robots.txt` then disallows everything and whose
+  `llms.txt` lists nothing. Optional so that an answer from an earlier backend, which never sends
+  it, still parses; read its absence as `true`.
+- afaa86a: Admin shapes for an Organization's sales channels and for creating an Organization
+  (`specs/154-sales-channel-access/`).
+
+  - `OrganizationSalesChannelsResponseSchema` — `GET`/`PUT /api/v1/admin/organizations/:id/sales-channels`:
+    the assigned channel ids and every channel option, each `OrganizationSalesChannelOptionSchema`
+    (`SalesChannelOptionSchema` plus `systemDefault`).
+  - `OrganizationSalesChannelsUpdateBodySchema` — `{ salesChannelIds }`, 1 to 100 distinct uuids.
+  - `OrganizationSalesChannelOptionsResponseSchema` — `GET /api/v1/admin/organizations/sales-channel-options`.
+  - `AdminOrganizationCreateBodySchema` — `POST /api/v1/admin/organizations`: the organization part of
+    `registerOrganizationRequestSchema` plus `status` (`active` by default, or `pending_verification`)
+    and `salesChannelIds` (at least one). `AdminOrganizationCreateRequest` is the body before defaults.
+
+- 248a9df: Sales-channel access shapes (`specs/154-sales-channel-access/`).
+
+  - `SalesChannelSummarySchema` / `SalesChannelDetailSchema` gain a required `anonymousAccess`;
+    `SalesChannelCreateBodySchema` accepts it (default `true`) and `SalesChannelUpdateBodySchema`
+    accepts it optionally. `SalesChannelCreateRequest` is the body a client sends before defaults
+    apply.
+  - `PublicSalesChannelSchema` gains `anonymousAccess`.
+  - New `SalesChannelAccessResponseSchema` for `GET /api/v1/storefront/sales-channel/access`.
+  - `ERROR_CODES` gains `SALES_CHANNEL_SIGN_IN_REQUIRED`, `SALES_CHANNEL_NOT_PERMITTED` and
+    `ORDER_SALES_CHANNEL_MISMATCH`.
+  - `CartCustomerContext` gains an optional `salesChannelId`.
+
+- cb098b7: The permalink rule for library assets, the request shapes for setting a permalink and restoring a previous file version, and seven new error codes.
+
+  **For a consumer of the contracts.**
+
+  - `validateAssetPermalink(value)` — the one permalink rule the server and the admin form share.
+    It answers `{ ok: true }` or `{ ok: false, reason }`, the reason being the first broken rule
+    of, in this order: `empty`; `too_long` (more than `ASSET_PERMALINK_MAX_LENGTH`, `200`,
+    characters); `invalid_characters` (anything outside letters, digits, `-`, `_`, `.` and `/`);
+    `invalid_segment` (a leading or trailing `/`, `//`, or a `.` or `..` part); `uuid_shaped`
+    (the whole value has the shape of an asset id, in either case). A value such as
+    `<uuid>.pdf` is accepted. The reason union is exported as `AssetPermalinkInvalidReason`.
+  - `isAssetIdShaped(segment)` — true for a UUID in either case; it is how a file URL decides
+    whether its path names an asset id or a permalink.
+  - `assetPreviousVersionSchema` (`AssetPreviousVersion`) — the one kept previous version of an
+    asset's file: `filename`, `mimeType`, `sizeBytes`, `contentVersion`, `replacedAt`,
+    `replacedBy` (`{ id, displayName }` or `null`) and `restorableUntil`.
+  - `setAssetPermalinkRequestSchema` (`SetAssetPermalinkRequest`) — `{ permalink, confirmReuse? }`.
+    The schema only bounds the length of `permalink`; its shape is judged by
+    `validateAssetPermalink`. `confirmReuse: true` acknowledges taking a permalink whose last
+    holder was a different asset.
+  - `restorePreviousAssetVersionRequestSchema` (`RestorePreviousAssetVersionRequest`) —
+    `{ expectedContentVersion, expectedPreviousContentVersion }`, both required and non-empty, so
+    a restore always names the file it replaces and the file it brings back.
+  - Seven `ERROR_CODES` members, all owned by the assets library: `ASSET_REPLACE_KIND_MISMATCH`,
+    `ASSET_LEGACY_CANNOT_REPLACE`, `ASSET_REPLACE_CONFLICT`, `ASSET_NO_PREVIOUS_VERSION`,
+    `ASSET_PERMALINK_TAKEN`, `ASSET_PERMALINK_PREVIOUSLY_USED` and `ASSET_PERMALINK_INVALID`
+    (whose `details.code` carries the validator's reason).
+
+  **New members on existing shapes — additive for a reader, required for anyone constructing one.**
+
+  - `assetSummarySchema` (and so `AssetSummary`, `AssetDetail` and every response carrying them)
+    gains four required members: `fileUrl` (the stable, unversioned file URL, the same across
+    replaces), `permalink` (string or `null`), `permalinkUrl` (the absolute permalink URL, or
+    `null`) and `contentVersion` (the identity of the bytes the asset currently holds).
+  - `AssetRecord` gains `contentVersion: string` and `permalink: string | null`.
+
+  - `AssetDetail` gains `retentionDays` (a whole number, at least 1): the retention, in days, the sweep applies — how long a replaced file stays restorable.
+  - `AssetDetail` gains `replaceable` (boolean): whether the file can be replaced in place — false for a legacy row and for a row with no storage key.
+  - New `folderPermalinkCountResponseSchema` (`{ data: { permalinkedAssets } }`) for the folder delete confirmation's count.
+
+  A client that only reads these shapes needs no change. Code that builds an `AssetSummary`,
+  `AssetDetail` or `AssetRecord` by hand — a test fixture, a mock, an optimistic list update — must
+  add the new members. The `url` and `storageUrl` members keep their shape (a string), but their
+  values now carry `?v=<contentVersion>` for public assets — see the
+  `@endora-commerce/mod-assets-library` changeset of this release for which values change and why.
+
+  The routes that use the request schemas arrive with the assets library release that ships them.
+
+- 3d5a203: A product sold on request only is refused by the cart whether or not a price list holds it. `CartService.addItem` read the display mode off the resolved list price, so a product no price list prices — priced from the catalogue attribute — resolved nothing, the `CART_PRODUCT_QUOTE_ONLY` guard was skipped, and `POST /api/v1/cart/items` added the line with `200`. It now answers `400 CART_PRODUCT_QUOTE_ONLY` for it too.
+
+  `@endora-commerce/contracts` publishes `ProductDisplayModePort` — `resolveDisplayMode({ productId, organizationId, salesChannelId, customerKind })` — and `@endora-commerce/mod-price-lists` provides it as `productDisplayModePort`, over the same Product → Category → Organization → Settings chain its storefront display-mode route answers with. `CartService` takes it as a new required constructor argument, after `channelMembership`; the module's own composition wires it.
+
+- 5865c59: The API description is available to administrators with the `platform.api_description.read` permission and to API keys with the `platform.api_description.read` scope.
+
+  **`@endora-commerce/platform`.**
+
+  - New permission `platform.api_description.read` (_Read the API description_), declared by `_lifecycle`'s manifest with English and Polish labels. The platform administrator grants it through an admin role.
+  - `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` now answer only an administrator holding the code or an API key whose scopes include it. Anybody else is answered `401 UNAUTHORIZED` (no administrator session or key, a customer session included) or `403 FORBIDDEN` (an administrator or a key without the code). Both stay outside the sales-channel access rule (`salesChannelAccess: 'open'`). Responses carry `Cache-Control: private, no-store`.
+  - New admin route `GET /api/v1/admin/api-description`, gated on the same code, serving the same document to the Admin UI.
+  - `buildServer` no longer mounts the two routes. It decorates the root instance with `apiDescription(): OpenAPIV3_1.Document` (built on first call, as before), and `_lifecycle` mounts the routes where `auth`'s `requireAdmin` port is available. A composition that mounts no `_lifecycle` serves no API description; one that called `buildServer` and read `/api/v1/_openapi.json` in-process reads `app.apiDescription()` instead, or sends credentials. `registerOpenApiRoutes` is removed; it was reachable only through the host-internal `./http/openapi` subpath.
+  - The reference page loads `swagger-ui-dist@5.33.3` from jsDelivr with Subresource Integrity on both files (`swagger-ui.css` `sha384-Ov4/wv3j2bmct8cDc5X4ngJZohVPzEmc6uDPH8WeljUxO5vtoykvMEfbu9Vh6RaW`, `swagger-ui-bundle.js` `sha384-h00llMzD1afyNow1pDmnZKlHsUZgp9KE9HXLFXF2CvbwsBY0+WBO4f75SfGwvM4K`) and `crossorigin="anonymous"`; it used to load an unpinned version.
+  - A command-palette action, _API description_, targets `/api-description` and requires the new code.
+
+  **`@endora-commerce/contracts`.** `apiKeyScopeSchema` gains `'platform.api_description.read'`, so an administrator who holds the code can issue an API key that reads the API description.
+
+  **`@endora-commerce/admin-shell`.** New kernel-served screen `/api-description` (_System → API description_, gated on `platform.api_description.read`): the document's title, version and endpoint count, a JSON download, and a link that opens the interactive reference on the API's own address in a new tab, carrying the administrator session.
+
+  **`@endora-commerce/mod-i18n`.** The screen's strings and its navigation label in English and Polish (`platform.apiDescription.*`, `appShell.nav.platformApiDescription`).
+
+  **`@endora-commerce/mod-api-keys`.** The module page lists the new scope.
+
+- e9a92b9: Saved views on the admin product list (#289).
+
+  - The Product list's toolbar carries the admin kit's saved-views control: a selector of the admin's own views and every shared view, _Save view_ and _Delete view_. A view is named, private or shared, and stores the list's status tab, type chip and search text — only the ones not at their default. The Stock, Category and Channel chips are not saved. Loading a view replaces status, type and search, returns Stock to _All_, goes back to the first page and clears the row selection; a status or type the list no longer offers loads as _All_, and keys the list does not know are ignored. Any admin who can open the Product list (`catalog:read`) can use it.
+  - Four new routes, gated by `catalog:read`: `GET` and `POST /api/v1/admin/catalog/products/list-views`, `PATCH` and `DELETE /api/v1/admin/catalog/products/list-views/{id}`. A view stores the list's filters only (`sort` and `visibleColumns` in a request body are ignored). `GET` returns the caller's own views and every shared view, ordered by name; every item carries `ownedByCaller` and `canModify`. Another admin's private view answers `404`; a shared view is modified or deleted only by its owner or a platform admin (any role except `sales_representative`), `403` otherwise. All four routes answer `401 UNAUTHORIZED` when no admin session resolves.
+  - A `PATCH` that changes nothing — an empty body, or every value as already stored — writes nothing and logs nothing; it answers `200` with the current view. It is still refused (`403`/`404`) to a caller who may not modify the view.
+  - `PATCH` and `DELETE` answer an `id` that is not a UUID with the same `404 NOT_FOUND` as a view that does not exist.
+  - Names are trimmed, 1–160 characters, without control or format characters. One admin cannot hold two views on the product list whose names differ only by letter case or surrounding spaces: `POST`, and a `PATCH` that changes the name, answer `409 PRODUCT_SAVED_VIEW_NAME_TAKEN` with a translated message (English and Polish). The rule binds the view's owner.
+  - New table `product_list_saved_views`, created by the migration `Migration20261014T170531CatalogProductListSavedViews`, with a unique index on the owner and the lower-cased name.
+  - When a platform admin changes or deletes another admin's view, the `catalog` module logs one `info` record (`event: 'saved_view.updated' | 'saved_view.deleted'`, `list`, `viewId`, `ownerAdminUserId`, `actorAdminUserId`).
+
+  `@endora-commerce/contracts` gains the `ERROR_CODES.PRODUCT_SAVED_VIEW_NAME_TAKEN` member.
+
+- d76291d: Storefront catalogue reads can be priced in the currency the shopper selected. `GET /api/v1/catalog/products`, `GET /api/v1/catalog/products/:idOrSlug` and `GET /api/v1/catalog/products/:idOrSlug/links` accept `?currency=` (an ISO 4217 code, any case). The listing price, the price ordering, the price-range filter, the link tiles and the Meilisearch-served listing are all resolved in that currency when the request's sales channel lists it in its `currencies`, and in the channel's `defaultCurrency` otherwise. A malformed code answers `400 VALIDATION_FAILED`. Without the parameter, every read asks the pricing engine exactly what it asked before.
+
+  `@endora-commerce/contracts` exports the pieces both modules use: `listingCurrencyQuerySchema` (the parameter), `resolveListingCurrency(requested, channel)` (requested if the channel offers it, else its default) and `listingPriceChannelContext(channel, currency)` (the `salesChannel` and `currencyCode` half of a `ListingPriceViewerContext`, with the default currency left implicit). `SearchQueryContext` gains an optional `currency`.
+
+  `@endora-commerce/mod-price-lists`: a listing priced in a currency other than the channel's default no longer falls back to the Product's own `defaultPrice` / `price` attribute. That attribute has no currency of its own and was entered in the default one, so the fallback would have quoted, for example, 100 PLN as 100 EUR; such a product now has no listing price in that currency (`source: 'none'`). In the default currency nothing changes.
+
+- ecd23de: `importExportEntitySchema` (and so `importExportEntitiesResponseSchema`) gains two required
+  booleans, `canExport` and `canImport`: whether the caller may export and import the entity.
+  `GET /api/v1/admin/import-export/entities` lists an entity only when one of them is true. An
+  entity whose import is supported but not permitted keeps its `importHeader` and carries
+  `canImport: false`; `importHeader: null` still means the import does not exist.
+- 3acae57: Behaviour change for API clients of the order list's saved views (`/api/v1/admin/orders/list-views`).
+
+  - Names are stored trimmed. One admin can no longer hold two saved views on the order list whose names differ only by letter case or surrounding spaces: `POST`, and a `PATCH` that changes a view's name, answer `409 ORDER_SAVED_VIEW_NAME_TAKEN` with a translated message (English and Polish). The rule binds the view's owner — a platform admin renaming a colleague's shared view is refused when the colleague already uses that name. Duplicates saved before this release are kept, and a `PATCH` that does not change the name is never refused for one.
+  - Every item returned by `GET`, `POST` and `PATCH` carries two booleans computed for the caller: `ownedByCaller`, and `canModify` (the caller owns the view, or the view is shared and the caller is a platform admin).
+  - A `PATCH` that changes nothing — an empty body, or every value as already stored — writes nothing and logs nothing; it answers `200` with the current view. It is still refused (`403`/`404`) to a caller who may not modify the view.
+  - `PATCH` and `DELETE /api/v1/admin/orders/list-views/{id}` answer an `id` that is not a UUID with the same `404 NOT_FOUND` as a view that does not exist, instead of `500`.
+  - All four routes answer `401 UNAUTHORIZED` when no admin session resolves, instead of acting under an empty owner id.
+  - Who counts as a platform admin for saved views is now read from the request's tenant context (`mode === 'all'`: any role except `sales_representative`), as on the product and quote request lists. It fails closed: an admin whose reach cannot be resolved — no admin tenant scope composed, or no resolvable role — is no longer treated as a platform admin, so `canModify` is `false` on other admins' shared views and modifying or deleting one answers `403`.
+  - When a platform admin changes or deletes another admin's view, the `orders` module logs one `info` record (`event: 'saved_view.updated' | 'saved_view.deleted'`, `list`, `viewId`, `ownerAdminUserId`, `actorAdminUserId`).
+
+  `@endora-commerce/contracts` gains the `ERROR_CODES.ORDER_SAVED_VIEW_NAME_TAKEN` member.
+
+- b96321c: Saved views on the admin Quote Request list (#290).
+
+  - The Quote Request list's toolbar carries the admin kit's saved-views control beside the column picker: a selector of the admin's own views and every shared view, _Save view_ and _Delete view_. A view is named, private or shared, and stores the list's visibility scope, organization, status selection, search text, sort and visible columns. Loading a view replaces all six and goes back to the first page; a status or column the list no longer offers is dropped, an empty column selection loads the default columns, an unknown sort loads _Newest_, and a view without a scope loads the viewer's default (_All_ for a platform admin, _My organizations_ otherwise). Any admin who can open the Quote Request list (`rfqs:handle`) can use it.
+  - Loading a view never widens what the loader sees: the list request that follows is the loader's own, narrowed to the organizations they reach, and a saved `scope: 'mine'` means the loader's assignments. A view stores an organization by id only, and the list never shows the name of an organization the loader cannot see — a captured organization outside their scope shows as an id prefix and an empty list.
+  - Four new routes, gated by `rfqs:handle` and by the module's presence: `GET` and `POST /api/v1/admin/quote-requests/list-views`, `PATCH` and `DELETE /api/v1/admin/quote-requests/list-views/{id}`. A view stores the list's filters, and optionally its sort (`{ field, dir }`) and visible columns; `null` for either means the list's default. `GET` returns the caller's own views and every shared view, ordered by name; every item carries `ownedByCaller` and `canModify`. Another admin's private view answers `404`; a shared view is modified or deleted only by its owner or a platform admin (any role except `sales_representative`), `403` otherwise. All four routes answer `401 UNAUTHORIZED` when no admin session resolves.
+  - A `PATCH` that changes nothing — an empty body, or every value as already stored — writes nothing and logs nothing; it answers `200` with the current view. It is still refused (`403`/`404`) to a caller who may not modify the view.
+  - `PATCH` and `DELETE` answer an `id` that is not a UUID with the same `404 NOT_FOUND` as a view that does not exist.
+  - While `quote_requests` is switched off, all four routes answer `503 MODULE_DISABLED` exactly as the Quote Request list does; saved views are kept and are served again once the module is back.
+  - Names are trimmed, 1–160 characters, without control or format characters. One admin cannot hold two views on the quote request list whose names differ only by letter case or surrounding spaces: `POST`, and a `PATCH` that changes the name, answer `409 RFQ_SAVED_VIEW_NAME_TAKEN` with a translated message (English and Polish). The rule binds the view's owner.
+  - New table `quote_request_list_saved_views`, created by the migration `Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews`, with a unique index on the owner and the lower-cased name.
+  - When a platform admin changes or deletes another admin's view, the `quote_requests` module logs one `info` record (`event: 'saved_view.updated' | 'saved_view.deleted'`, `list`, `viewId`, `ownerAdminUserId`, `actorAdminUserId`).
+
+  `@endora-commerce/contracts` gains the `ERROR_CODES.RFQ_SAVED_VIEW_NAME_TAKEN` member.
+
+- 9d8f8c5: New `saved-list-views` exports — the one wire shape and write rule shared by the order, product and quote-request saved-view endpoints: `savedListViewSchema` (with `savedListViewListResponseSchema`, `savedListViewResponseSchema`, `savedListViewDeleteResponseSchema`), `savedListViewNameSchema`, `savedListViewSortSchema`, `savedListViewFiltersSchema`, `savedListViewColumnsSchema`, `createProductSavedViewRequestSchema` / `updateProductSavedViewRequestSchema` (filters only; `sort` and `visibleColumns` are stripped), `createQuoteRequestSavedViewRequestSchema` / `updateQuoteRequestSavedViewRequestSchema`, the constants `SAVED_LIST_VIEW_NAME_MAX` (160), `SAVED_LIST_VIEW_FILTERS_MAX_BYTES` (8192), `SAVED_LIST_VIEW_COLUMNS_MAX` (64) and `SAVED_LIST_VIEW_TOKEN_MAX` (64), and the helpers `hasForbiddenNameCharacters` and `savedListViewNameKey` (trim, then case-insensitive and independent of the host locale — the key two names are compared by for uniqueness).
+
+  `orderSavedViewSchema` gains two required booleans, `ownedByCaller` and `canModify`; its `sort` stays required and non-null. A reader parsing a reply gains the fields; code that builds an `OrderSavedView` by hand must now supply them.
+
+  `createOrderSavedViewRequestSchema` and `updateOrderSavedViewRequestSchema` keep their names but tighten what they accept. An order saved-view name is now trimmed before its 1–160 character limit is applied, so a whitespace-only name is refused, and it may not contain control or format characters (`\p{Cc}`, `\p{Cf}` — NUL, bidi overrides, zero-width characters). `filters` is limited to 8192 UTF-8 bytes of its JSON, `visibleColumns` to 64 entries of at most 64 characters each, and `sort.field` to 64 characters (it may no longer be empty). A body breaking any of these fails validation.
+
+### Patch Changes
+
+- edac0be: `POST /api/v1/admin/orders` now honours the sales channel the operator chose for the order.
+
+  - A `salesChannelId` that names no sales channel is refused with `404 NOT_FOUND` before anything is written; the customer's basket is left as it was. It used to be accepted and the order was placed on the system-default channel.
+  - The ordered products are checked against the assortment of the order's channel rather than the channel the admin request itself resolved (the system default, unless a channel header is sent). A product the chosen channel sells is now accepted even when the default channel does not sell it, and a product the chosen channel does not sell is refused with `404 PRODUCT_NOT_FOUND` even when the default channel sells it.
+
+  `CartWritePort.addItem` accepts an optional `salesChannelId` in its input: the channel whose assortment decides whether the product may be added. Without it the request's resolved channel decides, as before. Buyer-facing cart, shopping-list and quick-order paths do not pass it and behave exactly as before.
+
+- fe48d6d: Administrators hand out only the permissions their own role holds. A holder of the wildcard `*` is unaffected.
+
+  - `PUT /api/v1/admin/admin-roles/:code` refuses a role holding a permission the actor lacks, and refuses to change a role that already holds one, with `403 ADMIN_ROLE_GRANT_EXCEEDED` (`details.permissions` names the missing codes). A role the platform or a module seeds — `platform_admin` included, with its `requiresTwoFactor` flag — is changed only by a holder of `*`; anybody else is answered `409 ADMIN_ROLE_PROTECTED` with `details.code: 'modify'`.
+  - `POST` and `PATCH /api/v1/admin/admin-users` assign a role only if the actor holds every permission it grants (`403 ADMIN_ROLE_GRANT_EXCEEDED`). An account whose role holds a permission the actor lacks is not edited, given a password, deactivated or deleted by them: `403 ADMIN_USER_OUTRANKS_ACTOR`.
+  - `POST /api/v1/admin/api-keys` issues a key only with scopes the issuing administrator's role holds: `403 API_KEY_SCOPE_NOT_HELD`, with the missing scopes in `details.scopes`. `api_keys` now declares `admin_roles` as a dependency.
+
+  `AdminRolePort.upsertByCode(input, options?)` takes an optional `{ grantor: { permissions } }`. Pass it for a write made on an administrator's behalf; leave it out for a platform write — a module seeding its roles, an upgrade step, the bootstrap command — which is not held to the ceiling. `@endora-commerce/contracts` exports `permissionsNotHeld(requested, held)` and `ADMIN_PERMISSION_WILDCARD`, and three new `ERROR_CODES` members.
+
+- 4f9daef: `POST /api/v1/analytics/events` now stores, and forwards to GA4, the identity the server resolved
+  for the request rather than the one the event body names: `customerAccountId` and
+  `organizationId` come from the signed-in customer (none for any other caller), and
+  `salesChannelId` is the request's resolved sales channel. The three body fields on
+  `ingestAnalyticsEventSchema` are still accepted, so existing senders keep validating, but they are
+  ignored and marked `@deprecated`.
+
+  The route also carries its own rate limit, `ANALYTICS_INGEST_RATE_LIMIT` (60 batches per minute
+  per client IP), on top of the host's global ceiling. `AnalyticsIngestService.ingest` takes a
+  required `context` (`IngestContext`) carrying the resolved channel and identity.
+
+- 7d2d00f: Two new members of `ERROR_CODES`: `CART_PRODUCT_UNPRICED` (a product with no price cannot be
+  added to a cart) and `CART_PRICE_CHANGED` (an order placement refused because a cart line's stored
+  price is no longer current; `details.lines` names the lines).
+- 1525d86: Customer sign-in, the customer second factor and password-reset requests are now limited per
+  account, the way administrator sign-in already was.
+
+  - `@endora-commerce/platform/kernel` publishes `AuthenticationAttemptThrottle`, the attempt
+    counter administrator sign-in used, with the profile types an owner of accounts builds one
+    over (`AttemptThrottleProfile`, `AttemptPolicy`, `AttemptCounterStore`, `ThrottledAttempt`,
+    `ThrottledCheckResult`, `ThrottledCredentialState`) and `ADDRESS_POLICY`, `ACCOUNT_POLICY`,
+    `ABANDONED_AFTER_SECONDS`, `DEFAULT_STORE_DEADLINE_MS`, `addressOrigin`. `admin_users`' own
+    throttle is now a profile over it; its keys, cookie values, codes and audit rows are unchanged.
+  - `@endora-commerce/contracts` adds `CustomerAuthenticationThrottlePort` (container name
+    `customerAuthenticationThrottlePort`, owner `customer_accounts`) with
+    `CustomerAuthenticationAttempt`, `CustomerAuthenticationCheckResult`,
+    `CustomerAuthenticationOrigin` and `CustomerAuthenticationFactor`; the error codes
+    `CUSTOMER_AUTHENTICATION_THROTTLED` (429, with `Retry-After`) and
+    `CUSTOMER_AUTHENTICATION_UNAVAILABLE` (503); the cookie name
+    `CUSTOMER_KNOWN_DEVICE_COOKIE_NAME` (`b2b_customer_device`) and its lifetime. Optional
+    additions: `CustomerLoginInput.knownDevice`, `CustomerLoginResult.knownDevice`, and a second
+    `context` argument on `CustomerPasswordResetPort.requestReset`.
+  - `customer_accounts` counts wrong passwords per folded e-mail address (50 in 30 minutes from a
+    device the account has not signed in on, 10 from a known one), and password-reset requests per
+    address (5 an hour). There is no per-address counter: the storefront signs shoppers in from its
+    own server. A completed sign-in sets the signed `b2b_customer_device` cookie, and an attempt
+    carrying it is held to that device's own budget. Asking for a new reset link retires the
+    earlier unused ones.
+  - `mfa` checks customer second-factor codes inside the customer throttle (20 in 30 minutes,
+    10 from a known device) and sets the customer known-device cookie when a customer sign-in
+    completes there.
+  - `organizations` reads and sets the customer known-device cookie on
+    `POST /api/v1/auth/customer/login` and reads it on `POST /api/v1/auth/password-reset/request`.
+
+- 0472475: Two changes that keep a stored protection from being dropped as a side effect of another change.
+
+  - **`mfa` is not switched off while administrators are required to use a second factor.** `POST /api/v1/admin/modules/mfa/activation` with `{ active: false }` answers `409 MFA_DEACTIVATION_BLOCKED` (`details.setting: 'mfa.admin.totp_enforced'`) while that setting is on, and changes nothing. Turn the requirement off first; the switch-off then goes through as before, and switching `mfa` back on is never refused. `mfa` publishes the answer as `mfaDeactivationGuardPort` (`MfaDeactivationGuardPort` in `@endora-commerce/contracts`).
+  - **A stored credential secret is not carried over to a changed endpoint.** `PUT /api/v1/admin/credentials/:code` that changes a field saying where the record's secrets are sent — an LLM `baseUrl`, an SMTP `host` — answers `422 CREDENTIAL_SECRET_REENTRY_REQUIRED` (`details.fields` lists the secret keys) unless every stored secret is re-entered in the same request. The admin form marks those secret fields as soon as the endpoint is edited. `FieldDefinition` gains an optional `endpoint` flag (defaulting to `true` for `format: 'url'` fields) and `@endora-commerce/contracts` exports `isCredentialEndpointField`; a module registering its own configuration type gets the rule for its URL fields without a change, and declares `endpoint: true` on a host field that is not a URL.
+
+- dd9ab59: Campaign e-mails can carry open and click tracking, switched on by an operator. When it is on
+  and a campaign is sent, each recipient's message gets an invisible 1×1 image and its absolute
+  `http(s)` links are routed through the click redirect, each with a signed token bound to the recipient's send record, a link id
+  (`link-1`, `link-2`, … in document order) and the link's destination. `mailto:`, `tel:`, in-page
+  anchors, relative links and the module's own unsubscribe and confirmation links are left as they
+  are; the plain-text part is sent unchanged. The per-campaign opened and clicked counts and the
+  per-link clicks reflect what recipients do while tracking is on.
+
+  The two public trackers take their token in the query string, because a signed token is longer
+  than the router's 100-character path-parameter limit and the path form was answered `414`
+  before reaching the handler:
+
+  - `GET /api/v1/newsletter/o/:token.gif` is now `GET /api/v1/newsletter/open.gif?token=<token>`
+  - `GET /api/v1/newsletter/c/:token?u=<url>` is now `GET /api/v1/newsletter/click?token=<token>&u=<url>`
+
+  The click redirect still leads only to the destination its token binds, sends a mismatching
+  destination to the storefront home page and answers an invalid or missing token `410`.
+
+  Two new settings in the Newsletter group, `newsletter.tracking.opens_enabled` and
+  `newsletter.tracking.clicks_enabled`, switch the two kinds of tracking independently. Both
+  default to off, so an instance sends campaigns untracked until an operator switches them on; they
+  can be set per sales channel, and are labelled in English and Polish on the
+  Settings screen. A campaign with `trackingEnabled: false` is sent without either. Automation
+  e-mails are not tracked. `NEWSLETTER_SETTING_CODES` in `@endora-commerce/contracts` gains
+  `TRACKING_OPENS_ENABLED` and `TRACKING_CLICKS_ENABLED`.
+
+- 30c61d9: New constant `MFA_CHALLENGE_COOKIE_NAME` (`'b2b_mfa_challenge'`): the storefront's pending second-step cookie, now set both by the storefront's password sign-in and by the backend when a federated sign-in hands over to the second step.
+
 ## 0.106.0
 
 ### Minor Changes

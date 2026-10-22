@@ -51,7 +51,10 @@ export function ReturnDetail(): ReactNode {
       if (detail.statusCode === 'received') {
         const pf = await returnsClient.settlementPrefill(id);
         setPrefill(pf);
-        setApproved(Object.fromEntries(pf.items.map((it) => [it.returnCaseItemId, it.defaultRefundAmount])));
+        // Feature 155 (owner ruling R1) — the stored approved amount, not the
+        // amount paid: a complaint line that was not returnable at purchase is
+        // stored at 0, so nothing is refunded for it unless the operator sets it.
+        setApproved(Object.fromEntries(pf.items.map((it) => [it.returnCaseItemId, it.approvedRefundAmount])));
       } else {
         setPrefill(null);
       }
@@ -93,6 +96,16 @@ export function ReturnDetail(): ReactNode {
   }
 
   const isNew = rc.statusCode === 'new';
+  // Feature 155 (owner ruling R1) — complaint lines recorded not returnable at
+  // purchase; they start with an approved refund of 0.
+  const notReturnableItemIds = new Set(
+    rc.items.filter((it) => it.returnableAtPurchase === false).map((it) => it.id),
+  );
+  const notReturnableBadge = (
+    <Badge variant="warning" className="ml-2">
+      {t('returns.detail.notReturnableAtPurchase')}
+    </Badge>
+  );
 
   return (
     <div className="space-y-4">
@@ -175,7 +188,10 @@ export function ReturnDetail(): ReactNode {
             <TableBody>
               {rc.items.map((it) => (
                 <TableRow key={it.id}>
-                  <TableCell>{it.productName}</TableCell>
+                  <TableCell>
+                    {it.productName}
+                    {it.returnableAtPurchase === false ? notReturnableBadge : null}
+                  </TableCell>
                   <TableCell>{it.quantity}</TableCell>
                   <TableCell>{it.defaultRefundAmount.toFixed(2)}</TableCell>
                   <TableCell>{it.approvedRefundAmount.toFixed(2)}</TableCell>
@@ -226,7 +242,10 @@ export function ReturnDetail(): ReactNode {
               <TableBody>
                 {prefill.items.map((it) => (
                   <TableRow key={it.returnCaseItemId}>
-                    <TableCell>{it.productName}</TableCell>
+                    <TableCell>
+                      {it.productName}
+                      {notReturnableItemIds.has(it.returnCaseItemId) ? notReturnableBadge : null}
+                    </TableCell>
                     <TableCell>{it.defaultRefundAmount.toFixed(2)}</TableCell>
                     <TableCell>
                       <input

@@ -184,6 +184,17 @@ export const storefrontCrawlerFilesSchema = storefrontRobotsPolicySchema.extend(
   }),
   /** The members above that could not be read. Absent means none. */
   unreadable: z.array(z.string()).optional(),
+  /**
+   * Whether the channel is open to anonymous visitors
+   * (`specs/154-sales-channel-access/`). `false` is a store with nothing
+   * public: its `robots.txt` disallows everything and names no sitemap, and
+   * its `llms.txt` names the store and lists nothing — whatever the texts and
+   * the policy above say. The texts are still answered as stored.
+   *
+   * Optional and additive: a backend older than it never sends it, and its
+   * channels are all open; a consumer reads its absence as `true`.
+   */
+  anonymousAccess: z.boolean().optional(),
 });
 export type StorefrontCrawlerFiles = z.infer<typeof storefrontCrawlerFilesSchema>;
 
@@ -405,4 +416,43 @@ export interface SeoMetaWritePort {
     title?: string | null;
     description?: string | null;
   }): Promise<void>;
+}
+
+/** The product-page metadata fields an SEO override can set (feature 163, FR-075). */
+export type SeoProductMetaField = 'title' | 'description' | 'ogTitle' | 'ogDescription' | 'ogImageUrl';
+
+/** Where an effective metadata value came from; `derived` = the product page's own fallback. */
+export type SeoProductMetaSource = 'channel_language' | 'channel' | 'language' | 'derived';
+
+export interface SeoProductMetaValues {
+  title: string;
+  description: string;
+  ogTitle: string;
+  ogDescription: string;
+  ogImageUrl: string | null;
+}
+
+/**
+ * Owner: `seo` (feature 163, R13). Not registered yet: published as
+ * `seoProductMetaPort` with its implementation, and the container-name marker
+ * arrives with that registration.
+ *
+ * Product metadata per sales channel × language. Each field resolves channel ×
+ * language → channel → language → the caller's derived fallback (FR-075).
+ * `catalog` declares the edge as degrades-without and probes `seo`'s presence before
+ * resolving it.
+ *
+ * **Owner off:** resolving this port throws `ModuleDisabledError` (503).
+ */
+export interface SeoProductMetaPort {
+  resolveForProduct(input: {
+    productId: string;
+    channelId: string;
+    languageCode: string;
+    fallback: SeoProductMetaValues;
+  }): Promise<SeoProductMetaValues & { sources: Record<SeoProductMetaField, SeoProductMetaSource> }>;
+  /** Every scope holding an override for the product, for the scope overview. */
+  listScopesForProduct(
+    productId: string,
+  ): Promise<Array<{ channelId: string | null; locale: string | null; fields: SeoProductMetaField[] }>>;
 }

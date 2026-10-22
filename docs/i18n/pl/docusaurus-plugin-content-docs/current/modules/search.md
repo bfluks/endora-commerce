@@ -132,8 +132,16 @@ Cztery sposoby sortowania z kontraktu listy produktów odpowiadają następując
 | `name` | `name:asc` |
 | `-name` | `name:desc` |
 
-Zindeksowane `name` jest ustalane w domyślnym języku kanału, czyli w języku, w którym wyświetla się
-lista produktów, więc kolejność widziana przez kupującego to ta, według której posortowano wyniki.
+Zindeksowane `name` jest ustalane w domyślnym języku kanału, czyli w języku, w którym domyślnie
+wyświetla się lista produktów, więc kolejność widziana przez kupującego to ta, według której
+posortowano wyniki.
+
+Nazwa *wyświetlana* na karcie wyniku nie pochodzi z indeksu. Każde trafienie jest przed udzieleniem
+odpowiedzi ponownie odczytywane z Postgresa, a karta dostaje tę nazwę, którą dla kanału sprzedaży i
+języka z żądania pokazuje karta na liście produktów katalogu: nadpisanie wartości dla kanału, jeśli
+obowiązuje (wiersze nadpisań kanału dla strony wyników są odczytywane raz), a w przeciwnym razie
+tekst bazowy w języku z żądania. Żądanie w języku innym niż domyślny język kanału jest więc nadal
+sortowane według nazwy w języku domyślnym.
 
 **Aktualizacja indeksu zbudowanego przed wprowadzeniem ustawień sortowania** wymaga ponownego
 zindeksowania: ustawienia nigdy nie były stosowane (`sortableAttributes` było `[]` w każdym indeksie,
@@ -169,6 +177,17 @@ zdarzenia.
 Każda procedura obsługi przechwytuje własne błędy — chwilowa awaria Meilisearch nie psuje zapisu w
 katalogu. Zapasowa ścieżka odczytu (`catalog/routes.public.ts`) utrzymuje wyszukiwanie w storefroncie
 w działaniu przy nieaktualnym indeksie aż do następnego ręcznego `search:reindex`.
+
+### Dostępność w kanale i języku
+
+Od wprowadzenia zakresów danych produktu (funkcja 163) produkt można włączyć lub wyłączyć w każdym kanale sprzedaży i w każdym języku kanału, nadać mu okno publikacji i odbiorców właściwych dla kanału. Indeksator pyta moduł `catalog` (`catalogProductAvailabilityPort.describeChannelAvailability`) zamiast czytać status produktu:
+
+- produkt należący do kanału trafia do indeksu, gdy jest włączony w **co najmniej jednym** języku kanału; produkt zarchiwizowany lub usunięty nie jest włączony w żadnym;
+- każdy dokument zawiera `liveLanguages` (języki kanału, w których produkt jest włączony), `publishFromMs` / `publishUntilMs` (obowiązujące okno w milisekundach od epoki; `0` i `Number.MAX_SAFE_INTEGER`, gdy okno jest otwarte) oraz obowiązujące w kanale `visibility` i `allowedOrganizationIds`. Wszystkie pięć to atrybuty filtrowalne;
+- zapytanie dodaje filtr dla języka żądania (pierwszy znacznik `Accept-Language` dopasowany do języków kanału, w przeciwnym razie język domyślny), okna w chwili zapytania i odbiorców wywołującego, więc strona jest wycinana wyłącznie z dostępnych trafień. Lista dozwolonych organizacji służy tylko do filtrowania i nigdy nie trafia do odpowiedzi;
+- przy uzupełnianiu wyników moduł `catalog` jest pytany ponownie (`filterAvailable`) o każde trafienie, więc nieaktualny dokument nie pokaże produktu, który nie jest już dostępny.
+
+Dokument zaindeksowany przed tą zmianą nie ma nowych pól i jest obsługiwany jak dotąd. **Po aktualizacji uruchom ponowne indeksowanie każdego kanału sprzedaży** (operacja zbiorcza `search_reindex` albo opisane niżej polecenie CLI), aby filtry okna i języka działały dokładnie.
 
 ### Gdy indeks nie odpowiada
 

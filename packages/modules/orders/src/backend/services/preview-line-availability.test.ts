@@ -4,7 +4,7 @@ import {
   isProductVisibleTo,
   productVisibilitySchema,
 } from '@endora-commerce/contracts';
-import { previewLineAvailability } from './preview-line-availability.js';
+import { previewBelowMinimums, previewLineAvailability } from './preview-line-availability.js';
 
 /**
  * Steps 1–3 of the order preview's per-line decision (feature 145, FR-027):
@@ -67,5 +67,40 @@ describe('previewLineAvailability', () => {
       }
     }
     expect([...outcomes].sort()).toEqual([false, true]);
+  });
+});
+
+/**
+ * Step 5 (feature 155, FR-009, FR-035): the pieces minimum, over the lines that
+ * passed steps 1–4 only, the product's total across its lines (D1).
+ */
+describe('previewBelowMinimums', () => {
+  const A = { id: '00000000-0000-4000-8000-00000000b001', type: 'simple', minOrderQuantity: 10 };
+  const B = { id: '00000000-0000-4000-8000-00000000b002', type: 'simple', minOrderQuantity: null };
+  const BUNDLE = { id: '00000000-0000-4000-8000-00000000b003', type: 'bundle', minOrderQuantity: 10 };
+
+  it('marks every line of a product whose total is below its minimum, with the minimum', () => {
+    const below = previewBelowMinimums([
+      { product: A, quantity: 3 },
+      { product: B, quantity: 1 },
+      { product: A, quantity: 4 },
+    ]);
+    expect([...below]).toEqual([
+      [0, 10],
+      [2, 10],
+    ]);
+  });
+
+  it('D1 — the product total across lines meets the minimum: nothing marked', () => {
+    expect(previewBelowMinimums([{ product: A, quantity: 5 }, { product: A, quantity: 5 }]).size).toBe(0);
+  });
+
+  it('a line that failed an earlier step counts toward no total and is never marked', () => {
+    const below = previewBelowMinimums([null, { product: A, quantity: 5 }]);
+    expect([...below]).toEqual([[1, 10]]);
+  });
+
+  it('an ineligible product type carries no minimum', () => {
+    expect(previewBelowMinimums([{ product: BUNDLE, quantity: 1 }]).size).toBe(0);
   });
 });

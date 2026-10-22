@@ -128,6 +128,21 @@ export const manifest = defineModuleManifest({
       keywords: ['modules', 'moduły', 'włącz', 'wyłącz', 'enable', 'disable', 'platform'],
       weight: 300,
     },
+    /**
+     * The API description screen. Kernel-served like `/platform/modules`: the
+     * document describes every module's routes, so no module owns it. Gated on
+     * the code its backing route `GET /api/v1/admin/api-description` enforces.
+     */
+    {
+      id: 'open-api-description',
+      labelKey: 'actions.openApiDescription.label',
+      descriptionKey: 'actions.openApiDescription.description',
+      icon: 'BookOpen',
+      targetRoute: '/api-description',
+      requiredPermission: 'platform.api_description.read',
+      keywords: ['api', 'openapi', 'swagger', 'docs', 'dokumentacja', 'opis api', 'integration'],
+      weight: 310,
+    },
   ],
   permissions: [
     {
@@ -139,6 +154,18 @@ export const manifest = defineModuleManifest({
       code: 'platform.modules.activate',
       module: 'module_lifecycle',
       label: 'Switch modules on and off',
+    },
+    /**
+     * Read the API description — the OpenAPI document and its interactive
+     * reference (`http/api-description.ts`). Declared here because this is
+     * the manifest of the platform's own surfaces; the routes are kernel
+     * resident and mounted from this module. An API key carries it as a scope,
+     * held like every scope to the issuing administrator's own role.
+     */
+    {
+      code: 'platform.api_description.read',
+      module: 'platform',
+      label: 'Read the API description',
     },
   ],
 });

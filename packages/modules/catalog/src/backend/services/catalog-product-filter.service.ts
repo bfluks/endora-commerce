@@ -1,13 +1,16 @@
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql';
-import type {
-  CatalogProductFilter,
-  CatalogProductFilterCondition,
-  CatalogProductFilterPort,
-  CatalogProductRecord,
-  CatalogSellableProductQuery,
+import {
+  ANONYMOUS_PRODUCT_AUDIENCE,
+  resolveScopeLanguage,
+  type CatalogProductFilter,
+  type CatalogProductFilterCondition,
+  type CatalogProductFilterPort,
+  type CatalogProductRecord,
+  type CatalogSellableProductQuery,
 } from '@endora-commerce/contracts';
 import { Product } from '../entities/product.entity.js';
 import { toCatalogProductRecord } from './catalog-product-read.service.js';
+import type { ProductAvailabilityService } from './product-availability.service.js';
 
 /**
  * The sellable-product filter `catalog` publishes (feature 075).
@@ -93,10 +96,46 @@ const NEVER: Record<string, unknown> = { id: null };
 const ALWAYS: Record<string, unknown> = { id: { $ne: null } };
 
 export class CatalogProductFilterService implements CatalogProductFilterPort {
-  constructor(private readonly emFactory: () => EntityManager) {}
+  constructor(
+    private readonly emFactory: () => EntityManager,
+    /**
+     * Feature 163 — the availability answer a scoped query's floor is. Optional
+     * only in the signature: a scoped query with it unwired fails loudly
+     * rather than falling back to the global floor.
+     */
+    private readonly availability?: Pick<ProductAvailabilityService, 'filterAvailable' | 'scopeChannel'>,
+  ) {}
+
+  #requireAvailability(): Pick<ProductAvailabilityService, 'filterAvailable' | 'scopeChannel'> {
+    if (!this.availability) {
+      throw new Error('CatalogProductFilterService: the availability service is not wired — a scoped floor cannot be applied.');
+    }
+    return this.availability;
+  }
+
+  /**
+   * Feature 163 — the ids of `productIds` effectively available at the query's
+   * (channel, language) to the anonymous audience, now. An unknown channel
+   * answers none (FR-007).
+   */
+  async #availableIn(
+    scope: NonNullable<CatalogSellableProductQuery['scope']>,
+    productIds: readonly string[],
+  ): Promise<Set<string>> {
+    if (productIds.length === 0) return new Set();
+    const availability = this.#requireAvailability();
+    const channel = await availability.scopeChannel(scope.channelId);
+    if (!channel) return new Set();
+    return availability.filterAvailable(productIds, {
+      channelId: channel.id,
+      languageCode: resolveScopeLanguage(channel, scope.languageTag),
+      audience: ANONYMOUS_PRODUCT_AUDIENCE,
+    });
+  }
 
   async listSellable(query: CatalogSellableProductQuery): Promise<CatalogProductRecord[]> {
     if (query.productIds.length === 0) return [];
+    if (query.scope) return this.#listAvailable(query, query.scope);
     const em = this.emFactory();
     const rows = await em.find(Product, this.where(query) as FilterQuery<Product>, {
       orderBy: { id: 'asc' },
@@ -110,10 +149,52 @@ export class CatalogProductFilterService implements CatalogProductFilterPort {
     return records;
   }
 
+  /**
+   * A scoped page: the rows the filter selects past the cursor, narrowed to
+   * the available ones, chunk after chunk until the page is full or the source
+   * is exhausted — so a short page still means "no more", which is what the
+   * feed's walk reads it as. A row left out is passed again by the next page's
+   * cursor and left out again; nothing is skipped.
+   */
+  async #listAvailable(
+    query: CatalogSellableProductQuery,
+    scope: NonNullable<CatalogSellableProductQuery['scope']>,
+  ): Promise<CatalogProductRecord[]> {
+    const limit = query.limit ?? DEFAULT_PAGE_SIZE;
+    const out: CatalogProductRecord[] = [];
+    let afterId = query.afterId ?? null;
+    for (;;) {
+      const em = this.emFactory();
+      const rows = await em.find(
+        Product,
+        this.where({ ...query, afterId }, scopedFloor(query.productIds)) as FilterQuery<Product>,
+        { orderBy: { id: 'asc' }, limit },
+      );
+      const records = rows.map(toCatalogProductRecord);
+      em.clear();
+      const available = await this.#availableIn(scope, records.map((r) => r.id));
+      for (const record of records) {
+        if (!available.has(record.id)) continue;
+        out.push(record);
+        if (out.length >= limit) return out;
+      }
+      if (records.length < limit) return out;
+      afterId = records[records.length - 1]!.id;
+    }
+  }
+
   async countSellable(
     query: Omit<CatalogSellableProductQuery, 'afterId' | 'limit'>,
   ): Promise<number> {
     if (query.productIds.length === 0) return 0;
+    if (query.scope) {
+      const rows = await this.emFactory().find(
+        Product,
+        this.where({ ...query, afterId: null }, scopedFloor(query.productIds)) as FilterQuery<Product>,
+        { fields: ['id'] },
+      );
+      return (await this.#availableIn(query.scope, rows.map((r) => r.id))).size;
+    }
     return this.emFactory().count(
       Product,
       this.where({ ...query, afterId: null }) as FilterQuery<Product>,
@@ -127,8 +208,11 @@ export class CatalogProductFilterService implements CatalogProductFilterPort {
    * only the last one — which for a category criterion would drop the channel
    * scoping altogether.
    */
-  private where(query: CatalogSellableProductQuery): Record<string, unknown> {
-    const clauses: Array<Record<string, unknown>> = [sellableFloor(query.productIds)];
+  private where(
+    query: CatalogSellableProductQuery,
+    floor: Record<string, unknown> = sellableFloor(query.productIds),
+  ): Record<string, unknown> {
+    const clauses: Array<Record<string, unknown>> = [floor];
     const predicate = translateFilter(query.filter);
     if (predicate !== null) clauses.push(predicate);
     if (query.afterId) clauses.push({ id: { $gt: query.afterId } });
@@ -223,6 +307,16 @@ function sellableFloor(productIds: readonly string[]): Record<string, unknown> {
     archivedAt: null,
     deletedAt: null,
   };
+}
+
+/**
+ * Feature 163 — the floor of a scoped query before availability narrows it:
+ * the candidate ids, not archived, not soft-deleted. Status, window and
+ * audience are the availability answer's (`#availableIn`), applied to every
+ * row this floor admits before a row leaves the port.
+ */
+function scopedFloor(productIds: readonly string[]): Record<string, unknown> {
+  return { id: { $in: [...productIds] }, archivedAt: null, deletedAt: null };
 }
 
 /** `null` when the node constrains nothing, so the caller can omit the clause. */

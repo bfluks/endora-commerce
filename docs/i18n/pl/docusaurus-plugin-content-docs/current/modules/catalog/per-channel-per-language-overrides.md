@@ -145,7 +145,7 @@ Details. Nadpisania dla kanałów są dodatkiem.
 
 ## Odczyt
 
-Z funkcji rozstrzygającej korzystają trzy miejsca:
+Z funkcji rozstrzygającej korzystają następujące miejsca:
 
 - **Endpoint administracyjny** —
   `GET /api/v1/admin/catalog/products/:id?channelId=&languageCode=&includeOverridesMap=true`
@@ -153,12 +153,35 @@ Z funkcji rozstrzygającej korzystają trzy miejsca:
   `name`, `description`, `attributeValues` i `sources`. Przy `includeOverridesMap=true` dołącza też
   pełną listę nadpisań, aby klient mógł pokazywać podgląd przy przełączaniu kontekstu.
 - **Publiczny odczyt dla storefrontu** — kanał pobiera z nagłówka `x-sales-channel` (dotychczasowa
-  konwencja), a język z `Accept-Language`. Warstwa nadpisań jest niewidoczna dla publicznego
-  klienta.
+  konwencja), a język z `Accept-Language`, a gdy go brak — domyślny język kanału. Warstwa nadpisań
+  jest niewidoczna dla publicznego klienta: otrzymuje on wartość obowiązującą. Strona produktu
+  (nazwa, opis, pola SEO, wartości atrybutów, lista atrybutów na stronie produktu, produkty
+  składowe zestawu grupowego i opcje pakietu) oraz każda karta na liście produktów przechodzą przez języki w kolejności własnego wyboru wartości bazowej
+  storefrontu — język z żądania, potem domyślny język kanału, potem `en-US`, `en` i pierwszy
+  zapisany język — i dla każdego języka biorą wartość z miejsca `(channel + language)`, jeśli jest
+  wypełnione, a w przeciwnym razie zatrzymują się na nim, jeśli wartość bazowa ma tekst w tym
+  języku. Nadpisanie obowiązuje więc tylko dla języka, z którego strona wzięłaby tekst bazowy, albo
+  dla języka wcześniejszego w tej kolejności: żądanie w `en-US` w kanale z domyślnym językiem
+  `pl-PL` pokazuje tekst bazowy `en-US`, a nie nadpisanie `pl-PL`, natomiast żądanie w `de-DE` dla
+  produktu bez tekstu `de-DE` przechodzi do `pl-PL` i pokazuje jego nadpisanie. Miejsce
+  `(channel-only)` jest sprawdzane na końcu i wygrywa z wartością bazową niezależnie od tego, gdzie
+  zatrzymało się przejście. Kafelki powiązanych produktów zachowują własny wybór języka, który nie
+  uwzględnia domyślnego języka kanału, i przez niego przechodzą miejsca nadpisań, więc kafelek może
+  pokazać tekst bazowy `en-US` tam, gdzie karta na liście pokazuje nadpisanie domyślnego języka
+  kanału. Produkt bez nadpisań wygląda dokładnie tak jak wcześniej.
+  Filtry listy, filtrowanie po atrybutach i sortowanie po nazwie nadal korzystają z wartości
+  bazowych.
 - **Indeksowanie wyszukiwarki (Meilisearch)** — tworzy jeden dokument dla każdej pary
   `(product, channel)`. Pola `name` i `description` każdego dokumentu przechodzą przez funkcję
   rozstrzygającą z `channel.defaultLanguage` jako aktywnym językiem, więc nadpisania dla kanałów
-  wpływają na wyniki wyszukiwania w storefroncie.
+  wpływają na trafność wyników wyszukiwania w storefroncie i na sortowanie po nazwie.
+- **Karty wyników wyszukiwania** — moduł wyszukiwania przed udzieleniem odpowiedzi ponownie
+  odczytuje każde trafienie z Postgresa, a nazwa na karcie jest ustalana właśnie tam, a nie
+  brana z indeksu: wiersze nadpisań kanału sprzedaży z żądania są odczytywane raz na stronę
+  wyników, a karta przechodzi przez te same języki i miejsca, w tej samej kolejności, co karta na
+  liście produktów opisana wyżej. Zindeksowana nazwa jest ustalana tylko dla domyślnego języka
+  kanału, więc dla żądania w każdym innym języku byłaby błędna. Produkt bez nadpisania dla
+  danego kanału wygląda dokładnie tak jak wcześniej.
 
 ## Panel administracyjny
 
@@ -200,10 +223,10 @@ usuwa obie tabele i obie kolumny.
   pokazuje dziś tylko systemowe Name i Description. Endpoint PATCH przyjmuje nadpisania atrybutów
   użytkownika, a odczyt je rozstrzyga, ale aplikacja panelu nie ma jeszcze dla nich interfejsu
   zapisu.
-- **Zmiana postaci publicznego odczytu dla storefrontu** — publiczny endpoint katalogu nadal
-  zwraca `products.name` i `products.description` jako JSONB `Record<lang, string>`. Przejście na
-  pojedynczą, rozstrzygniętą wartość to zmiana niezgodna wstecz dla konsumentów storefrontu i
-  zostanie zrobione osobno.
+- **Filtry i sortowanie listy z uwzględnieniem nadpisań** — publiczny endpoint katalogu zwraca
+  `name` i `description` jako wartość obowiązującą dla kanału sprzedaży i języka żądania (zob.
+  *Odczyt* powyżej), ale filtry listy, filtrowanie po atrybutach i sortowanie po nazwie nadal
+  korzystają z wartości bazowych. Uwzględnienie w nich nadpisań zostanie zrobione osobno.
 - **Ponowne indeksowanie z uwzględnieniem kanału** — endpoint PATCH nie dodaje jeszcze do kolejki
   zadania ponownego indeksowania w Meilisearch dla każdego zmienionego kanału; zmianę uwzględni
   dopiero następna aktualizacja indeksu produktu (wywołana dowolną zmianą w katalogu). Osobne

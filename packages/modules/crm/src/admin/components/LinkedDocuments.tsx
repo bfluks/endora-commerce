@@ -23,6 +23,7 @@ import { useAuth } from '@endora-commerce/admin-kit/lib';
 import { crmApi, type LinkableOrder, type OrderStatusOption } from '../api.js';
 import { CreateDocumentButton, CreatedDocumentNotice } from './CreateFromOpportunity.js';
 import { errorMessage, moneyLabel, orderStatusLabel } from '../lib/labels.js';
+import { useReturnHere } from '../lib/return-here.js';
 
 const SEARCH_DEBOUNCE_MS = 250;
 
@@ -58,6 +59,7 @@ export interface LinkedDocumentsProps {
  * Quote Requests have a section of their own (`LinkedQuoteRequests`).
  */
 export function LinkedDocuments(props: LinkedDocumentsProps): ReactNode {
+  const returnHere = useReturnHere();
   const { opportunity, orderStatuses, language, canWrite, reload } = props;
   const { hasPermission } = useAuth();
   const canLink = canWrite && hasPermission(ORDERS_READ);
@@ -210,7 +212,7 @@ export function LinkedDocuments(props: LinkedDocumentsProps): ReactNode {
                   <TableCell>
                     {item.available && item.number ? (
                       <Link
-                        to={`/orders/${item.documentId}`}
+                        to={returnHere(`/orders/${item.documentId}`)}
                         className="font-medium text-primary underline-offset-4 hover:underline"
                       >
                         {item.number}

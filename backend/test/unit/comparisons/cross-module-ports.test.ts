@@ -10,7 +10,6 @@ import type {
   CustomerAccountRecord,
 } from '@endora-commerce/contracts';
 import type { SettingsService } from '../../../src/kernel/settings/settings.service.js';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { ComparableAttributeProjection } from '../../../../packages/modules/comparisons/src/backend/services/comparable-attribute-projection.js';
 import { ComparisonAdminService } from '../../../../packages/modules/comparisons/src/backend/services/comparison-admin.service.js';
 import {
@@ -26,14 +25,14 @@ import { ShareTokenGenerator } from '../../../../packages/modules/comparisons/sr
  * absent, or the exercise is a read), so a port that throws on every method is
  * the assertion that they do not.
  */
-const refusingChannelMembership = new Proxy(
-  {},
-  {
-    get: (_target, property) => () => {
-      throw new Error(`comparisons unexpectedly called the channel bridge.${String(property)}`);
-    },
-  },
-) as SalesChannelMembershipPort;
+/**
+ * Feature 163 — `catalog`'s availability answer, which replaced the channel
+ * bridge in this service: every column is available, so the cases here read
+ * as they did.
+ */
+const availableEverywhere = {
+  filterAvailable: async (ids: readonly string[]) => new Set(ids),
+};
 
 
 /**
@@ -80,6 +79,8 @@ function productRecord(id: string): CatalogProductRecord {
     lowStockThresholdMode: 'cumulative',
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: null,
+    returnable: false,
   };
 }
 
@@ -171,6 +172,7 @@ describe('comparisons — catalog rows arrive over catalogProductReadPort', () =
       findVariantsBySkus: async () => [],
       findVariantInProduct: async () => null,
       findPackagingUnitInProduct: async () => null,
+      listPackagingUnitsByProductIds: async () => [],
       listLinksBySourceIds: async () => [],
       listValueOverridesByProductIds: async () => [],
       listProductIdsByAttributeValue: async () => [],
@@ -181,7 +183,7 @@ describe('comparisons — catalog rows arrive over catalogProductReadPort', () =
       new ComparableAttributeProjection(),
       new ShareTokenGenerator(),
       catalogProducts,
-      refusingChannelMembership,
+      availableEverywhere,
       imagelessGallery,
       settingsStub,
       attributePortStub,
@@ -209,6 +211,7 @@ describe('comparisons — catalog rows arrive over catalogProductReadPort', () =
       findVariantsBySkus: async () => [],
       findVariantInProduct: async () => null,
       findPackagingUnitInProduct: async () => null,
+      listPackagingUnitsByProductIds: async () => [],
       listLinksBySourceIds: async () => [],
       listValueOverridesByProductIds: async () => [],
       listProductIdsByAttributeValue: async () => [],
@@ -224,7 +227,7 @@ describe('comparisons — catalog rows arrive over catalogProductReadPort', () =
       new ComparableAttributeProjection(),
       new ShareTokenGenerator(),
       catalogProducts,
-      refusingChannelMembership,
+      availableEverywhere,
       imagelessGallery,
       settingsStub,
       attributePortStub,

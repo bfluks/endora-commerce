@@ -1,6 +1,98 @@
 {
   "components": {
     "parameters": {},
+    "responses": {
+      "SalesChannelNotPermitted": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "properties": {
+                "error": {
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "details": {
+                      "properties": {
+                        "channelCode": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "channelCode"
+                      ],
+                      "type": "object"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "details"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "error"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        "description": "403 `SALES_CHANNEL_NOT_PERMITTED` — a customer request on a sales channel the customer's Organization is not assigned to. `details.channelCode` names the channel."
+      },
+      "SalesChannelSignInRequired": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "properties": {
+                "error": {
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "details": {
+                      "properties": {
+                        "channelCode": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "channelCode"
+                      ],
+                      "type": "object"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "details"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "error"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        "description": "403 `SALES_CHANNEL_SIGN_IN_REQUIRED` — an anonymous request on a sales channel closed to anonymous visitors. `details.channelCode` names the channel."
+      }
+    },
     "schemas": {}
   },
   "info": {
@@ -258,6 +350,15 @@
         }
       }
     },
+    "/api/v1/admin/api-description": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/admin/api-interceptors": {
       "get": {
         "responses": {
@@ -340,6 +441,15 @@
         }
       }
     },
+    "/api/v1/admin/assets/folders/{folderId}/permalink-count": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/admin/assets/move-many": {
       "post": {
         "responses": {
@@ -391,6 +501,40 @@
       }
     },
     "/api/v1/admin/assets/{id}/move": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/assets/{id}/permalink": {
+      "delete": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/assets/{id}/previous-version/restore": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/assets/{id}/replace": {
       "post": {
         "responses": {
           "200": {
@@ -1894,6 +2038,15 @@
         }
       },
       "post": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/crm/opportunities/custom-field-filters": {
+      "get": {
         "responses": {
           "200": {
             "description": "OK"
@@ -4036,6 +4189,15 @@
         }
       }
     },
+    "/api/v1/admin/orders/custom-field-filters": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/admin/orders/export": {
       "get": {
         "responses": {
@@ -4241,6 +4403,22 @@
       }
     },
     "/api/v1/admin/organizations": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/organizations/sales-channel-options": {
       "get": {
         "responses": {
           "200": {
@@ -4505,6 +4683,22 @@
     },
     "/api/v1/admin/organizations/{id}/restrictions/warehouses": {
       "patch": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/organizations/{id}/sales-channels": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
         "responses": {
           "200": {
             "description": "OK"
@@ -5529,6 +5723,15 @@
         }
       },
       "post": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/quote-requests/custom-field-filters": {
+      "get": {
         "responses": {
           "200": {
             "description": "OK"
@@ -7300,7 +7503,7 @@
         }
       }
     },
-    "/api/v1/newsletter/c/{token}": {
+    "/api/v1/newsletter/click": {
       "get": {
         "responses": {
           "200": {
@@ -7318,7 +7521,7 @@
         }
       }
     },
-    "/api/v1/newsletter/o/{token}.gif": {
+    "/api/v1/newsletter/open.gif": {
       "get": {
         "responses": {
           "200": {
@@ -8211,6 +8414,15 @@
         }
       }
     },
+    "/api/v1/storefront/sales-channel/access": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/storefront/seo/crawler-files": {
       "get": {
         "responses": {
@@ -8257,6 +8469,15 @@
       }
     },
     "/api/v1/storefront/speculation-rules": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/assets/file/*": {
       "get": {
         "responses": {
           "200": {

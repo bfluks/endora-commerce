@@ -5,9 +5,13 @@ import { quoteDocumentTexts } from './texts.js';
  * The fictitious quote the template editor draws over and the preview prints
  * (`contracts/quote-request-document.md` §1): fully priced, five lines — two
  * discounted, one in a packaging unit, one with a note — an organisation with
- * an address, a customer, a representative, two details and a validity date.
- * Names are invented; product names are kept language-neutral.
+ * an address, a customer, a representative, two details and a validity date —
+ * and two line groups with one line in none (feature 159). Names are invented;
+ * product names are kept language-neutral, group names are in the language.
  */
+const SAMPLE_GROUP_FASTENERS = '00000000-0000-4000-8000-000000000301';
+const SAMPLE_GROUP_MOUNTING = '00000000-0000-4000-8000-000000000302';
+
 export function sampleQuoteRequestData(language: string): QuoteRequestDocumentData {
   const texts = quoteDocumentTexts(language).sample;
   return {
@@ -39,17 +43,27 @@ export function sampleQuoteRequestData(language: string): QuoteRequestDocumentDa
       { label: texts.orderNumberLabel, value: 'PO-2026-117' },
       { label: texts.siteLabel, value: texts.siteValue },
     ],
+    // Feature 159 (FR-044) — two groups and one line in none, so the editor
+    // and the preview show sections.
+    groups: [
+      { id: SAMPLE_GROUP_FASTENERS, name: texts.groupFasteners, position: 0 },
+      { id: SAMPLE_GROUP_MOUNTING, name: texts.groupMounting, position: 1 },
+    ],
     lines: [
-      line(1, 'Hex bolt M8×40', 'HB-M8-40', 500, 0.42, 0.5),
-      line(2, 'Hex nut M8', 'HN-M8', 500, 0.12, 0.12),
+      line(1, 'Hex bolt M8×40', 'HB-M8-40', 500, 0.42, 0.5, { groupId: SAMPLE_GROUP_FASTENERS, position: 0 }),
+      line(2, 'Hex nut M8', 'HN-M8', 500, 0.12, 0.12, { groupId: SAMPLE_GROUP_FASTENERS, position: 1 }),
       line(3, 'Washer 8.4 mm', 'W-84', 1200, 0.05, 0.06, {
         packagingUnitName: texts.packaging,
         packagingUnitBaseQuantity: 100,
+        groupId: SAMPLE_GROUP_FASTENERS,
+        position: 2,
       }),
       line(4, 'Threaded rod M8, 1 m', 'TR-M8-1000', 40, 3.9, 3.9, {
         lineNote: texts.lineNote,
+        groupId: SAMPLE_GROUP_MOUNTING,
+        position: 0,
       }),
-      line(5, 'Anchor 10×80', 'AN-10-80', 200, 1.15, 1.15),
+      line(5, 'Anchor 10×80', 'AN-10-80', 200, 1.15, 1.15, { position: 0 }),
     ],
   };
 }
@@ -79,6 +93,8 @@ function line(
     lineCurrency: 'PLN',
     lineNote: null,
     attributes: {},
+    groupId: null,
+    position: n - 1,
     ...over,
   };
 }

@@ -100,10 +100,6 @@ describe('sales_channels contributes the product editor channels zone', () => {
     // One host, one mount: `match` narrows the mounts of one place (Z13) and
     // has nothing to narrow here. Asserted absent so a later author cannot add
     // one quietly.
-    //
-    // The **set** of members this module declares is asserted in
-    // `organization-channels-zone.test.tsx`, which is the file P7b changed it
-    // in; two copies of one list are two answers waiting to disagree.
     const zone = (salesChannels.contributions.zones ?? []).find(
       (candidate) => candidate.zone === 'product.editor.channels',
     );
@@ -111,6 +107,37 @@ describe('sales_channels contributes the product editor channels zone', () => {
     expect(zone!.match).toBeUndefined();
     expect(zone!.requiredPermission).toBe('sales_channels:read');
     expect(typeof zone!.component).toBe('function');
+  });
+
+  it('declares exactly this one member', () => {
+    // The set lives here since feature 154 withdrew the organization detail's
+    // contribution (P7b's): `organizations` edits an Organization's channels in
+    // a panel of its own, and two editors of one assignment on one page would
+    // disagree about who may change it. Asserted as an equality so that it
+    // cannot quietly come back.
+    expect((salesChannels.contributions.zones ?? []).map((zone) => zone.zone)).toEqual([
+      'product.editor.channels',
+    ]);
+  });
+
+  it('leaves no second copy of its components under admin/src', async () => {
+    // Held by `organization-channels-zone.test.tsx` until feature 154 deleted
+    // it with the contribution: "no second copy of this component exists under
+    // `admin/src`" is the claim the duplication P7a opened made worth checking,
+    // and it outlives both the duplication and that file.
+    const { existsSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    for (const component of ['EntityChannelMembership', 'DefaultChannelBadge']) {
+      expect(
+        existsSync(
+          resolve(
+            process.cwd(),
+            `../packages/admin-shell/src/modules/sales_channels/components/${component}.tsx`,
+          ),
+        ),
+        component,
+      ).toBe(false);
+    }
   });
 
   it('renders the membership panel for the product it is mounted on', async () => {

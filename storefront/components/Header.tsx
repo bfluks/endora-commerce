@@ -29,8 +29,11 @@ export function Header(props: {
   locale: string;
   /** Currently-selected display currency (from the `currency` cookie), if any. */
   currency?: string;
-  /** Optional sales-channel code for the autocomplete's `X-Sales-Channel` header. */
-  salesChannelCode?: string;
+  /**
+   * The active sales-channel code, sent by the search box and the comparison
+   * counter on their browser-side calls. Required: the layout always has one.
+   */
+  salesChannelCode: string | undefined;
   /** Feature 027 — buyer's cart line count for the icon-btn badge. */
   cartItemCount?: number;
   /** Feature 015 — resolved megamenu powering the "Wszystkie kategorie" panel. */
@@ -123,9 +126,7 @@ export function Header(props: {
               unavailableLabel={t('search.unavailable')}
               requestQuoteLabel={t('product.requestQuote')}
               showKeyboardHint
-              {...(props.salesChannelCode !== undefined
-                ? { salesChannelCode: props.salesChannelCode }
-                : {})}
+              salesChannelCode={props.salesChannelCode}
             />
           </form>
           <div className="industria-header__actions">
@@ -142,6 +143,7 @@ export function Header(props: {
               href="/compare"
               ariaLabel="Porównaj produkty"
               icon={<CompareIcon />}
+              salesChannelCode={props.salesChannelCode}
             />
             <CartCounterBadge
               initialCount={props.cartItemCount ?? 0}
@@ -180,6 +182,7 @@ export function Header(props: {
               href="/compare"
               ariaLabel="Porównaj produkty"
               icon={<CompareIcon />}
+              salesChannelCode={props.salesChannelCode}
             />
             <CartCounterBadge
               initialCount={props.cartItemCount ?? 0}
@@ -194,9 +197,7 @@ export function Header(props: {
               placeholder={t('search.placeholder')}
               seeAllResultsLabel={t('search.seeAllResults')}
               quickLinks={mobileSearchQuickLinks}
-              {...(props.salesChannelCode !== undefined
-                ? { salesChannelCode: props.salesChannelCode }
-                : {})}
+              salesChannelCode={props.salesChannelCode}
             />
           </div>
         </div>

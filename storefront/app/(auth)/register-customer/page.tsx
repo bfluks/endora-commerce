@@ -31,7 +31,13 @@ export default async function RegisterCustomerPage({
 }): Promise<ReactNode> {
   const params = await searchParams;
   const orgRequired = params.orgRequired === '1';
-  const { ctx } = await getServerContext();
+  const { ctx, anonymousAccess } = await getServerContext();
+  // `specs/154-sales-channel-access/` — individual self-registration signs the
+  // new account in at once, which would be a way into a store that serves
+  // signed-in business customers only. The backend refuses it there; this
+  // page does not offer it. The middleware already sends anonymous visitors to
+  // the sign-in page; this catches a signed-in visitor arriving by link.
+  if (!anonymousAccess) redirect('/login');
   const channelCode = ctx.salesChannelCode ?? 'default';
 
   return (
@@ -104,7 +110,7 @@ async function registerCustomerAction(formData: FormData): Promise<void> {
       redirect('/register-customer?orgRequired=1');
     }
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Registration failed. Please try again.';
+      err instanceof StorefrontApiError ? err.detail : 'Registration failed. Please try again.';
     redirect(`/register-customer?error=${encodeURIComponent(message)}`);
   }
   // Newsletter consent (feature 048): subscribe the new account's email when the

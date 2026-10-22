@@ -12,7 +12,9 @@ import {
   type LanguageReadPort,
   type ListingPriceOrderPort,
   type ListingPricePort,
+  type ListingPriceDetailPort,
   type OrgLinePricePort,
+  type LinePricesPort,
   type CustomFieldDefinitionReadPort,
   type CustomFieldValuePort,
   type OrganizationDetailsPort,
@@ -58,6 +60,8 @@ import { BundleService } from './services/bundle.service.js';
 import { ProductEditorPreferencesService } from './services/product-editor-preferences.service.js';
 import { ProductListViewService } from './services/product-list-view-service.js';
 import { ProductOverridesService } from './services/product-overrides.service.js';
+import { ProductScopesService } from './services/product-scopes.service.js';
+import { UrlKeyService } from './services/url-key.service.js';
 import { ProductScopeContextService } from './services/product-scope-context.service.js';
 import { ProductValueResolverService } from './services/product-value-resolver.service.js';
 import { registerCatalogPublicRoutes } from './routes.public.js';
@@ -117,7 +121,11 @@ export interface CatalogModuleOptions {
    * pricing uses). Consumed only by the external catalog namespace's
    * decoration layer — SC-001 parity by construction.
    */
-  pricingService?: OrgLinePricePort & ListingPricePort & ListingPriceOrderPort;
+  pricingService?: OrgLinePricePort &
+    LinePricesPort &
+    ListingPricePort &
+    ListingPriceDetailPort &
+    ListingPriceOrderPort;
   /**
    * Feature 062 — inventory availability port for the external namespace's
    * `availability` indication. Optional: when omitted the field is omitted.
@@ -132,6 +140,9 @@ export interface CatalogModuleOptions {
    * the caller's own price is the caller's organisation's, and the one field
    * the pricing engine needs beyond the id — the customer group a
    * group-targeted list is selected by — lives on that row.
+   *
+   * Feature 163 (owner decision U1) — the product scopes answer names the
+   * organizations its audience rules name, best effort.
    */
   organizations?: OrganizationDetailsPort;
   /**
@@ -491,6 +502,22 @@ export function catalogModule(options: CatalogModuleOptions) {
         )
       : undefined;
 
+    // Feature 163 — scoped values per channel and channel × language. Needs the
+    // membership accessor for FR-014 and the C4 warning, like the overrides.
+    // Owner decision U1 — `organizations` names the audience's organizations in the answer.
+    const scopesService = options.salesChannelMembership
+      ? new ProductScopesService(
+          options.emFactory,
+          options.salesChannelMembership,
+          options.commandBus,
+          options.organizations,
+        )
+      : undefined;
+    // Feature 163 — URL keys per language and channel × language, and their redirects.
+    const urlKeyService = options.salesChannelMembership
+      ? new UrlKeyService(options.emFactory, options.salesChannelMembership, options.commandBus)
+      : undefined;
+
     await registerCatalogAdminRoutes(app, {
       adminService,
       categoryAdminService,
@@ -517,6 +544,8 @@ export function catalogModule(options: CatalogModuleOptions) {
       productListViewService: listViewService,
       ...(valueResolverService ? { productValueResolverService: valueResolverService } : {}),
       ...(overridesService ? { productOverridesService: overridesService } : {}),
+      ...(scopesService ? { productScopesService: scopesService } : {}),
+      ...(urlKeyService ? { urlKeyService } : {}),
     });
 
     // Consumer side (Principle X). The BullMQ worker claims each queued

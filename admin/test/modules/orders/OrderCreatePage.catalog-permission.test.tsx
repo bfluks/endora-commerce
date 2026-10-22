@@ -140,7 +140,7 @@ describe('OrderCreatePage — product picking permission (FR-013) and re-selecti
     expect(screen.getByRole('combobox', { name: CORE['orderCreate.items.quickSearch']! })).toBeEnabled();
   });
 
-  it('makes a product selectable again once its line is removed', async () => {
+  it('keeps a product selectable while it is a line and once its line is removed (feature 159, N-31)', async () => {
     const user = userEvent.setup();
     renderPage(['*']);
     const open = async (): Promise<HTMLElement> => {
@@ -156,7 +156,8 @@ describe('OrderCreatePage — product picking permission (FR-013) and re-selecti
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
     dialog = await open();
-    expect(within(dialog).getByRole('checkbox', { name: 'Select Widget 01' })).toBeDisabled();
+    // One product may be on several lines: it is offered again.
+    expect(within(dialog).getByRole('checkbox', { name: 'Select Widget 01' })).toBeEnabled();
     await user.click(within(dialog).getByRole('button', { name: /Cancel/ }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 

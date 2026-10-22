@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import {
   QUOTE_REQUEST_HISTORY_EVENT_WINDOW,
+  customFieldCarrySkipReasonSchema,
   quoteRequestHistoryChangeSchema,
   quoteRequestHistoryEntryKindSchema,
   type QuoteRequestHistory,
@@ -69,6 +70,21 @@ function coreEntries(language: Language): Record<string, string> {
 }
 
 const ENTRIES: Record<Language, Record<string, string>> = { en: coreEntries('en'), pl: coreEntries('pl') };
+
+/** `quote_requests`' own bundle, shipped — the feature 162 entry's detail lines are its. */
+function moduleEntries(language: Language): Record<string, string> {
+  return JSON.parse(
+    readFileSync(join(REPO_ROOT, 'packages/modules/quote_requests/i18n', `${language}.json`), 'utf8'),
+  ) as Record<string, string>;
+}
+
+const MODULE_ENTRIES: Record<Language, Record<string, string>> = { en: moduleEntries('en'), pl: moduleEntries('pl') };
+
+function trModule(language: Language, key: string, params: Record<string, string | number> = {}): string {
+  const template = MODULE_ENTRIES[language][key];
+  if (template === undefined) throw new Error(`missing ${language} key quote_requests ${key}`);
+  return template.replace(/\{(\w+)\}/g, (_m, name: string) => String(params[name]));
+}
 const LOCALE: Record<Language, string> = { en: 'en-GB', pl: 'pl-PL' };
 
 function tr(language: Language, key: string, params: Record<string, string | number> = {}): string {
@@ -189,6 +205,14 @@ const FULL: QuoteRequestHistory = {
     entry('pdf_sent', REP, {
       delivery: { recipients: ['buyer@example.com', 'two@example.com'], templateName: 'With discounts', language: 'pl-PL', message: XSS },
     }),
+    // Feature 162 — values a Sales Opportunity could not carry into the request
+    // (its skip lines are rendered and tested with the History renderer, T048).
+    entry('custom_field_carry_skipped', SYSTEM, {
+      customFieldCarry: {
+        source: { entityType: 'opportunity', recordId: ORDER_ID, reference: 'OPP-000001' },
+        skipped: [{ key: 'order_source', reason: 'value_invalid' }],
+      },
+    }),
   ],
 };
 
@@ -208,7 +232,7 @@ function answerHistory(history: QuoteRequestHistory): void {
 }
 
 function renderHistory(language: Language): ReturnType<typeof render> {
-  const bundle: Bundle = { core: ENTRIES[language] };
+  const bundle: Bundle = { core: ENTRIES[language], quote_requests: MODULE_ENTRIES[language] };
   const wrapper = ({ children }: { children: ReactNode }): ReactElement => (
     <TranslationProvider language={language} initialBundle={bundle}>
       <>{children}</>
@@ -271,6 +295,105 @@ describe.each<Language>(['en', 'pl'])('RfqHistory — %s', (language) => {
       expect(text, kind).not.toContain(kind);
     }
     expect(container.innerHTML).not.toMatch(/rfq\.detail\.history|core\.rfq/);
+  });
+
+  it('says which sales opportunity a carry came from and lists each key not carried with its reason (162, T048)', async () => {
+    const longKey = `k${'x'.repeat(70)}`;
+    answerHistory({
+      truncated: false,
+      entries: [
+        entry('custom_field_carry_skipped', SYSTEM, {
+          customFieldCarry: {
+            source: { entityType: 'opportunity', recordId: ORDER_ID, reference: 'OPP-000042' },
+            skipped: [
+              { key: 'order_source', reason: 'target_missing' },
+              { key: 'fair', reason: 'value_type_mismatch' },
+              { key: longKey, reason: 'audience_mismatch' },
+              { key: XSS, reason: 'value_invalid' },
+            ],
+          },
+        }),
+      ],
+    });
+    const { container } = renderHistory(language);
+    await screen.findByText(tr(language, 'entry.custom_field_carry_skipped'));
+    expect(screen.getByText(trModule(language, 'history.carrySource', { reference: 'OPP-000042' }))).toBeInTheDocument();
+    const reason = (code: string): string => trModule(language, `history.carryReason.${code}`);
+    const lines = screen.getAllByRole('listitem').filter((item) => item.tagName === 'LI' && item.closest('ul ul, li ul'));
+    expect(lines.map((item) => item.textContent)).toEqual([
+      trModule(language, 'history.carryLine', { field: 'order_source', reason: reason('target_missing') }),
+      trModule(language, 'history.carryLine', { field: 'fair', reason: reason('value_type_mismatch') }),
+      trModule(language, 'history.carryLine', { field: `${longKey.slice(0, 64)}…`, reason: reason('audience_mismatch') }),
+      trModule(language, 'history.carryLine', { field: XSS, reason: reason('value_invalid') }),
+    ]);
+    // A key is text, never markup; no reason reaches the operator as its code.
+    expect(container.querySelector('img, script')).toBeNull();
+    expect(container.textContent).not.toMatch(/target_missing|value_type_mismatch|audience_mismatch|value_invalid/);
+  });
+
+  it('names a skipped field by the label stored with the skip, in the reader\'s language (162, V3, T067)', async () => {
+    const longLabel = `L${'y'.repeat(70)}`;
+    answerHistory({
+      truncated: false,
+      entries: [
+        entry('custom_field_carry_skipped', SYSTEM, {
+          customFieldCarry: {
+            source: { entityType: 'opportunity', recordId: ORDER_ID, reference: 'OPP-000043' },
+            skipped: [
+              { key: 'fair', reason: 'target_missing', label: { labelDefault: 'Trade fair', labels: { en: 'Trade fair', pl: 'Targi' } } },
+              // No label in Polish: a Polish reader gets the default label.
+              { key: 'region', reason: 'value_type_mismatch', label: { labelDefault: 'Region', labels: { en: 'Sales region' } } },
+              // Recorded before labels were stored: the key.
+              { key: 'order_source', reason: 'audience_mismatch' },
+              { key: 'long_label', reason: 'value_invalid', label: { labelDefault: longLabel, labels: {} } },
+              { key: 'markup', reason: 'value_invalid', label: { labelDefault: XSS, labels: {} } },
+            ],
+          },
+        }),
+      ],
+    });
+    const { container } = renderHistory(language);
+    await screen.findByText(tr(language, 'entry.custom_field_carry_skipped'));
+    const reason = (code: string): string => trModule(language, `history.carryReason.${code}`);
+    const line = (field: string, code: string): string => trModule(language, 'history.carryLine', { field, reason: reason(code) });
+    const lines = screen.getAllByRole('listitem').filter((item) => item.tagName === 'LI' && item.closest('ul ul, li ul'));
+    expect(lines.map((item) => item.textContent)).toEqual([
+      line(language === 'pl' ? 'Targi' : 'Trade fair', 'target_missing'),
+      line(language === 'pl' ? 'Region' : 'Sales region', 'value_type_mismatch'),
+      line('order_source', 'audience_mismatch'),
+      line(`${longLabel.slice(0, 64)}…`, 'value_invalid'),
+      line(XSS, 'value_invalid'),
+    ]);
+    // A stored label is text, never markup; no key is shown where a label was stored.
+    expect(container.querySelector('img, script')).toBeNull();
+    expect(container.textContent).not.toMatch(/long_label|markup/);
+  });
+
+  it('words a skip reason it does not know by the generic sentence, never by its code (162)', async () => {
+    answerHistory({
+      truncated: false,
+      entries: [
+        entry('custom_field_carry_skipped', SYSTEM, {
+          customFieldCarry: {
+            source: { entityType: 'opportunity', recordId: ORDER_ID, reference: 'OPP-000044' },
+            // A reason a newer server may answer and this screen has no sentence for.
+            skipped: [{ key: 'region', reason: 'owner_unreachable' as never, label: { labelDefault: 'Region', labels: {} } }],
+          },
+        }),
+      ],
+    });
+    const { container } = renderHistory(language);
+    await screen.findByText(tr(language, 'entry.custom_field_carry_skipped'));
+    expect(
+      screen.getByText(trModule(language, 'history.carryLine', { field: 'Region', reason: trModule(language, 'history.carryReasonUnknown') })),
+    ).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/owner.unreachable/i);
+  });
+
+  it('ships a reason sentence for every reason a carry can be skipped by (162)', () => {
+    for (const code of customFieldCarrySkipReasonSchema.options) {
+      expect(MODULE_ENTRIES[language][`history.carryReason.${code}`], code).toBeTruthy();
+    }
   });
 
   it('prints who a quote PDF was sent to, with which template, language and message, as text (153)', async () => {
@@ -359,7 +482,7 @@ describe.each<Language>(['en', 'pl'])('RfqHistory — %s', (language) => {
     // A custom role is shown as stored.
     expect(screen.getByText(withDetail('Dana Lead', 'Key account lead'))).toBeInTheDocument();
     // System.
-    expect(screen.getAllByText(tr(language, 'actor.system')).length).toBe(2);
+    expect(screen.getAllByText(tr(language, 'actor.system')).length).toBe(3);
     // Unresolvable: recorded role (translated) + "unknown user".
     expect(screen.getByText(withDetail(unknownUser(), role('administrator')))).toBeInTheDocument();
     expect(screen.getByText(withDetail(unknownUser(), role('platformAdministrator')))).toBeInTheDocument();
@@ -392,6 +515,63 @@ describe.each<Language>(['en', 'pl'])('RfqHistory — %s', (language) => {
     renderHistory(language);
     await screen.findAllByText(tr(language, 'entry.modified'));
     expect(screen.queryByText(notice)).toBeNull();
+  });
+
+  it('feature 159 — lists the grouping changes as sentences; no group reads as Ungrouped (T038)', async () => {
+    const group = { id: '00000000-0000-4000-8000-0000000001a1', name: 'Ground floor' };
+    answerHistory({
+      truncated: false,
+      entries: [
+        entry('modified', REP, {
+          revisionNumber: 5,
+          changes: [
+            { kind: 'group_added', group },
+            { kind: 'group_removed', group: { ...group, name: 'Options' } },
+            { kind: 'group_renamed', groupId: group.id, before: 'First floor', after: 'Floor 1' },
+            { kind: 'line_group', line: blue, before: null, after: 'Ground floor' },
+            { kind: 'line_group', line: plain, before: 'Ground floor', after: null },
+            { kind: 'line_order' },
+          ],
+        }),
+      ],
+    });
+    const { container } = renderHistory(language);
+    await screen.findAllByText(tr(language, 'entry.modified'));
+    const ungrouped = tr(language, 'ungrouped');
+    const expected = [
+      tr(language, 'change.group_added', { name: 'Ground floor' }),
+      tr(language, 'change.group_removed', { name: 'Options' }),
+      tr(language, 'change.group_renamed', { before: 'First floor', after: 'Floor 1' }),
+      tr(language, 'change.line_group', { line: line(blue), before: ungrouped, after: 'Ground floor' }),
+      tr(language, 'change.line_group', { line: line(plain), before: 'Ground floor', after: ungrouped }),
+      tr(language, 'change.line_order'),
+    ];
+    for (const sentence of expected) expect(screen.getByText(sentence)).toBeInTheDocument();
+    expect(container.innerHTML).not.toMatch(/rfq\.detail\.history|group_added|line_group|line_order/);
+  });
+
+  it('feature 159 — a line of a product on several lines is named with its group (N-32)', async () => {
+    answerHistory({
+      truncated: false,
+      entries: [
+        entry('modified', REP, {
+          revisionNumber: 6,
+          changes: [
+            { kind: 'line_quantity', line: { ...plain, groupName: 'Hall A' }, before: 5, after: 3 },
+            { kind: 'line_removed', line: { ...plain, groupName: null } },
+          ],
+        }),
+      ],
+    });
+    renderHistory(language);
+    await screen.findAllByText(tr(language, 'entry.modified'));
+    const inGroup = (group: string): string => tr(language, 'lineInGroup', { line: line(plain), group });
+    expect(
+      screen.getByText(tr(language, 'change.line_quantity', { line: inGroup('Hall A'), before: 5, after: 3 })),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(tr(language, 'change.line_removed', { line: inGroup(tr(language, 'ungrouped')) })),
+    ).toBeInTheDocument();
   });
 
   it('lists two changes of one kind on one line, each under its own key (review fix N6)', async () => {

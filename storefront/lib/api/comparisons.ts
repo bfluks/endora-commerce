@@ -6,6 +6,7 @@ import type {
   ComparisonDisplayMode,
 } from '@endora-commerce/contracts';
 import { publicApiBaseUrl } from '../env.mjs';
+import { channelHeaders } from '../channel/channel-header';
 
 /**
  * Client-side fetch helpers for the comparisons backend module
@@ -16,6 +17,11 @@ import { publicApiBaseUrl } from '../env.mjs';
  * The dev setup either shares a domain (reverse proxy) or accepts
  * cross-origin credentials — same setup the cart and account flows
  * already rely on.
+ *
+ * Every function takes the storefront's active sales-channel code and sends
+ * it as `X-Sales-Channel` (`specs/154-sales-channel-access/`): a call from
+ * the browser has no request the middleware stamped, so the component passes
+ * the code the layout gave it.
  */
 
 const apiBase = publicApiBaseUrl();
@@ -36,11 +42,12 @@ interface ErrorEnvelope {
 }
 
 async function call<T>(
+  channelCode: string | undefined,
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   path: string,
   body?: unknown,
 ): Promise<T | null> {
-  const res = await rawFetch(method, path, body);
+  const res = await rawFetch(channelCode, method, path, body);
   if (res.status === 204) return null;
   await throwOnError(res);
   const json = (await res.json()) as { data: T };
@@ -48,12 +55,17 @@ async function call<T>(
 }
 
 async function rawFetch(
+  channelCode: string | undefined,
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   path: string,
   body?: unknown,
   extraHeaders: Readonly<Record<string, string>> = {},
 ): Promise<Response> {
-  const headers: Record<string, string> = { Accept: 'application/json', ...extraHeaders };
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...channelHeaders(channelCode),
+    ...extraHeaders,
+  };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   return fetch(`${apiBase}${path}`, {
     method,
@@ -78,14 +90,18 @@ async function throwOnError(res: Response): Promise<void> {
   );
 }
 
-export async function getMyComparison(): Promise<ComparisonOwnerView | null> {
-  return call<ComparisonOwnerView>('GET', '/api/v1/comparisons/me');
+export async function getMyComparison(
+  channelCode: string | undefined,
+): Promise<ComparisonOwnerView | null> {
+  return call<ComparisonOwnerView>(channelCode, 'GET', '/api/v1/comparisons/me');
 }
 
 export async function addProductToCompare(
   productId: string,
+  channelCode: string | undefined,
 ): Promise<ComparisonOwnerView> {
   const view = await call<ComparisonOwnerView>(
+    channelCode,
     'POST',
     '/api/v1/comparisons/me/products',
     { productId },
@@ -96,8 +112,10 @@ export async function addProductToCompare(
 
 export async function removeProductFromCompare(
   productId: string,
+  channelCode: string | undefined,
 ): Promise<ComparisonOwnerView> {
   const view = await call<ComparisonOwnerView>(
+    channelCode,
     'DELETE',
     `/api/v1/comparisons/me/products/${encodeURIComponent(productId)}`,
   );
@@ -107,16 +125,17 @@ export async function removeProductFromCompare(
 
 export async function setComparisonDisplayMode(
   mode: ComparisonDisplayMode,
+  channelCode: string | undefined,
 ): Promise<ComparisonOwnerView> {
-  const view = await call<ComparisonOwnerView>('PATCH', '/api/v1/comparisons/me', {
+  const view = await call<ComparisonOwnerView>(channelCode, 'PATCH', '/api/v1/comparisons/me', {
     displayMode: mode,
   });
   if (!view) throw new Error('expected ComparisonOwnerView');
   return view;
 }
 
-export async function deleteMyComparison(): Promise<void> {
-  await call('DELETE', '/api/v1/comparisons/me');
+export async function deleteMyComparison(channelCode: string | undefined): Promise<void> {
+  await call(channelCode, 'DELETE', '/api/v1/comparisons/me');
 }
 
 /**
@@ -130,8 +149,11 @@ export async function exportComparisonPdf(options: {
   readonly locale: string;
   /** The *Hide empty rows* switch, so the PDF shows the rows the screen shows (FR-020). */
   readonly hideEmptyRows: boolean;
+  /** The storefront's active sales channel. */
+  readonly channelCode: string | undefined;
 }): Promise<void> {
   const res = await rawFetch(
+    options.channelCode,
     'GET',
     `/api/v1/comparisons/me/pdf?hideEmptyRows=${options.hideEmptyRows ? 'true' : 'false'}`,
     undefined,
@@ -171,8 +193,13 @@ function parseDispositionFilename(value: string | null): string | null {
  */
 export async function getSharedComparison(
   token: string,
+  channelCode: string | undefined,
 ): Promise<{ data: ComparisonSharedView; viewerIsOwner: boolean } | null> {
-  const res = await rawFetch('GET', `/api/v1/comparisons/share/${encodeURIComponent(token)}`);
+  const res = await rawFetch(
+    channelCode,
+    'GET',
+    `/api/v1/comparisons/share/${encodeURIComponent(token)}`,
+  );
   if (res.status === 404) return null;
   await throwOnError(res);
   const json = (await res.json()) as {

@@ -46,6 +46,12 @@ export const SalesChannelSummarySchema = z.object({
   code: SalesChannelCodeSchema,
   name: SalesChannelNameSchema,
   active: z.boolean(),
+  /**
+   * May an anonymous visitor use this channel (`specs/154-sales-channel-access/`)?
+   * When false, only signed-in customers whose Organization is assigned to the
+   * channel are answered. Independent of the anonymous price-visibility flag.
+   */
+  anonymousAccess: z.boolean(),
   systemDefault: z.boolean(),
   defaultLanguage: z.string(),
   defaultCurrency: z.string(),
@@ -125,6 +131,8 @@ export const SalesChannelCreateBodySchema = z
     currencies: z.array(z.string()).min(1),
     defaultCurrency: z.string(),
     active: z.boolean().optional().default(true),
+    /** Open to anonymous visitors unless the operator turns it off (feature 154, FR-003). */
+    anonymousAccess: z.boolean().optional().default(true),
   })
   .superRefine((v, ctx) => {
     if (!v.languages.includes(v.defaultLanguage)) {
@@ -143,6 +151,11 @@ export const SalesChannelCreateBodySchema = z
     }
   });
 export type SalesChannelCreateBody = z.infer<typeof SalesChannelCreateBodySchema>;
+/**
+ * What a client sends to create a channel: the body **before** defaults apply,
+ * so `active` and `anonymousAccess` may be left out (both default to `true`).
+ */
+export type SalesChannelCreateRequest = z.input<typeof SalesChannelCreateBodySchema>;
 
 /**
  * Body shape for PATCH /api/v1/admin/sales-channels/{code}. Every field optional.
@@ -170,6 +183,7 @@ export const SalesChannelUpdateBodySchema = z
     currencies: z.array(z.string()).min(1).optional(),
     defaultCurrency: z.string().optional(),
     active: z.boolean().optional(),
+    anonymousAccess: z.boolean().optional(),
   })
   .superRefine((v, ctx) => {
     if (v.defaultLanguage !== undefined && v.languages && !v.languages.includes(v.defaultLanguage)) {
@@ -284,6 +298,12 @@ export const PublicSalesChannelSchema = z.object({
   currencies: z.array(z.string()),
   themeCode: z.string().nullable(),
   logoUrl: z.string().url().nullable(),
+  /**
+   * Whether anonymous visitors may use this channel (feature 154). A storefront
+   * reads it to send a visitor to sign-in instead of rendering a page whose
+   * every read is refused. Says nothing about the viewer.
+   */
+  anonymousAccess: z.boolean(),
 });
 export type PublicSalesChannel = z.infer<typeof PublicSalesChannelSchema>;
 
@@ -292,6 +312,35 @@ export const PublicSalesChannelResponseSchema = z.object({
   data: PublicSalesChannelSchema,
 });
 export type PublicSalesChannelResponse = z.infer<typeof PublicSalesChannelResponseSchema>;
+
+/**
+ * `GET /api/v1/storefront/sales-channel/access` — may **this viewer** use the
+ * request's channel (`specs/154-sales-channel-access/contracts/storefront-api.md`
+ * §2). Viewer-specific, so it is served `private, no-store`, and it never
+ * refuses: it answers the same decision the kernel's access step makes.
+ *
+ * `viewer: 'other'` is an administrator or an API key, which the rule does not
+ * evaluate. `permittedChannels` is filled for customer viewers only.
+ */
+export const SalesChannelAccessResponseSchema = z.object({
+  data: z.object({
+    channelCode: SalesChannelCodeSchema,
+    anonymousAccess: z.boolean(),
+    viewer: z.enum(['anonymous', 'customer', 'other']),
+    permitted: z.boolean(),
+    reason: z.enum(['sign_in_required', 'not_permitted']).nullable(),
+    /** Customer viewers only: the active channels their Organization may use; [] otherwise. */
+    permittedChannels: z.array(
+      z.object({
+        code: SalesChannelCodeSchema,
+        name: SalesChannelNameSchema,
+        /** `sales_channels.storefront_url` for that channel, or null when not configured. */
+        storefrontUrl: z.string().url().nullable(),
+      }),
+    ),
+  }),
+});
+export type SalesChannelAccessResponse = z.infer<typeof SalesChannelAccessResponseSchema>;
 
 /**
  * **The platform no longer holds a list of storefront themes** — owner ruling

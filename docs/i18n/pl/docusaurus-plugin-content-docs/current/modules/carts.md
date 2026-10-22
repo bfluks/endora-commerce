@@ -15,6 +15,30 @@ droższych zamienników, trzy rodzaje zamiany (koszyk ↔ zapytanie ofertowe, li
 wgląd administratora organizacji w koszyki i akceptację koszyków, wyszukiwanie porzuconych koszyków
 oraz ekrany podglądu dla administratora platformy.
 
+## Jeden koszyk na sklep
+
+Koszyk należy do kanału sprzedaży — sklepu — w którym jest używany:
+
+- Powstaje w kanale żądania, które go tworzy, i zapamiętuje ten kanał (`salesChannelId`). Każdy
+  odczyt i zapis koszyka dotyczy koszyka kanału żądania, więc klient kupujący w dwóch sklepach ma
+  koszyk w każdym z nich; token koszyka niezalogowanego odwiedzającego wskazuje koszyk tylko w jednym
+  sklepie, a napełnianie koszyka w innym sklepie zaczyna nowy.
+- Ceny pozycji, promocje i kupony oraz to, czy produkt jest sprzedawany tylko na zapytanie, są
+  ustalane dla kanału koszyka — cena widoczna w koszyku sklepu to cena tego sklepu.
+- Łączenie przy logowaniu łączy tylko koszyk anonimowy ze sklepu, w którym klient się loguje; koszyk
+  napełniony w innym sklepie pozostaje bez zmian.
+- Złożenie zamówienia korzysta z koszyka kanału zamówienia. Koszyk innego kanału jest odrzucany z
+  `422 ORDER_SALES_CHANNEL_MISMATCH` — *„Twój koszyk należy do innego sklepu. Otwórz koszyk w tym
+  sklepie i złóż zamówienie ponownie.”* — zanim cokolwiek zostanie zarezerwowane lub zapisane;
+  koszyk zostaje zachowany i nie jest ponownie wyceniany.
+
+Gdy koszyki zaczęły zapamiętywać swój kanał, każdy koszyk bez kanału został przypisany do
+domyślnego kanału systemowego.
+
+Reguła dostępu do kanału dotyczy koszyków jak każdego wywołania storefrontu: niezalogowany
+odwiedzający nie ma koszyka w sklepie zamkniętym dla niezalogowanych odwiedzających, a klient nie ma
+go w sklepie, do którego jego organizacja nie jest przypisana.
+
 ## Cykl życia
 
 ```text
@@ -54,7 +78,7 @@ Brak akceptowania własnych koszyków: koszyk utworzony przez administratora org
 
 | Metoda i ścieżka | Przeznaczenie |
 | --- | --- |
-| `GET /api/v1/cart` | Aktywny koszyk (tworzony przy pierwszym odczycie); odpowiedź zawiera `status`, `approvalStatus`, `salesChannelId`, `grandTotal`, `discount`, `primaryCta`, `droppedLines`, `couponDroppedThisRead`, `lastActivityAt` |
+| `GET /api/v1/cart` | Aktywny koszyk kanału sprzedaży żądania (tworzony przy pierwszym odczycie); odpowiedź zawiera `status`, `approvalStatus`, `salesChannelId`, `grandTotal`, `discount`, `primaryCta`, `droppedLines`, `couponDroppedThisRead`, `lastActivityAt` |
 | `POST /api/v1/cart/items` | Dodanie pozycji (limit 200 pozycji) |
 | `PATCH /api/v1/cart/items/:itemId` | Zmiana ilości (`0` usuwa pozycję) |
 | `DELETE /api/v1/cart/items/:itemId` | Usunięcie pozycji |
@@ -74,7 +98,7 @@ Brak akceptowania własnych koszyków: koszyk utworzony przez administratora org
 | `GET /api/v1/organization/carts` | Lista wszystkich koszyków w organizacji wywołującego |
 | `GET /api/v1/organization/carts/:id` | Szczegóły koszyka członka organizacji |
 | `PATCH /api/v1/organization/policies/cart-approval` | Włączenie lub wyłączenie `requires_cart_approval` dla organizacji |
-| `POST /api/v1/cart/submit-for-approval` | Kupujący przekazuje koszyk do akceptacji administratorowi organizacji (nic nie robi, gdy akceptacja jest wyłączona; odrzucane dla samych administratorów organizacji) |
+| `POST /api/v1/cart/submit-for-approval` | Kupujący przekazuje koszyk do akceptacji administratorowi organizacji (nic nie robi, gdy akceptacja jest wyłączona; odrzucane dla samych administratorów organizacji oraz dla koszyka poniżej minimum — zob. *Minimalne ilości zamówienia*) |
 | `POST /api/v1/organization/carts/:id/approve` | Akceptacja oczekującego koszyka |
 | `POST /api/v1/organization/carts/:id/reject` | Odrzucenie oczekującego koszyka z wymaganym powodem |
 
@@ -169,12 +193,17 @@ porzucenia mógł ponownie wysłać powiadomienie.
   `desired_unit_price = null`, więc zamiana działa także dla klienta, który nie może proponować cen.
   Dział sprzedaży widzi cenę z koszyka jako *cenę z dnia zapytania* pozycji na ekranie zapytania
   ofertowego w panelu administracyjnym. Pozycje koszyka źródłowego są usuwane, a koszyk przechodzi
-  w stan `'completed'` z ustawionym `converted_to_quote_request_id`.
-- **Zapytanie ofertowe → koszyk**: przechodzi przez pozycje zapytania i wywołuje
-  `CartService.addItem`, które już wyznacza ceny przez `PricingService`. `desired_unit_price` z
-  zapytania jest celowo pomijane — źródłem prawdy są bieżące ceny kontraktowe kupującego. Pozycje
-  niedostępne, bez ceny albo niemożliwe do kupienia są pomijane i zwracane w `droppedLines[]` z
-  typowanym powodem.
+  w stan `'completed'` z ustawionym `converted_to_quote_request_id`. Pozycja w jednostce opakowania
+  jest wysyłana z jej `packagingUnitId`; pozycja, której jednostkę w międzyczasie usunięto, jest
+  wysyłana jako zwykłe sztuki, z niezmienioną liczbą sztuk.
+- **Zapytanie ofertowe → koszyk**: dodaje pozycje zapytania jedną partią
+  (`CartService.addItems`, zob. *Minimalne ilości zamówienia* niżej), z cenami wyznaczanymi przez
+  `PricingService`. `desired_unit_price` z zapytania jest celowo pomijane — źródłem prawdy są
+  bieżące ceny kontraktowe kupującego. Pozycje niedostępne, bez ceny albo niemożliwe do kupienia są
+  pomijane i zwracane w `droppedLines[]` z typowanym powodem; pozycja poniżej minimum produktu jest
+  pomijana z powodem `below_minimum` i swoim `minimum` (wcześniej zgłaszano ją jako
+  `no_price_in_customer_list`), a produkt, którego kupujący już nie widzi — z powodem
+  `not_purchasable`.
 - **Zaakceptowane zapytanie ofertowe → koszyk** (`POST
   /api/v1/quote-requests/:id/convert-to-order`, należy do modułu zapytań ofertowych): koszyk jest
   czyszczony i wypełniany pozycjami zapytania w **uzgodnionych** cenach jednostkowych przez
@@ -188,6 +217,70 @@ porzucenia mógł ponownie wysłać powiadomienie.
   ustawia oznaczenia.
 - **Lista zakupów → koszyk**: przekazywane do istniejącego `ShoppingListService.convertToCart`; moduł
   koszyków udostępnia port, który kompozycja do niego podłącza.
+
+## Minimalne ilości zamówienia
+
+Koszyk stosuje minimalne ilości zamówienia z katalogu — minimum produktu w sztukach i minimum
+każdej jednostki opakowania w jednostkach, liczone ze wszystkich pozycji produktu w koszyku (oba
+definiuje strona modułu Catalog).
+
+- **Dodanie i edycja** (`POST /api/v1/cart/items`, `PATCH /api/v1/cart/items/:itemId`) oceniają
+  koszyk w stanie, w jakim zostawiłaby go zmiana — po dotychczasowych sprawdzeniach ilości,
+  produktu, kanału i jednostki opakowania, a przed wyceną. Zmiana, która zostawia pozycję poniżej
+  minimum, jest odrzucana z kodem `422 PRODUCT_BELOW_MINIMUM_QUANTITY` albo
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`; komunikat w języku odpowiedzi (z nagłówka
+  `Accept-Language` żądania, z uwzględnieniem wag q, a w przeciwnym razie w domyślnym języku
+  kanału) podaje produkt i minimum, a nic nie jest zapisywane. Edycja do `0` i `DELETE` zawsze usuwają pozycję. Edycja
+  pozycji, której produkt już nie istnieje, kończy się `404 PRODUCT_NOT_FOUND`.
+- **Widok koszyka** (`GET /api/v1/cart`) podaje dla każdej pozycji `minOrderQuantity` (minimum
+  produktu w sztukach, `null`, gdy go nie ma) i `belowMinimum` (`{ kind, minimum,
+  packagingUnitName? }`, gdy pozycja jest poniżej minimum i nie jest z niego zwolniona, w
+  przeciwnym razie `null`); storefront oznacza taką pozycję i blokuje checkout. Pozycja, której
+  rekord produktu zniknął, jest zgłaszana jako `unavailable: true` z
+  `unavailableReason: 'not_purchasable'`. **Jeśli katalogu nie da się odczytać, widok kończy się
+  błędem `5xx`**, zamiast zwrócić koszyk bez tych oznaczeń. Widok skrócony (`?view=mini`) się nie
+  zmienia.
+- **Dodawanie partiami** — zapytanie ofertowe → koszyk, lista zakupów → koszyk, szybkie zamówienie
+  oraz tworzenie zamówienia przez administratora i przez zewnętrzne API — przechodzi przez
+  `CartWritePort.addItems`. Najpierw rozstrzyga każdą pozycję tymi samymi sprawdzeniami co
+  pojedyncze dodanie: pozycja, której produkt jest nieznany, ukryty przed kupującym albo spoza
+  kanału, dostaje odpowiedź „nieznany produkt”, bez nazwy i bez minimum. Potem ocenia rozstrzygnięte
+  pozycje razem z koszykiem — pozycje jednego produktu w partii są sumowane, więc
+  `A-red × 5 + A-blue × 5` spełnia minimum 10 — i dodaje tylko te, które przechodzą, zgłaszając
+  pozostałe. Pozycje już obecne w koszyku nigdy nie są odrzucane. Wywołujący, który prosi o
+  `throw`, dostaje teraz błąd **zanim cokolwiek zostanie dodane**, gdy pozycji nie da się
+  rozstrzygnąć; ten, który prosi o `report`, dostaje każdą porażkę jako wynik. Wywołujący może też
+  poprosić, by pozycja poniżej minimum odrzucała całą partię, zanim cokolwiek zostanie zapisane, a —
+  dla klienta — by partia zastąpiła koszyk, który jest wtedy czyszczony dopiero po pozytywnej ocenie
+  partii: w ten sposób tworzenie zamówienia przez administratora i zewnętrzne API zamówień zostawiają
+  koszyk klienta nienaruszony, gdy odrzucają żądanie. Przed tym wyczyszczeniem partia, która ma
+  zgłaszać błąd przy nieudanej pozycji, wycenia też każdą pozycję, którą zamierza zapisać, więc
+  produkt bez ceny albo sprzedawany wyłącznie na zapytanie odrzuca żądanie, a koszyk pozostaje
+  nienaruszony. Najwyżej 200 pozycji na wywołanie.
+- **Koszyk wypełniony z zaakceptowanego zapytania ofertowego** zachowuje wynegocjowane ilości
+  zapytania: każda pozycja wypełniona z zapytania jest zwolniona z minimów, **dopóki jej ilość
+  równa się ilości z zapytania** dla tej pozycji — ilości, przy której obowiązuje uzgodniona cena
+  (`cart_items.agreed_quantity`). Zmiana ilości
+  czyni ją zwykłą pozycją, dopóki ilość nie wróci do wartości z zapytania, co jest dozwolone nawet
+  poniżej minimum. Pozycje dodane później są sprawdzane jak zwykle, a sztuki pozycji zwolnionej
+  nadal liczą się do łącznej ilości produktu, gdy sprawdzana jest inna pozycja tego produktu.
+  Koszyk przyjmuje oznaczenie zapytania na koszyku bez weryfikacji; checkout i składanie zamówienia
+  potwierdzają, że zapytanie jest nadal ważne (strona modułu Orders). Ponowne wypełnienie koszyka —
+  z innego zapytania albo przez ponowne zamówienie — zastępuje je, a wraz z nim każde wcześniejsze
+  zwolnienie.
+- **Przekazanie do akceptacji** (`POST /api/v1/cart/submit-for-approval`) odrzuca koszyk, którego
+  nie dałoby się zamówić, po dotychczasowych odmowach tego punktu końcowego: pozycja, której rekord
+  produktu zniknął, kończy się `404 PRODUCT_NOT_FOUND` z `cartItemIds` każdej takiej pozycji;
+  pozycja poniżej minimum kończy się `422 PRODUCT_BELOW_MINIMUM_QUANTITY` albo
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`, z każdą naruszającą pozycją w `details.lines` wraz z
+  jej `cartItemId`, w języku odpowiedzi. Nic nie jest zapisywane, a koszyk pozostaje w stanie
+  `not_required`. Inaczej niż widok koszyka, przekazanie nie przyjmuje oznaczenia zapytania bez
+  weryfikacji: pozycja wypełniona z zapytania jest zwolniona dopiero wtedy, gdy moduł Orders
+  potwierdzi, że zapytanie jest nadal ważne — należy do organizacji kupującego, ma status
+  `Approved`, nie wygasło, nie zostało jeszcze zamówione, a w koszyku jest nadal uzgodniona
+  pozycja — tym samym sprawdzeniem, które wykonuje podgląd checkoutu. Gdy moduł Quote Requests jest
+  wyłączony, nic nie jest zwolnione. Koszyk, którego zapytanie straciło ważność, jest więc
+  odrzucany przy przekazaniu, choć widok go nie oznacza; storefront pokazuje komunikat odmowy.
 
 ## Stosowanie kuponu
 

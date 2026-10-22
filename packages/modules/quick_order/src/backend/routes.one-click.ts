@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { quickOrderOneClickRequestSchema } from '@endora-commerce/contracts';
-import { currentSalesChannel } from '@endora-commerce/platform/kernel';
+import { currentSalesChannel, getResolvedChannel } from '@endora-commerce/platform/kernel';
 import type { OneClickService } from './services/one-click-service.js';
 
 /**
@@ -53,7 +53,8 @@ export async function registerQuickOrderOneClickRoutes(
           ...(body.quantity ? { quantity: body.quantity } : {}),
           ...(body.idempotencyKey ? { idempotencyKey: body.idempotencyKey } : {}),
         },
-        currentSalesChannel()?.id ?? null,
+        getResolvedChannel(request).id,
+        { language: await request.responseLanguage() },
       );
       reply.status(201);
       return {

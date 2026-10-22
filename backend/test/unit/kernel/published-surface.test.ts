@@ -267,9 +267,12 @@ const PUBLISHED_KERNEL_SURFACE: Readonly<Record<string, readonly string[]>> = {
   'ports/settings.js': ['SettingsReadPort', 'SettingsReadResult'],
   'ports/sales-channel.js': [
     'ResolvedChannel',
+    'SalesChannelAccessPort',
     'SalesChannelMembershipPort',
     'SalesChannelResolutionPort',
   ],
+  /** Feature 154 — the write seam a channel delete drops the access cache through. */
+  'sales-channels/sales-channel-access-cache.js': ['SalesChannelAccessCacheInvalidation'],
 };
 
 /**

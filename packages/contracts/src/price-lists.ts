@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ADMIN_PRODUCT_SELECTION_MAX } from './catalog.js';
+import { ADMIN_PRODUCT_SELECTION_MAX, type ProductResolvedPrice } from './catalog.js';
 import { isoDateTimeSchema, moneySchema, uuidSchema } from './common.js';
 
 /**
@@ -451,6 +451,18 @@ export const displayModeSchema = z.enum([
 ]);
 export type DisplayMode = z.infer<typeof displayModeSchema>;
 
+/**
+ * `productResolvedPriceSchema` (in `catalog.ts`, which this file imports and so
+ * cannot import back) spells the display modes out; this keeps the two lists
+ * identical at compile time.
+ */
+const displayModesAgree: [ProductResolvedPrice['displayMode']] extends [DisplayMode]
+  ? [DisplayMode] extends [ProductResolvedPrice['displayMode']]
+    ? true
+    : never
+  : never = true;
+void displayModesAgree;
+
 export const displayModeOverrideScopeSchema = z.enum([
   'organization',
   'category',
@@ -598,15 +610,54 @@ export interface ListingPriceProduct {
  * same reasoning {@link LinePricePort} states for a cart line.
  */
 export interface ListingPricePort {
-  resolveListingPrices(input: {
-    products: readonly ListingPriceProduct[];
-    context: {
-      salesChannel: { id: string; defaultCurrency: string };
-      currencyCode?: string;
-      /** The buying organisation, when the viewer has one. */
-      organization?: PriceOrganization | null;
-    };
-  }): Promise<Map<string, ListingPrice>>;
+  resolveListingPrices(input: ListingPriceInput): Promise<Map<string, ListingPrice>>;
+}
+
+/** The input both listing slices take. */
+export interface ListingPriceInput {
+  products: readonly ListingPriceProduct[];
+  context: {
+    salesChannel: { id: string; defaultCurrency: string };
+    currencyCode?: string;
+    /** The buying organisation, when the viewer has one. */
+    organization?: PriceOrganization | null;
+    /**
+     * D-287 P0 — the signed-in customer account, when the viewer is one. The
+     * engine resolves the account's own customer group, which overrides the
+     * organisation's (feature 040 R6) — see {@link PricingBuyerContext}.
+     */
+    customerAccountId?: string | null;
+  };
+}
+
+/**
+ * What a storefront surface renders for one product, from **one** resolution:
+ * the listing chain's answer (`price`, what `ProductSummary.price` is built
+ * from) and the base / sale / display-mode split a product page, a home-page
+ * card and a typeahead suggestion show (D-287 P0).
+ */
+export interface ListingPriceDetail extends ProductResolvedPrice {
+  price: ListingPrice;
+}
+
+/**
+ * Container name: `pricingService`. Owner: `price_lists`.
+ *
+ * `ListingPricePort`'s sibling for a surface that renders the base / sale /
+ * display-mode split as well as the price — the product detail, the catalogue
+ * cards behind the home page, the typeahead. One call answers both, so such a
+ * surface resolves its products once rather than once for `price` and again
+ * through `resolveEngine` per product (D-287 P0,
+ * `specs/pricing/read-paths-and-performance.md` §2.1, §2.3).
+ *
+ * A separate slice rather than a widened `ListingPricePort`, for the reason
+ * `OrgLinePricePort` states: every consumer types a structural stub of the
+ * port it names, and a caller that needs both asks for both by name.
+ *
+ * **Owner off:** fails closed, like `ListingPricePort`.
+ */
+export interface ListingPriceDetailPort {
+  resolveListingPriceDetails(input: ListingPriceInput): Promise<Map<string, ListingPriceDetail>>;
 }
 
 /**
@@ -728,6 +779,32 @@ export interface ListingPriceViewerContext {
   organization?: PriceOrganization | null;
   /** Feature 040 — a customer's direct group overrides the organisation's. */
   customerGroupId?: string | null;
+  /** D-287 P0 — the customer account whose own group to resolve; see {@link PricingBuyerContext}. */
+  customerAccountId?: string | null;
+}
+
+/**
+ * D-287 P0 — **the** customer-group rule, for every pricing path:
+ *
+ *     effective group = customer.customerGroupId ?? organization.customerGroupId ?? null
+ *
+ * A caller says who the buyer is — the organisation, and the customer account
+ * when the buyer is a signed-in customer — and the engine applies the rule.
+ * Listings, the product page and the cart used to pass the organisation alone,
+ * so a customer whose own group overrides the organisation's (feature 040 R6)
+ * was priced on the organisation's group there while quotes and the admin order
+ * preview, which resolved the account themselves, honoured it: the same buyer,
+ * different winning lists (`specs/pricing/read-paths-and-performance.md` §2.2).
+ *
+ * `customerGroupId`, when set, is a group the caller already resolved for the
+ * customer and wins. The account is read only when it belongs to the
+ * organisation named beside it; otherwise its group is ignored, never another
+ * tenant's terms.
+ */
+export interface PricingBuyerContext {
+  organization?: PriceOrganization | null;
+  customerGroupId?: string | null;
+  customerAccountId?: string | null;
 }
 
 /**
@@ -881,10 +958,48 @@ export interface LinePricePort {
       organization?: PriceOrganization | null;
       /** Feature 040 — a customer's direct group overrides the org's. */
       customerGroupId?: string | null;
+      /** D-287 P0 — see {@link PricingBuyerContext}. */
+      customerAccountId?: string | null;
       salesChannel: { id: string; defaultCurrency: string };
       currencyCode?: string;
     };
   }): Promise<LinePriceResult | null>;
+}
+
+/** One line of a batched line resolution: a caller-chosen key, a product, a quantity. */
+export interface LinePriceRequest {
+  /** Echoed back as the answer's map key; unique per call. */
+  key: string;
+  product: ListingPriceProduct;
+  variantId?: string | null;
+  quantity: number;
+}
+
+/**
+ * Container name: `pricingService`. Owner: `price_lists`.
+ *
+ * `LinePricePort` for many lines at once — a cart read, a placement drift
+ * check, a quote's reference prices, an external bulk price request. One call
+ * prices every line at its own quantity for one buyer, in a number of
+ * statements that does not grow with the lines, and answers exactly what
+ * calling `resolveLinePrice` once per line answers (D-287 P0; the identity is
+ * `backend/test/integration/price_lists/line-prices-batch.test.ts`).
+ *
+ * Every requested key gets an entry; `null` is "nothing applies", as for the
+ * single call. The same product may appear on several lines, at the same or
+ * different quantities.
+ *
+ * A separate slice so a stub of `LinePricePort` keeps compiling.
+ * **Owner off:** fails closed, like `LinePricePort`.
+ */
+export interface LinePricesPort {
+  resolveLinePrices(input: {
+    lines: readonly LinePriceRequest[];
+    context: PricingBuyerContext & {
+      salesChannel: { id: string; defaultCurrency: string };
+      currencyCode?: string;
+    };
+  }): Promise<Map<string, LinePriceResult | null>>;
 }
 
 /**
@@ -939,6 +1054,9 @@ export interface ProductDisplayModePort {
  * `price_lists` still satisfies it (D-77's rejected alternative, same
  * reasoning). `PricingServiceContract` is a superset and satisfies this
  * structurally, so no implementation changed.
+ *
+ * D-287 P0 left it as it was — a stub of it still compiles — and the external
+ * namespace, which now prices in batches, names `OrgLinePricePort & LinePricesPort`.
  */
 export interface OrgLinePricePort extends LinePricePort {
   /**

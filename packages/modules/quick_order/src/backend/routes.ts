@@ -74,7 +74,11 @@ export async function registerQuickOrderRoutes(
       const body = quickOrderBuildRequestSchema.parse(request.body);
       const ctx = resolveCustomerContext(request);
       const result = await buildService.build(
-        { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId },
+        {
+          customerAccountId: ctx.customerAccountId,
+          organizationId: ctx.organizationId,
+          salesChannelId: getResolvedChannel(request).id,
+        },
         {
           target: body.target,
           items: body.items.map((item) => ({
@@ -83,6 +87,9 @@ export async function registerQuickOrderRoutes(
             quantity: item.quantity,
           })),
         },
+        // Feature 155 — the buyer's build: no actor, so a quote request is
+        // judged by the buyer's rules (FR-012).
+        { language: await request.responseLanguage() },
       );
       return { data: result };
     },
@@ -119,17 +126,29 @@ export async function registerQuickOrderRoutes(
       limit: query.limit,
       salesChannelId: getResolvedChannel(request).id,
       organizationId: resolveCustomerContext(request).organizationId,
+      // Feature 163 — the request's language; `catalog` resolves it against
+      // the channel's own languages, so a product off in it is not a hit.
+      languageCode: firstAcceptLanguage(request),
     });
 
     return {
       data: hits.map((hit) => ({
         productId: hit.productId,
         sku: hit.sku,
-        name: hit.name['en-US'] ?? Object.values(hit.name)[0] ?? hit.sku,
+        // Feature 163 (FR-017 a) — the Name the storefront shows here.
+        name: hit.effectiveName || hit.name['en-US'] || Object.values(hit.name)[0] || hit.sku,
         slug: hit.slug,
         status: hit.status,
         matchedOn: hit.matchedOn,
       })),
     };
   });
+}
+
+/** The first `Accept-Language` tag, or `undefined` — a language preference, never trusted for anything else. */
+function firstAcceptLanguage(request: FastifyRequest): string | undefined {
+  const header = request.headers['accept-language'];
+  if (typeof header !== 'string') return undefined;
+  const first = header.split(',')[0]?.split(';')[0]?.trim();
+  return first === '' ? undefined : first;
 }

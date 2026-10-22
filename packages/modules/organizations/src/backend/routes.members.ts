@@ -106,7 +106,9 @@ export async function registerMembersRoutes(app: FastifyInstance, deps: MembersD
 
   app.post<{ Params: { token: string } }>(
     '/api/v1/organizations/invitations/:token/accept',
-    { schema: { body: acceptInvitationRequestSchema } },
+    // Feature 154 — reachable whatever the sales-channel access rule decides: an
+    // invited person joins before they can sign in.
+    { schema: { body: acceptInvitationRequestSchema }, config: { salesChannelAccess: 'open' } },
     async (request) => {
       const body = acceptInvitationRequestSchema.parse(request.body);
       const result = await invitationService.acceptByToken(request.params.token, {

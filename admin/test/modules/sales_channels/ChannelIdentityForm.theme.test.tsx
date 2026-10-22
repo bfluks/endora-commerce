@@ -80,6 +80,7 @@ function channel(themeCode: string | null): SalesChannelDetail {
     code: 'serwis-a',
     name: { 'en-US': 'Serwis A' },
     active: true,
+    anonymousAccess: true,
     systemDefault: false,
     defaultLanguage: 'en-US',
     defaultCurrency: 'PLN',

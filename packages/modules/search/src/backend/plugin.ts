@@ -4,8 +4,9 @@ import { z } from 'zod';
 import type {
   CatalogAttributeReadPort,
   CatalogCategoryReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
-  ListingPricePort,
+  ListingPriceDetailPort,
   OrganizationDetailsPort,
   SettingsAdminAuditContext,
   SettingsAdminPort,
@@ -96,6 +97,14 @@ export interface SearchModuleOptions {
    */
   catalogCategories: CatalogCategoryReadPort;
   /**
+   * Feature 163 — `catalog`'s availability answer: which channel members are
+   * effectively on in which channel language, with their effective window and
+   * audience (the indexer's documents), and which hits a caller may see at
+   * (channel, language) now (the query's hydration). Same binding `catalog`
+   * dependency as `catalogProducts`.
+   */
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'describeChannelAvailability' | 'filterAvailable'>;
+  /**
    * The `sales_channel_products` bridge, through the sanctioned accessor
    * (Constitution XII). Kernel-composed, so it is present for as long as the
    * platform is.
@@ -135,7 +144,7 @@ export interface SearchModuleOptions {
    * above covers the typeahead popup). A search hit is a listing and prices
    * through the same chain as the catalogue grid.
    */
-  listingPrices: ListingPricePort;
+  listingPrices: ListingPriceDetailPort;
   /**
    * `organizations`' read model — the customer group the pricing engine keys a
    * group-targeted list on. The enricher above already resolves it for the
@@ -223,6 +232,7 @@ export function searchModule(options: SearchModuleOptions): SearchModuleResult {
     products: options.catalogProducts,
     categories: options.catalogCategories,
     channelMembership: options.salesChannelMembership,
+    availability: options.catalogAvailability,
     resolveTaskTimeoutMs: resolveIndexTaskTimeoutMs,
   });
   // Handlers only: `backend.ts` registers them through `ctx.subscribe`, which
@@ -241,6 +251,7 @@ export function searchModule(options: SearchModuleOptions): SearchModuleResult {
     {},
     options.listingPrices,
     options.organizations,
+    options.catalogAvailability,
   );
 
   // Settings-aware suggest config, with fallback to manifest defaults

@@ -11,7 +11,7 @@ description: "Everything the `custom_fields` module's manifest declares: permiss
 
 # `custom_fields` — module reference
 
-Rendered from the module's own manifest, and from nothing written by hand. Nobody has written a page about what this module *does* yet; the [module map](../modules/module-map.generated.md) lists every module the platform composes.
+Rendered from the module's own manifest, and from nothing written by hand. What the module *does* is [its own page](../modules/custom_fields.md).
 
 | | |
 | --- | --- |

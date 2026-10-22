@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   OPPORTUNITY_BOARD_BUILTIN_FIELD_KEYS,
   calendarScopeSchema,
+  customFieldCarrySkipReasonSchema,
   opportunityEventReminderChannelSchema,
   opportunityEventReminderStateSchema,
   opportunityEventRuleSchema,
@@ -202,6 +203,10 @@ describe('crm admin copy', () => {
       // One label per field the history can show — the set the tab itself reads.
       'history.field.': [...LABELLED_HISTORY_FIELDS],
       'history.notFollowed.': ['skipped', 'failed'],
+      // Feature 162 — what a carry into the Opportunity skipped: the record it
+      // came from, and every reason the contract can answer.
+      'history.customFieldCarry.from.': ['order', 'quote_request'],
+      'history.carryReason.': [...customFieldCarrySkipReasonSchema.options],
       'references.kind.': ['product', 'order', 'admin_user'],
       'references.inserted.': ['product', 'order', 'admin_user'],
       'references.unavailable.': ['product', 'order', 'admin_user'],
@@ -236,6 +241,8 @@ describe('crm admin copy', () => {
       'events.reminder.': [...opportunityEventReminderStateSchema.options],
       'events.channel.': [...opportunityEventReminderChannelSchema.options],
       'events.saved.': ['created', 'updated', 'deleted'],
+      // The formatted field's toolbar (specs/158-crm-opportunity-inline-editing/).
+      'editor.format.': ['bold', 'italic', 'strike', 'bulletList', 'orderedList', 'link'],
     };
     const composed = sources.flatMap(({ text }) =>
       [...text.matchAll(/\bt\(\s*`([^`$]+)\$\{/g)].map((match) => match[1] as string),

@@ -64,7 +64,9 @@ export async function registerSeoRoutes(
   // A stored value that cannot be read — not a string, or not one of the four
   // choices — is a `500` and never a permissive `200`: the storefront keeps
   // what it knew instead of withdrawing a `noindex` nobody withdrew.
-  app.get('/api/v1/storefront/seo/robots-policy', async (request, reply) => {
+  // Feature 154 — reachable whatever the sales-channel access rule decides:
+  // the crawler policy of a closed store is still served.
+  app.get('/api/v1/storefront/seo/robots-policy', { config: { salesChannelAccess: 'open' } }, async (request, reply) => {
     const channel = getResolvedChannel(request);
     reply.header('Cache-Control', 'no-store');
     const stored = await settings.get(DEFAULT_ROBOTS_SETTING_CODE, channel.id, z.string());
@@ -109,11 +111,17 @@ export async function registerSeoRoutes(
   // `llms.txt` content is named in the answer instead, so that it costs the
   // channel its `llms.txt` and not its `robots.txt` — see
   // `services/crawler-files.service.ts`.
-  app.get('/api/v1/storefront/seo/crawler-files', async (request, reply) => {
+  //
+  // **Open on a store closed to anonymous visitors** (`specs/154-sales-channel-access/`,
+  // research R-4): `robots.txt` and `llms.txt` are served on every store. On a
+  // closed one there is nothing public to crawl, and the answer says so in
+  // `anonymousAccess` — the storefront then serves a `robots.txt` that
+  // disallows everything and an `llms.txt` that lists nothing.
+  app.get('/api/v1/storefront/seo/crawler-files', { config: { salesChannelAccess: 'open' } }, async (request, reply) => {
     const channel = getResolvedChannel(request);
     reply.header('Cache-Control', 'no-store');
     try {
-      const files = await resolveCrawlerFiles(settings, channel.id);
+      const files = await resolveCrawlerFiles(settings, channel);
       if (files.unreadable !== undefined) {
         // Answered, with what could not be read named in it — `robots.txt`
         // needs none of it. Names of members only; never a stored value.

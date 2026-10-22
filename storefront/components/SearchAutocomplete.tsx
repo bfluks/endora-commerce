@@ -46,8 +46,11 @@ export interface SearchAutocompleteProps {
   initialLimit?: number;
   /** Minimum-query-length default until the first response echoes the resolved value. */
   initialMinimumQueryLength?: number;
-  /** Forwarded as `X-Sales-Channel`. */
-  salesChannelCode?: string;
+  /**
+   * Forwarded as `X-Sales-Channel`. Required, so the layout cannot forget it: a
+   * query that names no channel is answered on the system default.
+   */
+  salesChannelCode: string | undefined;
   /** Translated placeholder + button label (matches the server-rendered fallback). */
   placeholder: string;
   searchActionLabel: string;
@@ -109,9 +112,7 @@ export function SearchAutocomplete(props: SearchAutocompleteProps): ReactNode {
             apiBaseUrl: props.apiBaseUrl,
             q: trimmed,
             ...(props.initialLimit !== undefined ? { limit: props.initialLimit } : {}),
-            ...(props.salesChannelCode !== undefined
-              ? { salesChannelCode: props.salesChannelCode }
-              : {}),
+            salesChannelCode: props.salesChannelCode,
             signal: ac.signal,
           });
           setResponse(next);

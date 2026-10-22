@@ -22,6 +22,13 @@ export function QuoteRequestCta(props: {
   label?: string;
   /** Hide the explanatory blurb shown above the form on the PDP. */
   withoutHint?: boolean;
+  /**
+   * Feature 155 (FR-032) — the product's pieces minimum: the PDP variant's quantity starts at
+   * it and the add never puts fewer pieces in the quote-request draft. `null`/absent = none.
+   */
+  minOrderQuantity?: number | null | undefined;
+  /** Request locale for the add button's copy and the minimum statement. */
+  locale?: string;
 }): ReactNode {
   const { productId, productSlug, productName, variant = 'pdp', unitPrice, label, withoutHint } =
     props;
@@ -51,6 +58,8 @@ export function QuoteRequestCta(props: {
         productName={productName ?? productSlug}
         unitPrice={unitPrice ?? null}
         withQuantity
+        minOrderQuantity={props.minOrderQuantity ?? null}
+        {...(props.locale ? { locale: props.locale } : {})}
       />
     </div>
   );

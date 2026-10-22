@@ -16,6 +16,7 @@ import {
 } from './seed-commerce.js';
 import { ADMIN_COOKIES, TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from './test-actors.js';
 import type { BackendServerHandle } from './test-server.js';
+import { bindOrganizationsToFixtureChannelsSql } from './sales-channel-access.js';
 
 /**
  * Fixtures shared by the `crm` contract and integration tests
@@ -155,6 +156,9 @@ export async function seedCrmOrganization(em: EntityManager, label: string): Pro
     registeredAddress: { street: 'ul. Testowa 1', city: 'Warszawa', postalCode: '00-100', country: 'PL' },
   });
   await em.persistAndFlush(organization);
+  // Feature 154 — an Organization with no sales channel may not shop anywhere;
+  // bind the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(em, [organization.id]);
   return organization.id;
 }
 

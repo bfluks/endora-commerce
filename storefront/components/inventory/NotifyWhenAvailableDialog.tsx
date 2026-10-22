@@ -2,6 +2,7 @@
 
 import { useId, useState, type FormEvent, type ReactNode } from 'react';
 import { publicApiBaseUrl } from '../../lib/env.mjs';
+import { channelHeaders } from '../../lib/channel/channel-header';
 
 /**
  * NotifyWhenAvailableDialog — feature 010 / US6.
@@ -42,8 +43,8 @@ export function NotifyWhenAvailableDialog(props: {
   productId: string;
   variantId?: string | null;
   defaultEmail?: string | null;
-  /** The channel this page was rendered for, forwarded as `X-Sales-Channel`. */
-  salesChannelCode?: string | undefined;
+  /** The channel this page was rendered for, forwarded as `X-Sales-Channel`. Required. */
+  salesChannelCode: string | undefined;
   labels: Labels;
 }): ReactNode {
   const [open, setOpen] = useState(false);
@@ -64,7 +65,7 @@ export function NotifyWhenAvailableDialog(props: {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          ...(props.salesChannelCode ? { 'X-Sales-Channel': props.salesChannelCode } : {}),
+          ...channelHeaders(props.salesChannelCode),
         },
         body: JSON.stringify({
           productId: props.productId,

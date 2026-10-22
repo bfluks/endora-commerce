@@ -8,6 +8,7 @@ import {
   ERROR_CODES,
   type ListingPriceOrderPort,
   type ListingPricePort,
+  type ListingPriceDetailPort,
   type WebhookEventRegistryPort,
 } from '@endora-commerce/contracts';
 import type { AuditReferenceRegistryPort } from '@endora-commerce/contracts';
@@ -38,6 +39,7 @@ import type {
   CatalogProductValueOverrideWritePort,
   CatalogPromoAttributePort,
   CatalogQuickSearchPort,
+  CatalogProductAvailabilityPort,
   InventoryProductThresholdWritePort,
   SearchQueryPort,
   SearchReindexPort,
@@ -71,6 +73,10 @@ import { GalleryItem } from './entities/gallery-item.entity.js';
 import { GroupedItem } from './entities/grouped-item.entity.js';
 import { ProductAttachment } from './entities/product-attachment.entity.js';
 import { ProductAttribute } from './entities/product-attribute.entity.js';
+import { ProductChannelLanguageScope } from './entities/product-channel-language-scope.entity.js';
+import { ProductChannelScope } from './entities/product-channel-scope.entity.js';
+import { ProductUrlKey } from './entities/product-url-key.entity.js';
+import { ProductUrlRedirect } from './entities/product-url-redirect.entity.js';
 import { ProductEditorPreference } from './entities/product-editor-preference.entity.js';
 import { ProductLink } from './entities/product-link.entity.js';
 import { ProductListSavedView } from './entities/product-list-saved-view.entity.js';
@@ -84,6 +90,11 @@ import { catalogModule, type CatalogModuleOptions } from './plugin.js';
 import type { CustomFieldDefinitionApplyApi } from './commands/attribute-commands.js';
 import { CatalogAdminService } from './services/catalog-admin.service.js';
 import { CatalogBulkImportService } from './services/catalog-bulk-import.service.js';
+import { ProductAvailabilityService } from './services/product-availability.service.js';
+import {
+  PublicationWindowSweep,
+  startPublicationWindowSweep,
+} from './services/publication-window-sweep.js';
 import { CategoryAdminService } from './services/category-admin.service.js';
 import { AttributeSetService } from './services/attribute-set.service.js';
 import { GalleryService } from './services/gallery.service.js';
@@ -172,6 +183,11 @@ export interface CatalogCradle {
   readonly commandBus: CommandBus;
   readonly auditLogService: AuditPort;
   readonly moduleQueueRedis: Redis | undefined;
+  /**
+   * Whether this process consumes queues — the host's answer; the shared test
+   * server says no and drives the publication-window sweep directly.
+   */
+  readonly processRunsWorkers: boolean;
   /**
    * The process connection, distinct from `moduleQueueRedis`: the assistant's
    * bulk tools delegate over the same queue in both compositions, which is a
@@ -684,7 +700,18 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.providePort<CatalogProductFilterPort>(
     'catalogProductFilterPort',
     ctx
-      .asFunction(({ emFactory }: CatalogCradle) => new CatalogProductFilterService(emFactory))
+      .asFunction(
+        ({ emFactory }: CatalogCradle) =>
+          new CatalogProductFilterService(
+            emFactory,
+            // Feature 163 — a feed's scoped floor is effective availability.
+            new ProductAvailabilityService(
+              emFactory,
+              lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+              lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
+            ),
+          ),
+      )
       .singleton(),
   );
 
@@ -785,6 +812,29 @@ export function registerModule(ctx: ModuleContext): void {
           new CatalogQuickSearchService(
             emFactory,
             lazyPort<CatalogAttributeReadPort>(ctx, 'catalogAttributeReadPort'),
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+            lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
+          ),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Feature 163 — the one way another module asks whether a product is
+   * available at (sales channel, language) to an audience, now
+   * (`specs/163-product-data-scopes/contracts/product-scopes.md` §3, FR-002).
+   * Consumers replace their own status, membership and audience tests with
+   * one call and keep their single not-found answer.
+   */
+  ctx.di.providePort<CatalogProductAvailabilityPort>(
+    'catalogProductAvailabilityPort',
+    ctx
+      .asFunction(
+        ({ emFactory }: CatalogCradle) =>
+          new ProductAvailabilityService(
+            emFactory,
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+            lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
           ),
       )
       .singleton(),
@@ -834,7 +884,7 @@ export function registerModule(ctx: ModuleContext): void {
             undefined,
             undefined,
             lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort'),
-            lazyPort<ListingPricePort>(ctx, 'pricingService'),
+            lazyPort<ListingPriceDetailPort>(ctx, 'pricingService'),
             lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
             lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
             lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
@@ -1100,6 +1150,24 @@ export function registerModule(ctx: ModuleContext): void {
 
   ctx.routes(async (app) => {
     await cradle().catalog(app);
+
+    // Feature 163 (R9, FR-024) — the publication-window sweep's clock: a Job
+    // Scheduler and its consumer, where the host says this process consumes
+    // queues. `ctx.worker` stops the consumer with the module; the watermark
+    // lives on the process connection, beside nothing it could be mistaken for.
+    const c = cradle();
+    await startPublicationWindowSweep({
+      processRunsWorkers: c.processRunsWorkers,
+      moduleQueueRedis: c.moduleQueueRedis,
+      sweep: new PublicationWindowSweep(c.emFactory, c.redis, (event) =>
+        c.eventBus.emit('product.updated.v1', event),
+      ),
+      log: ctx.log,
+      attach: (worker) => ctx.worker(worker, { logger: app.log }),
+      onClose: (close) => {
+        app.addHook('onClose', close);
+      },
+    });
   });
 
   /**
@@ -1158,10 +1226,14 @@ export const entities = [
   GroupedItem,
   ProductAttachment,
   ProductAttribute,
+  ProductChannelLanguageScope,
+  ProductChannelScope,
   ProductEditorPreference,
   ProductLink,
   ProductListSavedView,
   ProductPackagingUnit,
+  ProductUrlKey,
+  ProductUrlRedirect,
   ProductValueOverride,
   ProductVariant,
   Product,

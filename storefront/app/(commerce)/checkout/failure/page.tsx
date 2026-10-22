@@ -118,7 +118,7 @@ async function payAgainAction(formData: FormData): Promise<void> {
       )}`;
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : t('order.payment.retry.failed');
+      err instanceof StorefrontApiError ? err.detail : t('order.payment.retry.failed');
     target = `/orders/${id}?error=${encodeURIComponent(message)}`;
   }
   redirect(target);

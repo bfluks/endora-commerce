@@ -13,7 +13,7 @@ import type { Redis } from 'ioredis';
 import { buildServer, type ModulePlugin } from '@endora-commerce/platform/composition';
 import type { ApiInterceptorRegistry } from '@endora-commerce/platform/composition';
 import { publishStateChanged, registryCache } from '@endora-commerce/platform/composition';
-import { effectiveState } from '@endora-commerce/platform/kernel';
+import { effectiveState, getResolvedChannel } from '@endora-commerce/platform/kernel';
 import { type TenantContext } from '@endora-commerce/platform/tenancy';
 // Feature 072 — the generated module list, composed in one pass exactly as
 // `src/composition.ts` composes it (D-45). Issue #52 — and contributed into
@@ -119,6 +119,9 @@ import type {
 import type { EmailCradle } from '../../../packages/modules/email/src/backend/index.js';
 import type { AdminUsersCradle } from '@endora-commerce/mod-admin-users/backend';
 import type { ShoppingListService } from '../../../packages/modules/shopping_lists/src/backend/services/shopping-list-service.js';
+// Feature 155 — the shopping-list bridge's skipped → droppedLines mapping, the
+// same function `composition.ts` calls.
+import { toCartDroppedLines } from '@endora-commerce/contracts';
 // `dist`, not `src`, and it is the type that matches the object (feature 080,
 // T040b, batch four). The container holds the **composed** cradle, which the
 // platform built out of `@endora-commerce/mod-invoices/backend` — i.e. out of
@@ -1013,6 +1016,10 @@ async function dropStaleCaches(redis: Redis): Promise<void> {
   for (const pattern of [
     'session:*',
     'sales-channels:*',
+    // Feature 154 — an Organization's permitted channels, keyed by an
+    // Organization id the seeds reuse in every file while the channel ids
+    // behind it are new.
+    'sales-channel-access:*',
     'settings:v1:*',
     'admin-auth-throttle:*',
   ]) {
@@ -1178,7 +1185,10 @@ export async function setupBackendServer(
     resolveByEmail(
       email: string,
     ): Promise<{ id: string; organizationId: string | null; blocked: boolean } | null>;
-    autoCreate(email: string): Promise<{ id: string; organizationId: string | null } | null>;
+    autoCreate(
+      email: string,
+      context: { salesChannelId: string | null },
+    ): Promise<{ id: string; organizationId: string | null } | null>;
   } =>
     (
       container.cradle as never as {
@@ -1186,7 +1196,10 @@ export async function setupBackendServer(
           resolveByEmail(
             email: string,
           ): Promise<{ id: string; organizationId: string | null; blocked: boolean } | null>;
-          autoCreate(email: string): Promise<{ id: string; organizationId: string | null } | null>;
+          autoCreate(
+            email: string,
+            context: { salesChannelId: string | null },
+          ): Promise<{ id: string; organizationId: string | null } | null>;
         };
       }
     ).customerSocialLoginPort;
@@ -1778,6 +1791,11 @@ export async function setupBackendServer(
         // channel-scoped stock read at all. Registering it only in production is
         // what let the missing registration survive — see the note there.
         salesChannelResolutionPort: salesChannels.resolver,
+        // Feature 154 — mirrors `compose-app.ts`: the access rule for the
+        // sign-in paths and the access read, and the permitted-channel cache a
+        // channel delete drops.
+        salesChannelAccessPort: salesChannels.accessPolicy,
+        salesChannelAccessCache: salesChannels.accessCache,
       });
 
       // Feature 014 — CMS module. Reconcile seeded Hooks once; the storefront
@@ -1949,7 +1967,8 @@ export async function setupBackendServer(
         // had configured), and one fixed password hash for every account it made.
         mfaSocialAccountResolvers: {
           resolveCustomerByEmail: (email: string) => customerSocialLogin().resolveByEmail(email),
-          autoCreateCustomer: (email: string) => customerSocialLogin().autoCreate(email),
+          autoCreateCustomer: (email: string, context: { salesChannelId: string }) =>
+            customerSocialLogin().autoCreate(email, context),
           resolveAdminByEmail: async (email: string) => {
             // T052 — the same port production reads, rather than a second copy of
             // the read. The comment that stood here argued for the copy on the
@@ -2240,7 +2259,9 @@ export async function setupBackendServer(
       composedModules.contribute({
         transactionalEmailAssetUrl: async (assetId: string): Promise<string | null> => {
           try {
-            return (await assetsLibrary.handle.service.resolveUrl(assetId)).url;
+            // The embed form (specs/156-asset-stable-url/ R-8): an e-mail is a cached
+            // copy the platform never sees again, so the logo carries its marker.
+            return await assetsLibrary.handle.service.resolveEmbedUrl(assetId);
           } catch {
             return null;
           }
@@ -2331,15 +2352,13 @@ export async function setupBackendServer(
               },
               input.shoppingListId,
               undefined,
+              input.salesChannelId,
             );
             return {
               cartId: '',
               appendedLineCount: res.added,
-              droppedLines: res.skipped.map((it) => ({
-                productId: it.productId,
-                productName: it.productId,
-                reason: 'not_purchasable',
-              })),
+              // Feature 155 — the shared mapping, as `composition.ts`.
+              droppedLines: toCartDroppedLines(res.skipped),
             };
           },
         } satisfies CartShoppingListBridge,
@@ -2492,6 +2511,8 @@ export async function setupBackendServer(
             ).cartService.mergeAnonymousIntoCustomer(loginCtx.anonymousCartToken, {
               customerAccountId: loginCtx.customerAccountId,
               organizationId: loginCtx.organizationId,
+              // Mirrors composition.ts: the sign-in request's channel.
+              salesChannelId: getResolvedChannel().id,
             });
             result = { cartMerge };
           }

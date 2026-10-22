@@ -12,6 +12,7 @@ import {
   detail,
   en,
   renderCrm,
+  returningHere,
 } from './crm-fixtures';
 
 /**
@@ -186,7 +187,7 @@ describe('coming back from the create-order screen', () => {
     ).toBeInTheDocument();
     expect(within(orders).getByRole('link', { name: 'ORD-2001' })).toHaveAttribute(
       'href',
-      `/orders/${NEW_ORDER_ID}`,
+      returningHere(`/orders/${NEW_ORDER_ID}`),
     );
     expect(within(orders).queryByText(en('origin.order.linking'))).toBeNull();
   });
@@ -207,7 +208,7 @@ describe('coming back from the create-order screen', () => {
     expect(notice).toBeInTheDocument();
     expect(within(orders).getByRole('link', { name: en('origin.order.open') })).toHaveAttribute(
       'href',
-      `/orders/${NEW_ORDER_ID}`,
+      returningHere(`/orders/${NEW_ORDER_ID}`),
     );
   }, 12_000);
 

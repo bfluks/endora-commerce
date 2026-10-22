@@ -1,5 +1,113 @@
 # @endora-commerce/admin-kit
 
+## 0.107.0
+
+### Minor Changes
+
+- 97d24cf: A shared product browser for admin screens that add many products at once, and selectability rules for the quick product search.
+
+  **New in `@endora-commerce/admin-kit/components`.**
+
+  - `ProductBrowserDialog` — a wide side drawer that lists the catalogue from
+    `GET /api/v1/admin/catalog/products` in a paginated table (status tabs with counts, a type
+    filter, a debounced SKU / slug / name search) and keeps a selection across pages, page sizes
+    and filters. Props: `open`, `rules`, `alreadyAddedIds`, `title?`, `onConfirm(items)`,
+    `onCancel`, `confirmErrorMessage?(error)` (the message shown for a rejected confirm, given the
+    rejection so a host can name its cause). `onConfirm` receives the selected
+    `ProductBrowserItem`s in the order they were ticked. Return nothing for a local append; return a
+    promise to make the confirm a server write — the dialog shows pending, and on rejection stays
+    open with the selection kept and a **Retry** that sends the same items again. **The host owns
+    `open`**: close the dialog in `onConfirm`, or once its promise resolves. One confirm takes at most
+    `ADMIN_PRODUCT_SELECTION_MAX` (200) products. Its first page size follows the operator's
+    Products-list preference, and changing it inside the dialog does not change that preference.
+  - `ProductBrowserTrigger` — the **Browse products** button. It is disabled, with a visible hint,
+    for an operator without `catalog:read`; `disabled` and `disabledReason` add a host's own reason.
+  - `productSelectability(row, rules, { alreadyAddedIds, selectedIds, max })` — the pure rule both
+    entry points apply: `{ selectable: true }` or `{ selectable: false, reason }`, the reason being
+    the first of `alreadyAdded`, `typeBlocked`, `statusBlocked`, `limitReached`. A row already
+    selected stays de-selectable at the cap. `productSelectabilityReasonKey(reason, rules)` gives
+    the `core` translation key for a reason.
+  - `productDisplayName(item)` — the name a product is shown under: `en-US`, else the first locale
+    present, else the slug, else the SKU. `parsePositiveInt(input)` — a whole number of at least 1
+    from a quantity field, or `null`. The two line helpers every product-browser host shares, so
+    their screens and the kit's own picker show the same name and accept the same quantities.
+  - Types: `ProductBrowserRules` (`initialStatus: 'all' | 'active'`, `blockedTypes?`,
+    `blockedStatuses?`, `alreadyAddedLabelKey?`), `ProductBrowserItem`, `ProductBrowserStatus`,
+    `ProductBrowserType`, `ProductSelectability`, `ProductSelectabilityReason`,
+    `ProductSelectabilityContext`, `ProductBrowserDialogProps`, `ProductBrowserTriggerProps`.
+
+  **`ProductPicker` gains three optional props; without them nothing changes.**
+
+  - `rules` and `alreadyAddedIds` — every option is judged by `productSelectability`; one the host
+    refuses is shown disabled with its translated reason instead of hidden. Passing `rules` also
+    disables the picker, with the same hint as the trigger, for an operator without
+    `catalog:read`. A picker given no `rules` adds no permission check and needs no signed-in
+    session, exactly as before.
+  - `onPickProduct(item)` — receives the full summary of the picked product (`id`, `sku`, `slug`,
+    `name`, `status`, `type`), in both `select` and `multiselect` mode.
+
+  Every new string is read from the `core` namespace, so a host needs `@endora-commerce/mod-i18n`
+  at the version that ships the `productBrowser.*` keys.
+
+- 86a88fd: `AssetUploader` takes two optional props: `upload` and `accept`.
+
+  - `upload(file)` replaces the default request, which uploads the file as a new asset. The assets library's **Replace file** action passes one that stages the file for its own confirmation. The component still refuses a file outside `acceptPrefix` when one is given — a dropped file included — shows its progress and errors, and calls `onUploaded` with what `upload` answers.
+  - `accept` sets the file input's whole `accept` attribute (for example `application/pdf`). It only filters the file picker: a dropped file is checked against `acceptPrefix` alone, so pass both to hold a drop to one kind. Without `accept`, `acceptPrefix` decides the attribute as before.
+
+  The hidden file input now carries the trigger's label as its accessible name.
+
+  Every existing caller is unchanged.
+
+- 2933bf0: `@endora-commerce/admin-kit/components` publishes two new components. `ModalDialog` (with `ModalDialogProps`) is the dialog primitive `crm` used to keep to itself: a titled panel over a scrim with an accessible name, a focus trap, Escape and scrim to close, and a `busy` flag that makes both inert. It gains two optional props, `initialFocusRef` (focused on open instead of the first focusable element) and `finalFocusRef` (focused after close instead of the opener, read at close time); without them it behaves as before. `useFocusTrap` accepts the same two refs through a new optional third argument (`FocusTrapOptions`). `SavedViewsControl` (with `SavedViewsControlProps` and `SavedViewState`) is the saved-views selector with _Save view_ and _Delete view_, both through dialogs rather than the browser's native prompts: the caller passes the list's saved-view endpoint, its current state and an `onApply` callback, and the control lists, creates and deletes views through the kit's `apiClient`. A name the server refuses as taken (`409`) is shown in the save dialog with the name field marked invalid until the next keystroke. It never sends an update.
+
+  `crm` imports `ModalDialog` from the kit instead of its own copy, which is deleted. No behaviour changes.
+
+  The `core` bundle gains eighteen `savedViews.*` keys in English and Polish — the copy `SavedViewsControl` and its dialogs render.
+
+### Patch Changes
+
+- 09e72a3: `ProductPicker` now shows a preselected product without any interaction when it is mounted under React `<StrictMode>`, as the admin runs it. Its warm-up lookup marked an id as fetched before the answer arrived, so StrictMode's simulated unmount discarded the answer and the remount asked for nothing — the field stayed empty until opening the dropdown happened to load the product (seen on a quote request's Modify tab). The lookup in flight is now kept per id and re-awaited by every effect run, so a remount reuses the same request; only a failed lookup is remembered so it is not retried on every re-render.
+- b8adc7f: `AssetPicker` carries the new asset summary members (`fileUrl`, `permalink`, `permalinkUrl`, `contentVersion`) into its grid when an upload completes.
+
+  Nothing changes in what the picker shows or selects; the item it adds after an upload now matches the
+  shape the library's list answers.
+
+- a57515b: The sidebar shows the release number in a section of its own: the logo, a divider, the version
+  badge, a divider, then the rest of the sidebar. The badge no longer overlaps the logo's header.
+  The collapsed sidebar still hides it and keeps the release in the logo's tooltip.
+- 30c61d9: `AuthProvider` picks up what a federated sign-in leaves in the address when it returns to the Admin UI: `#mfa-challenge=<id>` opens the two-step verification form exactly as after the password step, and `/login?error=<sentence>` shows that sentence on the sign-in form (it was not shown before). Both are removed from the address bar once read. A pending challenge and that sentence survive the initial `/admin/me` check answering `401`.
+- Updated dependencies [fcf4d09]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/contracts@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

@@ -131,6 +131,10 @@ const MIGRATED_MODULES: readonly string[] = [
   // `DOCUMENT_*` codes were created after the chain was deleted, so
   // `MINTED_ERROR_CODES` accounts for them.
   'document_templates',
+  // Minted with the module (issue #379): its two `ADMIN_FEEDBACK_*` codes were
+  // created after the chain was deleted, so `MINTED_ERROR_CODES` accounts for
+  // them.
+  'admin_feedback',
   // Tier B, MR 4 — the first batch of the sweep whose receivers all already ship
   // an i18n bundle, and the first that deletes from one. `catalog`, `orders` and
   // `mfa` were on this roster from Phase 3 and simply grow; `customer_accounts`,
@@ -203,6 +207,11 @@ const MIGRATED_MODULES: readonly string[] = [
   'promotions',
   'prompt_actions',
   'quote_requests',
+  // Minted (`specs/155-catalog-order-constraints/`): `RETURN_LINE_NOT_RETURNABLE`
+  // is this module's first code and was created after the chain was deleted, so
+  // the frozen capture holds none and `MINTED_ERROR_CODES` is what accounts for
+  // it.
+  'returns',
   'sales_channels',
   'search',
   // Minted (`specs/144-seo-search-engine-robots/`): `SEO_CRAWLER_TEXT_TOO_LARGE`

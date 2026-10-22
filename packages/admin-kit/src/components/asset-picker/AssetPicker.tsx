@@ -153,6 +153,10 @@ export function AssetPicker(props: AssetPickerProps): ReactNode {
                     updatedAt: a.updatedAt,
                     deletedAt: a.deletedAt,
                     pendingCleanup: a.pendingCleanup,
+                    fileUrl: a.fileUrl,
+                    permalink: a.permalink,
+                    permalinkUrl: a.permalinkUrl,
+                    contentVersion: a.contentVersion,
                   },
                   ...prev,
                 ]);

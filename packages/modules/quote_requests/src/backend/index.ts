@@ -14,8 +14,12 @@ import type {
   BuyerLinePricePort,
   CartWritePort,
   CatalogAttributeReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
+  CustomFieldCarryPort,
+  CustomFieldCarryReceiverPort,
+  CustomFieldListFilterPort,
   CustomFieldDefinitionReadPort,
   DocumentRenderPort,
   DocumentTypeRegistryPort,
@@ -34,6 +38,7 @@ import type {
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import type { Redis } from 'ioredis';
 import { QuoteRequestReadService } from './services/quote-request-read-port.js';
+import { QuoteRequestCustomFieldCarryReceiver } from './services/quote-request-custom-field-carry-receiver.js';
 import {
   createQuoteRequestAdminSearchProvider,
   type QuoteRequestAdminSearchProviderDeps,
@@ -58,6 +63,7 @@ import { quoteRequestsModule, type QuoteRequestsModuleOptions } from './plugin.j
 import { QuoteRequest } from './entities/quote-request.entity.js';
 import { QuoteRequestEvent } from './entities/quote-request-event.entity.js';
 import { QuoteRequestItem } from './entities/quote-request-item.entity.js';
+import { QuoteRequestItemGroup } from './entities/quote-request-item-group.entity.js';
 import { QuoteRequestListSavedView } from './entities/quote-request-list-saved-view.entity.js';
 import { QuoteRequestNotificationEvent } from './entities/quote-request-notification-event.entity.js';
 import { QuoteRequestRevision } from './entities/quote-request-revision.entity.js';
@@ -440,6 +446,8 @@ export function registerModule(ctx: ModuleContext): void {
             ctx,
             'customFieldValueService',
           ),
+          // Feature 157 — the admin list's custom-field filters.
+          customFieldListFilter: lazyPort<CustomFieldListFilterPort>(ctx, 'customFieldListFilterPort'),
           requireAdmin: (permission) => async (req, reply) =>
             ctx.cradle<QuoteRequestsCradle>().requireAdmin(permission)(req, reply),
           requireAdminAny: (permissions) => async (req, reply) =>
@@ -473,6 +481,10 @@ export function registerModule(ctx: ModuleContext): void {
           channelMembership: lazyPort<SalesChannelMembershipPort>(
             ctx,
             'salesChannelMembershipPort',
+          ),
+          catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(
+            ctx,
+            'catalogProductAvailabilityPort',
           ),
           customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
           organizations: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
@@ -554,6 +566,25 @@ export function registerModule(ctx: ModuleContext): void {
     ctx
       .asFunction(
         ({ emFactory }: QuoteRequestsCradle) => new QuoteRequestReadService(emFactory),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Feature 162 — a Sales Opportunity's custom-field values received into a
+   * Quote Request created from it (`specs/162-custom-fields-value-carry/`,
+   * contract `carry-api.md` §4.2). `crm` decides this module's presence before
+   * it calls; the carry itself is planned by `custom_fields`.
+   */
+  ctx.di.providePort<CustomFieldCarryReceiverPort>(
+    'quoteRequestCustomFieldCarryPort',
+    ctx
+      .asFunction(
+        ({ commandBus }: QuoteRequestsCradle) =>
+          new QuoteRequestCustomFieldCarryReceiver({
+            commandBus,
+            customFieldCarry: lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort'),
+          }),
       )
       .singleton(),
   );
@@ -783,6 +814,7 @@ export const entities = [
   QuoteRequest,
   QuoteRequestEvent,
   QuoteRequestItem,
+  QuoteRequestItemGroup,
   QuoteRequestListSavedView,
   QuoteRequestNotificationEvent,
   QuoteRequestRevision,

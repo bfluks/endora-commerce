@@ -62,3 +62,39 @@ export async function establishPlatformInvariants(orm: MikroORM): Promise<void> 
     );
   }
 }
+
+/**
+ * The inverse of {@link establishPlatformInvariants}, for a clone of the
+ * template that has to be exactly what `migration:up` from empty leaves.
+ *
+ * The demo files under `test/integration/demo/` drive a real first boot — a
+ * boot that creates the system-default channel under the instance's own
+ * `DEFAULT_SALES_CHANNEL_CODE`, and whose reconcilers' writes are part of what
+ * those files measure — so a channel the template already holds would change
+ * their answer. They used to get that state by spawning the migrator into an empty
+ * database, 12.5 s per file on the test Postgres (2026-10-20); a clone with
+ * this withdrawn is the same state in 0.2 s (`test/helpers/migrated-database.ts`).
+ *
+ * It lives here, beside what it undoes, so a second invariant added above is a
+ * second one withdrawn in the same edit; and it refuses anything it does not
+ * recognise rather than deleting it. That the result really is a migrated
+ * database is not left to this comment —
+ * `test/integration/demo/migrated-clone-parity.test.ts` compares it with one,
+ * table by table.
+ */
+export async function withdrawPlatformInvariants(client: {
+  query: (sql: string) => Promise<{ rowCount: number | null; rows: unknown[] }>;
+}): Promise<void> {
+  const channels = await client.query(
+    `select code, system_default from sales_channels order by code`,
+  );
+  const rows = channels.rows as { code: string; system_default: boolean }[];
+  if (rows.length !== 1 || rows[0]!.code !== 'default' || rows[0]!.system_default !== true) {
+    throw new Error(
+      `[test-setup] a clone of the migration template was expected to hold exactly the ` +
+        `system-default channel establishPlatformInvariants seeds ("default"), and holds ` +
+        `${JSON.stringify(rows)}. Withdrawing anything else would not leave a migrated database.`,
+    );
+  }
+  await client.query(`delete from sales_channels where code = 'default' and system_default`);
+}

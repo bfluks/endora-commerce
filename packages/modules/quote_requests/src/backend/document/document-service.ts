@@ -25,7 +25,7 @@ import {
 } from '../commands/document-template-commands.js';
 import { QuoteRequest } from '../entities/quote-request.entity.js';
 import { QuoteRequestEvent } from '../entities/quote-request-event.entity.js';
-import { QuoteRequestItem } from '../entities/quote-request-item.entity.js';
+import { loadArrangedQuoteLines, toLineGroup } from '../services/line-order.js';
 import type { AdminContext } from '../services/rfq-admin-service.js';
 import { submissionRecordProposals } from '../services/draft-guard.js';
 import { formatQuoteDate } from './blocks/types.js';
@@ -152,14 +152,16 @@ export class QuoteRequestDocumentService {
     }
     const templateId = input.templateId ?? quote.documentTemplateId ?? undefined;
 
-    const [items, events] = await Promise.all([
-      em.find(QuoteRequestItem, { quoteRequestId: quote.id }, { orderBy: { createdAt: 'asc', id: 'asc' } }),
+    const [arranged, events] = await Promise.all([
+      loadArrangedQuoteLines(em, quote.id),
       em.find(QuoteRequestEvent, { quoteRequestId: quote.id }, { orderBy: { createdAt: 'asc' } }),
     ]);
+    const items = arranged.lines;
     const language = input.language ?? (await this.deps.builder.suggestedLanguage(quote.salesChannelId));
     const data = await this.deps.builder.build({
       quote,
       lines: items,
+      groups: arranged.groups.map(toLineGroup),
       language,
       proposals: await submissionRecordProposals(em, items, events),
     });

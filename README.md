@@ -155,7 +155,9 @@ Everything past the first run is on the documentation site,
   [kernel](docs/docs/architecture/kernel.md), the
   [customisation ladder](docs/docs/architecture/customisation-ladder.md) and
   [per-deployment overlay modules](docs/docs/architecture/overlay-pattern.md).
-- **The API** — a running backend serves its OpenAPI document at `GET /api/v1/_openapi.json`.
+- **The API** — a running backend serves its OpenAPI document at `GET /api/v1/_openapi.json` to
+  administrators holding `platform.api_description.read` and to API keys with that scope; in the
+  admin it is **System → API description**.
 
 ## 💻 Hardware & system requirements
 

@@ -348,6 +348,9 @@ importers:
       '@endora-commerce/mod-admin-actions':
         specifier: workspace:*
         version: link:../packages/modules/admin_actions
+      '@endora-commerce/mod-admin-feedback':
+        specifier: workspace:*
+        version: link:../packages/modules/admin_feedback
       '@endora-commerce/mod-admin-notifications':
         specifier: workspace:*
         version: link:../packages/modules/admin_notifications
@@ -1131,6 +1134,33 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
+  packages/modules/admin_feedback:
+    devDependencies:
+      '@endora-commerce/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      '@endora-commerce/platform':
+        specifier: workspace:*
+        version: link:../../platform
+      '@fastify/rate-limit':
+        specifier: ^10.3.0
+        version: 10.3.0
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      fastify:
+        specifier: ^5.12.5
+        version: 5.12.5
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+      zod:
+        specifier: ^4.2.0
+        version: 4.3.6
+
   packages/modules/admin_notifications:
     devDependencies:
       '@endora-commerce/contracts':
@@ -1406,12 +1436,18 @@ importers:
       '@types/react':
         specifier: ^19.2.14
         version: 19.2.14
+      bullmq:
+        specifier: ^5.76.1
+        version: 5.76.1
       fastify:
         specifier: ^5.12.5
         version: 5.12.5
       file-type:
         specifier: ^22.0.1
         version: 22.0.1
+      ioredis:
+        specifier: ^5.10.1
+        version: 5.10.1
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -1916,6 +1952,12 @@ importers:
       '@mikro-orm/postgresql':
         specifier: ^6.6.13
         version: 6.6.16(@mikro-orm/core@6.6.16)
+      '@tiptap/react':
+        specifier: ^3.22.5
+        version: 3.31.3(@floating-ui/dom@1.7.6)(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(@types/react-dom@19.2.3(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@tiptap/starter-kit':
+        specifier: ^3.22.5
+        version: 3.31.3
       '@types/node':
         specifier: ^22.9.0
         version: 22.19.17
@@ -18781,7 +18823,7 @@ snapshots:
       '@tiptap/extension-underline': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))
       '@tiptap/html': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(happy-dom@20.14.5)
       '@tiptap/pm': 3.31.3
-      '@tiptap/react': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(@types/react-dom@19.2.3(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@tiptap/react': 3.31.3(@floating-ui/dom@1.7.6)(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(@types/react-dom@19.2.3(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       deep-diff: 1.0.2
       fast-equals: 5.2.2
       flat: 5.0.2
@@ -20423,7 +20465,7 @@ snapshots:
     transitivePeerDependencies:
       - '@floating-ui/dom'
 
-  '@tiptap/react@3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(@types/react-dom@19.2.3(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
+  '@tiptap/react@3.31.3(@floating-ui/dom@1.7.6)(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(@types/react-dom@19.2.3(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
       '@tiptap/core': 3.31.3(@tiptap/pm@3.31.3)
       '@tiptap/pm': 3.31.3

@@ -1,4 +1,5 @@
 import { Asset } from '../../helpers/package-entities.js';
+import { overrideAssetSetting } from '../../helpers/crm-attachment-upload.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -113,5 +114,44 @@ describe('admin soft-delete + reference protection (T056)', () => {
       [a.id],
     );
     await h.em().removeAndFlush(await h.em().findOneOrFail(Asset, { id: a.id }));
+  });
+
+  // specs/156-asset-stable-url/ T042 — the reported purge date follows the
+  // setting as read now (FR-029, owner ruling P1), so it agrees with the sweep.
+  it('reports deletedAt + the current retention, also when the delete is repeated after the setting changed', async () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const em = h.em();
+    const a = em.create(Asset, {
+      kind: 'image',
+      filename: 'as156-retention-report.png',
+      mimeType: 'image/png',
+      sizeBytes: '0',
+      storageUrl: 'https://example.com/as156.png',
+      storageLocator: 'https://example.com/as156.png',
+      storageBackend: 'legacy',
+      visibility: 'public',
+    });
+    await em.persistAndFlush(a);
+    const restoreSeven = await overrideAssetSetting(h, 'assets.soft_delete_retention_days', 7);
+    try {
+      const del = await h.app.inject({ method: 'DELETE', url: `/api/v1/admin/assets/${a.id}`, cookies: adminCookie });
+      expect(del.statusCode).toBe(200);
+      const first = (del.json() as { data: { deletedAt: string; purgeAfterAt: string } }).data;
+      expect(Date.parse(first.purgeAfterAt) - Date.parse(first.deletedAt)).toBe(7 * DAY_MS);
+
+      const restoreThree = await overrideAssetSetting(h, 'assets.soft_delete_retention_days', 3);
+      try {
+        const again = await h.app.inject({ method: 'DELETE', url: `/api/v1/admin/assets/${a.id}`, cookies: adminCookie });
+        expect(again.statusCode).toBe(200);
+        const second = (again.json() as { data: { deletedAt: string; purgeAfterAt: string } }).data;
+        expect(second.deletedAt).toBe(first.deletedAt);
+        expect(Date.parse(second.purgeAfterAt) - Date.parse(second.deletedAt)).toBe(3 * DAY_MS);
+      } finally {
+        await restoreThree();
+      }
+    } finally {
+      await restoreSeven();
+      await h.em().removeAndFlush(await h.em().findOneOrFail(Asset, { id: a.id }));
+    }
   });
 });
