@@ -48,7 +48,7 @@ function primeProduct(values: { minOrderQuantity: number | null; returnable: boo
     if (path === PATH) {
       return Promise.resolve({ data: { id: PRODUCT_ID, type: 'simple', ...values } });
     }
-    // Feature 162 — the per-channel rules below the global ones; this file's
+    // Feature 163 — the per-channel rules below the global ones; this file's
     // subject is the global pair, so the product is in no channel here
     // (`product-scope-controls.test.tsx` covers the channel table).
     if (path === `${PATH}/scopes`) {

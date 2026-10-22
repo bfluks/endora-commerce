@@ -23,7 +23,7 @@ import { ProductChannelLanguageScope } from '../entities/product-channel-languag
 import { ProductChannelScope } from '../entities/product-channel-scope.entity.js';
 
 /**
- * Feature 162 (`specs/162-product-data-scopes/`) — a product's scoped values per
+ * Feature 163 (`specs/163-product-data-scopes/`) — a product's scoped values per
  * sales channel and per channel × language: status, publication window, audience,
  * minimum order quantity and the returnable flag (`contracts/admin-scopes-api.md`
  * §1–§2, research R1–R4, R10, R29).

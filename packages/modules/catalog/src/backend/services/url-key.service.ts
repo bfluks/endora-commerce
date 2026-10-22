@@ -17,7 +17,7 @@ import { ProductUrlKey } from '../entities/product-url-key.entity.js';
 import { ProductUrlRedirect } from '../entities/product-url-redirect.entity.js';
 
 /**
- * Feature 162 (`specs/162-product-data-scopes/`) — a product's URL keys per language
+ * Feature 163 (`specs/163-product-data-scopes/`) — a product's URL keys per language
  * and per sales channel × language, and the redirects their changes leave behind
  * (`contracts/url-keys-and-redirects.md` §1–§3, data-model §5, research R11, R29).
  *
