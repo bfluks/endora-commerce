@@ -3,18 +3,17 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import { describe, expect, it, vi } from 'vitest';
 import {
   ERROR_CODES,
+  isProductVisibleTo,
   type CatalogPackagingUnitRecord,
+  type CatalogProductAvailabilityPort,
+  type ProductAvailabilityScope,
   type CatalogProductReadPort,
   type CatalogProductRecord,
   type LinePricePort,
   type OrganizationDetailsPort,
   type ProductDisplayModePort,
 } from '@endora-commerce/contracts';
-import {
-  ModuleDisabledError,
-  SalesChannel,
-  type SalesChannelMembershipPort,
-} from '@endora-commerce/platform/kernel';
+import { ModuleDisabledError, SalesChannel } from '@endora-commerce/platform/kernel';
 import { Cart } from '../entities/cart.entity.js';
 import { CartItem } from '../entities/cart-item.entity.js';
 import { CART_MAX_LINES, CartService, type CustomerContext } from './cart-service.js';
@@ -47,6 +46,7 @@ const B = 'prod-b'; // no minimum
 const C = 'prod-c'; // pieces minimum 10, Pallet of 64 with a minimum of 2 units
 const H = 'prod-h'; // minimum 10, restricted to another organisation — hidden
 const Q = 'prod-q'; // quote-only
+const D = 'prod-d'; // a draft member — feature 163: not acquirable
 const UNKNOWN = 'prod-unknown';
 const PALLET = 'unit-pallet';
 const RED = 'var-red';
@@ -75,6 +75,7 @@ const PRODUCTS = new Map<string, CatalogProductRecord>([
   [C, product(C, { minOrderQuantity: 10, name: { en: 'Cement', pl: 'Cement PL' } })],
   [H, product(H, { minOrderQuantity: 10, allowedOrganizationIds: ['org-other'] })],
   [Q, product(Q)],
+  [D, product(D, { status: 'draft' })],
 ]);
 
 const UNITS: CatalogPackagingUnitRecord[] = [
@@ -194,10 +195,23 @@ function rig(
     },
   };
   const organizations = { findById: async () => null } as unknown as OrganizationDetailsPort;
-  const membership = {
-    filterEntityIdsInChannel: async (channelId: string, _kind: string, ids: string[]) =>
-      ids.filter((id) => (options.channels?.[channelId] ?? []).includes(id)),
-  } as unknown as SalesChannelMembershipPort;
+  // Feature 163 — `catalog`'s availability answer, stubbed as the rule over the
+  // fixture: a member of the channel, globally `active`, visible to the buyer.
+  const availability = {
+    filterAvailable: vi.fn(async (ids: readonly string[], scope: ProductAvailabilityScope) =>
+      new Set(
+        ids.filter((id) => {
+          const p = products.get(id);
+          return (
+            p !== undefined &&
+            p.status === 'active' &&
+            isProductVisibleTo(p, scope.audience) &&
+            (options.channels?.[scope.channelId] ?? []).includes(id)
+          );
+        }),
+      ),
+    ),
+  } as unknown as CatalogProductAvailabilityPort;
   // Asked only when no price list holds the product (issue #236).
   const displayModes: ProductDisplayModePort = { resolveDisplayMode: async () => 'gross_only' };
   const audits: unknown[] = [];
@@ -208,12 +222,12 @@ function rig(
     pricing,
     catalog as unknown as CatalogProductReadPort,
     organizations,
-    membership,
     displayModes,
+    availability,
     undefined,
     auditService as never,
   );
-  return { service, carts, items, writes, catalog, audits };
+  return { service, carts, items, writes, catalog, audits, availability };
 }
 
 function existingCart(overrides: Partial<Row> = {}): Row {
@@ -276,6 +290,31 @@ describe('addItems — resolution first (F1, FR-035)', () => {
       expect(ids).not.toContain(UNKNOWN);
       expect(ids).not.toContain(A);
     }
+    expect(r.items.map((i) => i.productId)).toEqual([B]);
+  });
+
+  it('feature 163 (F1, FR-004) — a member product that is not available in the channel gets the same 404', async () => {
+    const r = rig({
+      carts: [existingCart()],
+      channels: { 'ch-x': [B, D] },
+    });
+    const result = await r.service.addItems(
+      ACTOR,
+      [
+        { productId: D, quantity: 1, salesChannelId: 'ch-x' },
+        { productId: B, quantity: 1, salesChannelId: 'ch-x' },
+      ],
+      { onLineError: 'report' },
+    );
+    expect(result.outcomes).toEqual([
+      { index: 0, status: 'failed', error: NOT_FOUND },
+      { index: 1, status: 'added' },
+    ]);
+    // An operator naming the channel is answered in the channel's default language (N2).
+    const scopes = (r.availability.filterAvailable as unknown as { mock: { calls: [string[], ProductAvailabilityScope][] } }).mock.calls.map(
+      ([, scope]) => scope,
+    );
+    expect(scopes.every((scope) => scope.channelId === 'ch-x' && scope.languageCode === null)).toBe(true);
     expect(r.items.map((i) => i.productId)).toEqual([B]);
   });
 

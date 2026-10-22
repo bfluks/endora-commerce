@@ -17,14 +17,15 @@ import { Cart } from '../entities/cart.entity.js';
 import { CartItem } from '../entities/cart-item.entity.js';
 import type {
   CatalogPackagingUnitRecord,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CatalogProductRecord,
   LinePricesPort,
   ProductDisplayModePort,
   OrganizationDetailsPort,
 } from '@endora-commerce/contracts';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
-import { outOfRequestChannel, rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
+import { currentSalesChannel, rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
+import { basketScopeLanguage } from './cart-availability.js';
 import type { CartApprovalService } from './cart-approval-service.js';
 import type { CartAuditService } from './cart-audit-service.js';
 import type { CartRecomputeCache } from './cart-recompute-cache.js';
@@ -86,6 +87,13 @@ export interface CartActor {
   customer?: CustomerContext;
   anonymousToken?: string;
   anonymousSalesChannelId?: string;
+  /**
+   * Feature 163 — the request's first `Accept-Language` tag. The basket's
+   * scope language L is this tag resolved against the channel's languages
+   * (`basketScopeLanguage`). A preference, never an authority: it chooses a
+   * language the channel offers and nothing else.
+   */
+  languageTag?: string;
 }
 
 /**
@@ -156,19 +164,21 @@ export class CartService {
     /** `organizations`' read model — the buying org the price resolves against. */
     private readonly organizations: OrganizationDetailsPort,
     /**
-     * The sanctioned bridge accessor (Constitution XII), for the assortment
-     * gate `addItem` owes (issue #259). Required, like `catalogProducts`: an
-     * optional one would make "this rig did not wire it" and "this channel
-     * publishes the product" the same answer, which is the fail-open shape the
-     * whole issue is about.
-     */
-    private readonly channelMembership: SalesChannelMembershipPort,
-    /**
      * `price_lists`' display mode on its own (issue #236) — what `addItem`
      * refuses a product sold on request only by when no price list holds it.
-     * Required for the reason `channelMembership` is.
+     * Required for the reason `availability` is.
      */
     private readonly displayModes: ProductDisplayModePort,
+    /**
+     * Feature 163 — `catalog`'s one answer to "may this shopper acquire this
+     * product here, now" (FR-004): membership, effective status at (channel,
+     * L), window and effective audience in one call — membership through the
+     * sanctioned bridge accessor (Constitution XII) inside it. Required: an
+     * optional one would make "this rig did not wire it" and "this channel
+     * offers the product" the same answer, which is the fail-open shape issue
+     * #259 is about.
+     */
+    private readonly availability: CatalogProductAvailabilityPort,
     private readonly approvalService?: CartApprovalService,
     private readonly auditService?: CartAuditService,
     private readonly recomputeCache?: CartRecomputeCache,
@@ -780,43 +790,39 @@ export class CartService {
       );
     }
     const product = await this.catalogProducts.findById(input.productId);
-    // Issue #227 — a product this shopper may not see is a product they may not
-    // put in a cart. The read port is the row-level one and applies no policy of
-    // its own, deliberately: an order line has to resolve its product long after
-    // the operator restricted it. That makes enforcement the caller's, and this
-    // caller is holding a `productId` the buyer chose.
+    // Issue #227 / #259 / feature 163 — a product this shopper may not acquire
+    // here, now, is a product they may not put in a cart. The read port is the
+    // row-level one and applies no policy of its own, deliberately: an order
+    // line has to resolve its product long after the operator restricted it.
+    // That makes enforcement the caller's, and this caller is holding a
+    // `productId` the buyer chose.
     //
-    // 404 and not 403, matching the product detail: a caller who may not see the
-    // row may not learn it exists, and the two answers are indistinguishable to
-    // an honest client because they are the same answer.
-    if (!product || !isProductVisibleTo(product, cartAudience(actor))) {
-      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
-    }
-    // Issue #259 — the second filter the predicate above says it is not. The
-    // channel is a property of the request, so it is read off the request scope
-    // and never re-resolved here; outside a request there is no channel to be
-    // out of and `outOfRequestChannel` answers `false`.
-    //
-    // The same 404 as the two lines above, deliberately: "sold on another
-    // channel", "restricted to another organisation" and "does not exist" have
-    // to be one answer, or the pair of them is an enumeration oracle over an
-    // operator's private assortment — the defect issue #174 found in the
-    // type-ahead next door.
-    //
-    // The one exception is a caller that names the channel itself: an
-    // administrator creating an order on a customer's behalf chooses the
-    // order's channel in the request body, and the request scope of an admin
-    // call resolves to the system default, which is not that channel. Buyer
-    // routes never pass `salesChannelId`.
-    const outOfChannel = input.salesChannelId
-      ? !(
-          await this.channelMembership.filterEntityIdsInChannel(input.salesChannelId, 'product', [
-            product.id,
-          ])
-        ).includes(product.id)
-      : await outOfRequestChannel(this.channelMembership, product.id);
-    if (outOfChannel) {
-      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    // 404 and not 403, matching the product detail: "does not exist", "sold on
+    // another channel", "restricted to another organisation", "switched off in
+    // this language" and "outside its publication window" have to be one
+    // answer, or the set of them is an enumeration oracle over an operator's
+    // private assortment — the defect issue #174 found in the type-ahead.
+    const notFound = (): HttpError =>
+      new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    if (!product) throw notFound();
+    // The channel is a property of the request, read off the request scope and
+    // never re-resolved here. The one exception is a caller that names the
+    // channel itself: an administrator creating an order on a customer's
+    // behalf chooses the order's channel in the request body (buyer routes
+    // never pass `salesChannelId`), and is answered in that channel's default
+    // language (N2).
+    const channelId = input.salesChannelId ?? currentSalesChannel()?.id ?? null;
+    if (channelId === null) {
+      // Outside a request there is no channel to ask about (FR-007): the
+      // audience filter alone, as before.
+      if (!isProductVisibleTo(product, cartAudience(actor))) throw notFound();
+    } else {
+      const available = await this.availability.filterAvailable([product.id], {
+        channelId,
+        languageCode: input.salesChannelId ? null : basketScopeLanguage(channelId, actor.languageTag),
+        audience: cartAudience(actor),
+      });
+      if (!available.has(product.id)) throw notFound();
     }
 
     // Feature 043 — ordering by a packaging unit (e.g. a pallet): the line is

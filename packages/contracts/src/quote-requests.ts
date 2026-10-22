@@ -635,6 +635,22 @@ export const adminCreateQuoteRequestSchema = z
   .superRefine((body, ctx) => refineLineGrouping(ctx, body));
 export type AdminCreateQuoteRequest = z.infer<typeof adminCreateQuoteRequestSchema>;
 
+/**
+ * Feature 163 (FR-018) — what `POST /api/v1/admin/quote-requests` reports about
+ * a line it accepted although the product is not available to the request's
+ * Organization at the request's channel, in that channel's default language
+ * (N2): switched off there, outside its publication window, or outside the
+ * channel's audience rule. An operator surface, so the line is accepted and
+ * named (a buyer seam answers one not-found instead). Additive: the response
+ * carries `warnings` only when there is one.
+ */
+export const ADMIN_QUOTE_REQUEST_WARNING_CODES = ['PRODUCT_UNAVAILABLE_IN_SCOPE'] as const;
+export const adminQuoteRequestWarningSchema = z.object({
+  productId: uuidSchema,
+  code: z.enum(ADMIN_QUOTE_REQUEST_WARNING_CODES),
+});
+export type AdminQuoteRequestWarning = z.infer<typeof adminQuoteRequestWarningSchema>;
+
 /** The name of the event that announces a Quote Request an administrator created. */
 export const RFQ_CREATED_BY_ADMIN_EVENT = 'rfq.created_by_admin.v1';
 

@@ -5,6 +5,7 @@ import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type {
   AddressReadPort,
   CartWritePort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CatalogQuickSearchPort,
   CustomerAccountReadPort,
@@ -21,7 +22,6 @@ import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { lazyPort } from '@endora-commerce/platform/kernel';
 import { effectiveState } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { SettingNotRegistered, SettingOutOfScopeForChannel } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import {
@@ -192,9 +192,10 @@ export function registerModule(ctx: ModuleContext): void {
           new QuickOrderImportPipeline(
             new CatalogPortLookup(
               lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
-              // Issue #259 — the channel assortment gate on the pasted-SKU
-              // seam. A kernel registration, so no module edge to declare.
-              lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+              // Issue #259 / feature 163 — the availability gate on the
+              // pasted-SKU seam: `catalog`'s answer, with the kernel's channel
+              // membership inside it.
+              lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
             ),
           ),
       )

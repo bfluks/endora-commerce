@@ -14,3 +14,5 @@ Product data scopes per sales channel and language: the availability rule, the a
 - **`updateProductRequestSchema`** accepts optional, nullable `publishFrom` / `publishUntil` (ISO instants).
 - **`resolveScopeLanguage`** ignores a quality parameter carried with the tag (`de;q=0.9`).
 - **`CatalogQuickSearchParams`** gains optional `languageCode` (the request's language tag; absent = the channel default).
+- **`ProductAvailabilityScope.languageCode`** is `string | null` — `null` asks at the channel's default language.
+- **Quote requests:** `ADMIN_QUOTE_REQUEST_WARNING_CODES` (`PRODUCT_UNAVAILABLE_IN_SCOPE`), `adminQuoteRequestWarningSchema`, `AdminQuoteRequestWarning`.

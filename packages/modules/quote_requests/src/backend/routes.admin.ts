@@ -131,9 +131,12 @@ export async function registerQuoteRequestsAdminRoutes(
       const ctx = await resolveAdminContext(request);
       const body = adminCreateQuoteRequestSchema.parse(request.body);
       const rfq = await adminService.createOnBehalf(ctx, body);
+      // Feature 163 (FR-018) — accepted, and each line not available to the
+      // Organization here is named for the operator.
+      const warnings = await adminService.onBehalfWarnings(body);
       setEtag(reply, rfq.version);
       reply.code(201);
-      return { data: rfq };
+      return { data: rfq, ...(warnings.length > 0 ? { warnings } : {}) };
     },
   );
 

@@ -3,6 +3,7 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
   pickLocalized,
+  resolveScopeLanguage,
   type CartSnapshot,
   type CustomFieldCarryPort,
   type FulfilmentStrategy,
@@ -128,6 +129,7 @@ import {
   belowMinimumLinesOf,
   evaluateBasketMinimums,
   readBasketCatalogue,
+  availableOnly,
 } from './placement-minimums.js';
 import { returnableAtPurchase } from './returnable-at-purchase.js';
 import type { InvoicePlacementApplyPort } from '@endora-commerce/mod-invoices/ports';
@@ -153,6 +155,7 @@ import { assertMethodsOfferedInChannel } from './method-channel-gate.js';
 import type {
   AddressReadPort,
   CartReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   DeliveryMethodReadPort,
@@ -293,6 +296,13 @@ export interface OrderServiceNeighbourPorts {
   readonly customerAccountRead: CustomerAccountReadPort;
   readonly addressRead: AddressReadPort;
   readonly catalogProductRead: CatalogProductReadPort;
+  /**
+   * Feature 163 (FR-006) — `catalog`'s availability answer, asked again at
+   * placement: a line whose product is no longer available at the order's
+   * (channel, language) to its Organization refuses the placement with the
+   * unknown-id 404, as a line whose product is gone does.
+   */
+  readonly catalogProductAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
   /** `null` ⇒ `payment_methods` is not effectively present. */
   readonly paymentMethodRead: () => PaymentMethodReadPort | null;
   /** `null` ⇒ `delivery_methods` is not effectively present. */
@@ -1327,7 +1337,25 @@ export class OrderService {
         paymentMethodId: paymentMethod.id,
       });
     }
-    const catalogue = await readBasketCatalogue(this.neighbours.catalogProductRead, items);
+    // Feature 163 (FR-006) — the lines whose product is no longer available
+    // in the basket's channel are reported as placement will refuse them.
+    const basketChannel = await this.emFactory().findOne(SalesChannel, { id: basketChannelId });
+    const catalogue = await readBasketCatalogue(this.neighbours.catalogProductRead, items, (products) =>
+      availableOnly(this.neighbours.catalogProductAvailability, products, {
+        channelId: basketChannelId,
+        languageCode: basketChannel
+          ? resolveScopeLanguage(
+              {
+                id: basketChannel.id,
+                languages: basketChannel.languages,
+                defaultLanguage: basketChannel.defaultLanguage,
+              },
+              options.language,
+            )
+          : null,
+        organizationId: ctx.organizationId,
+      }),
+    );
     const productById = new Map(catalogue.products.map((p) => [p.id, p]));
 
     // Feature 155 (FR-008, FR-036, FR-037; research R19) — the lines placement
@@ -1689,7 +1717,20 @@ export class OrderService {
       // then the evaluation. A line whose product record is gone refuses the
       // placement (FR-037, fail-closed). Nothing has been written, so the
       // rollback releases the lock and leaves the basket as it was.
-      const catalogue = await readBasketCatalogue(this.neighbours.catalogProductRead, items);
+      const catalogue = await readBasketCatalogue(this.neighbours.catalogProductRead, items, (products) =>
+        availableOnly(this.neighbours.catalogProductAvailability, products, {
+          channelId: orderChannel.id,
+          languageCode: resolveScopeLanguage(
+            {
+              id: orderChannel.id,
+              languages: orderChannel.languages,
+              defaultLanguage: orderChannel.defaultLanguage,
+            },
+            options?.language,
+          ),
+          organizationId: ctx.organizationId,
+        }),
+      );
       const productById = new Map(catalogue.products.map((p) => [p.id, p]));
       const quoteSource = await this.#vouchedQuoteRequestSource(
         tx,
