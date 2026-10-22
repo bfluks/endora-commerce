@@ -28,15 +28,28 @@ import {
   type StorefrontOverrideContext,
 } from './storefront-value-overrides.js';
 import {
+  availabilityCondition,
+  type ListingCondition,
+} from './product-availability.sql.js';
+import {
+  availableAmong,
+  globalScopeFields,
+  loadChannelScopeRows,
+  toScopeChannel,
+  type PageAvailabilityScope,
+} from './product-availability.service.js';
+import {
   ERROR_CODES,
   compareDecimal,
   decimalText,
   formatUnits,
   isOrderMinimumEligibleType,
   normaliseAmount,
+  effectiveAudience,
   isPriceSort,
   isProductVisibleTo,
   listingPriceChannelContext,
+  resolveScopeLanguage,
   listingPriceMoney,
   type AssetReadPort,
   type AssetRecord,
@@ -149,6 +162,16 @@ export interface CatalogResolvedChannel {
   isPublic: boolean;
   defaultCurrency: string;
   defaultLanguage: string;
+  /**
+   * Feature 163 — the channel's content languages, from the resolved channel
+   * record (never from the client). The scope language "L" of a read is the
+   * request's `Accept-Language` pick resolved against this list
+   * (`resolveScopeLanguage`). Optional only for fixtures that predate it: an
+   * absent list is the channel's default language alone, so such a caller is
+   * answered for the default language and never for a language the channel
+   * may not offer.
+   */
+  languages?: readonly string[] | undefined;
 }
 
 export interface CatalogQueryContext {
@@ -313,6 +336,8 @@ type PricedListingPrice = Extract<ListingPrice, { source: 'price_list' }>;
 interface PriceWalkScope {
   context: ListingPriceViewerContext;
   categoryIds: ReadonlySet<string> | null;
+  /** Feature 163 — the read's availability scope, applied to every chunk of the walk. */
+  availability: PageAvailabilityScope;
 }
 
 /**
@@ -358,18 +383,6 @@ function afterKeysetCursor(
   }
   const at = new Date(cursor.createdAt);
   return { $or: [{ createdAt: { [op]: at } }, { createdAt: at, id: { [op]: cursor.id } }] };
-}
-
-/**
- * One condition of the listing statement: SQL over the `products` alias the ORM
- * settles on, and the values its `?` placeholders bind, in order.
- *
- * A plain description rather than a `raw()` fragment on purpose — see
- * `#listingNarrowing`.
- */
-interface ListingCondition {
-  sql: (alias: string) => string;
-  params: unknown[];
 }
 
 /**
@@ -556,6 +569,67 @@ export class CatalogQueryService {
       );
     }
     return this.channelMembership;
+  }
+
+  /**
+   * Feature 163 — where a read asks availability (FR-001): the request's
+   * resolved channel (Constitution XII), its scope language L, the audience the
+   * route took from the session, and one `now` for every statement and every
+   * page-side check of the read, so a window edge cannot fall between two of
+   * them.
+   */
+  #availabilityScope(ctx: CatalogQueryContext, now: Date = new Date()): PageAvailabilityScope {
+    const channel = toScopeChannel(ctx.resolvedChannel);
+    return {
+      channel,
+      languageCode: resolveScopeLanguage(channel, ctx.preferredLanguage),
+      audience: ctx.audience,
+      now,
+    };
+  }
+
+  /** {@link availabilityCondition} for this scope — a description; the caller makes the `raw()` key. */
+  #availabilityNarrowing(scope: PageAvailabilityScope): ListingCondition {
+    return availabilityCondition(
+      {
+        channelId: scope.channel.id,
+        languageCode: scope.languageCode,
+        channelLanguages: scope.channel.languages,
+        audience: scope.audience,
+        now: scope.now,
+      },
+      this.#requireChannelMembership(),
+    );
+  }
+
+  /**
+   * The pure rule over rows already held — the defence in depth behind every
+   * statement that carried {@link availabilityCondition}, and the whole check
+   * where a read could not carry it. `membersKnown` when the statement already
+   * held the kernel's membership subquery.
+   */
+  #availableAmong(
+    em: EntityManager,
+    products: readonly Product[],
+    scope: PageAvailabilityScope,
+    membersKnown: boolean,
+  ): Promise<Set<string>> {
+    return availableAmong(em, this.#requireChannelMembership(), products, scope, { membersKnown });
+  }
+
+  /**
+   * Feature 163 — the ids of `productIds` available to this request at (C, L),
+   * for a seam that holds ids and answers its own single not-found (bundle
+   * configuration options, FR-004).
+   */
+  async filterAvailableForRequest(
+    productIds: readonly string[],
+    ctx: CatalogQueryContext,
+  ): Promise<Set<string>> {
+    if (productIds.length === 0) return new Set();
+    const em = this.emFactory();
+    const products = await em.find(Product, { id: { $in: [...new Set(productIds)] } });
+    return this.#availableAmong(em, products, this.#availabilityScope(ctx), false);
   }
 
   #requireAssets(): AssetReadPort {
@@ -787,10 +861,13 @@ export class CatalogQueryService {
       }
     }
 
+    // Feature 163 — status, window, membership and audience are one condition,
+    // `availabilityCondition`, applied in every statement below; no status
+    // value is tested here (FR-002).
     const where: Record<string, unknown> = {
-      status: 'active',
       deletedAt: null,
     };
+    const scope = this.#availabilityScope(ctx);
     if (params.q) {
       // MVP: DB-only search. Production target uses Meilisearch behind this
       // same query method (T067/T068 — Phase 10 polish); for now we match:
@@ -821,10 +898,10 @@ export class CatalogQueryService {
     // chunked and both are bounded; everything else takes the single fetch it
     // always took.
     if (isPriceSort(params.sort)) {
-      return this.#listByViewerPrice(em, params, ctx, where, params.sort, priceCursor);
+      return this.#listByViewerPrice(em, params, ctx, where, params.sort, priceCursor, scope);
     }
     if (params.minPrice !== undefined || params.maxPrice !== undefined) {
-      return this.#listWithPriceRange(em, params, ctx, where);
+      return this.#listWithPriceRange(em, params, ctx, where, scope);
     }
 
     // Cursor decoding — over the keyset this ordering pages by, which is
@@ -838,7 +915,7 @@ export class CatalogQueryService {
 
     // Issue #151 — everything that decides whether a row is on the listing is
     // part of the statement the page is cut from. See `#listingNarrowing`.
-    const narrowing = await this.#listingNarrowing(em, params, ctx);
+    const narrowing = await this.#listingNarrowing(em, params, scope);
     if (narrowing === null) {
       // The category names nothing a storefront may browse, so no row matches
       // and there is no statement worth issuing.
@@ -873,16 +950,20 @@ export class CatalogQueryService {
     const nextCursor =
       hasMore && page.length > 0 ? encodeObjectCursor(keyset.of(page[page.length - 1]!)) : null;
 
-    // The audience and attribute predicates once more, over the rows the
+    // The availability and attribute predicates once more, over the rows the
     // statement returned — kept deliberately, as defence in depth.
-    // `isProductVisibleTo` is the platform's one answer to "may this caller see
-    // this product" and the SQL above is a restatement of it; a restatement that
-    // admits a row the predicate refuses must not be what decides a disclosure.
-    // The case that exists today is a stored allow-list that is not an array:
-    // the statement reads it as "no allow-list", the predicate does not. It
-    // costs no statement, and while the two agree it removes nothing — which is
-    // what the contract test holds them to, rule by rule, with full pages.
-    const priceable = page.filter((p) => this.#passesPageFilters(p, params, ctx));
+    // `isProductEffectivelyAvailable` is the platform's one answer to "may this
+    // caller see this product here, now" and the SQL above is a restatement of
+    // it; a restatement that admits a row the rule refuses must not be what
+    // decides a disclosure. The case that exists today is a stored allow-list
+    // that is not an array: the statement reads it as "no allow-list", the
+    // predicate does not. It costs the page's two scope-row reads, and while the
+    // two agree it removes nothing — which is what the parity test holds them
+    // to (`availability-parity.test.ts`).
+    const available = await this.#availableAmong(em, page, scope, true);
+    const priceable = page.filter(
+      (p) => available.has(p.id) && this.#passesPageFilters(p, params),
+    );
 
     // Build the summaries. The page is resolved **once** — `toSummary` used to
     // ask `price_lists` for a batch of one, so a 50-card page made 50 calls and
@@ -921,11 +1002,12 @@ export class CatalogQueryService {
    * were was short. With two sales channels and the newest hundred products on
    * one of them, the other's first page of a hundred was empty.
    *
-   *  - **channel membership** comes from the kernel's accessor as a fragment
-   *    ({@link SalesChannelMembershipPort.entityIdsInChannelSubquery}); the bridge
-   *    is still not named here (Constitution XII);
-   *  - **the audience** is `isProductVisibleTo` restated — see
-   *    `#audienceCondition`;
+   *  - **availability** (feature 163) is `availabilityCondition`: channel
+   *    membership through the kernel's accessor
+   *    ({@link SalesChannelMembershipPort.entityIdsInChannelSubquery} — the
+   *    bridge is still not named here, Constitution XII), the effective status
+   *    at (C, L), the effective window at `now` and the effective audience rule
+   *    (`isProductVisibleTo` restated over the channel's rule);
    *  - **the category** is an `exists` over this module's own
    *    `product_categories`, against the tree's ids rather than against every
    *    product id the tree holds, which is what the page-side test loaded;
@@ -941,7 +1023,7 @@ export class CatalogQueryService {
   async #listingNarrowing(
     em: EntityManager,
     params: ListProductsParams,
-    ctx: CatalogQueryContext,
+    scope: PageAvailabilityScope,
   ): Promise<ListingCondition[] | null> {
     // First, because it is the one part that can end the request: an unknown,
     // inactive or deleted category means no row matches.
@@ -951,14 +1033,7 @@ export class CatalogQueryService {
       if (categoryIds.length === 0) return null;
     }
 
-    const inChannel = this.#requireChannelMembership().entityIdsInChannelSubquery(
-      ctx.resolvedChannel.id,
-      'product',
-    );
-    const conditions: ListingCondition[] = [
-      { sql: (alias) => `${alias}.id in (${inChannel.sql})`, params: inChannel.params },
-      this.#audienceCondition(ctx.audience),
-    ];
+    const conditions: ListingCondition[] = [this.#availabilityNarrowing(scope)];
 
     if (categoryIds !== null) {
       const ids = categoryIds;
@@ -976,36 +1051,6 @@ export class CatalogQueryService {
     }
 
     return conditions;
-  }
-
-  /**
-   * `isProductVisibleTo`, as SQL, for the audience in front of the listing.
-   *
-   * The third restatement of that predicate in this module, and the only one
-   * that takes the audience as an argument: `catalog-quick-search.service.ts`
-   * answers for a signed-in buyer and `ANONYMOUS_AUDIENCE_CLAUSE` for nobody,
-   * so neither could be reused for a surface both kinds of caller read. The
-   * `case` follows the predicate branch for branch — a non-empty allow-list
-   * decides on its own, then `organization_restricted`, then `logged_in_only` —
-   * so a fourth visibility value falls to `else true` exactly as it falls to
-   * the predicate's last `return`.
-   *
-   * `@>` containment over the JSONB array, so the organisation has to be one of
-   * its elements rather than a substring of the serialised bag.
-   */
-  #audienceCondition(audience: ProductAudience): ListingCondition {
-    const onAllowList = audience.organizationId !== null;
-    return {
-      sql: (alias) =>
-        `(case ` +
-        `when (case when jsonb_typeof(${alias}.allowed_organization_ids) = 'array' ` +
-        `then jsonb_array_length(${alias}.allowed_organization_ids) else 0 end) > 0 ` +
-        `then ${onAllowList ? `${alias}.allowed_organization_ids @> ?::jsonb` : 'false'} ` +
-        `when ${alias}.visibility = 'organization_restricted' then false ` +
-        `when ${alias}.visibility = 'logged_in_only' then ${audience.authenticated ? 'true' : 'false'} ` +
-        `else true end)`,
-      params: onAllowList ? [JSON.stringify([audience.organizationId])] : [],
-    };
   }
 
   /**
@@ -1035,30 +1080,18 @@ export class CatalogQueryService {
   }
 
   /**
-   * The channel/audience/attribute predicates a fetched page is narrowed by,
-   * for one product.
+   * The attribute predicate a fetched page is narrowed by, for one product.
    *
-   * The channel test is the caller's, because it is one `in (…)` for the whole
-   * chunk; the other two are per row and were already written inline. They are
-   * collected here so the price paths below apply **exactly** the same
-   * narrowing as the default path — a price ordering that filtered differently
-   * would make a hidden row observable through a position or a page boundary,
-   * which is the disclosure FR-014 forbids and which neither the relevance sort
-   * nor the name sort could have had.
+   * Availability (channel, status, window, audience — feature 163) is the
+   * caller's, because it is one batched check for the whole chunk
+   * (`#availableAmong`) behind the statement's own `availabilityCondition`.
+   * Both are applied identically by the default path and the price paths below
+   * — a price ordering that filtered differently would make a hidden row
+   * observable through a position or a page boundary, which is the disclosure
+   * FR-014 forbids and which neither the relevance sort nor the name sort could
+   * have had.
    */
-  #passesPageFilters(
-    product: Product,
-    params: ListProductsParams,
-    ctx: CatalogQueryContext,
-  ): boolean {
-    // Issue #227 — the second scoping axis, alongside the channel one. The two
-    // price paths apply it here, to each chunk they collect before cutting a
-    // page, and their known cost is the scan budget binding where an operator
-    // restricts most of a catalogue. The default path no longer relies on it
-    // (issue #151): `#audienceCondition` puts the same answer in the statement
-    // its page is cut from, and this runs afterwards only as the predicate's
-    // own word on each row.
-    if (!isProductVisibleTo(product, ctx.audience)) return false;
+  #passesPageFilters(product: Product, params: ListProductsParams): boolean {
     if (!params.attributeFilters) return true;
     for (const [k, values] of Object.entries(params.attributeFilters)) {
       const av = product.attributeValues[k];
@@ -1114,6 +1147,7 @@ export class CatalogQueryService {
     sort: 'price' | '-price',
     /** The request's cursor as `#priceCursor` read it: `null` starts the walk. */
     decoded: PriceListingCursor | null,
+    availability: PageAvailabilityScope,
   ): Promise<ListResult<ProductSummary>> {
     const channel = ctx.resolvedChannel;
     const direction = sort === 'price' ? 'asc' : 'desc';
@@ -1121,7 +1155,7 @@ export class CatalogQueryService {
     // page and handed to whichever walk serves it — every chunk of it (review
     // 3, A5). An `unordered` walk is decided earlier, in `listProducts`, and
     // reads neither (review 2, finding 7).
-    const scope = await this.#priceWalkScope(em, params, ctx);
+    const scope = await this.#priceWalkScope(em, params, ctx, availability);
     const { context } = scope;
     // A walk whose price order went missing carries on in the default order
     // from the last price it served, to its end.
@@ -1202,7 +1236,7 @@ export class CatalogQueryService {
         chunk.rows.map((row) => row.productId),
         where,
         params,
-        ctx,
+        scope.availability,
       );
       for (const row of chunk.rows) {
         const product = byId.get(row.productId);
@@ -1225,25 +1259,29 @@ export class CatalogQueryService {
           bound = true;
           break;
         }
-        const chunkWhere = tailCursor
-          ? {
-              $and: [
-                where,
-                {
-                  $or: [
-                    { createdAt: { $lt: new Date(tailCursor.createdAt) } },
-                    { createdAt: new Date(tailCursor.createdAt), id: { $lt: tailCursor.id } },
-                  ],
-                },
-              ],
-            }
-          : where;
-        const rows = await em.find(Product, chunkWhere, {
-          limit: chunkSize,
-          // The listing's own default ordering, in both directions: the tail is
-          // not ordered by a price it does not have.
-          orderBy: { createdAt: 'desc', id: 'desc' },
-        });
+        const tailAfter = tailCursor
+          ? [
+              {
+                $or: [
+                  { createdAt: { $lt: new Date(tailCursor.createdAt) } },
+                  { createdAt: new Date(tailCursor.createdAt), id: { $lt: tailCursor.id } },
+                ],
+              },
+            ]
+          : [];
+        // Feature 163 — availability in the chunk's own statement (issue #151);
+        // the `raw()` key is made in the expression that executes it.
+        const narrowing = this.#availabilityNarrowing(scope.availability);
+        const rows = await em.find(
+          Product,
+          { $and: [where, ...tailAfter, { [raw(narrowing.sql, narrowing.params)]: [] }] },
+          {
+            limit: chunkSize,
+            // The listing's own default ordering, in both directions: the tail is
+            // not ordered by a price it does not have.
+            orderBy: { createdAt: 'desc', id: 'desc' },
+          },
+        );
         spent += rows.length;
         if (rows.length === 0) break;
         const lastRow = rows[rows.length - 1]!;
@@ -1256,13 +1294,10 @@ export class CatalogQueryService {
         const candidates = rows.filter(
           (r) => !priced.has(r.id) && (categoryIds === null || categoryIds.has(r.id)),
         );
-        const visibleIds = await this.filterByChannel(
-          candidates.map((r) => r.id),
-          channel,
-        );
+        const visibleIds = await this.#availableAmong(em, candidates, scope.availability, true);
         for (const product of candidates) {
           if (!visibleIds.has(product.id)) continue;
-          if (!this.#passesPageFilters(product, params, ctx)) continue;
+          if (!this.#passesPageFilters(product, params)) continue;
           collected.push(product);
           cursors.push({
             stream: 'tail',
@@ -1322,10 +1357,12 @@ export class CatalogQueryService {
     em: EntityManager,
     params: ListProductsParams,
     ctx: CatalogQueryContext,
+    availability: PageAvailabilityScope,
   ): Promise<PriceWalkScope> {
     return {
       context: await this.#viewerPricingContext(ctx),
       categoryIds: params.categorySlug ? await this.productIdsInCategoryTree(em, params.categorySlug) : null,
+      availability,
     };
   }
 
@@ -1411,12 +1448,13 @@ export class CatalogQueryService {
     params: ListProductsParams,
     ctx: CatalogQueryContext,
     where: Record<string, unknown>,
+    scope: PageAvailabilityScope,
   ): Promise<ListResult<ProductSummary>> {
     const range = this.#amountRange(params);
     // The chunk walk and the page it hands back page by the same keyset, and
     // that keyset is the one this ordering sorts on — `keysetFor`.
     const keyset = this.keysetFor(params.sort);
-    return this.#walkKeepingByPrice(em, params, ctx, where, await this.#priceWalkScope(em, params, ctx), {
+    return this.#walkKeepingByPrice(em, params, ctx, where, await this.#priceWalkScope(em, params, ctx, scope), {
       sort: params.sort,
       start: params.cursor ? keyset.parse(decodeObjectCursor<unknown>(params.cursor)) : null,
       keep: (price) => price !== null && withinAmountRange(price.amount, range),
@@ -1534,24 +1572,33 @@ export class CatalogQueryService {
         bound = true;
         break;
       }
-      const chunkWhere = cursor ? { $and: [where, keyset.after(cursor)] } : where;
-      const rows = await em.find(Product, chunkWhere, {
-        limit: chunkSize,
-        orderBy: this.orderForSort(walk.sort),
-      });
+      // Feature 163 — availability in the chunk's own statement (issue #151);
+      // the `raw()` key is made in the expression that executes it.
+      const narrowing = this.#availabilityNarrowing(scope.availability);
+      const rows = await em.find(
+        Product,
+        {
+          $and: [
+            where,
+            ...(cursor ? [keyset.after(cursor)] : []),
+            { [raw(narrowing.sql, narrowing.params)]: [] },
+          ],
+        },
+        {
+          limit: chunkSize,
+          orderBy: this.orderForSort(walk.sort),
+        },
+      );
       spent += rows.length;
       if (rows.length === 0) break;
       const lastRow = rows[rows.length - 1]!;
       cursor = keyset.of(lastRow);
 
-      const visibleIds = await this.filterByChannel(
-        rows.map((r) => r.id),
-        channel,
-      );
+      const visibleIds = await this.#availableAmong(em, rows, scope.availability, true);
       const candidates = rows.filter(
         (r) =>
           visibleIds.has(r.id) &&
-          this.#passesPageFilters(r, params, ctx) &&
+          this.#passesPageFilters(r, params) &&
           (categoryFilteredIds === null || categoryFilteredIds.has(r.id)),
       );
       // The walk decides on the viewer's own price — the figure the price
@@ -1624,18 +1671,19 @@ export class CatalogQueryService {
     productIds: readonly string[],
     where: Record<string, unknown>,
     params: ListProductsParams,
-    ctx: CatalogQueryContext,
+    scope: PageAvailabilityScope,
   ): Promise<Map<string, Product>> {
     const out = new Map<string, Product>();
     if (productIds.length === 0) return out;
-    const rows = await em.find(Product, { $and: [where, { id: { $in: [...productIds] } }] });
-    const visibleIds = await this.filterByChannel(
-      rows.map((r) => r.id),
-      ctx.resolvedChannel,
-    );
+    // Feature 163 — the `raw()` key is made in the expression that executes it.
+    const narrowing = this.#availabilityNarrowing(scope);
+    const rows = await em.find(Product, {
+      $and: [where, { id: { $in: [...productIds] } }, { [raw(narrowing.sql, narrowing.params)]: [] }],
+    });
+    const visibleIds = await this.#availableAmong(em, rows, scope, true);
     for (const product of rows) {
       if (!visibleIds.has(product.id)) continue;
-      if (!this.#passesPageFilters(product, params, ctx)) continue;
+      if (!this.#passesPageFilters(product, params)) continue;
       out.set(product.id, product);
     }
     return out;
@@ -1648,28 +1696,34 @@ export class CatalogQueryService {
     const isUuid =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrSlug);
     const product = await em.findOne(Product, isUuid ? { id: idOrSlug } : { slug: idOrSlug });
-    if (!product || product.deletedAt) {
-      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    const notFound = (): HttpError =>
+      new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    if (!product || product.deletedAt) throw notFound();
+
+    // Membership and the audience come first, for every product including an
+    // archived one: a caller outside the channel, or outside the product's
+    // effective audience there, may not learn the row exists — not even that
+    // it existed (feature 163, one answer for "unavailable" and "absent").
+    // Through the kernel's accessor (Constitution XII).
+    const scope = this.#availabilityScope(ctx);
+    const scopeRows = await loadChannelScopeRows(em, [product.id], channel.id);
+    const isMember = (await this.filterByChannel([product.id], channel)).has(product.id);
+    if (!isMember) throw notFound();
+    if (!isProductVisibleTo(effectiveAudience(globalScopeFields(product), scopeRows.channelRows.get(product.id)), ctx.audience)) {
+      throw notFound();
     }
-    if (product.status === 'inactive') {
+
+    // FR-005 — 410 iff archived (the global `inactive`, which sets
+    // `archived_at`); otherwise 404 unless effectively available at (C, L):
+    // a `draft` member is no longer reachable by its URL.
+    if (product.archivedAt || product.status === 'inactive') {
       throw new HttpError(410, ERROR_CODES.PRODUCT_ARCHIVED, 'Product is inactive.');
     }
-
-    // Visibility — if the product is not associated with the requested channel,
-    // behave like it doesn't exist. Avoids exposing non-public catalogue.
-    const visibleIds = await this.filterByChannel([product.id], channel);
-    if (!visibleIds.has(product.id)) {
-      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
-    }
-
-    // Issue #227 — and the same answer for the audience axis. 404 rather than
-    // 403: a caller who may not see the row may not learn it exists either,
-    // and a 403 on a slug tells them it does. This is also the gate the
-    // `/links` and `/bundle-configuration/validate` routes stand behind, since
-    // both resolve their subject through here first.
-    if (!isProductVisibleTo(product, ctx.audience)) {
-      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
-    }
+    const available = await availableAmong(em, this.#requireChannelMembership(), [product], scope, {
+      membersKnown: true,
+      rows: scopeRows,
+    });
+    if (!available.has(product.id)) throw notFound();
 
     const cardReads = await this.#listingCardReadsFor(em, [product.id], channel.id);
     const summary = this.toSummary(
@@ -2073,7 +2127,12 @@ export class CatalogQueryService {
       price: { amount: number; currency: string } | null;
     }>();
     if (ids.length === 0) return result;
-    const products = await em.find(Product, { id: { $in: ids } });
+    // Feature 163 — a child or option off at (C, L), outside its window or
+    // outside the audience is not offered through its parent (edge case
+    // *child off*): it is left out of the composite, as an absent one is.
+    const candidates = await em.find(Product, { id: { $in: ids } });
+    const available = await this.#availableAmong(em, candidates, this.#availabilityScope(ctx), false);
+    const products = candidates.filter((p) => available.has(p.id));
 
     // Primary asset url via gallery thumb chain -> base_image -> first item
     // -> legacy product_assets first row. One helper, shared with `toSummary`
@@ -2121,7 +2180,7 @@ export class CatalogQueryService {
     );
 
     // Directly-assigned products per category that this caller may see.
-    const directSets = await this.directProductSetsByCategory(em, channel, ctx.audience);
+    const directSets = await this.directProductSetsByCategory(em, channel, this.#availabilityScope(ctx));
 
     const byParent = new Map<string | null, Category[]>();
     for (const row of rows) {
@@ -2235,15 +2294,20 @@ export class CatalogQueryService {
     const channel = ctx.resolvedChannel;
     const attrs = await this.#requireAttributeRead().listByFlag('isFilterable');
 
-    // Build option / range facets by scanning Products in the channel.
-    const products = await em.find(Product, { status: 'active', deletedAt: null });
-    const visibleIds = await this.filterByChannel(products.map((p) => p.id), channel);
-    // Issue #227 — a facet count is a disclosure too. "Brass (3)" on a
+    // Build option / range facets by scanning Products available in the
+    // channel. Issue #227 — a facet count is a disclosure too. "Brass (3)" on a
     // catalogue holding two brass products the caller may see is the third
-    // one, named by arithmetic.
-    const visible = products.filter(
-      (p) => visibleIds.has(p.id) && isProductVisibleTo(p, ctx.audience),
-    );
+    // one, named by arithmetic; feature 163 extends that to a product off at
+    // (C, L) or outside its window. Availability is in the statement and then
+    // the rule's own word on each row; the `raw()` key is made in the
+    // expression that executes it.
+    const scope = this.#availabilityScope(ctx);
+    const narrowing = this.#availabilityNarrowing(scope);
+    const products = await em.find(Product, {
+      $and: [{ deletedAt: null }, { [raw(narrowing.sql, narrowing.params)]: [] }],
+    });
+    const visibleIds = await this.#availableAmong(em, products, scope, true);
+    const visible = products.filter((p) => visibleIds.has(p.id));
 
     const definitions = attrs.map((a) => {
       const label = this.pickLang(a.label, ctx.preferredLanguage, channel);
@@ -2704,7 +2768,7 @@ export class CatalogQueryService {
   private async directProductSetsByCategory(
     em: EntityManager,
     channel: CatalogResolvedChannel,
-    audience: ProductAudience,
+    scope: PageAvailabilityScope,
   ): Promise<Map<string, Set<string>>> {
     const base = await em.execute<{ category_id: string; product_id: string }[]>(
       `select category_id, product_id from product_categories`,
@@ -2712,30 +2776,21 @@ export class CatalogQueryService {
     if (base.length === 0) return new Map();
 
     // Channel membership.
-    const visibleIds = await this.filterByChannel(
+    const memberIds = await this.filterByChannel(
       base.map((r) => r.product_id),
       channel,
     );
-    // Issue #227 — and the audience axis, which needs the two columns this
-    // path never loaded: `product_categories` carries ids and nothing else, so
-    // the rows come back here rather than the predicate going down there. The
-    // category tree publishes a `productCount` per node, and a count is the
-    // one field a restricted product can still move.
-    const restricted = new Set(
-      (
-        await em.find(
-          Product,
-          { id: { $in: [...visibleIds] } },
-          { fields: ['id', 'visibility', 'allowedOrganizationIds'] },
-        )
-      )
-        .filter((p) => !isProductVisibleTo(p, audience))
-        .map((p) => p.id),
-    );
+    // Issue #227 / feature 163 — and availability, which needs the columns
+    // this path never loaded: `product_categories` carries ids and nothing
+    // else, so the rows come back here rather than the predicate going down
+    // there. The category tree publishes a `productCount` per node, and a count
+    // is the one field a restricted, switched-off or out-of-window product can
+    // still move.
+    const members = await em.find(Product, { id: { $in: [...memberIds] } });
+    const visibleIds = await this.#availableAmong(em, members, scope, true);
     const sets = new Map<string, Set<string>>();
     for (const row of base) {
       if (!visibleIds.has(row.product_id)) continue;
-      if (restricted.has(row.product_id)) continue;
       let set = sets.get(row.category_id);
       if (!set) {
         set = new Set<string>();
