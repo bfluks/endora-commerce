@@ -83,3 +83,27 @@ export async function clearProductScopes(em: EntityManager, productIds: readonly
     ...productIds,
   ]);
 }
+
+/** A channel's Name override for a product (feature 022 row); `languageCode` `null` = channel-only. */
+export async function setNameOverride(
+  em: EntityManager,
+  productId: string,
+  channelId: string,
+  languageCode: string | null,
+  name: string,
+): Promise<void> {
+  await exec(
+    em,
+    `insert into product_value_overrides (id, product_id, attribute_key, channel_id, language_code, value, created_at, updated_at)
+     values (gen_random_uuid(), ?, 'name', ?, ?, ?::jsonb, now(), now())`,
+    [productId, channelId, languageCode, JSON.stringify({ v: name })],
+  );
+}
+
+/** Every value override of the products. */
+export async function clearValueOverrides(em: EntityManager, productIds: readonly string[]): Promise<void> {
+  if (productIds.length === 0) return;
+  await exec(em, `delete from product_value_overrides where product_id in (${productIds.map(() => '?').join(',')})`, [
+    ...productIds,
+  ]);
+}
