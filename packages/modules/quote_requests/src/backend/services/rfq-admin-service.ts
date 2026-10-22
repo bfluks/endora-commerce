@@ -39,7 +39,7 @@ import { QuoteRequestItem } from '../entities/quote-request-item.entity.js';
 import { QuoteRequestItemGroup } from '../entities/quote-request-item-group.entity.js';
 import { underRowLock } from './transition-lock.js';
 import type { RfqService} from './rfq-service.js';
-import { type RfqEventBus, type RfqEvents } from './rfq-service.js';
+import { rfqAudience, type RfqEventBus, type RfqEvents } from './rfq-service.js';
 import type { RfqEventService } from './rfq-event-service.js';
 import type { RfqRevisionService } from './rfq-revision-service.js';
 import type { RfqNotificationService } from './rfq-notification-service.js';
@@ -902,7 +902,8 @@ export class RfqAdminService {
     const available = await this.deps.catalogAvailability.filterAvailable(productIds, {
       channelId,
       languageCode: null,
-      audience: { organizationId: body.organizationId, authenticated: true },
+      // The customer the operator names: the request's own actor is the operator.
+      audience: rfqAudience({ organizationId: body.organizationId }),
     });
     return productIds
       .filter((productId) => !available.has(productId))

@@ -9,7 +9,6 @@
 import type {} from '@fastify/cookie';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
-  ANONYMOUS_PRODUCT_AUDIENCE,
   addCartItemRequestSchema,
   updateCartItemRequestSchema,
   saveCartItemToListSchema,
@@ -25,7 +24,7 @@ import {
   type PromotionApplication,
 } from '@endora-commerce/contracts';
 import { availableRecords, basketScopeLanguage, firstLanguageTag } from './services/cart-availability.js';
-import type { CartActor, CartService } from './services/cart-service.js';
+import { cartAudience, type CartActor, type CartService } from './services/cart-service.js';
 import type { CartUpsellService } from './services/cart-upsell-service.js';
 import type { CartCouponService } from './services/cart-coupon-service.js';
 import type { CartConversionService } from './services/cart-conversion-service.js';
@@ -278,9 +277,7 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
     const products = await availableRecords(deps.catalogAvailability, records, {
       channelId: actor.salesChannelId,
       languageCode: basketScopeLanguage(actor.salesChannelId, actor.languageTag),
-      audience: actor.customer
-        ? { organizationId: actor.customer.organizationId, authenticated: true }
-        : ANONYMOUS_PRODUCT_AUDIENCE,
+      audience: cartAudience(actor),
     });
     const productMeta = productMetaOf(records, preferredLanguage);
     const minimumViews = await evaluateCartViewMinimums(
