@@ -119,7 +119,8 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
       `select count(*)::text as n from product_channel_language_scopes where product_id = ?`,
       [productId],
     );
-    return { channel: Number(c?.n ?? 0), language: Number(l?.n ?? 0) };
+    if (!c || !l) throw new Error('count(*) returned no row');
+    return { channel: Number(c.n), language: Number(l.n) };
   }
 
   function captureUpdates(productId: string): { fields: () => string[][]; stop: () => void } {
