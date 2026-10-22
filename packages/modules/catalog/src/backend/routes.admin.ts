@@ -152,13 +152,13 @@ export interface CatalogAdminDeps {
    */
   productOverridesService?: ProductOverridesService;
   /**
-   * Feature 162 — a product's scoped values per sales channel and language
+   * Feature 163 — a product's scoped values per sales channel and language
    * (`GET|PATCH /admin/catalog/products/:id/scopes`). When omitted, the two
    * routes are NOT registered.
    */
   productScopesService?: ProductScopesService;
   /**
-   * Feature 162 — a product's URL keys and redirects
+   * Feature 163 — a product's URL keys and redirects
    * (`GET|PUT /admin/catalog/products/:id/url-keys`,
    * `DELETE /admin/catalog/products/:id/url-redirects/:redirectId`). When
    * omitted, the three routes are NOT registered.
@@ -716,7 +716,7 @@ export async function registerCatalogAdminRoutes(
   }
 
   // -------------------------------------------------------------------------
-  // Feature 162 — scoped status, publication window, audience and order rules
+  // Feature 163 — scoped status, publication window, audience and order rules
   // per sales channel and channel × language (`contracts/admin-scopes-api.md`
   // §1–§2). The body is parsed inside the handler, after the gate, so an
   // unauthenticated or unauthorised caller is answered 401/403 whatever it sent.

@@ -8,7 +8,7 @@ import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
 import type { ScopeContext } from '../components/ProductScopeEditor.js';
 
 /**
- * Feature 162 (T088) — the product editor's calls to `…/scopes`, made the way
+ * Feature 163 (T088) — the product editor's calls to `…/scopes`, made the way
  * `ProductScopeEditor` already calls `…/scope-context` and `…/value-overrides`: through
  * the admin kit's client (`contracts/admin-scopes-api.md` §1–§2).
  */

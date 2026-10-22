@@ -462,7 +462,7 @@ export const manifest = defineModuleManifest({
    * owns the noun. Each arrives with its sentence in both bundles. No token:
    * their `details` carry the line's product, minimum and `lines[]`, no `code`.
    *
-   * **Five were minted by feature 162** (`specs/162-product-data-scopes/`
+   * **Five were minted by feature 163** (`specs/163-product-data-scopes/`
    * `contracts/error-codes.md`): `SCOPE_INVALID`, `SCOPE_INCOMPLETE`,
    * `URL_KEY_TAKEN`, `URL_KEY_REDIRECT_TAKEOVER_REQUIRED` and
    * `URL_REDIRECT_NOT_FOUND`. D-121 T1: the nouns are product scopes, URL keys
@@ -609,7 +609,7 @@ export const manifest = defineModuleManifest({
       icon: 'Package',
       targetRoute: '/catalog/products',
       requiredPermission: 'catalog:read',
-      // Feature 162 (R23, FR-042) — the scope controls and overview are part of the
+      // Feature 163 (R23, FR-042) — the scope controls and overview are part of the
       // product editor, which a palette route cannot open by id; these find it.
       keywords: [
         'products',
