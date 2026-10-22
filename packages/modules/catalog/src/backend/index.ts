@@ -72,6 +72,8 @@ import { GalleryItem } from './entities/gallery-item.entity.js';
 import { GroupedItem } from './entities/grouped-item.entity.js';
 import { ProductAttachment } from './entities/product-attachment.entity.js';
 import { ProductAttribute } from './entities/product-attribute.entity.js';
+import { ProductChannelLanguageScope } from './entities/product-channel-language-scope.entity.js';
+import { ProductChannelScope } from './entities/product-channel-scope.entity.js';
 import { ProductEditorPreference } from './entities/product-editor-preference.entity.js';
 import { ProductLink } from './entities/product-link.entity.js';
 import { ProductListSavedView } from './entities/product-list-saved-view.entity.js';
@@ -1167,6 +1169,8 @@ export const entities = [
   GroupedItem,
   ProductAttachment,
   ProductAttribute,
+  ProductChannelLanguageScope,
+  ProductChannelScope,
   ProductEditorPreference,
   ProductLink,
   ProductListSavedView,
