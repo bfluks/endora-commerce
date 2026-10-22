@@ -335,6 +335,17 @@ export const ADMIN_COOKIES: Record<string, { adminUserId: string }> = {
   'stub-product-views-no-catalog-session': {
     adminUserId: '00000000-0000-4000-8000-0000000147b3',
   },
+  // `specs/162-product-data-scopes/` — the product scopes routes' gates. A
+  // catalogue reader on a custom role (`catalog:read` only) reads a product's
+  // scopes and is refused the write; an admin without `catalog:read` is refused
+  // both. The users, and the custom roles, are created by
+  // `test/contract/catalog/product-scopes-api.test.ts`.
+  'stub-product-scopes-reader-session': {
+    adminUserId: '00000000-0000-4000-8000-0000000162a1',
+  },
+  'stub-product-scopes-no-catalog-session': {
+    adminUserId: '00000000-0000-4000-8000-0000000162a2',
+  },
   // `specs/147-saved-views/` — the Quote Request list's saved views, with ids
   // of their own for the same reason. A sales representative holding
   // `rfqs:handle`, assigned to `TEST_ORGANIZATION_ID` only, reads a shared view
