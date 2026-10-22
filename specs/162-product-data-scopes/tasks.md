@@ -179,13 +179,20 @@ consumer still compiles.
 **Goal**: `product_channel_scopes`, `product_channel_language_scopes`, `products.publish_from/until`
 exist, registered, with entities (data-model §1–§3).
 
-- [ ] T014 [P] [PG] [S1] RED integration test: both tables exist; `CHECK`s refuse a bad status, `from >= until`, MOQ 0 and 1 000 001, `allowed_organization_ids` without `visibility`, bounds without `window_overridden`; cascade on product hard delete and on channel delete (edge case *Channel deleted*) — `backend/test/integration/catalog/product-scopes-schema.test.ts`
-- [ ] T015 [S1] Scaffold and fill `pnpm --filter backend run migration:new -- --module catalog --name product_scopes` per data-model §1–§3 (`down` drops both tables and both columns)
-- [ ] T016 [P] [S1] Entities `ProductChannelScope`, `ProductChannelLanguageScope` (`@GlobalEntity()`), `Product.publishFrom/publishUntil` in `[OptionalProps]` with doc comments citing the FRs — `packages/modules/catalog/src/backend/entities/{product-channel-scope,product-channel-language-scope,product}.entity.ts`
-- [ ] T017 [S1] `toCatalogProductRecord` fills `publishFrom/publishUntil` (the contract fields stay **optional** — required would break every consumer fixture that builds a record literal) — `catalog-product-read.service.ts` **(⛔384 touches this file: if #384 is not merged, put the two fields in a one-line hunk away from `listValueOverridesByProductIds` and expect a trivial rebase)**
-- [ ] T018 [S1] Regenerate + commit: `composer:generate`, `manifests:generate`, `pnpm install --lockfile-only`
-- [ ] T019 [S1] `check-entity-tenant-classification` passes for the two entities (platform-global, FR-083)
-- [ ] T020 [S1] Run the registry/graph tests
+- [x] T014 [P] [PG] [S1] RED integration test: both tables exist; `CHECK`s refuse a bad status, `from >= until`, MOQ 0 and 1 000 001, `allowed_organization_ids` without `visibility`, bounds without `window_overridden`; cascade on product hard delete and on channel delete (edge case *Channel deleted*) — `backend/test/integration/catalog/product-scopes-schema.test.ts`
+  - Written; [PG] — unrun locally, typechecks; for the fork `ci-pg` run.
+- [x] T015 [S1] Scaffold and fill `pnpm --filter backend run migration:new -- --module catalog --name product_scopes` per data-model §1–§3 (`down` drops both tables and both columns)
+  - `20261022T035133_catalog_product_scopes.ts`, named constraints (`product_channel_scopes_{status,window_order,window_flag,visibility,audience_pair,min_order_quantity}_check`, `products_publish_window_check`); also a visibility value-set `CHECK` and an audience pair `CHECK` both ways; indexes `(sales_channel_id, status)` and `(sales_channel_id, language_code, status)`. Registered in the module's `migrations/index.ts`.
+- [x] T016 [P] [S1] Entities `ProductChannelScope`, `ProductChannelLanguageScope` (`@GlobalEntity()`), `Product.publishFrom/publishUntil` in `[OptionalProps]` with doc comments citing the FRs — `packages/modules/catalog/src/backend/entities/{product-channel-scope,product-channel-language-scope,product}.entity.ts`
+  - Composite-PK entities registered in `backend/index.ts`' entity list.
+- [x] T017 [S1] `toCatalogProductRecord` fills `publishFrom/publishUntil` (the contract fields stay **optional** — required would break every consumer fixture that builds a record literal) — `catalog-product-read.service.ts` **(⛔384 touches this file: if #384 is not merged, put the two fields in a one-line hunk away from `listValueOverridesByProductIds` and expect a trivial rebase)**
+  - #384 not merged: two lines after `returnable`, away from the overrides code.
+- [x] T018 [S1] Regenerate + commit: `composer:generate`, `manifests:generate`, `pnpm install --lockfile-only`
+  - Only `migrations-registry.generated.ts` moved; lockfile unchanged.
+- [x] T019 [S1] `check-entity-tenant-classification` passes for the two entities (platform-global, FR-083)
+  - 222/222 classified, unclassified=0.
+- [x] T020 [S1] Run the registry/graph tests
+  - migrations-registry, fk-dependency-drift, module-graph: 3 files / 275 tests green. `mod-catalog` and `backend` typecheck clean.
 
 **Verification**:
 - `[PG] backend/test/integration/catalog/product-scopes-schema.test.ts` (fork `ci-pg`)
