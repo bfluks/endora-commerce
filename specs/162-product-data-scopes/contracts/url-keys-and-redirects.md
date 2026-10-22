@@ -44,8 +44,9 @@ with `URL_KEY_TAKEN` like any other write (R29).
 Refusals (nothing saved):
 - `409 URL_KEY_TAKEN` `details: { conflicts: [{ languageCode: string | null, key, heldByProductId, heldByProductName }] }`.
   Also raised when a `languageKeys` entry is `null` (use inherited) and the product's global key is another
-  product's current key in that language — removing the language key would make the global key the
-  product's key there again (data-model §5).
+  product's current key in that language while some channel offers it — removing the language key would
+  make the global key the product's key there again (data-model §5). An orphaned language key (no channel
+  offers the language) is not checked: removing it stays always allowed (FR-015).
 - `409 URL_KEY_REDIRECT_TAKEOVER_REQUIRED` `details: { takeovers: [{ languageCode, key, losingProductId, losingProductName }] }`
   — the admin asks the operator, then retries with `confirmTakeover` (FR-072, US7 #5).
 - `422 SCOPE_INVALID` for a channel the product is not a member of or a language the channel does not offer
