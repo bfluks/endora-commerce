@@ -50,7 +50,11 @@ import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import { orderTotalsMoney } from './services/order-money.js';
 import type { OrderService } from './services/order-service.js';
 import { assertMethodsOfferedInChannel } from './services/method-channel-gate.js';
-import { previewBelowMinimums, previewLineAvailability } from './services/preview-line-availability.js';
+import {
+  customerAudience,
+  previewBelowMinimums,
+  previewLineAvailability,
+} from './services/preview-line-availability.js';
 import { assertWithinAdminOrderItemBound } from './services/request-minimums.js';
 import type { OrderStatusGraphService } from './services/order-status-graph-service.js';
 import type { OrderTransitionService } from './services/order-transition-service.js';
@@ -954,7 +958,7 @@ export async function registerOrderRoutes(
           ? await deps.catalogProductAvailability.filterAvailable(members, {
               channelId: body.salesChannelId,
               languageCode: null,
-              audience: { organizationId, authenticated: true },
+              audience: customerAudience(organizationId),
             })
           : new Set<string>();
       const inChannel = new Set(members.filter((id) => availableHere.has(id)));

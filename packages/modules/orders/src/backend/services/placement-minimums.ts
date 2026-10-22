@@ -16,6 +16,7 @@ import {
   type OrderPreviewTotalResponse,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
+import { customerAudience } from './preview-line-availability.js';
 
 /**
  * Feature 155 (FR-008, FR-028, FR-036, FR-037; research R19;
@@ -153,7 +154,7 @@ export async function availableOnly(
     {
       channelId: scope.channelId,
       languageCode: scope.languageCode,
-      audience: { organizationId: scope.organizationId, authenticated: true },
+      audience: customerAudience(scope.organizationId),
     },
   );
   return products.filter((p) => available.has(p.id));
