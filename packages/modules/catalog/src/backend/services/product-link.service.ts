@@ -4,6 +4,7 @@ import {
   ERROR_CODES,
   listingPriceChannelContext,
   listingPriceMoney,
+  resolveScopeLanguage,
   type AssetReadPort,
   type ListingPricePort,
   type OrganizationDetailsPort,
@@ -16,6 +17,7 @@ import { Product } from '../entities/product.entity.js';
 import { ProductLink, type ProductLinkKind } from '../entities/product-link.entity.js';
 import { resolvePrimaryAssetUrls } from './primary-asset-url.js';
 import { viewerOrganizationFor } from './viewer-organization.js';
+import { availableAmong, toScopeChannel } from './product-availability.service.js';
 import {
   effectiveSystemText,
   loadChannelOverridesByProduct,
@@ -34,6 +36,9 @@ interface StorefrontContext {
     id: string;
     code: string;
     defaultCurrency: string;
+    /** Feature 163 — the channel's default and content languages, from the resolved record. */
+    defaultLanguage?: string | undefined;
+    languages?: readonly string[] | undefined;
   };
   /**
    * Who is asking. A cross-sell tile is a card with an Add-to-cart on it, and
@@ -47,11 +52,10 @@ interface StorefrontContext {
    * — a defect that reads as "the negotiated list does not work" and is found
    * by nobody. Both call sites pass it; `tsc` names a third.
    *
-   * It is read for the **price** and not, today, for the tile's visibility:
-   * `listForStorefront` filters by status and channel membership and has never
-   * applied `isProductVisibleTo`, which is issue #227 residue this change does
-   * not close. Do not read the presence of this field as the entitlement
-   * question having been answered here.
+   * Read for the **price** and, since feature 163, for the tile's
+   * availability too: a target is shown only where it is effectively
+   * available to this audience at (C, L), now — which closes the issue #227
+   * residue this field used to warn about.
    */
   audience: ProductAudience;
   preferredLanguage?: string | undefined;
@@ -359,31 +363,27 @@ export class ProductLinkService {
     if (rows.length === 0) return [];
 
     const targetIds = rows.map((r) => r.targetProductId);
-    const targets = await em.find(Product, {
-      id: { $in: targetIds },
-      status: 'active',
-    });
+    const targets = await em.find(Product, { id: { $in: targetIds } });
     const byId = new Map(targets.map((p) => [p.id, p]));
 
-    // Feature 053 (FR-006 / Principle XII) — sales-channel visibility. The
-    // channel is resolved once upstream (`getResolvedChannel()`) and handed in;
-    // the membership filter is ALWAYS applied, failing closed to an empty
-    // visible set rather than leaking the full cross-channel target set.
-    // Through the kernel's accessor since issue #185: this was a `select
-    // product_id from sales_channel_products` written here, which is the one
-    // read Principle XII names the membership service for.
+    // Feature 053 (FR-006 / Principle XII) and feature 163 (FR-001) — a target
+    // is shown only where it is effectively available: a member of the
+    // resolved channel (the kernel's accessor, failing closed to an empty set),
+    // on at (C, L), inside its window, and admitted by its effective audience.
+    // The channel is resolved once upstream (`getResolvedChannel()`) and handed
+    // in; it is never taken from the client.
     const channel = ctx.resolvedChannel;
-    const visibleIds =
-      targets.length > 0
-        ? new Set(
-            await this.#requireChannelMembership().filterEntityIdsInChannel(
-              channel.id,
-              'product',
-              targets.map((t) => t.id),
-            ),
-          )
-        : // No targets → nothing is visible (fail closed).
-          new Set<string>();
+    const scopeChannel = toScopeChannel({
+      id: channel.id,
+      languages: channel.languages,
+      defaultLanguage: channel.defaultLanguage ?? channel.languages?.[0] ?? '',
+    });
+    const visibleIds = await availableAmong(em, this.#requireChannelMembership(), targets, {
+      channel: scopeChannel,
+      languageCode: resolveScopeLanguage(scopeChannel, ctx.preferredLanguage),
+      audience: ctx.audience,
+      now: new Date(),
+    });
 
     // Primary asset urls: the gallery thumb chain, with the legacy
     // `product_assets` fallback. Shared with `CatalogQueryService` so the chain

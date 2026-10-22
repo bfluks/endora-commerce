@@ -359,7 +359,9 @@ export async function registerCatalogPublicRoutes(
           ctx,
         );
         const body = validateBundleConfigurationRequestSchema.parse(request.body);
-        const result = await bundle.validateConfiguration(product.id, body.selections);
+        const result = await bundle.validateConfiguration(product.id, body.selections, (ids) =>
+          queryService.filterAvailableForRequest(ids, ctx),
+        );
         return { data: result };
       },
     );
@@ -397,6 +399,7 @@ function readContext(request: FastifyRequest): {
     code: string;
     defaultCurrency: string;
     defaultLanguage: string;
+    languages: readonly string[];
   };
   audience: ProductAudience;
   preferredLanguage?: string | undefined;
@@ -423,6 +426,8 @@ function readContext(request: FastifyRequest): {
       code: ch.code,
       defaultCurrency: ch.defaultCurrency,
       defaultLanguage: ch.defaultLanguage,
+      // Feature 163 — the channel's content languages, from the resolved record.
+      languages: ch.languages,
     },
     audience: productAudienceOf(request),
     preferredLanguage,

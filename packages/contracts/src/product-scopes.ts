@@ -242,7 +242,8 @@ function statusOnAt(snapshot: ScopeSnapshot, channelId: string, languageCode: st
  * BCP-47 codes, while the prose resolver normalises to the platform's UI languages.
  */
 export function resolveScopeLanguage(channel: ScopeChannel, requestedTag: string | null | undefined): string {
-  const tag = requestedTag?.trim().toLowerCase() ?? '';
+  // An `Accept-Language` pick may carry its quality parameter (`de;q=0.9`).
+  const tag = requestedTag?.split(';')[0]?.trim().toLowerCase() ?? '';
   if (tag === '') return channel.defaultLanguage;
   const exact = channel.languages.find((language) => language.toLowerCase() === tag);
   if (exact !== undefined) return exact;
@@ -277,9 +278,7 @@ export interface ChannelAvailability {
 }
 
 /**
- * Owner: `catalog`. Not registered yet: feature 163 publishes it as
- * `catalogProductAvailabilityPort` when the read path lands (Block B), and the
- * container-name marker arrives with that registration.
+ * Container name: `catalogProductAvailabilityPort`. Owner: `catalog`.
  *
  * The one way another module asks whether a product is available (FR-002). `catalog`
  * is non-deactivatable, so the port is always present. Never asked for an unresolved
