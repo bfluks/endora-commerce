@@ -356,13 +356,19 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
 
 **Goal**: rows 5, 6, 12, 13, 16 of `contracts/consumers.md` for names/values; the benchmark passes.
 
-- [ ] T057 [P] [PG] [S1] RED parity: `effectiveTextSql` equals #384's `channelOverrideFor` over a grid (override at C×L for the request language / a later language / channel-only; baseline present/absent per leg) — `backend/test/integration/catalog/effective-text-parity.test.ts`
+- [x] T057 [P] [PG] [S1] RED parity: `effectiveTextSql` equals #384's `channelOverrideFor` over a grid (override at C×L for the request language / a later language / channel-only; baseline present/absent per leg) — `backend/test/integration/catalog/effective-text-parity.test.ts`
+  - Written; [PG] — unrun locally (5 baselines × 8 override sets × 4 request languages, expectation derived from `effectiveSystemText`).
 - [ ] T058 [P] [PG] [S1] RED listing: free-text search, attribute filters, facet counts and name sort use effective values at (C, L); name sort keyset `(effective name, id)` pages without gaps or repeats (D6) — `backend/test/integration/catalog/listing-effective-names.test.ts`
+  - 2026-10-22 pause: not written yet (P8 in progress — resume here).
 - [ ] T059 [P] [PG] [S1] RED quick search (matches and returns effective name), comparisons (names + compared values), basket line names and batch outcomes, RFQ line snapshots (buyer: request language → channel default; operator: channel default — N2; snapshot kept after an override changes) — `backend/test/integration/{catalog/quick-search-effective-names,comparisons/effective-values,carts/effective-names,quote_requests/effective-names}.test.ts`
-- [ ] T060 [S1] `effectiveTextSql` builder — `packages/modules/catalog/src/backend/services/effective-value.sql.ts`
-- [ ] T061 [S1] Listing q / filters / counts / name sort through it — `catalog-query.service.ts`
-- [ ] T062 [S1] Quick search — `catalog-quick-search.service.ts:118` area
-- [ ] T063 [S1] `effectiveNames` on the port; carts, quote_requests, comparisons consume it / #384's helpers — `product-availability.service.ts`, `cart-service.ts:1251`, `rfq-service.ts:462`, `:635`, `comparison-service.ts:607`, `:623`
+- [x] T060 [S1] `effectiveTextSql` builder — `packages/modules/catalog/src/backend/services/effective-value.sql.ts`
+  - `effective-value.sql.ts`: `effectiveTextSql` (name/description incl. the storefront baseline pick) and `effectiveAttributeSql`; overrides of one (product, attribute, channel) aggregated once per row into a jsonb map; params bound as written (Writer). Unit test `effective-value.sql.test.ts` green.
+- [x] T061 [S1] Listing q / filters / counts / name sort through it — `catalog-query.service.ts`
+  - Name sort keyset `(effective name, id)` via raw `orderBy`/`after` made inline (`#keysetFor`, cursor name computed in TS by `#cursorNames`); free text = SKU + effective Name + effective searchable attributes; attribute filters on effective values in every statement (default + both price paths) with TS twin (`#listingFilters().passes`); facet counts over effective values. Old slug keyset/`orderForSort`/`#passesPageFilters` removed.
+- [x] T062 [S1] Quick search — `catalog-quick-search.service.ts:118` area
+  - Quick search matches `effectiveTextSql` at (C, L) and returns `CatalogQuickSearchHit.effectiveName` (additive); `quick_order` displays it.
+- [x] T063 [S1] `effectiveNames` on the port; carts, quote_requests, comparisons consume it / #384's helpers — `product-availability.service.ts`, `cart-service.ts:1251`, `rfq-service.ts:462`, `:635`, `comparison-service.ts:607`, `:623`
+  - `effectiveNames(…, languageCode: string | null)` (null = channel default). Carts: view line names + batch below-minimum outcomes/refusals; quote requests: buyer create/draft-edit snapshots (request language), operator `createOnBehalf` (channel default, N2) via `RfqService.lineNames`; comparisons: names (record entry for L) and compared values via `channelOverrideFor`. Not done: admin `modify` new-line snapshot still baseline.
 - [ ] T064 [S1] Search: `localizedNames.<L>` in documents + `attributesToSearchOn` (FR-017 b on the Meilisearch path) — `search-indexer.ts`, `search-query.service.ts`
 - [ ] T065 [S1] Benchmark: a scoped variant of `backend/test/perf/catalog-list.bench.ts` and `backend/test/perf/catalog/listing-filtered-page.bench.ts` (20% of products with C and C×L rows, windows, audience overrides, effective-name sort) and record before/after in the PR; **> 10% regression stops the block** and goes back to the architect (R1 fallback) — `backend/test/perf/catalog/listing-scoped-availability.bench.ts`
 - [ ] T066 [S1] Release note entry: name sort order (D6), reindex per channel (R21) — `.changeset/163-…` bodies of the touched packages
