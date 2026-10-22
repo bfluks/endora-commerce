@@ -94,17 +94,25 @@ export type ProductUrlKeysResponse = z.infer<typeof productUrlKeysResponseSchema
 
 // --- Admin write — PUT /api/v1/admin/catalog/products/:id/url-keys (§2) ----------
 
+/** The most entries one list of a URL-keys PUT carries (Phase 16 review; the scopes PATCH's bound). */
+const URL_KEY_LIST_MAX = 64;
+
 export const putProductUrlKeysRequestSchema = z.object({
   globalKey: productSlugSchema.optional(),
   /** `key: null` = use inherited (deletes the language key). */
-  languageKeys: z.array(z.object({ languageCode: languageCodeSchema, key: productSlugSchema.nullable() })).optional(),
+  languageKeys: z
+    .array(z.object({ languageCode: languageCodeSchema, key: productSlugSchema.nullable() }))
+    .max(URL_KEY_LIST_MAX)
+    .optional(),
   /** `key: null` = use inherited (deletes the channel × language key). */
   channelKeys: z
     .array(z.object({ channelId: uuidSchema, languageCode: languageCodeSchema, key: productSlugSchema.nullable() }))
+    .max(URL_KEY_LIST_MAX)
     .optional(),
   /** The operator's confirmation of taking over another product's redirect (FR-072). */
   confirmTakeover: z
     .array(z.object({ languageCode: languageCodeSchema.nullable(), key: productSlugSchema }))
+    .max(URL_KEY_LIST_MAX)
     .optional(),
 });
 export type PutProductUrlKeysRequest = z.infer<typeof putProductUrlKeysRequestSchema>;
