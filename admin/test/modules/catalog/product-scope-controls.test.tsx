@@ -458,6 +458,49 @@ describe('ProductScopeControls — refusals and permissions', () => {
     expect(status).toHaveValue('draft');
   });
 
+  it('translates a concurrent-write conflict and keeps the edit', async () => {
+    patchSpy.mockRejectedValue(
+      new ApiError(409, {
+        error: { code: 'VERSION_CONFLICT', message: 'Concurrent scope write.' },
+      }),
+    );
+    render(wrap(controls(B2B)));
+    const user = userEvent.setup();
+    const status = await screen.findByRole('combobox', { name: 'Status in B2B' });
+    await user.selectOptions(status, 'draft');
+    await user.click(screen.getByRole('button', { name: 'Save availability' }));
+
+    expect(
+      await screen.findByText(
+        'Someone else changed this product’s availability at the same time. Reload the page and apply your change again.',
+      ),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('VERSION_CONFLICT');
+    expect(status).toHaveValue('draft');
+  });
+
+  it('translates a repeated language refusal with the channel and language', async () => {
+    patchSpy.mockRejectedValue(
+      new ApiError(422, {
+        error: {
+          code: 'VALIDATION_FAILED',
+          message: 'Language named twice.',
+          details: { field: 'languageStatuses', channelId: B2B, languageCode: 'de' },
+        },
+      }),
+    );
+    render(wrap(controls(B2B)));
+    const user = userEvent.setup();
+    const de = await screen.findByRole('combobox', { name: 'Status in B2B · DE' });
+    await user.selectOptions(de, 'active');
+    await user.click(screen.getByRole('button', { name: 'Save availability' }));
+
+    expect(
+      await screen.findByText('DE is set more than once for B2B. Reload the page and try again.'),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('VALIDATION_FAILED');
+  });
+
   it('explains a completeness refusal per channel and language, and saves nothing', async () => {
     patchSpy.mockRejectedValue(
       new ApiError(422, {
