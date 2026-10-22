@@ -37,6 +37,10 @@ import { ProductUrlRedirect } from '../entities/product-url-redirect.entity.js';
  * every key it touched, plus every redirect row it removed (another product's
  * included); `after` holds the keys and the redirect rows it inserted (R29 — no
  * single-write undo, Q-D → A). `product.updated.v1` follows with `['urlKeys']`.
+ *
+ * Without a `CommandBus` (a composition that wires none, such as a unit rig) every write
+ * still runs as one transaction, so the locks hold, but it is **not audited** and
+ * announces no `product.updated.v1`.
  */
 
 const LOCK_PREFIX = 'catalog.url-key:';
@@ -505,6 +509,11 @@ export async function isUrlKeyFree(em: EntityManager, key: string): Promise<bool
 
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** A `:id` that is not a UUID names no product: 404, before Postgres refuses the cast as a 500. */
+function assertProductIdShape(productId: string): void {
+  if (!UUID_SHAPE.test(productId)) throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+}
+
 function displayName(product: Pick<Product, 'name' | 'sku'>): string {
   const name = product.name ?? {};
   return name['en-US'] || Object.values(name).find((value) => typeof value === 'string' && value.trim() !== '') || product.sku;
@@ -527,6 +536,7 @@ export class UrlKeyService {
 
   /** `GET /admin/catalog/products/:id/url-keys` (§1). */
   async read(productId: string): Promise<ProductUrlKeysResponse['data']> {
+    assertProductIdShape(productId);
     const em = this.emFactory();
     const product = await em.findOne(Product, { id: productId, deletedAt: null });
     if (!product) throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
@@ -593,12 +603,16 @@ export class UrlKeyService {
 
   /** `PUT /admin/catalog/products/:id/url-keys` (§2) — answers the keys as `read` does. */
   async update(productId: string, request: PutProductUrlKeysRequest): Promise<ProductUrlKeysResponse['data']> {
+    assertProductIdShape(productId);
     await this.#run(this.#updateCommand(productId, request));
     return this.read(productId);
   }
 
   /** `DELETE /admin/catalog/products/:id/url-redirects/:redirectId` (§3). */
   async deleteRedirect(productId: string, redirectId: string): Promise<void> {
+    if (!UUID_SHAPE.test(productId) || !UUID_SHAPE.test(redirectId)) {
+      throw new HttpError(404, ERROR_CODES.URL_REDIRECT_NOT_FOUND, 'Redirect not found.', { redirectId });
+    }
     await this.#run(this.#deleteRedirectCommand(productId, redirectId));
   }
 
@@ -719,7 +733,7 @@ export class UrlKeyService {
       objectType: 'product',
       objectId: productId,
       run: async ({ em }) => {
-        const row = UUID_SHAPE.test(redirectId) ? await em.findOne(ProductUrlRedirect, { id: redirectId, productId }) : null;
+        const row = await em.findOne(ProductUrlRedirect, { id: redirectId, productId });
         if (!row) {
           throw new HttpError(404, ERROR_CODES.URL_REDIRECT_NOT_FOUND, 'Redirect not found.', { redirectId });
         }
