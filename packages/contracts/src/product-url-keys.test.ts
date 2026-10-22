@@ -66,7 +66,7 @@ describe('putProductUrlKeysRequestSchema', () => {
   });
 
   // Phase 16 review — every list in the body is bounded, as the scopes PATCH's are.
-  const many = <T>(count: number, at: (index: number) => T): T[] => Array.from({ length: count }, (_, index) => at(index));
+  const many = (count: number, at: (index: number) => object): object[] => Array.from({ length: count }, (_, index) => at(index));
   it.each([
     ['languageKeys', (index: number) => ({ languageCode: 'de', key: `k-${index}` })],
     ['channelKeys', (index: number) => ({ channelId: C, languageCode: 'de', key: `k-${index}` })],
