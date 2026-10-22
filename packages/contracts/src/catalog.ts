@@ -2757,6 +2757,13 @@ export interface CatalogQuickSearchParams {
    * See {@link CatalogQuickSearchPort} for what it restricts.
    */
   organizationId: string;
+  /**
+   * Feature 163 — the request's language tag (its first `Accept-Language`
+   * pick). Resolved against the channel's own languages by
+   * `resolveScopeLanguage`; absent means the channel's default language. A
+   * product switched off at (channel, that language) is not a hit.
+   */
+  languageCode?: string | undefined;
 }
 
 export interface CatalogQuickSearchHit {
