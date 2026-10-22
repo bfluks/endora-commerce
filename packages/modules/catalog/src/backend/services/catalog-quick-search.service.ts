@@ -1,11 +1,19 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import type {
-  CatalogAttributeReadPort,
-  CatalogQuickSearchField,
-  CatalogQuickSearchHit,
-  CatalogQuickSearchParams,
-  CatalogQuickSearchPort,
+import {
+  resolveScopeLanguage,
+  type CatalogAttributeReadPort,
+  type CatalogQuickSearchField,
+  type CatalogQuickSearchHit,
+  type CatalogQuickSearchParams,
+  type CatalogQuickSearchPort,
 } from '@endora-commerce/contracts';
+import type {
+  SalesChannelMembershipPort,
+  SalesChannelResolutionPort,
+} from '@endora-commerce/platform/kernel';
+
+import { availabilityCondition } from './product-availability.sql.js';
+import { toScopeChannel } from './product-availability.service.js';
 
 /**
  * The buyer-facing quick-search read model (issue #174).
@@ -80,6 +88,14 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
   constructor(
     private readonly emFactory: () => EntityManager,
     private readonly attributeRead: CatalogAttributeReadPort,
+    /**
+     * Feature 163 — the kernel's membership accessor (Constitution XII) and
+     * the channel record whose languages the scope language L is resolved
+     * against. Availability is `availabilityCondition`, the same condition
+     * the listing is cut by.
+     */
+    private readonly membership: Pick<SalesChannelMembershipPort, 'entityIdsInChannelSubquery'>,
+    private readonly channels: Pick<SalesChannelResolutionPort, 'getById'>,
   ) {}
 
   async quickSearch(params: CatalogQuickSearchParams): Promise<CatalogQuickSearchHit[]> {
@@ -88,18 +104,38 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
 
     // The `quickSearchable` flag is this module's, and so is the JSONB the
     // values live in — which is the whole reason the predicate belongs here.
+    // FR-007 — an id no channel has matches nothing.
+    const record = await this.channels.getById(params.salesChannelId);
+    if (!record) return [];
+    const channel = toScopeChannel(record);
+
     const quickKeys = (await this.attributeRead.listByFlag('quickSearchable')).map((a) => a.key);
 
     const em = this.emFactory();
     const like = `%${needle}%`;
 
-    // One statement, joined to the channel bridge, so the scope cannot be
+    // One statement, scoped by the kernel's membership subquery, so the scope cannot be
     // forgotten by a later caller and the limit is applied *after* scoping —
     // narrowing a page that was already cut would silently shorten results.
     const attributeClause = quickKeys
       .map(() => `p.attribute_values->>? ILIKE ?`)
       .join(' or ');
     const attributeBindings = quickKeys.flatMap((key) => [key, like]);
+
+    // Feature 163 — membership (the kernel's subquery), effective status at
+    // (C, L), the window and the effective audience in one condition. The
+    // audience is the signed-in buyer's (see the file header):
+    // `{ organizationId, authenticated: true }`.
+    const available = availabilityCondition(
+      {
+        channelId: channel.id,
+        languageCode: resolveScopeLanguage(channel, params.languageCode),
+        channelLanguages: channel.languages,
+        audience: { organizationId: params.organizationId, authenticated: true },
+        now: new Date(),
+      },
+      this.membership,
+    );
 
     const rows = await em.execute<
       Array<{
@@ -113,17 +149,7 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
     >(
       `select p.id::text as id, p.sku, p.slug, p.name, p.status, p.attribute_values
          from products p
-         join sales_channel_products scp on scp.product_id = p.id
-        where scp.sales_channel_id = ?
-          and p.status = 'active'
-          and p.deleted_at is null
-          and (
-            p.allowed_organization_ids @> ?::jsonb
-            or (
-              jsonb_array_length(p.allowed_organization_ids) = 0
-              and p.visibility <> 'organization_restricted'
-            )
-          )
+        where ${available.sql('p')}
           and (
             p.sku ILIKE ?
             or p.slug ILIKE ?
@@ -133,10 +159,7 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
         order by p.sku asc
         limit ?`,
       [
-        params.salesChannelId,
-        // `@>` containment over the JSONB array, so the buyer's id has to be
-        // one of the elements rather than a substring of the serialised bag.
-        JSON.stringify([params.organizationId]),
+        ...available.params,
         like,
         like,
         like,

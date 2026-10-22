@@ -418,6 +418,11 @@ describe('resolveScopeLanguage (A-3, R7)', () => {
     expect(resolveScopeLanguage(channel, 'fr-FR')).toBe('pl-PL');
   });
 
+  it('ignores a quality parameter carried with the tag (an `Accept-Language` pick)', () => {
+    expect(resolveScopeLanguage(channel, 'de;q=0.9')).toBe('de-DE');
+    expect(resolveScopeLanguage(channel, 'en-GB;q=0.8')).toBe('en-GB');
+  });
+
   it.each([null, undefined, '', '   '])('%s answers the channel default', (tag) => {
     expect(resolveScopeLanguage(channel, tag)).toBe('pl-PL');
   });

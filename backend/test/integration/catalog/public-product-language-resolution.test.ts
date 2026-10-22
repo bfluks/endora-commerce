@@ -79,6 +79,12 @@ describe('US1 — public product language resolution', () => {
        on conflict do nothing`,
       [channelId, productIds[0], channelId, productIds[1]],
     );
+    // Feature 163 (FR-005) — a `draft` product is no longer reachable by its
+    // URL, and products are created as drafts; publish both.
+    await conn.execute(`update products set status = 'active' where id in (?, ?)`, [
+      productIds[0],
+      productIds[1],
+    ]);
   });
 
   afterAll(async () => {

@@ -1,0 +1,312 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import {
+  setupBackendServer,
+  teardownBackendServer,
+  type BackendServerHandle,
+} from '../../helpers/test-server.js';
+import { TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+
+/**
+ * Feature 163, Phase 5 (T031) — the Independent Test of US1: one product, two
+ * channels × two languages, overrides at the channel and at the channel ×
+ * language scope, read through every catalogue surface a buyer reaches it by.
+ *
+ * Per (channel, language) pair the product must be on everywhere or off
+ * everywhere: the listing, the facet counts, the product page, the quick search,
+ * the links of another product naming it, and a bundle offering it as an option.
+ * "Off" answers exactly what "absent" answers (one `PRODUCT_NOT_FOUND`, the same
+ * body), so the reason is never disclosed.
+ *
+ * Also: a product with no scope rows inherits everywhere ("use inherited"); a
+ * `draft` member is no longer reachable by its URL (FR-005); an archived one
+ * answers 410 to a caller who may see it; an unresolvable channel matches
+ * nothing (FR-007).
+ *
+ * Every fixture name carries a per-run token; the channels are this suite's own.
+ */
+
+const RUN = randomUUID().slice(0, 8);
+const ADMIN = { b2b_session: 'stub-admin-session' };
+const BUYER = { b2b_session: 'stub-customer-session' };
+const LANGUAGES = ['pl-PL', 'en-US'] as const;
+type Language = (typeof LANGUAGES)[number];
+
+interface Channel {
+  id: string;
+  code: string;
+}
+
+describe('163 — scoped availability on every catalogue read [contract]', () => {
+  let h: BackendServerHandle;
+  let c1: Channel;
+  let c2: Channel;
+  const ids: Record<string, string> = {};
+  const slugs: Record<string, string> = {};
+  let facetKey: string | null = null;
+  const facetValue = `scoped-${RUN}`;
+  let bundle: { slotId: string; optionId: string } | null = null;
+
+  async function sql(query: string, params: unknown[] = []): Promise<void> {
+    await h.orm.em.getConnection().execute(query, params);
+  }
+
+  async function insertChannel(label: string): Promise<Channel> {
+    const id = randomUUID();
+    const code = `s163-${RUN}-${label}`;
+    await sql(
+      `insert into sales_channels (id, code, name, default_language, languages, currencies, default_currency,
+                                   active, is_public, created_at, updated_at)
+       values (?, ?, ?::jsonb, 'pl-PL', '["pl-PL","en-US"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, true, now(), now())`,
+      [id, code, JSON.stringify({ 'en-US': `163 matrix ${label}` })],
+    );
+    // Feature 154 — the signed-in buyer shops here only if its Organization is assigned.
+    await sql(
+      `insert into sales_channel_organizations (sales_channel_id, organization_id) values (?, ?)
+       on conflict do nothing`,
+      [id, TEST_ORGANIZATION_ID],
+    );
+    return { id, code };
+  }
+
+  async function insertProduct(
+    key: string,
+    fields: { status?: string; type?: string; archived?: boolean; channels: Channel[] },
+  ): Promise<void> {
+    const id = randomUUID();
+    const sku = `S163-${RUN}-${key}`.toUpperCase();
+    const attributeValues = facetKey ? { [facetKey]: facetValue } : {};
+    await sql(
+      `insert into products (id, sku, slug, type, status, name, description, attribute_values, visibility,
+                             allowed_organization_ids, archived_at, created_at, updated_at)
+       values (?, ?, ?, ?, ?, ?::jsonb, '{}'::jsonb, ?::jsonb, 'public', '[]'::jsonb, ?, now(), now())`,
+      [
+        id,
+        sku,
+        sku.toLowerCase(),
+        fields.type ?? 'simple',
+        fields.status ?? 'active',
+        JSON.stringify({ 'pl-PL': `Matrix ${key} PL`, 'en-US': `Matrix ${key} EN` }),
+        JSON.stringify(attributeValues),
+        fields.archived ? new Date() : null,
+      ],
+    );
+    for (const channel of fields.channels) {
+      await sql(`insert into sales_channel_products (sales_channel_id, product_id) values (?, ?)`, [channel.id, id]);
+    }
+    ids[key] = id;
+    slugs[key] = sku.toLowerCase();
+  }
+
+  beforeAll(async () => {
+    h = await setupBackendServer();
+    // A filterable option-style attribute to count facets on.
+    const filters = await h.app.inject({ method: 'GET', url: '/api/v1/catalog/filters' });
+    const defs = (filters.json() as { data: Array<{ attributeKey: string; valueType: string }> }).data;
+    facetKey = defs.find((d) => d.valueType === 'string' || d.valueType === 'select')?.attributeKey ?? null;
+
+    c1 = await insertChannel('c1');
+    c2 = await insertChannel('c2');
+
+    // P — on at (C1, pl-PL) and (C2, pl-PL) only:
+    //   C1 inherits global `active`, but C1 × en-US is `draft`;
+    //   C2 is `draft`, but C2 × pl-PL is `active`.
+    await insertProduct('p', { channels: [c1, c2] });
+    await sql(
+      `insert into product_channel_language_scopes (product_id, sales_channel_id, language_code, status, created_at, updated_at)
+       values (?, ?, 'en-US', 'draft', now(), now()), (?, ?, 'pl-PL', 'active', now(), now())`,
+      [ids['p'], c1.id, ids['p'], c2.id],
+    );
+    await sql(
+      `insert into product_channel_scopes (product_id, sales_channel_id, status, created_at, updated_at)
+       values (?, ?, 'draft', now(), now())`,
+      [ids['p'], c2.id],
+    );
+    // Q — no scope rows: inherits `active` everywhere.
+    await insertProduct('q', { channels: [c1, c2] });
+    // D — a `draft` member (FR-005); A — archived.
+    await insertProduct('d', { status: 'draft', channels: [c1, c2] });
+    await insertProduct('a', { status: 'inactive', archived: true, channels: [c1, c2] });
+    // S — names P as related; B — a bundle offering P.
+    await insertProduct('s', { channels: [c1, c2] });
+    await insertProduct('b', { type: 'bundle', channels: [c1, c2] });
+    await sql(
+      `insert into product_links (id, source_product_id, target_product_id, kind, position, created_at, updated_at)
+       values (?, ?, ?, 'related', 0, now(), now()), (?, ?, ?, 'related', 1, now(), now())`,
+      [randomUUID(), ids['s'], ids['p'], randomUUID(), ids['s'], ids['q']],
+    );
+    const slotId = randomUUID();
+    const optionId = randomUUID();
+    await sql(
+      `insert into bundle_slots (id, parent_product_id, name, min_quantity, max_quantity, position, created_at, updated_at)
+       values (?, ?, '{"en-US":"Pick"}'::jsonb, 1, 3, 0, now(), now())`,
+      [slotId, ids['b']],
+    );
+    await sql(
+      `insert into bundle_slot_options (id, slot_id, option_product_id, default_quantity, position, created_at, updated_at)
+       values (?, ?, ?, 1, 0, now(), now())`,
+      [optionId, slotId, ids['p']],
+    );
+    bundle = { slotId, optionId };
+  });
+
+  afterAll(async () => {
+    if (h) {
+      const all = Object.values(ids);
+      if (all.length > 0) {
+        const list = all.map(() => '?').join(',');
+        await sql(`delete from bundle_slot_options where option_product_id in (${list})`, all);
+        await sql(`delete from bundle_slots where parent_product_id in (${list})`, all);
+        await sql(`delete from product_links where source_product_id in (${list})`, all);
+        await sql(`delete from sales_channel_products where product_id in (${list})`, all);
+        await sql(`delete from products where id in (${list})`, all);
+      }
+      for (const channel of [c1, c2]) {
+        if (!channel) continue;
+        await sql(`delete from sales_channel_organizations where sales_channel_id = ?`, [channel.id]);
+        await sql(`delete from sales_channels where id = ?`, [channel.id]);
+      }
+      await teardownBackendServer(h);
+    }
+  });
+
+  const headers = (channel: Channel, language: Language) => ({
+    'x-sales-channel': channel.code,
+    'accept-language': language,
+  });
+
+  /** On at (C, L) — the spec of the fixture above. */
+  const pOn = (channel: Channel, language: Language): boolean => language === 'pl-PL' && (channel === c1 || channel === c2);
+
+  const pairs = (): Array<[Channel, Language]> =>
+    [c1, c2].flatMap((c) => LANGUAGES.map((l) => [c, l] as [Channel, Language]));
+
+  it('lists P exactly where it is on, and Q (inherited) everywhere', async () => {
+    for (const [channel, language] of pairs()) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/catalog/products?q=${encodeURIComponent(`S163-${RUN}`)}&limit=50`,
+        headers: headers(channel, language),
+      });
+      expect(res.statusCode).toBe(200);
+      const listed = (res.json() as { data: Array<{ id: string }> }).data.map((p) => p.id);
+      expect(listed.includes(ids['p']!), `P listed at ${channel.code}/${language}`).toBe(pOn(channel, language));
+      expect(listed, `Q inherits at ${channel.code}/${language}`).toContain(ids['q']);
+      expect(listed, 'a draft member is never listed').not.toContain(ids['d']);
+      expect(listed, 'an archived product is never listed').not.toContain(ids['a']);
+    }
+  });
+
+  it('counts P in the facets exactly where it is on', async () => {
+    if (!facetKey) throw new Error('the seed provides no filterable option-style attribute');
+    for (const [channel, language] of pairs()) {
+      const res = await h.app.inject({ method: 'GET', url: '/api/v1/catalog/filters', headers: headers(channel, language) });
+      expect(res.statusCode).toBe(200);
+      const def = (res.json() as { data: Array<{ attributeKey: string; options?: Array<{ value: string; count: number }> }> }).data.find(
+        (d) => d.attributeKey === facetKey,
+      );
+      const option = def?.options?.find((o) => o.value === facetValue);
+      if (!option) throw new Error(`no facet option ${facetValue} at ${channel.code}/${language}`);
+      // Q, S, B are on everywhere and carry the value; P only where on.
+      expect(option.count, `facet count at ${channel.code}/${language}`).toBe(3 + (pOn(channel, language) ? 1 : 0));
+    }
+  });
+
+  it('serves P’s page where it is on and answers the absent product’s 404 elsewhere', async () => {
+    const absent = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/catalog/products/does-not-exist-${RUN}`,
+      headers: headers(c1, 'pl-PL'),
+    });
+    expect(absent.statusCode).toBe(404);
+    for (const [channel, language] of pairs()) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/catalog/products/${slugs['p']}`,
+        headers: headers(channel, language),
+      });
+      if (pOn(channel, language)) {
+        expect(res.statusCode, `PDP at ${channel.code}/${language}`).toBe(200);
+      } else {
+        expect(res.statusCode, `PDP at ${channel.code}/${language}`).toBe(404);
+        // Same body as a product that does not exist: no reason leaks.
+        expect(res.json()).toEqual(absent.json());
+      }
+    }
+  });
+
+  it('a draft member answers 404 by slug (FR-005); an archived one 410', async () => {
+    const draft = await h.app.inject({ method: 'GET', url: `/api/v1/catalog/products/${slugs['d']}`, headers: headers(c1, 'pl-PL') });
+    expect(draft.statusCode).toBe(404);
+    const archived = await h.app.inject({ method: 'GET', url: `/api/v1/catalog/products/${slugs['a']}`, headers: headers(c1, 'pl-PL') });
+    expect(archived.statusCode).toBe(410);
+  });
+
+  it('shows P among S’s links only where P is on', async () => {
+    for (const [channel, language] of pairs()) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/catalog/products/${slugs['s']}/links`,
+        headers: headers(channel, language),
+      });
+      expect(res.statusCode).toBe(200);
+      const targets = (res.json() as { data: Array<{ product: { id: string } }> }).data.map((l) => l.product.id);
+      expect(targets.includes(ids['p']!), `link to P at ${channel.code}/${language}`).toBe(pOn(channel, language));
+      expect(targets).toContain(ids['q']);
+    }
+  });
+
+  it('accepts P as a bundle option only where P is on', async () => {
+    for (const [channel, language] of pairs()) {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/catalog/products/${slugs['b']}/bundle-configuration/validate`,
+        headers: headers(channel, language),
+        payload: { selections: [{ slotId: bundle!.slotId, optionId: bundle!.optionId, quantity: 1 }] },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { data: { valid: boolean; errors: Array<{ code: string }> } };
+      expect(body.data.valid, `bundle with P at ${channel.code}/${language}`).toBe(pOn(channel, language));
+      if (!pOn(channel, language)) {
+        // The answer an absent option gets — never a reason.
+        expect(body.data.errors.map((e) => e.code)).toContain('UNKNOWN_OPTION');
+      }
+    }
+  });
+
+  it('finds P in the quick search only where it is on', async () => {
+    for (const [channel, language] of pairs()) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/quick-order/search?q=${encodeURIComponent(`S163-${RUN}`)}&limit=50`,
+        headers: headers(channel, language),
+        cookies: BUYER,
+      });
+      expect(res.statusCode).toBe(200);
+      const hits = (res.json() as { data: Array<{ productId: string }> }).data.map((hit) => hit.productId);
+      expect(hits.includes(ids['p']!), `quick search at ${channel.code}/${language}`).toBe(pOn(channel, language));
+      expect(hits).toContain(ids['q']);
+      expect(hits).not.toContain(ids['d']);
+    }
+  });
+
+  it('matches nothing on a channel code no channel has (FR-007)', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/catalog/products?q=${encodeURIComponent(`S163-${RUN}`)}`,
+      headers: { 'x-sales-channel': `no-such-${RUN}`, 'accept-language': 'pl-PL' },
+    });
+    if (res.statusCode === 200) {
+      const listed = (res.json() as { data: Array<{ id: string }> }).data.map((p) => p.id);
+      expect(listed).not.toContain(ids['p']);
+      expect(listed).not.toContain(ids['q']);
+    } else {
+      expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    }
+  });
+
+  it('keeps ADMIN reads unaffected (the admin session is not a buyer)', async () => {
+    const res = await h.app.inject({ method: 'GET', url: `/api/v1/admin/catalog/products/${ids['d']}`, cookies: ADMIN });
+    expect(res.statusCode).toBe(200);
+  });
+});
