@@ -3,7 +3,7 @@
 **Feature**: `specs/163-product-data-scopes/` | **Issues**: #385, depends on #384
 **Input**: `spec.md` (clarify rounds 1–4), `plan.md`, `research.md` (R0–R29), `data-model.md`,
 `contracts/{product-scopes,admin-scopes-api,url-keys-and-redirects,consumers,seo-media-attachments,error-codes}.md`,
-`quickstart.md`. Measured on `origin/master` `aa6891d63`.
+`quickstart.md`. Measured on `origin/master` `aa6891d63`; Block B onwards runs on `6f66ea18e` (#384 merged).
 
 **Organisation**: 25 phases, each ≤ 10 tasks and sized for part of one builder spawn, grouped into **7
 blocks of ≤ 4 phases** (one builder spawn each), with a **review checkpoint after every backend block and
@@ -134,6 +134,7 @@ P21 and P22 wait (S1 works on P9–P11 meanwhile, which do not touch that file).
 
 - [x] T001 [S1] Confirm the branch is on `origin/master` (rebased 2026-10-21 onto `aa6891d63`); `git fetch origin fork`; record whether #384 (`fork/fix/storefront-channel-value-overrides`) is merged, and if not, whether the coordinator chose to stack — write the answer under this task
   - 2026-10-22: branch contains `aa6891d63` (= `origin/master`). #384 is **not** merged (`fork/fix/storefront-channel-value-overrides` is not an ancestor of `origin/master`); the coordinator did **not** stack — Block A runs on `origin/master`, Block B waits for #384.
+  - 2026-10-22 (Block B start): #384 merged (PR #403); branch rebased onto `6f66ea18e` with `--signoff`. Conflicts: `AGENTS.md` Recent Changes (kept both entries, then pruned the oldest — `155-…` — to the appendix cap of 3), `packages/contracts/src/index.ts` (kept #384's `storefront-value-overrides` export beside ours). `composer:generate`/`manifests:generate` moved nothing; `--frozen-lockfile` clean. Block A + #384 unit tests green after `build:packages`.
 - [x] T002 [S1] `bash scripts/setup-worktree.sh && pnpm run build:packages`
 - [x] T003 [S1] Baseline: `pnpm --filter @endora-commerce/contracts run test`, `pnpm --filter @endora-commerce/mod-catalog run test`, `pnpm --filter @endora-commerce/mod-search run test`, `pnpm --filter @endora-commerce/mod-carts run test`; note any pre-existing red in the PR description
   - 2026-10-22: all green — contracts 53 files / 1154 tests, mod-catalog 9 / 86, mod-search 10 / 44, mod-carts 5 / 89. No pre-existing red.
