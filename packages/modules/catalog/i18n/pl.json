@@ -592,6 +592,8 @@
   "errors.URL_REDIRECT_NOT_FOUND": "To przekierowanie już nie istnieje. Odśwież stronę, aby zobaczyć aktualne przekierowania produktu.",
   "auditLog.product.update": "Zaktualizowano produkt",
   "auditLog.product.scopes.update": "Zaktualizowano ustawienia produktu w kanałach sprzedaży",
+  "auditLog.product.url_keys.update": "Zaktualizowano klucze URL produktu",
+  "auditLog.product.url_redirect.delete": "Usunięto przekierowanie URL produktu",
   "auditLog.attribute_set.create": "Utworzono zestaw atrybutów",
   "auditLog.attribute_set.update": "Zaktualizowano zestaw atrybutów",
   "auditLog.attribute_set.delete": "Usunięto zestaw atrybutów",

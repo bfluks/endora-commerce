@@ -58,6 +58,8 @@ import type { ProductListViewService } from './services/product-list-view-servic
 import type { ProductValueResolverService } from './services/product-value-resolver.service.js';
 import type { ProductOverridesService } from './services/product-overrides.service.js';
 import type { ProductScopesService } from './services/product-scopes.service.js';
+import type { UrlKeyService } from './services/url-key.service.js';
+import { registerCatalogUrlKeyAdminRoutes } from './routes.admin.url-keys.js';
 import {
   patchProductScopesRequestSchema,
   productValueOverridesPatchRequestSchema,
@@ -155,6 +157,13 @@ export interface CatalogAdminDeps {
    * routes are NOT registered.
    */
   productScopesService?: ProductScopesService;
+  /**
+   * Feature 162 — a product's URL keys and redirects
+   * (`GET|PUT /admin/catalog/products/:id/url-keys`,
+   * `DELETE /admin/catalog/products/:id/url-redirects/:redirectId`). When
+   * omitted, the three routes are NOT registered.
+   */
+  urlKeyService?: UrlKeyService;
   /**
    * Feature 022 (products bulk edit) — POST /products/bulk-update. Optional
    * so tests / dev composition roots that don't yet wire the service stay
@@ -726,6 +735,9 @@ export async function registerCatalogAdminRoutes(
         return scopesSvc.apply(request.params.id, body);
       },
     );
+  }
+  if (deps.urlKeyService) {
+    await registerCatalogUrlKeyAdminRoutes(app, { urlKeyService: deps.urlKeyService, requireAdmin });
   }
 
   // -------------------------------------------------------------------------
