@@ -132,10 +132,13 @@ P21 and P22 wait (S1 works on P9–P11 meanwhile, which do not touch that file).
 
 **Goal**: a known-good baseline and the #384 status recorded.
 
-- [ ] T001 [S1] Confirm the branch is on `origin/master` (rebased 2026-10-21 onto `aa6891d63`); `git fetch origin fork`; record whether #384 (`fork/fix/storefront-channel-value-overrides`) is merged, and if not, whether the coordinator chose to stack — write the answer under this task
-- [ ] T002 [S1] `bash scripts/setup-worktree.sh && pnpm run build:packages`
-- [ ] T003 [S1] Baseline: `pnpm --filter @endora-commerce/contracts run test`, `pnpm --filter @endora-commerce/mod-catalog run test`, `pnpm --filter @endora-commerce/mod-search run test`, `pnpm --filter @endora-commerce/mod-carts run test`; note any pre-existing red in the PR description
-- [ ] T004 [S1] Open the fork draft PR so `ci-pg` runs from the first push; record the PR URL here
+- [x] T001 [S1] Confirm the branch is on `origin/master` (rebased 2026-10-21 onto `aa6891d63`); `git fetch origin fork`; record whether #384 (`fork/fix/storefront-channel-value-overrides`) is merged, and if not, whether the coordinator chose to stack — write the answer under this task
+  - 2026-10-22: branch contains `aa6891d63` (= `origin/master`). #384 is **not** merged (`fork/fix/storefront-channel-value-overrides` is not an ancestor of `origin/master`); the coordinator did **not** stack — Block A runs on `origin/master`, Block B waits for #384.
+- [x] T002 [S1] `bash scripts/setup-worktree.sh && pnpm run build:packages`
+- [x] T003 [S1] Baseline: `pnpm --filter @endora-commerce/contracts run test`, `pnpm --filter @endora-commerce/mod-catalog run test`, `pnpm --filter @endora-commerce/mod-search run test`, `pnpm --filter @endora-commerce/mod-carts run test`; note any pre-existing red in the PR description
+  - 2026-10-22: all green — contracts 53 files / 1154 tests, mod-catalog 9 / 86, mod-search 10 / 44, mod-carts 5 / 89. No pre-existing red.
+- [x] T004 [S1] Open the fork draft PR so `ci-pg` runs from the first push; record the PR URL here
+  - https://github.com/bfluks/endora-commerce/pull/10 (fork-internal draft, do not merge).
 
 **Verification**:
 - `pnpm --filter backend exec vitest run --config vitest.unit.config.ts test/unit/docs/agents-router.test.ts`
