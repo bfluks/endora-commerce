@@ -45,14 +45,16 @@ patchProductScopesRequestSchema = z.object({
 ```
 
 Response `200 { data: <§1 shape>, warnings: ScopeWarning[] }` where
-`ScopeWarning = { kind: 'completeness'; channelId; languageCode; missing: ('name' | 'urlKey' | `attribute:${string}`)[] }
+`ScopeMissingValue = 'name' | 'urlKey' | `attribute:${string}`` (`scopeMissingValueSchema`, one definition,
+shared by the warning, `SCOPE_INCOMPLETE` details and the overview cell of §3) and
+`ScopeWarning = { kind: 'completeness'; channelId; languageCode; missing: ScopeMissingValue[] }
                | { kind: 'audience_non_members'; channelId; organizationIds: uuid[] }`.
 
 Behaviour:
 - One Command `product.scopes.update` (`objectType: 'product'`), one audit entry with `before`/`after` of
-  every touched scope row, complete enough that re-sending `before` restores it (FR-080; undo per
-  `research.md` R29 — bulk writes are undone by the bulk-operation undo, single writes are restored from the
-  audit's before-state until the owner answers Q-D).
+  every touched scope row, complete enough that re-sending `before` restores it (FR-080, FR-081). Undo per
+  `research.md` R29, owner decision Q-D → A (2026-10-22): bulk writes are undone by the bulk-operation
+  undo; a single write has no undo of its own and is restored by re-applying the audit's before-state.
 - **FR-014**: a channel the product is not a member of → `422 SCOPE_INVALID`
   `details: { channelId, reason: 'not_a_member' }`; a language the channel does not offer →
   `reason: 'language_not_offered', languageCode` — **except** `null` (removing an orphaned override is
@@ -61,6 +63,13 @@ Behaviour:
 - Emits `product.updated.v1` with the `changedFields` of R10 after commit.
 - Completeness gate (R18): `warn` → saved, `warnings[].kind = 'completeness'`; `refuse` →
   `422 SCOPE_INCOMPLETE details: { pairs: [{ channelId, languageCode, missing }] }`, nothing saved.
+  **Only a status change fires it** (M3 → A, FR-060): the pairs are `pairsTurningOn`, which compares
+  effective *status* alone. A request that changes only `window`, `audience`, order rules or nothing at
+  all never warns and never refuses, even if it makes the product live at (C, L) now. Joining a channel
+  (`PUT /api/v1/admin/sales-channels/:code/:entityType/:entityId`, `sales_channels`, or bulk
+  `salesChannels` without `status`) and a channel gaining a language (`PATCH /api/v1/admin/sales-channels/:code`)
+  never produce a gate pair;
+  what they leave missing is shown by the overview (§3, `cells[].missing`).
 - The global **status** keeps its existing write path (`PATCH /api/v1/admin/catalog/products/:id`); that
   path now runs the gate too (US6 #3) and never warns about overrides (FR-013).
 
@@ -76,6 +85,7 @@ scopeOverviewResponseSchema = z.object({ data: z.object({
     effectiveStatus: productScopeStatusSchema,
     statusSource: z.enum(['channel_language', 'channel', 'global']),
     overriddenFields: z.array(z.object({ field: z.string(), level: z.enum(['channel_language', 'channel', 'language']) })),
+    missing: z.array(scopeMissingValueSchema).optional(),      // FR-041 — what the gate would report at this cell
   })),
   channelRows: z.array(z.object({ channelId, overriddenFields: z.array(z.string()) })),
   languageColumns: z.array(z.object({ languageCode, overriddenFields: z.array(z.string()) })),
@@ -84,7 +94,15 @@ scopeOverviewResponseSchema = z.object({ data: z.object({
 ```
 
 `available` here means "on and inside the window now" — audience depends on the buyer and is shown as the
-rule, not evaluated (SC-003). Fields covered: every row of FR-009 (name/description and user-attribute
+rule, not evaluated (SC-003).
+
+`missing` (FR-041, M3 → A) is `checkCompleteness` (R18) evaluated for that cell — the same function and the
+same `ScopeMissingValue` vocabulary the gate uses, so the overview and a refusal can never disagree. It is
+computed for every cell whose channel the product is a member of and whose language that channel offers,
+**whatever the effective status** — so the operator sees the gap before switching a cell on and after a
+change that made it live without firing the gate (joining a channel, a channel gaining a language, a window
+opening, an audience change). `[]` = complete; absent = the cell is not evaluable (non-member channel,
+language not offered); the admin renders nothing for an absent field. Fields covered: every row of FR-009 (name/description and user-attribute
 overrides read from `product_value_overrides`, SEO through `seo`'s port when present, URL keys, media,
 attachments, order rules). "Reset to inherited" in a cell calls the owning write endpoint with `null` for
 that one field.

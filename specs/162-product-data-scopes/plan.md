@@ -85,7 +85,7 @@ changes* (R21)
 | X. Queues | The window sweep is a BullMQ Job Scheduler through `ctx.worker` (`price-list-status-worker.ts` shape); bulk scoped status rides `BulkOperationService` |
 | XI. Tenancy (NN) | New tables platform-global like `products`; audience evaluated at read time against the buyer's organization; no no-organization path introduced |
 | XII. Channel scoping (NN) | Membership read only through the kernel accessor (subquery / filter); unresolved channel matches nothing (FR-007); cross-channel tests for every FR-004 consumer |
-| XIII. Command Bus (NN) | Every scoped write, URL-key write, redirect delete, takeover, SEO override upsert/delete (converted from today's hand audit, R13) and bulk run is a Command, one audit entry per product with a complete before/after projection (FR-080); bulk runs undo through the existing bulk-operation undo, single writes restore from the audit before-state (R29, Q-D) |
+| XIII. Command Bus (NN) | Every scoped write, URL-key write, redirect delete, takeover, SEO override upsert/delete (converted from today's hand audit, R13) and bulk run is a Command, one audit entry per product with a complete before/after projection (FR-080); bulk runs undo through the existing bulk-operation undo, single writes have no undo and restore from the audit before-state (R29; owner Q-D → A) |
 | XIV. Extensibility | Typed columns are justified (filterability, R1) — these are core commerce fields, not "add a field" requests |
 | XV. Untouched core | Core feature; no overlay |
 | XVI. Palette | Overview and scope controls are part of the product editor, reached by the existing `open-products` action (keywords extended); `targetRoute` cannot carry a product id (R23) |
@@ -95,9 +95,10 @@ changes* (R21)
 
 ## Deviations from the spec, and reinterpretations
 
-- **D1 — SEO overrides start being served (R0 F2, R13).** US8 #2's "no page's metadata changes" cannot
-  hold literally for products that already have per-language overrides, because none are served today.
-  **Decided by the owner (Q-A → serve, 2026-10-21)**; listed under *Intended behaviour changes*.
+- **D1 — SEO overrides start being served (R0 F2, R13).** No longer a deviation: US8 #2 now states that
+  existing per-language overrides are served from deploy and that those pages' metadata changes as intended
+  (owner Q-A → serve, 2026-10-21; spec reworded 2026-10-22). Kept here as the pointer to *Intended behaviour
+  changes* 4, which the deploy-parity test T144 asserts.
 - **D2 — Basket add gains a status check (R0 F1).** SC-001's parity statement is extended to name it.
 - **D3 — Alt text is product-scoped per language (R15)**, falling back to the asset's own alt text, which is
   what "the global alt text" means in US9 #3.
@@ -113,9 +114,10 @@ changes* (R21)
   goes through one backend-called helper, `productPath()` in `packages/contracts/src/product-url-keys.ts`
   (R12); the storefront receives ready paths (resolve `path`, PDP `paths`), so the owner's
   language-path-prefix issue (Q-B → C) replaces one function for every emitted URL.
-- **D8 — "Standard undo" of a single scoped write (R29).** The tree has undo only for bulk operations.
-  Bulk scoped writes use it; single writes are Commands whose audit before-state is complete and is
-  restored by re-sending it. FR-081 and US1 #8 promise more; Q-D asks the owner.
+- **D8 — Undo of a scoped write (R29).** The tree has undo only for bulk operations. Bulk scoped writes
+  use it; single writes are Commands whose audit before-state is complete and is restored by re-applying
+  it — no single-write undo. **Decided by the owner (Q-D → A, 2026-10-22)**; FR-081 and US1 #8 now say
+  exactly this, so it is no longer a deviation.
 - **D9 — The admin attribute editor gains the two scope flags (R27, analyze H2).** No admin surface edits
   `channelScoped` / `languageScoped` today; FR-090's preview needs the control it previews.
 
@@ -145,11 +147,12 @@ changes* (R21)
   `redirects`); redirect data stays in catalog and keeps reserving keys; the takeover confirmation is part of
   the catalog URL-key editor, keeps working with `seo` off and names the product that loses the redirect
   (R12).
-- **Q-D [NEEDS CLARIFICATION] — single-write undo (D8, R29).** Is restoring a single scoped write from its
-  audit before-state (re-sending it) enough for FR-081, or must a single scoped write have a one-click undo
-  with a conflict report? *Options*: (a) as designed — bulk undo for bulk writes, before-state restore for
-  single writes, no new machinery (recommended); (b) a generic single-Command undo in the platform — a new
-  phase in `audit_logs`/platform before Phase 4, and a Complexity Tracking entry. Interim: (a).
+- **Q-D — decided 2026-10-22: option A.** No single-write undo: bulk scoped writes undo through the
+  existing bulk-operation undo; a single write is restored from its audit before-state (D8, R29, FR-081). A
+  generic single-Command undo is out of scope (a possible future issue).
+- **M3 — decided 2026-10-22: option A.** Only a status write that turns a (C, L) on fires the completeness
+  gate — not joining a channel, a channel gaining a language, a window opening or an audience change;
+  the scope overview shows per cell what the gate would report missing (R18, FR-041, FR-060).
 
 ## Requirement → test (abridged; every FR maps to at least one test in `tasks.md`)
 
@@ -162,9 +165,9 @@ changes* (R21)
 | FR-017 | `backend/test/integration/catalog/effective-text-parity.test.ts`, `…/listing-effective-names.test.ts`, carts/RFQ snapshot tests [PG] |
 | FR-023, FR-024, SC-005 | `product-scopes.test.ts` (inclusive edges); `backend/test/integration/catalog/publication-window-sweep.test.ts` [PG] |
 | FR-030 | `product-scopes-api.test.ts` (whole-rule override, non-member warning) |
-| FR-040–FR-043 | `admin/test/modules/catalog/product-scope-*.test.tsx`; `registered-bundles-shape.test.ts` |
+| FR-040–FR-043 | `admin/test/modules/catalog/product-scope-*.test.tsx`; `registered-bundles-shape.test.ts`; FR-041's per-cell `missing` in `…/contract/catalog/scope-completeness-gate.test.ts` [PG] (T078) and `product-scope-overview.test.tsx` (T093) |
 | FR-050–FR-052, SC-006 | `backend/test/contract/catalog/products-bulk-scoped-status.test.ts` [PG] |
-| FR-060, FR-061 | `packages/modules/catalog/src/backend/services/scope-completeness.test.ts`; `…/contract/catalog/scope-completeness-gate.test.ts` [PG] |
+| FR-060, FR-061 | `packages/contracts/src/product-scopes.test.ts` (`pairsTurningOn`, M3 non-trigger cases); `packages/modules/catalog/src/backend/services/scope-completeness.test.ts`; `…/contract/catalog/scope-completeness-gate.test.ts` [PG] |
 | FR-070–FR-074, FR-093, SC-008 | `backend/test/integration/catalog/url-key-uniqueness.test.ts`, `…/url-key-resolution.test.ts` [PG]; `storefront/test/catalog/pdp-redirect.test.ts` |
 | FR-075 | `backend/test/integration/seo/meta-channel-scope.test.ts` [PG] |
 | FR-080 (SEO writes) | `backend/test/contract/seo/meta-override-commands.test.ts` [PG] |
@@ -276,8 +279,7 @@ commit artefacts together.
 7. **External connectors** must adopt the new write port to honour FR-091/FR-093 (D5).
 8. **The status value set (Q1)** may change at acceptance — cheap by construction (R3), but it touches the
    admin control, contracts and a data migration late in the feature.
-9. **Single-write undo (Q-D).** If the owner chooses one-click undo, a platform phase is inserted before
-   Phase 4 and every single-write test gains an undo assertion.
+9. *(Retired — Q-D decided A on 2026-10-22: no single-write undo, no platform phase.)*
 10. **CMS blocks by slug.** Blocks store global slugs; the JSON lookup keeps answering them (R28). If a
    product's global slug is later taken over in L by another product's L key, a block naming that slug at L
    shows the other product — an edge the operator caused by confirming a takeover; blocks moving to product
@@ -295,6 +297,8 @@ a status value other than through the port or the pure rule; no SQL against anot
 availability narrowing goes **in the statement**, never after the page is cut; every write is a Command;
 every buyer seam keeps one not-found answer; do not start a #384-gated phase before #384 is on `master`.
 Owner decisions since planning: Q-A serve, Q-B interim `?lang` only (prefix is a separate issue; every
-emitted URL through `productPath()`), Q-C hide redirects with `seo` off. Open: Q1 (re-asked at acceptance)
-and Q-D (single-write undo; build interim (a)). Phase 18 converts `seo`'s hand-audited override writes to
+emitted URL through `productPath()`), Q-C hide redirects with `seo` off, M3 → A (the gate fires on status
+writes only; the overview shows each cell's missing values), Q-D → A (no single-write undo; restore from the
+audit before-state). Open: Q1 only (re-asked at acceptance). The old global slug becomes a `NULL`-language
+redirect only where it is free in every language (data-model §5, HIGH-2). Phase 18 converts `seo`'s hand-audited override writes to
 Commands **before** adding the channel dimension — do not extend the hand audit.

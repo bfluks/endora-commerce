@@ -144,9 +144,24 @@ in one language, so "wins" only ever arbitrates between a product's own current 
 | `k` is P's own `NULL`-language redirect, written as an L or C×L key | the redirect row is **kept** (it still serves every other language); in L the current key wins (resolution order) |
 | P's previous key at that scope was `k0 ≠ k` | redirect `(L, k0) → P` inserted (if not already P's current key in L) |
 | P gets its **first** language key for L | redirect `(L, P.slug) → P` inserted (FR-072 consequence 1) |
-| P's language key for L is removed ("use inherited") | the removed key becomes redirect `(L, k)`; a redirect `(L, P.slug)` of P is deleted (slug is current again) |
-| Writing a **global** key (`products.slug`) | checked against every language: any other product's key in any L → refused; another product's redirect with that key in any language → takeover required (confirmation names every losing product); old slug becomes redirect `(NULL, old)` |
+| P's language key for L is removed ("use inherited") | `P.slug` becomes P's key in L again, so it is checked in L like a write of `P.slug`: another product's current key in L → refused `URL_KEY_TAKEN` naming the holder (the operator gives P another L key instead); another product's L redirect → takeover required. Otherwise the removed key becomes redirect `(L, k)` and a redirect `(L, P.slug)` of P is deleted (slug is current again) |
+| Writing a **global** key (`products.slug`) | checked against every language: any other product's key in any L → refused; another product's redirect with that key in any language → takeover required (confirmation names every losing product). The old slug `old` becomes a redirect **only where it is free** (below) |
+| … the old slug's redirect, when the global key changes from `old` | `old` is **free in L** when no other product holds it in L as a current key (language key, C×L key of any channel incl. orphans) or as a redirect (`(L, old)`). If `old` is free in every language of every channel → one redirect `(NULL, old) → P`. Otherwise → **no** `NULL` row; a redirect `(L, old) → P` for every language L of any channel in which `old` is free and is not already P's own current key or own `(L, old)` redirect, and **none** where it is taken (that language's holder keeps it). Rationale below the table |
 | Writing P's own `NULL`-language redirect `k` back as P's global key | the `NULL` row is deleted and replaced by a redirect `(L, k) → P` for every language L in which P holds a language or C×L key (there the slug is not P's key, so without it `k` would stop resolving in L — H1) |
+| Writing P's own per-language redirects `(L, k)` (the fallback rows above) back as P's global key | rows of languages where P has no language key are deleted (the slug is current there again — no self-redirect); rows of languages where P holds a language or C×L key are kept |
+
+**Why the old global slug is conditional (re-analyze HIGH-2, 2026-10-22).** A language or C×L key `k0` that
+P gives up was P's current key in its language, so uniqueness guarantees no other product holds it there and
+`(L, k0)` is always free. The global slug is different: it counts as P's key only in languages where P has
+**no** language key, so in a language L where P has one, another product Q may legally take `old` as its L
+key. Sequence: P holds a key in L → Q takes P's slug `k` as its L key → P changes its slug. An unconditional
+`(NULL, k) → P` would then share `k` in L with Q's current key — exactly the state the resolution order
+promises cannot arise between two products — and would sit in the `(key) where language_code is null`
+unique, blocking Q from ever releasing `k` as an `(L, k)` redirect of its own. The per-language fallback
+keeps `old` redirecting to P everywhere it can and never in a language where it belongs to someone else.
+Languages are those of the channels that exist at write time; a language added later gets no row in the
+fallback case — `old` never resolved there, so nothing expires (FR-072). The same reasoning makes removing
+P's language key a write of `P.slug` in L (the row above).
 
 Import / connector writes take the same checks and **never** take over: the refused key is reported and
 the previous key kept (FR-093).

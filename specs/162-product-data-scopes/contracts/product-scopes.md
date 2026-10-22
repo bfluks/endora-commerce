@@ -49,6 +49,11 @@ export function isProductEffectivelyAvailable(input: {
 export function effectiveOrderRules(g, channelRow | undefined): { minOrderQuantity: number | null; returnable: boolean };
 export function pairsTurningOn(before: ScopeSnapshot, after: ScopeSnapshot, channels: ScopeChannel[]):
   Array<{ channelId: string; languageCode: string }>;   // R18; members only, channel languages only
+  // M3 → A (2026-10-22): a pair is returned only when isOn(effectiveStatus(...)) goes false → true.
+  // Window and audience are NOT inputs to the comparison, and one `channels` list (membership and channel
+  // languages after the write) serves both snapshots, so a membership or channel-language change cannot
+  // produce a pair on its own — the gate fires on status writes only. A bulk run that sets `status` and
+  // adds channels in one go gates the pairs its status change turns on, new channels included.
 export function resolveScopeLanguage(channel: ScopeChannel, requestedTag: string | null | undefined): string; // R7
 ```
 
@@ -56,7 +61,9 @@ Unit tests (`packages/contracts/src/product-scopes.test.ts`): every row of `data
 at C or C×L is off and nothing else (FR-010); the window's inclusive edges at the millisecond (K4); an
 overridden open window beats a bounded global one; the audience override replaces the list (US3 #3);
 `resolveScopeLanguage` exact / base / default / unknown-tag cases; `pairsTurningOn` for a global switch,
-a channel row covering every language, a C×L row, and non-member channels ignored.
+a channel row covering every language, a C×L row, and non-member channels ignored; **and the M3 non-trigger
+cases** — snapshots that differ only in window (incl. one that opens the window now) or only in audience
+return `[]`.
 
 ## 3. Port — `catalogProductAvailabilityPort` (owner `catalog`, `ctx.di.providePort`)
 
