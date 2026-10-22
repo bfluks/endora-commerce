@@ -38,7 +38,7 @@ import {
  * checkboxes and the low-stock threshold beside it: the flag on toggle, the minimum on
  * its Save button.
  *
- * Feature 162 (US10, FR-100) adds both rules per sales channel below the global ones,
+ * Feature 163 (US10, FR-100) adds both rules per sales channel below the global ones,
  * inheriting them; that table saves through `PATCH …/scopes` with one Save, and is
  * read-only — like the global controls — without `catalog:write` (FR-042).
  */
@@ -332,7 +332,7 @@ function draftFromRow(row: ProductScopes['channels'][number]): ChannelRuleDraft 
 }
 
 /**
- * Feature 162 (US10, FR-100) — minimum order quantity and "returnable" per member
+ * Feature 163 (US10, FR-100) — minimum order quantity and "returnable" per member
  * channel. An empty minimum and "use inherited" both send `null` (FR-012); `1` is how a
  * channel says "no minimum here" against a global one, which the help line states rather
  * than leaving the operator to discover it (Tesler). Only changed fields are sent, every

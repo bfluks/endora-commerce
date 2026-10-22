@@ -335,7 +335,7 @@ export const ADMIN_COOKIES: Record<string, { adminUserId: string }> = {
   'stub-product-views-no-catalog-session': {
     adminUserId: '00000000-0000-4000-8000-0000000147b3',
   },
-  // `specs/162-product-data-scopes/` — the product scopes routes' gates. A
+  // `specs/163-product-data-scopes/` — the product scopes routes' gates. A
   // catalogue reader on a custom role (`catalog:read` only) reads a product's
   // scopes and is refused the write; an admin without `catalog:read` is refused
   // both. The users, and the custom roles, are created by

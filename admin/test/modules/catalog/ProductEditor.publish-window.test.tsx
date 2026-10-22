@@ -12,7 +12,7 @@ import {
 } from '../../helpers/render-with-session';
 
 /**
- * Feature 162 / T089 (US2, FR-023, FR-013) — the global publication window on the product
+ * Feature 163 / T089 (US2, FR-023, FR-013) — the global publication window on the product
  * editor's Details tab: read from the scopes answer, shown in the operator's local time,
  * sent with the page Save only when it changed, and refused inline — never by a browser
  * bubble — when it does not start before it ends. The global status is handed to the
@@ -145,7 +145,7 @@ afterAll(() => {
   else process.env.TZ = previousTz;
 });
 
-describe('ProductEditor — global publication window (162)', () => {
+describe('ProductEditor — global publication window (163)', () => {
   beforeEach(() => {
     getSpy.mockReset();
     patchSpy.mockReset();

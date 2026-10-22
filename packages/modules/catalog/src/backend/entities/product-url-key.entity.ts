@@ -2,7 +2,7 @@ import { Entity, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 
 /**
- * ProductUrlKey — feature 162 (`specs/162-product-data-scopes/` data-model.md §5,
+ * ProductUrlKey — feature 163 (`specs/163-product-data-scopes/` data-model.md §5,
  * research R11).
  *
  * A product's URL key in one language (`salesChannelId` null — the language key,

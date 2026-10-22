@@ -10,8 +10,8 @@ import { AdminRole, AdminUser } from '../../helpers/package-entities.js';
 import { seedOrganization } from '../../helpers/admin-search-fixtures.js';
 
 /**
- * Feature 162, Phase 4 (T022, T028) — `GET|PATCH /api/v1/admin/catalog/products/:id/scopes`
- * (`specs/162-product-data-scopes/contracts/admin-scopes-api.md` §1–§2).
+ * Feature 163, Phase 4 (T022, T028) — `GET|PATCH /api/v1/admin/catalog/products/:id/scopes`
+ * (`specs/163-product-data-scopes/contracts/admin-scopes-api.md` §1–§2).
  *
  * - the `catalog:read` / `catalog:write` gates answer 401/403 before the body is
  *   validated (FR-084);
@@ -29,7 +29,7 @@ import { seedOrganization } from '../../helpers/admin-search-fixtures.js';
  * in `afterAll` (its scope rows go with it by cascade); no seeded channel's
  * languages are changed.
  */
-describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 162)', () => {
+describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 163)', () => {
   let h: BackendServerHandle;
   const run = randomUUID().slice(0, 8);
   const admin = { cookies: { b2b_session: 'stub-admin-session' } };

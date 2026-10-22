@@ -1,6 +1,6 @@
 # Research: product data scopes per sales channel and language
 
-**Feature**: `specs/162-product-data-scopes/` | **Spec**: `spec.md` (clarify rounds 1–4) | **Measured on**:
+**Feature**: `specs/163-product-data-scopes/` | **Spec**: `spec.md` (clarify rounds 1–4) | **Measured on**:
 `origin/master` `aa6891d63` (2026-10-21), with #384 read from `fork/fix/storefront-channel-value-overrides`
 `f855ffc8a`.
 
@@ -328,8 +328,8 @@ C, a separate issue) edits one function for every emitted URL. In-page links (32
 storefront and `cms-components` files today) stay `/p/<effective key>` without `?lang` — the clicking
 browser is already in L — and are the prefix issue's to change.
 
-**Q-B decided (owner, 2026-10-21): option C, out of scope for 162.** A language prefix in the storefront
-path (`/en/p/drill`) is a separate issue. For 162 the interim stands: `?lang=<L>` on every URL the
+**Q-B decided (owner, 2026-10-21): option C, out of scope for 163.** A language prefix in the storefront
+path (`/en/p/drill`) is a separate issue. For 163 the interim stands: `?lang=<L>` on every URL the
 platform emits when L is not the channel default, and **no** cross-language rendering (option B rejected).
 **Accepted residual gap until the path-prefix issue lands:** a link to a language key without `?lang` —
 typically a default-language link — opened by a browser whose `Accept-Language` resolves to another channel
@@ -616,4 +616,4 @@ tests assert that projection, not an undo endpoint. No new machinery, and no sin
 **Alternative rejected (Q-D option B).** A generic single-Command undo (revert records on the audit row or a
 new table, a generic undo route, conflict detection per object type) is platform work owned by
 `audit_logs`/the platform, a new phase, and a Complexity Tracking entry. The owner placed it out of scope;
-it is a possible future issue, not part of 162.
+it is a possible future issue, not part of 163.

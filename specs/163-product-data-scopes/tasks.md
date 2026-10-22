@@ -1,6 +1,6 @@
 # Tasks: product data scopes per sales channel and language
 
-**Feature**: `specs/162-product-data-scopes/` | **Issues**: #385, depends on #384
+**Feature**: `specs/163-product-data-scopes/` | **Issues**: #385, depends on #384
 **Input**: `spec.md` (clarify rounds 1–4), `plan.md`, `research.md` (R0–R29), `data-model.md`,
 `contracts/{product-scopes,admin-scopes-api,url-keys-and-redirects,consumers,seo-media-attachments,error-codes}.md`,
 `quickstart.md`. Measured on `origin/master` `aa6891d63`.
@@ -28,7 +28,7 @@ suffix (`T056a`), never a renumbering.
 ## Rules for every phase (read once)
 
 - **Every commit `git commit -s`** (the `dco` job). Never add `Co-Authored-By` or any AI trailer. English,
-  conventional commits: `feat(catalog): …`, `test(search): …`, `docs(162): …`.
+  conventional commits: `feat(catalog): …`, `test(search): …`, `docs(163): …`.
 - After editing anything under `packages/`, rebuild it (`pnpm --filter <package> run build`) **before**
   running any backend, admin or storefront test — tests read `dist`, `tsc` reads sources.
 - **Test helpers import services from `dist`** through the package specifier
@@ -61,23 +61,23 @@ suffix (`T056a`), never a renumbering.
 
 ## Streams and file ownership
 
-Up to three builders, each in its own worktree (`git worktree add ../wt-162-<stream> -b
-feat/162-product-data-scopes-<stream> <S1 tip>` then `bash ../wt-162-<stream>/scripts/setup-worktree.sh`;
-never a symlinked `node_modules`). Stream branches are cherry-picked onto `feat/162-product-data-scopes` at
+Up to three builders, each in its own worktree (`git worktree add ../wt-163-<stream> -b
+feat/163-product-data-scopes-<stream> <S1 tip>` then `bash ../wt-163-<stream>/scripts/setup-worktree.sh`;
+never a symlinked `node_modules`). Stream branches are cherry-picked onto `feat/163-product-data-scopes` at
 phase boundaries by the coordinator.
 
 | Stream | Branch | Phases | Owns (may edit freely) |
 | --- | --- | --- | --- |
-| **S1** backend availability | `feat/162-product-data-scopes` (primary checkout) | 1–12, 21, 22, 24, 25 | `packages/contracts/src/product-scopes.ts`; catalog scope entities/services/migrations (`product-channel-*`, `product-availability*`, `effective-value.sql.ts`, `scope-*`, `publication-window-sweep.ts`, media/attachment/packaging changes); consumer seams in `search`, `carts`, `orders`, `quote_requests`, `comparisons`, `shopping_lists`, `quick_order`, `product_feeds`, `import_export`; `backend/test/**` files it creates |
-| **S2** URL keys + SEO | `feat/162-product-data-scopes-urlkeys` | 16–19 | `packages/contracts/src/product-url-keys.ts`; `packages/contracts/src/seo.ts` from P18 on (S1 adds `SeoProductMetaPort` there in P2, T010, then hands it over); catalog `url-key*.ts`, `product-url-*.entity.ts`, the `product_url_keys` migration, `routes.admin.url-keys.ts`, `routes.public.url-keys.ts`; everything under `packages/modules/seo/`; `storefront/app/(catalog)/p/[slug]/**`, `storefront/lib/api/catalog.ts` |
-| **S3** admin UI | `feat/162-product-data-scopes-admin` | 13–15, 20, 23 | `packages/modules/catalog/src/admin/**`, `packages/modules/seo/src/admin/**` (Phase 20 only, after S2 hands `seo` back), `admin/test/modules/catalog/**` |
+| **S1** backend availability | `feat/163-product-data-scopes` (primary checkout) | 1–12, 21, 22, 24, 25 | `packages/contracts/src/product-scopes.ts`; catalog scope entities/services/migrations (`product-channel-*`, `product-availability*`, `effective-value.sql.ts`, `scope-*`, `publication-window-sweep.ts`, media/attachment/packaging changes); consumer seams in `search`, `carts`, `orders`, `quote_requests`, `comparisons`, `shopping_lists`, `quick_order`, `product_feeds`, `import_export`; `backend/test/**` files it creates |
+| **S2** URL keys + SEO | `feat/163-product-data-scopes-urlkeys` | 16–19 | `packages/contracts/src/product-url-keys.ts`; `packages/contracts/src/seo.ts` from P18 on (S1 adds `SeoProductMetaPort` there in P2, T010, then hands it over); catalog `url-key*.ts`, `product-url-*.entity.ts`, the `product_url_keys` migration, `routes.admin.url-keys.ts`, `routes.public.url-keys.ts`; everything under `packages/modules/seo/`; `storefront/app/(catalog)/p/[slug]/**`, `storefront/lib/api/catalog.ts` |
+| **S3** admin UI | `feat/163-product-data-scopes-admin` | 13–15, 20, 23 | `packages/modules/catalog/src/admin/**`, `packages/modules/seo/src/admin/**` (Phase 20 only, after S2 hands `seo` back), `admin/test/modules/catalog/**` |
 
 **Single-owner shared files — S1 only.** `packages/contracts/src/index.ts`, `errors.ts`, `catalog.ts`;
 `packages/modules/catalog/src/manifest.ts`, `src/backend/index.ts`, `routes.admin.ts`, `routes.public.ts`;
 `packages/modules/catalog/i18n/{en,pl}.json`; `backend/test/fixtures/error-code-routing/reference-ledgers.ts`;
 every generated artefact (`backend/src/db/*.generated.ts`, `manifest-index.generated.ts`, module-reference
 pages, package manifests), `pnpm-lock.yaml`, the `AGENTS.md` appendix, `.changeset/`. S2 and S3 put any
-line they need in such a file into **one separate commit per phase**, titled `chore(162): <stream> handover
+line they need in such a file into **one separate commit per phase**, titled `chore(163): <stream> handover
 P<n>`, touching only shared files; the coordinator applies it on S1 at the boundary. A stream that adds a migration, entity or error code
 **also regenerates and commits the generated artefacts on its own branch** (so its own `ci-pg` run has them
 registered); when the coordinator applies the stream's commits to S1, the generated files are **not**
@@ -162,8 +162,8 @@ consumer still compiles.
   - `fields.scopedStatus` + mutual-exclusion refine on path `scopedStatus`; reasons added; record fields optional; `SeoProductMetaPort` in seo.ts; barrel exports both new modules.
 - [x] T011 [S1] Mint `SCOPE_INVALID`, `SCOPE_INCOMPLETE`, `URL_KEY_TAKEN`, `URL_KEY_REDIRECT_TAKEOVER_REQUIRED`, `URL_REDIRECT_NOT_FOUND` in one commit per `contracts/error-codes.md` (ERROR_CODES, `MINTED_ERROR_CODES`, catalog manifest `errorCodes`, `errors.<CODE>` en+pl, `composer:generate` + Polish module-reference refresh) — `packages/contracts/src/errors.ts`, `backend/test/fixtures/error-code-routing/reference-ledgers.ts`, `packages/modules/catalog/src/manifest.ts`, `packages/modules/catalog/i18n/{en,pl}.json`
   - One commit; composer/manifests generators moved no artefact (no module-reference change). `check:error-translations` violations=0.
-- [x] T012 [S1] Changeset: `@endora-commerce/contracts` `minor` (new exports `product-scopes`, `product-url-keys`, `SeoProductMetaPort`) — `.changeset/162-product-scopes-contracts.md`
-  - Plus `.changeset/162-catalog-product-scopes.md` (`mod-catalog` minor) because the catalog manifest and bundles changed; extended by later phases. `check:release-intent --since origin/master` violations=0.
+- [x] T012 [S1] Changeset: `@endora-commerce/contracts` `minor` (new exports `product-scopes`, `product-url-keys`, `SeoProductMetaPort`) — `.changeset/163-product-scopes-contracts.md`
+  - Plus `.changeset/163-catalog-product-scopes.md` (`mod-catalog` minor) because the catalog manifest and bundles changed; extended by later phases. `check:release-intent --since origin/master` violations=0.
 - [x] T013 [S1] Build contracts; type-check consumers by name
   - contracts build + typecheck + lint clean; `mod-catalog` typecheck (backend + UI tsconfig) clean.
 
@@ -336,7 +336,7 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
 - [ ] T063 [S1] `effectiveNames` on the port; carts, quote_requests, comparisons consume it / #384's helpers — `product-availability.service.ts`, `cart-service.ts:1251`, `rfq-service.ts:462`, `:635`, `comparison-service.ts:607`, `:623`
 - [ ] T064 [S1] Search: `localizedNames.<L>` in documents + `attributesToSearchOn` (FR-017 b on the Meilisearch path) — `search-indexer.ts`, `search-query.service.ts`
 - [ ] T065 [S1] Benchmark: a scoped variant of `backend/test/perf/catalog-list.bench.ts` and `backend/test/perf/catalog/listing-filtered-page.bench.ts` (20% of products with C and C×L rows, windows, audience overrides, effective-name sort) and record before/after in the PR; **> 10% regression stops the block** and goes back to the architect (R1 fallback) — `backend/test/perf/catalog/listing-scoped-availability.bench.ts`
-- [ ] T066 [S1] Release note entry: name sort order (D6), reindex per channel (R21) — `.changeset/162-…` bodies of the touched packages
+- [ ] T066 [S1] Release note entry: name sort order (D6), reindex per channel (R21) — `.changeset/163-…` bodies of the touched packages
 
 **Verification** (one invocation per line):
 - `[PG] backend/test/integration/catalog/effective-text-parity.test.ts`
@@ -436,7 +436,7 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
 - [x] T091 [S3] Every string as a flat key in `catalog/i18n/{en,pl}.json` (handover commit) — `i18n:hardcoded` stays at baseline
 - [x] T092 [S3] Palette: `open-products` keywords extended (handover commit to `manifest.ts`) (R23)
   - S3 (2026-10-22), applied by S1: the scope controls are a new `ProductScopeControls.tsx` mounted from
-    `ProductScopeEditor.tsx`/`ProductEditor.tsx`; i18n and palette keywords in `chore(162): s3 handover P13`. S1
+    `ProductScopeEditor.tsx`/`ProductEditor.tsx`; i18n and palette keywords in `chore(163): s3 handover P13`. S1
     added the Block A refusals (409 `VERSION_CONFLICT`, repeated language 422) to the admin error mapping.
 
 **Verification**:
@@ -492,7 +492,7 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
   - S2 (2026-10-22): T100/T101 written, type-checked, **unrun** (no local Postgres) — run in fork `ci-pg`. Pure
     planner rules covered by `packages/modules/catalog/src/backend/services/url-key.service.test.ts` (35, green).
     Shared-file lines (entity registration, plugin/route composition, T104 in `catalog-admin.service.ts`, audit
-    labels en/pl, `.changeset/162-catalog-url-keys.md`) are in `chore(162): s2 handover P16`; the regenerated
+    labels en/pl, `.changeset/163-catalog-url-keys.md`) are in `chore(163): s2 handover P16`; the regenerated
     `migrations-registry.generated.ts` is a separate S2-only commit. `GET …/url-keys` lists `redirects`
     unconditionally until T110 adds the `seo` presence probe with the T118b edge. A language key for a language no
     channel offers is `422 VALIDATION_FAILED` (`field: 'languageKeys'`): `SCOPE_INVALID`'s details need a channel.
