@@ -3,10 +3,30 @@ import {
   ORDER_MINIMUM_MAX,
   isOrderMinimumEligibleType,
   isValidOrderMinimum,
+  type PatchProductScopesRequest,
+  type ProductScopes,
 } from '@endora-commerce/contracts';
-import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
-import { Alert, Button, Checkbox, Input } from '@endora-commerce/admin-kit/ui';
+import { ApiError, apiClient, useAuth } from '@endora-commerce/admin-kit/lib';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Input,
+  Select,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import {
+  getProductScopeContext,
+  getProductScopes,
+  patchProductScopes,
+  scopeSaveErrorMessage,
+} from '../lib/product-scopes-api.js';
 
 /**
  * Feature 155 (US1, US5; FR-001, FR-003, FR-004) — the product's order rules, in the
@@ -17,6 +37,10 @@ import { useTranslation } from '@endora-commerce/admin-kit/i18n';
  * Each control saves on its own through the product `PATCH`, like the stock-management
  * checkboxes and the low-stock threshold beside it: the flag on toggle, the minimum on
  * its Save button.
+ *
+ * Feature 162 (US10, FR-100) adds both rules per sales channel below the global ones,
+ * inheriting them; that table saves through `PATCH …/scopes` with one Save, and is
+ * read-only — like the global controls — without `catalog:write` (FR-042).
  */
 
 interface OrderRulesResponse {
@@ -52,6 +76,8 @@ export function ProductOrderRulesCard({
   productType,
 }: ProductOrderRulesCardProps): ReactNode {
   const t = useTranslation('catalog');
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('catalog:write');
   const path = `/api/v1/admin/catalog/products/${productId}`;
   const minimumEligible = isOrderMinimumEligibleType(productType);
 
@@ -180,12 +206,13 @@ export function ProductOrderRulesCard({
           <Alert variant="destructive">{loadError}</Alert>
         ) : (
           <>
+            {!canWrite ? <div className="b2b-help">{t('orderRules.readOnly')}</div> : null}
             <div className="b2b-col" style={{ gap: 4 }}>
               <label className="b2b-row" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer' }}>
                 <Checkbox
                   className="mt-0.5"
                   checked={returnable}
-                  disabled={returnableSaving}
+                  disabled={returnableSaving || !canWrite}
                   aria-describedby={
                     returnableError ? `${returnableHelpId} ${returnableErrorId}` : returnableHelpId
                   }
@@ -221,7 +248,7 @@ export function ProductOrderRulesCard({
                       step={1}
                       value={minimumDraft}
                       placeholder={t('orderRules.minimum.placeholder')}
-                      disabled={minimumSaving}
+                      disabled={minimumSaving || !canWrite}
                       aria-invalid={minimumError ? true : undefined}
                       aria-describedby={
                         minimumError ? `${minimumHelpId} ${minimumErrorId}` : minimumHelpId
@@ -238,16 +265,18 @@ export function ProductOrderRulesCard({
                       }}
                     />
                   </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={minimumSaving}
-                    aria-busy={minimumSaving || undefined}
-                    onClick={submitMinimum}
-                  >
-                    {minimumSaving ? t('orderRules.saving') : t('orderRules.minimum.save')}
-                  </Button>
-                  {savedMinimum != null ? (
+                  {canWrite ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={minimumSaving}
+                      aria-busy={minimumSaving || undefined}
+                      onClick={submitMinimum}
+                    >
+                      {minimumSaving ? t('orderRules.saving') : t('orderRules.minimum.save')}
+                    </Button>
+                  ) : null}
+                  {canWrite && savedMinimum != null ? (
                     <Button
                       type="button"
                       variant="ghost"
@@ -273,9 +302,262 @@ export function ProductOrderRulesCard({
             ) : (
               <div className="b2b-help">{t('orderRules.minimum.notApplicable')}</div>
             )}
+
+            <ChannelOrderRules
+              productId={productId}
+              minimumEligible={minimumEligible}
+              globalMinimum={savedMinimum}
+              globalReturnable={returnable}
+              canWrite={canWrite}
+            />
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+type ReturnableChoice = 'inherit' | 'yes' | 'no';
+
+interface ChannelRuleDraft {
+  minimum: string;
+  returnable: ReturnableChoice;
+}
+
+function draftFromRow(row: ProductScopes['channels'][number]): ChannelRuleDraft {
+  return {
+    minimum: row.minOrderQuantity == null ? '' : String(row.minOrderQuantity),
+    returnable: row.returnable === null ? 'inherit' : row.returnable ? 'yes' : 'no',
+  };
+}
+
+/**
+ * Feature 162 (US10, FR-100) — minimum order quantity and "returnable" per member
+ * channel. An empty minimum and "use inherited" both send `null` (FR-012); `1` is how a
+ * channel says "no minimum here" against a global one, which the help line states rather
+ * than leaving the operator to discover it (Tesler). Only changed fields are sent, every
+ * channel in one request.
+ */
+function ChannelOrderRules({
+  productId,
+  minimumEligible,
+  globalMinimum,
+  globalReturnable,
+  canWrite,
+}: {
+  productId: string;
+  minimumEligible: boolean;
+  globalMinimum: number | null;
+  globalReturnable: boolean;
+  canWrite: boolean;
+}): ReactNode {
+  const t = useTranslation('catalog');
+  const ids = useId();
+  const [rows, setRows] = useState<ProductScopes['channels'] | null>(null);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [drafts, setDrafts] = useState<Record<string, ChannelRuleDraft>>({});
+  const [errors, setErrors] = useState<Record<string, true>>({});
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [status, setStatus] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([getProductScopes(productId), getProductScopeContext(productId)])
+      .then(([scopes, context]) => {
+        if (cancelled) return;
+        setRows(scopes.channels.filter((row) => row.isMember));
+        setNames(Object.fromEntries(context.channels.map((c) => [c.id, c.name])));
+      })
+      .catch(() => {
+        if (!cancelled) setLoadFailed(true);
+      });
+    return (): void => {
+      cancelled = true;
+    };
+  }, [productId]);
+
+  const channelName = (channelId: string): string =>
+    names[channelId] ?? t('productEditor.scopeControls.unknownChannel');
+
+  const update = (row: ProductScopes['channels'][number], changes: Partial<ChannelRuleDraft>): void => {
+    setDrafts((prev) => ({ ...prev, [row.channelId]: { ...(prev[row.channelId] ?? draftFromRow(row)), ...changes } }));
+    if ('minimum' in changes && errors[row.channelId]) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next[row.channelId];
+        return next;
+      });
+    }
+    setSaveError(null);
+    setStatus('');
+  };
+
+  const changedRows = (rows ?? []).filter((row) => {
+    const draft = drafts[row.channelId];
+    if (!draft) return false;
+    const saved = draftFromRow(row);
+    return draft.returnable !== saved.returnable || (minimumEligible && draft.minimum !== saved.minimum);
+  });
+
+  const save = async (): Promise<void> => {
+    const entries: PatchProductScopesRequest['channels'] = [];
+    const invalid: Record<string, true> = {};
+    for (const row of changedRows) {
+      const draft = drafts[row.channelId]!;
+      const saved = draftFromRow(row);
+      const entry: PatchProductScopesRequest['channels'][number] = { channelId: row.channelId };
+      if (minimumEligible && draft.minimum !== saved.minimum) {
+        const parsed = parseOrderMinimumInput(draft.minimum);
+        if (!parsed.ok) {
+          invalid[row.channelId] = true;
+          continue;
+        }
+        entry.minOrderQuantity = parsed.value;
+      }
+      if (draft.returnable !== saved.returnable) {
+        entry.returnable = draft.returnable === 'inherit' ? null : draft.returnable === 'yes';
+      }
+      entries.push(entry);
+    }
+    if (Object.keys(invalid).length > 0) {
+      setErrors(invalid);
+      return;
+    }
+    if (entries.length === 0) return;
+    setSaving(true);
+    setSaveError(null);
+    setStatus(t('orderRules.saving'));
+    try {
+      const res = await patchProductScopes(productId, { channels: entries });
+      setRows(res.data.channels.filter((row) => row.isMember));
+      setDrafts({});
+      setStatus(t('orderRules.channels.saved'));
+    } catch (err) {
+      setSaveError(scopeSaveErrorMessage(err, channelName, t, 'orderRules.channels.error.save'));
+      setStatus('');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inheritedMinimum =
+    globalMinimum == null ? t('orderRules.channels.minimumNone') : String(globalMinimum);
+  const inheritedReturnable = globalReturnable
+    ? t('orderRules.channels.returnable.inheritedYes')
+    : t('orderRules.channels.returnable.inheritedNo');
+  const disabled = saving || !canWrite;
+  const helpId = `${ids}-channels-help`;
+
+  return (
+    <div className="b2b-col" style={{ gap: 8 }}>
+      <h3 className="text-sm font-semibold" style={{ margin: 0 }}>
+        {t('orderRules.channels.title')}
+      </h3>
+      {loadFailed ? (
+        <Alert variant="destructive">{t('orderRules.channels.loadFailed')}</Alert>
+      ) : rows === null ? (
+        <div className="b2b-help" aria-busy="true">
+          {t('orderRules.channels.loading')}
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="b2b-help">{t('orderRules.channels.empty')}</div>
+      ) : (
+        <>
+          {minimumEligible ? (
+            <div id={helpId} className="b2b-help">
+              {t('orderRules.channels.help')}
+            </div>
+          ) : null}
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col">{t('orderRules.channels.column.channel')}</TableHead>
+                {minimumEligible ? (
+                  <TableHead scope="col">{t('orderRules.channels.column.minimum')}</TableHead>
+                ) : null}
+                <TableHead scope="col">{t('orderRules.channels.column.returnable')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => {
+                const draft = drafts[row.channelId] ?? draftFromRow(row);
+                const name = channelName(row.channelId);
+                const errorId = `${ids}-${row.channelId}-minimum-error`;
+                const invalid = errors[row.channelId] === true;
+                return (
+                  <TableRow key={row.channelId}>
+                    <TableCell>{name}</TableCell>
+                    {minimumEligible ? (
+                      <TableCell>
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          value={draft.minimum}
+                          placeholder={t('orderRules.channels.minimumInherited', { value: inheritedMinimum })}
+                          aria-label={t('orderRules.channels.minimumLabel', { channel: name })}
+                          aria-invalid={invalid ? true : undefined}
+                          aria-describedby={invalid ? `${helpId} ${errorId}` : helpId}
+                          disabled={disabled}
+                          style={{ maxWidth: 160 }}
+                          onChange={(e): void => update(row, { minimum: e.target.value })}
+                          onKeyDown={(e): void => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              void save();
+                            }
+                          }}
+                        />
+                        {invalid ? (
+                          <div id={errorId} role="alert" className="text-sm text-destructive">
+                            {t('orderRules.minimum.invalid', { max: String(ORDER_MINIMUM_MAX) })}
+                          </div>
+                        ) : null}
+                      </TableCell>
+                    ) : null}
+                    <TableCell>
+                      <Select
+                        value={draft.returnable}
+                        aria-label={t('orderRules.channels.returnableLabel', { channel: name })}
+                        disabled={disabled}
+                        style={{ maxWidth: 240 }}
+                        onChange={(e): void => update(row, { returnable: e.target.value as ReturnableChoice })}
+                      >
+                        <option value="inherit">
+                          {t('orderRules.channels.returnable.inherit', { value: inheritedReturnable })}
+                        </option>
+                        <option value="yes">{t('orderRules.channels.returnable.yes')}</option>
+                        <option value="no">{t('orderRules.channels.returnable.no')}</option>
+                      </Select>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+          {saveError ? <Alert variant="destructive">{saveError}</Alert> : null}
+          <div className="b2b-row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {canWrite ? (
+              <Button
+                type="button"
+                size="sm"
+                disabled={saving || changedRows.length === 0}
+                aria-busy={saving || undefined}
+                onClick={(): void => {
+                  void save();
+                }}
+              >
+                {saving ? t('orderRules.saving') : t('orderRules.channels.save')}
+              </Button>
+            ) : null}
+            {/* Mounted before it carries text so a save is announced (WCAG 4.1.3). */}
+            <span role="status" aria-live="polite" className="b2b-help">
+              {status}
+            </span>
+          </div>
+        </>
+      )}
     </div>
   );
 }
