@@ -7,6 +7,7 @@ import {
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
 import { AdminRole, AdminUser } from '../../helpers/package-entities.js';
+import { seedOrganization } from '../../helpers/admin-search-fixtures.js';
 
 /**
  * Feature 162, Phase 4 (T022, T028) — `GET|PATCH /api/v1/admin/catalog/products/:id/scopes`
@@ -227,6 +228,22 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
         languageStatuses: [],
       });
       expect(data.channels.some((c) => c.channelId === notMember)).toBe(false);
+    });
+
+    // Owner decision U1 — the answer names the organizations its audience rules name, so a
+    // catalogue reader without `customers:read` reads names; an unknown id stays unnamed.
+    it('names the organizations the audience names to a catalogue reader; an unknown one is left out', async () => {
+      const productId = await createProduct();
+      const org = await seedOrganization(h.em().fork(), { name: `Westfield ${run}` });
+      const write = await patch(productId, {
+        channels: [{ channelId: b2b, audience: { visibility: 'organization_restricted', allowedOrganizationIds: [org.id, ORG_X] } }],
+      });
+      expect(write.statusCode, write.body).toBe(200);
+      expect((write.json() as PatchProductScopesResponse).data.organizations).toEqual([{ id: org.id, name: `Westfield ${run}` }]);
+
+      const res = await h.app.inject({ method: 'GET', url: url(productId), ...reader });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as ProductScopesResponse).data.organizations).toEqual([{ id: org.id, name: `Westfield ${run}` }]);
     });
 
     it('answers 404 PRODUCT_NOT_FOUND for an unknown product', async () => {
