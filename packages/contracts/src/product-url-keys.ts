@@ -182,7 +182,9 @@ export interface ProductUrlKeyWrite {
 // --- Port — catalogProductUrlKeyReadPort (owner `catalog`, R28) ------------------
 
 /**
- * Container name: `catalogProductUrlKeyReadPort`. Owner: `catalog`.
+ * Owner: `catalog`. Not registered yet: feature 162 publishes it as
+ * `catalogProductUrlKeyReadPort` with its implementation (T111), and the
+ * container-name marker arrives with that registration.
  *
  * URL keys for whole-channel readers such as `seo`'s sitemap generator.
  */
