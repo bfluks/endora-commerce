@@ -807,6 +807,17 @@ const bulkUpdateFieldsObject = z.object({
   attributeValues: z.record(z.string(), z.unknown()).optional(),
   /** Feature 155 — set (or unset) the returnable flag on every selected product. */
   returnable: z.boolean().optional(),
+  /**
+   * Feature 162 (FR-050) — the status at one channel (`languageCode: null`) or one
+   * channel × language; `inherit` removes the override. Never combined with `status`.
+   */
+  scopedStatus: z
+    .object({
+      channelId: uuidSchema,
+      languageCode: z.string().min(1).max(16).nullable(),
+      value: z.enum([...productStatusSchema.options, 'inherit']),
+    })
+    .optional(),
 });
 
 export const bulkUpdateProductsRequestSchema = z.object({
@@ -825,9 +836,13 @@ export const bulkUpdateProductsRequestSchema = z.object({
       f.categories !== undefined ||
       f.attributeSetId !== undefined ||
       f.returnable !== undefined ||
+      f.scopedStatus !== undefined ||
       (f.attributeValues !== undefined && Object.keys(f.attributeValues).length > 0),
     { message: 'at least one field must be present' },
-  ),
+  ).refine((f) => f.scopedStatus === undefined || f.status === undefined, {
+    message: 'scopedStatus cannot be combined with status',
+    path: ['scopedStatus'],
+  }),
 });
 export type BulkUpdateProductsRequest = z.infer<typeof bulkUpdateProductsRequestSchema>;
 
@@ -841,6 +856,10 @@ export const bulkUpdateProductResultSchema = z.object({
       'permission_denied',
       'concurrent_modification',
       'product_not_found',
+      // Feature 162 — a scope the product cannot hold (FR-051), and the
+      // completeness gate in `refuse` mode (FR-061).
+      'scope_invalid',
+      'completeness_gate',
     ])
     .optional(),
   details: z
@@ -1955,6 +1974,13 @@ export interface CatalogProductRecord {
   minOrderQuantity: number | null;
   /** Feature 155 — the product's current flag; order lines record their own copy at placement. */
   returnable: boolean;
+  /**
+   * Feature 162 — the global publication window, inclusive at both ends; `null` =
+   * open on that side. Optional for good, so a record literal built without it keeps
+   * compiling; the channel-effective window comes from `catalogProductAvailabilityPort`.
+   */
+  publishFrom?: Date | null;
+  publishUntil?: Date | null;
 }
 
 /**
