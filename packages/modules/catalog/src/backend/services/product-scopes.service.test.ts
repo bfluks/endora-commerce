@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 import { ERROR_CODES, type ProductChannelScopeRecord } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
+import { Product } from '../entities/product.entity.js';
 import {
   nonMemberOrganizationIds,
   planProductScopeWrite,
+  ProductScopesService,
   type ProductScopeWriteState,
 } from './product-scopes.service.js';
 
@@ -274,6 +277,35 @@ describe('planProductScopeWrite — refusals (FR-014) and their one exception (F
     expect(err.code).toBe(ERROR_CODES.VALIDATION_FAILED);
     expect(err.details).toMatchObject({ field: 'channels' });
   });
+
+  it('the same language named twice in one channel, in any letter case, is VALIDATION_FAILED, field languageStatuses', () => {
+    const err = refusal(() =>
+      planProductScopeWrite(state(), {
+        channels: [
+          {
+            channelId: B2B,
+            languageStatuses: [
+              { languageCode: 'de-DE', status: 'draft' },
+              { languageCode: 'de-de', status: 'active' },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(err.statusCode).toBe(422);
+    expect(err.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    expect(err.details).toEqual({ field: 'languageStatuses', channelId: B2B, languageCode: 'de-DE' });
+  });
+
+  it('the same language in two different channels is not a duplicate', () => {
+    const plan = planProductScopeWrite(state(), {
+      channels: [
+        { channelId: B2B, languageStatuses: [{ languageCode: 'pl-PL', status: 'draft' }] },
+        { channelId: B2C, languageStatuses: [{ languageCode: 'pl-PL', status: 'active' }] },
+      ],
+    });
+    expect(plan.languageRows).toHaveLength(2);
+  });
 });
 
 describe('planProductScopeWrite — audience (C4)', () => {
@@ -386,5 +418,62 @@ describe('planProductScopeWrite — the audit projection (FR-080, Q-D → A)', (
     expect(plan.before).toEqual({
       channels: [{ channelId: B2B, languageStatuses: [{ languageCode: 'de-DE', status: null }] }],
     });
+  });
+});
+
+describe('ProductScopesService.apply — concurrent writes (security review, 162 Block A)', () => {
+  function rig(flush: () => Promise<void> = async () => {}) {
+    const reads: Array<{ entity: unknown; lockMode: LockMode | undefined }> = [];
+    const product = {
+      id: P,
+      type: 'simple',
+      status: 'draft',
+      publishFrom: null,
+      publishUntil: null,
+      visibility: 'public',
+      allowedOrganizationIds: [],
+      minOrderQuantity: null,
+      returnable: true,
+    };
+    const em = {
+      findOne: async (entity: unknown, _where: unknown, options?: { lockMode?: LockMode }) => {
+        reads.push({ entity, lockMode: options?.lockMode });
+        return product;
+      },
+      find: async () => [],
+      create: (_entity: unknown, data: Record<string, unknown>) => ({ ...data }),
+      persist: () => undefined,
+      remove: () => undefined,
+      flush,
+      transactional: async (fn: (tx: unknown) => Promise<unknown>) => fn(em),
+    };
+    const membership = {
+      listChannelsForEntity: async () => [{ id: B2B, code: 'b2b', languages: ['pl-PL', 'de-DE'] }],
+      filterEntityIdsAvailableInChannel: async () => [],
+    };
+    return { service: new ProductScopesService(() => em as never, membership as never), reads };
+  }
+
+  it('reads the product under a write lock inside the write, so before is the true predecessor', async () => {
+    const { service, reads } = rig();
+    await service.apply(P, { channels: [{ channelId: B2B, status: 'active' }] });
+    expect(reads[0]).toEqual({ entity: Product, lockMode: LockMode.PESSIMISTIC_WRITE });
+    // The response read after the commit takes no lock.
+    expect(reads.slice(1).every((read) => read.lockMode === undefined)).toBe(true);
+  });
+
+  it('a residual unique violation is 409 VERSION_CONFLICT, never a 500', async () => {
+    const { service } = rig(async () => {
+      throw new UniqueConstraintViolationException(new Error('duplicate key value violates unique constraint'));
+    });
+    const err = await service.apply(P, { channels: [{ channelId: B2B, status: 'active' }] }).then(
+      () => {
+        throw new Error('expected a refusal');
+      },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).statusCode).toBe(409);
+    expect((err as HttpError).code).toBe(ERROR_CODES.VERSION_CONFLICT);
   });
 });

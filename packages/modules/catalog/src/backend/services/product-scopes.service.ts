@@ -1,5 +1,6 @@
+import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { randomUUID } from 'crypto';
+import { randomUUID } from 'node:crypto';
 import {
   ERROR_CODES,
   isOrderMinimumEligibleType,
@@ -96,6 +97,9 @@ const CHANNEL_ROW_KEYS = ['status', 'window', 'audience', 'minOrderQuantity', 'r
  *   `not_a_member`; a language status for a language the channel does not offer is
  *   `SCOPE_INVALID` `language_not_offered` — but `null` is always accepted, because
  *   removing an orphaned override is always allowed (FR-014, FR-015).
+ * - A channel named twice, or a language named twice within one channel (compared in
+ *   the channel's spelling, so case-insensitively), is `VALIDATION_FAILED` with
+ *   `details.field` `channels` / `languageStatuses`.
  * - A window whose start is not before its end is `VALIDATION_FAILED`,
  *   `details.field = 'window'`; so is a channel minimum on a type that takes none,
  *   with `details.field = 'minOrderQuantity'` (the feature-155 rule).
@@ -141,8 +145,17 @@ export function planProductScopeWrite(
       plan.channelRows.push({ channelId: entry.channelId, next: inheritsEverything(next) ? null : next });
     }
 
+    const seenLanguages = new Set<string>();
     for (const language of entry.languageStatuses ?? []) {
       const languageCode = channelSpelling(languages, language.languageCode, state.languageRows, entry.channelId);
+      if (seenLanguages.has(languageCode.toLowerCase())) {
+        throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'A language is named more than once in one sales channel.', {
+          field: 'languageStatuses',
+          channelId: entry.channelId,
+          languageCode,
+        });
+      }
+      seenLanguages.add(languageCode.toLowerCase());
       const current =
         state.languageRows.find((row) => row.channelId === entry.channelId && row.languageCode === languageCode)
           ?.status ?? null;
@@ -348,7 +361,7 @@ function toChannelRecord(row: ProductChannelScope): ProductChannelScopeRecord {
     status: row.status ?? null,
     window: row.windowOverridden ? { from: row.publishFrom ?? null, until: row.publishUntil ?? null } : null,
     audience:
-      row.visibility == null
+      row.visibility === null || row.visibility === undefined
         ? null
         : { visibility: row.visibility, allowedOrganizationIds: [...(row.allowedOrganizationIds ?? [])] },
     minOrderQuantity: row.minOrderQuantity ?? null,
@@ -485,7 +498,14 @@ export class ProductScopesService {
       objectType: 'product',
       objectId: productId,
       run: async ({ em }) => {
-        const product = await em.findOne(Product, { id: productId, deletedAt: null });
+        // The write lock serialises concurrent scope writes on one product, so the
+        // rows read below — and the audit `before` built from them — are the true
+        // predecessor of this write, and two first writes cannot race to one PK.
+        const product = await em.findOne(
+          Product,
+          { id: productId, deletedAt: null },
+          { lockMode: LockMode.PESSIMISTIC_WRITE },
+        );
         if (!product) throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
         const [members, channelRows, languageRows] = await Promise.all([
           this.membership.listChannelsForEntity('product', productId),
@@ -533,7 +553,18 @@ export class ProductScopesService {
           product.publishFrom = plan.globalWindow.from;
           product.publishUntil = plan.globalWindow.until;
         }
-        await em.flush();
+        try {
+          await em.flush();
+        } catch (err) {
+          if (err instanceof UniqueConstraintViolationException) {
+            throw new HttpError(
+              409,
+              ERROR_CODES.VERSION_CONFLICT,
+              'The product\'s scopes were changed by another request; reload and try again.',
+            );
+          }
+          throw err;
+        }
         return {
           result: { changedFields: plan.changedFields },
           before: plan.before,
