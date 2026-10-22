@@ -39,6 +39,7 @@ import type {
   CatalogProductValueOverrideWritePort,
   CatalogPromoAttributePort,
   CatalogQuickSearchPort,
+  CatalogProductAvailabilityPort,
   InventoryProductThresholdWritePort,
   SearchQueryPort,
   SearchReindexPort,
@@ -89,6 +90,7 @@ import { catalogModule, type CatalogModuleOptions } from './plugin.js';
 import type { CustomFieldDefinitionApplyApi } from './commands/attribute-commands.js';
 import { CatalogAdminService } from './services/catalog-admin.service.js';
 import { CatalogBulkImportService } from './services/catalog-bulk-import.service.js';
+import { ProductAvailabilityService } from './services/product-availability.service.js';
 import { CategoryAdminService } from './services/category-admin.service.js';
 import { AttributeSetService } from './services/attribute-set.service.js';
 import { GalleryService } from './services/gallery.service.js';
@@ -790,6 +792,29 @@ export function registerModule(ctx: ModuleContext): void {
           new CatalogQuickSearchService(
             emFactory,
             lazyPort<CatalogAttributeReadPort>(ctx, 'catalogAttributeReadPort'),
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+            lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
+          ),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Feature 163 — the one way another module asks whether a product is
+   * available at (sales channel, language) to an audience, now
+   * (`specs/163-product-data-scopes/contracts/product-scopes.md` §3, FR-002).
+   * Consumers replace their own status, membership and audience tests with
+   * one call and keep their single not-found answer.
+   */
+  ctx.di.providePort<CatalogProductAvailabilityPort>(
+    'catalogProductAvailabilityPort',
+    ctx
+      .asFunction(
+        ({ emFactory }: CatalogCradle) =>
+          new ProductAvailabilityService(
+            emFactory,
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+            lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
           ),
       )
       .singleton(),
