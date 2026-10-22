@@ -14,6 +14,7 @@ import type {
   BuyerLinePricePort,
   CartWritePort,
   CatalogAttributeReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   CustomFieldCarryPort,
@@ -480,6 +481,10 @@ export function registerModule(ctx: ModuleContext): void {
           channelMembership: lazyPort<SalesChannelMembershipPort>(
             ctx,
             'salesChannelMembershipPort',
+          ),
+          catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(
+            ctx,
+            'catalogProductAvailabilityPort',
           ),
           customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
           organizations: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),

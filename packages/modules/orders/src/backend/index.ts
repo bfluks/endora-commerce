@@ -11,6 +11,7 @@ import type {
   AssetReadPort,
   CartReadPort,
   CartWritePort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CreditLimitReadPort,
   CustomerAccountReadPort,
@@ -593,6 +594,10 @@ export function registerModule(ctx: ModuleContext): void {
             cartPlacementApply: lazyPort<CartPlacementApplyPort>(ctx, 'cartPlacementApplyPort'),
             cartRead: lazyPort<CartReadPort>(ctx, 'cartReadPort'),
             catalogProductRead: lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+            catalogProductAvailability: lazyPort<CatalogProductAvailabilityPort>(
+              ctx,
+              'catalogProductAvailabilityPort',
+            ),
             customerAccountRead: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
             organizationDetails: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
             // The Organization's method allow-lists, which placement and the

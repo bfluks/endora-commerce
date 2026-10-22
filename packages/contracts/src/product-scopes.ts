@@ -262,8 +262,12 @@ function baseLanguage(tag: string): string {
 /** Where an availability question is asked. */
 export interface ProductAvailabilityScope {
   channelId: string;
-  /** Already resolved by {@link resolveScopeLanguage} (or the channel default for an operator). */
-  languageCode: string;
+  /**
+   * Already resolved by {@link resolveScopeLanguage} against this channel, or
+   * `null` for the channel's default language — an operator acting for a
+   * customer (N2), or a seam that knows no request language.
+   */
+  languageCode: string | null;
   audience: ProductAudience;
   /** Default: the time of the call. */
   now?: Date;
