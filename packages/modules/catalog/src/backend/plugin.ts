@@ -60,6 +60,7 @@ import { BundleService } from './services/bundle.service.js';
 import { ProductEditorPreferencesService } from './services/product-editor-preferences.service.js';
 import { ProductListViewService } from './services/product-list-view-service.js';
 import { ProductOverridesService } from './services/product-overrides.service.js';
+import { ProductScopesService } from './services/product-scopes.service.js';
 import { ProductScopeContextService } from './services/product-scope-context.service.js';
 import { ProductValueResolverService } from './services/product-value-resolver.service.js';
 import { registerCatalogPublicRoutes } from './routes.public.js';
@@ -497,6 +498,12 @@ export function catalogModule(options: CatalogModuleOptions) {
         )
       : undefined;
 
+    // Feature 162 — scoped values per channel and channel × language. Needs the
+    // membership accessor for FR-014 and the C4 warning, like the overrides.
+    const scopesService = options.salesChannelMembership
+      ? new ProductScopesService(options.emFactory, options.salesChannelMembership, options.commandBus)
+      : undefined;
+
     await registerCatalogAdminRoutes(app, {
       adminService,
       categoryAdminService,
@@ -523,6 +530,7 @@ export function catalogModule(options: CatalogModuleOptions) {
       productListViewService: listViewService,
       ...(valueResolverService ? { productValueResolverService: valueResolverService } : {}),
       ...(overridesService ? { productOverridesService: overridesService } : {}),
+      ...(scopesService ? { productScopesService: scopesService } : {}),
     });
 
     // Consumer side (Principle X). The BullMQ worker claims each queued
