@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ERROR_CODES, putProductUrlKeysRequestSchema, type PutProductUrlKeysRequest } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import {
+  otherProductSlugs,
   planUrlKeyWrite,
   urlKeysToLock,
   type UrlKeyRow,
@@ -127,6 +128,30 @@ describe('planUrlKeyWrite — uniqueness per language (FR-070, US7 #2, #7)', () 
       put({ languageKeys: [{ languageCode: 'pl-PL', key: 'hammer' }] }),
     );
     expect(plan.keyRows).toEqual([{ languageCode: 'pl-PL', channelId: null, next: 'hammer' }]);
+  });
+
+  // Phase 16 review — `products.slug` is unique across deleted rows too, so a soft-deleted
+  // product's global key stays taken in every language (its language keys no longer count).
+  it("a soft-deleted product's global key is taken in every language and as a global key", () => {
+    const otherSlugs = otherProductSlugs(
+      [
+        { id: Q, slug: 'hammer', deletedAt: new Date('2026-10-01T00:00:00Z') },
+        { id: R, slug: 'saw', deletedAt: null },
+      ],
+      [key(Q, 'de-DE', 'hammer-de'), key(R, 'de-DE', 'saw-de')],
+    );
+    expect(otherSlugs).toEqual([
+      { productId: Q, slug: 'hammer', languageKeyLanguages: [] },
+      { productId: R, slug: 'saw', languageKeyLanguages: ['de-DE'] },
+    ]);
+
+    const inLanguage = refusal(() =>
+      planUrlKeyWrite(state({ otherSlugs }), put({ languageKeys: [{ languageCode: 'de-DE', key: 'hammer' }] })),
+    );
+    expect(inLanguage.code).toBe(ERROR_CODES.URL_KEY_TAKEN);
+    const asGlobal = refusal(() => planUrlKeyWrite(state({ otherSlugs }), put({ globalKey: 'hammer' })));
+    expect(asGlobal.code).toBe(ERROR_CODES.URL_KEY_TAKEN);
+    expect((asGlobal.details as { conflicts: Array<{ heldByProductId: string }> }).conflicts[0]?.heldByProductId).toBe(Q);
   });
 
   it('accepts a key another product holds in another language only', () => {
