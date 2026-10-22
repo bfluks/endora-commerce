@@ -248,6 +248,8 @@ export function toCatalogProductRecord(product: Product): CatalogProductRecord {
     fulfilmentStrategyWarehouseOrder: product.fulfilmentStrategyWarehouseOrder ?? null,
     minOrderQuantity: product.minOrderQuantity ?? null,
     returnable: product.returnable,
+    publishFrom: product.publishFrom ?? null,
+    publishUntil: product.publishUntil ?? null,
   };
 }
 
