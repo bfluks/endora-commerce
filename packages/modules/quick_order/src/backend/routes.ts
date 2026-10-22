@@ -135,7 +135,8 @@ export async function registerQuickOrderRoutes(
       data: hits.map((hit) => ({
         productId: hit.productId,
         sku: hit.sku,
-        name: hit.name['en-US'] ?? Object.values(hit.name)[0] ?? hit.sku,
+        // Feature 163 (FR-017 a) — the Name the storefront shows here.
+        name: hit.effectiveName || hit.name['en-US'] || Object.values(hit.name)[0] || hit.sku,
         slug: hit.slug,
         status: hit.status,
         matchedOn: hit.matchedOn,

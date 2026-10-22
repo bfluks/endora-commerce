@@ -6,10 +6,15 @@ import {
   type CatalogGalleryPort,
   type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
+  type CatalogProductRecord,
   ANONYMOUS_PRODUCT_AUDIENCE,
   isOrderMinimumEligibleType,
   isProductVisibleTo,
   resolveScopeLanguage,
+  channelOverrideFor,
+  effectiveSystemText,
+  overrideLanguages,
+  type OverrideRow,
   type ComparisonOwnerView,
   type ComparisonDisplayMode,
   type ComparisonPricedFor,
@@ -175,6 +180,61 @@ export class ComparisonService {
      */
     private readonly customerAccounts?: CustomerAccountReadPort,
   ) {}
+
+  /**
+   * Feature 163 (FR-017 c) — each column's Name and compared values at
+   * (`channelId`, `languageCode`): the channel's override where #384's walk
+   * lands on one, else the stored value. The Name stays a per-language record —
+   * its entry for `languageCode` is the effective one — so a reader that picks
+   * its language out of it reads what the storefront shows.
+   */
+  async #effectiveValues(
+    products: readonly CatalogProductRecord[],
+    channelId: string,
+    languageCode: string | null,
+    channelDefaultLanguage: string | undefined,
+    attributeDefs: ReadonlyArray<{ key: string; channelScoped?: boolean; languageScoped?: boolean }>,
+  ): Promise<{ names: Map<string, Record<string, string>>; values: Map<string, Record<string, unknown>> }> {
+    const names = new Map<string, Record<string, string>>();
+    const values = new Map<string, Record<string, unknown>>();
+    if (products.length === 0 || languageCode === null) return { names, values };
+    const rows = await this.catalogProducts.listValueOverridesByProductIds(
+      products.map((p) => p.id),
+      { channelId },
+    );
+    if (rows.length === 0) return { names, values };
+    const byProduct = new Map<string, OverrideRow[]>();
+    for (const row of rows) {
+      const list = byProduct.get(row.productId) ?? [];
+      list.push({ attributeKey: row.attributeKey, channelId: row.channelId, languageCode: row.languageCode, value: row.value });
+      byProduct.set(row.productId, list);
+    }
+    const ctx = { channelId, languages: overrideLanguages(languageCode, channelDefaultLanguage) };
+    for (const product of products) {
+      const overrides = byProduct.get(product.id);
+      if (!overrides) continue;
+      const baseline = product.name ?? {};
+      const pick = [languageCode, channelDefaultLanguage, 'en-US', 'en']
+        .filter((l): l is string => typeof l === 'string')
+        .map((l) => baseline[l])
+        .find((v) => typeof v === 'string' && v.length > 0);
+      const name = effectiveSystemText(overrides, 'name', ctx, baseline, pick ?? Object.values(baseline)[0] ?? '');
+      names.set(product.id, { ...baseline, [languageCode]: name });
+      const out: Record<string, unknown> = { ...product.attributeValues };
+      for (const def of attributeDefs) {
+        const v = channelOverrideFor(
+          overrides,
+          def.key,
+          { channelScoped: def.channelScoped === true, languageScoped: def.languageScoped === true },
+          ctx,
+          product.attributeValues[def.key],
+        );
+        if (v !== undefined) out[def.key] = v;
+      }
+      values.set(product.id, out);
+    }
+    return { names, values };
+  }
 
   #requireListingPrices(): ListingPricePort {
     if (!this.listingPrices) {
@@ -606,6 +666,20 @@ export class ComparisonService {
             audience: viewer.kind === 'buyer' ? viewer.audience : ANONYMOUS_PRODUCT_AUDIENCE,
           })
         : new Set<string>();
+    // Feature 163 (FR-017 c) — names and compared values as the storefront
+    // shows them at this reader's (channel, language): #384's walk over this
+    // channel's override rows, from `catalog`'s read port.
+    const scopeLanguage = comparisonScopeLanguage(
+      viewerSalesChannelId,
+      viewer.kind === 'buyer' ? viewer.languageTag : undefined,
+    );
+    const effective = await this.#effectiveValues(
+      products,
+      viewerSalesChannelId,
+      scopeLanguage ?? channel?.defaultLanguage ?? null,
+      channel?.defaultLanguage ?? undefined,
+      attributeDefs,
+    );
     const productSummaries = visibleRows.map((row) => {
       const p = productById.get(row.productId);
       if (!p) {
@@ -627,7 +701,7 @@ export class ComparisonService {
       return {
         id: p.id,
         sku: p.sku,
-        name: p.name,
+        name: effective.names.get(p.id) ?? p.name,
         slug: p.slug,
         type: p.type,
         primaryAssetUrl: baseImageByProduct.get(p.id) ?? null,
@@ -642,7 +716,7 @@ export class ComparisonService {
     const comparableAttributes = this.projection.projectRows(
       productSummaries.map((s) => {
         const p = productById.get(s.id);
-        return { attributeValues: p?.attributeValues ?? {} };
+        return { attributeValues: (p && effective.values.get(p.id)) ?? p?.attributeValues ?? {} };
       }),
       attributeDefs,
     );
@@ -773,6 +847,7 @@ export class ProductNotFoundError extends Error {
     this.name = 'ProductNotFoundError';
   }
 }
+
 
 /**
  * Feature 163 — the scope language L of a comparison read: the request's tag
