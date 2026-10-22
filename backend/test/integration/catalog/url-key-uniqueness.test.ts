@@ -198,7 +198,10 @@ describe('URL-key uniqueness and redirects (spec 162, T100)', () => {
       const q = await insertProduct('Writer', k('writer-b'), [chB]);
       const res = await put(q, { languageKeys: [{ languageCode: 'pl-PL', key: k('mlot') }] });
       expect(res.statusCode).toBe(409);
-      expect((res.json() as ErrorBody).error.code).toBe(ERROR_CODES.URL_KEY_TAKEN);
+      expect((res.json() as ErrorBody).error).toMatchObject({
+        code: ERROR_CODES.URL_KEY_TAKEN,
+        details: { conflicts: [{ languageCode: 'pl-PL', key: k('mlot'), heldByProductId: p }] },
+      });
       // In German P's slug is its key too — and also in English, which no channel of P offers.
       expect((await put(q, { languageKeys: [{ languageCode: 'en-GB', key: k('mlot') }] })).statusCode).toBe(409);
     });
