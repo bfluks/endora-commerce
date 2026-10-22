@@ -1288,7 +1288,7 @@ export class CartService {
  * accounts of feature 026 have none, and they are exactly the caller
  * `logged_in_only` distinguishes from the public.
  */
-function cartAudience(actor: CartActor): ProductAudience {
+export function cartAudience(actor: CartActor): ProductAudience {
   if (!actor.customer) return ANONYMOUS_PRODUCT_AUDIENCE;
   return { organizationId: actor.customer.organizationId, authenticated: true };
 }
