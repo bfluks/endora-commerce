@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { Queue, Worker } from 'bullmq';
 import type { Redis } from 'ioredis';
-import { rethrowIfModuleDisabled, type PlatformLogger } from '@endora-commerce/platform/kernel';
+import {
+  enterSystemScope,
+  rethrowIfModuleDisabled,
+  type PlatformLogger,
+} from '@endora-commerce/platform/kernel';
 
 /**
  * Feature 163 (`specs/163-product-data-scopes/research.md` R9, FR-024, SC-005) —
@@ -86,6 +90,9 @@ export class PublicationWindowSweep {
   }
 }
 
+/** The audit reason the sweep's system scope records. */
+export const PUBLICATION_WINDOW_SWEEP_SCOPE_REASON = 'catalog: publication-window sweep tick';
+
 export type PublicationWindowSweepJobData = Record<string, never>;
 
 /**
@@ -141,7 +148,12 @@ export async function startPublicationWindowSweep(input: {
   input.attach(
     new Worker<PublicationWindowSweepJobData>(
       PUBLICATION_WINDOW_SWEEP_QUEUE,
-      () => runPublicationWindowSweepTick({ sweep: input.sweep, log: input.log }),
+      // A tick has no caller: it opens its own system scope, so the event
+      // subscribers it reaches (search, webhooks) run in a scope.
+      () =>
+        enterSystemScope(PUBLICATION_WINDOW_SWEEP_SCOPE_REASON, () =>
+          runPublicationWindowSweepTick({ sweep: input.sweep, log: input.log }),
+        ),
       { connection: moduleQueueRedis, concurrency: 1 },
     ),
   );
