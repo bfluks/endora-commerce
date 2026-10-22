@@ -251,6 +251,28 @@ describe('URL-key uniqueness and redirects (spec 162, T100)', () => {
       expect(await slugOf(q)).toBe(k('global-writer'));
     });
 
+    // Phase 16 review — `products.slug` is unique across soft-deleted rows, so a deleted
+    // product's global key is refused (409), never reaching the index as a 500.
+    it("a soft-deleted product's global key is refused as a global and as a language key", async () => {
+      const p = await insertProduct('Deleted holder', k('deleted-holder'), [chA]);
+      const q = await insertProduct('Writer', k('deleted-writer'), [chA]);
+      await putOk(p, { languageKeys: [{ languageCode: 'pl-PL', key: k('deleted-pl') }] });
+      await h.em().getConnection().execute(`update products set deleted_at = now() where id = ?`, [p]);
+
+      const asGlobal = await put(q, { globalKey: k('deleted-holder') });
+      expect(asGlobal.statusCode, asGlobal.body).toBe(409);
+      expect((asGlobal.json() as ErrorBody).error).toMatchObject({
+        code: ERROR_CODES.URL_KEY_TAKEN,
+        details: { conflicts: [{ key: k('deleted-holder'), heldByProductId: p }] },
+      });
+      expect(await slugOf(q)).toBe(k('deleted-writer'));
+      // Its language keys no longer count, so the slug is taken in Polish too.
+      const asLanguageKey = await put(q, { languageKeys: [{ languageCode: 'pl-PL', key: k('deleted-holder') }] });
+      expect(asLanguageKey.statusCode, asLanguageKey.body).toBe(409);
+      // …while its former Polish key is free.
+      await putOk(q, { languageKeys: [{ languageCode: 'pl-PL', key: k('deleted-pl') }] });
+    });
+
     it('the same key in another language, and in several channels of one language for one product, is accepted', async () => {
       const p = await insertProduct('Polish', k('lang-p'), [chA, chB]);
       const q = await insertProduct('German', k('lang-q'), [chA]);
