@@ -56,6 +56,14 @@
   item is satisfied by the global key, while name and required attributes may not be satisfied by another
   language's fallback value (K3; FR-060, US6). The publication window's end is inclusive (K4; FR-023,
   Terms, US2 #5). No open marker remains.
+- Session 2026-10-22: owner answers recorded — Q-A serve existing SEO overrides (US8 #2, FR-075, SC-001);
+  Q-B language path prefix is a separate issue #396, `?lang` interim with an accepted residual gap
+  (FR-071, FR-074); Q-C hide the redirect list with `seo` off (FR-111, US7 #10); M3 the completeness gate
+  fires on status writes only, missing values shown in the overview (FR-060, FR-061, FR-041, US6 #6); Q-D
+  no single-write undo, bulk undo plus audit before-state (FR-081, US1 #8). Redirect semantics aligned with
+  the language-less (former global) redirect of the design (Key Entities, FR-071, FR-072, US7 #11); FR-005
+  notes the CMS slug handle; FR-090 requires the admin scope-flag control. No open marker remains; D-1 stays
+  deferred by owner choice.
 - "No implementation details": the *Current state* section cites code paths deliberately (house style of
   specs 156/157) to anchor the baseline; requirements themselves are stated as behaviour. FR-016 and FR-052
   name a performance property and the existing bulk path, not a technology.
