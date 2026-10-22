@@ -516,7 +516,7 @@ describe('ProductScopesService.read — organization names (U1)', () => {
     return new ProductScopesService(() => em as never, membership as never, undefined, organizations as never);
   }
 
-  it('names every organization the global and channel rules name, once; an unknown one is absent', async () => {
+  it('names every organization the channel rules name, once; an unknown one is absent; the global rule is not named', async () => {
     const asked: string[][] = [];
     const service = rig({
       findByIds: async (ids) => {
@@ -528,10 +528,11 @@ describe('ProductScopesService.read — organization names (U1)', () => {
       },
     });
     const scopes = await service.read(P);
-    expect(asked).toEqual([[ORG_A, ORG_B, ORG_GONE]]);
+    // ORG_A is also the global rule's; it is named because the channel rule names it.
+    expect(asked).toEqual([[ORG_B, ORG_GONE, ORG_A]]);
     expect(scopes.organizations).toEqual([
-      { id: ORG_A, name: 'Acme' },
       { id: ORG_B, name: 'Westfield Ltd' },
+      { id: ORG_A, name: 'Acme' },
     ]);
     expect(scopes.channels[0]?.audience?.nonMemberOrganizationIds).toEqual([ORG_B, ORG_GONE]);
   });
