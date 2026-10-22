@@ -20,11 +20,19 @@ productScopesResponseSchema = z.object({ data: z.object({
     languageStatuses: z.array(z.object({ languageCode, status, orphaned: z.boolean() })),
     orphaned: z.boolean(),                                                 // not a member any more (FR-015)
   })),
+  organizations: z.array(z.object({ id: uuid, name: z.string() })),       // U1, below
 })})
 ```
 
 `nonMemberOrganizationIds` is the C4 warning (organizations named by the override that are not members of
 the channel); it is computed on read so the warning stays current.
+
+`organizations` (owner decision U1, 2026-10-22) names every organization the global rule and the channel
+audience rules name — non-members included — so the admin shows names to an operator who holds
+`catalog:read` but not `customers:read`, without reading `GET /api/v1/admin/organizations/:id` per id. The
+server resolves them through `organizations`' read port (`organizationDetailsPort.findByIds`), best effort:
+an organization that cannot be read (deleted, or the port refusing) is absent from the list and never an
+error, and the admin shows its short id. The `PATCH` answer's `data` carries the same list.
 
 ## 2. Write scoped values — `PATCH /api/v1/admin/catalog/products/:id/scopes` (`catalog:write`)
 
