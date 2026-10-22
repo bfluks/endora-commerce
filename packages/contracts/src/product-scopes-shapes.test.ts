@@ -97,6 +97,43 @@ describe('patchProductScopesRequestSchema', () => {
         .success,
     ).toBe(false);
   });
+
+  it('caps an audience at 1000 organizations', () => {
+    const parse = (n: number) =>
+      patchProductScopesRequestSchema.safeParse({
+        channels: [
+          {
+            channelId: C,
+            audience: {
+              visibility: 'organization_restricted',
+              allowedOrganizationIds: Array.from({ length: n }, () => ORG),
+            },
+          },
+        ],
+      }).success;
+    expect(parse(1000)).toBe(true);
+    expect(parse(1001)).toBe(false);
+  });
+
+  it('caps one channel at 64 language statuses', () => {
+    const parse = (n: number) =>
+      patchProductScopesRequestSchema.safeParse({
+        channels: [
+          { channelId: C, languageStatuses: Array.from({ length: n }, () => ({ languageCode: 'pl-PL', status: 'active' })) },
+        ],
+      }).success;
+    expect(parse(64)).toBe(true);
+    expect(parse(65)).toBe(false);
+  });
+
+  it('takes a language code in the BCP-47 shape, in any letter case', () => {
+    const parse = (languageCode: string) =>
+      patchProductScopesRequestSchema.safeParse({
+        channels: [{ channelId: C, languageStatuses: [{ languageCode, status: 'active' }] }],
+      }).success;
+    for (const ok of ['pl', 'pl-PL', 'de-de', 'fil-PH']) expect(parse(ok), ok).toBe(true);
+    for (const bad of ['', 'p', 'pl_PL', 'pl-PL-x', 'pl-PL; drop', 'x'.repeat(17)]) expect(parse(bad), bad).toBe(false);
+  });
 });
 
 describe('productScopesResponseSchema', () => {
