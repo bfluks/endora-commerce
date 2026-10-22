@@ -236,14 +236,21 @@ export class SearchQueryService {
     ];
     const sort = buildSort(params.sort);
 
-    let response: SearchResponse<DocumentHit & { updatedAt: number }>;
-    try {
-      response = await index.search(params.q ?? '', {
+    // Feature 163 (FR-017 b) — a query matches the Name shown in its language,
+    // `localizedNames.<L>`, beside the fields it always searched. An index not
+    // yet reindexed after the upgrade does not know the field; it is asked
+    // again without the restriction rather than refused (see below).
+    const searchOn = params.q
+      ? await this.#attributesToSearchOn(searchScopeLanguage(channel, ctx.preferredLanguage))
+      : null;
+    const runSearch = (restrict: boolean) =>
+      index.search(params.q ?? '', {
         offset,
         // Over-fetch by one to detect hasMore.
         limit: params.limit + 1,
         ...(filter.length > 0 ? { filter } : {}),
         ...(sort.length > 0 ? { sort } : {}),
+        ...(restrict && searchOn ? { attributesToSearchOn: searchOn } : {}),
         attributesToRetrieve: [
           'id',
           'sku',
@@ -254,6 +261,16 @@ export class SearchQueryService {
           'primaryAssetUrl',
         ],
       });
+    let response: SearchResponse<DocumentHit & { updatedAt: number }>;
+    try {
+      try {
+        response = await runSearch(true);
+      } catch (err) {
+        if (!(searchOn && err instanceof MeilisearchApiError && err.cause?.code === 'invalid_search_attributes_to_search_on')) {
+          throw err;
+        }
+        response = await runSearch(false);
+      }
     } catch (err) {
       // Reserved-fallback (R-08): `searchQueryPort` converts this into the
       // `index-unavailable` arm and `catalog`'s listing re-runs the request
@@ -374,6 +391,24 @@ export class SearchQueryService {
     }
 
     return summaries;
+  }
+
+  /**
+   * Feature 163 — the fields a query searches: the Name in its language
+   * (`localizedNames.<L>`), the indexed default-language `name` (documents
+   * indexed before the upgrade carry nothing else), and the fields the index
+   * has always searched. Mirrors `SearchIndexer.attributeSettings`.
+   */
+  async #attributesToSearchOn(languageCode: string): Promise<string[]> {
+    const attributes = this.attributeRead ? await this.attributeRead.listAll() : [];
+    return [
+      `localizedNames.${languageCode}`,
+      'name',
+      'sku',
+      'description',
+      'searchableOptions',
+      ...attributes.filter((a) => a.isSearchable).map((a) => `attributes.${a.key}`),
+    ];
   }
 
   #requireAvailability(): Pick<CatalogProductAvailabilityPort, 'filterAvailable'> {
