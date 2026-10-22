@@ -210,6 +210,17 @@ outage does not break the catalog write path. The reserved fallback
 in the read path (`catalog/routes.public.ts`) keeps storefront search
 functional with a stale index until the next offline `search:reindex`.
 
+### Availability per channel and language
+
+Since product data scopes (feature 163) a product can be switched on or off per sales channel and per channel language, carry a publication window, and have a channel-specific audience. The indexer asks `catalog` (`catalogProductAvailabilityPort.describeChannelAvailability`) instead of reading the product status:
+
+- a channel member is indexed when it is on in **at least one** language of the channel; archived and deleted products are on in none;
+- each document carries `liveLanguages` (the channel languages it is on in), `publishFromMs` / `publishUntilMs` (the effective window in epoch milliseconds; `0` and `Number.MAX_SAFE_INTEGER` when open), and the channel-effective `visibility` and `allowedOrganizationIds`. All five are filterable attributes;
+- a query adds a filter for the request language (the first `Accept-Language` tag matched to the channel's languages, else its default), the window at the moment of the query, and the caller's audience, so a page is cut from available hits only. The allow-list is a filter input and is never retrieved into a response;
+- hydration asks `catalog` again (`filterAvailable`) for every hit, so a stale document cannot show a product that is no longer available.
+
+A document indexed before this change has none of the new fields and is served as before. **After upgrading, run one reindex per sales channel** (the `search_reindex` bulk operation or the reindex CLI below) so the window and per-language filters become exact.
+
 ### When the index does not answer
 
 The fallback stays a fallback — a public catalogue must not 503

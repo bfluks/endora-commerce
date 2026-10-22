@@ -92,7 +92,12 @@ function serviceWith(
     findByIds: async (ids: readonly string[]) => products.filter((p) => ids.includes(p.id)),
     listValueOverridesByProductIds,
   } as unknown as CatalogProductReadPort;
-  return { service: new SearchQueryService(port), listValueOverridesByProductIds };
+  // Feature 163 — every hit is available here; this file is about names.
+  const availableEverywhere = { filterAvailable: async (ids: readonly string[]) => new Set(ids) };
+  return {
+    service: new SearchQueryService(port, undefined, {}, undefined, undefined, availableEverywhere),
+    listValueOverridesByProductIds,
+  };
 }
 
 const ctx = (preferredLanguage?: string) => ({
