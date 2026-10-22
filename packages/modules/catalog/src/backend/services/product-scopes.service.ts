@@ -5,6 +5,7 @@ import {
   ERROR_CODES,
   isOrderMinimumEligibleType,
   type AudienceRule,
+  type OrganizationDetailsPort,
   type PatchProductScopesRequest,
   type ProductChannelLanguageScopeRecord,
   type ProductChannelScopeRecord,
@@ -401,7 +402,29 @@ export class ProductScopesService {
     private readonly emFactory: () => EntityManager,
     private readonly membership: SalesChannelMembershipPort,
     private readonly commandBus?: CommandBus,
+    /**
+     * Owner decision U1 — names for the organizations the audience rules name. Optional
+     * and best effort: absent, or refusing (`organizations` off), the answer carries no
+     * names and the admin shows ids.
+     */
+    private readonly organizations?: Pick<OrganizationDetailsPort, 'findByIds'>,
   ) {}
+
+  /** The names of these organizations, in this order; an unreadable one is left out. */
+  async #organizationNames(ids: readonly string[]): Promise<ProductScopes['organizations']> {
+    if (!this.organizations || ids.length === 0) return [];
+    let records: Array<{ id: string; name: string }>;
+    try {
+      records = await this.organizations.findByIds(ids);
+    } catch {
+      return [];
+    }
+    const byId = new Map(records.map((record) => [record.id, record.name]));
+    return ids.flatMap((id) => {
+      const name = byId.get(id);
+      return name === undefined ? [] : [{ id, name }];
+    });
+  }
 
   /** `GET /admin/catalog/products/:id/scopes` — the global values and every channel the product is in or has rows for. */
   async read(productId: string): Promise<ProductScopes> {
@@ -431,6 +454,7 @@ export class ProductScopesService {
         returnable: product.returnable,
       },
       channels: [],
+      organizations: [],
     };
     for (const channel of channels) {
       const isMember = memberIds.has(channel.id);
@@ -466,6 +490,11 @@ export class ProductScopesService {
         orphaned: !isMember,
       });
     }
+    const named = new Set(data.global.allowedOrganizationIds);
+    for (const channel of data.channels) {
+      for (const id of channel.audience?.allowedOrganizationIds ?? []) named.add(id);
+    }
+    data.organizations = await this.#organizationNames([...named]);
     return data;
   }
 

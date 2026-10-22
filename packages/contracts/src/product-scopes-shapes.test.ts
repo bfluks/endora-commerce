@@ -163,9 +163,36 @@ describe('productScopesResponseSchema', () => {
             orphaned: false,
           },
         ],
+        organizations: [{ id: ORG, name: 'Westfield Ltd' }],
       },
     });
     expect(parsed.success).toBe(true);
+  });
+
+  // Owner decision U1 — the names of the organizations the audience rules name travel
+  // with the answer, so an operator without `customers:read` still reads who they are.
+  it('carries the named organizations as { id, name }, required, never a bare id list', () => {
+    const base = productScopesResponseSchema.parse({
+      data: {
+        global: {
+          status: 'active',
+          publishFrom: null,
+          publishUntil: null,
+          visibility: 'organization_restricted',
+          allowedOrganizationIds: [ORG],
+          minOrderQuantity: null,
+          returnable: true,
+        },
+        channels: [],
+        organizations: [{ id: ORG, name: 'Westfield Ltd' }],
+      },
+    });
+    expect(base.data.organizations).toEqual([{ id: ORG, name: 'Westfield Ltd' }]);
+    const { organizations: _omitted, ...withoutNames } = base.data;
+    expect(productScopesResponseSchema.safeParse({ data: withoutNames }).success).toBe(false);
+    expect(
+      productScopesResponseSchema.safeParse({ data: { ...base.data, organizations: [{ id: 'not-a-uuid', name: 'X' }] } }).success,
+    ).toBe(false);
   });
 });
 
