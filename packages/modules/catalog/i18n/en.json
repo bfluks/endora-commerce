@@ -765,6 +765,8 @@
   "productEditor.scopeControls.error.forbidden": "You do not have permission to change product availability.",
   "productEditor.scopeControls.error.notAMember": "The product is no longer in {channel}. Reload the page to see its current channels.",
   "productEditor.scopeControls.error.languageNotOffered": "{channel} does not offer {language} any more. Reload the page and try again.",
+  "productEditor.scopeControls.error.conflict": "Someone else changed this product’s availability at the same time. Reload the page and apply your change again.",
+  "productEditor.scopeControls.error.languageRepeated": "{language} is set more than once for {channel}. Reload the page and try again.",
   "productEditor.scopeControls.error.window": "The publication window must start before it ends.",
   "productEditor.scopeControls.error.windowIn": "Check the publication window in {channel} before saving.",
   "productEditor.scopeControls.error.incomplete": "Not saved: the product cannot be switched on where values are missing. {details}",
