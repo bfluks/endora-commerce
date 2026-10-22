@@ -50,6 +50,9 @@ export class Migration20261022T054223CatalogProductUrlKeys extends Migration {
     `);
     this.addSql(`create index "product_url_keys_language_key_idx" on "product_url_keys" ("language_code", "key");`);
     this.addSql(`create index "product_url_keys_key_idx" on "product_url_keys" ("key");`);
+    // Both uniques above are partial, so neither serves a plain `product_id = ?` read
+    // (every key read of one product, and the cascade from `products`).
+    this.addSql(`create index "product_url_keys_product_idx" on "product_url_keys" ("product_id");`);
 
     this.addSql(`
       create table "product_url_redirects" (
