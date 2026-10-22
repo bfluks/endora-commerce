@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { bulkUpdateProductResultSchema, bulkUpdateProductsRequestSchema } from './catalog.js';
+import {
+  bulkUpdateProductResultSchema,
+  bulkUpdateProductsRequestSchema,
+  updateProductRequestSchema,
+} from './catalog.js';
 import {
   patchProductScopesRequestSchema,
   productScopesResponseSchema,
@@ -254,3 +258,15 @@ describe('bulk update — scopedStatus (admin-scopes-api.md §4)', () => {
   });
 });
 
+
+describe('updateProductRequestSchema — the global publication window (T026)', () => {
+  it('accepts publishFrom / publishUntil as ISO instants or null', () => {
+    const parsed = updateProductRequestSchema.parse({ publishFrom: '2026-12-01T00:00:00.000Z', publishUntil: null });
+    expect(parsed.publishFrom).toBe('2026-12-01T00:00:00.000Z');
+    expect(parsed.publishUntil).toBeNull();
+  });
+
+  it('refuses a bound that is not an ISO instant', () => {
+    expect(updateProductRequestSchema.safeParse({ publishFrom: 'tomorrow' }).success).toBe(false);
+  });
+});
