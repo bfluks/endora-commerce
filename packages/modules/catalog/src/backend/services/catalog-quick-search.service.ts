@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
+  overrideLanguages,
   resolveScopeLanguage,
   type CatalogAttributeReadPort,
   type CatalogQuickSearchField,
@@ -13,6 +14,7 @@ import type {
 } from '@endora-commerce/platform/kernel';
 
 import { availabilityCondition } from './product-availability.sql.js';
+import { effectiveTextSql } from './effective-value.sql.js';
 import { toScopeChannel } from './product-availability.service.js';
 
 /**
@@ -126,10 +128,17 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
     // (C, L), the window and the effective audience in one condition. The
     // audience is the signed-in buyer's (see the file header):
     // `{ organizationId, authenticated: true }`.
+    const languageCode = resolveScopeLanguage(channel, params.languageCode);
+    // FR-017 a — the Name the storefront shows at (C, L), matched and returned.
+    const effectiveName = effectiveTextSql(
+      'name',
+      { channelId: channel.id, languages: overrideLanguages(languageCode, channel.defaultLanguage) },
+      [languageCode, channel.defaultLanguage, 'en-US', 'en'],
+    );
     const available = availabilityCondition(
       {
         channelId: channel.id,
-        languageCode: resolveScopeLanguage(channel, params.languageCode),
+        languageCode,
         channelLanguages: channel.languages,
         audience: { organizationId: params.organizationId, authenticated: true },
         now: new Date(),
@@ -143,25 +152,31 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
         sku: string;
         slug: string;
         name: Record<string, string>;
+        effective_name: string;
         status: string;
         attribute_values: Record<string, unknown>;
       }>
     >(
-      `select p.id::text as id, p.sku, p.slug, p.name, p.status, p.attribute_values
+      `select p.id::text as id, p.sku, p.slug, p.name, ${effectiveName.sql('p')} as effective_name,
+              p.status, p.attribute_values
          from products p
         where ${available.sql('p')}
           and (
             p.sku ILIKE ?
             or p.slug ILIKE ?
             or p.name::text ILIKE ?
+            or ${effectiveName.sql('p')} ILIKE ?
             ${attributeClause === '' ? '' : `or ${attributeClause}`}
           )
         order by p.sku asc
         limit ?`,
       [
+        ...effectiveName.params,
         ...available.params,
         like,
         like,
+        like,
+        ...effectiveName.params,
         like,
         ...attributeBindings,
         params.limit,
@@ -174,6 +189,7 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
       sku: row.sku,
       slug: row.slug,
       name: row.name,
+      effectiveName: row.effective_name,
       status: row.status as CatalogQuickSearchHit['status'],
       matchedOn: matchedOnFor(row, lowered, quickKeys),
     }));
@@ -191,13 +207,21 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
  * surface, not a labelled one, and it was not labelled before either.
  */
 function matchedOnFor(
-  row: { sku: string; name: Record<string, string>; attribute_values: Record<string, unknown> },
+  row: {
+    sku: string;
+    name: Record<string, string>;
+    effective_name: string;
+    attribute_values: Record<string, unknown>;
+  },
   lowered: string,
   quickKeys: readonly string[],
 ): CatalogQuickSearchField[] {
   const matched: CatalogQuickSearchField[] = [];
   if (row.sku.toLowerCase().includes(lowered)) matched.push('sku');
-  if (Object.values(row.name).some((n) => String(n).toLowerCase().includes(lowered))) {
+  if (
+    row.effective_name.toLowerCase().includes(lowered) ||
+    Object.values(row.name).some((n) => String(n).toLowerCase().includes(lowered))
+  ) {
     matched.push('name');
   }
   if (

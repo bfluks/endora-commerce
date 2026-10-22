@@ -146,7 +146,7 @@ export interface CartsDeps {
    * (channel, language), outside its window or outside its audience reads as
    * a product with no record.
    */
-  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveNames'>;
   /**
    * Optional gate — when provided, signed-in customers whose Organization
    * is not `active` (pending_verification / blocked / rejected) cannot add
@@ -279,7 +279,16 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
       languageCode: basketScopeLanguage(actor.salesChannelId, actor.languageTag),
       audience: cartAudience(actor),
     });
-    const productMeta = productMetaOf(records, preferredLanguage);
+    // Feature 163 (FR-017 d) — each line named as the storefront shows the
+    // product in this basket's (channel, language), not in the baseline alone.
+    const effectiveNames = await deps.catalogAvailability.effectiveNames(
+      records.map((p) => p.id),
+      {
+        channelId: actor.salesChannelId,
+        languageCode: basketScopeLanguage(actor.salesChannelId, actor.languageTag),
+      },
+    );
+    const productMeta = productMetaOf(records, preferredLanguage, effectiveNames);
     const minimumViews = await evaluateCartViewMinimums(
       deps.catalogProducts,
       { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
@@ -938,11 +947,13 @@ async function loadCartProducts(
 function productMetaOf(
   products: readonly CatalogProductRecord[],
   preferredLanguage: string | undefined,
+  /** Feature 163 — the effective names at the basket's (channel, language), where known. */
+  effectiveNames: ReadonlyMap<string, string> = new Map(),
 ): Map<string, ProductMeta> {
   const meta = new Map<string, ProductMeta>();
   for (const p of products) {
     meta.set(p.id, {
-      name: pickLocalized(p.name, preferredLanguage),
+      name: effectiveNames.get(p.id) || pickLocalized(p.name, preferredLanguage),
       slug: p.slug,
       sku: p.sku,
     });
