@@ -2,9 +2,10 @@
 
 **Feature Branch**: `feat/162-product-data-scopes`
 **Created**: 2026-10-20
-**Status**: Draft — clarify rounds 1, 2, 3 and 4 recorded 2026-10-21; no open clarification marker remains.
-D-1 (draft preview by direct link) stays deferred with an interim reading; the status value set (FR-010) is
-re-asked by the coordinator before acceptance
+**Status**: Draft — clarify rounds 1–4 recorded 2026-10-21 and the owner's answers to the plan and analyze
+questions (Q-A, Q-B, Q-C, Q-D, M3) recorded 2026-10-22; no open clarification marker remains. D-1 (draft
+preview by direct link) stays deferred by owner choice with an interim reading (not-found); the status value
+set (FR-010) is re-asked by the coordinator before acceptance
 **Issues**: #385 (source), depends on #384; adjacent to #377 and #241
 **Input**: Issue #385 — *Catalog: Magento-style scopes for product data — status, visibility, URL, SEO,
 media per sales channel and language.* An operator cannot set a product's status or visibility per sales
@@ -139,6 +140,37 @@ spec records the owner's binding decisions so far and leaves the rest open for c
   when `now > validUntil` (`packages/modules/promotions/src/backend/services/promotion-service.ts:412`);
   both are date-time instants entered via `datetime-local` in the admin (FR-023, US2, Terms).
 
+### Session 2026-10-22
+
+Owner answers to the questions raised by `plan.md` and `/speckit.analyze`. Q-A, Q-B and Q-C were decided on
+2026-10-21 and are recorded here.
+
+- Q: (Q-A) Existing per-language SEO overrides are stored but not served on product pages today. Serve them
+  once they become the language-scope values? → A: **Serve** (decided 2026-10-21). Those products' metadata
+  changes to the values operators entered; this is a listed exception to deployment parity (US8 #2, FR-075,
+  SC-001).
+- Q: (Q-B) A key is valid only in its language (K1). How does a link reach the right language — a language
+  prefix in the storefront path, cross-language rendering, or a separate issue? → A: **Option C, a separate
+  issue (#396, language path prefix)** (decided 2026-10-21). This feature keeps the interim: every product
+  URL the platform emits carries `?lang=<L>` when L is not the channel's default language, and accepts the
+  residual not-found gap described in FR-071 until #396 lands (FR-071, FR-074).
+- Q: (Q-C) With `seo` off, is the product editor's redirect list hidden or shown read-only? → A: **Hide**
+  (decided 2026-10-21). Redirect data persists in the catalogue and keeps reserving keys; the takeover
+  confirmation still appears and names the product losing the redirect (FR-111, US7).
+- Q: (M3) Which events fire the completeness gate — only a status write, or also anything else that makes a
+  product live at (C, L)? → A: **Option A — only a status write** that turns the product on at a (channel,
+  language): a global or scoped status change, including bulk status. The gate does **not** fire when a
+  product becomes live at (C, L) by joining a channel, by a channel gaining a language, by a publication
+  window opening, or by an audience change; missing values in those cases are visible in the scope overview
+  (FR-060, FR-061, FR-041, US6).
+- Q: (Q-D) Must a single scoped write have a one-click undo, or is restoring it from its audit before-state
+  enough? → A: **Option A — no single-write undo.** Bulk scoped writes are reversible as a whole with the
+  existing bulk-operation undo (`bulk-operation.service.ts`,
+  `POST /api/v1/admin/catalog/bulk-operations/:id/undo`); a single scoped write is an audited Command whose
+  audit entry holds the complete before-state, so re-applying it restores the previous value — the
+  repository's convention (e.g. the `delivery_methods` commands). A generic single-Command undo is out of
+  scope (a possible future issue) (FR-081, US1 #8, SC-006).
+
 ## Current state (origin/master cde5563ea)
 
 Paths are relative to the repository root. Behaviour below is read from the code, not observed at
@@ -269,7 +301,8 @@ compare against the expected matrix; then remove one override and repeat.
 7. **Given** the existing product base, **When** this story is deployed, **Then** every product is live in
    exactly the same (channel, language) pairs and lists as before deployment.
 8. **Given** a per-scope status change, **When** an auditor opens the audit log, **Then** one entry
-   records the actor, the product, the scope and the before / after value, and the change can be undone.
+   records the actor, the product, the scope and the before / after value, and the before-state can be
+   restored (FR-081).
 9. **Given** a product whose effective status is off at (C, L), **When** a buyer raises a quote request at
    (C, L) containing it, **Then** that line is refused; **when** an operator creates a quote request at
    (C, L) containing it in the admin, **Then** the line is accepted with a warning (FR-018).
@@ -383,7 +416,10 @@ at that scope and no other, the audit entries, and undo.
 
 When an operator switches a product on for (C, L) — directly, in bulk, or by changing the global switch so
 that (C, L) becomes live — the system checks that the values required to sell there exist in L: name, URL
-key and every required language-scoped attribute. Missing values are listed. The URL key is satisfied by
+key and every required language-scoped attribute. Missing values are listed. Only a status write triggers
+the check: a product that becomes live at (C, L) by joining a channel, by the channel gaining a language, by
+its publication window opening or by an audience change is not checked, and its missing values are shown in
+the scope overview instead (clarify 2026-10-22, M3). The URL key is satisfied by
 the product's global key when it has no key in L (clarify round 4, K3); the name is not — a missing German
 name is exactly what the gate is for.
 
@@ -407,6 +443,10 @@ response per FR-060.
    skipped and reported per product (FR-061, FR-051).
 5. **Given** a product with a German name, a global URL key and no German URL key, **When** the operator
    enables it at (B2C, de), **Then** the gate reports nothing for the URL key (FR-060).
+6. **Given** the gate setting is *refuse* and a product whose status is on everywhere but which lacks a
+   German name, **When** the operator adds it to a channel offering German, or adds German to one of its
+   channels, **Then** the change is saved without a gate message, and the scope overview shows the missing
+   German name for the affected (channel, de) cell (FR-060, FR-041; clarify 2026-10-22, M3).
 
 ---
 
@@ -452,6 +492,14 @@ and assert not-found; change one key and assert the old URL redirects permanentl
    current or redirecting key in Polish, **When** the run applies the record, **Then** that key is not
    written, the run's issue list names the record and the product holding the key, and no redirect is taken
    over (FR-093).
+10. **Given** `seo` is off, **When** the operator opens the product editor, **Then** no redirect list is
+   shown; redirect data persists and keeps reserving keys, and a key equal to another product's redirecting
+   key still asks for the takeover confirmation naming that product (FR-111; clarify 2026-10-22, Q-C).
+11. **Given** product Q whose former global key `bohr` is a language-less redirect, **When** the operator
+   gives product P the Polish key `bohr`, **Then** the confirmation names Q and says that the redirect is
+   removed in every language; on confirmation `bohr` serves P at every (C, pl) and answers not-found in every
+   other language. **Given** instead that `bohr` is P's **own** language-less redirect, **Then** no
+   confirmation is asked and `bohr` keeps redirecting to P in every other language (FR-072).
 
 ---
 
@@ -470,7 +518,8 @@ source.
 1. **Given** an SEO override at (B2B, pl) and one at (pl), **Then** B2B × Polish shows the first and B2C ×
    Polish the second.
 2. **Given** existing per-language SEO overrides, **When** this story is deployed, **Then** they become the
-   language-scope values and no page's metadata changes.
+   language-scope values unchanged and, for the first time, are served on product pages; those products'
+   metadata changes to the values operators entered (owner, 2026-10-21; clarify 2026-10-22, Q-A).
 
 ---
 
@@ -547,13 +596,14 @@ the minimum and the return eligibility.
   (not-found), the redirect does not leak that the product exists. An old key of an **archived** product
   answers as the product's current URL does — "gone" (FR-005) — since archiving is already disclosed there.
 - **Key of another language**: a request at (C, L) for a key that the product holds only in another
-  language answers not-found; no cross-language redirect is made (FR-071).
+  language answers not-found; no cross-language redirect is made (FR-071). A language-less redirect (a
+  former global key) is not a key of another language: it resolves in every language (FR-072).
 - **Import or PIM writes a taken key**: the key is refused and listed in the run's issue list; the run never
   takes over another product's redirecting key (FR-093).
 - **Attribute scope flag changed** after values exist (e.g. a language-scoped attribute made global):
   defined by FR-090.
-- **Module off**: with `seo` off, redirects and SEO overrides are not served, but the data persists
-  (FR-111).
+- **Module off**: with `seo` off, redirects and SEO overrides are not served and the product editor shows
+  no redirect list, but the data persists and keeps reserving keys (FR-111).
 - **Audience override naming non-member organizations**: the save is allowed and the editor shows a warning
   naming them; the list is not pruned, so the entry applies if the organization later joins the channel
   (FR-030).
@@ -587,6 +637,9 @@ the minimum and the return eligibility.
   except for the archived case, which MUST keep its current "gone" answer. Interim reading: this also stops
   a `draft` product being reachable by its URL (the gap noted in *Current state*); whether a not-yet-published
   product should instead stay reachable by direct link as a preview is open — *Deferred to clarify* D-1.
+  Note: product handles stored by CMS product blocks (global slugs) MUST keep resolving — the product lookup
+  `GET :idOrSlug` answers an id, then a current key at (C, L), then the global slug, and never a redirect.
+  It is an API handle, not a storefront URL, so FR-071 does not govern it (`research.md` R28).
 - **FR-006**: A basket line whose product is no longer effectively available at the basket's (C, L) MUST be
   shown as unavailable and MUST block placement, reusing the existing unavailable-line behaviour.
 - **FR-007**: An unresolved request channel MUST NOT match any scoped value or any product (fail closed,
@@ -694,8 +747,10 @@ the minimum and the return eligibility.
 - **FR-040**: The product editor MUST offer, for every scoped field, a way to set it at each supported scope
   and to "use inherited", and MUST show the source of the effective value.
 - **FR-041**: The editor MUST offer a scope overview: channels × languages for the product's channels, with
-  the channel and language levels, marking per cell the overridden fields, the effective status and any
-  orphaned override (FR-015), and offering "reset to inherited" per field per cell.
+  the channel and language levels, marking per cell the overridden fields, the effective status, any
+  orphaned override (FR-015) and every value the completeness gate would report missing at that cell
+  (FR-060) — so that a product made live by a change that does not fire the gate shows what it lacks — and
+  offering "reset to inherited" per field per cell.
 - **FR-042**: The overview and scope controls MUST be read-only for an operator without the product-edit
   permission, and MUST be reachable from the product editor and discoverable in the command palette
   (Constitution XVI) as part of the product editor.
@@ -712,8 +767,8 @@ the minimum and the return eligibility.
 
 #### Completeness gate
 
-- **FR-060**: When a product becomes effectively "on" at (C, L) through an operator action, the system MUST
-  check that name, URL key and every required language-scoped attribute resolve to a non-empty value at
+- **FR-060**: When an operator's **status write** — the global status, a channel or channel × language
+  status override, or a bulk status change — turns a product on at (C, L), the system MUST check that name, URL key and every required language-scoped attribute resolve to a non-empty value at
   (C, L), and MUST name every missing field. What follows is decided by one **platform-level setting**
   (one value for the whole platform, not per channel) with two values: *warn* — the change is saved and the
   missing fields are shown — and *refuse* — the change is not saved. The default MUST be *warn*. The setting
@@ -727,10 +782,13 @@ the minimum and the return eligibility.
   language-scoped attributes: for them a value counts only if it is set at (C, L), at C, or for L itself —
   the resolver's cross-language fallback (see *Current state*) to the primary language's or any other
   language's value MUST NOT satisfy the gate, otherwise a
-  missing German name would pass as the Polish one (US6, scenario 1).
-- **FR-061**: The gate MUST apply equally to single edits, bulk edits and changes of the global switch that
-  turn on scopes without overrides, and MUST NOT apply to imports and PIM synchronisation (A-6, confirmed in
-  clarify 2026-10-21). In *refuse* mode a bulk edit MUST change the products that pass and skip and report
+  missing German name would pass as the Polish one (US6, scenario 1). The gate MUST NOT fire when a product
+  becomes live at (C, L) by any other change — joining a channel, a channel gaining a language, a
+  publication window opening, or an audience change; missing values in those cases MUST be visible in the
+  scope overview (FR-041) (clarify 2026-10-22, M3, option A; US6 #6).
+- **FR-061**: The gate MUST apply equally to single status edits, bulk status edits and changes of the
+  global switch that turn on scopes without overrides, MUST NOT apply to the non-status changes listed in
+  FR-060, and MUST NOT apply to imports and PIM synchronisation (A-6, confirmed in clarify 2026-10-21). In *refuse* mode a bulk edit MUST change the products that pass and skip and report
   per product those that fail, as FR-051 does for invalid scopes.
 
 #### URL key and redirects
@@ -757,8 +815,16 @@ the minimum and the return eligibility.
   other current keys in L (its language or global key where a (C, L) override exists, or an override of
   another channel) or for one of its redirecting keys in L (FR-072) MUST redirect permanently to its
   (C, L) URL. A key that the product holds only in another language MUST answer not-found — there are no
-  cross-language redirects — and so MUST a key of no product. Availability (FR-001, FR-005) is evaluated
-  for the product the key resolves to.
+  cross-language redirects — and so MUST a key of no product. A language-less redirect (a former global
+  key, FR-072) is not a key of another language: it resolves in every language. Availability (FR-001,
+  FR-005) is evaluated for the product the key resolves to. This governs storefront URLs; the product
+  lookup by handle is FR-005's note.
+  Every product URL the platform emits (canonical, alternate-language links, sitemap, redirect targets,
+  admin preview) MUST carry `?lang=<L>` when L is not the channel's default language. A key MUST NOT be
+  rendered in another language. Known and accepted until the language-path-prefix issue (#396): a link
+  without `?lang` opened by a browser whose language resolves to another channel language answers not-found
+  once the product has its own key in that language. A language prefix in the path is out of scope
+  (clarify 2026-10-22, Q-B).
 - **FR-072**: Changing a URL key MUST keep the previous key as a permanent redirect, in its language, at
   every (C, L) of that language, to the product's current URL in that (C, L) — availability is evaluated
   when the redirect is resolved (FR-071), not when the key changed; redirects MUST never
@@ -772,15 +838,21 @@ the minimum and the return eligibility.
   of the effective key at (C, L) counts as a change for this requirement, including giving a product its
   first language key for L: its global key then becomes a redirecting key **in L only**, and keeps serving
   the page in every language where the product still has no language key (consequence 1, round 4). Only an
-  operator may confirm a takeover; imports and connectors never do (FR-093).
+  operator may confirm a takeover; imports and connectors never do (FR-093). Changing the **global** key
+  keeps the previous global key as a language-less redirect, which resolves in every language of every
+  channel (Key Entities). Taking over another product's language-less (former global) redirect removes it
+  in every language, and the confirmation says so. A product giving itself a language key never makes its
+  own earlier redirects stop resolving.
 - **FR-073**: Existing slugs MUST become the global URL key at deployment, so every existing URL keeps
   resolving unchanged (SC-001).
-- **FR-074**: The sitemap and every alternate-language link MUST use the effective key per (C, L).
+- **FR-074**: The sitemap and every canonical and alternate-language link MUST use the effective key per
+  (C, L), with the `?lang` rule of FR-071.
 
 #### SEO, media, attachments, packaging units
 
 - **FR-075**: SEO meta title, description and OG fields MUST be settable per channel × language with the
-  chain of FR-008; existing per-language overrides MUST become language-scope values without change.
+  chain of FR-008; existing per-language overrides MUST become language-scope values without change, and
+  are served on product pages from then on (clarify 2026-10-22, Q-A; US8 #2).
 - **FR-076**: Gallery image roles (base, small, thumbnail) and "hide image" MUST be settable per channel;
   a hidden image MUST NOT be served in that channel; role uniqueness MUST hold per channel. The set of
   images itself MUST stay global — a channel cannot add an image of its own (clarify 2026-10-21, D-6).
@@ -797,8 +869,10 @@ the minimum and the return eligibility.
   carrying the product, the field, the scope and the before / after value (Constitution XIII), with exactly
   one audit entry per product per command. Deleting a URL redirect and taking over another product's
   redirecting key (FR-072) are admin writes and MUST run the same way.
-- **FR-081**: Single and bulk scoped writes MUST be reversible with the standard undo (all-or-nothing per
-  product, conflict report for products changed since).
+- **FR-081**: Bulk scoped writes MUST be reversible as a whole with the bulk-operation undo (all-or-nothing
+  per product, conflict report). A single scoped write's audit entry MUST hold the complete before-state, so
+  that re-applying it restores the previous value. A generic one-click undo of a single Command is out of
+  scope (clarify 2026-10-22, Q-D, option A).
 - **FR-082**: Status, window, audience and URL-key changes MUST emit domain events so
   that search, sitemap, feeds and webhooks update; an archive MUST still emit the existing archive event.
 - **FR-083**: The new scoped data is catalogue data and MUST be classified as platform-global, as product
@@ -808,7 +882,8 @@ the minimum and the return eligibility.
   the plan justifies a new one; any new code MUST appear on `/admin-roles` with Polish and English labels.
 - **FR-090**: Changing a user attribute's scope flags after values exist MUST follow a defined, previewable
   migration: narrowing (e.g. channel-scoped → global) MUST tell the operator how many overrides become
-  orphaned and retain them (FR-015); widening MUST create no values.
+  orphaned and retain them (FR-015); widening MUST create no values. The admin attribute editor MUST
+  expose the scope flags of user-defined attributes and show the preview before saving a narrowing.
 - **FR-091**: PIM connectors (Ergonode, Akeneo, Pimcore, UnoPim) and catalogue import / export MUST each
   state which scope they read and write for every field of FR-009; a connector that writes only global
   values MUST NOT remove overrides set by operators.
@@ -833,7 +908,9 @@ the minimum and the return eligibility.
   rule becomes the global audience rule.
 - **FR-111**: When `seo` is off, redirects and SEO overrides MUST NOT be served and their data MUST persist;
   scoped catalogue data MUST persist across any
-  module being turned off and on (Constitution XVII).
+  module being turned off and on (Constitution XVII). While `seo` is off the product editor MUST show no
+  redirect list. Redirect data persists in the catalogue and keeps reserving keys, and the takeover
+  confirmation still appears and names the product losing the redirect (clarify 2026-10-22, Q-C; US7 #10).
 
 ### Key Entities
 
@@ -843,9 +920,11 @@ the minimum and the return eligibility.
 - **Scope** — Global, Language, Channel, or Channel × language; valid only for the product's channels and
   their languages.
 - **Override** — a value of one field at one scope; absent means inherit.
-- **URL redirect** — an old URL key in one language, held by one product across all channels, pointing
-  permanently at that product's current URL in the requesting (C, L) of the same language; it never
-  resolves in another language (FR-071).
+- **URL redirect** — an old URL key, held by one product, that permanently points at that product's
+  current URL in the requesting (C, L). A redirect has a language (a former language or channel × language
+  key), and then resolves only in that language, or has no language (a former global key), and then
+  resolves in every language of every channel. Redirects never expire and never chain, and a current key
+  always wins over a redirect with the same key (FR-071, FR-072).
 - **Channel membership** — unchanged yes / no bridge; a precondition for every channel-scoped value.
 
 ## Success Criteria *(mandatory)*
@@ -854,10 +933,11 @@ the minimum and the return eligibility.
 
 - **SC-001**: After deployment, for every channel and language, the set of products listed, searchable,
   reachable by URL (all existing URLs) and in the sitemap and feeds is identical to the set before
-  deployment, except that products that are not "on" (today: `draft`) are no longer reachable by URL
-  (FR-005; FR-010 is decided, the final wording follows the D-1 decision on preview reachability) and no
-  longer addable to a basket — basket add honours FR-001 (FR-004), where today it checks no status at all
-  (`research.md` R0 F1).
+  deployment, except: products that are not "on" (today: `draft`) are no longer reachable by URL
+  (FR-005; FR-010 is decided, the final wording follows the D-1 decision on preview reachability); they are
+  no longer addable to a basket — basket add honours FR-001 (FR-004), where today it checks no status at all
+  (`research.md` R0 F1); the listing's name sort follows the effective name rather than the slug (FR-017);
+  and existing per-language SEO overrides are served (FR-075, US8 #2).
 - **SC-002**: An operator can take a product live in one market and offline in another in under one minute
   from the product editor, without touching other markets.
 - **SC-003**: For any product, an operator can tell from one screen why it is or is not live in every
@@ -930,6 +1010,10 @@ were decided on 2026-10-21 in round 1, D-3 became moot and D-5 was removed from 
 - Per-channel prices, promotions, warehouses, stock, SKU, product type or structure.
 - A Magento-style "store view" entity; the two existing axes are kept.
 - Per-deployment overlays for any of this (Constitution XV).
+- A language prefix in the storefront product path (`/en/p/<key>`) — issue #396 (clarify 2026-10-22, Q-B);
+  this feature emits `?lang=<L>` instead (FR-071).
+- A generic one-click undo of a single Command; single scoped writes are restored from their audit
+  before-state (FR-081; clarify 2026-10-22, Q-D) — a possible future issue.
 
 ## Constitution constraints
 
@@ -940,7 +1024,8 @@ were decided on 2026-10-21 in round 1, D-3 became moot and D-5 was removed from 
   from not-found.
 - **XII** — every scoped read resolves a concrete channel and fails closed; membership via the sanctioned
   service only; cross-channel tests for every FR-004 consumer.
-- **XIII** — every scoped write and bulk write is a Command, audited per scope, reversible.
+- **XIII** — every scoped write and bulk write is a Command, audited per scope; bulk writes are reversible
+  with the bulk-operation undo, single writes are restorable from the audit before-state (FR-081).
 - **VII** — localised URLs, permanent redirects, correct alternate-language links.
 - **XVI** — the scope overview and bulk action are reachable from the command palette with the product
   editor and product list.
