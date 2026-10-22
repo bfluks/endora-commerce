@@ -417,9 +417,9 @@ export const productScopesSchema = z.object({
     }),
   ),
   /**
-   * Owner decision U1 — the names of the organizations the global rule and the channel
-   * audience rules name (non-members included), resolved by the server so an operator
-   * without `customers:read` can read them. An organization that cannot be read (deleted,
+   * Owner decision U1 — the names of the organizations the channel audience rules name
+   * (non-members included), resolved by the server so an operator without
+   * `customers:read` can read them. The global rule's are not named: it is uncapped. An organization that cannot be read (deleted,
    * or `organizations` not answering) is absent: the consumer shows its id.
    */
   organizations: z.array(z.object({ id: uuidSchema, name: z.string() })),
