@@ -426,6 +426,22 @@ describe('Product URL keys — admin routes (spec 162, T101)', () => {
       });
     });
 
+    it("deleting the product removes its redirects in the product.delete Command (FR-072)", async () => {
+      const p = await insertProduct('Doomed', k('doomed'));
+      expect((await put(p, { globalKey: k('doomed-2') })).statusCode).toBe(200);
+      expect((await put(p, { languageKeys: [{ languageCode: 'pl-PL', key: k('skazany') }] })).statusCode).toBe(200);
+      const del = await h.app.inject({ method: 'DELETE', url: `/api/v1/admin/catalog/products/${p}`, ...admin });
+      expect(del.statusCode, del.body).toBe(204);
+      const [left] = await h
+        .em()
+        .getConnection()
+        .execute<Array<{ n: string }>>(`select count(*)::text as n from product_url_redirects where product_id = ?`, [p]);
+      expect(Number(left?.n)).toBe(0);
+      // The freed old key is a new product's to take.
+      const q = await insertProduct('Successor', k('successor'));
+      expect((await put(q, { languageKeys: [{ languageCode: 'pl-PL', key: k('doomed') }] })).statusCode).toBe(200);
+    });
+
     it("404 URL_REDIRECT_NOT_FOUND for another product's redirect, or an unknown id", async () => {
       const owner = await insertProduct('Owner', k('owner'));
       const p = await insertProduct('Stranger', k('stranger'));
