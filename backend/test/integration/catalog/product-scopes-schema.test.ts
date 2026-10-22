@@ -4,8 +4,8 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
 
 /**
- * Feature 162, Phase 3 (T014) — the schema `catalog`'s `product_scopes` migration
- * adds (`specs/162-product-data-scopes/data-model.md` §1–§3).
+ * Feature 163, Phase 3 (T014) — the schema `catalog`'s `product_scopes` migration
+ * adds (`specs/163-product-data-scopes/data-model.md` §1–§3).
  *
  * - `product_channel_scopes` and `product_channel_language_scopes` exist, keyed by
  *   (product, channel[, language]);
@@ -88,7 +88,7 @@ async function count(em: EntityManager, table: string, productId: string): Promi
   return Number(row.n);
 }
 
-describe('162 — product scope tables [integration]', () => {
+describe('163 — product scope tables [integration]', () => {
   it('a channel row inserted with only its key and status inherits every other field', async () => {
     const em = db.em();
     const productId = await insertProduct(em);

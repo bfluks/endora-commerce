@@ -7,7 +7,7 @@ import {
 } from '@endora-commerce/contracts';
 
 /**
- * Feature 162 (US1–US3, FR-012, FR-023, FR-030, FR-040) — the pure half of the product
+ * Feature 163 (US1–US3, FR-012, FR-023, FR-030, FR-040) — the pure half of the product
  * editor's scope controls: local time ↔ ISO for `datetime-local`, the editable draft of
  * one channel's scope row, and the diff that becomes `PATCH …/scopes`. Kept out of the
  * component so every rule here is assertable without rendering.

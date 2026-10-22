@@ -11,7 +11,7 @@ import { ORDER_MINIMUM_MAX } from './order-minimums.js';
 import type { ProductUrlKeyWrite, UrlKeyWriteOutcome } from './product-url-keys.js';
 
 /**
- * Feature 162 (`specs/162-product-data-scopes/`) — product data scopes per sales
+ * Feature 163 (`specs/163-product-data-scopes/`) — product data scopes per sales
  * channel and language: the one rule of effective availability, its admin shapes and
  * the ports other modules ask through (`contracts/product-scopes.md`,
  * `contracts/admin-scopes-api.md`, research R1–R7, R18).
@@ -277,7 +277,7 @@ export interface ChannelAvailability {
 }
 
 /**
- * Owner: `catalog`. Not registered yet: feature 162 publishes it as
+ * Owner: `catalog`. Not registered yet: feature 163 publishes it as
  * `catalogProductAvailabilityPort` when the read path lands (Block B), and the
  * container-name marker arrives with that registration.
  *
@@ -324,7 +324,7 @@ export interface ProductScopeWriteResult {
 }
 
 /**
- * Owner: `catalog` (R17). Not registered yet: feature 162 publishes it as
+ * Owner: `catalog` (R17). Not registered yet: feature 163 publishes it as
  * `catalogProductScopeWritePort` with its implementation (T122), and the
  * container-name marker arrives with that registration.
  *
@@ -352,7 +352,7 @@ const languageCodeSchema = z
   .max(16)
   .regex(/^[a-z]{2,3}(-[a-z]{2})?$/i, 'BCP-47 language tag');
 
-/** The most organizations one channel audience override names (security review, 162 Block A). */
+/** The most organizations one channel audience override names (security review, 163 Block A). */
 const SCOPE_AUDIENCE_ORGANIZATIONS_MAX = 1000;
 /** The most language statuses one channel entry of a scopes PATCH carries. */
 const SCOPE_LANGUAGE_STATUSES_MAX = 64;

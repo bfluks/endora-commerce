@@ -1,6 +1,6 @@
 # Data model: product data scopes
 
-**Feature**: `specs/162-product-data-scopes/` | Decisions: `research.md` (R#). Every table here is
+**Feature**: `specs/163-product-data-scopes/` | Decisions: `research.md` (R#). Every table here is
 **platform-global** (`@GlobalEntity()`), as `products` and `product_value_overrides` are (FR-083,
 Constitution XI): catalogue data, with audience evaluated at read time against the buyer's organization.
 
@@ -62,7 +62,7 @@ ignored (FR-015); the overview lists them as orphaned.
 No index beyond the primary key: every reader — the availability predicate's keyed sub-select (R2,
 `coalesce(cl.status, c.status, p.status)`), the scopes read, the write — seeks by product first, which the
 PK `(product_id, sales_channel_id, language_code)` serves. A `(sales_channel_id, language_code, status)`
-index had no reader and was dropped before the migration merged (162 Block A review).
+index had no reader and was dropped before the migration merged (163 Block A review).
 
 ## 3. `products` additions (catalog)
 

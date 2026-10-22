@@ -80,7 +80,7 @@ export const ERROR_CODES = {
   // by the products import of `import_export`)
   PRICE_SET_IN_PRICE_BOOKS: 'PRICE_SET_IN_PRICE_BOOKS',
 
-  // Catalog 162 — product data scopes and URL keys (owned by `catalog`)
+  // Catalog 163 — product data scopes and URL keys (owned by `catalog`)
   SCOPE_INVALID: 'SCOPE_INVALID',
   SCOPE_INCOMPLETE: 'SCOPE_INCOMPLETE',
   URL_KEY_TAKEN: 'URL_KEY_TAKEN',
