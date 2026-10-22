@@ -508,13 +508,17 @@ describe('URL-key uniqueness and redirects (spec 162, T100)', () => {
         await trx.raw('select pg_advisory_xact_lock(hashtextextended(?, 0))', [`catalog.url-key:${contested}`]);
         pending = put(p, { languageKeys: [{ languageCode: 'pl-PL', key: contested }] });
         // Wait until the write is blocked on the advisory lock — the second connection.
-        for (let i = 0; i < 100; i += 1) {
+        // The poll must see the waiter: timing out silently would let the write run
+        // after the holder commits, and the test would pass without exercising the lock.
+        let waiters = 0;
+        for (let i = 0; i < 100 && waiters === 0; i += 1) {
           const waiting = await knex.raw(
             `select count(*)::int as n from pg_locks where locktype = 'advisory' and not granted`,
           );
-          if (Number((waiting.rows as Array<{ n: number }>)[0]!.n) > 0) break;
-          await new Promise((resolve) => setTimeout(resolve, 20));
+          waiters = Number((waiting.rows as Array<{ n: number }>)[0]!.n);
+          if (waiters === 0) await new Promise((resolve) => setTimeout(resolve, 20));
         }
+        expect(waiters, 'the write never queued on the key lock').toBeGreaterThan(0);
         await trx.raw(
           `insert into product_url_keys (id, product_id, language_code, sales_channel_id, key) values (?, ?, 'pl-PL', null, ?)`,
           [randomUUID(), q, contested],
