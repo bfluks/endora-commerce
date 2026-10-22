@@ -108,7 +108,7 @@ describe('Product URL keys — admin routes (spec 163, T101)', () => {
       .execute<AuditRow[]>(
         `select state_before, state_after from audit_log_entries
           where action = ? and object_type = 'product' and object_id = ?
-          order by created_at`,
+          order by acted_at`,
         [action, productId],
       );
   }
