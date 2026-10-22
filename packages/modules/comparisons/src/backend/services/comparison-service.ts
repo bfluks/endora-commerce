@@ -4,10 +4,12 @@ import {
   listingPriceMoney,
   type CatalogAttributeReadPort,
   type CatalogGalleryPort,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   ANONYMOUS_PRODUCT_AUDIENCE,
   isOrderMinimumEligibleType,
   isProductVisibleTo,
+  resolveScopeLanguage,
   type ComparisonOwnerView,
   type ComparisonDisplayMode,
   type ComparisonPricedFor,
@@ -19,8 +21,7 @@ import {
   type ProductAudience,
 } from '@endora-commerce/contracts';
 import { withSystemScope } from '@endora-commerce/platform/tenancy';
-import { SalesChannel } from '@endora-commerce/platform/kernel';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
+import { SalesChannel, currentSalesChannel } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { Comparison } from '../entities/comparison.entity.js';
 import { ComparisonProduct } from '../entities/comparison-product.entity.js';
@@ -76,7 +77,12 @@ import {
  * somebody later reuses on a storefront path.
  */
 export type ComparisonViewer =
-  | { readonly kind: 'buyer'; readonly audience: ProductAudience }
+  | {
+      readonly kind: 'buyer';
+      readonly audience: ProductAudience;
+      /** Feature 163 — the request's language tag; L is it resolved against the channel. */
+      readonly languageTag?: string;
+    }
   | { readonly kind: 'administrator' };
 
 /**
@@ -103,13 +109,14 @@ export class ComparisonService {
      */
     private readonly catalogProducts: CatalogProductReadPort,
     /**
-     * The sanctioned bridge accessor (Constitution XII), for the assortment
-     * gate `addProduct` owes (issue #259). Required for the same reason
-     * `catalogProducts` is: an optional one would spell "this rig wired no
-     * membership service" and "this channel publishes the product" as the same
-     * answer.
+     * Feature 163 — `catalog`'s one answer to "may this reader acquire this
+     * product here, now" (FR-004): membership through the sanctioned bridge
+     * accessor (Constitution XII, issue #259), effective status at (channel,
+     * L), window and effective audience. Required for the same reason
+     * `catalogProducts` is: an optional one would spell "this rig wired
+     * nothing" and "this channel offers the product" as the same answer.
      */
-    private readonly channelMembership: SalesChannelMembershipPort,
+    private readonly availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
     /**
      * Feature 075 / D-87 — `catalog`'s gallery read model, for the base image
      * of each column. Required for the same reason `catalogProducts` is: the
@@ -361,6 +368,8 @@ export class ComparisonService {
      * public route passes the real one.
      */
     audience: ProductAudience = ANONYMOUS_PRODUCT_AUDIENCE,
+    /** Feature 163 — the request's language tag (L is it resolved against the channel). */
+    languageTag?: string,
   ): Promise<Comparison> {
     // command-coverage-ignore: transient customer working state (like carts) —
     // self-service convenience data, not an audited domain-state mutation.
@@ -371,24 +380,21 @@ export class ComparisonService {
     // and every comparable attribute value, so a product this shopper may not
     // see may not enter their comparison. Same answer as a product that does
     // not exist: `ProductNotFoundError` is what the route turns into a 404.
-    if (!product || !isProductVisibleTo(product, audience)) {
-      throw new ProductNotFoundError(productId);
-    }
-    // Issue #259 — the channel axis, which the predicate above states in
-    // writing that it is not. `salesChannelId` is the channel the caller
-    // resolved for this request and stamps on the row below, so the comparison
-    // a buyer builds on one channel can only ever hold products that channel
-    // publishes. Same `ProductNotFoundError` as the line above: "sold on
-    // another channel" must be indistinguishable from "restricted" and from
-    // "does not exist", or the three together enumerate the assortment.
-    const publishedHere = await this.channelMembership.filterEntityIdsInChannel(
-      salesChannelId,
-      'product',
-      [product.id],
-    );
-    if (publishedHere.length === 0) {
-      throw new ProductNotFoundError(productId);
-    }
+    if (!product) throw new ProductNotFoundError(productId);
+    // Issues #227, #259 and feature 163 — the channel, its language, the
+    // window and the audience in one answer from `catalog`. `salesChannelId`
+    // is the channel the caller resolved for this request and stamps on the
+    // row below, so the comparison a buyer builds on one channel can only ever
+    // hold products available there. Same `ProductNotFoundError` for every
+    // reason: "sold on another channel", "switched off", "restricted" and
+    // "does not exist" must be indistinguishable, or together they enumerate
+    // the assortment.
+    const available = await this.availability.filterAvailable([product.id], {
+      channelId: salesChannelId,
+      languageCode: comparisonScopeLanguage(salesChannelId, languageTag),
+      audience,
+    });
+    if (!available.has(product.id)) throw new ProductNotFoundError(productId);
 
     let comparison = await em.findOne(Comparison, ownerWhere(owner));
     if (!comparison) {
@@ -586,6 +592,20 @@ export class ComparisonService {
       stored.filter((p) => !productById.has(p.id)).map((p) => p.id),
     );
     const visibleRows = bridgeRows.filter((row) => !withheldIds.has(row.productId));
+    // Feature 163 — whether each column can still be acquired here, now, by
+    // this reader, as `catalog` answers it; no status is tested in this module
+    // (FR-002). An administrator reads it as the public would.
+    const availableHere =
+      visibleProductIds.length > 0
+        ? await this.availability.filterAvailable(visibleProductIds, {
+            channelId: viewerSalesChannelId,
+            languageCode: comparisonScopeLanguage(
+              viewerSalesChannelId,
+              viewer.kind === 'buyer' ? viewer.languageTag : undefined,
+            ),
+            audience: viewer.kind === 'buyer' ? viewer.audience : ANONYMOUS_PRODUCT_AUDIENCE,
+          })
+        : new Set<string>();
     const productSummaries = visibleRows.map((row) => {
       const p = productById.get(row.productId);
       if (!p) {
@@ -612,8 +632,7 @@ export class ComparisonService {
         type: p.type,
         primaryAssetUrl: baseImageByProduct.get(p.id) ?? null,
         price,
-        available:
-          p.deletedAt == null && p.archivedAt == null && p.status === 'active',
+        available: availableHere.has(p.id),
         // Feature 155 (FR-014) — emitted for the types the minimum applies to only.
         minOrderQuantity: isOrderMinimumEligibleType(p.type) ? p.minOrderQuantity : null,
         addedAt: row.addedAt.toISOString(),
@@ -753,4 +772,18 @@ export class ProductNotFoundError extends Error {
     super(`Product ${productId} not found.`);
     this.name = 'ProductNotFoundError';
   }
+}
+
+/**
+ * Feature 163 — the scope language L of a comparison read: the request's tag
+ * resolved against the request channel's own languages when the comparison is
+ * read on that channel, else `null` (the channel's default language).
+ */
+function comparisonScopeLanguage(channelId: string, languageTag: string | undefined): string | null {
+  const channel = currentSalesChannel();
+  if (!channel || channel.id !== channelId) return null;
+  const languages = channel.languages.includes(channel.defaultLanguage)
+    ? channel.languages
+    : [channel.defaultLanguage, ...channel.languages];
+  return resolveScopeLanguage({ id: channel.id, languages, defaultLanguage: channel.defaultLanguage }, languageTag);
 }

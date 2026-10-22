@@ -1,6 +1,9 @@
-import { isProductVisibleTo, type CatalogProductReadPort } from '@endora-commerce/contracts';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
-import { productIdsInRequestChannel } from '@endora-commerce/platform/kernel';
+import {
+  isProductVisibleTo,
+  type CatalogProductAvailabilityPort,
+  type CatalogProductReadPort,
+} from '@endora-commerce/contracts';
+import { currentSalesChannel } from '@endora-commerce/platform/kernel';
 import type {
   ProductLike,
   QuickOrderCatalogLookup,
@@ -27,10 +30,12 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
   constructor(
     private readonly catalogProducts: CatalogProductReadPort,
     /**
-     * The sanctioned bridge accessor (Constitution XII), for the channel half
-     * of the same answer (issue #259).
+     * Feature 163 — `catalog`'s availability answer, which holds the channel
+     * half of the same answer (issue #259, through the sanctioned bridge
+     * accessor) together with the effective status at (channel, L), the
+     * window and the effective audience.
      */
-    private readonly channelMembership: SalesChannelMembershipPort,
+    private readonly availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
   ) {}
 
   /**
@@ -53,7 +58,18 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
     productIds: string[],
   ): Promise<ReadonlySet<string> | null> {
     if (audience === 'unrestricted') return null;
-    return productIdsInRequestChannel(this.channelMembership, productIds);
+    // Outside a request there is no channel to ask about (FR-007); the audience
+    // filter the callers apply first is the whole answer there, as before.
+    const channel = currentSalesChannel();
+    if (channel === null) return null;
+    if (productIds.length === 0) return new Set();
+    // Feature 163 — the request channel's default language: a pasted list
+    // carries no language of its own.
+    return this.availability.filterAvailable(productIds, {
+      channelId: channel.id,
+      languageCode: null,
+      audience,
+    });
   }
 
   async findProductsBySku(

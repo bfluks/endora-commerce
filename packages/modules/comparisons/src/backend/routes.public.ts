@@ -27,6 +27,7 @@ import {
   ProductNotInComparisonError,
   type ComparisonOwner,
   type ComparisonService,
+  type ComparisonViewer,
 } from './services/comparison-service.js';
 import type { ComparisonPdfRenderer } from './services/comparison-pdf-renderer.js';
 import {
@@ -145,7 +146,7 @@ export async function registerComparisonsPublicRoutes(
       data: await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        buyerViewerOf(request),
       ),
     };
   });
@@ -165,6 +166,7 @@ export async function registerComparisonsPublicRoutes(
         channel.id,
         body.productId,
         productAudienceOf(request),
+        languageTagOf(request),
       );
     } catch (err) {
       throw translate(err);
@@ -174,7 +176,7 @@ export async function registerComparisonsPublicRoutes(
       data: await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        buyerViewerOf(request),
       ),
     };
   });
@@ -203,7 +205,7 @@ export async function registerComparisonsPublicRoutes(
         data: await comparisonService.buildOwnerView(
           comparison,
           channel.id,
-          { kind: 'buyer', audience: productAudienceOf(request) },
+          buyerViewerOf(request),
         ),
       };
     },
@@ -229,7 +231,7 @@ export async function registerComparisonsPublicRoutes(
       data: await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        buyerViewerOf(request),
       ),
     };
   });
@@ -248,7 +250,7 @@ export async function registerComparisonsPublicRoutes(
       const view = await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        buyerViewerOf(request),
       );
       if (view.products.length === 0) {
         throw new HttpError(
@@ -430,3 +432,24 @@ function parse<T>(schema: z.ZodType<T>, input: unknown): T {
 
 // Re-export the cookie name so test-server / docs can reference it.
 export { COMPARE_TOKEN_COOKIE };
+
+/**
+ * Feature 163 — the reader as a comparison view takes it: the session's
+ * audience and the request's language tag, which the scope language L of the
+ * column's availability is resolved from.
+ */
+function buyerViewerOf(request: FastifyRequest): ComparisonViewer {
+  const tag = languageTagOf(request);
+  return {
+    kind: 'buyer',
+    audience: productAudienceOf(request),
+    ...(tag ? { languageTag: tag } : {}),
+  };
+}
+
+/** The first `Accept-Language` tag without its quality parameter, or `undefined`. */
+function languageTagOf(request: FastifyRequest): string | undefined {
+  const header = request.headers['accept-language'];
+  const tag = typeof header === 'string' ? header.split(',')[0]?.split(';')[0]?.trim() : undefined;
+  return tag ? tag : undefined;
+}
