@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   ANONYMOUS_PRODUCT_AUDIENCE,
-  type CatalogProductReadPort,
+  type CatalogProductAvailabilityPort, type CatalogProductReadPort,
 } from '@endora-commerce/contracts';
 import { SearchQueryService } from '../../../../packages/modules/search/dist/backend/services/search-query.service.js';
 
@@ -383,6 +383,12 @@ describe('Issue #384 — public product reads honour channel value overrides', (
     // indexed name is deliberately neither text: the card must not trust it.
     const search = new SearchQueryService(
       h.container.resolve<CatalogProductReadPort>('catalogProductReadPort'),
+      undefined,
+      {},
+      undefined,
+      undefined,
+      // Feature 163 — hydration asks `catalog` for every hit.
+      h.container.resolve<CatalogProductAvailabilityPort>('catalogProductAvailabilityPort'),
     );
     const searchCardName = async (
       channelId: string,

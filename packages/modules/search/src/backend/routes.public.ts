@@ -316,6 +316,8 @@ function readContext(request: FastifyRequest): {
       isPublic: ch.isPublic,
       defaultCurrency: ch.defaultCurrency,
       defaultLanguage: ch.defaultLanguage,
+      // Feature 163 — the channel's content languages, from the resolved record.
+      languages: ch.languages,
     },
     audience: productAudienceOf(request),
     ...(preferredLanguage !== undefined ? { preferredLanguage } : {}),

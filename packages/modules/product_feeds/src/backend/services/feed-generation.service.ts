@@ -687,6 +687,8 @@ export class FeedGenerationService {
     const em = this.deps.emFactory();
     const idPages = this.deps.selection.iterateProductIds({
       salesChannelId: prepared.salesChannelId,
+      // Feature 163 — the feed's language decides availability (FR-001).
+      languageCode: prepared.feed.languageCode,
       selectionRule: prepared.feed.selectionRule,
       // A price criterion resolves against exactly the prices this run emits
       // (FR-025, FR-028) — same currency, same list, or none of it happens.

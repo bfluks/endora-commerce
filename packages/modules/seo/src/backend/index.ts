@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
   CatalogCategoryReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CmsPageReadPort,
   SeoMetaWritePort,
@@ -129,6 +130,8 @@ export function registerModule(ctx: ModuleContext): void {
             lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
             lazyPort<CatalogCategoryReadPort>(ctx, 'catalogCategoryReadPort'),
             lazyPort<CmsPageReadPort>(ctx, 'cmsPageReadPort'),
+            // Feature 163 — what is available to a crawler, per channel language.
+            lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
             sitemapOptions,
           ),
       )
