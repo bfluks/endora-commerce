@@ -64,6 +64,17 @@ describe('putProductUrlKeysRequestSchema', () => {
       false,
     );
   });
+
+  // Phase 16 review — every list in the body is bounded, as the scopes PATCH's are.
+  const many = <T>(count: number, at: (index: number) => T): T[] => Array.from({ length: count }, (_, index) => at(index));
+  it.each([
+    ['languageKeys', (index: number) => ({ languageCode: 'de', key: `k-${index}` })],
+    ['channelKeys', (index: number) => ({ channelId: C, languageCode: 'de', key: `k-${index}` })],
+    ['confirmTakeover', (index: number) => ({ languageCode: null, key: `k-${index}` })],
+  ] as const)('caps %s at 64 entries', (field, at) => {
+    expect(putProductUrlKeysRequestSchema.safeParse({ [field]: many(64, at) }).success).toBe(true);
+    expect(putProductUrlKeysRequestSchema.safeParse({ [field]: many(65, at) }).success).toBe(false);
+  });
 });
 
 describe('productUrlKeysResponseSchema', () => {
