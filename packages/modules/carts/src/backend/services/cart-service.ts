@@ -469,7 +469,7 @@ export class CartService {
     if (options.replaceExisting) {
       // Step 2 — the request alone: the basket it replaces counts toward nothing.
       rejections = await this.#judgeBatch({ sourceQuoteRequestId: null }, [], resolvedLines);
-      this.#throwIfBelowMinimum(rejections, resolvedLines, options);
+      await this.#throwIfBelowMinimum(actor, rejections, resolvedLines, options);
       // Round B (item 3) — the write step's own refusals (no price, quote-only)
       // are judged here too, before the basket is cleared, so a request refused
       // for them also leaves the basket as it was.
@@ -492,7 +492,7 @@ export class CartService {
         (await em.find(CartItem, { cartId: cart.id })).map(toCartMinimumItem),
         resolvedLines,
       );
-      this.#throwIfBelowMinimum(rejections, resolvedLines, options);
+      await this.#throwIfBelowMinimum(actor, rejections, resolvedLines, options);
     }
 
     // Step 3 — the accepted lines, in input order. Kept apart, each line is
@@ -501,12 +501,23 @@ export class CartService {
     // fall back to their random ids.
     const kept = options.keepRepeatedLines === true;
     const seedBase = Date.now();
+    // Feature 163 (FR-017 d) — a below-minimum outcome names the product as the
+    // storefront shows it in this basket's (channel, language).
+    const outcomeNames =
+      rejections.size > 0 ? await this.#effectiveNamesFor(actor, resolvedLines) : new Map<string, string>();
     let added = 0;
     let failure: unknown = null;
     for (const { index, input, resolved } of resolvedLines) {
       const rejection = rejections.get(index);
       if (rejection) {
-        outcomes.set(index, belowMinimumOutcome(index, rejection, resolved.product, options.language));
+        outcomes.set(
+          index,
+          belowMinimumOutcome(
+            index,
+            rejection,
+            outcomeNames.get(resolved.product.id) ?? pickLocalized(resolved.product.name, options.language),
+          ),
+        );
         continue;
       }
       try {
@@ -633,21 +644,46 @@ export class CartService {
    * rejected line in `details.lines` by its batch `index`, each product named in
    * `options.language`. The figures (`total`, `units`) are the judgement's own.
    */
-  #throwIfBelowMinimum(
+  async #throwIfBelowMinimum(
+    actor: CartActor,
     rejections: ReadonlyMap<number, CartBatchRejection>,
-    resolvedLines: ReadonlyArray<{ index: number; resolved: ResolvedCartLine }>,
+    resolvedLines: ReadonlyArray<{ index: number; resolved: ResolvedCartLine; input: CartBatchLineInput }>,
     options: { onBelowMinimum?: 'report' | 'throw'; language?: string },
-  ): void {
+  ): Promise<void> {
     if (options.onBelowMinimum !== 'throw' || rejections.size === 0) return;
     const violations = [...rejections.entries()]
       .sort(([a], [b]) => a - b)
       .map(([index, rejection]) => ({ ...rejection, key: String(index) }));
+    // Feature 163 (FR-017 d) — the names the storefront shows in this basket.
+    const effective = await this.#effectiveNamesFor(actor, resolvedLines);
     const names = new Map(
-      resolvedLines.map(({ resolved }) => [resolved.product.id, pickLocalized(resolved.product.name, options.language)]),
+      resolvedLines.map(({ resolved }) => [
+        resolved.product.id,
+        effective.get(resolved.product.id) ?? pickLocalized(resolved.product.name, options.language),
+      ]),
     );
     const refusal = minimumRefusal(violations, names, 'index');
     if (refusal === null) return;
     throw new HttpError(422, ERROR_CODES[refusal.code], refusal.message, refusal.details);
+  }
+
+  /**
+   * Feature 163 (FR-017 d) — the effective names of a batch's products at the
+   * basket's (channel, language): `catalog`'s answer, the walk a storefront card
+   * shows. Empty outside a channel — the caller falls back to the baseline pick.
+   * An operator naming the channel is answered in its default language (N2).
+   */
+  async #effectiveNamesFor(
+    actor: CartActor,
+    resolvedLines: ReadonlyArray<{ resolved: ResolvedCartLine; input: CartBatchLineInput }>,
+  ): Promise<Map<string, string>> {
+    const named = resolvedLines.find(({ input }) => input.salesChannelId)?.input.salesChannelId;
+    const channelId = named ?? currentSalesChannel()?.id ?? null;
+    if (channelId === null || resolvedLines.length === 0) return new Map();
+    return this.availability.effectiveNames(
+      [...new Set(resolvedLines.map(({ resolved }) => resolved.product.id))],
+      { channelId, languageCode: named ? null : basketScopeLanguage(channelId, actor.languageTag) },
+    );
   }
 
   /**
@@ -1319,14 +1355,13 @@ function failedOutcome(index: number, err: HttpError): CartBatchLineOutcome {
 function belowMinimumOutcome(
   index: number,
   rejection: CartBatchRejection,
-  product: CatalogProductRecord,
-  language: string | undefined,
+  productName: string,
 ): CartBatchLineOutcome {
   return {
     index,
     status: 'below_minimum',
     productId: rejection.productId,
-    productName: pickLocalized(product.name, language),
+    productName,
     kind: rejection.kind,
     minimum: rejection.minimum,
     ...(rejection.kind === 'packaging_unit' ? { packagingUnitName: rejection.packagingUnitName } : {}),

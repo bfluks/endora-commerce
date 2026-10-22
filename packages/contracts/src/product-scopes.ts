@@ -296,10 +296,14 @@ export interface CatalogProductAvailabilityPort {
     productIds: readonly string[],
     channelId: string,
   ): Promise<Map<string, ChannelAvailability>>;
-  /** FR-017 — the effective name per id at (channel, language). */
+  /**
+   * FR-017 — the effective name per id at (channel, language): #384's walk over
+   * the channel's overrides, else the storefront's baseline pick. `languageCode`
+   * `null` = the channel's default language (an operator, N2).
+   */
   effectiveNames(
     productIds: readonly string[],
-    scope: { channelId: string; languageCode: string },
+    scope: { channelId: string; languageCode: string | null },
   ): Promise<Map<string, string>>;
   /** FR-100 — the effective minimum order quantity and returnable flag in the channel. */
   effectiveOrderRules(

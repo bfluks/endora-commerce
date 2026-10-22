@@ -157,7 +157,7 @@ export interface RfqServiceDeps {
    * product here, now" (FR-004, FR-018): membership, effective status at
    * (channel, L), window and effective audience.
    */
-  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveNames'>;
   customerAccounts: CustomerAccountReadPort;
   adminUsers: AdminUserReadPort;
   carts: CartWritePort;
@@ -241,6 +241,25 @@ export class RfqService {
       { channelId, languageCode: raisedInScopeLanguage(languageTag), audience: rfqAudience(ctx) },
     );
     return new Map(records.filter((p) => available.has(p.id)).map((p) => [p.id, p]));
+  }
+
+  /**
+   * Feature 163 (FR-017 d, N2) — the names a quote line snapshots: the effective
+   * name `catalog` answers at `channelId` in the request's language (`language`
+   * resolved against the channel), or at the channel's default language for an
+   * operator (`language` `null`). Empty without a channel; the caller keeps its
+   * baseline pick then.
+   */
+  async lineNames(
+    products: readonly CatalogProductRecord[],
+    channelId: string | null,
+    language: string | null | undefined,
+  ): Promise<Map<string, string>> {
+    if (channelId === null || products.length === 0) return new Map();
+    return this.deps.catalogAvailability.effectiveNames(
+      products.map((p) => p.id),
+      { channelId, languageCode: language === null ? null : raisedInScopeLanguage(language) },
+    );
   }
 
   /**
@@ -467,6 +486,7 @@ export class RfqService {
     await em.persistAndFlush(rfq);
 
     const items: QuoteRequestItem[] = [];
+    const lineNames = await this.lineNames([...productById.values()], salesChannelId, options.language);
     for (const [index, lineInput] of input.items.entries()) {
       const product = productById.get(lineInput.productId)!;
       const unit = packaging[index]!;
@@ -474,7 +494,9 @@ export class RfqService {
       // RFQ views show "<name> (Paleta)", and persist the structured snapshot.
       // Feature 155 (FR-026) — the name and base quantity are the catalogue
       // unit's, beside its id; a line naming no unit stores plain pieces.
-      const baseName = anyLocaleValue(product.name);
+      // Feature 163 (FR-017 d, N2) — the name is the one the buyer saw: the
+      // effective name at the request's (channel, language).
+      const baseName = lineNames.get(product.id) ?? anyLocaleValue(product.name);
       const productName = unit.packagingUnitName ? `${baseName} (${unit.packagingUnitName})` : baseName;
       const item = em.create(QuoteRequestItem, {
         quoteRequestId: rfq.id,
@@ -633,6 +655,12 @@ export class RfqService {
           : referenceColumns(resolved[next++] ?? null, capturedAt),
       );
 
+      // Feature 163 — the names the edited lines snapshot (FR-017 d).
+      const lineNames = await this.lineNames(
+        [...productById.values()],
+        rfq.salesChannelId ?? null,
+        options.language,
+      );
       // Feature 159 (R-13, FR-025) — a customer body carries no grouping: a
       // paired line keeps its group, a new line is ungrouped, no group changes;
       // positions follow the body order within each section.
@@ -642,8 +670,9 @@ export class RfqService {
         const row = paired[index] ?? null;
         const unit = packaging[index]!;
         // FR-035 — packaging stored with the name suffix `createForCustomer`
-        // writes; feature 155 (FR-026) — the catalogue unit's, beside its id.
-        const baseName = anyLocaleValue(product.name);
+        // writes; feature 155 (FR-026) — the catalogue unit's, beside its id;
+        // feature 163 — the effective name at the request's (channel, language).
+        const baseName = lineNames.get(product.id) ?? anyLocaleValue(product.name);
         return {
           quoteRequestId: rfq.id,
           productId: product.id,

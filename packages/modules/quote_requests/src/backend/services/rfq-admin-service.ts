@@ -136,7 +136,7 @@ export interface RfqAdminServiceDeps {
    * Feature 163 (FR-018) — `catalog`'s availability answer, asked about an
    * operator's lines only to warn: `createOnBehalf` accepts them either way.
    */
-  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveNames'>;
   customerAccounts: CustomerAccountReadPort;
   organizations: OrganizationDetailsPort;
   adminUsers: AdminUserReadPort;
@@ -954,13 +954,20 @@ export class RfqAdminService {
     });
     const groupIds = await writeLineGroups(em, rfq.id, [], plan);
     const items: QuoteRequestItem[] = [];
+    // Feature 163 (FR-017 d, N2) — an operator's lines are named at the
+    // request channel's default language.
+    const lineNames = await this.deps.rfqService.lineNames(
+      [...productById.values()],
+      rfq.salesChannelId ?? null,
+      null,
+    );
     for (const [index, lineInput] of body.items.entries()) {
       const product = productById.get(lineInput.productId)!;
       items.push(
         em.create(QuoteRequestItem, {
           quoteRequestId: rfq.id,
           productId: product.id,
-          productName: anyLocaleValue(product.name),
+          productName: lineNames.get(product.id) ?? anyLocaleValue(product.name),
           productSlug: product.slug,
           variantId: lineInput.variantId ?? null,
           quantity: lineInput.quantity,
