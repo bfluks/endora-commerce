@@ -23,7 +23,7 @@ both, with a Polish and an English name and **no German name**. Run one `search_
 3. B2C: *Use inherited* on the channel row. B2C follows the global status again; the C×L row still wins
    in Polish.
 4. Audit log: one entry per change naming the scope with before/after; re-applying the before-state restores
-   it (single-write undo per `research.md` R29 — pending owner Q-D).
+   it (`research.md` R29; owner Q-D → A: no single-write undo — the audit before-state is the restore path).
 5. As a buyer of B2C in German, try to add P to a basket by id (API) → `404 PRODUCT_NOT_FOUND`; raise a quote
    request containing P → refused; as an operator create a quote request for a B2C customer → accepted with
    a warning naming P.
@@ -54,7 +54,9 @@ Result: the non-member is skipped and reported; Bulk actions page shows the oper
 
 Settings → Catalog → *Completeness gate* = **refuse**. Enable P at B2C × `de-DE` → refused, naming the
 missing German name. Switch to **warn** → saved with the warning. With a global key and no German key, the
-URL key is not reported.
+URL key is not reported. Still on **refuse**, with P active everywhere and no German name: add `de-DE` to a
+channel P belongs to → saved, no gate message (M3 → A); the scope overview's (channel, `de-DE`) cell lists
+the missing name. Change only P's B2C publication window or audience → saved, no gate message.
 
 ## 7. US7 — URL keys
 
