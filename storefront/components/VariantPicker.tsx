@@ -12,7 +12,14 @@ import type { ReactNode } from 'react';
  * Each variant shows:
  *   - the localized attribute combination (e.g. "M / Red")
  *   - SKU as small caption
- *   - price-override + stock badges if set
+ *   - a stock badge if set
+ *
+ * **No price per variant** (D-287 P0). It used to print
+ * `product_variants.price_override`, which no price list reads: a variant line
+ * is charged the product's resolved price, so the figure here was one the cart
+ * would never charge. The product page's price block is the price for every
+ * variant until variant prices live in the price books (issue #377,
+ * `specs/pricing/decision-record.md` §5.8).
  *
  * The currently-selected variant (matched against the `variant` URL query
  * parameter resolved by the parent page) gets `aria-current="true"`.
@@ -22,7 +29,6 @@ interface Variant {
   id: string;
   sku: string;
   variantAttributeValues: Record<string, unknown>;
-  priceOverride?: number | null;
   stockLevel?: number | null;
 }
 
@@ -35,7 +41,6 @@ export interface VariantPickerProps {
   labels: {
     heading: string;
     sku: string;
-    priceOverride: string;
     stockLevel: string;
     outOfStock: string;
     selectThisVariant: string;
@@ -80,12 +85,6 @@ export function VariantPicker({
                 <span className="text-[0.875rem] text-muted">
                   {labels.sku}: <code>{v.sku}</code>
                 </span>
-                {v.priceOverride != null ? (
-                  <span className="text-[0.875rem]">
-                    {labels.priceOverride}:{' '}
-                    <strong>{formatPriceOverride(v.priceOverride)}</strong>
-                  </span>
-                ) : null}
                 {v.stockLevel != null ? (
                   <span className="text-[0.875rem]">
                     {outOfStock ? labels.outOfStock : `${labels.stockLevel}: ${v.stockLevel}`}
@@ -120,10 +119,4 @@ function formatValue(value: unknown): string {
   }
   if (Array.isArray(value)) return value.join(', ');
   return JSON.stringify(value);
-}
-
-function formatPriceOverride(value: number): string {
-  return new Intl.NumberFormat('en-US', { style: 'decimal', minimumFractionDigits: 2 }).format(
-    value,
-  );
 }

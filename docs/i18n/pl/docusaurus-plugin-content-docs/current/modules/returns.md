@@ -75,13 +75,60 @@ trafia do dziennika audytu.
   ma** integracji zwrotów z operatorem płatności — tam rozliczenie nadal kończy się stanem
   `pending_manual`, aby człowiek wypłacił pieniądze ręcznie, bo nie ma czego włączyć.
 
+## Produkty podlegające zwrotowi
+
+O tym, czy pozycję można zwrócić, decyduje flaga **Podlega zwrotowi** produktu w stanie z chwili
+złożenia zamówienia — moduł Orders zapisuje ją na każdej pozycji zamówienia przy jego składaniu, a
+późniejsze zmiany produktu nie dotyczą już złożonych zamówień. Flagę ustawia się na produkcie w
+katalogu (opisuje ją strona modułu Catalog, łącznie z ustawianiem jej dla wielu produktów naraz
+przez **Edycję masową**).
+
+- **Odpowiedź dla każdej pozycji.** `GET /api/v1/orders/:orderId/returnable` podaje dla każdej
+  pozycji `returnable` (zawsze obecne), a dla pozycji, której nie można zwrócić —
+  `notReturnableReason: 'product_not_returnable'`. Pozycja zamówienia złożonego, zanim flagę
+  zaczęto zapisywać, nie ma zapisanej wartości i **jest traktowana jako podlegająca zwrotowi**.
+- **`eligible` dotyczy tylko spraw rodzaju zwrot.** Werdykt dla zamówienia ma kolejność
+  pierwszeństwa: `order_not_completing`, `fully_returned`, potem `no_returnable_lines`.
+  `eligible: false` z `reason: 'no_returnable_lines'` oznacza, że w zamówieniu zostały jeszcze
+  ilości, ale żadna na pozycji podlegającej zwrotowi: **zwrotu nie można otworzyć, ale reklamację
+  nadal tak.**
+- **Zwrot wskazujący pozycję niepodlegającą zwrotowi jest odrzucany.** `POST /api/v1/returns` z
+  `kind: 'return'` odpowiada kodem `422 RETURN_LINE_NOT_RETURNABLE`, gdy którakolwiek wskazana
+  pozycja została zapisana jako niepodlegająca zwrotowi, z `details.productName` (pierwsza taka
+  pozycja), `details.orderItemIds[]` i `details.lines[]` (`orderItemId`, `productName`)
+  wymieniającymi każdą taką pozycję. Nic nie jest zapisywane.
+- **Reklamacje nigdy nie są ograniczane** flagą: `complaint` może wskazać dowolną pozycję
+  zamówienia. **Za pozycję bez prawa zwrotu domyślnie nic nie jest zwracane**: taka pozycja
+  reklamacji jest zapisywana z zatwierdzoną kwotą zwrotu `0`, a jej domyślna kwota zwrotu pozostaje
+  kwotą zapłaconą — najwyższą, jaką operator może zatwierdzić. Widok sprawy w panelu oznacza pozycję
+  jako **Bez prawa zwrotu przy zakupie**, a formularz rozliczenia zaczyna dla niej od `0`, więc
+  zwrot pieniędzy lub środków następuje tylko wtedy, gdy operator wpisze kwotę. Szczegóły sprawy
+  podają dla każdej pozycji `returnableAtPurchase` (`true`, `false` albo `null` dla pozycji złożonej,
+  zanim ta wartość była zapisywana).
+- **Powtórzone pozycje są sumowane.** Gdy żądanie wskazuje jedną pozycję zamówienia więcej niż raz,
+  ilości są sumowane dla każdej pozycji zamówienia, a suma jest porównywana z ilością pozostałą do
+  zwrotu, dla obu rodzajów; suma powyżej niej jest odrzucana z kodem `422 VALIDATION_FAILED`,
+  `details.code: 'qty_exceeds_returnable'`. Wpisy są nadal zapisywane tak, jak je przesłano.
+- **Kolejność sprawdzeń.** Pozycja spoza zamówienia (`details.code: 'unknown_line'`) jest zgłaszana
+  przed jakimkolwiek błędem ilości, sprawdzenie ilości poprzedza sprawdzenie powodu
+  (`unknown_reason`), a podleganie zwrotowi jest sprawdzane na końcu. Sprawy otwarte, zanim produkt
+  oznaczono jako niepodlegający zwrotowi, nigdy nie są oceniane ponownie.
+
+**Po aktualizacji żaden istniejący produkt nie podlega zwrotowi.** Flaga jest domyślnie wyłączona,
+więc pozycje zamówień złożonych po wydaniu nie podlegają zwrotowi, dopóki produkt nie zostanie
+oznaczony w katalogu jako podlegający zwrotowi — zaznacz produkty na liście produktów i użyj
+**Edycja masowa → Podlega zwrotowi → Tak — podlega zwrotowi**. Zamówienia złożone przed wydaniem
+pozostają bez zmian: ich pozycje nie mają zapisanej wartości i nadal podlegają zwrotowi.
+
 ## Interfejsy między modułami
 
 Moduł odczytuje i zmienia dane innych domen wyłącznie przez udokumentowane porty, nigdy przez
 importy wnętrza innych modułów:
 
 - `OrderReturnContextPort` (orders) — kwoty zapłacone za każdą pozycję i czas osiągnięcia statusu
-  kończącego realizację.
+  kończącego realizację oraz `returnableAtPurchase` każdej pozycji (`true`/`false` zapisane przy
+  składaniu zamówienia, `null` dla zamówienia złożonego, zanim zaczęto je zapisywać). Moduł Orders
+  podaje fakt; zasada dla `null` — podlega zwrotowi — należy do tego modułu.
 - `PaymentRefundPort` (payments) — wykonanie zwrotu, odpowiedź `pending_manual`, gdy nie ma
   integracji z operatorem płatności, albo odmowa, gdy bramka, która przyjęła płatność, jest
   wyłączona.

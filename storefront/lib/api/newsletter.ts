@@ -5,6 +5,7 @@ import type {
 } from '@endora-commerce/contracts';
 import { apiMutate, apiGetAuthed } from './mutations';
 import { backendBaseUrl } from '../env.mjs';
+import { channelHeaders } from '../channel/channel-header';
 
 /**
  * The backend's origin, read per call.
@@ -36,7 +37,7 @@ export async function getNewsletterStatus(channelCode: string): Promise<Newslett
   try {
     const res = await fetch(
       `${backendBaseUrl()}/api/v1/newsletter/status?channel=${encodeURIComponent(channelCode)}`,
-      { cache: 'no-store' },
+      { headers: channelHeaders(channelCode), cache: 'no-store' },
     );
     if (!res.ok) return { enabled: false, optInMode: 'double' };
     const body = (await res.json()) as { data: NewsletterStatusResponse };

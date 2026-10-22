@@ -1,6 +1,6 @@
 ---
 title: Assets Library
-description: Central digital-asset library with pluggable storage adapters, soft-delete, and reference-protection guards
+description: Central digital-asset library with pluggable storage adapters, stable file URLs and permalinks, in-place file replacement, soft-delete with a retention sweep, and reference-protection guards
 ---
 
 # Assets Library
@@ -14,8 +14,13 @@ The Assets Library is the platform's digital-asset substrate. It owns:
 - Pluggable storage backends — Local filesystem, Amazon S3, GCP Cloud
   Storage — configured from Settings, exactly one active at a time.
 - Public/private visibility per asset.
+- Stable file URLs and operator-chosen permalinks that keep working when the
+  file behind them is replaced.
+- In-place file replacement, with the previous version kept and restorable.
 - Reference protection: assets in use by Catalog or CMS cannot be deleted
   until every reference is detached.
+- A retention sweep that hard-deletes soft-deleted assets and replaced files
+  once their retention period has passed.
 
 ## Quick start
 
@@ -38,6 +43,12 @@ The Assets Library is the platform's digital-asset substrate. It owns:
    Returns `{ ok: true }` on success or `{ ok: false, reason: ... }` on
    misconfiguration. The dashboard is at `GET /api/v1/admin/assets/storage/state`.
 
+The admin opens the library from the sidebar or from the command palette
+(⌘K / CTRL+K → "Assets library", for anyone holding `assets.read`). The asset
+detail drawer holds the shareable link, the permalink, **Replace file**, the
+previous version with **Restore**, and the delete action. Every write control
+needs `assets.write`.
+
 ## Upload constraints
 
 Two settings gate uploads, both checked before any byte reaches the active
@@ -49,7 +60,8 @@ adapter:
   MIME under that prefix. The check considers both the declared MIME and
   the magic-number-sniffed MIME (file-type) and rejects when either fails.
 - `assets.max_file_size_mb` — integer cap in MB. `0` (default) disables
-  the cap.
+  the cap. The cap is read on every request and applies to the bytes
+  actually received, so a tightened limit takes effect without a restart.
 
 Independently of `assets.allowed_file_types`, documents a browser would run
 — HTML, XHTML, XML (including XSL stylesheets) and JavaScript — are refused
@@ -57,23 +69,64 @@ with `415 ASSET_UPLOAD_TYPE_NOT_ALLOWED`, judged by the declared MIME type and
 by the file extension. SVG is accepted (logos, icons) and is always stored as
 `image/svg+xml`. Any other file is stored under the type sniffed from its
 content when the content is recognised, and under its declared type otherwise.
+An upload takes one `file` part; a second one is ignored.
+
+## Which URLs are stable
+
+| URL | Stable? |
+| --- | --- |
+| File URL (`fileUrl`, and `GET /api/v1/admin/assets/:id/url` for a public asset): `/assets/file/<asset id>` on local storage; on S3 and GCS the object's stable bucket URL (on `public_base_url` when one is set) | Yes — across every replace, for as long as the asset exists. `/assets/file/<asset id>` also answers on every backend, redirecting a cloud asset to its bucket URL. |
+| Permalink `/assets/file/<permalink>` (`permalinkUrl`) | Yes — across every replace, until the permalink is changed or removed. |
+| Embed URL `…?v=<contentVersion>` (what the catalogue, CMS, feeds and e-mails embed) | Points at one version of the file. After a replace it redirects to the current version, so it keeps working, but it is not the URL to hand out. |
+| Signed private URL (`token`, `exp`) | No — valid for `assets.private_url_ttl_sec` (default 300 s) and re-issued on every read. |
+
+The shareable link the admin drawer offers is the permalink URL when the asset
+has one, and the stable file URL otherwise — never the versioned embed URL.
+`contentVersion` is a short marker on each asset that changes whenever its file
+changes; `AssetsLibraryService.resolveEmbedUrl(id)` returns the embed form for
+code that renders an asset.
 
 ## How files are served
 
-`GET /assets/file/:assetId` sends `X-Content-Type-Options: nosniff` and a
+`GET /assets/file/:assetId` and `GET /assets/file/<permalink>` send
+`X-Content-Type-Options: nosniff` on every response. A served file carries a
 `Content-Security-Policy` of `default-src 'none'; style-src 'unsafe-inline'; sandbox`
-on every response (PDFs get the same policy without `sandbox`, which the
-browsers' built-in PDF viewers do not run under). Only displayable media —
-raster images, SVG, video, audio, PDF and plain text — is served
-`Content-Disposition: inline`; every other stored type is served as an
-`attachment`, whatever the request asks for. An SVG opened directly therefore
-runs no script, and embedding it through `<img>` is unaffected.
+(PDFs get the same policy without `sandbox`, which the browsers' built-in PDF
+viewers do not run under). Only displayable media — raster images, SVG, video,
+audio, PDF and plain text — is served `Content-Disposition: inline`; every
+other stored type is served as an `attachment`, whatever the request asks for;
+`?download=1` asks for an attachment. An SVG opened directly therefore runs no
+script, and embedding it through `<img>` is unaffected.
+
+Redirects and error answers (`302`, `403`, `404`, `410`) carry `no-store` and
+the fixed sandbox policy above, whatever the stored type.
+
+The route decides in this order:
+
+1. An unknown id or name answers `404 ASSET_NOT_FOUND`.
+2. A **private** asset is checked for a valid signature first. Without one it
+   answers `403 ASSET_ACCESS_DENIED` by id — also when it is soft-deleted —
+   and `404` by permalink, byte-for-byte the answer an unused name gets.
+3. A soft-deleted asset answers `410 ASSET_GONE`.
+4. A private asset with a valid signature is streamed (local) or redirected to
+   a time-limited bucket URL (S3, GCS), always `no-store`.
+5. A public cloud asset is redirected (`302`, `no-store`) to its stable bucket
+   URL — with `?v=<current>` when the request carried a `v`.
+6. A public local asset is streamed; see [Caching](#caching).
+
+The `ETag` is `"<asset id>-<contentVersion>"`: it changes when the file changes
+and not when only the label or folder does. `If-None-Match` is compared weakly
+and accepts a list or `*`.
 
 ## Visibility & private URLs
 
-Each asset has `visibility ∈ {public, private}`. Public URLs are stable;
-private URLs are short-lived (TTL = `assets.private_url_ttl_sec`, default
-300s) and re-issued by the admin or storefront on every read.
+Each asset has `visibility ∈ {public, private}`. Private URLs are short-lived
+(TTL = `assets.private_url_ttl_sec`, default 300s) and re-issued by the admin
+or storefront on every read.
+
+Making an asset private stops the platform serving it without a signature from
+the next request, but it does not purge copies that browsers, CDNs or other
+external caches already hold.
 
 For the **local FS** adapter, private URLs are HMAC-signed by the backend.
 The signing key is sourced from the `ASSETS_LIBRARY_HMAC_KEY` env var
@@ -88,23 +141,224 @@ gets; without a valid token it answers `403 ASSET_ACCESS_DENIED`. Admin
 screens obtain private URLs from `GET /api/v1/admin/assets/:id/url` and are
 unaffected.
 
+## Replacing a file
+
+`POST /api/v1/admin/assets/:id/replace` (multipart: an optional
+`expectedContentVersion` field, then one `file` part; a second file part is
+ignored) swaps an asset's file and keeps everything else — the id, folder,
+label, alternate text, visibility, every reference to the asset, its storage
+key and therefore every URL already handed out. The answer is the updated
+asset, with a new `contentVersion`. In the admin it is **Replace file** in the
+asset drawer, which confirms naming both files and how long the current one
+stays restorable.
+
+- **Same kind only.** The new file must be of the asset's stored kind — image,
+  video, PDF or other — judged by its recognised content, not its declared
+  type: an image or a PDF counts only when its bytes are recognised as one, and
+  an SVG counts as an image. A mismatch answers
+  `415 ASSET_REPLACE_KIND_MISMATCH` with `details.currentKind` and
+  `details.newKind`. A video or PDF in a format the content sniffer does not
+  recognise answers `newKind: other`, so it cannot replace a `video` or `pdf`
+  asset; upload it as a new asset instead. A certificate stays a certificate.
+- **The filename follows the file.** The asset takes the new file's name, type
+  and size; an admin's MIME override is cleared.
+- **The same upload rules apply** — allowed types, the browser-executable
+  refusal and the size cap.
+- **Legacy rows** (see [Legacy escape hatch](#legacy-escape-hatch)) are refused
+  with `409 ASSET_LEGACY_CANNOT_REPLACE`; re-upload them instead. A soft-deleted
+  asset answers `410`.
+- **Concurrent replaces.** Two replaces of the same version race to one winner;
+  the other answers `409 ASSET_REPLACE_CONFLICT`. Sending
+  `expectedContentVersion` makes a replace fail the same way when the asset
+  changed since it was read. The field must come before the file part; sent
+  after it, the request answers `400 VALIDATION_FAILED` and nothing is replaced.
+- **The 5 GiB ceiling on S3.** A replacement of an S3 asset above 5 GiB is
+  refused with `413` naming 5120 MB, the largest object S3 copies in one step.
+- The asset's own backend is used, whatever backend is active now.
+
+Every replace is the audited Command `asset.replace`.
+
+## Permalinks
+
+A permalink is an operator-chosen path that serves the asset at
+`/assets/file/<permalink>`, for example `/assets/file/brand/logo.svg` or
+`/assets/file/datasheets/pump-2000.pdf`. Set it with
+`PUT /api/v1/admin/assets/:id/permalink` (`{ permalink, confirmReuse? }`) and
+remove it with `DELETE /api/v1/admin/assets/:id/permalink`, or from the asset
+drawer, which validates it as it is typed and confirms before a set permalink
+is changed or removed.
+
+- **Rules.** At most 200 characters of `A–Z`, `a–z`, `0–9`, `.`, `_`, `-` and
+  `/`; no empty, `.` or `..` segment; not shaped like an asset id. A refusal is
+  `400 ASSET_PERMALINK_INVALID` with `details.code` naming the rule.
+- **Unique case-insensitively**, and matched case-insensitively when served.
+  A name another asset holds answers `409 ASSET_PERMALINK_TAKEN`.
+- **Private assets.** A private asset's permalink answers `404` without a valid
+  signature, exactly as an unused name does, while its id URL answers `403`,
+  live or soft-deleted. A soft-deleted private asset answers `410` only to a
+  valid signature.
+- **Change or removal** takes effect at once: the old name answers `404` from
+  the next request.
+- **Reusing a name.** A name that was changed, removed or released by a purge
+  can be taken at once. When the asset that held it last was a **different**
+  one, the request answers `409 ASSET_PERMALINK_PREVIOUSLY_USED` until it is
+  repeated with `confirmReuse: true` — links already printed with that name
+  will open the new asset — and the audit entry records which asset held it.
+  An asset taking back its own former permalink needs no confirmation.
+- **Delete and purge.** A soft-deleted asset keeps its permalink, which answers
+  `410`; the drawer warns before deleting an asset that has one. The hard
+  delete releases it. Setting or removing the permalink of a soft-deleted asset
+  answers `410`; restore the asset first.
+- **Deleting a folder.** Deleting a folder in the library moves its files to
+  the parent folder, so their permalinks keep working; the confirmation names
+  how many files in the folder, at any depth, have one
+  (`GET /api/v1/admin/assets/folders/:folderId/permalink-count`). The API
+  option `deleteRecursively` of `DELETE /api/v1/admin/assets/folders/:folderId`
+  instead moves the folder's assets to the trash without confirmation, so their
+  permalinks answer `410` until the assets are restored.
+
+Setting and removing a permalink are the audited Commands
+`asset.permalink_set` and `asset.permalink_remove`. The list search also
+matches permalinks.
+
+## Previous version and restore
+
+A replace keeps the file it replaced as the asset's **previous version**; one
+is kept, and a further replace discards the one before it. The asset detail
+reports it as `previousVersion` — name, type, size, content version, when and
+by whom it was replaced, and `restorableUntil` (replaced at plus the retention
+period) — or `null`. The detail also answers `retentionDays`, the effective
+retention period in whole days, which the replace confirmation names.
+
+`POST /api/v1/admin/assets/:id/previous-version/restore` (**Restore** in the
+drawer) swaps the two: the previous file becomes current and the current one
+becomes the previous version, with a fresh retention period. The body names
+both versions — `expectedContentVersion` and `expectedPreviousContentVersion` —
+so a restore brings back exactly the file the admin saw; either being out of
+date answers `409 ASSET_REPLACE_CONFLICT`. Without a previous version, or past
+`restorableUntil`, the answer is `409 ASSET_NO_PREVIOUS_VERSION` (with
+`details.restorableUntil` in the second case). The restored file keeps its own
+content version, so its earlier ETag and cached copies are valid again. A
+restore is the audited Command `asset.restore_previous_version`.
+
+## Caching
+
+What the file route answers, by request:
+
+| Request | Answer | `Cache-Control` |
+| --- | --- | --- |
+| Public local, no `v` (file URL or permalink) | `200` / `304` | `public, no-cache` |
+| Public local, `v` = current version | `200` / `304` | `public, max-age=31536000, immutable` |
+| Public local, `v` ≠ current version | `302` to the same URL with the current `v` | `no-store` |
+| Public S3 / GCS | `302` to the stable bucket URL | `no-store` |
+| Private, valid signature, local | `200` / `304` | `private, no-store, max-age=0` |
+| Private, valid signature, S3 / GCS | `302` to a time-limited URL | `no-store` |
+| Refusals (`403`, `404`, `410`) | — | `no-store` |
+
+- **Freshness.** A replace is visible on the next request to the file URL or
+  the permalink: both are revalidated every time, and the embed URLs the
+  platform hands out carry the new `v`.
+- An unsigned conditional request on a private asset never receives `304`.
+- The one-year `immutable` answer on `?v=<current>` is best effort while a
+  replace is running: a request that arrives in the brief window before the
+  replace commits can be cached with the new bytes under the old marker.
+- **Upgrading.** Before this version the bare file URL was served
+  `immutable` for a year. A client that cached it then can keep its copy until
+  that year runs out; the embed URLs are versioned from this version on.
+
+### CMS pages after a replace
+
+The CMS page cache holds a resolved page, embed URLs included, for up to five
+minutes and is not cleared when an asset changes. A CMS page cached before a
+replace therefore keeps serving the previous `?v=` for up to five minutes; that
+URL redirects to the current file when it is requested. A browser that already
+holds the old `?v=` URL in its cache — it was served as immutable — can keep
+showing the previous image until the CMS page cache has turned over and the
+page is reloaded. Clearing the CMS page cache when an asset changes is tracked
+in [issue #363](https://github.com/endora-commerce/endora-commerce/issues/363).
+
+## Cloud storage
+
+- **The stable key.** An asset's object key never changes; a replace copies the
+  new file over it on the server, so the bucket URL is stable too.
+- **Object headers.** Objects written by this version carry
+  `Cache-Control: no-cache` and a `Content-Disposition` chosen by the serving
+  policy — SVG and every non-displayable type as `attachment`. Objects stored
+  earlier keep their headers until their first replace. To set them in bulk,
+  update each object's metadata with your provider's tooling (for S3 a copy of
+  the object onto itself with the metadata directive set to replace; for GCS a
+  metadata update), re-stating its content type — and on S3 its ACL, which a
+  self-copy otherwise resets.
+- **A stale `v`** on a bucket URL serves the current file; the bucket does not
+  version by query string.
+- **Private assets** are served through the API only with a valid platform
+  signature, which redirects to a time-limited bucket URL.
+- **Previous and staging objects** have random names and private ACLs. **A
+  bucket policy must not grant public read beyond the objects the module makes
+  public.**
+- **Size.** A file on S3 is limited to 5 GiB; a larger replacement is refused
+  with the size message.
+
+## Operating a CDN
+
+**In front of the API** (`assets.local.public_url_base`, or the API origin):
+forward `/assets/file/` with nested paths and the query string, and honour the
+origin's `Cache-Control`. A CDN that overrides the origin's freshness must
+purge the bare file URL and the permalink after a replace.
+
+**In front of the bucket** (`assets.s3.public_base_url`,
+`assets.gcs.public_base_url`): include `v` (and `download`) in the cache key and
+nothing else; cache for a long time when `v` is present and revalidate
+otherwise; never strip `v`. Add `X-Content-Type-Options: nosniff` and a
+restrictive `Content-Security-Policy` to bucket responses, which the bucket
+does not send itself. A CDN that overrides freshness must purge the bare URL
+after a replace.
+
 ## Soft-delete & hard-delete
 
 Deletes go through a two-step lifecycle:
 
-1. `DELETE /api/v1/admin/assets/:id` → soft-delete. Sets `deletedAt` and
-   `purgeAfterAt = now + assets.soft_delete_retention_days` (default 30).
-   The asset disappears from listings and pickers but remains recoverable
-   via `POST /api/v1/admin/assets/:id/restore`.
-   Recursive folder deletion uses the same retention setting. The value is read
-   when an asset is deleted; changing it does not reschedule assets already
-   soft-deleted. Negative or non-finite values fall back to 30 days. A value of
-   `0` makes an asset eligible for hard deletion on the next sweep.
-2. The repeating `HardDeleteAssetWorker` finalises after `purgeAfterAt`:
-   removes the row and asks the adapter to delete the underlying file.
-   If the backend cannot remove the file (read-only mount, revoked
-   credentials, network partition), the row stays and `pendingCleanup` is
-   set to `true`; the worker retries on the next tick.
+1. `DELETE /api/v1/admin/assets/:id` → soft-delete. Sets `deletedAt`; the asset
+   disappears from listings and pickers but remains recoverable via
+   `POST /api/v1/admin/assets/:id/restore`, which also takes it out of the
+   sweep. Recursive folder deletion works the same way. The reported
+   `purgeAfterAt` is `deletedAt` plus the current retention period.
+2. The [retention sweep](#retention-and-purge) hard-deletes the asset once the
+   period has passed: it removes the row and asks the adapter to delete the
+   underlying file.
+
+## Retention and purge
+
+`assets.soft_delete_retention_days` (default 30) is the retention period for
+both soft-deleted assets and replaced files. The effective period is at least
+one day: `0`, or anything between zero and one, is one day; an empty,
+non-numeric or negative value applies the default of 30.
+
+- **Hourly sweep.** A scheduled job runs every hour and handles at most 500
+  assets per run, oldest deletion first. Each run writes one
+  `assets_library.retention.sweep` log line saying what it did, also when
+  nothing was due.
+- **What it purges.** Soft-deleted assets, once the period has passed since
+  their deletion, and previous versions, once it has passed since they were
+  replaced.
+- **Read when the sweep runs.** The period is read at sweep time, so a changed
+  setting applies to assets already deleted, and the purge date the API
+  reports follows it.
+- **Referenced assets are skipped** and stay soft-deleted.
+- **Failed deletes are retried.** When the backend cannot remove a file
+  (read-only mount, revoked credentials, network partition), the row stays
+  with `pendingCleanup` set and the next run retries; a file already gone
+  counts as deleted. Storage objects the module stopped needing — the
+  leftovers of a failed or interrupted replace — are cleaned after 24 hours.
+- **Restore** removes an asset from the sweep.
+- **Upgrading.** Before this version soft-deleted assets were not purged. **The
+  first runs after upgrading purge every asset soft-deleted longer ago than the
+  period**; to keep them, lengthen the setting before upgrading.
+
+**Rolling back** this version's migration leaves previous-version and staging
+objects in storage with nothing referencing them; remove them from the bucket
+or directory by hand if they matter. Every asset keeps being served, because
+the stored file key does not change.
 
 ## Reference protection {#asset-reference-registry}
 
@@ -130,16 +384,18 @@ class that implements:
 ```ts
 selfCheck(): Promise<{ ok: boolean; reason?: string }>;
 newLocator({ assetId, originalFilename }): string;
-put({ locator, mimeType, visibility, stream, sizeBytes }): Promise<void>;
+put({ locator, mimeType, visibility, stream, sizeBytes, cacheControl?, contentDisposition? }): Promise<void>;
 resolveUrl({ locator, visibility, ttlSec? }): Promise<{ url; expiresAt }>;
 open({ locator }): Promise<NodeJS.ReadableStream>;
 delete({ locator }): Promise<void>;
+copy({ from, to, visibility, mimeType, cacheControl?, contentDisposition? }): Promise<void>;
 setVisibility?({ locator, visibility }): Promise<void>;
 ```
 
-…and registering it in `AdapterRegistry.build`. See the existing
-`LocalFsStorageAdapter`, `S3StorageAdapter`, and `GcsStorageAdapter` for
-templates.
+`copy` is a server-side copy that a reader of `to` sees whole or not at all,
+and it sets the destination's ACL explicitly. Register the class in
+`AdapterRegistry.build`. See the existing `LocalFsStorageAdapter`,
+`S3StorageAdapter`, and `GcsStorageAdapter` for templates.
 
 ## Legacy escape hatch
 
@@ -148,5 +404,14 @@ issue are tagged `storage_backend = 'legacy'` at migration time. The legacy
 resolver returns the URL verbatim for `public` assets — rebasing it onto the
 public API origin when the stored value is host-relative — and refuses to flip
 them to `private` (we cannot sign URLs we didn't issue), which surfaces as
-`409 ASSET_LEGACY_LOCATOR_CANNOT_HARDEN` to the admin. Re-upload through
-the active adapter to upgrade.
+`409 ASSET_LEGACY_LOCATOR_CANNOT_HARDEN` to the admin. The file route redirects
+a legacy asset to its stored URL when that is an `http(s)` URL and answers
+`404 ASSET_FILE_MISSING` otherwise; a legacy asset cannot be replaced
+(`409 ASSET_LEGACY_CANNOT_REPLACE`). Re-upload through the active adapter to
+upgrade.
+
+A row with no storage key — a file inserted directly into the database, such
+as the demo data's inline `data:` images — is treated the same way: replace and
+restore answer `409 ASSET_LEGACY_CANNOT_REPLACE`, and the asset detail answers
+`replaceable: false`, so the drawer offers no **Replace file**. The legacy rows
+above answer `replaceable: false` too.

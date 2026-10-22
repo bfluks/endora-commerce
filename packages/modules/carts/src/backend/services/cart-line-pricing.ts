@@ -1,7 +1,8 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
   CatalogProductRecord,
-  LinePricePort,
+  LinePricesPort,
+  LinePriceResult,
   OrganizationDetailsPort,
   ProductDisplayModePort,
 } from '@endora-commerce/contracts';
@@ -28,15 +29,22 @@ import { SalesChannel } from '@endora-commerce/platform/kernel';
  *     applies to the quantity actually ordered.
  *  3. **The Product's own price** (the `defaultPrice` / `price` attribute) when
  *     no list applies — the second step of the catalogue's pricing chain
- *     (issue #132), which is what the storefront lists the product at.
+ *     (issue #132), which is what the storefront lists the product at. It is in
+ *     the basket channel's default currency, as the listing chain labels it
+ *     (`price_lists`' `listingPriceFrom`); it used to be labelled `PLN` whatever
+ *     the channel (D-287 P0, issue #303's cart half), so on a EUR channel the
+ *     card said 100 EUR and the cart line 100 PLN. A basket whose channel is
+ *     gone has no currency to claim for the attribute and is unpriced.
  *  4. **Nothing.** A product nobody priced is not orderable; it used to become a
  *     line at `0.00`.
  *
  * A product sold on request only (display mode `none`) is not orderable outside
  * an agreement either.
  *
- * Prices resolve against the system-default sales channel, as cart lines always
- * have — see `CartService`'s constructor note on cart-side channel tracking.
+ * Prices resolve against the basket's own sales channel — the channel it is used
+ * on (`specs/154-sales-channel-access/`, contracts/basket-attribution.md §2). They
+ * used to resolve against the system-default channel whatever the basket, so a
+ * list targeting another store never applied to its baskets.
  */
 
 export interface CartLineAgreement {
@@ -50,6 +58,12 @@ export interface CartPricingContext {
   organization: Awaited<ReturnType<OrganizationDetailsPort['findById']>>;
   organizationId: string | null;
   signedIn: boolean;
+  /**
+   * D-287 P0 — the basket's customer account, whose own customer group
+   * overrides the organisation's. `price_lists` applies the rule; optional so a
+   * hand-built context for a guest needs nothing.
+   */
+  customerAccountId?: string | null;
 }
 
 export interface CartLinePriceInput {
@@ -63,24 +77,39 @@ export type CartLinePriceAnswer =
   | { ok: true; unitPrice: string; currency: string; source: 'agreed' | 'price_list' | 'product' }
   | { ok: false; reason: 'unpriced' | 'quote_only' };
 
-/** The currency a line priced from the Product's own attribute carries, as before. */
-const OWN_PRICE_CURRENCY = 'PLN';
-
 export class CartLinePricing {
   constructor(
-    private readonly pricingService: LinePricePort,
+    /**
+     * D-287 P0 — the batched line slice: a basket's lines are priced in one
+     * call (the placement drift check and the login/reorder reprice looped one
+     * `resolveLinePrice` per line). A single line is a batch of one, so there
+     * is one chain and one call shape.
+     */
+    private readonly pricingService: LinePricesPort,
     private readonly displayModes: ProductDisplayModePort,
     private readonly organizations: OrganizationDetailsPort,
   ) {}
 
-  /** The channel and buyer every line of one cart is priced for, resolved once. */
+  /**
+   * The channel and buyer every line of one cart is priced for, resolved once.
+   * `salesChannelId` is the basket's channel; there is no fallback to the system
+   * default, so a basket is never priced for a store it is not used on. A
+   * channel that no longer exists prices nothing from a list, which leaves the
+   * Product's own price or "unpriced" — never another channel's list.
+   */
   async contextFor(
     em: EntityManager,
-    input: { organizationId: string | null; signedIn: boolean },
+    input: {
+      organizationId: string | null;
+      signedIn: boolean;
+      salesChannelId: string;
+      /** D-287 P0 — the customer whose own group to price on. */
+      customerAccountId?: string | null;
+    },
   ): Promise<CartPricingContext> {
     const channel = await em.findOne(
       SalesChannel,
-      { systemDefault: true },
+      { id: input.salesChannelId },
       { fields: ['id', 'defaultCurrency'] },
     );
     const organization = input.organizationId
@@ -91,50 +120,96 @@ export class CartLinePricing {
       organization,
       organizationId: input.organizationId,
       signedIn: input.signedIn,
+      customerAccountId: input.customerAccountId ?? null,
     };
   }
 
   async orderablePrice(ctx: CartPricingContext, line: CartLinePriceInput): Promise<CartLinePriceAnswer> {
-    const agreed = agreedUnitPriceFor(line.quantity, line.agreed ?? null);
-    if (agreed) return { ok: true, ...agreed, source: 'agreed' };
+    const answers = await this.orderablePrices(ctx, [{ ...line, key: 'line' }]);
+    return answers.get('line')!;
+  }
+
+  /**
+   * {@link orderablePrice} for many lines of one basket, keyed by the caller's
+   * `key`. The list prices of every line without an agreement come from one
+   * batched `resolveLinePrices` call (D-287 P0); the chain per line is
+   * unchanged.
+   */
+  async orderablePrices(
+    ctx: CartPricingContext,
+    lines: ReadonlyArray<CartLinePriceInput & { key: string }>,
+  ): Promise<Map<string, CartLinePriceAnswer>> {
+    const out = new Map<string, CartLinePriceAnswer>();
+    const toResolve: Array<CartLinePriceInput & { key: string }> = [];
+    for (const line of lines) {
+      const agreed = agreedUnitPriceFor(line.quantity, line.agreed ?? null);
+      if (agreed) out.set(line.key, { ok: true, ...agreed, source: 'agreed' });
+      else toResolve.push(line);
+    }
+    if (toResolve.length === 0) return out;
 
     // No `catch` (issue #84): `null` is the engine's own "no list applies", and
     // an absent `price_lists` throws `MODULE_DISABLED` through this call.
-    const resolved = ctx.channel
-      ? await this.pricingService.resolveLinePrice({
-          product: line.product,
-          variantId: line.variantId,
-          context: {
+    const resolved: Map<string, LinePriceResult | null> = ctx.channel
+      ? await this.pricingService.resolveLinePrices({
+          lines: toResolve.map((line) => ({
+            key: line.key,
+            product: line.product,
+            variantId: line.variantId,
             quantity: line.quantity,
+          })),
+          context: {
             ...(ctx.organization ? { organization: ctx.organization } : {}),
+            ...(ctx.organization && ctx.customerAccountId
+              ? { customerAccountId: ctx.customerAccountId }
+              : {}),
             salesChannel: ctx.channel,
           },
         })
-      : null;
-    // Issue #236 — the mode is read off the list price when there is one, and
-    // asked for on its own when there is not.
-    const displayMode =
-      resolved?.displayMode ??
-      (ctx.channel
-        ? await this.displayModes.resolveDisplayMode({
-            productId: line.product.id,
-            organizationId: ctx.organizationId,
-            salesChannelId: ctx.channel.id,
-            customerKind: ctx.signedIn ? 'signed_in' : 'guest',
-          })
-        : null);
-    if (displayMode === 'none') return { ok: false, reason: 'quote_only' };
-    if (resolved) {
-      return {
+      : new Map();
+
+    for (const line of toResolve) {
+      const price = resolved.get(line.key) ?? null;
+      // Issue #236 — the mode is read off the list price when there is one, and
+      // asked for on its own when there is not.
+      const displayMode =
+        price?.displayMode ??
+        (ctx.channel
+          ? await this.displayModes.resolveDisplayMode({
+              productId: line.product.id,
+              organizationId: ctx.organizationId,
+              salesChannelId: ctx.channel.id,
+              customerKind: ctx.signedIn ? 'signed_in' : 'guest',
+            })
+          : null);
+      if (displayMode === 'none') {
+        out.set(line.key, { ok: false, reason: 'quote_only' });
+        continue;
+      }
+      if (price) {
+        out.set(line.key, {
+          ok: true,
+          unitPrice: Number(price.amount).toFixed(2),
+          currency: price.currency,
+          source: 'price_list',
+        });
+        continue;
+      }
+      const own = productOwnUnitPrice(line.product.attributeValues);
+      // The attribute carries no currency; the basket channel's default is the
+      // only one it was ever entered in (D-287 P0 — it used to read `PLN`).
+      if (own === null || !ctx.channel) {
+        out.set(line.key, { ok: false, reason: 'unpriced' });
+        continue;
+      }
+      out.set(line.key, {
         ok: true,
-        unitPrice: Number(resolved.amount).toFixed(2),
-        currency: resolved.currency,
-        source: 'price_list',
-      };
+        unitPrice: own,
+        currency: ctx.channel.defaultCurrency.toUpperCase(),
+        source: 'product',
+      });
     }
-    const own = productOwnUnitPrice(line.product.attributeValues);
-    if (own === null) return { ok: false, reason: 'unpriced' };
-    return { ok: true, unitPrice: own, currency: OWN_PRICE_CURRENCY, source: 'product' };
+    return out;
   }
 }
 

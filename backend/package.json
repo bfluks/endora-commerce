@@ -118,6 +118,7 @@
     "@endora-commerce/email-components": "workspace:^",
     "@endora-commerce/mod-addresses": "workspace:*",
     "@endora-commerce/mod-admin-actions": "workspace:*",
+    "@endora-commerce/mod-admin-feedback": "workspace:*",
     "@endora-commerce/mod-admin-notifications": "workspace:*",
     "@endora-commerce/mod-admin-roles": "workspace:*",
     "@endora-commerce/mod-admin-search": "workspace:*",

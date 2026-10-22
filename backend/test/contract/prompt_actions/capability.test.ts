@@ -130,7 +130,11 @@ describe('US4 — capability and governance (T054)', () => {
   });
 
   it('the prompt-actions endpoints are exposed in the OpenAPI document (T060)', async () => {
-    const r = await h.app.inject({ method: 'GET', url: '/api/v1/_openapi.json' });
+    const r = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/_openapi.json',
+      cookies: { b2b_session: 'stub-admin-session' },
+    });
     expect(r.statusCode).toBe(200);
     const paths = Object.keys((r.json() as { paths: Record<string, unknown> }).paths);
     expect(paths).toContain('/api/v1/admin/prompt-actions/capability');

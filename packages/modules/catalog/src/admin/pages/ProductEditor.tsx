@@ -37,6 +37,7 @@ import { AdminZone, useAdminZone } from '@endora-commerce/admin-kit/zones';
 import type { AssetSummary, AssetDetail } from '@endora-commerce/contracts';
 import { ProductInventoryTab } from '../components/ProductInventoryTab.js';
 import { PackagingUnitsEditor } from '../components/PackagingUnitsEditor.js';
+import { ProductOrderRulesCard } from '../components/ProductOrderRulesCard.js';
 import { ProductAttributesTab } from '../components/ProductAttributesTab.js';
 import {
   ProductScopeEditor,
@@ -795,6 +796,8 @@ export function ProductEditor(): ReactNode {
           {activeTab === 'inventory' && id ? (
             <div className="b2b-col" style={{ gap: 16 }}>
               <ProductInventoryTab productId={id} />
+              {/* Feature 155 — returnable for every type; the minimum gates itself (D5). */}
+              <ProductOrderRulesCard productId={id} productType={type} />
               {type === 'simple' || type === 'configurable' ? (
                 <PackagingUnitsEditor productId={id} />
               ) : null}

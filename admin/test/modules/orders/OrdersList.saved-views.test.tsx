@@ -122,6 +122,7 @@ beforeEach(() => {
       return { data: { statuses: [{ code: 'new', name: { en: 'New' } }, { code: 'pending', name: { en: 'Pending' } }] } };
     }
     if (path.startsWith(ENDPOINT)) return { data: VIEWS };
+    if (path.startsWith('/api/v1/admin/orders/custom-field-filters')) return { data: [] };
     if (path.startsWith('/api/v1/admin/orders')) {
       return { data: [row('o1', 'ORD-1')], pagination: { page: 1, pageSize: 20, total: 1 }, counts: { new: 1 } };
     }

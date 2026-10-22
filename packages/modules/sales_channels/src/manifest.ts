@@ -160,6 +160,11 @@ export const manifest = defineModuleManifest({
     { code: 'SALES_CHANNEL_ATTRIBUTION_IMMUTABLE' },
     { code: 'SALES_CHANNEL_CODE_IMMUTABLE' },
     { code: 'SALES_CHANNEL_HAS_ATTRIBUTIONS' },
+    // Feature 154 — the two refusals of the access rule. Raised by the kernel's
+    // access step and by the customer sign-in paths; owned here by the domain
+    // noun, as `INACTIVE_SALES_CHANNEL` is for the same platform thrower.
+    { code: 'SALES_CHANNEL_NOT_PERMITTED' },
+    { code: 'SALES_CHANNEL_SIGN_IN_REQUIRED' },
     { code: 'STALE_SALES_CHANNEL_WRITE' },
     { code: 'UNKNOWN_CURRENCY_CODE' },
     { code: 'UNKNOWN_LANGUAGE_CODE' },

@@ -107,7 +107,13 @@ describe('permissionless admin routes, at runtime (issue #141)', () => {
   });
 
   it('every mounted admin route is known to the static reader, and only listed ones answer without a permission', async () => {
-    const document = (await h.app.inject({ method: 'GET', url: '/api/v1/_openapi.json' })).json() as {
+    const document = (
+      await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/_openapi.json',
+        cookies: { b2b_session: 'stub-admin-session' },
+      })
+    ).json() as {
       paths: Record<string, Record<string, unknown>>;
     };
     const mounted: Array<{ key: string; method: string; url: string }> = [];

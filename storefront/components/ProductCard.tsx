@@ -2,12 +2,13 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { ProductSummary, StorefrontProductStock } from '@endora-commerce/contracts';
 import { tForLocale } from '../lib/i18n/messages';
+import { cardAddToCartLabel } from '../lib/orderMinimum';
 import { DEFAULT_VAT_RATE, grossFromNet } from '../lib/i18n/money';
 import { CompareToggle } from './CompareToggle';
 import { BaseSalePriceBlock } from './pricing/BaseSalePriceBlock';
 import { QuoteRequestCta } from './pricing/QuoteRequestCta';
 import { ProductCardActions } from './ProductCardActions';
-import type { ResolvedPrice } from '../lib/api/pricing';
+import type { PriceDisplay } from '../lib/api/pricing';
 import { toAbsoluteAssetUrl } from '../lib/asset-url';
 import { publicApiBaseUrl } from '../lib/env.mjs';
 
@@ -47,13 +48,18 @@ export function ProductCard(props: {
   stock?: StorefrontProductStock | null;
   /** Optional feature-011 resolver payload — when present it drives
    *  the price block, sale treatment, and display-mode handling. */
-  resolved?: ResolvedPrice | null;
+  resolved?: PriceDisplay | null;
   /**
    * Fractional VAT rate used to derive gross from net; defaults to the
    * deployment assumption in `lib/i18n/money` (issue #132). The card used to
    * bake its own `1.23` literal here.
    */
   vatRate?: number;
+  /**
+   * The active sales channel. The card's compare toggle and action buttons call
+   * the backend from the browser, where no request header carries it.
+   */
+  salesChannelCode: string | undefined;
 }): ReactNode {
   const { product, locale, stock, resolved, vatRate = DEFAULT_VAT_RATE } = props;
   const t = tForLocale(locale);
@@ -96,7 +102,7 @@ export function ProductCard(props: {
           />
         )}
       </Link>
-      <CompareToggle productId={product.id} />
+      <CompareToggle productId={product.id} salesChannelCode={props.salesChannelCode} />
       {resolved && resolved.salePrice ? (
         <span className="industria-badge industria-badge--sale" aria-label={t('product.requestQuote')}>
           Promocja
@@ -118,11 +124,15 @@ export function ProductCard(props: {
         </div>
         <ProductCardActions
           apiBase={CARD_API_BASE}
+          salesChannelCode={props.salesChannelCode}
           productId={product.id}
           productSlug={product.slug}
           productName={product.name}
           unitPrice={product.price ?? null}
           buyable={resolved ? resolved.displayMode !== 'none' : product.price != null}
+          minOrderQuantity={product.minOrderQuantity ?? null}
+          addToCartMinimumLabel={cardAddToCartLabel(product.minOrderQuantity, locale)}
+          locale={locale}
         />
       </div>
     </article>
@@ -132,7 +142,7 @@ export function ProductCard(props: {
 function renderPriceSlot(args: {
   product: ProductSummary;
   locale: string;
-  resolved: ResolvedPrice | null | undefined;
+  resolved: PriceDisplay | null | undefined;
   t: ReturnType<typeof tForLocale>;
   vatRate: number;
 }): ReactNode {

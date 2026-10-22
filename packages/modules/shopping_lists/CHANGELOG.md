@@ -1,5 +1,51 @@
 # @endora-commerce/mod-shopping-lists
 
+## 0.107.0
+
+### Patch Changes
+
+- 34f97ae: Callers of the cart ports name the basket's sales channel (`specs/154-sales-channel-access/`):
+  quick-order builds and one-click buy fill the basket of the request's channel (one-click now
+  always places on that channel), converting an approved quote request seeds the basket of the
+  request's channel (`RfqService.convertToOrder` takes the channel), and converting a shopping list
+  fills the basket of the request's channel (`ShoppingListService.convertToCart` takes the channel
+  as its fourth argument).
+- Updated dependencies [fcf4d09]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

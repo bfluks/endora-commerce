@@ -75,6 +75,14 @@ const RECORDED_ANONYMOUS_LISTING_ENTRY = {
   price: { amount: 88, currency: 'PLN' },
   stockIndicator: null,
   stockLevel: null,
+  // Feature 155 — the pieces minimum, `null` for none.
+  minOrderQuantity: null,
+  // D-287 P0 — the split behind `price`, from the same resolution.
+  resolvedPrice: {
+    basePrice: { amount: '88.0000', currency: 'PLN' },
+    salePrice: null,
+    displayMode: 'gross_only',
+  },
 };
 
 /**
@@ -94,6 +102,9 @@ const RECORDED_ANONYMOUS_SOURCE_ENTRY = {
   price: null,
   stockIndicator: null,
   stockLevel: null,
+  minOrderQuantity: null,
+  // Nothing prices it; the display mode is still the viewer's.
+  resolvedPrice: { basePrice: null, salePrice: null, displayMode: 'gross_only' },
 };
 
 describe('a catalogue listing is priced for the viewer', () => {

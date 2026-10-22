@@ -74,4 +74,18 @@ describe('PricingCache', () => {
     expect(cache.get({ ...baseKey, productId: 'a' })).toBe(1);
     expect(cache.get({ ...baseKey, productId: 'c' })).toBe(3);
   });
+
+  it('refuses a fill that began before an invalidation (the stale re-cache race)', () => {
+    const cache = new PricingCache<string>();
+    // A resolution reads the generation, then the database; a write commits
+    // and invalidates while it is still reading. Storing its answer would pin
+    // the pre-write price for a whole TTL.
+    const before = cache.generation;
+    cache.invalidateAll();
+    cache.set(baseKey, 'stale', before);
+    expect(cache.get(baseKey)).toBeUndefined();
+    // A fill that began after the invalidation is stored.
+    cache.set(baseKey, 'fresh', cache.generation);
+    expect(cache.get(baseKey)).toBe('fresh');
+  });
 });

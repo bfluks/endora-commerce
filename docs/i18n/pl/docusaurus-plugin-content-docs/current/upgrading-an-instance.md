@@ -106,7 +106,8 @@ w ostrzeżeniu i uruchom `pnpm install`.
 
 Aktualizacja przesuwa pakiety, które Twoja instancja już deklaruje. Moduł, który pojawia się
 w wydaniu po raz pierwszy, do nich nie należy, więc po aktualizacji nie jest ani zainstalowany,
-ani widoczny na ekranie **Modules**. Żeby go mieć, zadeklaruj jego pakiet w głównym
+ani widoczny na ekranie **Modules** — chyba że wymaga go moduł zainstalowany w instancji: wtedy
+pierwszy krok `setup`, `endora generate`, sam go deklaruje i instaluje. Żeby mieć każdy inny, zadeklaruj jego pakiet w głównym
 `package.json` i uruchom `setup` — w katalogu głównym instancji:
 
 ```bash
@@ -1664,6 +1665,731 @@ sekcji żadna instancja nie została zaktualizowana z `0.105.0` poleceniem
 `pnpm run upgrade 0.106.0` i w żadnym storefroncie utworzonym we wcześniejszym wydaniu nie
 wprowadzono trzech powyższych grup plików; kolejność kroków, wiersz dla proxy i zmiany w
 storefroncie nie były wypróbowane.
+
+### Po aktualizacji do wydania 0.107.0 {#after-0-107-0}
+
+`pnpm run upgrade 0.107.0` przenosi pakiety wydania z `0.106.0` i wykonuje jego migracje — piętnaście,
+w tym jedną należącą do nowego modułu szablonów dokumentów. Wydanie przynosi trzy pakiety, których
+wcześniej nie było — `@endora-commerce/mod-document-templates`, `@endora-commerce/mod-admin-search`
+i `@endora-commerce/llm-client` — i **jeden z nich nie jest opcjonalny**: instancja, która
+deklaruje `@endora-commerce/mod-invoices`, potrzebuje także
+`@endora-commerce/mod-document-templates`, a krok `setup` aktualizacji sam go deklaruje i instaluje. Wydanie nie dodaje żadnej zmiennej środowiskowej. Dodaje
+pięć uprawnień (`platform.api_description.read`, `document_templates:read`,
+`document_templates:write`, `admin_search:configure` i `cms.translate`) i przenosi uprawnienia
+importu i eksportu do modułów, do których należą dane.
+
+Najwięcej zmienia się w tym, kto może korzystać z kanału sprzedaży. Każdy kanał ma teraz
+przełącznik *Open to anonymous visitors*, który po aktualizacji jest włączony, a zalogowany klient
+jest obsługiwany w kanale tylko wtedy, gdy jego organizacja jest do tego kanału przypisana.
+Migracja danych tworzy te przypisania dla istniejących organizacji, więc nic się nie zmienia dla
+klienta, który składał zamówienia tam, gdzie kupuje — ale przypisania warto przejrzeć, zanim
+instancja znów przyjmie ruch. Koszyki należą do kanału, w którym zostały napełnione, złożenie
+zamówienia sprawdza ceny koszyka, opis API nie jest już publiczny, a kilka ekranów i odpowiedzi się
+zmienia. Ta sekcja mówi, co zrobić i w jakiej kolejności, a potem — co działa inaczej, osobno dla
+każdego czytelnika: [operatorów](#after-0-107-0-operators),
+[klientów API i integratorów](#after-0-107-0-api),
+[autorów modułów i modułów nakładkowych](#after-0-107-0-authors) oraz właściciela
+[istniejącego storefrontu](#after-0-107-0-storefront).
+
+#### Co zrobić i w jakiej kolejności {#after-0-107-0-steps}
+
+Przed aktualizacją:
+
+1. **Jeśli projektowano szablony faktur, zapisz, co zawierają.** Szablony faktur przeniesiono do
+   nowego modułu *Document templates* i nic nie jest przenoszone automatycznie:
+   `Migration20261017T075839InvoicesDropInvoiceTemplates` usuwa tabelę `invoice_templates`, a PDF-y
+   faktur — zarówno pobierane, jak i dołączane do e-maili — używają wbudowanego układu typu
+   dokumentu faktury (dawnego szablonu ogólnego), dopóki operator nie ustawi szablonu faktury jako
+   domyślnego w **Document templates**. Cofnięcie migracji odtwarza pustą tabelę, nie jej wiersze;
+   jedyną kopią jest kopia zapasowa bazy danych.
+2. **Odczytaj `assets.soft_delete_retention_days`** — *Soft-delete retention before hard-delete
+   (days)* w grupie *Storage* w **Ustawieniach**, domyślnie 30. Od tego wydania zasoby przeniesione
+   do kosza są trwale usuwane przez cogodzinne zadanie, gdy od ich usunięcia minie tyle dni, a
+   **pierwsze uruchomienia po aktualizacji usuwają każdy zasób, który leży w koszu dłużej**, do 500
+   na uruchomienie. Jeśli chcesz te zasoby zachować, wydłuż to ustawienie przed aktualizacją.
+   Wartość mniejsza niż jeden jest odczytywana jako jeden dzień.
+3. **W instancji z więcej niż jednym kanałem sprzedaży odczytaj `quote_requests.expiry_days`** —
+   *Auto-expire pending after (days)* na karcie Quote Requests w **Ustawieniach** — dla każdego
+   kanału, który ma własną wartość. Zadanie wygaszania trzyma się teraz wartości kanału danego
+   zapytania ofertowego, podczas gdy wcześniej stosowało wartość kanału domyślnego do wszystkich:
+   przy pierwszych uruchomieniach kanał z niższą wartością niż domyślna wygasza zaległe zapytania,
+   które były nieaktywne tak długo, a kanał ustawiony na `0` przestaje wygaszać.
+
+Sama aktualizacja:
+
+4. **Uruchom `pnpm run upgrade 0.107.0`.** `invoices` wymienia teraz `document_templates` wśród
+   `dependencies` w swoim manifeście i **jeśli instancja deklaruje `@endora-commerce/mod-invoices`**,
+   krok `setup` aktualizacji dodaje `@endora-commerce/mod-document-templates` do głównego
+   `package.json`, w wersji, w której zadeklarowana jest platforma, i instaluje go przed
+   czymkolwiek innym. Jego pierwszy krok, `endora generate`, pochodzi już z właśnie
+   zainstalowanego wydania i wypisuje wiersz:
+
+   ```text
+   declared @endora-commerce/mod-document-templates 0.107.0 in package.json — invoices needs document_templates (dependencies)
+   ```
+
+   Zatwierdź zmienione `package.json` i `pnpm-lock.yaml` razem z resztą aktualizacji. Jeśli krok
+   `setup` się nie zakończył, uruchom `pnpm run setup` ponownie — kontynuuje od tego miejsca.
+   Ręcznie musi go zadeklarować tylko instancja, w której `setup` pominięto albo która nie
+   uruchamia `generate`:
+
+   ```bash
+   pnpm add -w -E @endora-commerce/mod-document-templates@0.107.0
+   pnpm run setup
+   ```
+
+   Bez tego modułu wdrożenie, które składa `invoices`, odmawia uruchomienia i go wymienia:
+
+   ```text
+   This deployment will not boot: it composes modules whose declarations it does not satisfy.
+
+     document_templates — not shipped by this deployment, and it is needed:
+         invoices — dependencies
+   ```
+
+   Reszta opisu [Dodawanie modułu, który jest nowy w wydaniu](#adding-a-new-module) obowiązuje —
+   flagi i to, co uruchomić ponownie. *Document templates* startuje włączony i nie da się go
+   wyłączyć, dopóki włączony jest `invoices`. Pozostałe zależności dodane w wydaniu — `quote_requests`
+   od `price_lists` i `transactional_emails`, `invoices` i `api_keys` od `admin_roles`,
+   `assets_library` od `admin_users` — wskazują moduły, których nie da się wyłączyć i które każda
+   instancja już deklaruje, więc nie wymagają niczego.
+
+   Migracje, które wykonuje `setup`, w kolejności ich znaczników czasu:
+
+   | Migracja | Moduł | Co robi |
+   | --- | --- | --- |
+   | `Migration20261014T115049QuoteRequestsItemReferencePrice` | `quote_requests` | Trzy kolumny dopuszczające `null` w `quote_request_items` na cenę referencyjną |
+   | `Migration20261014T115053QuoteRequestsNegotiationPolicies` | `quote_requests` | Dwie tabele, `quote_request_org_policies` i `quote_request_account_policies` |
+   | `Migration20261014T170531CatalogProductListSavedViews` | `catalog` | Tabela `product_list_saved_views` |
+   | `Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews` | `quote_requests` | Tabela `quote_request_list_saved_views` |
+   | `Migration20261016T131148PriceListsPriceMatrixEntries` | `price_lists` | Tabela `price_list_matrix_entries` |
+   | `Migration20261016T172243PwaPushNotificationPreferences` | `pwa` | Tabela `push_notification_preferences` |
+   | `Migration20261017T071754DocumentTemplatesInit` | `document_templates` | Tabela `document_templates`, gdy moduł zostanie zadeklarowany |
+   | `Migration20261017T075839InvoicesDropInvoiceTemplates` | `invoices` | Usuwa `invoice_templates` — zob. krok 1 |
+   | `Migration20261017T142116QuoteRequestsQuoteRequestDocumentTemplate` | `quote_requests` | Kolumna `quote_requests.document_template_id` dopuszczająca `null` |
+   | `Migration20261017T142121QuoteRequestsQuoteRequestEventPdfSent` | `quote_requests` | Dopuszcza typ zdarzenia `pdf-sent` |
+   | `Migration20261018T074021CartsCartItemAgreedPrice` | `carts` | Trzy kolumny dopuszczające `null` w `cart_items` na uzgodnioną ilość i cenę z oferty |
+   | `Migration20261018T101912CoreSalesChannelsAnonymousAccess` | platforma | `sales_channels.anonymous_access boolean not null default true` |
+   | `Migration20261018T104644OrganizationsChannelAccessBackfill` | `organizations` | Przypisuje każdej organizacji jej kanały sprzedaży — zob. krok 7 |
+   | `Migration20261018T141739AssetsLibraryAssetVersionsPermalinks` | `assets_library` | Jedenaście kolumn w `assets`, dwie tabele na stałe linki i sprzątanie magazynu |
+   | `Migration20261019T043854CartsChannelBackfill` | `carts` | Zapisuje koszyk bez kanału w domyślnym kanale systemowym |
+
+   Instancja, która deklaruje `@endora-commerce/mod-admin-search`, nie wykonuje dla niego żadnej
+   migracji: moduł nie ma własnych tabel.
+
+Po aktualizacji, zanim instancja znów przyjmie ruch:
+
+5. **Nadaj ponownie uprawnienia do importu i eksportu.** Każda encja na ekranie Import / Export
+   wymaga teraz uprawnienia, które chroni te same wiersze w module, do którego należą, podczas gdy
+   wcześniej każda encja wymagała `catalog:write`:
+
+   | Encja | Eksport | Import |
+   | --- | --- | --- |
+   | `products`, `categories` | `catalog:read` | `catalog:write` |
+   | `stock` | `inventory:read` | `inventory:write` |
+   | `customers` | `customers:read` | — |
+   | `orders` | `orders:read` | — |
+
+   Rola, która eksportowała klientów, zamówienia lub stany magazynowe albo importowała stany na
+   podstawie `catalog:write`, potrzebuje `customers:read`, `orders:read`, `inventory:read` lub
+   `inventory:write` nadanych w **Admin roles** (`/admin-roles`). Rola z `catalog:read` może teraz
+   eksportować produkty i kategorie. Ekran i jego pozycja w menu bocznym otwierają się dla roli z
+   którymkolwiek kodem z tabeli, a karta każdej encji pokazuje tylko te kontrolki, na które rola
+   pozwala.
+6. **Nadaj `platform.api_description.read` tym, którzy czytają opis API.**
+   `GET /api/v1/_openapi.json` i `GET /api/v1/_docs` odpowiadają tylko administratorowi, którego
+   rola ma ten kod, albo kluczowi API wydanemu z tym kodem w zakresach; wszyscy inni dostają `401`
+   (brak sesji administratora i klucza) albo `403` (sesja lub klucz bez kodu). Rola administratora
+   platformy ma wszystkie uprawnienia i nie wymaga niczego. Skrypt lub proces budowania, który pobiera
+   dokument — generator klienta, test kontraktu — potrzebuje klucza API z zakresem
+   `platform.api_description.read`, wydanego przez administratora, który ma ten kod, i wysyła go tak
+   jak każdy klucz. W panelu administracyjnym dokument jest na nowym ekranie
+   **System → API description**.
+7. **Przejrzyj przypisania organizacji do kanałów sprzedaży i nie zamykaj żadnego kanału, dopóki
+   storefront nie zostanie zaktualizowany.** Po aktualizacji każdy kanał jest otwarty dla
+   niezalogowanych odwiedzających, tak jak każdy kanał był wcześniej, a zalogowany klient jest
+   obsługiwany w kanale tylko wtedy, gdy jego organizacja jest do tego kanału przypisana. Migracja
+   `Migration20261018T104644OrganizationsChannelAccessBackfill` przypisała każdej organizacji
+   domyślny kanał systemowy oraz każdy kanał, w którym ma co najmniej jedno zamówienie. W instancji
+   z jednym kanałem sprzedaży obejmuje to wszystkich i nic się nie zmienia. W instancji z kilkoma
+   kanałami **organizacja, której klienci korzystają z innego kanału, nie składając w nim
+   zamówienia** — zarejestrowana w drugim sklepie i bez zamówień albo wysyłająca tam tylko zapytania
+   ofertowe — dostaje teraz w tym kanale odmowę przy logowaniu, z komunikatem *„To konto nie ma
+   dostępu do tego sklepu.”* Otwórz każdą taką organizację w panelu administracyjnym i zaznacz kanał
+   w jej panelu **Kanały sprzedaży**. Potem zdecyduj dla każdego kanału, czy pozostaje otwarty dla
+   niezalogowanych odwiedzających — [Kanały sprzedaży i to, kto może z nich korzystać](#after-0-107-0-channel-access)
+   mówi, co oznacza każdy wybór — ale **wyłączaj *Open to anonymous visitors* dopiero wtedy, gdy
+   storefront ma pliki z części [W istniejącym storefroncie](#after-0-107-0-storefront)**, a w
+   domyślnym kanale systemowym dopiero wtedy, gdy wiesz, jak docierają wywołania zwrotne płatności i
+   przewoźników z modułów spoza wydania.
+8. **W storefroncie, który obsługuje więcej niż jeden kanał sprzedaży przez nagłówek
+   `X-Sales-Channel`**, a nie przez `SALES_CHANNEL_HOST_MAP`, zaktualizuj storefront, zanim klienci
+   znów zaczną napełniać koszyki. Koszyk należy teraz do kanału, w którym jest napełniany, a storefront
+   utworzony we wcześniejszym wydaniu wskazuje kanał tylko w tych wywołaniach backendu, które
+   przekazują go jawnie; każde inne wywołanie backend przypisuje sam — według mapy hostów, a bez niej
+   do domyślnego kanału systemowego. Do tego wydania nie miało to znaczenia dla koszyka, który
+   istniał w kanale domyślnym bez względu na sklep. Od teraz koszyk kanału domyślnego i koszyk
+   sklepu to dwa różne koszyki.
+9. **Sprawdź, kto może nadawać jakie uprawnienia.** Administrator nadaje teraz tylko uprawnienia,
+   które ma jego własna rola — w roli, w roli konta administratora, w zakresach klucza API — a rolę
+   tworzoną przez platformę lub moduł, w tym `platform_admin`, może zmienić tylko posiadacz
+   uprawnienia wieloznacznego `*`. Jeśli administrator z delegowanymi uprawnieniami zarządza rolami,
+   użytkownikami lub kluczami API dla innych, nadaj jego roli uprawnienia, które on rozdaje, albo
+   zostaw te zmiany posiadaczowi `*`.
+
+W dowolnym momencie:
+
+10. **Zdecyduj o powiadomieniach push dla ofert.** W sklepie z włączonymi powiadomieniami push
+    zapytania ofertowe teraz je wysyłają: gdy administrator tworzy zapytanie dla klienta, modyfikuje,
+    zatwierdza lub anuluje je i gdy zapytanie wygasa. Wcześniej nie wysyłały ich nigdy, choć
+    przełącznik istniał. Jeśli ich nie chcesz, wyłącz tę kategorię ustawieniem
+    `pwa.push_quote_status_enabled` na ekranie PWA.
+11. **Zainstaluj `@endora-commerce/mod-admin-search`, jeśli paleta poleceń ma znajdować rekordy** —
+    zamówienia, zapytania ofertowe, szanse sprzedaży, organizacje, klientów, produkty i kategorie.
+    Moduł jest opcjonalny; bez niego paleta znajduje ekrany i akcje jak dotąd. Zadeklaruj go tak, jak
+    opisuje [Dodawanie modułu, który jest nowy w wydaniu](#adding-a-new-module); startuje włączony.
+12. **Zbuduj własne moduły ponownie z tym wydaniem.** Kod, który implementuje lub konstruuje któryś z
+    portów i kształtów wymienionych w części
+    [Dla autorów modułów i modułów nakładkowych](#after-0-107-0-authors), nie skompiluje się, dopóki
+    nie zostanie zmieniony, a moduł, który odbiera wywołanie zwrotne dostawcy, ma deklarację do
+    dodania.
+13. **Zaktualizuj storefront** zgodnie z częścią [W istniejącym storefroncie](#after-0-107-0-storefront).
+    Bez tego zamówienie, strona produktu i logowanie działają jak wcześniej; zamknięte sklepy, ekran
+    braku dostępu, wybór powiadomień push, blokada negocjacji cen i język PDF-a porównania — nie.
+
+#### Dla operatorów {#after-0-107-0-operators}
+
+##### Kanały sprzedaży i to, kto może z nich korzystać {#after-0-107-0-channel-access}
+
+**Każdy kanał sprzedaży ma przełącznik *Open to anonymous visitors*** w formularzu kanału w
+**Sales channels**. Jest włączony w każdym istniejącym kanale i w każdym nowym.
+
+- **Włączony** — każdy może przeglądać sklep; zalogowany klient może z niego korzystać, gdy jego
+  organizacja jest przypisana do kanału.
+- **Wyłączony** — sklep obsługuje wyłącznie zalogowanych klientów. Zaktualizowany storefront z każdej
+  strony kieruje niezalogowanego odwiedzającego na stronę logowania z komunikatem, że sklep jest dla
+  zalogowanych klientów biznesowych; nie dostaje on niczego z katalogu, cen ani treści, mapa strony
+  sklepu jest pusta, jego `robots.txt` zabrania wszystkiego i nie wskazuje mapy strony, a jego
+  `llms.txt` podaje nazwę sklepu i mówi, że treść jest tylko dla zalogowanych klientów. Rejestracja
+  firmy pozostaje na stronie logowania, a zarejestrowana tam organizacja otrzymuje ten kanał — więc
+  przy automatycznej moderacji wchodzi każdy, kto zarejestruje firmę, a przy ręcznej nikt, dopóki
+  operator nie zatwierdzi organizacji. Samodzielna rejestracja klienta indywidualnego (B2C) nie jest
+  oferowana, a logowanie przez zewnętrznego dostawcę (Google, Microsoft) nie tworzy tam nowego konta.
+  Lista kanałów oznacza zamknięty kanał etykietą *Sign-in required*. Pokazywanie cen niezalogowanym
+  odwiedzającym to osobne ustawienie i ma znaczenie tylko w sklepie otwartym.
+
+Backend stosuje regułę do każdego żądania spoza `/api/v1/admin/`, gdy jego kanał zostanie wyznaczony:
+żądanie anonimowe w zamkniętym kanale dostaje `403 SALES_CHANNEL_SIGN_IN_REQUIRED`, a żądanie
+klienta — także administratora działającego jako klient — w kanale, do którego jego organizacja nie
+jest przypisana, `403 SALES_CHANNEL_NOT_PERMITTED`. Reguła nie dotyczy administratorów ani kluczy
+API. Kilka tras jest osiągalnych w każdym aktywnym kanale, bo wywołujący musi do nich dotrzeć, aby
+zostać klientem sklepu, albo nim nie jest: logowanie i wylogowanie, drugi składnik i logowanie przez
+zewnętrznego dostawcę, reset hasła, weryfikacja e-maila, rejestracja firmy, zaproszenia, tożsamość
+kanału, konfiguracja języków, słowniki czytane przez formularz rejestracji, polityka robotów i pliki
+dla robotów, pobieranie plików produktowych i linki newslettera w e-mailach.
+
+**To, które organizacje mogą korzystać z kanału, ustawia się w organizacji**, w nowym panelu
+**Kanały sprzedaży** na jej stronie: odczyt z `customers:read` lub `customers:manage`, zmiana z
+`customers:manage`. Organizacja zachowuje co najmniej jeden kanał. Każdy dodany lub usunięty kanał to
+jeden wiersz w dzienniku audytu, a zmiana obowiązuje od razu na serwerze, który ją wprowadził, i na
+każdym innym w ciągu 30 sekund. Klient, którego organizacja nie jest przypisana, dostaje odmowę przy
+logowaniu — hasłem, drugim składnikiem lub przez zewnętrznego dostawcę — zanim powstanie sesja;
+klient, któremu przypisanie usunięto w trakcie sesji, widzi w zaktualizowanym storefroncie ekran
+*Brak dostępu do tego sklepu* z listą sklepów, z których może korzystać, każdy jako link, gdy
+ustawienie **Storefront URL** kanału jest wypełnione.
+
+**Jaki kanał dostaje nowa organizacja.** Firma zarejestrowana w sklepie dostaje kanał tego sklepu;
+organizacja osobista utworzona przy rejestracji klienta indywidualnego lub logowaniu przez
+zewnętrznego dostawcę dostaje kanał, w którym odwiedzający się zarejestrował; organizacja utworzona w
+panelu administracyjnym dostaje kanały wybrane w formularzu; każda inna ścieżka tworzenia daje
+domyślny kanał systemowy. Przyjęcie zaproszenia nie zmienia żadnego przypisania. **New
+organization** (`/organizations/new`, przycisk na liście organizacji i akcja palety
+`new-organization`, `customers:manage`) tworzy organizację w panelu administracyjnym — zduplikowany
+NIP jest odrzucany, tak jak przy rejestracji.
+
+**Zanim zamkniesz domyślny kanał systemowy**, dowiedz się, gdzie docierają wywołania zwrotne
+dostawców. Powiadomienie bramki płatności, webhook przewoźnika czy adres powrotu od dostawcy
+przychodzą bez sesji i zwykle bez kanału, więc są żądaniem anonimowym w domyślnym kanale
+systemowym: jeśli moduł, który je odbiera, nie zadeklaruje trasy jako otwartej, po zamknięciu tego
+kanału dostają `403`, a powiadomienia dostawcy przestają docierać. `POST /api/v1/payments/receive` i
+`POST /api/v1/shipments/receive` są wywoływane z sesją administratora lub kluczem API, których
+reguła nie dotyczy; moduł bramki lub przewoźnika, który odbiera żądanie samego dostawcy, musi
+zadeklarować tę trasę, jak opisuje część
+[Dla autorów modułów i modułów nakładkowych](#after-0-107-0-authors).
+
+Zobacz [Otwieranie i zamykanie sklepu dla niezalogowanych odwiedzających](./modules/sales_channels/admin-usage.md#anonymous-access)
+oraz [Kanały sprzedaży](./modules/organizations.md#kanały-sprzedaży) na stronie modułu organizacji.
+
+##### Koszyki, ceny i składanie zamówień
+
+**Koszyk należy do sklepu, w którym jest napełniany.** Klient ma jeden aktywny koszyk na kanał
+sprzedaży, wyceniany, objęty promocjami i sprawdzany pod kątem „tylko na zapytanie” w tym kanale,
+podczas gdy wcześniej każdy koszyk był tworzony i wyceniany w domyślnym kanale systemowym. Token
+koszyka niezalogowanego odwiedzającego wskazuje koszyk tylko w jednym sklepie, a napełnianie koszyka
+w innym sklepie zaczyna nowy. Łączenie przy logowaniu łączy tylko koszyk anonimowy ze sklepu, w
+którym klient się loguje. Złożenie zamówienia z koszykiem innego kanału jest odrzucane z
+`422 ORDER_SALES_CHANNEL_MISMATCH`, zanim cokolwiek zostanie zarezerwowane lub zapisane, a koszyk
+zostaje zachowany. Migracja `Migration20261019T043854CartsChannelBackfill` zapisała każdy koszyk bez
+kanału w domyślnym kanale systemowym; jeśli klient miał już tam aktywny koszyk, koszyk bez kanału
+pozostaje bez zmian i nie jest już osiągalny. Zobacz
+[Jeden koszyk na sklep](./modules/carts.md#jeden-koszyk-na-sklep).
+
+**Cena pozycji koszyka jest zawsze ceną dla jej bieżącej ilości**, a złożenie zamówienia to
+sprawdza:
+
+- dodanie kolejnych sztuk produktu, zmiana ilości, łączenie koszyka przy logowaniu i ponowne
+  zamówienie zapisują cenę dla ilości wynikowej, więc próg ilościowy dotyczy zamawianej ilości, a
+  ponowne zamówienie jest wyceniane według dzisiejszych cen;
+- produkt, któremu cenę nadaje ani cennik, ani jego własna cena, jest odrzucany z
+  `422 CART_PRODUCT_UNPRICED`, podczas gdy wcześniej był dodawany po `0.00`; produkt sprzedawany
+  tylko na zapytanie jest odrzucany z `400 CART_PRODUCT_QUOTE_ONLY` niezależnie od tego, czy jest w
+  cenniku;
+- pozycja utworzona z zaakceptowanego zapytania ofertowego zachowuje uzgodnioną cenę tylko przy
+  uzgodnionej ilości, a przy każdej innej jest wyceniana z cennika. Koszyk przekształcony z oferty
+  **przed** tym wydaniem nie ma uzgodnionej ilości, więc jego pozycje są przy składaniu zamówienia
+  wyceniane z cennika; ponowne przekształcenie oferty przywraca uzgodnione ceny;
+- przy składaniu zamówienia pozycja, której zapisana cena nie jest już ceną, po jakiej można ją
+  zamówić, daje `409 CART_PRICE_CHANGED`. Nic nie jest zapisywane, koszyk jest aktualizowany, a
+  kupujący składa zamówienie ponownie po jego przejrzeniu. Istniejący storefront pokazuje tę odmowę
+  na stronie błędu zamówienia z kodem błędu przed zdaniem; zaktualizowany pokazuje samo zdanie.
+
+Zobacz [Ceny pozycji](./modules/carts.md#ceny-pozycji).
+
+**Tworzenie zamówienia w panelu administracyjnym używa wybranego kanału.**
+`POST /api/v1/admin/orders` sprawdza produkty względem asortymentu kanału zamówienia, a nie żądania
+administratora, i odrzuca nieistniejący kanał sprzedaży z `404`, podczas gdy wcześniej składał
+zamówienie w domyślnym kanale systemowym. Ekran **Create order** pokazuje *Items* i podsumowanie po
+wybraniu klienta i kanału, dodaje produkty przez wspólną przeglądarkę produktów (do 200 naraz) lub
+szybkie wyszukiwanie i mówi przy każdej pozycji, dlaczego produktu nie można zamówić: klient go nie
+widzi albo nie ma go w asortymencie kanału. Podgląd zamówienia również odrzuca nieznany kanał z
+`404`.
+
+##### Uprawnienia i to, kto może je nadawać
+
+- **Import i eksport** podlegają uprawnieniom modułów, do których należą dane — tabela jest w kroku 5.
+- **Opis API** odczytuje się z `platform.api_description.read` — krok 6. Nowy ekran
+  **System → API description** (`/api-description`, dostępny też w palecie poleceń) pokazuje tytuł,
+  wersję i liczbę punktów końcowych dokumentu, pobiera go jako JSON i otwiera interaktywną dokumentację
+  pod własnym adresem API. Strona dokumentacji ładuje z jsDelivr przypiętą wersję `swagger-ui-dist`,
+  `5.33.3`, z sumą integralności dla każdego pliku, podczas gdy wcześniej ładowała wersję aktualną
+  w danej chwili.
+- **Administrator nadaje tylko to, co ma jego rola.** Zapisanie roli z uprawnieniem, którego
+  wykonujący nie ma, albo zmiana roli, która już je ma, daje `403 ADMIN_ROLE_GRANT_EXCEEDED` z
+  listą kodów; rolę tworzoną przez platformę lub moduł zmienia tylko posiadacz `*` (w przeciwnym
+  razie `409 ADMIN_ROLE_PROTECTED`). Przypisanie roli daje `403 ADMIN_ROLE_GRANT_EXCEEDED`, jeśli
+  wykonujący nie ma każdego uprawnienia, które ona nadaje, a administratora, którego rola ma coś,
+  czego wykonujący nie ma, ten nie może edytować, ustawić mu hasła, dezaktywować ani usunąć
+  (`403 ADMIN_USER_OUTRANKS_ACTOR`). Klucz API jest wydawany tylko z zakresami, które ma rola
+  wydającego administratora (`403 API_KEY_SCOPE_NOT_HELD`).
+- **Nowe uprawnienia.** `document_templates:read` i `document_templates:write` (jednorazowy krok
+  przy pierwszym uruchomieniu nadaje pierwsze każdej roli z `invoices:read`, a każdej roli z
+  `invoices:write` także drugie, i zapisuje to w dzienniku audytu), `admin_search:configure` (po
+  których polach szuka wyszukiwanie globalne, gdy ten moduł jest zainstalowany), `cms.translate`
+  (akcja *Translate* w Page Builderze) i `platform.api_description.read`. `invoices:write` ma teraz
+  etykietę *Issue/correct invoices and configure invoicing*.
+
+##### Logowanie i konta
+
+- **Modułu `mfa` nie da się wyłączyć, dopóki administratorzy muszą używać drugiego składnika.**
+  Wyłączenie go na ekranie **Modules** daje `409 MFA_DEACTIVATION_BLOCKED`, dopóki włączone jest
+  `mfa.admin.totp_enforced`, i niczego nie zmienia; najpierw wyłącz ten wymóg. Ponowne włączenie
+  `mfa` nigdy nie jest odrzucane.
+- **Zmiana miejsca, do którego zapisane poświadczenie wysyła swoje sekrety, wymaga ponownego
+  wpisania sekretów.** Zapisanie poświadczenia ze zmienionym polem punktu końcowego — *Base URL*
+  modelu LLM, host SMTP — daje `422 CREDENTIAL_SECRET_REENTRY_REQUIRED`, chyba że każdy zapisany
+  sekret rekordu zostanie wpisany ponownie w tym samym zapisie; formularz oznacza te pola, gdy tylko
+  punkt końcowy zostanie zmieniony. Poświadczenie zapisane bez zmiany punktu końcowego zachowuje
+  swoje sekrety jak wcześniej.
+- **Logowanie klienta, drugi składnik klienta i prośby o reset hasła mają limity na konto**, tak jak
+  logowanie administratora: 50 błędnych haseł w 30 minut z urządzenia, na którym konto się nie
+  logowało, 10 z takiego, na którym się logowało; 20 błędnych kodów drugiego składnika w 30 minut,
+  10 ze znanego urządzenia; 5 próśb o reset na godzinę. Powyżej limitu odpowiedź to
+  `429 CUSTOMER_AUTHENTICATION_THROTTLED` z `Retry-After`. Udane logowanie ustawia plik cookie
+  `b2b_customer_device`, który oznacza znane urządzenie — istniejący storefront go nie przekazuje,
+  więc jego klienci są liczeni według pierwszego limitu, dopóki storefront nie zostanie
+  zaktualizowany. Prośba o nowy link resetujący unieważnia wcześniejsze, niewykorzystane.
+- **Logowanie przez zewnętrznego dostawcę podlega regułom logowania hasłem**, w storefroncie i w
+  panelu administracyjnym: kończy się tylko w przeglądarce, która je rozpoczęła, konto z drugim
+  składnikiem trafia na ekran drugiego kroku zamiast zostać zalogowane, a zablokowane konto klienta
+  dostaje odmowę z tym samym zdaniem co przy logowaniu hasłem. Sesja klienta, którego konto jest
+  zablokowane, usunięte lub nie istnieje, jest traktowana jak wylogowana.
+- **Błędny kod lub hasło na ekranach drugiego składnika po zalogowaniu nie wylogowuje już
+  administratora.** Potwierdzenie konfiguracji, wyłączenie drugiego składnika i ponowne generowanie
+  kodów odzyskiwania odpowiadają na błędny kod `403 MFA_INVALID_CODE`, a na błędne hasło
+  `403 CURRENT_PASSWORD_INVALID`; wcześniej odpowiadały `401`, które panel administracyjny traktuje
+  jak wygasłą sesję.
+
+##### Biblioteka mediów
+
+- **Nie można przesyłać plików HTML, XHTML, XML (w tym XSL) ani JavaScript**, niezależnie od
+  `assets.allowed_file_types`: `415 ASSET_UPLOAD_TYPE_NOT_ALLOWED`, według zadeklarowanego typu i
+  rozszerzenia. SVG jest nadal przyjmowany i zapisywany jako `image/svg+xml`. Plik tych typów
+  przesłany wcześniej pozostaje w bibliotece i jest serwowany do pobrania.
+- **Pliki są serwowane ze stałym nagłówkiem polityki treści** i `X-Content-Type-Options: nosniff`;
+  obrazy rastrowe, SVG, wideo, audio, PDF i zwykły tekst są wyświetlane w przeglądarce, każdy inny
+  typ jest pobierany. Prywatny zasób w S3 lub GCS jest przekierowywany do magazynu tylko z ważnym
+  podpisanym linkiem, tak jak zasób lokalny już był (w przeciwnym razie `403 ASSET_ACCESS_DENIED`).
+- **Plik zasobu można podmienić w miejscu**, z zachowaniem identyfikatora, folderu, etykiety,
+  widoczności, każdego odwołania i każdego wydanego już adresu; podmieniony plik można przywrócić
+  jako poprzednią wersję przez `assets.soft_delete_retention_days`. Zasób może mieć **stały link**,
+  serwowany pod `/assets/file/<permalink>`. Oba są w panelu zasobu, za uprawnieniem `assets.write`;
+  biblioteka jest też w palecie poleceń jako *Assets library*.
+- **Osadzane adresy zasobów mają `?v=<wersja treści>`**, więc podmieniony plik zostaje pobrany, a
+  osadzenie może być buforowane przez rok; `GET /assets/file/<id>` jest teraz wysyłany z
+  `Cache-Control: public, no-cache`. Strona CMS zbuforowana przed podmianą może przez maksymalnie
+  pięć minut serwować poprzednią wersję.
+- **Zasoby w koszu są trwale usuwane** po `assets.soft_delete_retention_days` — krok 2. Każde
+  uruchomienie zadania zapisuje jeden wiersz dziennika `assets_library.retention.sweep`.
+
+Zobacz [Które adresy są stałe](./modules/assets-library/index.md#które-adresy-są-stałe) oraz
+[Przechowywanie i trwałe usuwanie](./modules/assets-library/index.md#retention-and-purge).
+
+##### Dokumenty i PDF-y
+
+- **Document templates** (`document_templates`) to miejsce, w którym projektuje się układy PDF, w
+  Page Builderze, dla typu dokumentu i kanału sprzedaży, po jednym układzie na język. Obsługuje
+  fakturę, porównanie produktów i zapytanie ofertowe. Ekrany szablonów faktur przeniesiono tam:
+  `/invoices/templates` przekierowuje do nich, a PDF faktury wysyłany e-mailem jest teraz
+  generowany dokładnie tak jak pobierany. Zobacz [Document templates](./modules/document-templates.md).
+- **Ekran zapytania ofertowego oferuje *Export PDF* i *Send PDF to customer*** w każdym stanie,
+  dopóki szablony dokumentów są włączone. Wysyłka przesyła PDF na maksymalnie pięć adresów przez nowy
+  e-mail transakcyjny `quote_request_pdf`, edytowalny i wyłączalny jak każdy inny, i pojawia się w
+  historii oferty.
+- **PDF porównania** korzysta z szablonu, w języku, w którym kupujący przegląda sklep, jeśli kanał go
+  oferuje: kupujący przeglądający sklep po polsku dostaje teraz polski PDF.
+
+##### Zapytania ofertowe
+
+- **Każda pozycja oferty zapisuje cenę referencyjną** — ile klient zapłaciłby w zwykłym zamówieniu w
+  kanale zapytania — pokazywaną w panelu administracyjnym obok propozycji klienta i ceny uzgodnionej.
+  Koszyk przekształcony w zapytanie ofertowe nie zapisuje już swoich cen jako propozycji klienta.
+- **Blokada negocjacji cen dla klienta.** W organizacji (domyślnie dozwolone) oraz, jako nadpisanie,
+  na koncie klienta administrator decyduje, czy klienci mogą proponować ceny. Utworzenie lub edycja
+  szkicu z proponowaną ceną, gdy właścicielowi zapytania nie wolno, jest odrzucana z
+  `422 RFQ_PRICE_PROPOSAL_NOT_ALLOWED`. Panele wymagają `customers:read` do odczytu i
+  `customers:manage` do zmiany.
+- **Czytelna historia** na ekranie zapytania ofertowego, łącząca zapisy jednej decyzji i wskazująca,
+  kto działał.
+- **Przedstawiciel handlowy spoza organizacji zapytania dostaje `404`**, jak dla nieistniejącego
+  zapytania, podczas gdy wcześniej dostawał `403`.
+- **Najwyżej 200 pozycji** przy tworzeniu lub edycji szkicu przez klienta (powyżej `400`). Klient
+  może wielokrotnie edytować oczekujący szkic, dopóki administrator go nie zmodyfikuje, do 30 edycji
+  na minutę na zapytanie.
+
+##### Ceny, katalog i listy
+
+- **Cenniki zyskują macierz cen** (karta *Price matrix* cennika): jeden wpis wycenia produkt,
+  kategorię, wartość atrybutu, kategorię z wartością atrybutu albo wszystkie produkty, opcjonalnie
+  dla organizacji i przedziału ilości, ceną stałą lub rabatem procentowym. Wybór według atrybutu
+  używa atrybutów oznaczonych *Price list rules*. Zobacz [Cenniki](./modules/price_lists.md).
+- **Dodawanie produktów do cennika** otwiera wspólną przeglądarkę produktów i dodaje do 200 produktów
+  w jednym kroku. Systemowy cennik *Default* nadal nie przyjmuje produktów w ten sposób.
+- **Odczyty katalogu w storefroncie mogą być wyceniane w walucie kupującego**, jeśli kanał ją
+  obsługuje. W walucie innej niż domyślna waluta kanału produkt, któremu cenę nadaje tylko jego
+  własna cena, nie ma ceny na liście, zamiast pokazywać własną cenę w niewłaściwej walucie.
+- **Zapisane widoki** na liście produktów i liście zapytań ofertowych, a na liście zamówień zapis i
+  usuwanie przez okna dialogowe zamiast monitów przeglądarki. Dwa widoki jednego administratora na
+  jednej liście nie mogą różnić się tylko wielkością liter.
+- **Nowo utworzony produkt jest od razu wyszukiwalny**, bez pierwszej edycji.
+- **Listy CMS** — Pages, Blocks, Templates, Hooks — są w palecie poleceń.
+
+##### Powiadomienia, newsletter i AI
+
+- **Powiadomienia push o statusie.** Dwa ustawienia, `pwa.push_order_status_enabled` i
+  `pwa.push_quote_status_enabled` (domyślnie włączone, globalnie i dla kanału), włączają obie
+  kategorie; klient wybiera dla swojego konta w zaktualizowanym storefroncie. Powiadomienia o
+  zamówieniach są w języku kanału, nazywają status tak jak sklep i otwierają zamówienie.
+  Powiadomienia o ofertach zaczynają być wysyłane — krok 10.
+- **Śledzenie otwarć i kliknięć newslettera** włączają dwa nowe ustawienia,
+  `newsletter.tracking.opens_enabled` i `newsletter.tracking.clicks_enabled`, domyślnie wyłączone.
+  Gdy są wyłączone, kampanie są wysyłane bez śledzenia, jak wcześniej.
+- **Page Builder potrafi tłumaczyć** płótno karty języka lub zaznaczenie modelem LLM skonfigurowanym
+  w *Settings → Page Builder* (`cms.page_builder.translation.enabled`, domyślnie wyłączone), za
+  uprawnieniem `cms.translate`. Każde żądanie jest zapisywane w dzienniku audytu.
+- **Konfiguracje LLM obsługują DeepSeek i dowolny punkt końcowy zgodny z OpenAI** przez nowego
+  dostawcę *OpenAI-compatible (custom endpoint)*; każdy *Base URL* modelu LLM musi być bezwzględnym
+  adresem `http://` lub `https://`.
+
+##### Wszystko inne, co widzi operator
+
+- **Globalne wyszukiwanie w panelu administracyjnym**, gdy zainstalowano
+  `@endora-commerce/mod-admin-search` (krok 11): paleta szuka rekordów od minimalnej długości
+  (`admin_search.minimum_query_length`, domyślnie 3), a każdy typ podlega widoczności swojej listy w
+  panelu; `/global-search` pokazuje pełne wyniki. Zobacz [Admin search](./modules/admin-search.md).
+- **Ekran ustawień** nie pokazuje już wartości jednego kanału sprzedaży pod nagłówkiem innego, gdy
+  lista jeszcze się wczytywała w chwili zmiany „Editing for”.
+- **Menu boczne** pokazuje numer wydania w osobnej sekcji, pod logo.
+- **Podglądy e-maili** w edytorze e-maili i w podglądzie kampanii newslettera są rysowane w ramkach,
+  które nie uruchamiają skryptów.
+- **`order.cancelled.v1` jest emitowane** przy anulowaniu zamówienia, więc subskrybent napisany pod
+  to zdarzenie teraz działa.
+
+#### Dla klientów API i integratorów {#after-0-107-0-api}
+
+- **Opis API wymaga uprawnienia.** `GET /api/v1/_openapi.json` i `GET /api/v1/_docs` wymagają sesji
+  administratora, którego rola ma `platform.api_description.read`, albo klucza API z tym zakresem:
+  `401 UNAUTHORIZED` bez żadnego z nich, także z sesją klienta, `403 FORBIDDEN` bez kodu. Obie
+  odpowiedzi mają `Cache-Control: private, no-store`. `GET /api/v1/admin/api-description` serwuje
+  ten sam dokument w przestrzeni administracyjnej. `apiKeyScopeSchema` przyjmuje nowy zakres.
+- **Dostęp do kanału sprzedaży.** Każde żądanie storefrontu jest rozstrzygane po wyznaczeniu kanału:
+  `403 SALES_CHANNEL_SIGN_IN_REQUIRED` dla żądania anonimowego w zamkniętym kanale,
+  `403 SALES_CHANNEL_NOT_PERMITTED` dla klienta, którego organizacja nie jest przypisana, oba z
+  `details.channelCode`. `POST /api/v1/auth/customer/login` odpowiada tym drugim po poprawnym haśle
+  (błędne nadal daje najpierw `401`) i nie ustawia pliku cookie.
+  `GET /api/v1/storefront/sales-channel` zawiera `anonymousAccess`, a nowe
+  `GET /api/v1/storefront/sales-channel/access` mówi wywołującemu, czy może korzystać ze sklepu, a
+  klientowi z odmową — z których sklepów może; nigdy nie odmawia. Panel administracyjny:
+  `GET`/`PUT /api/v1/admin/organizations/:id/sales-channels`,
+  `GET /api/v1/admin/organizations/sales-channel-options`, `POST /api/v1/admin/organizations`;
+  `anonymousAccess` w kształtach administracyjnych kanału sprzedaży (przy tworzeniu domyślnie
+  `true`). `GET /api/v1/storefront/seo/crawler-files` zawiera opcjonalne `anonymousAccess` — brak
+  traktuj jako `true`.
+- **Koszyki per kanał.** Każda trasa koszyka storefrontu dotyczy koszyka kanału żądania; pozycja
+  koszyka innego kanału daje `404`. Złożenie zamówienia z koszykiem innego kanału daje
+  `422 ORDER_SALES_CHANNEL_MISMATCH`.
+- **Złożenie zamówienia sprawdza ceny.** `409 CART_PRICE_CHANGED` z `details.lines` — `productId`,
+  `variantId`, `quantity`, `previousUnitPrice`, `currentUnitPrice` (`null`, gdy pozycji nie można
+  już zamówić) i `currency`. Odczytaj koszyk ponownie i złóż zamówienie jeszcze raz. Dodanie
+  produktu bez ceny daje `422 CART_PRODUCT_UNPRICED`.
+- **Zamówienia w panelu administracyjnym.** `POST /api/v1/admin/orders` i
+  `POST /api/v1/admin/orders/preview` odpowiadają na nieznany `salesChannelId` `404 NOT_FOUND`.
+  Podgląd podaje dwa nowe powody niedostępności pozycji, `PRODUCT_NOT_VISIBLE_TO_CUSTOMER` i
+  `PRODUCT_NOT_IN_SALES_CHANNEL`, po jednym na pozycję w kolejności, jaką podaje
+  `ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE`; `messages[].code` pozostaje ciągiem znaków, więc
+  nieznany kod traktuj jako ogólne „niedostępne”.
+- **Import i eksport.** `GET /api/v1/admin/import-export/entities` wymienia tylko to, co wywołujący
+  może eksportować lub importować, każdą pozycję z `canExport` i `canImport`; trasy eksportu i
+  importu odpowiadają `403` bez uprawnienia danej encji, a `405` przy imporcie encji tylko do
+  eksportu, którą wywołujący może eksportować.
+- **Zmienione kody odpowiedzi.**
+  - Trasy samoobsługi drugiego składnika (`…/activate`, `…/disable`, `…/recovery-codes/regenerate`
+    pod `/api/v1/admin/account/mfa` i `/api/v1/account/mfa`) odpowiadają `403 MFA_INVALID_CODE` i
+    `403 CURRENT_PASSWORD_INVALID`, podczas gdy wcześniej odpowiadały `401`. Wyzwania przy
+    logowaniu zachowują `401`.
+  - Przedstawiciel handlowy spoza organizacji zapytania ofertowego dostaje `404` na każdej
+    administracyjnej trasie zapytań ofertowych.
+  - Żądanie ograniczone limitem odpowiada `429 RATE_LIMITED` w standardowej kopercie błędu, z
+    `Retry-After`, podczas gdy wcześniej odpowiadało `500 INTERNAL`.
+  - Treść, której serwer nie potrafi odczytać, daje `400` (pusta z
+    `Content-Type: application/json` lub niepoprawna), `413` (ponad limit rozmiaru) albo `415`
+    (brak parsera dla typu), każda z `VALIDATION_FAILED`, podczas gdy wcześniej dawała `500`.
+  - `PATCH /api/v1/admin/cms/hooks/:id/attachments/:blockId` dla bloku, który nie jest dołączony,
+    odpowiada `404 CMS_BLOCK_NOT_FOUND`.
+  - `POST /api/v1/admin/assets` z dwiema częściami plikowymi odpowiada `201` dla pierwszej z nich.
+- **Nowe odmowy.** `415 ASSET_UPLOAD_TYPE_NOT_ALLOWED` przy przesyłaniu HTML, XHTML, XML lub
+  JavaScript; `409 MFA_DEACTIVATION_BLOCKED` przy wyłączaniu `mfa`, gdy wymuszony jest TOTP
+  administratorów; `422 CREDENTIAL_SECRET_REENTRY_REQUIRED` (`details.fields`) przy zmianie punktu
+  końcowego poświadczenia bez jego sekretów; `403 ADMIN_ROLE_GRANT_EXCEEDED`,
+  `409 ADMIN_ROLE_PROTECTED`, `403 ADMIN_USER_OUTRANKS_ACTOR` i `403 API_KEY_SCOPE_NOT_HELD` z
+  reguły nadawania; `429 CUSTOMER_AUTHENTICATION_THROTTLED` i
+  `503 CUSTOMER_AUTHENTICATION_UNAVAILABLE` przy logowaniu klienta;
+  `422 RFQ_PRICE_PROPOSAL_NOT_ALLOWED`; oraz `400` dla ponad 200 pozycji przy tworzeniu lub edycji
+  szkicu zapytania ofertowego przez klienta.
+- **Przyjmowanie zdarzeń analitycznych.** `POST /api/v1/analytics/events` zapisuje tożsamość
+  wyznaczoną przez serwer — zalogowanego klienta, kanał żądania — i ignoruje `customerAccountId`,
+  `organizationId` i `salesChannelId` w treści, które nadal przechodzą walidację. Limit to 60 partii
+  na minutę na adres klienta.
+- **Linki śledzące newslettera** to `GET /api/v1/newsletter/open.gif?token=…` i
+  `GET /api/v1/newsletter/click?token=…&u=…`. Dawne formy ze ścieżką, do których podpisany token był
+  za długi, zostały usunięte.
+- **Adresy zasobów.** `url` i `storageUrl` zasobu publicznego zawierają `?v=<contentVersion>`;
+  stałą formą jest nowe `fileUrl`. Podsumowania i szczegóły zyskują `fileUrl`, `permalink`,
+  `permalinkUrl` i `contentVersion`; szczegóły zyskują `previousVersion`, `retentionDays` i
+  `replaceable`. Nowe trasy: `POST /api/v1/admin/assets/:id/replace`,
+  `POST …/previous-version/restore`, `PUT`/`DELETE …/permalink`,
+  `GET /api/v1/admin/assets/folders/:folderId/permalink-count`.
+- **Usunięte: API szablonów faktur.** `/api/v1/admin/invoice-templates` i jego trasy zostały
+  usunięte; użyj `/api/v1/admin/document-templates` z `documentType: 'invoices.invoice'`.
+- **Nowe w tym wydaniu**, wszystko addytywne: historia zapytania ofertowego
+  (`GET /api/v1/admin/quote-requests/:id/history`), negocjacja cen
+  (`…/organizations/:id/quote-price-negotiation`, `…/customers/:id/quote-price-negotiation`,
+  `GET /api/v1/quote-requests/price-negotiation`), PDF zapytania ofertowego
+  (`/api/v1/admin/quote-requests/:id/pdf`, `…/pdf/send`, `…/document-templates`,
+  `…/document-template`), macierz cen (`/api/v1/admin/price-lists-engine/:id/matrix`) i dodawanie
+  zbiorcze (`…/:id/products/bulk-add`), zapisane widoki
+  (`/api/v1/admin/catalog/products/list-views`, `/api/v1/admin/quote-requests/list-views`),
+  preferencje push (`GET`/`PUT /api/v1/storefront/pwa/preferences`), wyszukiwanie globalne
+  (`/api/v1/admin/global-search…`), tłumaczenie w Page Builderze
+  (`/api/v1/admin/cms/page-builder/translat…`), `?currency=` w odczytach katalogu oraz
+  `salesChannelId` w `GET /api/v1/admin/products/:id/resolved-price`, który teraz odpowiada `404`
+  dla kupującego, który nie istnieje albo którego przedstawiciel handlowy nie może widzieć.
+- **Zapisane widoki zamówień.** Pozycje mają `ownedByCaller` i `canModify`; nazwa zajęta przez inny
+  widok właściciela daje `409 ORDER_SAVED_VIEW_NAME_TAKEN`; `PATCH`, który niczego nie zmienia,
+  niczego nie zapisuje; identyfikator, który nie jest UUID, daje `404`; brak sesji administratora
+  daje `401`.
+
+#### Dla autorów modułów i modułów nakładkowych {#after-0-107-0-authors}
+
+**Zadeklaruj jako otwartą dla reguły dostępu do kanału każdą trasę, do której odwiedzający dociera
+przed zalogowaniem albo która przychodzi bez kanału storefrontu.** Dotyczy to tras logowania,
+rejestracji i odzyskiwania konta, linków w e-mailach, pobierania plików produktowych i — przypadku
+najłatwiejszego do przeoczenia — **wywołań zwrotnych dostawców płatności i przewoźników oraz
+adresów powrotu od dostawców**:
+
+```ts
+app.post(
+  '/api/v1/payments/acme/notify',
+  { config: { salesChannelAccess: 'open' } },
+  async (request, reply) => {
+    // Still resolved to a channel, and still behind this route's own guards.
+  },
+);
+```
+
+Bez tego trasa dostaje `403` w chwili, gdy operator zamknie kanał, do którego jest przypisywana — dla
+wywołania zwrotnego jest to domyślny kanał systemowy. Opcja jest otypowana w `FastifyContextConfig`
+Fastify przez barrel `./http` platformy. Pomija tylko krok dostępu: trasa nadal jest przypisywana do
+kanału i zachowuje własne warunki dostępu. Nie deklaruj jej na niczym, co pokazuje lub zmienia
+katalog, ceny, koszyk lub zamówienia sklepu. `SalesChannelAccessPort` (`salesChannelAccessPort`,
+`./kernel`) rozstrzyga regułę dla ścieżki, która nie ma jeszcze sesji. Zobacz
+[Dostęp do kanału: trasy, które muszą pozostać otwarte](./modules/sales_channels/developer-guide.md#dostęp-do-kanału-trasy-które-muszą-pozostać-otwarte).
+
+**Zmiany, po których kod się nie kompiluje albo nie składa.** Kod, który implementuje, konstruuje lub
+wywołuje którykolwiek z poniższych elementów, wymaga zmiany:
+
+| Co | Zmiana |
+| --- | --- |
+| `CartCustomerContext` (`@endora-commerce/contracts`) | `salesChannelId` jest **wymagane**: każdy wywołujący `CartReadPort` / `CartWritePort` wskazuje kanał, o którego koszyk chodzi |
+| `PersonalOrganizationProvisionInput` (`@endora-commerce/mod-organizations/ports`) | wymagane `salesChannelId: string \| null` |
+| `CatalogProductReadPort` | nowa wymagana metoda `listProductIdsByAttributeValue({ key, value, match })` |
+| `OrderReadPort` | nowa wymagana metoda `findStatusDefinition(code)` |
+| `DocumentRenderPort` | nowa wymagana metoda `listChoices({ documentType, salesChannelId })` |
+| `CartPlacementApplyPort` (`@endora-commerce/mod-carts/ports`) | nowe `findPriceDrift` i `refreshLinePrices` |
+| `CartService` | nowy wymagany argument konstruktora `ProductDisplayModePort` po `channelMembership`; `getOrCreateForAnon(em, token, salesChannelId)` zwraca `Cart \| null` |
+| `CartsDeps` | `cartCouponService`, `cartConversionService`, `pushLineToShoppingList` i `appendShoppingListToCart` są wymagane |
+| `PriceListTargetReads` | wymagane `catalogAttributeRead` — dla ręcznie budowanego `PriceListService` lub `PricingService` |
+| `MfaModuleOptions` | wymagane `customerChannelAccess` |
+| `AnalyticsIngestService.ingest` | wymagany `context` (`IngestContext`) |
+| `customerOrgResolver` (`mod-customer-accounts`) | odpowiada `{ organizationId, active }` lub `null`; aktualizuj razem z nim `mod-auth` |
+| `customerSocialLoginPort` | `resolveByEmail` odpowiada `{ id, organizationId, blocked }`, `autoCreate(email, { salesChannelId })` odpowiada `{ id, organizationId }` |
+| `AssetSummary`, `AssetDetail`, `AssetRecord` | nowe wymagane pola (`fileUrl`, `permalink`, `permalinkUrl`, `contentVersion`; `retentionDays`, `replaceable`) dla kodu, który je buduje |
+| `OrderSavedView` | wymagane `ownedByCaller` i `canModify` dla kodu, który go buduje |
+| `buildServer` | nie montuje już tras opisu API; w procesie czytaj `app.apiDescription()`, a `registerOpenApiRoutes` usunięto |
+
+**Nowe porty i punkty styku.** `BuyerLinePricePort` (`buyerLinePricePort`, z `price_lists`) — cena
+jednostkowa netto, jaką kupujący zapłaciłby za każdą pozycję w kanale; `ProductDisplayModePort`
+(`productDisplayModePort`); `MfaDeactivationGuardPort`; `CustomerAuthenticationThrottlePort` oraz,
+w `./kernel`, `AuthenticationAttemptThrottle`; `AdminSearchProviderRegistryPort`
+(`adminSearchProviderRegistry`) — dodaj dostawcę z haka startowego, który tylko wnosi wkład, aby
+rekordy modułu dało się znaleźć; `DocumentTypeRegistryPort` (`documentTypeRegistry`) i
+`DocumentRenderPort` (`documentRenderPort`) — rejestracja typu dokumentu i jego generowanie;
+`AdminRolePort.upsertByCode(input, { grantor })` — przekaż `grantor` dla zapisu wykonywanego w
+imieniu administratora; `createLlmAdapter` z `@endora-commerce/llm-client`, przeniesiony z
+`mod-prompt-actions`. `BlockDefinition` zyskuje opcjonalne ścieżki `translatable`, a blok bez nich
+nigdy nie jest wysyłany do modelu. Pole poświadczenia, które wskazuje, dokąd wysyłane są sekrety,
+deklaruje `endpoint: true`, chyba że jest polem `format: 'url'`, które liczy się domyślnie.
+
+**`order.cancelled.v1` jest emitowane**, a jego treść rośnie z `{ orderId }` do `orderId`,
+`organizationId`, `salesChannelId`, `from`, `actor`, `reason` i `businessId`. Pozostaje na
+wewnątrzprocesowej szynie zdarzeń; webhooki wychodzące nadal dostarczają anulowanie jako
+`order.status_changed.v1`.
+
+**Admin kit.** `ProductBrowserDialog`, `ProductBrowserTrigger` i `productSelectability`;
+`ModalDialog` i `SavedViewsControl`; `AssetUploader` zyskuje `upload` i `accept`. Ich teksty są w
+pakiecie `core` modułu `@endora-commerce/mod-i18n` w tym wydaniu.
+
+**Zależności równorzędne.** `mod-quote-requests` deklaruje `@fastify/rate-limit` (`^10`), które host
+platformy już rejestruje; `mod-cms` i `mod-prompt-actions` deklarują `@endora-commerce/llm-client`,
+który pnpm instaluje razem z nimi, tak jak inne zależności równorzędne.
+
+#### W istniejącym storefroncie {#after-0-107-0-storefront}
+
+**Istniejący storefront nie zmienia się przez aktualizację.** `endora new storefront` kopiuje
+wzorzec raz, a potem projekt należy do Ciebie; aktualizacja przenosi jego pakiety, których poniższe
+pliki potrzebują w wersji `0.107.0`. Dopóki jego pliki nie zostaną zaktualizowane, działa z
+zaktualizowanym backendem w sklepie otwartym dla niezalogowanych odwiedzających: katalog, koszyk,
+zamówienie i logowanie działają jak wcześniej, w granicach podanych przy każdej grupie. To, czego
+nie robi, opisano przy każdej grupie. Storefront do kopiowania utwórz tak, jak opisuje
+[Bloki modułów w istniejącym storefroncie](#storefront-block-renderers), i przejmuj grupy w tej
+kolejności. Tam, gdzie edytowano plik, nanieś jego różnicę ręcznie; `diff -ru` między Twoim
+storefrontem a nowym pokazuje każdą różnicę obok Twoich własnych zmian. Kilka plików należy do więcej
+niż jednej grupy — nową wersję weź raz.
+
+**1. Dostęp do kanału sprzedaży — wymagany, zanim jakikolwiek kanał zostanie zamknięty dla
+niezalogowanych odwiedzających, oraz w storefroncie, który obsługuje kilka kanałów przez
+`X-Sales-Channel`.** Storefront wskazuje swój kanał w każdym wywołaniu backendu, kieruje
+odwiedzającego zamkniętego sklepu na stronę logowania, pokazuje odmowę logowania i ekran braku
+dostępu oraz przestaje oferować rejestrację klienta indywidualnego w zamkniętym sklepie. Bez tego
+zamknięty sklep odpowiada na wywołania stron storefrontu `403`, a klient z odmową nie ma ekranu,
+który mówi dlaczego.
+
+- **nowe**: `components/ChannelAccessDenied.tsx`, `lib/api/channel-headers.ts`,
+  `lib/auth/sign-in-errors.ts`, `lib/channel/channel-header.ts`, `lib/channel/channel-identity.ts`,
+  `lib/channel/closed-store.ts`, `lib/actions/sign-out.ts`, `lib/dictionary/browser.ts`,
+  `lib/dictionary/types.ts`, `components/account/SignOutButton.tsx`, `lib/cart-action-failure.ts`;
+- **zmienione**: `middleware.ts` — oznacza `x-sales-channel` kanałem, który backend wyznacza dla
+  tego storefrontu, gdy nie zrobiło tego proxy, i kieruje odwiedzającego zamkniętego sklepu do
+  logowania; `app/layout.tsx`, `app/page.tsx`, `app/sitemap.ts`, `app/globals.css`;
+  `app/(auth)/login/page.tsx`, `app/(auth)/login/mfa/page.tsx`,
+  `app/(auth)/register-customer/page.tsx`; `app/(catalog)/c/[slug]/page.tsx`,
+  `app/(catalog)/catalog/page.tsx`, `app/(catalog)/p/[slug]/page.tsx`,
+  `app/(catalog)/search/page.tsx`; `app/compare/page.tsx`, `app/compare/share/[token]/page.tsx`;
+  `app/pwa/subscriptions/route.ts`; komponenty `CompareToggle`, `ComparisonTable`, `Header`,
+  `MfaCodeForm`, `ProductCard`, `ProductCardActions`, `ProductGrid`, `SearchAutocomplete`,
+  `SharedComparisonTable`, `SocialLoginButtons`, `analytics/AnalyticsProvider`,
+  `analytics/GtmProvider`, `inventory/NotifyWhenAvailableDialog` i `mobile/MobileSearchOverlay`;
+  oraz w `lib/`: `analytics/gtag.ts`, `analytics/gtm/dataLayer.ts`, `api/cart.ts`, `api/client.ts`,
+  `api/comparisons.ts`, `api/mutations.ts`, `api/newsletter.ts`, `api/pwa-server.ts`, `api/rfq.ts`,
+  `api/sales-channel.ts`, `api/search.ts`, `api/speculation-rules.ts`,
+  `dictionary/DictionaryProvider.tsx`, `dictionary/client.ts`, `i18n/messages.ts` i
+  `server-context.ts`. Ta sama zmiana dotyka `lib/seo/crawler-policy.ts` i
+  `lib/seo/crawler-file-response.ts`, które istnieją tylko w storefroncie, który przejął grupy SEO z
+  wydania 0.106.0; grupa 2 je zastępuje.
+
+Wzorzec pilnuje statycznym testem, by każde wywołanie backendu przechodziło przez pomocnika kanału;
+jeśli utrzymujesz testy storefrontu z `test/`, skopiuj je razem z plikami.
+
+**2. Pliki dla robotów w zamkniętym sklepie — zakłada trzy grupy SEO z wydania
+[0.106.0](#after-0-106-0-storefront) i grupę 1 powyżej.** Zastąp `lib/seo/crawler-policy.ts`,
+`lib/seo/crawler-file-response.ts`, `lib/seo/robots-txt.ts`, `lib/seo/llms-txt.ts` i
+`lib/seo/llms-txt-base.ts` oraz dodaj nową funkcję `renderClosedStoreRobotsTxt` do
+`lib/seo/robots-system-rules.ts` — reszta tego pliku, `ROBOTS_SYSTEM_RULES` z ewentualnymi Twoimi
+regułami, się nie zmienia. W zamkniętym sklepie `robots.txt` zabrania wtedy wszystkiego i nie wskazuje
+mapy strony, a `llms.txt` podaje nazwę sklepu i mówi, że treść jest tylko dla zalogowanych klientów;
+własne instrukcje i dodatkowa treść operatora są zachowane i wracają po otwarciu sklepu. Pliki
+otwartego sklepu się nie zmieniają.
+
+**3. Limity logowania klientów.** `lib/session.ts`, `lib/api/auth.ts`, `lib/api/mfa.ts` i
+`app/(auth)/password-reset/request/page.tsx`: storefront przekazuje plik cookie `b2b_customer_device`
+przy logowaniu, drugim kroku i prośbie o reset oraz zachowuje ten, który ustawia backend. Bez nich
+każda próba jest liczona według limitu urządzenia, na którym konto się nie logowało.
+
+**4. Wybór powiadomień push i wylogowanie.** `app/(account)/account/page.tsx`,
+`app/(account)/layout.tsx`, `components/account/SignOutButton.tsx`,
+`components/pwa/PushNotificationsToggle.tsx` (nowy), `components/pwa/PushPreferencesForm.tsx`
+(nowy), `components/pwa/PushOptIn.tsx`, `lib/api/pwa.ts` i `lib/api/pwa-server.ts`. Profil konta
+zyskuje wybór powiadomień o zamówieniach i ofertach oraz przełącznik wyłączający powiadomienia;
+wylogowanie zwalnia subskrypcję push przeglądarki. Bez nich klient dostaje obie kategorie, które
+oferuje operator.
+
+**5. Blokada negocjacji cen w szkicu zapytania ofertowego.** `app/(commerce)/quote-request/actions.ts`,
+`app/(commerce)/quote-request/page.tsx`, `components/rfq/RfqDraftView.tsx` i `lib/api/rfq.ts`. Bez
+nich klient z zablokowanymi propozycjami widzi pole propozycji i dostaje `422` przy wysłaniu
+propozycji.
+
+**6. Mniejsze poprawki.** `app/(commerce)/checkout/page.tsx` — strona błędu pokazuje zdanie
+backendu, także dla `CART_PRICE_CHANGED`, bez kodu na początku; `app/(catalog)/p/[slug]/page.tsx`,
+`lib/cart-action-failure.ts` i `lib/i18n/messages.ts` — strona produktu opisuje błędy koszyka w
+języku kupującego; `app/compare/page.tsx`, `components/ComparisonTable.tsx` i
+`lib/api/comparisons.ts` — PDF porównania jest zamawiany w wyświetlanym języku i z wyświetlanymi
+wierszami; `lib/api/catalog.ts` — odczyty katalogu w wybranej walucie; `components/Breadcrumbs.tsx`
+i `app/(catalog)/p/[slug]/page.tsx` — dane strukturalne produktu i ścieżki nawigacji renderowane
+przez `JsonLd`.
+
+Następnie uruchom `pnpm run typecheck`, `pnpm test` i `pnpm run build` i usuń katalog, z którego
+kopiowano. **Własny storefront**, który nie wywodzi się ze wzorca, musi zrobić trzy rzeczy, aby
+działać z zamkniętym sklepem: wskazywać swój kanał w każdym wywołaniu backendu, także z
+przeglądarki; kierować odwiedzającego do logowania przy `403 SALES_CHANNEL_SIGN_IN_REQUIRED`; oraz
+pokazywać `403 SALES_CHANNEL_NOT_PERMITTED`, odczytując z
+`GET /api/v1/storefront/sales-channel/access` sklepy, z których klient może korzystać.
+
+Jak dalece to sprawdzono: to, co mówi ta sekcja, pochodzi z opisów zmian (changesetów) wydania,
+sprawdzonych ze źródłami tego wydania — manifestami, migracjami, trasami i historią wzorcowego
+storefrontu między `v0.106.0` a `0.107.0`. W chwili pisania tej sekcji żadna instancja nie została
+zaktualizowana z `0.106.0` poleceniem `pnpm run upgrade 0.107.0`, do żadnej instancji deklarującej
+`mod-invoices` nie dodano po aktualizacji `mod-document-templates` i w żadnym storefroncie
+utworzonym we wcześniejszym wydaniu nie wprowadzono powyższych grup plików; kolejność kroków i
+zmiany w storefroncie nie były wypróbowane.
 
 ## Instancja niespójna od początku
 

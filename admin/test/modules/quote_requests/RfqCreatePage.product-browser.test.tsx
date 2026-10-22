@@ -393,7 +393,7 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     await waitFor(() => expect(priceInput('Widget 01')).toHaveValue(9));
   });
 
-  it('prefills only the lines an add actually appended, when two confirms land in the same tick', async () => {
+  it('appends an add once, and prefills only its lines, when two confirms land in the same tick', async () => {
     const user = userEvent.setup();
     renderPage();
     await waitForCustomer('Jan Kowalski');
@@ -496,25 +496,18 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     expect(screen.getByText(totalText('10.00'))).toBeInTheDocument();
   });
 
-  it('shows a product that is already a line as already added, not selectable (sc. 6)', async () => {
+  it('a product already a line can be picked again, as a line of its own (feature 159, N-31)', async () => {
     const user = userEvent.setup();
     renderPage();
     await addThroughPicker(user, ['Widget 01']);
 
     const dialog = await openPicker(user);
     const box = rowCheckbox(dialog, 'Widget 01');
-    expect(box.disabled).toBe(true);
-    expect(document.getElementById(box.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
-      tr('productBrowser.reason.alreadyAdded'),
-    );
-    expect(rowCheckbox(dialog, 'Widget 02').disabled).toBe(false);
-    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
-
-    // Removing the line makes the product selectable again.
-    await user.click(within(lineRow('Widget 01')).getByRole('button', { name: `${tr('common.action.delete')} Widget 01` }));
-    expect(lineNames()).toEqual([]);
-    const again = await openPicker(user);
-    expect(rowCheckbox(again, 'Widget 01').disabled).toBe(false);
+    expect(box.disabled).toBe(false);
+    await user.click(box);
+    await user.click(within(dialog).getByRole('button', { name: 'Add 1' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(lineNames()).toEqual(['Widget 01', 'Widget 01']);
   });
 
   it('adds lines before a customer with empty prices, and prefills them once a customer with an organization is chosen (FR-032)', async () => {
@@ -580,7 +573,8 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     await user.type(quick, 'widget');
     const draft = await screen.findByRole('option', { name: /Draft widget/ });
     expect(draft).not.toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByRole('option', { name: /Widget 01/ }).textContent).toContain(
+    // Feature 159 (N-31) — a product already a line is offered again.
+    expect(screen.getByRole('option', { name: /Widget 01/ }).textContent).not.toContain(
       tr('productBrowser.reason.alreadyAdded'),
     );
     await user.clear(quick);
@@ -593,7 +587,8 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     await user.type(quick, 'SKU-A07');
     await user.click(await screen.findByRole('option', { name: /Widget 07/ }));
 
-    expect(lineNames()).toEqual(['Widget 01', 'Widget 07']);
+    // The line is added after the click settles; asserting at once raced the render.
+    await waitFor(() => expect(lineNames()).toEqual(['Widget 01', 'Widget 07']));
     expect(within(lineRow('Widget 07')).getByText('SKU-A07')).toBeInTheDocument();
     expect(qtyInput('Widget 07')).toHaveValue('1');
     expect(screen.queryByRole('dialog')).toBeNull();

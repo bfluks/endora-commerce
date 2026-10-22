@@ -1842,6 +1842,9 @@ function serializeAdminProduct(p: Product) {
     lowStockThresholdMode: p.lowStockThresholdMode,
     fulfilmentStrategy: p.fulfilmentStrategy ?? null,
     fulfilmentStrategyWarehouseOrder: p.fulfilmentStrategyWarehouseOrder ?? null,
+    // Feature 155 (FR-001, FR-003) — the order rules, as stored (any type).
+    minOrderQuantity: p.minOrderQuantity ?? null,
+    returnable: p.returnable,
     // Feature 022 — surface so the Bulk Edit summary and the single-
     // product editor can render the archived state.
     archivedAt: p.archivedAt ? p.archivedAt.toISOString() : null,

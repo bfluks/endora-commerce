@@ -22,6 +22,7 @@ import { resolvePrimaryAssetUrls } from './primary-asset-url.js';
 import { viewerOrganizationFor } from './viewer-organization.js';
 import {
   ERROR_CODES,
+  isOrderMinimumEligibleType,
   isPriceSort,
   isProductVisibleTo,
   listingPriceChannelContext,
@@ -32,10 +33,10 @@ import {
   type CategoryPageContent,
   type CustomFieldDefinitionReadPort,
   type FilterDefinition,
-  type ListingPrice,
   type ListingPriceOrderCursor,
   type ListingPriceOrderPort,
-  type ListingPricePort,
+  type ListingPriceDetail,
+  type ListingPriceDetailPort,
   type ListingPriceViewerContext,
   type OrganizationDetailsPort,
   type ProductAudience,
@@ -366,7 +367,7 @@ export class CatalogQueryService {
      * unwired attribute read model does. `null` from the port is the engine's
      * own "nothing applies" answer and is rendered as an absence.
      */
-    private readonly listingPrices?: ListingPricePort,
+    private readonly listingPrices?: ListingPriceDetailPort,
     /**
      * Feature 075 — `assets_library`'s read port, where six raw
      * `join assets a on a.id = …` clauses and an `em.find(Asset, …)` used to
@@ -463,7 +464,7 @@ export class CatalogQueryService {
     return this.attributeRead;
   }
 
-  #requireListingPrices(): ListingPricePort {
+  #requireListingPrices(): ListingPriceDetailPort {
     if (!this.listingPrices) {
       throw new Error(
         'CatalogQueryService: the pricing port is not wired — a listing cannot be priced.',
@@ -510,10 +511,13 @@ export class CatalogQueryService {
   async #listingPricesFor(
     products: readonly Product[],
     ctx: CatalogQueryContext,
-  ): Promise<Map<string, ListingPrice>> {
+  ): Promise<Map<string, ListingPriceDetail>> {
     if (products.length === 0) return new Map();
     if (!(ctx.resolvedChannel.isPublic ?? true)) return new Map();
-    return this.#requireListingPrices().resolveListingPrices({
+    // D-287 P0 — the details call: one resolution answers both `price` and
+    // `resolvedPrice` (base / sale / display mode), so the product page and the
+    // home page's cards need no second, per-product resolution.
+    return this.#requireListingPrices().resolveListingPriceDetails({
       products,
       context: await this.#viewerPricingContext(ctx),
     });
@@ -539,6 +543,12 @@ export class CatalogQueryService {
       // Issue #249 — the currency the route resolved, or the channel default.
       ...listingPriceChannelContext(ctx.resolvedChannel, ctx.currency),
       organization,
+      // D-287 P0 — the customer's own group overrides the organisation's; the
+      // engine resolves it from the account. Named only beside the account's
+      // organisation, so an anonymous page asks exactly what it asked before.
+      ...(organization && audience.customerAccountId
+        ? { customerAccountId: audience.customerAccountId }
+        : {}),
     };
   }
 
@@ -548,11 +558,24 @@ export class CatalogQueryService {
    * the chain's `none` arm — the wire field has one spelling for "no price".
    */
   #summaryPrice(
-    resolved: Map<string, ListingPrice>,
+    resolved: Map<string, ListingPriceDetail>,
     productId: string,
   ): { amount: number; currency: string } | null {
-    const price = resolved.get(productId);
-    return price === undefined ? null : listingPriceMoney(price);
+    const detail = resolved.get(productId);
+    return detail === undefined ? null : listingPriceMoney(detail.price);
+  }
+
+  /**
+   * `ProductSummary.resolvedPrice` — base, sale and display mode from the same
+   * resolution as `price` (D-287 P0). `null` where the channel withholds prices.
+   */
+  #summaryResolvedPrice(
+    resolved: Map<string, ListingPriceDetail>,
+    productId: string,
+  ): ProductSummary['resolvedPrice'] {
+    const detail = resolved.get(productId);
+    if (detail === undefined) return null;
+    return { basePrice: detail.basePrice, salePrice: detail.salePrice, displayMode: detail.displayMode };
   }
 
   /**
@@ -1167,7 +1190,7 @@ export class CatalogQueryService {
     let bound = false;
 
     const collected: Product[] = [];
-    const prices = new Map<string, ListingPrice>();
+    const prices = new Map<string, ListingPriceDetail>();
 
     while (collected.length < target) {
       if (spent >= budget) {
@@ -1196,14 +1219,15 @@ export class CatalogQueryService {
       );
       const chunkPrices = await this.#listingPricesFor(candidates, ctx);
       for (const product of candidates) {
-        const price = chunkPrices.get(product.id);
-        if (price === undefined || price.source !== 'price_list') continue;
+        const detail = chunkPrices.get(product.id);
+        const price = detail?.price;
+        if (detail === undefined || price === undefined || price.source !== 'price_list') continue;
         const amount = Number(price.amount);
         if (!Number.isFinite(amount)) continue;
         if (min !== undefined && amount < min) continue;
         if (max !== undefined && amount > max) continue;
         collected.push(product);
-        prices.set(product.id, price);
+        prices.set(product.id, detail);
         if (collected.length >= target) break;
       }
       if (rows.length < chunkSize) break;
@@ -1616,6 +1640,8 @@ export class CatalogQueryService {
           baseQuantity: u.baseQuantity,
           position: u.position,
           isDefault: u.isDefault,
+          // Feature 155 (FR-016) — the unit's own minimum; `null` = none.
+          minOrderUnits: u.minOrderUnits ?? null,
         }));
       }
     }
@@ -2337,7 +2363,7 @@ export class CatalogQueryService {
     product: Product,
     channel: CatalogResolvedChannel,
     preferredLanguage: string | undefined,
-    resolvedPrices: Map<string, ListingPrice>,
+    resolvedPrices: Map<string, ListingPriceDetail>,
     cardReads: ListingCardReads,
   ): ProductSummary {
     // Price — the pricing engine's answer for this product on this channel
@@ -2360,6 +2386,11 @@ export class CatalogQueryService {
       price,
       stockIndicator: null,
       stockLevel: null,
+      // Feature 155 (FR-014) — emitted for the types the minimum applies to only.
+      minOrderQuantity: isOrderMinimumEligibleType(product.type)
+        ? (product.minOrderQuantity ?? null)
+        : null,
+      resolvedPrice: this.#summaryResolvedPrice(resolvedPrices, product.id),
     };
   }
 

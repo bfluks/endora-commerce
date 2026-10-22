@@ -32,7 +32,9 @@ export class CustomFieldDefinition {
     | 'audience'
     | 'sortOrder'
     | 'label'
-    | 'config';
+    | 'config'
+    | 'listFilter'
+    | 'carryTo';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -73,6 +75,23 @@ export class CustomFieldDefinition {
   /** Opaque host-capability flags (FR-006). The core stores but never reads this for meaning. */
   @Property({ type: 'json' })
   config: Record<string, unknown> = {};
+
+  /**
+   * Whether the admin list of the entity type offers the field as a filter
+   * (`specs/157-custom-fields-list-filters/`). Settable only where the
+   * registry entry carries the `listFilter` marker.
+   */
+  @Property({ type: 'boolean' })
+  listFilter: boolean = false;
+
+  /**
+   * The entity types this definition's values carry to
+   * (`specs/162-custom-fields-value-carry/`). Settable only to the registry
+   * entry's `carryTargets`, each judged compatible when it is turned on; an
+   * entry whose owner module is off is kept, and not served.
+   */
+  @Property({ type: 'json' })
+  carryTo: SupportedEntityType[] = [];
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

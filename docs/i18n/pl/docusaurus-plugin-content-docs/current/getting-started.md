@@ -82,7 +82,7 @@ Po `pnpm run dev:all`:
 | Co | Adres | |
 | --- | --- | --- |
 | Sklep | `http://localhost:3000` | |
-| API | `http://localhost:3001` | dokument OpenAPI jest pod `/api/v1/_openapi.json` |
+| API | `http://localhost:3001` | opis API jest w panelu administracyjnym w **System → Opis API** |
 | Panel administracyjny | `http://localhost:3002` | zaloguj się adresem e-mail administratora i hasłem podanym podczas instalacji |
 | Mailpit | `http://localhost:8025` | każda wiadomość e-mail wysłana przez instancję w trybie deweloperskim |
 

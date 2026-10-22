@@ -66,7 +66,7 @@ function codeOf(relativePath: string): string {
 }
 
 /**
- * The three routes `App.tsx` declares that belong to no module, in source order,
+ * The four routes `App.tsx` declares that belong to no module, in source order,
  * each with the reason it is the admin application's own.
  *
  * **It was four until feature 134's wave 1**, and losing one is the interesting
@@ -92,12 +92,16 @@ const HOST_ROUTES = [
   // D-36: the screen that switches modules on and off may belong to no module,
   // or it could switch itself out of existence.
   '/platform/modules',
+  // The API description: the document describes every module's routes, so no
+  // module's presence may decide whether the screen is there. Its backing
+  // routes are kernel resident (`_lifecycle`), as `/platform/modules`' are.
+  '/api-description',
   // The signed-in admin's own profile.
   '/profile',
 ];
 
 /**
- * The three `AppShell.tsx` destinations that belong to no module, in source
+ * The four `AppShell.tsx` destinations that belong to no module, in source
  * order — which is `NAV`'s two sections and then `PALETTE_ITEMS`.
  */
 const HOST_NAV = [
@@ -105,10 +109,13 @@ const HOST_NAV = [
   '/',
   // D-36 again: the modules screen, in the `system` section.
   '/platform/modules',
+  // The API description, in the `system` section, for the reason its route is
+  // the host's above.
+  '/api-description',
   // The dashboard's command-palette row. `adminNavEntries` counted a palette
   // row beside a sidebar one — both are `{ to, module }` object literals — and
   // it is a second declaration of the same host-owned destination rather than a
-  // duplicate of it, so the total is three and not two.
+  // duplicate of it, so it is counted on its own.
   '/',
 ];
 
@@ -138,7 +145,7 @@ describe('SC-007 — the admin application declares its own registrations and no
     expect(declared).toContain('*');
   });
 
-  it('declares exactly the three host nav entries, and those three', () => {
+  it('declares exactly the four host nav entries, and those four', () => {
     const shell = codeOf('../packages/admin-shell/src/components/AppShell.tsx');
     // `module: null` is the shell's own attribution for a destination no module
     // owns. It is read here rather than counted blind: the `to` beside each one

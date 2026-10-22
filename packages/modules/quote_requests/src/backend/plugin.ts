@@ -8,6 +8,7 @@ import type {
   CartWritePort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
   OrderReadPort,
   OrganizationDetailsPort,
@@ -87,6 +88,8 @@ export interface QuoteRequestsModuleOptions {
   auditLog?: AuditPort;
   /** Feature 055 — validates + reads RFQ custom-field values on the admin edit path. */
   customFieldValues?: CustomFieldValuePort;
+  /** Feature 157 — the admin list's custom-field filters. */
+  customFieldListFilter?: CustomFieldListFilterPort;
   /**
    * Feature 075, Phase C — the five owners this module reads, and the one it
    * writes. Each replaces an `em.find` against another module's table, which
@@ -208,6 +211,7 @@ export function quoteRequestsModule(options: QuoteRequestsModuleOptions): {
     resolveTaxRate: options.resolveTaxRate,
     ...(options.auditLog ? { auditLog: options.auditLog } : {}),
     ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
+    ...(options.log ? { log: options.log } : {}),
   });
 
   const adminService = new RfqAdminService({
@@ -224,6 +228,7 @@ export function quoteRequestsModule(options: QuoteRequestsModuleOptions): {
     adminUsers: options.adminUsers,
     ...(options.auditLog ? { auditLog: options.auditLog } : {}),
     ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
+    ...(options.customFieldListFilter ? { customFieldListFilter: options.customFieldListFilter } : {}),
   });
 
   const expiryWorker = new RfqExpiryWorker({

@@ -66,6 +66,12 @@ function addressServiceFailingCleanupWith(error: unknown): AddressServicePort {
 const cartService = {
   clearForCustomer: async () => undefined,
   addItem: async () => undefined,
+  // Feature 155 (R8) — the batch admin create builds its basket with; every line admitted.
+  addItems: async (_actor: unknown, lines: readonly unknown[]) => ({
+    cart: {},
+    items: [],
+    outcomes: lines.map((_line, index) => ({ index, status: 'added' })),
+  }),
 } as unknown as CartWritePort;
 
 const placedOrder = { id: ORDER_ID, businessId: 'ORD-1' };

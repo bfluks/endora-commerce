@@ -36,14 +36,23 @@ missing array means "convert every item on the list".
 `ShoppingListService` partitions the requested items by their referencing
 product's status:
 
-- `active` products go into the cart / RFQ via the existing
-  `CartService.addItem` / `RfqService.addItem` so cart aggregation and
-  RFQ draft version bumps stay in one place.
+- `active` products go into the cart as one batch through the cart's
+  `addItems` (judged together with the cart, so the minimum order quantities
+  apply), and into the RFQ via `RfqService.createForCustomer`, whose
+  customer-write minimum check applies.
 - `archived` products (or rows whose product no longer exists) are
   reported in `skipped[]` with one of:
   - `product_archived`
   - `product_not_found`
   - `variant_unavailable`
+  - `below_minimum` (cart only) — the product's total in the cart after the
+    conversion would stay below a minimum order quantity; the skip carries the
+    `minimum` the line missed.
+
+A product the buyer may no longer see, or that the channel does not publish,
+is skipped as `product_not_found` — exactly like a deleted product, with no
+name or minimum. Every other line is still added; the conversion is not rolled
+back.
 
 The HTTP response is always `200 OK` with `{ added, skipped }` so the UI
 can show a friendly message rather than treating the partial result as

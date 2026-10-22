@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   CatalogProductRecord,
   DisplayMode,
-  LinePricePort,
+  LinePricesPort,
   LinePriceResult,
   OrganizationDetailsPort,
   ProductDisplayModePort,
@@ -24,25 +24,35 @@ import {
 const product = (attributeValues: Record<string, unknown> = {}): CatalogProductRecord =>
   ({ id: 'p-1', attributeValues }) as unknown as CatalogProductRecord;
 
-/** Quantity-tier list: 11.49 below 100 pieces, 1.00 from 100 up. */
-function tieredPricing(calls: number[] = []): LinePricePort {
+/** A batched stub answering every line with `price(quantity)`; records each batch. */
+function batched(
+  price: (quantity: number) => LinePriceResult | null,
+  batches: Array<{ quantities: number[]; context: Record<string, unknown> }> = [],
+): LinePricesPort {
   return {
-    async resolveLinePrice({ context }): Promise<LinePriceResult | null> {
-      calls.push(context.quantity);
-      const amount = context.quantity >= 100 ? '1.0000' : '11.4900';
-      return {
-        amount,
-        currency: 'PLN',
-        priceListId: 'list-1',
-        isSale: false,
-        bracketStartQuantity: context.quantity >= 100 ? 100 : 1,
-        displayMode: 'gross_only',
-      };
+    async resolveLinePrices({ lines, context }) {
+      batches.push({ quantities: lines.map((l) => l.quantity), context: { ...context } });
+      return new Map(lines.map((line) => [line.key, price(line.quantity)]));
     },
   };
 }
 
-const noListPrice: LinePricePort = { resolveLinePrice: async () => null };
+/** Quantity-tier list: 11.49 below 100 pieces, 1.00 from 100 up. */
+function tieredPricing(calls: number[] = []): LinePricesPort {
+  return batched((quantity) => {
+    calls.push(quantity);
+    return {
+      amount: quantity >= 100 ? '1.0000' : '11.4900',
+      currency: 'PLN',
+      priceListId: 'list-1',
+      isSale: false,
+      bracketStartQuantity: quantity >= 100 ? 100 : 1,
+      displayMode: 'gross_only',
+    };
+  });
+}
+
+const noListPrice: LinePricesPort = batched(() => null);
 
 function displayModes(mode: DisplayMode): ProductDisplayModePort {
   return { resolveDisplayMode: async () => mode };
@@ -118,16 +128,14 @@ describe('CartLinePricing.orderablePrice', () => {
 
   it('answers quote_only for a product sold on request, listed or not', async () => {
     const listed = new CartLinePricing(
-      {
-        resolveLinePrice: async () => ({
-          amount: '3.00',
-          currency: 'PLN',
-          priceListId: 'l',
-          isSale: false,
-          bracketStartQuantity: 1,
-          displayMode: 'none',
-        }),
-      },
+      batched(() => ({
+        amount: '3.00',
+        currency: 'PLN',
+        priceListId: 'l',
+        isSale: false,
+        bracketStartQuantity: 1,
+        displayMode: 'none',
+      })),
       displayModes('gross_only'),
       noOrganizations,
     );
@@ -155,6 +163,70 @@ describe('CartLinePricing.orderablePrice', () => {
         agreed: { quantity: 4, unitPrice: '0.00', currency: 'PLN' },
       }),
     ).toEqual({ ok: true, unitPrice: '0.00', currency: 'PLN', source: 'agreed' });
+  });
+});
+
+describe('CartLinePricing — D-287 P0', () => {
+  it("labels the product's own price with the basket channel's currency, not PLN (#303)", async () => {
+    const pricing = new CartLinePricing(noListPrice, displayModes('gross_only'), noOrganizations);
+    const eurBasket: CartPricingContext = { ...ctx, channel: { id: 'ch-eur', defaultCurrency: 'eur' } };
+    expect(
+      await pricing.orderablePrice(eurBasket, {
+        product: product({ defaultPrice: 19.99 }),
+        variantId: null,
+        quantity: 1,
+      }),
+    ).toEqual({ ok: true, unitPrice: '19.99', currency: 'EUR', source: 'product' });
+  });
+
+  it('answers unpriced for an own-price product on a basket whose channel is gone', async () => {
+    const pricing = new CartLinePricing(noListPrice, displayModes('gross_only'), noOrganizations);
+    expect(
+      await pricing.orderablePrice(
+        { ...ctx, channel: null },
+        { product: product({ defaultPrice: 19.99 }), variantId: null, quantity: 1 },
+      ),
+    ).toEqual({ ok: false, reason: 'unpriced' });
+  });
+
+  it("prices a basket's lines in one batched call, agreed lines excluded", async () => {
+    const batches: Array<{ quantities: number[]; context: Record<string, unknown> }> = [];
+    const pricing = new CartLinePricing(
+      batched(
+        (quantity) => ({
+          amount: quantity >= 100 ? '1.0000' : '11.4900',
+          currency: 'PLN',
+          priceListId: 'list-1',
+          isSale: false,
+          bracketStartQuantity: 1,
+          displayMode: 'gross_only',
+        }),
+        batches,
+      ),
+      displayModes('gross_only'),
+      noOrganizations,
+    );
+    const answers = await pricing.orderablePrices(
+      { ...ctx, organization: { id: 'org-1', customerGroupId: null } as never, customerAccountId: 'cust-1' },
+      [
+        { key: 'a', product: product(), variantId: null, quantity: 1 },
+        { key: 'b', product: product(), variantId: null, quantity: 100 },
+        {
+          key: 'c',
+          product: product(),
+          variantId: null,
+          quantity: 7,
+          agreed: { quantity: 7, unitPrice: '5.00', currency: 'PLN' },
+        },
+      ],
+    );
+    expect(batches).toHaveLength(1);
+    expect(batches[0]!.quantities).toEqual([1, 100]);
+    // The customer travels to the engine, which applies their own group.
+    expect(batches[0]!.context['customerAccountId']).toBe('cust-1');
+    expect(answers.get('a')).toMatchObject({ unitPrice: '11.49', source: 'price_list' });
+    expect(answers.get('b')).toMatchObject({ unitPrice: '1.00', source: 'price_list' });
+    expect(answers.get('c')).toMatchObject({ unitPrice: '5.00', source: 'agreed' });
   });
 });
 
@@ -189,5 +261,46 @@ describe('storedPriceDiffers', () => {
     expect(storedPriceDiffers({ unitPrice: '1.00', currency: 'PLN' }, { unitPrice: '11.49', currency: 'PLN' })).toBe(true);
     expect(storedPriceDiffers({ unitPrice: '1.00', currency: 'PLN' }, { unitPrice: '1.00', currency: 'EUR' })).toBe(true);
     expect(storedPriceDiffers({ unitPrice: '1.00', currency: 'PLN' }, null)).toBe(true);
+  });
+});
+
+describe('CartLinePricing.contextFor — the basket’s own channel', () => {
+  /**
+   * `specs/154-sales-channel-access/` (contracts/basket-attribution.md §2): the
+   * context is the basket's channel, looked up by id. It used to load the
+   * system-default channel whatever the basket, which is the shape this
+   * refuses: the only lookup is by the id it was given.
+   */
+  it('loads the channel it is given, by id, and nothing else', async () => {
+    const lookups: Array<Record<string, unknown>> = [];
+    const em = {
+      findOne: async (_entity: unknown, where: Record<string, unknown>) => {
+        lookups.push(where);
+        return where['id'] === 'ch-b' ? { id: 'ch-b', defaultCurrency: 'EUR' } : null;
+      },
+    } as unknown as Parameters<CartLinePricing['contextFor']>[0];
+    const pricing = new CartLinePricing(noListPrice, displayModes('both'), noOrganizations);
+
+    const context = await pricing.contextFor(em, {
+      organizationId: null,
+      signedIn: false,
+      salesChannelId: 'ch-b',
+    });
+
+    expect(context.channel).toEqual({ id: 'ch-b', defaultCurrency: 'EUR' });
+    expect(lookups).toEqual([{ id: 'ch-b' }]);
+  });
+
+  it('answers no channel for one that is gone, rather than another channel', async () => {
+    const em = { findOne: async () => null } as unknown as Parameters<
+      CartLinePricing['contextFor']
+    >[0];
+    const pricing = new CartLinePricing(noListPrice, displayModes('both'), noOrganizations);
+    const context = await pricing.contextFor(em, {
+      organizationId: null,
+      signedIn: true,
+      salesChannelId: 'ch-gone',
+    });
+    expect(context.channel).toBeNull();
   });
 });

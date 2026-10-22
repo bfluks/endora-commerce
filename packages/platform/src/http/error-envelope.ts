@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { LANGUAGE_FALLBACK, ERROR_CODES, type ErrorCode, type ErrorEnvelope, type ModuleErrorCode, type SupportedLanguage } from '@endora-commerce/contracts';
+import { ERROR_CODES, type ErrorCode, type ErrorEnvelope, type ModuleErrorCode, type SupportedLanguage } from '@endora-commerce/contracts';
 import { ZodError, type core as zodCore } from 'zod';
 import { hasZodFastifySchemaValidationErrors } from '@fastify/type-provider-zod';
 import { OrgWriteOutOfScopeError } from '../tenancy/tenant-context.js';
+import { installResponseLanguage } from './response-language.js';
 
 /**
  * Fastify plugin that converts every error — Zod validation failures, MikroORM unique-constraint
@@ -145,12 +146,15 @@ export interface ErrorEnvelopeOptions {
 }
 
 export function registerErrorEnvelope(app: FastifyInstance, options: ErrorEnvelopeOptions = {}): void {
+  // Feature 155 (D3/D4) — `request.responseLanguage()`, the one answer a
+  // handler names a product in and this envelope translates the sentence into.
+  const responseLanguage = installResponseLanguage(app, options.resolvePreferredLanguage);
   app.addHook('preSerialization', async (request, reply, payload) => {
     if (!options.translateErrorMessage || !isErrorEnvelope(payload)) return payload;
     const target = options.errorTranslationTargets?.[payload.error.code];
     if (!target) return payload;
     try {
-      return await localizeErrorEnvelope(options, target, payload, request, reply);
+      return await localizeErrorEnvelope(options, target, payload, request, reply, responseLanguage);
     } catch (error) {
       // **Localising an error may never replace the error.**
       //
@@ -432,6 +436,7 @@ async function localizeErrorEnvelope(
   payload: ErrorEnvelope,
   request: FastifyRequest,
   reply: FastifyReply,
+  responseLanguage: (request: FastifyRequest) => Promise<SupportedLanguage>,
 ): Promise<ErrorEnvelope> {
   // Narrowing only: the hook already refused a composition that injects no
   // translator, and this is the same `options` object.
@@ -482,7 +487,7 @@ async function localizeErrorEnvelope(
   // the place a client can branch on too.
   const params = messageParams(payload.error.details);
   const token = refusalToken(payload.error.details);
-  const language = (await options.resolvePreferredLanguage?.(request)) ?? LANGUAGE_FALLBACK;
+  const language = await responseLanguage(request);
   const translated = await options.translateErrorMessage({
     moduleId: target.moduleId,
     key: token === null ? target.key : `${target.key}.${token}`,

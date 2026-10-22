@@ -53,6 +53,8 @@ draft ──activate──▶ scheduled ──auto on startsAt──▶ active �
   (`scheduled → active` at `startsAt`, `active → expired` at `endsAt`).
   In production it's invoked by a 5-min BullMQ repeatable job; in tests
   the same `sweep()` is exposed via `POST /api/v1/admin/price-lists-engine/internal/sweep`.
+  A sweep that flips at least one list clears the pricing cache on every
+  process (see *Pricing cache*).
 
 The seeded `Default` list (`isSystem = true`) refuses every state
 change, every delete, and every non-empty `applicationRule`.
@@ -132,6 +134,25 @@ Determinism: same inputs → same outputs (no clock, no randomness, total
 tie-break order). The resolver is consumed by the storefront
 (`GET /api/v1/storefront/products/:id/resolved-price`) and by the cart
 + order-placement code paths.
+
+**The customer group** in step 2 is the same on every path: the signed-in
+customer account's own group, else its organization's group, else none. A caller
+names the buyer — the organization and, for a signed-in customer, the customer
+account — and the engine applies the rule. The catalogue listing, the product
+page, search, the typeahead, comparisons, product links, the resolved-price
+endpoint and the cart all name the account; quote reference prices and the
+admin order preview pass the group they already resolved. An account that does
+not belong to the organization it is named with is ignored.
+
+**Batched entry points.** Besides the single `resolveEngine` /
+`resolveLinePrice`, the engine prices many products at once:
+`resolveListingPrices` (a listing page, quantity 1), `resolveListingPriceDetails`
+(the same plus the base / sale / display-mode split, for the product page, the
+home page cards and the typeahead) and `resolveLinePrices` (many lines, each at
+its own quantity — the cart, the placement price check, quote reference prices,
+the external catalogue API). Each costs a number of statements that does not
+grow with the number of products or lines, and each answers exactly what the
+single call answers for every product or line.
 
 ## Price matrix
 
@@ -431,16 +452,23 @@ one currency.
 
 ## Storefront integration
 
-- `GET /api/v1/storefront/products/:id/resolved-price` is consumed by
-  `storefront/lib/api/pricing.ts` (`getResolvedPrice` /
-  `getResolvedPricesBulk`); the bulk wrapper fans out to the singular
-  endpoint with bounded concurrency until a backend POST batch lands.
-- `BaseSalePriceBlock`, `PriceTag`, and `ProductCard` consume the
-  `resolvedPrice` envelope; `displayMode === 'none'` hides every price
-  element and surfaces the `QuoteRequestCta` (which routes through
-  `AddToRfqForm`).
-- The PDP fetches the resolver in parallel with stock and swaps the
-  Add-to-cart row for the QuoteRequest CTA when the mode is `none`.
+- Catalogue reads carry the price split with them: every `ProductSummary` the
+  catalogue (and search) returns has `resolvedPrice` — `basePrice`, `salePrice`
+  and `displayMode` — from the same resolution that produced `price`. The
+  product page and the home page's product cards render it, so each product is
+  priced once per page; neither calls
+  `GET /api/v1/storefront/products/:id/resolved-price` any more.
+- `GET /api/v1/storefront/products/:id/resolved-price` stays available, through
+  `storefront/lib/api/pricing.ts` (`getResolvedPrice`), for a surface that needs
+  one product at another quantity.
+- `BaseSalePriceBlock`, `PriceTag`, and `ProductCard` consume the base / sale /
+  display-mode split; `displayMode === 'none'` hides every price element and
+  surfaces the `QuoteRequestCta` (which routes through `AddToRfqForm`).
+- The PDP swaps the Add-to-cart row for the QuoteRequest CTA when the mode is
+  `none`.
+- The variant picker shows no price per variant. A variant is charged its
+  product's price — price lists have no variant dimension yet — so the price
+  block above the picker is the price of every variant.
 
 ## Admin integration
 
@@ -487,12 +515,28 @@ one currency.
   authority check — the caller passes a buyer it has already authorised. The
   `quote_requests` module uses it for every line's reference price.
 
+## Pricing cache
+
+Resolutions are cached per process in an in-memory LRU (`PricingCache`, 60 s,
+5 000 entries), keyed by product, variant, quantity, currency, sales channel,
+organization and effective customer group.
+
+- **Cleared after commit.** Every audited price-list write clears it once the
+  Command Bus has committed the write — never before, so a read racing the write
+  cannot put the old price back for a whole TTL. A write that changed nothing
+  clears nothing. A resolution that started before a clear is answered but not
+  stored.
+- **Cleared on every process.** A clear is announced on the Redis channel
+  `b2b:price_lists:pricing-generation`; every API and worker process subscribes
+  when it boots and clears its own cache when another process announces one. If
+  Redis cannot deliver the announcement, other processes catch up within the
+  60 s TTL.
+- **Cleared by the status sweep** whenever it activates or expires a list.
+- **Not cleared** by catalogue writes (a product's categories or its own
+  price): those still take up to 60 s to reach a cached price.
+
 ## Extension points
 
-- **In-memory LRU cache** around the resolver
-  (deferred — the storefront's 60-s revalidate window is sufficient
-  for the MVP). Bookkeeping: every write path on `PriceListService`
-  should emit `pricing.invalidate.v1`.
 - **Cart-service / order-placement swap** — the foundation cart and
   order-placement code paths still read `attributeValues.defaultPrice`.
   The next iteration introduces `PricingService.resolveLinePrice()`

@@ -74,6 +74,8 @@ import type { SearchPhraseRecord as SearchPhraseRecordRow } from '../../../packa
 import type { Tax as TaxRow } from '../../../packages/modules/taxes/src/backend/entities/tax.entity.js';
 import type { Asset as AssetRow } from '../../../packages/modules/assets_library/src/backend/entities/asset.entity.js';
 import type { AssetFolder as AssetFolderRow } from '../../../packages/modules/assets_library/src/backend/entities/asset-folder.entity.js';
+import type { AssetObjectCleanup as AssetObjectCleanupRow } from '../../../packages/modules/assets_library/src/backend/entities/asset-object-cleanup.entity.js';
+import type { AssetPermalinkRelease as AssetPermalinkReleaseRow } from '../../../packages/modules/assets_library/src/backend/entities/asset-permalink-release.entity.js';
 import type { Cart as CartRow } from '../../../packages/modules/carts/src/backend/entities/cart.entity.js';
 import type { CartItem as CartItemRow } from '../../../packages/modules/carts/src/backend/entities/cart-item.entity.js';
 import type { CartAuditEntry as CartAuditEntryRow } from '../../../packages/modules/carts/src/backend/entities/cart-audit-entry.entity.js';
@@ -715,6 +717,16 @@ export const AssetFolder = classNamed<AssetFolderRow>(
   installedModuleEntities,
   'assets_library',
   'AssetFolder',
+);
+export const AssetPermalinkRelease = classNamed<AssetPermalinkReleaseRow>(
+  installedModuleEntities,
+  'assets_library',
+  'AssetPermalinkRelease',
+);
+export const AssetObjectCleanup = classNamed<AssetObjectCleanupRow>(
+  installedModuleEntities,
+  'assets_library',
+  'AssetObjectCleanup',
 );
 export const Cart = classNamed<CartRow>(installedModuleEntities, 'carts', 'Cart');
 export const CartItem = classNamed<CartItemRow>(installedModuleEntities, 'carts', 'CartItem');

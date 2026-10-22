@@ -37,6 +37,10 @@ gated by `customers:manage`.
 | `PATCH /api/v1/organizations/mine/addresses/:id` | customer | Update |
 | `DELETE /api/v1/organizations/mine/addresses/:id` | customer | Remove |
 | `GET /api/v1/admin/organizations` | admin | List with `filter[status]` / `filter[vatStatus]` / `q` |
+| `POST /api/v1/admin/organizations` | admin (`customers:manage`) | Create an Organization with its sales channels (see *Sales channels* below) |
+| `GET /api/v1/admin/organizations/sales-channel-options` | admin (`customers:manage`) | The channels the create form offers |
+| `GET /api/v1/admin/organizations/:id/sales-channels` | admin (`customers:read` or `customers:manage`) | The channels assigned to the Organization, and the channels it could be assigned |
+| `PUT /api/v1/admin/organizations/:id/sales-channels` | admin (`customers:manage`) | Replace the assigned channels (`{ salesChannelIds }`, at least one) |
 | `GET /api/v1/admin/organizations/:id` | admin | Org + member roster (`updatedAt`, members include `lastLoginAt`) |
 | `PATCH /api/v1/admin/organizations/:id` | admin | Update name / `status` / `vatStatus`; optional `expectedUpdatedAt` → `409 VERSION_CONFLICT` when stale |
 | `POST /api/v1/admin/organizations/:id/members/invite` | admin | Invite by email + role (platform-scope) |
@@ -67,6 +71,31 @@ uniqueness is enforced at the DB level; duplicate registrations return
 - **Last-admin guard** — codified in `role-service.ts#changeRole` and
   `invitation-service.ts#revoke`; add new "must keep at least one admin"
   call sites here.
+
+## Sales channels
+
+An Organization's members may sign in to and shop in exactly the stores whose sales channels are assigned to the Organization. No assignment means no access; an Organization always keeps at least one.
+
+- **Sign-in.** A member whose Organization is not assigned to the store they sign in on is refused with `403 SALES_CHANNEL_NOT_PERMITTED` — *"This account does not have access to this store."* — after the password is checked and before a second factor is asked for or a session is created. Signing in with an external identity provider is refused the same way and lands back on the store's sign-in page with that message. A wrong password is still answered `401` first, so the refusal says nothing about assignments to someone without the password.
+- **Signed in when access is removed.** The member's next page on that store shows a *No access to this store* screen listing the stores they can use, with a sign-out button.
+
+### Who gets which channel
+
+| How the Organization is created | Channels assigned |
+| --- | --- |
+| Business registration on a storefront (`POST /api/v1/organizations/register`) | exactly the channel of the store it registered on — also on a store closed to anonymous visitors, where moderation decides whether the business gets in |
+| Individual (B2C) self-registration (personal organization) | exactly the channel of the store it registered on; refused on a store closed to anonymous visitors |
+| *New organization* in the admin | the channels chosen on the form |
+| Anything else — sign-in with an external identity provider that provisions a new account, imports, demo data | the system-default channel |
+
+Accepting an invitation adds a member to an existing Organization and changes none of its channels.
+
+When this rule was introduced, every existing Organization was assigned the system-default channel and every channel it already had orders on.
+
+### In the admin
+
+- **Sales channels panel** — on an Organization's page. With `customers:manage` it is a multi-select with **Save sales channels**; without it, a read-only list. Inactive channels are marked *(inactive)* and the system-default channel is badged. Saving an empty selection is refused: *"An organization must be assigned at least one sales channel."* Each added or removed channel writes one audit row. A change applies at once on the server that saved it and on every other server within 30 seconds.
+- **New organization** — a button on the Organizations list and an action in the command palette (⌘K / Ctrl+K), both shown with `customers:manage`. The form asks for the name, tax ID, registered address, status (*Active* or *Pending verification*) and the sales channels, with the system-default channel pre-selected. The creation is one audited command; the new Organization's page opens when it is saved. Members are invited from that page once the Organization exists.
 
 ## Commercial party and moderation
 

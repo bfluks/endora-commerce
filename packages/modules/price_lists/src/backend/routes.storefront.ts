@@ -169,16 +169,18 @@ export async function registerStorefrontPricingRoutes(
       const currency = request.query.currency?.toUpperCase();
       const variantId = request.query.variantId ?? null;
 
-      // The engine reads `customerGroupId` off the record `pricingViewerOf`
-      // loaded, so the organisation's group travels with it; a customer's *own*
-      // group override (feature 040 R6) is not resolved here, exactly as it is
-      // not on the catalogue listing this page's cards come from.
+      // D-287 P0 — the customer's own group (feature 040 R6) overrides the
+      // organisation's here exactly as on the catalogue listing: the engine
+      // resolves it from the account, which belongs to `viewer.organization`.
       const out = await pricingService.resolveEngine({
         product,
         variantId,
         context: {
           quantity,
           organization: viewer.organization,
+          ...(viewer.organization && viewer.audience.customerAccountId
+            ? { customerAccountId: viewer.audience.customerAccountId }
+            : {}),
           salesChannel: channel,
           ...(currency ? { currencyCode: currency } : {}),
         },

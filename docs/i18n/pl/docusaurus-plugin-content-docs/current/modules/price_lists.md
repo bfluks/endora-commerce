@@ -45,7 +45,8 @@ draft ──activate──▶ scheduled ──auto on startsAt──▶ active �
 - `PriceListStatusWorker.sweep()` wykonuje dwa przejścia zależne od czasu (`scheduled → active` w
   chwili `startsAt`, `active → expired` w chwili `endsAt`). Na produkcji wywołuje go co 5 minut
   powtarzalne zadanie BullMQ; w testach to samo `sweep()` jest dostępne przez
-  `POST /api/v1/admin/price-lists-engine/internal/sweep`.
+  `POST /api/v1/admin/price-lists-engine/internal/sweep`. Przebieg, który przestawi choć jeden
+  cennik, czyści pamięć podręczną cen we wszystkich procesach (zob. *Pamięć podręczna cen*).
 
 Cennik `Default` tworzony przy instalacji (`isSystem = true`) odrzuca każdą zmianę stanu, każde
 usunięcie i każdą niepustą `applicationRule`. Migracja `20260504T125655_price_lists_engine.ts` tworzy w nim też progi na podstawie
@@ -118,6 +119,22 @@ Algorytm:
 Determinizm: te same dane wejściowe → ten sam wynik (bez zegara, bez losowości, pełny porządek przy
 remisach). Z mechanizmu korzysta storefront (`GET /api/v1/storefront/products/:id/resolved-price`)
 oraz koszyk i składanie zamówienia.
+
+**Grupa klientów** w kroku 2 jest taka sama na każdej ścieżce: własna grupa zalogowanego konta
+klienta, w przeciwnym razie grupa jego organizacji, w przeciwnym razie żadna. Wywołujący wskazuje
+kupującego — organizację oraz, dla zalogowanego klienta, konto klienta — a mechanizm stosuje tę
+regułę. Lista produktów w katalogu, strona produktu, wyszukiwanie, podpowiedzi wyszukiwania,
+porównania, powiązania produktów, endpoint ceny wyznaczonej i koszyk wskazują konto; ceny
+referencyjne zapytań ofertowych i podgląd zamówienia w panelu przekazują grupę, którą już ustaliły.
+Konto, które nie należy do wskazanej obok organizacji, jest pomijane.
+
+**Wywołania zbiorcze.** Oprócz pojedynczych `resolveEngine` / `resolveLinePrice` mechanizm wycenia
+wiele produktów naraz: `resolveListingPrices` (strona listy, ilość 1), `resolveListingPriceDetails`
+(to samo oraz podział na cenę bazową, promocyjną i tryb wyświetlania — dla strony produktu, kart na
+stronie głównej i podpowiedzi wyszukiwania) oraz `resolveLinePrices` (wiele pozycji, każda w swojej
+ilości — koszyk, sprawdzenie ceny przy składaniu zamówienia, ceny referencyjne zapytań ofertowych,
+zewnętrzne API katalogu). Każde z nich wykonuje liczbę zapytań, która nie rośnie z liczbą produktów
+ani pozycji, i dla każdego produktu lub pozycji zwraca dokładnie to, co pojedyncze wywołanie.
 
 ## Macierz cen
 
@@ -392,14 +409,20 @@ którego pojedyncza dawna cena została skopiowana do więcej niż jednej waluty
 
 ## Storefront
 
-- Z `GET /api/v1/storefront/products/:id/resolved-price` korzysta `storefront/lib/api/pricing.ts`
-  (`getResolvedPrice` / `getResolvedPricesBulk`); wersja zbiorcza wywołuje endpoint dla pojedynczych
-  produktów z ograniczoną współbieżnością, dopóki w backendzie nie powstanie zbiorczy endpoint POST.
-- `BaseSalePriceBlock`, `PriceTag` i `ProductCard` korzystają ze struktury `resolvedPrice`;
-  `displayMode === 'none'` ukrywa wszystkie elementy ceny i pokazuje `QuoteRequestCta` (prowadzący
-  do `AddToRfqForm`).
-- Strona produktu pobiera cenę równolegle ze stanem magazynowym i zamienia wiersz Add-to-cart na
-  przycisk zapytania ofertowego, gdy tryb to `none`.
+- Odczyty katalogu niosą ze sobą podział ceny: każdy `ProductSummary` zwracany przez katalog (i
+  wyszukiwanie) ma `resolvedPrice` — `basePrice`, `salePrice` i `displayMode` — z tego samego
+  wyznaczenia, z którego pochodzi `price`. Strona produktu i karty produktów na stronie głównej
+  pokazują go, więc każdy produkt jest wyceniany raz na stronę; żadna z nich nie wywołuje już
+  `GET /api/v1/storefront/products/:id/resolved-price`.
+- `GET /api/v1/storefront/products/:id/resolved-price` pozostaje dostępny przez
+  `storefront/lib/api/pricing.ts` (`getResolvedPrice`) dla miejsca, które potrzebuje ceny jednego
+  produktu w innej ilości.
+- `BaseSalePriceBlock`, `PriceTag` i `ProductCard` korzystają z podziału na cenę bazową, promocyjną
+  i tryb wyświetlania; `displayMode === 'none'` ukrywa wszystkie elementy ceny i pokazuje
+  `QuoteRequestCta` (prowadzący do `AddToRfqForm`).
+- Strona produktu zamienia wiersz Add-to-cart na przycisk zapytania ofertowego, gdy tryb to `none`.
+- Wybór wariantu nie pokazuje ceny dla wariantu. Wariant kosztuje tyle, ile jego produkt — cenniki
+  nie mają jeszcze wymiaru wariantu — więc blok ceny nad wyborem wariantu jest ceną każdego wariantu.
 
 ## Panel administracyjny
 
@@ -440,11 +463,26 @@ którego pojedyncza dawna cena została skopiowana do więcej niż jednej waluty
   ona uprawnień — wywołujący przekazuje kupującego, którego już autoryzował. Moduł
   `quote_requests` korzysta z niej przy cenie referencyjnej każdej pozycji.
 
+## Pamięć podręczna cen
+
+Wyznaczone ceny są przechowywane w każdym procesie w pamięci podręcznej LRU (`PricingCache`, 60 s,
+5 000 wpisów), z kluczem: produkt, wariant, ilość, waluta, kanał sprzedaży, organizacja i
+obowiązująca grupa klientów.
+
+- **Czyszczona po zatwierdzeniu.** Każdy audytowany zapis cennika czyści ją dopiero wtedy, gdy
+  Command Bus zatwierdzi zapis — nigdy wcześniej, więc odczyt równoległy z zapisem nie przywróci
+  starej ceny na cały czas życia wpisu. Zapis, który niczego nie zmienił, niczego nie czyści.
+  Wyznaczenie, które zaczęło się przed czyszczeniem, dostaje odpowiedź, ale nie jest zapamiętywane.
+- **Czyszczona w każdym procesie.** Czyszczenie jest ogłaszane na kanale Redis
+  `b2b:price_lists:pricing-generation`; każdy proces API i workera subskrybuje go przy starcie i
+  czyści własną pamięć, gdy inny proces je ogłosi. Jeśli Redis nie dostarczy ogłoszenia, pozostałe
+  procesy nadrabiają w ciągu 60 s.
+- **Czyszczona przez przebieg statusów**, gdy aktywuje albo wygasza cennik.
+- **Nie jest czyszczona** przez zapisy katalogu (kategorie produktu albo jego własna cena): te
+  nadal docierają do zapamiętanej ceny w ciągu do 60 s.
+
 ## Punkty rozszerzenia
 
-- **Pamięć podręczna LRU w procesie** wokół mechanizmu wyznaczania cen (odłożona — 60-sekundowe okno
-  odświeżania storefrontu wystarcza na MVP). Do zrobienia: każda ścieżka zapisu w
-  `PriceListService` powinna emitować `pricing.invalidate.v1`.
 - **Przejście koszyka i składania zamówień na nowy mechanizm** — pierwotny koszyk i składanie
   zamówień nadal odczytują `attributeValues.defaultPrice`. Następna wersja wprowadzi
   `PricingService.resolveLinePrice()` i uzależni od niego konstruktor `cart-service`; w tej samej

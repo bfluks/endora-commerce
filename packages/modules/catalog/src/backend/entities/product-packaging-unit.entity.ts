@@ -17,7 +17,13 @@ import { randomUUID } from 'crypto';
 @Entity({ tableName: 'product_packaging_units' })
 @Unique({ properties: ['productId', 'name'] })
 export class ProductPackagingUnit {
-  [OptionalProps]?: 'id' | 'position' | 'isDefault' | 'createdAt' | 'updatedAt';
+  [OptionalProps]?:
+    | 'id'
+    | 'position'
+    | 'isDefault'
+    | 'minOrderUnits'
+    | 'createdAt'
+    | 'updatedAt';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -39,6 +45,14 @@ export class ProductPackagingUnit {
   /** Whether this unit is the one presented by default on the storefront. */
   @Property({ type: 'boolean' })
   isDefault: boolean = false;
+
+  /**
+   * Feature 155 (FR-002) — the minimum number of units of this packaging
+   * unit per order line, 1…1 000 000, or `null` for none. Deleting the unit
+   * removes the rule with it.
+   */
+  @Property({ type: 'integer', nullable: true })
+  minOrderUnits?: number | null;
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

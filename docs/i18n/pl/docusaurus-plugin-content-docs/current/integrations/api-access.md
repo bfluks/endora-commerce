@@ -51,6 +51,7 @@ utworzeniu — aby powiązać klucz inaczej, unieważnij go i utwórz nowy. Regu
 | `catalog:write` | Zapis produktu w PIM według SKU | Nie można przyznać (reguła tworzenia) |
 | `orders:read` | Nie można przyznać bez powiązania | Lista i szczegóły zamówień przez zewnętrzne API |
 | `orders:write` | Nie można przyznać bez powiązania | Składanie zamówień przez zewnętrzne API |
+| `platform.api_description.read` | Opis API (`GET /api/v1/_openapi.json`) | Opis API (`GET /api/v1/_openapi.json`) |
 
 ### Przypięcie kanału (klucze powiązane)
 

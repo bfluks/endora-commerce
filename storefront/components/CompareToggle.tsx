@@ -22,6 +22,8 @@ import {
  */
 export function CompareToggle(props: {
   productId: string;
+  /** The active sales channel, sent on the browser-side calls. Supplied by the layout. */
+  salesChannelCode: string | undefined;
   /**
    * `'card'` (default) floats a compact icon button over a product-card media
    * block (absolutely positioned). `'inline'` renders a labelled button that
@@ -38,7 +40,7 @@ export function CompareToggle(props: {
     let cancelled = false;
     void (async () => {
       try {
-        const view = await getMyComparison();
+        const view = await getMyComparison(props.salesChannelCode);
         if (!cancelled) {
           setActive(view?.products.some((p) => p.id === props.productId) ?? false);
           setHydrated(true);
@@ -50,7 +52,7 @@ export function CompareToggle(props: {
     return () => {
       cancelled = true;
     };
-  }, [props.productId]);
+  }, [props.productId, props.salesChannelCode]);
 
   if (!hydrated) return null;
 
@@ -60,10 +62,10 @@ export function CompareToggle(props: {
     setError(null);
     try {
       if (active) {
-        await removeProductFromCompare(props.productId);
+        await removeProductFromCompare(props.productId, props.salesChannelCode);
         setActive(false);
       } else {
-        await addProductToCompare(props.productId);
+        await addProductToCompare(props.productId, props.salesChannelCode);
         setActive(true);
       }
       // Notify any listening counter pill to refresh.
@@ -178,6 +180,8 @@ export function CompareCounterLink(props: {
   ariaLabel: string;
   /** Inline SVG passed in from the server-rendered header. */
   icon: ReactNode;
+  /** The active sales channel, sent on the browser-side calls. Supplied by the layout. */
+  salesChannelCode: string | undefined;
 }): ReactNode {
   const [size, setSize] = useState(0);
 
@@ -185,7 +189,7 @@ export function CompareCounterLink(props: {
     let cancelled = false;
     const refresh = async (): Promise<void> => {
       try {
-        const view = await getMyComparison();
+        const view = await getMyComparison(props.salesChannelCode);
         if (!cancelled) setSize(view?.products.length ?? 0);
       } catch {
         if (!cancelled) setSize(0);
@@ -198,7 +202,7 @@ export function CompareCounterLink(props: {
       cancelled = true;
       window.removeEventListener('b2b:compare:changed', onChange);
     };
-  }, []);
+  }, [props.salesChannelCode]);
 
   const label = size > 0 ? `${props.ariaLabel} · ${size}` : props.ariaLabel;
   return (

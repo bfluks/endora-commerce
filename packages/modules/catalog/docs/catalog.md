@@ -226,6 +226,97 @@ modules are present. The payload is sent whole; the strict schemas are
   default; override the slugifier in `catalog-admin.service.ts` if locale
   collisions become a concern.
 
+## Order rules: minimum order quantity and returnable
+
+Two rules on a product decide how it may be ordered and whether it may be sent
+back. Both are edited in the **Order rules** card on the product editor's
+**Inventory** tab.
+
+> **Upgrading: every existing product starts as not returnable.** A product on
+> which nobody has set **Returnable** reads as not returnable, and that includes
+> every product that existed before the setting was introduced. Lines of orders
+> placed after the upgrade are therefore not returnable until you mark their
+> products. To mark many at once, select them on the product list and use
+> **Bulk edit → Returnable → Yes — returnable**. Orders placed before the
+> upgrade are unaffected: their lines stay returnable under the usual rules.
+
+### Minimum order quantity
+
+- **Minimum order quantity (pcs)** — the fewest pieces of the product a buyer
+  may order in one order. Optional; a whole number from **1 to 1 000 000**, or
+  empty for no minimum. It applies to `simple` and `configurable` products
+  only: on a `grouped`, `bundle` or `virtual` product the card says so, and
+  the API refuses the field with `422 VALIDATION_FAILED` naming
+  `minOrderQuantity`, on create and on update. A value outside the range is
+  refused with `400 VALIDATION_FAILED`.
+- **A minimum per packaging unit** — each packaging unit may carry its own
+  minimum number of units; see [Packaging Units](./catalog/packaging-units.md).
+
+The minimum is judged on the **product total**: every line of the product in
+the basket counts — single-piece and packaging-unit lines, every variant. A
+packaging-unit minimum counts the units of that unit ordered for the product,
+over every variant. The two checks are independent; a basket must satisfy
+every minimum that is set. Variants inherit the product's minimum.
+
+Every way into a basket, a quote request or an order applies it — the cart,
+checkout, quick order, one-click buy, shopping lists, quote requests, the
+admin's Create order screen and the external order API. Each of those modules'
+pages says what its path does with a line below the minimum. A refusal answers
+`422 PRODUCT_BELOW_MINIMUM_QUANTITY` (pieces) or
+`422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` (a packaging unit), with a message
+in the buyer's language naming the product and the minimum. Removing a line is
+always allowed.
+
+A product a buyer may not see, or that the request's sales channel does not
+publish, is reported as an unknown product on every path — its name and its
+minimum are never disclosed.
+
+The storefront product detail, the product list, search results and the
+comparison carry `minOrderQuantity` (`null` when there is none, or when the
+product's type takes no minimum); the product detail's `packagingUnits[]`
+carries each unit's `minOrderUnits`. The storefront starts the quantity at the
+minimum and does not offer less.
+
+### Returnable
+
+**Returnable** (yes / no, on every product type) says whether buyers may
+include the product in a **return**. It does not restrict **complaints**. The
+default is no.
+
+The value is **recorded on each order line when the order is placed**
+(`order_items.returnable_at_purchase`); changing the flag later changes no
+order already placed. A line whose product could not be read at placement is
+recorded as not returnable. What the Returns module does with the recorded
+value is on its own page.
+
+### Audit and copies
+
+Setting or clearing either rule is audited like any product edit, with the old
+and the new value. **Bulk edit → Returnable** writes one audit entry per
+product it changes, for up to 200 products in one synchronous request and
+through the queued bulk edit beyond. Changing a rule never alters an existing
+cart, order, quote request or return. **Duplicate** does not copy either rule:
+the copy starts with no minimum and as not returnable.
+
+### API
+
+| Field | Where | Values |
+| --- | --- | --- |
+| `minOrderQuantity` | `POST` / `PATCH /api/v1/admin/catalog/products[/:id]`, the admin product response | integer `1…1000000`, or `null` to clear |
+| `returnable` | the same, and `POST /api/v1/admin/catalog/products/bulk-update` | boolean |
+| `minOrderUnits` | `POST` / `PATCH …/packaging-units[/:unitId]`, the packaging-unit response | integer `1…1000000`, or `null` to clear |
+
+The catalogue read port (`CatalogProductReadPort`) reports `minOrderQuantity`
+and `returnable` on each product record and `minOrderUnits` on each packaging
+unit, and gains `listPackagingUnitsByProductIds` for batch reads. Like every
+method of the port it applies no visibility policy: a caller passes only
+product ids it has already vetted.
+
+Migration `20261016T082008_catalog_order_rules.ts` adds
+`products.min_order_quantity` (nullable, `CHECK` 1–1 000 000),
+`products.returnable` (not null, default `false`) and
+`product_packaging_units.min_order_units` (nullable, `CHECK` 1–1 000 000).
+
 ## Product structure and composition surfaces
 
 The catalog grew several capability surfaces, each with its own page:

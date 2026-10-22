@@ -1,7 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { Order } from '../entities/order.entity.js';
-import { OrderItem } from '../entities/order-item.entity.js';
 import type { OrderReturnContext, OrderReturnContextPort } from '@endora-commerce/contracts';
+import { loadArrangedOrderLines } from './order-line-order.js';
 
 /**
  * Orders-side implementation of `OrderReturnContextPort` (feature 046, R4).
@@ -27,7 +27,8 @@ export class OrderReturnContextProvider implements OrderReturnContextPort {
     const em = this.emFactory();
     const order = await em.findOne(Order, { id: orderId });
     if (!order) return null;
-    const items = await em.find(OrderItem, { orderId });
+    // Feature 159 — the lines in the order's display order.
+    const items = (await loadArrangedOrderLines(em, orderId)).lines;
 
     const completing = order.status === COMPLETING_STATUS;
     const lines = items.map((it) => {
@@ -39,6 +40,10 @@ export class OrderReturnContextProvider implements OrderReturnContextPort {
         purchasedQty: it.quantity,
         paidUnitAmount: unitPaid,
         paidLineAmount: round2(unitPaid * it.quantity),
+        // Feature 155 (FR-016a) — the stamp placement recorded, reported as
+        // it is: `null` only on a line placed before the feature. What `null`
+        // means for a return (FR-025) is `returns`' policy, not this port's.
+        returnableAtPurchase: it.returnableAtPurchase ?? null,
       };
     });
 

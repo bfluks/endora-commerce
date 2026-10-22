@@ -54,6 +54,7 @@ See [`api_keys` module docs](../modules/api_keys.md) for the creation rules.
 | `catalog:write` | PIM by-SKU product upsert | Not grantable (creation rule) |
 | `orders:read` | Not grantable without a binding | External order list/detail |
 | `orders:write` | Not grantable without a binding | External order placement |
+| `platform.api_description.read` | The API description (`GET /api/v1/_openapi.json`) | The API description (`GET /api/v1/_openapi.json`) |
 
 ### Channel pinning (bound keys)
 

@@ -21,6 +21,7 @@ import {
 } from '../../helpers/package-entities.js';
 import { setEscapeHatchAuditSink, withSystemScope } from '../../../src/tenancy/escape-hatch.js';
 import { runWithTenantContext, type TenantContext } from '../../../src/tenancy/tenant-context.js';
+import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
 
 /**
  * Feature 146, Phase 10 (T065, T065a) — the price-negotiation lock, enforced in
@@ -183,6 +184,8 @@ describe('146 — price-negotiation lock enforcement [integration]', () => {
       orgLocked = l.id;
       orgFree = f.id;
       orgOther = o.id;
+      // Feature 154 — the three tenants shop on the stores the harness seeds.
+      await bindOrganizationsToFixtureChannelsSql(em, [orgLocked, orgFree, orgOther]);
 
       const accounts = {
         lockedBuyer: newAccount(em, orgLocked, 'locked'),

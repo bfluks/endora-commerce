@@ -1,8 +1,11 @@
-import type {
-  ProductAudience,
-  QuickOrderImportResponse,
-  RecognizedQuickOrderItem,
-  RejectedQuickOrderItem,
+import {
+  evaluateOrderMinimums,
+  type OrderMinimumLine,
+  type OrderMinimumProduct,
+  type ProductAudience,
+  type QuickOrderImportResponse,
+  type RecognizedQuickOrderItem,
+  type RejectedQuickOrderItem,
 } from '@endora-commerce/contracts';
 import { resolveVariant, type VariantLike } from './variant-resolver.js';
 import type { NormalizedRow, ParseOutcome } from './import-rows.js';
@@ -18,12 +21,40 @@ export interface ProductLike {
   sku: string;
   status: string;
   deletedAt?: Date | null;
+  /** Feature 155 — the product type; minimums apply to `simple` / `configurable` only. */
+  type?: string;
+  /** Feature 155 — the pieces minimum; `null` or absent = none. */
+  minOrderQuantity?: number | null;
+}
+
+/** Feature 155 — the two fields of a parent product the minimum rule reads. */
+export interface ParentMinimumRule {
+  type: string;
+  minOrderQuantity: number | null;
 }
 
 export interface VariantBySku {
   id: string;
   sku: string;
   parentProductId: string;
+  /**
+   * Feature 155 — the parent's minimum rule, so a row naming a variant by its
+   * own SKU is judged against its product's minimum. Absent = no rule known.
+   */
+  parent?: ParentMinimumRule;
+}
+
+/**
+ * Feature 155 (research R20, threat F4) — the most rows one preview reads,
+ * whatever `quick_order.import_max_rows` is set to, so the evaluation is
+ * bounded. A module constant, not a contract.
+ */
+export const QUICK_ORDER_IMPORT_ROWS_CEILING = 10_000;
+
+/** Clamps a resolved row cap to `[1, QUICK_ORDER_IMPORT_ROWS_CEILING]`; absent = the ceiling. */
+export function clampImportMaxRows(maxRows: number | undefined): number {
+  if (typeof maxRows !== 'number' || !Number.isFinite(maxRows)) return QUICK_ORDER_IMPORT_ROWS_CEILING;
+  return Math.min(QUICK_ORDER_IMPORT_ROWS_CEILING, Math.max(1, Math.floor(maxRows)));
 }
 
 /**
@@ -89,6 +120,7 @@ interface Candidate {
 
 interface ResolvedLine {
   line: number;
+  raw: string;
   sku: string;
   productId: string;
   variantId: string | null;
@@ -118,19 +150,22 @@ export class QuickOrderImportPipeline {
     opts: { maxRows?: number; audience: QuickOrderImportAudience },
   ): Promise<QuickOrderImportResponse> {
     const rejected: RejectedQuickOrderItem[] = [];
+    // Feature 155 — the operator's summary always carries `warningCount`.
+    const noWarnings = opts.audience === 'unrestricted' ? 0 : undefined;
 
     if (!parse.headerOk) {
       for (const row of parse.rows) {
         rejected.push({ line: row.rowNumber, raw: row.raw, reason: 'malformed_row' });
       }
-      return this.finalize([], rejected, 0, false);
+      return this.finalize([], rejected, 0, false, noWarnings);
     }
 
     // Row cap (FR-010): overflow rows are reported, not silently dropped.
+    // Feature 155 (R20) — never above the ceiling, however the Setting is set.
     let rows = parse.rows;
     let truncated = false;
-    const maxRows = opts.maxRows;
-    if (typeof maxRows === 'number' && Number.isFinite(maxRows) && rows.length > maxRows) {
+    const maxRows = clampImportMaxRows(opts.maxRows);
+    if (rows.length > maxRows) {
       for (const row of rows.slice(maxRows)) {
         rejected.push({ line: row.rowNumber, raw: row.raw, reason: 'row_limit_exceeded' });
       }
@@ -139,7 +174,7 @@ export class QuickOrderImportPipeline {
     }
 
     const candidates = this.toCandidates(rows, rejected);
-    if (candidates.length === 0) return this.finalize([], rejected, 0, truncated);
+    if (candidates.length === 0) return this.finalize([], rejected, 0, truncated, noWarnings);
 
     const skus = Array.from(new Set(candidates.map((c) => c.sku)));
     const [products, variantsBySku] = await Promise.all([
@@ -176,6 +211,7 @@ export class QuickOrderImportPipeline {
         if (resolution.kind === 'no_variants') {
           resolvedLines.push({
             line: c.line,
+            raw: c.raw,
             sku: product.sku,
             productId: product.id,
             variantId: null,
@@ -185,6 +221,7 @@ export class QuickOrderImportPipeline {
         } else if (resolution.kind === 'resolved') {
           resolvedLines.push({
             line: c.line,
+            raw: c.raw,
             sku: product.sku,
             productId: product.id,
             variantId: resolution.variantId,
@@ -208,6 +245,7 @@ export class QuickOrderImportPipeline {
         }
         resolvedLines.push({
           line: c.line,
+          raw: c.raw,
           sku: variant.sku,
           productId: variant.parentProductId,
           variantId: variant.id,
@@ -220,8 +258,75 @@ export class QuickOrderImportPipeline {
       rejected.push({ line: c.line, raw: c.raw, reason: 'product_not_found' });
     }
 
-    const { recognized, mergedCount } = this.mergeDuplicates(resolvedLines);
-    return this.finalize(recognized, rejected, mergedCount, truncated);
+    const { recognized: merged, mergedCount } = this.mergeDuplicates(resolvedLines);
+
+    // Feature 155 (P1, R12.1) — the minimum rules of every product a
+    // recognised row resolved to, from the records already loaded above.
+    const rules = new Map<string, OrderMinimumProduct>();
+    for (const product of products) rules.set(product.id, ruleOf(product.id, product));
+    for (const variant of variantsBySku) {
+      if (!rules.has(variant.parentProductId) && variant.parent) {
+        rules.set(variant.parentProductId, ruleOf(variant.parentProductId, variant.parent));
+      }
+    }
+    const judged = this.judgeMinimums(merged, rules, opts.audience);
+    rejected.push(...judged.rejected);
+    return this.finalize(judged.recognized, rejected, mergedCount, truncated, judged.warningCount);
+  }
+
+  /**
+   * Feature 155 (FR-011 (a), P1, R12.1) — one evaluation over every recognised
+   * row of the file after the merge, pieces only and without the cart, so a
+   * product's total is the sum over all its rows and variants. Rows rejected
+   * for another reason are not here and count toward nothing.
+   *
+   * A buyer's rows of a product below its minimum move to `rejected`; the
+   * operator's (`'unrestricted'`) stay recognised with a `warning` — the build
+   * judges them (US4 #1d). `warningCount` is the operator's alone.
+   */
+  private judgeMinimums(
+    merged: Array<RecognizedQuickOrderItem & { raw: string }>,
+    rules: ReadonlyMap<string, OrderMinimumProduct>,
+    audience: QuickOrderImportAudience,
+  ): { recognized: RecognizedQuickOrderItem[]; rejected: RejectedQuickOrderItem[]; warningCount?: number } {
+    const lines: OrderMinimumLine[] = [];
+    const evaluated: OrderMinimumProduct[] = [];
+    for (const [index, item] of merged.entries()) {
+      // A product with no known rule has no minimum here; the build judges it.
+      if (!rules.has(item.productId)) continue;
+      lines.push({
+        key: String(index),
+        productId: item.productId,
+        quantity: item.quantity,
+        packagingUnitId: null,
+        packagingUnitBaseQuantity: null,
+        exempt: false,
+      });
+    }
+    for (const rule of rules.values()) evaluated.push(rule);
+    const below = new Map<number, { minimum: number; productTotal: number }>();
+    for (const violation of evaluateOrderMinimums(lines, { products: evaluated, packagingUnits: [] })) {
+      if (violation.kind !== 'pieces') continue;
+      below.set(Number(violation.key), { minimum: violation.minimum, productTotal: violation.total });
+    }
+
+    const operator = audience === 'unrestricted';
+    const recognized: RecognizedQuickOrderItem[] = [];
+    const rejected: RejectedQuickOrderItem[] = [];
+    let warningCount = 0;
+    for (const [index, item] of merged.entries()) {
+      const { raw, ...row } = item;
+      const verdict = below.get(index);
+      if (verdict === undefined) {
+        recognized.push(row);
+      } else if (operator) {
+        recognized.push({ ...row, warning: { reason: 'below_minimum', ...verdict } });
+        warningCount += 1;
+      } else {
+        rejected.push({ line: row.line, raw, reason: 'below_minimum', ...verdict });
+      }
+    }
+    return operator ? { recognized, rejected, warningCount } : { recognized, rejected };
   }
 
   /** Validate sku + integer quantity, rejecting malformed rows with a reason. */
@@ -250,10 +355,10 @@ export class QuickOrderImportPipeline {
 
   /** Merge duplicate (productId, variantId) lines, summing quantity (FR-009). */
   private mergeDuplicates(lines: ResolvedLine[]): {
-    recognized: RecognizedQuickOrderItem[];
+    recognized: Array<RecognizedQuickOrderItem & { raw: string }>;
     mergedCount: number;
   } {
-    const byKey = new Map<string, RecognizedQuickOrderItem & { mergedFromLines: number[] }>();
+    const byKey = new Map<string, RecognizedQuickOrderItem & { raw: string; mergedFromLines: number[] }>();
     let mergedCount = 0;
     for (const line of lines) {
       const key = `${line.productId}::${line.variantId ?? ''}`;
@@ -265,6 +370,7 @@ export class QuickOrderImportPipeline {
       } else {
         byKey.set(key, {
           line: line.line,
+          raw: line.raw,
           sku: line.sku,
           productId: line.productId,
           variantId: line.variantId,
@@ -286,6 +392,7 @@ export class QuickOrderImportPipeline {
     rejected: RejectedQuickOrderItem[],
     mergedCount: number,
     truncated: boolean,
+    warningCount?: number,
   ): QuickOrderImportResponse {
     return {
       recognized,
@@ -295,7 +402,15 @@ export class QuickOrderImportPipeline {
         rejectedCount: rejected.length,
         mergedCount,
         truncated,
+        ...(warningCount !== undefined ? { warningCount } : {}),
       },
     };
   }
+}
+
+function ruleOf(
+  productId: string,
+  source: { type?: string; minOrderQuantity?: number | null },
+): OrderMinimumProduct {
+  return { id: productId, type: source.type ?? '', minOrderQuantity: source.minOrderQuantity ?? null };
 }

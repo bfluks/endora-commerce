@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import type { Money } from '@endora-commerce/contracts';
 import { tForLocale } from '../lib/i18n/messages';
 import { BaseSalePriceBlock } from './pricing/BaseSalePriceBlock';
-import type { ResolvedPrice } from '../lib/api/pricing';
+import type { PriceDisplay } from '../lib/api/pricing';
 
 /**
  * Price rendering for the storefront.
@@ -21,7 +21,7 @@ import type { ResolvedPrice } from '../lib/api/pricing';
  */
 export function PriceTag(props: {
   price?: Money | null;
-  resolved?: ResolvedPrice | null;
+  resolved?: PriceDisplay | null;
   locale: string;
   variant?: 'card' | 'pdp';
 }): ReactNode {

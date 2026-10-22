@@ -12,6 +12,10 @@
  *      the run database is a clone of it — and *which* template is decided
  *      first, from a digest over this run's whole migration input, so two
  *      branches cannot be handed each other's platform (issue #289).
+ *      When the complete suite runs more than one worker
+ *      (`BACKEND_TEST_WORKERS`, see `test-workers.ts`), every worker after the
+ *      first gets a further clone of the same template and a Redis index of
+ *      its own, published in `BACKEND_TEST_WORKER_SERVICES`.
  *   2. Refuse to run if the resolved URL does not look like a test DB (must
  *      contain `_test` or `test_` in the database name). Override with
  *      ALLOW_NON_TEST_DATABASE_URL=1 if you really know what you're doing.
@@ -43,7 +47,14 @@
 
 import {
   assertTestDatabaseUrl,
+  cloneTemplateForCaller,
+  dropRunDatabase,
+  keepRunDatabase,
+  leaseRedisDatabase,
   leaseRunDatabase,
+  redisUrlNamesDatabase,
+  runIdentity,
+  type RedisLease,
   type RunDatabaseLease,
 } from '@endora-commerce/test-kit/database';
 import {
@@ -52,6 +63,12 @@ import {
   UNREACHABLE_SERVICE_URLS,
 } from './declared-services.js';
 import { applyGenerableSecretEnv } from './generable-secrets.js';
+import {
+  backendTestWorkers,
+  TEST_WORKERS_ENV,
+  WORKER_SERVICES_ENV,
+  type WorkerServices,
+} from './test-workers.js';
 
 const DEFAULT_TEST_DATABASE_URL = 'postgresql://b2b:b2b@localhost:5432/b2b_test';
 
@@ -140,8 +157,103 @@ async function applyDeterministicTestEnv(): Promise<void> {
 /** Vitest calls what a globalSetup returns once the whole invocation is over. */
 type Teardown = () => Promise<void>;
 
+const DEFAULT_REDIS_URL = 'redis://localhost:6379';
+
+/**
+ * One database and one Redis logical database for every worker after the
+ * first, so the complete suite's files can run side by side (see
+ * `test/test-workers.ts`).
+ *
+ * Worker 1 keeps the run's own lease — the #189 database and Redis index,
+ * untouched — so a one-worker run is exactly what it was. Each further worker
+ * gets a clone of the **same** migrated template the run was cloned from,
+ * through the kit's `cloneTemplateForCaller`, and a Redis index leased the way
+ * the run's own was. A clone is a file copy of an already-migrated template;
+ * migrating each worker's database instead would repeat the whole migration
+ * chain per worker for nothing.
+ *
+ * The clones carry the run-database name shape, so a run that crashes before
+ * its teardown leaves nothing the next invocation's sweep does not already
+ * collect, and the Redis leases expire on their own TTL.
+ */
+async function provisionWorkers(
+  lease: RunDatabaseLease,
+  baseUrl: string,
+  redisBaseUrl: string,
+  workers: number,
+): Promise<Teardown> {
+  const template = lease.templateName;
+  if (lease.mode !== 'per-invocation' || template === undefined) {
+    throw new Error(
+      `${TEST_WORKERS_ENV}=${workers} needs a database per worker, but this run shares one ` +
+        `database (${lease.mode}). Use ${TEST_WORKERS_ENV}=1.`,
+    );
+  }
+  if (lease.redisUrl === undefined || redisUrlNamesDatabase(redisBaseUrl)) {
+    throw new Error(
+      `${TEST_WORKERS_ENV}=${workers} needs a Redis logical database per worker, but REDIS_URL ` +
+        `(${redisBaseUrl}) already names one, so every worker would share it and consume the ` +
+        `others' BullMQ jobs. Drop the index from REDIS_URL or use ${TEST_WORKERS_ENV}=1.`,
+    );
+  }
+
+  const startedAt = Date.now();
+  const clones: string[] = [];
+  const redisLeases: RedisLease[] = [];
+  const services: WorkerServices[] = [{ databaseUrl: lease.databaseUrl, redisUrl: lease.redisUrl }];
+
+  const release: Teardown = async () => {
+    for (const redisLease of redisLeases.splice(0)) {
+      await redisLease.release().catch((error: unknown) => {
+        process.stdout.write(
+          `[test-setup] could not release Redis database ${redisLease.index}: ${String(error)}\n`,
+        );
+      });
+    }
+    const names = clones.splice(0);
+    if (keepRunDatabase()) {
+      if (names.length > 0) {
+        process.stdout.write(`[test-setup] keeping worker databases ${names.join(', ')}\n`);
+      }
+      return;
+    }
+    for (const name of names) await dropRunDatabase(baseUrl, name);
+  };
+
+  try {
+    const runId = runIdentity();
+    for (let worker = 2; worker <= workers; worker += 1) {
+      const clone = await cloneTemplateForCaller(baseUrl, template);
+      clones.push(clone.name);
+      const redisLease = await leaseRedisDatabase(redisBaseUrl, `${runId}:w${worker}`).catch(
+        (error: unknown) => {
+          throw new Error(
+            `${(error as Error).message} This run asked for ${workers} workers, one Redis ` +
+              `database each — ${TEST_WORKERS_ENV}=${worker - 1} would have fitted.`,
+          );
+        },
+      );
+      redisLeases.push(redisLease);
+      services.push({ databaseUrl: clone.url, redisUrl: redisLease.url });
+    }
+  } catch (error) {
+    await release();
+    throw error;
+  }
+
+  process.env[WORKER_SERVICES_ENV] = JSON.stringify(services);
+  process.stdout.write(
+    `[test-setup] ${workers} workers: ${workers - 1} more database(s) cloned from ${template} ` +
+      `and as many Redis databases leased in ${Date.now() - startedAt} ms\n`,
+  );
+  return release;
+}
+
 export default async function globalSetup(): Promise<Teardown | void> {
   await applyDeterministicTestEnv();
+  // Only this setup may say which database a worker uses; a value inherited
+  // from the shell would hand workers databases this run never provisioned.
+  delete process.env[WORKER_SERVICES_ENV];
 
   // Issue #211 — the run may declare that it has no services, and then this
   // setup has no database to create or migrate. The declaration is read from
@@ -172,8 +284,14 @@ export default async function globalSetup(): Promise<Teardown | void> {
   // repository's answer, which is why the kit takes it rather than deriving it.
   const { templateIdentity } = await import('./template-identity.js');
 
+  // Read before the lease rewrites `REDIS_URL` to the run's own index: the
+  // workers' indices are leased from the same server, by its base DSN.
+  const redisBaseUrl = process.env['REDIS_URL'] ?? DEFAULT_REDIS_URL;
+  const workers = backendTestWorkers();
+  const baseUrl = resolveTestDatabaseUrl();
+
   const lease: RunDatabaseLease = await leaseRunDatabase({
-    baseUrl: resolveTestDatabaseUrl(),
+    baseUrl,
     identity: await templateIdentity(),
     // `migrateTemplate` is a callback because the ORM config reads
     // DATABASE_URL at import: the template is migrated while that variable
@@ -182,5 +300,20 @@ export default async function globalSetup(): Promise<Teardown | void> {
     configuredMigrationNames,
   });
 
-  return lease.release;
+  if (workers <= 1) return lease.release;
+
+  let releaseWorkers: Teardown;
+  try {
+    releaseWorkers = await provisionWorkers(lease, baseUrl, redisBaseUrl, workers);
+  } catch (error) {
+    await lease.release();
+    throw error;
+  }
+  return async () => {
+    try {
+      await releaseWorkers();
+    } finally {
+      await lease.release();
+    }
+  };
 }

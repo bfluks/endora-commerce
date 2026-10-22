@@ -97,7 +97,9 @@ export async function registerProductFeedsPublicRoutes(
 
   app.get<{ Params: { token: string } }>(
     '/api/v1/public/product-feeds/:token',
-    { config: { rateLimit } },
+    // Feature 154 — reachable whatever the sales-channel access rule decides: a
+    // feed consumer downloads by token and names no storefront channel.
+    { config: { rateLimit, salesChannelAccess: 'open' } },
     async (request, reply) => {
       const token = request.params.token;
 

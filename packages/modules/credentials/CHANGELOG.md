@@ -1,5 +1,62 @@
 # @endora-commerce/mod-credentials
 
+## 0.107.0
+
+### Minor Changes
+
+- 8397b0f: LLM configurations can now reach DeepSeek and any OpenAI-compatible endpoint. The `llm` credential type gains the provider `openai_compatible` ("OpenAI-compatible (custom endpoint)"), whose Base URL is required; every `llm` provider's Base URL is validated on save as an absolute `http://` or `https://` URL through the new optional `FieldDefinition.format: 'url'`, and the credential form renders such a field as a URL input. `createLlmAdapter` honours the Base URL for `openai`, `deepseek` (default `https://api.deepseek.com`) and `openai_compatible`, and throws `LlmConfigurationError` for a missing or invalid one. `LlmProviderSchema` in `@endora-commerce/contracts` is the one provider list (`PromptActionsProviderSchema` is now its alias), and the AI assistant accepts DeepSeek and OpenAI-compatible configurations where it used to report them as not configured.
+
+### Patch Changes
+
+- 0472475: Two changes that keep a stored protection from being dropped as a side effect of another change.
+
+  - **`mfa` is not switched off while administrators are required to use a second factor.** `POST /api/v1/admin/modules/mfa/activation` with `{ active: false }` answers `409 MFA_DEACTIVATION_BLOCKED` (`details.setting: 'mfa.admin.totp_enforced'`) while that setting is on, and changes nothing. Turn the requirement off first; the switch-off then goes through as before, and switching `mfa` back on is never refused. `mfa` publishes the answer as `mfaDeactivationGuardPort` (`MfaDeactivationGuardPort` in `@endora-commerce/contracts`).
+  - **A stored credential secret is not carried over to a changed endpoint.** `PUT /api/v1/admin/credentials/:code` that changes a field saying where the record's secrets are sent — an LLM `baseUrl`, an SMTP `host` — answers `422 CREDENTIAL_SECRET_REENTRY_REQUIRED` (`details.fields` lists the secret keys) unless every stored secret is re-entered in the same request. The admin form marks those secret fields as soon as the endpoint is edited. `FieldDefinition` gains an optional `endpoint` flag (defaulting to `true` for `format: 'url'` fields) and `@endora-commerce/contracts` exports `isCredentialEndpointField`; a module registering its own configuration type gets the rule for its URL fields without a change, and declares `endpoint: true` on a host field that is not a URL.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

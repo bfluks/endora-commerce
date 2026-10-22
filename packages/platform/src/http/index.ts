@@ -43,6 +43,10 @@
  * **0** with it.
  */
 import './request-actor.js';
+// The `salesChannelAccess` route option (feature 154), carried the same way.
+import './sales-channel-access-option.js';
+// The same for `request.responseLanguage()` (feature 155, D3/D4).
+import './response-language.js';
 
 export { HttpError } from './error-envelope.js';
 export { productAudienceOf, markPersonalisedPricing } from './product-audience.js';

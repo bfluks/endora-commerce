@@ -157,6 +157,7 @@ export async function registerOrdersExternalRoutes(
           },
           idempotencyKey,
           parsed.data,
+          { language: await request.responseLanguage() },
         );
         reply.status(result.replayed ? 200 : 201);
         return { data: await serializeOrderForCustomer(emFactory(), result.order, deps.customFieldValues) };

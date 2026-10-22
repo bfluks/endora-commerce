@@ -11,7 +11,10 @@ import type {
   AuthSessionReadPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
+  CustomFieldCarryPort,
+  CustomFieldCarryReceiverPort,
   CustomFieldDefinitionReadPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
   EmailDefaultsRegistryPort,
   OpportunityReadPort,
@@ -69,6 +72,7 @@ import { createAdminReach } from './services/admin-reach.js';
 import { createOwnerReadChecks, type OwnerReadChecks } from './services/owner-read-permissions.js';
 import { createCrmNotifier, type CrmNotifier } from './services/crm-notifier.js';
 import { createCrmQuoteRequests, type CrmQuoteRequests } from './services/crm-quote-requests.js';
+import { createCarryIntoDocument } from './services/opportunity-document-carry.js';
 import { DocumentOpportunityService } from './services/document-opportunity-service.js';
 import { createEventReminderEmail } from './services/event-reminder-email.js';
 import { EventReminderService } from './services/event-reminder-service.js';
@@ -217,6 +221,9 @@ export function registerModule(ctx: ModuleContext): void {
             quoteRequests: crmQuoteRequests,
             linksChanged: (opportunityId) => crmOpportunityValueService.recalculate(opportunityId),
             mayRead: crmOwnerReadChecks,
+            // Feature 162 — an Order joining from its Quote Request carries its
+            // values into the Opportunity's empty fields.
+            customFieldCarry: lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort'),
           }),
       )
       .singleton(),
@@ -475,6 +482,10 @@ export function registerModule(ctx: ModuleContext): void {
             // Commands write. The owner is non-deactivatable, so this is a
             // plain binding edge with no off state to degrade into.
             customFields: lazyPort<CustomFieldValuePort>(ctx, 'customFieldValueService'),
+            // Feature 157 — the list's custom-field filters.
+            customFieldListFilter: lazyPort<CustomFieldListFilterPort>(ctx, 'customFieldListFilterPort'),
+            // Feature 162 — a document's values carried into the Opportunity created for it.
+            customFieldCarry: lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort'),
             // --- end of Custom fields ----------------------------------------
             recalculateValue: (opportunityId) => crmOpportunityValueService.recalculate(opportunityId),
             liveFigure: (opportunity) => crmOpportunityValueService.liveFigure(opportunity),
@@ -746,12 +757,17 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.register({
     crmOpportunityOriginLinkService: ctx
       .asFunction(
-        ({ emFactory, crmOpportunityLinkService }: CrmCradle) =>
+        ({ emFactory, crmOpportunityLinkService, crmQuoteRequests }: CrmCradle & ValueCradle) =>
           new OpportunityOriginLinkService({
             emFactory,
             links: crmOpportunityLinkService,
             adminScope: lazyPort<AdminTenantScopePort>(ctx, 'adminTenantScopePort'),
             warn: (fields, message) => ctx.log.warn(fields, message),
+            carryIntoDocument: createCarryIntoDocument({
+              orders: lazyPort<CustomFieldCarryReceiverPort>(ctx, 'orderCustomFieldCarryPort'),
+              quoteRequests: lazyPort<CustomFieldCarryReceiverPort>(ctx, 'quoteRequestCustomFieldCarryPort'),
+              quoteRequestsPresent: () => crmQuoteRequests.isPresent(),
+            }),
           }),
       )
       .singleton(),
@@ -801,12 +817,19 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.register({
     crmOpportunityHistoryService: ctx
       .asFunction(
-        ({ emFactory, auditLogService, crmReferenceService }: CrmCradle & HistoryCradle & ReferencesCradle) =>
+        ({
+          emFactory,
+          auditLogService,
+          crmReferenceService,
+          crmOwnerReadChecks,
+        }: CrmCradle & HistoryCradle & ReferencesCradle) =>
           new OpportunityHistoryService({
             emFactory,
             auditLog: auditLogService,
             adminUsers: lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort'),
             references: crmReferenceService,
+            // Feature 162 (owner ruling P2 = a) — values only for `custom_fields:read`.
+            mayReadCustomFields: crmOwnerReadChecks.customFields,
           }),
       )
       .singleton(),

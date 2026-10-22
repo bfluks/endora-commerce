@@ -21,7 +21,11 @@ import type {
   MfaEnrolmentStatePort,
   MfaLoginPort,
 } from '@endora-commerce/contracts';
-import type { AttemptCounterStore, AuditPort } from '@endora-commerce/platform/kernel';
+import type {
+  AttemptCounterStore,
+  AuditPort,
+  SalesChannelAccessPort,
+} from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import { withSystemScope } from '@endora-commerce/platform/tenancy';
@@ -150,7 +154,10 @@ export interface CustomerAccountsCradle {
    */
   readonly customerSocialLoginPort: {
     resolveByEmail(email: string): Promise<{ id: string } | null>;
-    autoCreate(email: string): Promise<{ id: string } | null>;
+    autoCreate(
+      email: string,
+      context: { salesChannelId: string | null },
+    ): Promise<{ id: string } | null>;
   };
   readonly customerAuthService: CustomerAuthService;
   readonly passwordResetService: PasswordResetService;
@@ -427,6 +434,9 @@ export function registerModule(ctx: ModuleContext): void {
             () => (effectiveState.isPresent('mfa') ? mfaLoginPort : undefined),
             auditLogService,
             customerAuthenticationThrottle,
+            // Feature 154 — kernel-provided and ungated, like the membership
+            // port; resolved per call so the singleton holds no captured value.
+            lazyPort<SalesChannelAccessPort>(ctx, 'salesChannelAccessPort'),
           ),
       )
       .singleton(),
@@ -547,6 +557,7 @@ export function registerModule(ctx: ModuleContext): void {
 
         async autoCreate(
           email: string,
+          context: { salesChannelId: string | null },
         ): Promise<{ id: string; organizationId: string | null } | null> {
           const cradle = ctx.cradle<CustomerAccountsCradle>();
           // The channel a global-scope read resolves against. Both roots used
@@ -612,6 +623,13 @@ export function registerModule(ctx: ModuleContext): void {
               const organization = await provision.provisionFor(em, {
                 customerAccountId,
                 email: folded,
+                // Feature 154 (owner decision D6) — the store the federated
+                // sign-in was started on, which `mfa` carries in the OAuth
+                // transaction because the provider's redirect names none, so
+                // the session issued next is accepted there. `mfa` creates an
+                // account only on a store open to anonymous visitors. Without a
+                // channel (a caller outside a sign-in) the default applies.
+                salesChannelId: context.salesChannelId,
               });
               const account = em.create(CustomerAccount, {
                 id: customerAccountId,

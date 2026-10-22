@@ -8,6 +8,7 @@ import {
   ERROR_CODES,
   type ListingPriceOrderPort,
   type ListingPricePort,
+  type ListingPriceDetailPort,
   type WebhookEventRegistryPort,
 } from '@endora-commerce/contracts';
 import type { AuditReferenceRegistryPort } from '@endora-commerce/contracts';
@@ -834,7 +835,7 @@ export function registerModule(ctx: ModuleContext): void {
             undefined,
             undefined,
             lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort'),
-            lazyPort<ListingPricePort>(ctx, 'pricingService'),
+            lazyPort<ListingPriceDetailPort>(ctx, 'pricingService'),
             lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
             lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
             lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),

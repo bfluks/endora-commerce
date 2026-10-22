@@ -5,7 +5,15 @@ import { randomUUID } from 'crypto';
 @GlobalEntity()
 @Entity({ tableName: 'order_items' })
 export class OrderItem {
-  [OptionalProps]?: 'id' | 'createdAt' | 'variantId' | 'variantSnapshot' | 'packagingUnitSnapshot';
+  [OptionalProps]?:
+    | 'id'
+    | 'createdAt'
+    | 'variantId'
+    | 'variantSnapshot'
+    | 'packagingUnitSnapshot'
+    | 'returnableAtPurchase'
+    | 'groupId'
+    | 'position';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -38,6 +46,15 @@ export class OrderItem {
   @Property({ type: 'json', nullable: true })
   packagingUnitSnapshot?: { name: string; baseQuantity: number } | null;
 
+  /**
+   * Feature 155 (FR-016a) — whether the product was returnable when the line
+   * was placed, written once at placement and never updated. `null` only on
+   * lines placed before the column existed, which `returns` treats as
+   * returnable (FR-017).
+   */
+  @Property({ type: 'boolean', nullable: true })
+  returnableAtPurchase?: boolean | null;
+
   @Property({ type: 'integer' })
   quantity!: number;
 
@@ -49,6 +66,20 @@ export class OrderItem {
 
   @Property({ type: 'decimal', precision: 14, scale: 2 })
   lineTotal!: string;
+
+  /**
+   * Feature 159 — the line's group (`order_item_groups`, same order), `null` =
+   * ungrouped. Written at placement, never changed (on delete set null).
+   */
+  @Property({ type: 'uuid', nullable: true })
+  groupId?: string | null = null;
+
+  /**
+   * Feature 159 — 0-based order within the line's section. Lines placed before
+   * the feature read `0`; readers break ties by `(createdAt, id)`.
+   */
+  @Property({ type: 'integer', default: 0 })
+  position: number = 0;
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

@@ -13,11 +13,18 @@
  * pulling a new runtime dependency.
  *
  * Invalidation: every write path on `PriceListService` calls
- * `invalidateAll()`. Coarse but correct — the resolver fans across
- * every active list, so any list mutation in principle affects every
- * tuple, and the cache is rebuilt within seconds of a quiet period.
- * Finer-grained invalidation can land later if profiling shows it
- * matters.
+ * `invalidateAll()` — through `PricingGeneration`, **after** the write
+ * commits, which also announces the bump to every other process (D-287
+ * P0). Coarse but correct — the resolver fans across every active list,
+ * so any list mutation in principle affects every tuple, and the cache
+ * is rebuilt within seconds of a quiet period.
+ *
+ * **A fill that began before an invalidation is not stored.** A
+ * resolution reads {@link PricingCache.generation} before its first
+ * statement and hands it back to `set`; if a write committed and
+ * invalidated in between, the answer it read is the pre-write one, and
+ * storing it would pin that price for a whole TTL. The caller still gets
+ * its answer — it is what the database said when it asked.
  *
  * Tests opt out by passing `{ ttlMs: 0 }` so each call goes through.
  */
@@ -46,6 +53,7 @@ export class PricingCache<T> {
   private readonly entries = new Map<string, CachedEntry<T>>();
   private hitCount = 0;
   private missCount = 0;
+  #generation = 0;
 
   constructor(options: { ttlMs?: number; capacity?: number } = {}) {
     this.ttlMs = options.ttlMs ?? DEFAULT_PRICING_CACHE_TTL_MS;
@@ -72,8 +80,19 @@ export class PricingCache<T> {
     return entry.value;
   }
 
-  set(key: PricingCacheKey, value: T): void {
+  /** Bumped by every {@link invalidateAll}; see the header. */
+  get generation(): number {
+    return this.#generation;
+  }
+
+  /**
+   * Store an answer. `generation` is the value of {@link generation} read
+   * before the resolution started; an answer that straddled an
+   * invalidation is dropped rather than stored.
+   */
+  set(key: PricingCacheKey, value: T, generation?: number): void {
     if (this.ttlMs <= 0) return;
+    if (generation !== undefined && generation !== this.#generation) return;
     const k = serializeKey(key);
     if (this.entries.has(k)) this.entries.delete(k);
     else if (this.entries.size >= this.capacity) {
@@ -85,6 +104,7 @@ export class PricingCache<T> {
   }
 
   invalidateAll(): void {
+    this.#generation += 1;
     this.entries.clear();
   }
 

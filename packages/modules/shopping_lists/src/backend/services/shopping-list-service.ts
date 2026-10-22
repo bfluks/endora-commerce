@@ -36,7 +36,9 @@ export interface CustomerContext {
 export interface ConversionSkip {
   itemId: string;
   productId: string;
-  reason: 'product_archived' | 'variant_unavailable' | 'product_not_found';
+  reason: 'product_archived' | 'variant_unavailable' | 'product_not_found' | 'below_minimum';
+  /** Feature 155 — on `below_minimum`: the minimum the line missed. */
+  minimum?: number;
 }
 
 export interface ConvertToCartResult {
@@ -308,13 +310,16 @@ export class ShoppingListService {
 
   /**
    * Adds the given items (or every item on the list when itemIds is omitted)
-   * to the customer's authenticated cart. Archived products are skipped and
+   * to the customer's authenticated cart on `salesChannelId` — the channel of
+   * the caller's request, since a customer holds one basket per channel
+   * (`specs/154-sales-channel-access/`). Archived products are skipped and
    * reported in `skipped`.
    */
   async convertToCart(
     ctx: CustomerContext,
     listId: string,
     itemIds: string[] | undefined,
+    salesChannelId: string,
   ): Promise<ConvertToCartResult> {
     const em = this.emFactory();
     const list = await this.#owned(em, ctx, listId);
@@ -322,16 +327,46 @@ export class ShoppingListService {
     const { skipped, kept } = await this.#partitionByProductStatus(items);
 
     let added = 0;
-    for (const item of kept) {
-      await this.cartService.addItem(
-        { customer: ctx },
-        {
+    if (kept.length > 0) {
+      // Feature 155 (FR-011, R12.4) — one batch, judged with the cart as a
+      // whole; every per-line failure is reported, never thrown mid-way.
+      const { outcomes } = await this.cartService.addItems(
+        { customer: { ...ctx, salesChannelId } },
+        kept.map((item) => ({
           productId: item.productId,
           ...(item.variantId ? { variantId: item.variantId } : {}),
           quantity: item.quantity,
-        },
+        })),
+        { onLineError: 'report' },
       );
-      added += 1;
+      for (const outcome of outcomes) {
+        const item = kept[outcome.index];
+        if (item === undefined) continue;
+        if (outcome.status === 'added') {
+          added += 1;
+        } else if (outcome.status === 'below_minimum') {
+          skipped.push({
+            itemId: item.id,
+            productId: item.productId,
+            reason: 'below_minimum',
+            minimum: outcome.minimum,
+          });
+        } else if (outcome.error.status === 404) {
+          // Hidden from this buyer, out of the channel, or its variant gone:
+          // the same skip a deleted product gets, so the two cannot be told
+          // apart (FR-035, threat F1) — never a name, never a minimum.
+          skipped.push({ itemId: item.id, productId: item.productId, reason: 'product_not_found' });
+        } else {
+          // Anything else was thrown by `addItem` before the batch, and still
+          // is — with its details, so the answer is the one `addItem` gave.
+          throw new HttpError(
+            outcome.error.status,
+            outcome.error.code as ConstructorParameters<typeof HttpError>[1],
+            outcome.error.message,
+            outcome.error.details as ConstructorParameters<typeof HttpError>[3],
+          );
+        }
+      }
     }
 
     return { shoppingListId: list.id, added, skipped };
@@ -346,6 +381,8 @@ export class ShoppingListService {
     ctx: CustomerContext,
     listId: string,
     itemIds: string[] | undefined,
+    /** The language a refusal names a product in (feature 155, D3/D4). */
+    options: { language?: string } = {},
   ): Promise<ConvertToRfqResult> {
     const em = this.emFactory();
     const list = await this.#owned(em, ctx, listId);
@@ -365,6 +402,7 @@ export class ShoppingListService {
             ...(item.note ? { lineNote: item.note } : {}),
           })),
         },
+        options.language ? { language: options.language } : undefined,
       );
       rfqId = rfq.id;
       added = kept.length;

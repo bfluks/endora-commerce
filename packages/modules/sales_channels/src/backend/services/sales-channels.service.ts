@@ -7,7 +7,7 @@ import {
   dispatchValidatorMode,
   type DictionaryValidator,
   type SalesChannelAttributionRegistryPort,
-  type SalesChannelCreateBody,
+  type SalesChannelCreateRequest,
   type SalesChannelUpdateBody,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -15,7 +15,10 @@ import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBus } from '@endora-commerce/platform/events';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
-import type { SalesChannelsCacheInvalidation } from '@endora-commerce/platform/kernel';
+import type {
+  SalesChannelAccessCacheInvalidation,
+  SalesChannelsCacheInvalidation,
+} from '@endora-commerce/platform/kernel';
 import {
   makeSetSystemDefaultChannelCommand,
   type SetSystemDefaultChannelResult,
@@ -145,6 +148,13 @@ export class SalesChannelsService {
      * become an unaudited flag move.
      */
     private readonly commandBus?: CommandBus,
+    /**
+     * Feature 154 — the per-Organization permitted-channel cache the access
+     * rule reads. A delete removes the deleted channel's Organization rows by
+     * cascade and may rebind orphans to the default, so every cached set can
+     * move; it is dropped as part of the write, like the channel cache.
+     */
+    private readonly accessCache?: SalesChannelAccessCacheInvalidation,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -186,7 +196,7 @@ export class SalesChannelsService {
   // -------------------------------------------------------------------------
 
   async create(
-    body: SalesChannelCreateBody,
+    body: SalesChannelCreateRequest,
     context?: AdminAuditContext,
   ): Promise<SalesChannel> {
     const em = this.emFactory();
@@ -206,6 +216,8 @@ export class SalesChannelsService {
       currencies: body.currencies,
       defaultCurrency: body.defaultCurrency,
       active: body.active ?? true,
+      // Feature 154 (FR-003) — open unless the operator turns it off.
+      anonymousAccess: body.anonymousAccess ?? true,
       systemDefault: false,
       version: 1,
       // Legacy columns preserved for one release (research R-12).
@@ -350,6 +362,9 @@ export class SalesChannelsService {
       channel.active = body.active;
       channel.status = body.active ? 'active' : 'inactive';
     }
+    // Feature 154 — the access step reads this off the cached channel, which
+    // `emitIdentityChanged` below drops as part of this write.
+    if (body.anonymousAccess !== undefined) channel.anonymousAccess = body.anonymousAccess;
     channel.version += 1;
 
     try {
@@ -519,6 +534,7 @@ export class SalesChannelsService {
     }
 
     await em.removeAndFlush(channel);
+    await this.accessCache?.invalidateAllAfterWrite();
 
     await this.audit('lifecycle', context, channel.id, {
       action: 'deleted',
@@ -713,6 +729,7 @@ export class SalesChannelsService {
       currencies: c.currencies,
       defaultCurrency: c.defaultCurrency,
       active: c.active,
+      anonymousAccess: c.anonymousAccess,
       systemDefault: c.systemDefault,
       version: c.version,
     };

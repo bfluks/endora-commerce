@@ -8,6 +8,8 @@ import {
 import { CUSTOMER_COOKIES, TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { withSystemScope } from '../../../src/tenancy/escape-hatch.js';
 import { seedInvoiceableOrder } from '../invoices/helpers.js';
+import { Organization } from '../../helpers/package-entities.js';
+import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
 
 /**
  * Feature 050 US2 — customer isolation is enforced by the guard. A customer of
@@ -25,6 +27,20 @@ describe('Customer isolation — cross-tenant scoping (feature 050 US2)', () => 
   beforeAll(async () => {
     h = await setupBackendServer();
     CUSTOMER_COOKIES[customerBCookie] = { customerAccountId: customerBId, organizationId: orgBId };
+    // Feature 154 — Org B's buyer must be able to use the store at all for its
+    // isolation to be what is tested: the Organization exists and is assigned
+    // the stores the harness seeds.
+    const em = h.em();
+    em.create(Organization, {
+      id: orgBId,
+      name: 'Cross-tenant Org B',
+      taxId: `PL050${orgBId.replace(/\D/g, '').slice(0, 8).padEnd(8, '0')}`,
+      status: 'active',
+      vatStatus: 'vat_payer',
+      registeredAddress: { street: 'ul. Testowa 2', city: 'Warszawa', postalCode: '00-002', country: 'PL' },
+    });
+    await em.flush();
+    await bindOrganizationsToFixtureChannelsSql(em, [orgBId]);
 
     await withSystemScope('test seed', async () => {
       const a = await seedInvoiceableOrder(h.em(), {

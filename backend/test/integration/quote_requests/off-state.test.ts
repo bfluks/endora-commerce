@@ -21,8 +21,31 @@ import {
   TEST_ORGANIZATION_ID,
 } from '../../helpers/test-actors.js';
 import { withSystemScope } from '../../../src/tenancy/escape-hatch.js';
-import { Order } from '../../helpers/package-entities.js';
-import { whenOrderCreatedSettled } from '../../helpers/quote-conversion.js';
+import { Order, Product } from '../../helpers/package-entities.js';
+import {
+  acceptedQuoteRequest,
+  checkOutBasket,
+  convertQuoteRequestToCart,
+  whenOrderCreatedSettled,
+} from '../../helpers/quote-conversion.js';
+import { setProductMinimum } from '../../helpers/order-minimum-fixture.js';
+import { ERROR_CODES } from '@endora-commerce/contracts';
+import {
+  SEED_ADDRESS_BILLING_ID,
+  SEED_ADDRESS_DELIVERY_ID,
+  SEED_DELIVERY_METHOD_ID,
+  SEED_PAYMENT_METHOD_ID,
+} from '../../helpers/seed-commerce.js';
+import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
+import { CrmOpportunityLink } from '../../helpers/package-entities.js';
+import { TEST_ADMIN_ID } from '../../helpers/test-actors.js';
+import { CRM_SETTING_CODES } from '../../../../packages/modules/crm/src/manifest.js';
+import {
+  createCrmOpportunity,
+  crmPlacedDocumentsHandled,
+  setCrmSetting,
+  whenCrmEventSettled,
+} from '../../helpers/seed-crm.js';
 
 /**
  * `quote_requests` off-state — Constitution XVII item 6, from a **package**
@@ -70,6 +93,8 @@ describe('quote_requests off-state, from a package (Constitution XVII)', () => {
       routes: [
         { url: '/api/v1/admin/quote-requests', cookies: admin },
         { url: '/api/v1/admin/quote-requests/list-views', cookies: admin },
+        // `specs/157-custom-fields-list-filters/` — the list's offered custom-field filters.
+        { url: '/api/v1/admin/quote-requests/custom-field-filters', cookies: admin },
         { url: '/api/v1/quote-requests', cookies: customer },
         '/api/v1/storefront/settings/quote-requests',
       ],
@@ -217,6 +242,214 @@ describe('quote_requests off-state, from a package (Constitution XVII)', () => {
   });
 
   /**
+   * Feature 155 (T056b; FR-036, research R17/R19) — with `quote_requests` off,
+   * placement cannot vouch for a basket's quote source, so no line is exempt:
+   * a seeded A × 5 (A minimum 10) is flagged by the checkout preview and refused
+   * at placement — the fail-closed reading. Switched back on, the same basket's
+   * exemption is honoured again and it places.
+   */
+  it('155 — while off, a quote-seeded A × 5 below its minimum is flagged and refused; back on, it places', async () => {
+    const em = h.em();
+    const product = await em.findOneOrFail(Product, { id: SEED_PRODUCT_101_ID }, { filters: false });
+    const previousMinimum = product.minOrderQuantity ?? null;
+    await em
+      .getConnection()
+      .execute(`update "stock_levels" set "on_hand" = 100000 where "product_id" = ?`, [SEED_PRODUCT_101_ID]);
+    await em
+      .getConnection()
+      .execute(`update "carts" set "status" = 'completed' where "customer_account_id" = ? and "status" = 'active'`, [
+        TEST_CUSTOMER_ID,
+      ]);
+    try {
+      await setProductMinimum(em, SEED_PRODUCT_101_ID, null);
+      const rfq = await acceptedQuoteRequest(h, { quantity: 5, agreedUnitPrice: 11.25 });
+      await setProductMinimum(em, SEED_PRODUCT_101_ID, 10);
+      await convertQuoteRequestToCart(h, rfq.id);
+
+      const preview = () =>
+        h.app.inject({
+          method: 'POST',
+          url: '/api/v1/orders/preview-total',
+          cookies: customer,
+          payload: { deliveryMethodId: SEED_DELIVERY_METHOD_ID, paymentMethodId: SEED_PAYMENT_METHOD_ID },
+        });
+      const place = () =>
+        h.app.inject({
+          method: 'POST',
+          url: '/api/v1/orders',
+          cookies: customer,
+          payload: {
+            deliveryAddressId: SEED_ADDRESS_DELIVERY_ID,
+            billingAddressId: SEED_ADDRESS_BILLING_ID,
+            deliveryMethodId: SEED_DELIVERY_METHOD_ID,
+            paymentMethodId: SEED_PAYMENT_METHOD_ID,
+          },
+        });
+      const belowMinimumLines = async () => {
+        const res = await preview();
+        expect(res.statusCode, res.body).toBe(200);
+        return (res.json() as { data: { belowMinimumLines: Array<{ productId: string; kind: string }> } }).data
+          .belowMinimumLines;
+      };
+
+      await withModuleOff('quote_requests', 'deactivated', async () => {
+        expect(await belowMinimumLines()).toEqual([
+          expect.objectContaining({ productId: SEED_PRODUCT_101_ID, kind: 'pieces', minimum: 10 }),
+        ]);
+        const refused = await place();
+        expect(refused.statusCode, refused.body).toBe(422);
+        expect((refused.json() as { error: { code: string } }).error.code).toBe(
+          ERROR_CODES.PRODUCT_BELOW_MINIMUM_QUANTITY,
+        );
+      });
+
+      expect(await belowMinimumLines()).toEqual([]);
+      const placed = await whenOrderCreatedSettled(h, () => place());
+      expect(placed.statusCode, placed.body).toBe(201);
+      await reactor.idle();
+    } finally {
+      await setProductMinimum(em, SEED_PRODUCT_101_ID, previousMinimum);
+    }
+  });
+
+  /**
+   * Feature 159 (T069; FR-083, research R-23) — line groups across the two
+   * off-states that touch them.
+   *
+   * - `document_templates` off: the quote PDF is refused (`refuses-without`, as
+   *   153), and nothing else about the grouping moves — an operator still
+   *   groups a quote, both replies still carry the groups.
+   * - `quote_requests` off: an order placed from a grouped quote keeps showing
+   *   its groups. They are `orders`' own rows, written at placement, so the
+   *   quote module's absence has nothing to take away. (A placement while it
+   *   is off carries no groups — `place-order-quote-groups.test.ts` FR-083.)
+   */
+  describe('feature 159 — line groups (FR-083)', () => {
+    type Grouped = {
+      itemGroups: Array<{ id: string; name: string; position: number }>;
+      items: Array<{ productId: string; groupId: string | null; position: number }>;
+    };
+
+    const read = async (url: string, cookies: Record<string, string>): Promise<Grouped> => {
+      const res = await h.app.inject({ method: 'GET', url, cookies });
+      expect(res.statusCode, `${url}: ${res.body}`).toBe(200);
+      return (res.json() as { data: Grouped }).data;
+    };
+
+    /** `[group name | '-', productId]` per line, in the reply's order. */
+    const shapeOf = (reply: Grouped) => {
+      const names = new Map(reply.itemGroups.map((group) => [group.id, group.name]));
+      return reply.items.map((item) => [item.groupId ? names.get(item.groupId) : '-', item.productId]);
+    };
+
+    /** A Pending quote of the shared buyer, grouped by the operator into `Hall A`. */
+    async function groupedQuote(): Promise<string> {
+      const created = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/quote-requests',
+        cookies: customer,
+        payload: { items: [{ productId: SEED_PRODUCT_101_ID, quantity: 2, desiredUnitPrice: 12 }] },
+      });
+      expect(created.statusCode, created.body).toBe(201);
+      const rfq = (created.json() as { data: { id: string; version: number } }).data;
+      const grouped = await h.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/quote-requests/${rfq.id}`,
+        cookies: admin,
+        headers: { 'if-match': `"${rfq.version}"` },
+        payload: {
+          groups: [{ key: 'a', name: 'Hall A' }],
+          items: [{ productId: SEED_PRODUCT_101_ID, quantity: 2, agreedUnitPrice: 11, groupKey: 'a' }],
+        },
+      });
+      expect(grouped.statusCode, grouped.body).toBe(200);
+      return rfq.id;
+    }
+
+    it('document templates off: the quote PDF is refused, grouping and the replies are unaffected', async () => {
+      const quoteId = await groupedQuote();
+      const adminUrl = `/api/v1/admin/quote-requests/${quoteId}`;
+      const before = await read(adminUrl, admin);
+      expect(shapeOf(before)).toEqual([['Hall A', SEED_PRODUCT_101_ID]]);
+
+      await withModuleOff('document_templates', 'deactivated', async () => {
+        const pdf = await h.app.inject({ method: 'GET', url: `${adminUrl}/pdf`, cookies: admin });
+        expect(pdf.statusCode, pdf.body).toBe(503);
+        expect((pdf.json() as { error: { code: string } }).error.code).toBe('MODULE_DISABLED');
+
+        expect(await read(adminUrl, admin)).toMatchObject({ itemGroups: before.itemGroups });
+        expect(shapeOf(await read(`/api/v1/quote-requests/${quoteId}`, customer))).toEqual([
+          ['Hall A', SEED_PRODUCT_101_ID],
+        ]);
+
+        // Regrouping is a quote write, not a document one: it still saves.
+        const { version } = (await read(adminUrl, admin)) as Grouped & { version: number };
+        const renamed = await h.app.inject({
+          method: 'PATCH',
+          url: adminUrl,
+          cookies: admin,
+          headers: { 'if-match': `"${version}"` },
+          payload: {
+            groups: [{ key: 'a', id: before.itemGroups[0]!.id, name: 'Hall A1' }],
+            items: [{ productId: SEED_PRODUCT_101_ID, quantity: 2, agreedUnitPrice: 11, groupKey: 'a' }],
+          },
+        });
+        expect(renamed.statusCode, renamed.body).toBe(200);
+        expect(shapeOf((renamed.json() as { data: Grouped }).data)).toEqual([['Hall A1', SEED_PRODUCT_101_ID]]);
+      });
+
+      const pdf = await h.app.inject({ method: 'GET', url: `${adminUrl}/pdf`, cookies: admin });
+      expect(pdf.statusCode, pdf.body).toBe(200);
+      expect(shapeOf(await read(adminUrl, admin))).toEqual([['Hall A1', SEED_PRODUCT_101_ID]]);
+    });
+
+    it.each(['deactivated', 'platform-unavailable'] as const)(
+      'quote requests %s: an order placed from a grouped quote still serves its itemGroups',
+      async (axis) => {
+        const em = h.em();
+        await em
+          .getConnection()
+          .execute(`update "stock_levels" set "on_hand" = 100000 where "product_id" = ?`, [SEED_PRODUCT_101_ID]);
+        await em
+          .getConnection()
+          .execute(
+            `update "carts" set "status" = 'completed' where "customer_account_id" = ? and "status" = 'active'`,
+            [TEST_CUSTOMER_ID],
+          );
+
+        const quoteId = await groupedQuote();
+        const detail = await read(`/api/v1/quote-requests/${quoteId}`, customer);
+        const accepted = await h.app.inject({
+          method: 'POST',
+          url: `/api/v1/quote-requests/${quoteId}/accept-revision`,
+          cookies: customer,
+          payload: {
+            expectedRevisionNumber: (detail as Grouped & { currentRevisionNumber: number }).currentRevisionNumber,
+          },
+        });
+        expect(accepted.statusCode, accepted.body).toBe(200);
+        await convertQuoteRequestToCart(h, quoteId);
+        const placed = await whenOrderCreatedSettled(h, () => checkOutBasket(h));
+        await reactor.idle();
+
+        const customerUrl = `/api/v1/orders/${placed.id}`;
+        const adminUrl = `/api/v1/admin/orders/${placed.id}`;
+        const customerBefore = await read(customerUrl, customer);
+        const adminBefore = await read(adminUrl, admin);
+        expect(shapeOf(customerBefore)).toEqual([['Hall A', SEED_PRODUCT_101_ID]]);
+
+        await withModuleOff('quote_requests', axis, async () => {
+          // The control: the quote itself is gone, so the order's answer below is an exemption measured.
+          const quote = await h.app.inject({ method: 'GET', url: `/api/v1/quote-requests/${quoteId}`, cookies: customer });
+          expect(quote.statusCode, quote.body).not.toBe(200);
+          expect(await read(customerUrl, customer)).toEqual(customerBefore);
+          expect(await read(adminUrl, admin)).toEqual(adminBefore);
+        });
+      },
+    );
+  });
+
+  /**
    * Feature 146 (T085, FR-028) — the price-negotiation lock and the history
    * read are module surfaces like any other: while `quote_requests` is off the
    * four admin negotiation routes, the buyer's own read and `/history` answer
@@ -273,6 +506,8 @@ describe('quote_requests off-state, from a package (Constitution XVII)', () => {
         });
         await em.persistAndFlush(account);
         organizationId = org.id;
+        // Feature 154 — the tenant shops on the stores the harness seeds.
+        await bindOrganizationsToFixtureChannelsSql(em, [org.id]);
         customerAccountId = account.id;
       });
       CUSTOMER_COOKIES[BUYER_SESSION] = { customerAccountId, organizationId };
@@ -360,4 +595,223 @@ describe('quote_requests off-state, from a package (Constitution XVII)', () => {
       expect(history.statusCode, history.body).toBe(200);
     });
   });
+
+  /**
+   * Feature 162 (`specs/162-custom-fields-value-carry/` T037; FR-005, FR-014) —
+   * custom-field carry with `quote_requests` off.
+   *
+   * - A basket converted from a request while the module was on places an
+   *   Order that carries nothing: there is no vouched quote source to carry
+   *   from, so there is nothing to skip either — no system note.
+   * - Opportunity → Quote Request is not attempted: CRM asks the module's
+   *   presence before it reads the request, so the announcement of a request
+   *   created from an Opportunity links nothing and carries nothing, and the
+   *   Opportunity's history is unchanged. Nothing is replayed once back on.
+   *
+   * The `quote_request` carry options being hidden and retained while the module
+   * is off is `custom_fields/entity-owner-presence.test.ts`' (Phase 2).
+   */
+  describe('feature 162 — custom-field carry while quote_requests is off', () => {
+    const CUSTOM_FIELDS_API = '/api/v1/admin/custom-fields';
+    const RUN = randomUUID().slice(0, 8);
+    const ORDER_KEY = `cfc_${RUN}_qr_off_order`;
+    const OPPORTUNITY_KEY = `cfc_${RUN}_qr_off_opportunity`;
+    const created: string[] = [];
+    let storedAutoCreate: unknown;
+
+    const define = async (entityType: string, key: string, carryTo: string[]) => {
+      const response = await h.app.inject({
+        method: 'POST',
+        url: `${CUSTOM_FIELDS_API}/definitions`,
+        cookies: admin,
+        payload: {
+          entityType,
+          key,
+          label: {},
+          labelDefault: key,
+          valueType: 'text',
+          required: false,
+          sortOrder: 0,
+          config: {},
+          options: [],
+          audience: 'internal',
+          carryTo,
+        },
+      });
+      expect(response.statusCode, response.body).toBe(201);
+      created.push((response.json() as { data: { id: string } }).data.id);
+    };
+
+    const valuesOf = async (
+      table: 'orders' | 'quote_requests' | 'crm_opportunities',
+      id: string,
+    ): Promise<Record<string, unknown>> => {
+      const rows = (await h
+        .em()
+        .getConnection()
+        .execute(`select custom_field_values from "${table}" where id = ?`, [id])) as Array<{
+        custom_field_values: Record<string, unknown> | null;
+      }>;
+      expect(rows).toHaveLength(1);
+      return rows[0]!.custom_field_values ?? {};
+    };
+
+    const setValues = async (table: 'quote_requests' | 'crm_opportunities', id: string, values: Record<string, unknown>) => {
+      await h
+        .em()
+        .getConnection()
+        .execute(`update "${table}" set custom_field_values = ?::jsonb where id = ?`, [JSON.stringify(values), id]);
+    };
+
+    const systemNotes = async (orderId: string): Promise<unknown[]> => {
+      const response = await h.app.inject({ method: 'GET', url: `/api/v1/admin/orders/${orderId}/comments`, cookies: admin });
+      expect(response.statusCode, response.body).toBe(200);
+      return (response.json() as { data: Array<{ systemNote: unknown }> }).data.filter((c) => c.systemNote !== null);
+    };
+
+    const carrySkipEvents = async (quoteRequestId: string): Promise<number> => {
+      const rows = (await h
+        .em()
+        .getConnection()
+        .execute(
+          `select count(*)::int as n from "quote_request_events" where quote_request_id = ? and event_type = 'custom-field-carry-skipped'`,
+          [quoteRequestId],
+        )) as Array<{ n: number }>;
+      return rows[0]!.n;
+    };
+
+    const opportunityHistory = async (opportunityId: string): Promise<unknown[]> => {
+      const response = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/crm/opportunities/${opportunityId}/history`,
+        cookies: admin,
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      return (response.json() as { data: unknown[] }).data;
+    };
+
+    /** A request converted into the buyer's basket while the module is on. */
+    const quoteInBasket = async (value: string) => {
+      await h
+        .em()
+        .getConnection()
+        .execute(`update "carts" set "status" = 'completed' where "customer_account_id" = ? and "status" = 'active'`, [
+          TEST_CUSTOMER_ID,
+        ]);
+      const rfq = await acceptedQuoteRequest(h, { quantity: 2, agreedUnitPrice: 11.25 });
+      await setValues('quote_requests', rfq.id, { [ORDER_KEY]: value });
+      await convertQuoteRequestToCart(h, rfq.id);
+    };
+
+    /** A submitted request, and an Opportunity holding `value`, announced as created from it. */
+    const announceCreatedFromOpportunity = async (quoteRequestId: string, opportunityId: string) =>
+      whenCrmEventSettled(h, 'rfq.created_by_admin.v1', (payload) => payload['rfqId'] === quoteRequestId, async () => {
+        h.eventBus.emit('rfq.created_by_admin.v1' as never, {
+          eventId: randomUUID(),
+          occurredAt: new Date().toISOString(),
+          rfqId: quoteRequestId,
+          organizationId: TEST_ORGANIZATION_ID,
+          adminUserId: TEST_ADMIN_ID,
+          origin: { type: 'crm_opportunity', id: opportunityId },
+        } as never);
+      });
+
+    const opportunityWithValue = async (value: string) => {
+      const opportunity = await createCrmOpportunity(h, { title: `cfc ${RUN} ${value}` });
+      await setValues('crm_opportunities', opportunity.id, { [OPPORTUNITY_KEY]: value });
+      return opportunity;
+    };
+
+    const submittedRequest = async (): Promise<string> => {
+      const rfq = await acceptedQuoteRequest(h, { quantity: 1, agreedUnitPrice: 11.25 });
+      return rfq.id;
+    };
+
+    const linksOf = (quoteRequestId: string) =>
+      h.em().count(CrmOpportunityLink, { documentKind: 'quote_request', documentId: quoteRequestId }, { filters: false });
+
+    beforeAll(async () => {
+      // The value in force, read and kept to write back (standing rule 7).
+      const rows = (await h
+        .em()
+        .getConnection()
+        .execute(`select coalesce(global_value, default_value) as value from "settings" where code = ?`, [
+          CRM_SETTING_CODES.AUTO_CREATE_FROM_QUOTE_REQUESTS,
+        ])) as Array<{ value: unknown }>;
+      if (!rows[0]) throw new Error('The setting crm.auto_create_from_quote_requests is not registered.');
+      storedAutoCreate = rows[0].value;
+      // A submitted request gets no Opportunity of its own: only the announced origin links one.
+      await setCrmSetting(h, CRM_SETTING_CODES.AUTO_CREATE_FROM_QUOTE_REQUESTS, false);
+      await h
+        .em()
+        .getConnection()
+        .execute(`update "stock_levels" set "on_hand" = 100000 where "product_id" = ?`, [SEED_PRODUCT_101_ID]);
+      await define('order', ORDER_KEY, []);
+      await define('quote_request', ORDER_KEY, ['order']);
+      await define('quote_request', OPPORTUNITY_KEY, []);
+      await define('opportunity', OPPORTUNITY_KEY, ['quote_request']);
+    });
+
+    afterAll(async () => {
+      await setCrmSetting(h, CRM_SETTING_CODES.AUTO_CREATE_FROM_QUOTE_REQUESTS, storedAutoCreate);
+      for (const id of [...created].reverse()) {
+        await h.app.inject({ method: 'DELETE', url: `${CUSTOM_FIELDS_API}/definitions/${id}`, cookies: admin });
+      }
+    });
+
+    it('carries a request’s value into the Order placed from its basket while on — the positive control', async () => {
+      const value = `on_${RUN}`;
+      await quoteInBasket(value);
+      const order = await whenOrderCreatedSettled(h, () => checkOutBasket(h));
+      expect((await valuesOf('orders', order.id))[ORDER_KEY]).toBe(value);
+      await reactor.idle();
+    });
+
+    it.each(['deactivated', 'platform-unavailable'] as const)(
+      'while %s a basket converted from a request places an Order that carries nothing and records nothing',
+      async (axis) => {
+        await quoteInBasket(`off_${axis}_${RUN}`);
+        let orderId = '';
+        let during: Record<string, unknown> = {};
+        await withModuleOff('quote_requests', axis, async () => {
+          orderId = (await whenOrderCreatedSettled(h, () => checkOutBasket(h))).id;
+          during = await valuesOf('orders', orderId);
+          expect(Object.hasOwn(during, ORDER_KEY)).toBe(false);
+          expect(await systemNotes(orderId)).toEqual([]);
+        });
+        await reactor.idle();
+        expect(await valuesOf('orders', orderId)).toEqual(during);
+        expect(await systemNotes(orderId)).toEqual([]);
+      },
+    );
+
+    it('carries an Opportunity’s value into the request created from it while on — the positive control', async () => {
+      const value = `on_${RUN}`;
+      const opportunity = await opportunityWithValue(value);
+      const quoteRequestId = await submittedRequest();
+      await announceCreatedFromOpportunity(quoteRequestId, opportunity.id);
+      expect(await linksOf(quoteRequestId)).toBe(1);
+      expect((await valuesOf('quote_requests', quoteRequestId))[OPPORTUNITY_KEY]).toBe(value);
+    });
+
+    it.each(['deactivated', 'platform-unavailable'] as const)(
+      'while %s a request announced as created from an Opportunity is neither linked nor carried into, then or afterwards',
+      async (axis) => {
+        const opportunity = await opportunityWithValue(`off_${axis}_${RUN}`);
+        const quoteRequestId = await submittedRequest();
+        const valuesBefore = await valuesOf('quote_requests', quoteRequestId);
+        const historyBefore = await opportunityHistory(opportunity.id);
+        await withModuleOff('quote_requests', axis, async () => {
+          await announceCreatedFromOpportunity(quoteRequestId, opportunity.id);
+          expect(await linksOf(quoteRequestId)).toBe(0);
+        });
+        await crmPlacedDocumentsHandled(h);
+        expect(await linksOf(quoteRequestId)).toBe(0);
+        expect(await valuesOf('quote_requests', quoteRequestId)).toEqual(valuesBefore);
+        expect(await carrySkipEvents(quoteRequestId)).toBe(0);
+        expect(await opportunityHistory(opportunity.id)).toEqual(historyBefore);
+      },
+    );
+  });
 });
+

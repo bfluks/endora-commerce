@@ -6,6 +6,7 @@ import {
   type CatalogGalleryPort,
   type CatalogProductReadPort,
   ANONYMOUS_PRODUCT_AUDIENCE,
+  isOrderMinimumEligibleType,
   isProductVisibleTo,
   type ComparisonOwnerView,
   type ComparisonDisplayMode,
@@ -547,6 +548,10 @@ export class ComparisonService {
             context: {
               salesChannel: { id: viewerSalesChannelId, defaultCurrency: currency },
               organization: viewerOrganization,
+              // D-287 P0 — the customer's own group, as on the catalogue listing.
+              ...(viewerOrganization && viewer.kind === 'buyer' && viewer.audience.customerAccountId
+                ? { customerAccountId: viewer.audience.customerAccountId }
+                : {}),
             },
           })
         : new Map<string, ListingPrice>();
@@ -594,6 +599,7 @@ export class ComparisonService {
           primaryAssetUrl: null,
           price: null,
           available: false,
+          minOrderQuantity: null,
           addedAt: row.addedAt.toISOString(),
         };
       }
@@ -609,6 +615,8 @@ export class ComparisonService {
         price,
         available:
           p.deletedAt == null && p.archivedAt == null && p.status === 'active',
+        // Feature 155 (FR-014) — emitted for the types the minimum applies to only.
+        minOrderQuantity: isOrderMinimumEligibleType(p.type) ? p.minOrderQuantity : null,
         addedAt: row.addedAt.toISOString(),
       };
     });

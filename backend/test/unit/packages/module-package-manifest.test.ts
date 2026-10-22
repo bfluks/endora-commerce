@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { findRepoRoot, findManifestIndex } from '../../../scripts/lib/module-roots.js';
 import { parseReadSize } from '../../../scripts/lib/read-size.js';
@@ -261,34 +261,47 @@ const BACKEND_ONLY = {
 
 describe('module package manifests are generated (feature 080, T041)', () => {
   describe('it reproduces every hand-written manifest in this checkout', () => {
-    it('renders each committed package.json byte-identically', () => {
+    // One render of the real tree is ~7.5 s with the machine to itself, and
+    // these cases used to pay it six times — the idempotence case twice, inside
+    // the 30 s case budget. With five other workers busy, measured in the
+    // complete suite at six workers, the first render of the file took 32 s and
+    // the case timed out while the generator was right. So the render is a
+    // fixture: made once, before the cases, under a budget sized for the work
+    // rather than for a unit case; only the idempotence case, whose subject is
+    // a *second* render, makes another, under the same budget.
+    const RENDER_BUDGET_MS = 120_000;
+    let realTreeRender: ReturnType<typeof renderModulePackageManifests> | undefined;
+    function renderRealTree(): ReturnType<typeof renderModulePackageManifests> {
+      return renderModulePackageManifests(repoRoot!, nodeManifestFs(), findManifestIndex(repoRoot!));
+    }
+    function realTree(): ReturnType<typeof renderModulePackageManifests> {
+      if (realTreeRender === undefined) throw new Error('the real tree was not rendered');
+      return realTreeRender;
+    }
+    beforeAll(() => {
       expect(repoRoot).not.toBeNull();
-      const run = renderModulePackageManifests(
-        repoRoot!,
-        nodeManifestFs(),
-        findManifestIndex(repoRoot!),
-      );
+      realTreeRender = renderRealTree();
+    }, RENDER_BUDGET_MS);
+
+    it('renders each committed package.json byte-identically', () => {
+      const run = realTree();
       expect(run.rendered.length).toBeGreaterThan(0);
       for (const entry of run.rendered) {
         expect(readFileSync(entry.outputPath, 'utf8'), entry.outputPath).toBe(entry.content);
       }
     });
 
-    it('is idempotent — a second render over its own output changes nothing', () => {
-      const first = renderModulePackageManifests(
-        repoRoot!,
-        nodeManifestFs(),
-        findManifestIndex(repoRoot!),
-      );
-      const second = renderModulePackageManifests(
-        repoRoot!,
-        nodeManifestFs(),
-        findManifestIndex(repoRoot!),
-      );
-      expect(second.rendered.map((entry) => entry.content)).toEqual(
-        first.rendered.map((entry) => entry.content),
-      );
-    });
+    it(
+      'is idempotent — a second render over its own output changes nothing',
+      () => {
+        const first = realTree();
+        const second = renderRealTree();
+        expect(second.rendered.map((entry) => entry.content)).toEqual(
+          first.rendered.map((entry) => entry.content),
+        );
+      },
+      RENDER_BUDGET_MS,
+    );
 
     it('renders every committed tailwind.css byte-identically', () => {
       // The declaration and the file it names are two halves of one statement
@@ -296,11 +309,7 @@ describe('module package manifests are generated (feature 080, T041)', () => {
       // both: a run that wrote one and not the other publishes a subpath over
       // a file that is not there — `ERR_PACKAGE_PATH_NOT_EXPORTED` at the first
       // consumer, or a stylesheet nothing imports.
-      const run = renderModulePackageManifests(
-        repoRoot!,
-        nodeManifestFs(),
-        findManifestIndex(repoRoot!),
-      );
+      const run = realTree();
       expect(run.stylesheets.length).toBeGreaterThan(0);
       for (const entry of run.stylesheets) {
         expect(readFileSync(entry.outputPath, 'utf8'), entry.outputPath).toBe(entry.content);
@@ -318,11 +327,7 @@ describe('module package manifests are generated (feature 080, T041)', () => {
       // R1.1's two halves, reconciled against each other over the real tree.
       // A package with a stylesheet and no subpath publishes a file no
       // consumer can name; a package with a subpath and no stylesheet is M9.
-      const run = renderModulePackageManifests(
-        repoRoot!,
-        nodeManifestFs(),
-        findManifestIndex(repoRoot!),
-      );
+      const run = realTree();
       const withStylesheet = new Set(run.stylesheets.map((entry) => entry.packageName));
       for (const entry of [...run.rendered, ...run.familyRendered]) {
         const manifest = JSON.parse(entry.content) as { exports: Record<string, unknown> };
@@ -334,11 +339,7 @@ describe('module package manifests are generated (feature 080, T041)', () => {
     });
 
     it('reads every module package the workspace declares, and says so', () => {
-      const run = renderModulePackageManifests(
-        repoRoot!,
-        nodeManifestFs(),
-        findManifestIndex(repoRoot!),
-      );
+      const run = realTree();
       expect(run.filesRead).toBeGreaterThan(run.rendered.length);
       expect(run.specifierSites).toBeGreaterThan(0);
       // The independent derivation: the generated manifest index registers a

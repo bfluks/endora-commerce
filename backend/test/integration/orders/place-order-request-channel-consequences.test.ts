@@ -14,7 +14,7 @@ import {
   seedCartForStubCustomer,
 } from '../../helpers/seed-commerce.js';
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
-import { TEST_CUSTOMER_ID } from '../../helpers/test-actors.js';
+import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import {
   Cart,
   OrderItem,
@@ -23,6 +23,7 @@ import {
   Warehouse,
   WarehouseChannelAssignment,
 } from '../../helpers/package-entities.js';
+import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
 
 /**
  * What follows an order's channel now that a storefront order records the
@@ -93,6 +94,8 @@ describe('order placement — what follows the resolved request channel', () => 
     });
     expect(created.statusCode).toBe(201);
     channelB = { id: (created.json() as { id: string }).id, code: 'consequences-b' };
+    // Feature 154 — the buyer shops on channel B as well as on the default.
+    await addOrganizationChannels(h, TEST_ORGANIZATION_ID, ['consequences-b']);
 
     // Channel B ships from a warehouse of its own, and only from it — so the
     // warehouse an order is allocated from says which channel's candidates
@@ -159,10 +162,14 @@ describe('order placement — what follows the resolved request channel', () => 
     }
   }
 
-  async function freshBasket(): Promise<void> {
+  /**
+   * A fresh basket of `channel` (the system default when absent): an order is
+   * placed from the basket of its own channel (`specs/154-sales-channel-access/`).
+   */
+  async function freshBasket(channel?: { id: string }): Promise<void> {
     const em = h.em();
     await em.nativeDelete(Cart, { customerAccountId: TEST_CUSTOMER_ID, status: 'active' });
-    await seedCartForStubCustomer(em);
+    await seedCartForStubCustomer(em, channel?.id);
   }
 
   /** Places the basket. `channelCode` is the header; the body never names a channel. */
@@ -210,7 +217,7 @@ describe('order placement — what follows the resolved request channel', () => 
 
   it('numbers the order with the prefix of the channel the request named', async () => {
     await withChannelValue(BUSINESS_ID_PREFIX, channelB.code, 'B-', '', async () => {
-      await freshBasket();
+      await freshBasket(channelB);
       const onB = await placeOk(channelB.code);
       expect(onB.businessId.startsWith('B-')).toBe(true);
 
@@ -223,7 +230,7 @@ describe('order placement — what follows the resolved request channel', () => 
   });
 
   it('allocates the stock from the warehouses of the channel the request named', async () => {
-    await freshBasket();
+    await freshBasket(channelB);
     const onB = await placeOk(channelB.code);
     expect(await allocatedWarehouse(onB.id)).toBe(CHANNEL_B_WAREHOUSE_ID);
 
@@ -234,11 +241,13 @@ describe('order placement — what follows the resolved request channel', () => 
 
   it('applies the minimum order value of the channel the request named, and only there', async () => {
     await withChannelValue(MIN_ORDER_VALUE, channelB.code, 10_000, 0, async () => {
-      await freshBasket();
+      await freshBasket(channelB);
       expectBelowMinimum(await place(channelB.code), 10_000);
 
-      // The same basket, still active after the refusal, on the default
-      // channel: channel B's minimum is not this order's.
+      // The same lines in the basket of the default channel: channel B's
+      // minimum is not this order's. (A basket belongs to its channel, so the
+      // refused basket of B is not the one the default channel places.)
+      await freshBasket();
       expect((await place()).statusCode).toBe(201);
     });
   });

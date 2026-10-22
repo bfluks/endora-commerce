@@ -233,6 +233,18 @@ export const manifest = defineModuleManifest({
         'than from a caught refusal. A link holds the Quote Request by value, so no table of ' +
         'that owner is referenced from this module\'s schema.',
     },
+    // Feature 162 — an Opportunity's custom-field values pushed into a Quote
+    // Request created from it (`specs/162-custom-fields-value-carry/`, R-16).
+    {
+      moduleId: 'quote_requests',
+      name: 'quoteRequestCustomFieldCarryPort',
+      kind: 'degrades-without',
+      whenAbsent: 'Values of Sales Opportunities are not carried into Quote Requests created from them',
+      reason:
+        'The one caller, `opportunity-document-carry.ts`, asks `isPresent()` before it reaches the ' +
+        'receiver, so a switched-off quote desk is never called and nothing is caught; there is ' +
+        'no Quote Request to carry into while the module is off, and nothing is replayed after.',
+    },
   ],
   settings,
   // Constitution XVII — the operator's activation control.

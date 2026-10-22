@@ -148,4 +148,59 @@ describe('Order comments', () => {
     const count = await em.count(OrderComment, { orderId: openOrderId });
     expect(count).toBeGreaterThanOrEqual(2);
   });
+
+  // Feature 162 (FR-010a, SC-006) — an author-less system note: listed to the
+  // administrator with its structured shape, never to the buyer, even if its
+  // visibility flag were ever set.
+  it('lists a system note to the administrator only, with its shape, and every other comment with systemNote null', async () => {
+    const orderId = await makeOrder('new');
+    const note = {
+      kind: 'custom_field_carry_skipped',
+      source: { entityType: 'quote_request', recordId: randomUUID(), reference: 'QR-0001' },
+      skipped: [{ key: 'order_source', reason: 'value_invalid' }],
+    };
+    const conn = h.em().getConnection();
+    const insertNote = async (visible: boolean): Promise<string> => {
+      const id = randomUUID();
+      await conn.execute(
+        `insert into "order_comments" (id, order_id, author_admin_user_id, author_customer_account_id, body, is_customer_visible, notify_customer, system_note, created_at)
+         values (?, ?, null, null, ?, ?, false, ?::jsonb, now())`,
+        [id, orderId, 'Custom field values were not carried from quote request QR-0001: order_source.', visible, JSON.stringify(note)],
+      );
+      return id;
+    };
+    const hiddenId = await insertNote(false);
+    const forcedVisibleId = await insertNote(true);
+    const staff = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/orders/${orderId}/comments`,
+      ...admin,
+      payload: { body: 'a staff note', isCustomerVisible: true, notifyCustomer: false },
+    });
+    expect(staff.statusCode, staff.body).toBe(201);
+    const staffId = (staff.json() as { data: { id: string } }).data.id;
+
+    const adminList = (
+      await h.app.inject({ method: 'GET', url: `/api/v1/admin/orders/${orderId}/comments`, ...admin })
+    ).json() as { data: Array<{ id: string; systemNote: unknown; authorAdminUserId: unknown }> };
+    const byId = new Map(adminList.data.map((comment) => [comment.id, comment]));
+    for (const id of [hiddenId, forcedVisibleId]) {
+      expect(byId.get(id)?.systemNote).toEqual(note);
+      expect(byId.get(id)?.authorAdminUserId).toBeNull();
+      expect(orderCommentSchema.safeParse(byId.get(id)).success).toBe(true);
+    }
+    expect(byId.get(staffId)?.systemNote).toBeNull();
+    for (const comment of adminList.data) {
+      if (comment.id !== hiddenId && comment.id !== forcedVisibleId) expect(comment.systemNote).toBeNull();
+    }
+
+    const customerList = (
+      await h.app.inject({ method: 'GET', url: `/api/v1/orders/${orderId}/comments`, ...customer })
+    ).json() as { data: Array<{ id: string }> };
+    const customerIds = customerList.data.map((comment) => comment.id);
+    expect(customerIds).toContain(staffId);
+    expect(customerIds).not.toContain(hiddenId);
+    expect(customerIds).not.toContain(forcedVisibleId);
+    for (const comment of customerList.data) expect(Object.hasOwn(comment, 'systemNote')).toBe(false);
+  });
 });

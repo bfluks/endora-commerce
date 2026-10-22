@@ -107,6 +107,7 @@ beforeEach(() => {
       return Promise.resolve({ data: { statuses: [{ code: 'on_hold', name: { en: 'On Hold' } }] } });
     }
     if (path.startsWith('/api/v1/admin/orders/list-views')) return Promise.resolve({ data: [] });
+    if (path.startsWith('/api/v1/admin/orders/custom-field-filters')) return Promise.resolve({ data: [] });
     if (path.startsWith('/api/v1/admin/orders')) {
       return Promise.resolve({
         data: [row('o1', 'ORD-1', 'failed'), row('o2', 'ORD-2', 'refunded')],

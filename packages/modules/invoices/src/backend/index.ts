@@ -24,7 +24,7 @@ import type {
   TransactionalEmailSender,
 } from '@endora-commerce/contracts';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
-import { effectiveState, enterSystemScope, lazyPort } from '@endora-commerce/platform/kernel';
+import { effectiveState, lazyPort } from '@endora-commerce/platform/kernel';
 import { z } from 'zod';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { FastifyRequest } from 'fastify';
@@ -490,24 +490,28 @@ export function registerModule(ctx: ModuleContext): void {
    * (D-68): with invoicing off nothing is written, and the grant runs the first
    * boot invoicing is present again. Once it has run, a hidden setting says so
    * and it never runs again.
+   *
+   * It opens no scope of its own. The platform runs every boot hook inside the
+   * system scope it enters for that module (`boot: invoices`, entry point
+   * `boot`), so the hook already crosses organisations and that access is
+   * already recorded. `enterSystemScope` is for starting a detached execution
+   * — a worker, a timer — and calling it here recorded a second widening on
+   * every boot, labelled `worker` although nothing but the boot ran it.
    */
   ctx.onBoot(async () => {
     if (!effectiveState.isPresent('invoices')) return;
     const settings = lazyPort<InvoicesModuleOptions['settingsService']>(ctx, 'settingsReadPort');
     const settingsAdmin = lazyPort<SettingsAdminPort>(ctx, 'settingsAdminService');
-    await enterSystemScope('invoices: one-time document template access grant', () =>
-      grantDocumentTemplatesAccess({
-        roles: lazyPort<AdminRolePort>(ctx, 'adminRolePort'),
-        isDone: () => settings.get(GRANT_DONE_SETTING, null, z.boolean()),
-        markDone: async () => {
-          await settingsAdmin.setValueForAllChannels(GRANT_DONE_SETTING, true, null, { actorAdminUserId: null });
-        },
-      }).then((outcome) => {
-        if (outcome.status === 'granted' && outcome.roleCodes.length > 0) {
-          ctx.log.info({ roleCodes: outcome.roleCodes }, '[invoices] granted document template access to roles');
-        }
-      }),
-    );
+    const outcome = await grantDocumentTemplatesAccess({
+      roles: lazyPort<AdminRolePort>(ctx, 'adminRolePort'),
+      isDone: () => settings.get(GRANT_DONE_SETTING, null, z.boolean()),
+      markDone: async () => {
+        await settingsAdmin.setValueForAllChannels(GRANT_DONE_SETTING, true, null, { actorAdminUserId: null });
+      },
+    });
+    if (outcome.status === 'granted' && outcome.roleCodes.length > 0) {
+      ctx.log.info({ roleCodes: outcome.roleCodes }, '[invoices] granted document template access to roles');
+    }
   });
 
 }

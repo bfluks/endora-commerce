@@ -2,6 +2,7 @@ import type {
   AdminUserReadPort,
   CatalogProductReadPort,
   OpportunityReference,
+  OpportunityReferenceOrder,
   OpportunityReferenceToken,
   OrderReadPort,
 } from '@endora-commerce/contracts';
@@ -152,10 +153,20 @@ export class ReferenceService {
       mayReadProducts ? this.#viewerLanguage() : Promise.resolve(FALLBACK_LANGUAGE),
     ]);
     const labels = new Map<string, string>();
+    const orderFacts = new Map<string, OpportunityReferenceOrder>();
     for (const product of products) {
       labels.set(`product:${product.id}`, productLabel(product.name, product.sku, language));
     }
-    for (const order of orders) labels.set(`order:${order.id}`, order.businessId);
+    for (const order of orders) {
+      labels.set(`order:${order.id}`, order.businessId);
+      orderFacts.set(order.id, {
+        status: order.status,
+        total: order.total,
+        currency: order.currency,
+        placedAt: new Date(order.placedAt).toISOString(),
+        customerName: order.billingAddress?.companyName || order.billingAddress?.recipientName || null,
+      });
+    }
     for (const person of people.filter(isActiveAdministrator)) {
       labels.set(
         `admin_user:${person.id}`,
@@ -168,7 +179,16 @@ export class ReferenceService {
         const label = labels.get(`${token.type}:${token.id}`);
         return label === undefined
           ? { type: token.type, id: token.id, available: false, label: null, url: null }
-          : { type: token.type, id: token.id, available: true, label, url: adminUrl(token) };
+          : {
+              type: token.type,
+              id: token.id,
+              available: true,
+              label,
+              url: adminUrl(token),
+              ...(token.type === 'order' && orderFacts.has(token.id)
+                ? { order: orderFacts.get(token.id) as OpportunityReferenceOrder }
+                : {}),
+            };
       }),
     );
   }

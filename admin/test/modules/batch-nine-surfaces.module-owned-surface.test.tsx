@@ -446,17 +446,25 @@ describe('the surfaces neither module contributes, derived from the contribution
     expect(contributions.zones ?? []).toEqual([]);
   });
 
-  it('assets_library advertises no palette action, and custom_fields advertises one', async () => {
+  it('assets_library advertises one palette action, and custom_fields advertises one', async () => {
     // The other half of Ruling 1, read off the **manifests**. It is asserted
     // here as a fact about the declaration and driven for real in
     // `backend/test/integration/_admin_surfaces/batch-nine-palette-off-state.test.ts`,
     // which is where the server's effective enabled-set can be seen at all.
-    // `assets_library` declaring none is not an omission this batch repairs:
-    // choosing a landing action for a screen is a product decision, not a file
-    // move.
+    // `assets_library`' "Assets library" landing action is the product decision
+    // `specs/156-asset-stable-url/` research R-16 records (round 3 Q2), named
+    // like its sidebar entry by the owner's later ruling.
     const assets = (await import('@endora-commerce/mod-assets-library')).manifest;
     const customFields = (await import('@endora-commerce/mod-custom-fields')).manifest;
-    expect(assets.actions ?? []).toEqual([]);
+    expect((assets.actions ?? []).map((action) => action.id)).toEqual(['open-assets-library']);
+    const [open] = assets.actions ?? [];
+    expect(open?.labelKey).toBe('actions.openLibrary.label');
+    expect(open?.targetRoute).toBe('/assets-library');
+    expect(open?.requiredPermission).toBe('assets.read');
+    const bundle = JSON.parse(
+      readFileSync(resolve(process.cwd(), '../packages/modules/assets_library/i18n/en.json'), 'utf8'),
+    ) as Record<string, string>;
+    expect(bundle['actions.openLibrary.label']).toBe('Assets library');
     expect((customFields.actions ?? []).map((action) => action.id)).toEqual([
       'open-custom-fields',
     ]);

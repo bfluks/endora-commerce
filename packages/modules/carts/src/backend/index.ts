@@ -9,7 +9,8 @@ import type {
   CartWritePort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
-  LinePricePort,
+  LinePricesPort,
+  OrderQuoteSourcePort,
   ProductDisplayModePort,
   OrganizationCartApprovalWritePort,
   OrganizationDetailsPort,
@@ -116,7 +117,7 @@ export interface CartsCradle {
    * `@endora-commerce/contracts`, never the provider's class, and each is resolved lazily
    * by a string literal so a switched-off owner answers at the call.
    */
-  readonly pricingService: LinePricePort;
+  readonly pricingService: LinePricesPort;
   readonly promotionService: PromotionApplyPort;
   readonly promotionCodePort: PromotionCodePort;
   readonly rfqService: RfqCustomerPort;
@@ -197,6 +198,8 @@ export function registerModule(ctx: ModuleContext): void {
               'organizationCartApprovalWritePort',
             ),
             lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+            lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+            lazyPort<OrderQuoteSourcePort>(ctx, 'orderQuoteSourcePort'),
           ),
       )
       .singleton(),
@@ -236,7 +239,7 @@ export function registerModule(ctx: ModuleContext): void {
         ({ emFactory, cartApprovalService, cartAuditService, cartRecomputeCache }: CartsCradle) =>
           new CartService(
             emFactory,
-            lazyPort<LinePricePort>(ctx, 'pricingService'),
+            lazyPort<LinePricesPort>(ctx, 'pricingService'),
             lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
             lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
             lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
@@ -302,7 +305,7 @@ export function registerModule(ctx: ModuleContext): void {
           new CartPlacementApplyService(
             emFactory,
             new CartLinePricing(
-              lazyPort<LinePricePort>(ctx, 'pricingService'),
+              lazyPort<LinePricesPort>(ctx, 'pricingService'),
               lazyPort<ProductDisplayModePort>(ctx, 'productDisplayModePort'),
               lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
             ),
@@ -358,12 +361,16 @@ export function registerModule(ctx: ModuleContext): void {
         lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
         lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
       ),
+      // Issue #168 — the read prices through the chain placement charges by.
       cartPricingRecompute: new CartPricingRecompute(
         emFactory,
-        lazyPort<LinePricePort>(ctx, 'pricingService'),
+        new CartLinePricing(
+          lazyPort<LinePricesPort>(ctx, 'pricingService'),
+          lazyPort<ProductDisplayModePort>(ctx, 'productDisplayModePort'),
+          lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
+        ),
         cradle.cartRecomputeCache,
         lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
-        lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
       ),
       assertOrganizationCanTransact: async (organizationId) => {
         await ctx.cradle<CartsCradle>().organizationReadPort.assertCanTransact(organizationId);

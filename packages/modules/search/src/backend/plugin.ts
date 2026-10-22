@@ -5,7 +5,7 @@ import type {
   CatalogAttributeReadPort,
   CatalogCategoryReadPort,
   CatalogProductReadPort,
-  ListingPricePort,
+  ListingPriceDetailPort,
   OrganizationDetailsPort,
   SettingsAdminAuditContext,
   SettingsAdminPort,
@@ -135,7 +135,7 @@ export interface SearchModuleOptions {
    * above covers the typeahead popup). A search hit is a listing and prices
    * through the same chain as the catalogue grid.
    */
-  listingPrices: ListingPricePort;
+  listingPrices: ListingPriceDetailPort;
   /**
    * `organizations`' read model — the customer group the pricing engine keys a
    * group-targeted list on. The enricher above already resolves it for the

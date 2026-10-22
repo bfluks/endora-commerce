@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
@@ -24,6 +24,7 @@ import {
   nodeWorkspaceFs,
   workspaceMembers,
 } from '../../scripts/lib/workspace-packages.js';
+import { mapBounded, spawnConcurrency } from './bounded-pool.js';
 
 /**
  * A backend whose module tree has moved, with the residue left behind — the
@@ -396,11 +397,117 @@ export interface MovedModuleTreeOptions extends BorrowedNodeModulesOption {
   readonly registeredIds?: readonly string[];
 }
 
+/** What one spawned check answered: its exit status and stdout followed by stderr. */
+export interface CheckResult {
+  readonly status: number | null;
+  readonly output: string;
+}
+
+/** One check a caller wants spawned over a fixture: the script and its arguments. */
+export interface CheckRequest {
+  readonly script: string;
+  readonly args?: readonly string[];
+}
+
 export interface MovedModuleTreeFixture {
   readonly root: string;
-  /** Runs `backend/scripts/<script>` inside the fixture. */
-  run: (script: string, args?: readonly string[]) => { status: number | null; output: string };
+  /**
+   * Runs `backend/scripts/<script>` inside the fixture.
+   *
+   * Answers from {@link prefetch} when that already spawned the identical
+   * script and arguments; otherwise spawns now. Only prefetched results are
+   * reused — a caller that changes the tree between two runs (the migration
+   * scaffold's companion test writes into it) gets two spawns, as before.
+   */
+  run: (script: string, args?: readonly string[]) => CheckResult;
+  /**
+   * Spawns every distinct request side by side, at most `concurrency` at once
+   * (default {@link spawnConcurrency}), and keeps each result for {@link run}.
+   *
+   * Each child is spawned exactly as `run` spawns it — the same `tsx`, script,
+   * arguments, working directory and environment — so a result read back here
+   * is the one a serial `run` would have produced over the same tree. A caller
+   * must not change the tree between prefetching and reading.
+   */
+  prefetch: (requests: readonly CheckRequest[], concurrency?: number) => Promise<void>;
   cleanup: () => void;
+}
+
+/**
+ * The spawn half of a fixture, shared by both trees: one way to run a check,
+ * synchronously or side by side, and the results a prefetch kept.
+ */
+function checkRunner(
+  backend: string,
+): Pick<MovedModuleTreeFixture, 'run' | 'prefetch'> {
+  const kept = new Map<string, CheckResult>();
+  const keyOf = (script: string, args: readonly string[]): string =>
+    JSON.stringify([script, args]);
+  const argvOf = (script: string, args: readonly string[]): string[] => [
+    join(backend, 'scripts', script),
+    ...args,
+  ];
+  const spawnAsync = (script: string, args: readonly string[]): Promise<CheckResult> =>
+    new Promise<CheckResult>((resolve, reject) => {
+      const child = spawn(TSX, argvOf(script, args), { cwd: backend });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => (stdout += chunk));
+      child.stderr.on('data', (chunk: string) => (stderr += chunk));
+      child.on('error', reject);
+      child.on('close', (status) => resolve({ status, output: `${stdout}${stderr}` }));
+    });
+  return {
+    run: (script, args = []) => {
+      const hit = kept.get(keyOf(script, args));
+      if (hit !== undefined) return hit;
+      const result = spawnSync(TSX, argvOf(script, args), {
+        encoding: 'utf8',
+        cwd: backend,
+      });
+      return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
+    },
+    prefetch: async (requests, concurrency = spawnConcurrency()) => {
+      const distinct = new Map<string, { script: string; args: readonly string[] }>();
+      for (const request of requests) {
+        const args = request.args ?? [];
+        const key = keyOf(request.script, args);
+        if (!kept.has(key)) distinct.set(key, { script: request.script, args });
+      }
+      const entries = [...distinct.entries()];
+      const results = await mapBounded(entries, concurrency, ([, request]) =>
+        spawnAsync(request.script, request.args),
+      );
+      entries.forEach(([key], index) => kept.set(key, results[index]!));
+    },
+  };
+}
+
+/**
+ * Prefetches several fixtures' checks through **one** bounded pool, so two trees
+ * prefetched together never run more children than the pool allows.
+ *
+ * Each item spawns exactly one request through its fixture's own
+ * {@link MovedModuleTreeFixture.prefetch}, so what is kept is what that
+ * fixture's `run` would have spawned.
+ */
+export async function prefetchChecks(
+  jobs: readonly { readonly fixture: MovedModuleTreeFixture; readonly requests: readonly CheckRequest[] }[],
+  concurrency: number = spawnConcurrency(),
+): Promise<void> {
+  const items: { fixture: MovedModuleTreeFixture; request: CheckRequest }[] = [];
+  for (const job of jobs) {
+    const seen = new Set<string>();
+    for (const request of job.requests) {
+      const key = JSON.stringify([request.script, request.args ?? []]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({ fixture: job.fixture, request });
+    }
+  }
+  await mapBounded(items, concurrency, ({ fixture, request }) => fixture.prefetch([request], 1));
 }
 
 /**
@@ -1049,13 +1156,7 @@ export function createMovedModuleTreeFixture(
 
   return {
     root,
-    run: (script, args = []) => {
-      const result = spawnSync(TSX, [join(backend, 'scripts', script), ...args], {
-        encoding: 'utf8',
-        cwd: backend,
-      });
-      return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
-    },
+    ...checkRunner(backend),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -1758,13 +1859,7 @@ export function createSplitModuleTreeFixture(
 
   return {
     root,
-    run: (script, args = []) => {
-      const result = spawnSync(TSX, [join(backend, 'scripts', script), ...args], {
-        encoding: 'utf8',
-        cwd: backend,
-      });
-      return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
-    },
+    ...checkRunner(backend),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }

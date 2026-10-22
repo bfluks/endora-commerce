@@ -24,8 +24,25 @@ import { HttpError } from '@endora-commerce/platform/http';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { AdapterRegistry } from './storage/adapter-registry.js';
-import type { AssetVisibility } from './storage/storage-adapter.js';
+import type { AssetVisibility, StorageAdapter } from './storage/storage-adapter.js';
 import { isActiveDocument, isSvg, SVG_MIME } from './content-policy.js';
+import { cloudContentDisposition } from './asset-urls.js';
+
+
+/** The sentence a storage failure answers with: generic, whatever the adapter said. */
+export const STORAGE_UNAVAILABLE_MESSAGE = 'The file storage is unavailable. Try again later.';
+
+/**
+ * A storage failure as the API answers it (security review): `503` with the
+ * generic sentence, never the adapter's own text — which can name an absolute
+ * path, a bucket or an endpoint. The adapter error rides along as `cause`, so
+ * the platform's 5xx log line carries the detail an operator needs.
+ */
+export function storageUnavailable(err: unknown): HttpError {
+  const error = new HttpError(503, ERROR_CODES.ASSET_STORAGE_UNAVAILABLE, STORAGE_UNAVAILABLE_MESSAGE);
+  error.cause = err;
+  return error;
+}
 
 export interface UploadPolicy {
   /** From `assets.allowed_file_types` setting; `['*']` ⇒ unrestricted. */
@@ -66,7 +83,7 @@ const KIND_BY_MIME_PREFIX: Array<[string, Asset['kind']]> = [
   ['application/pdf', 'pdf'],
 ];
 
-function mimeToKind(mime: string): Asset['kind'] {
+export function mimeToKind(mime: string): Asset['kind'] {
   for (const [prefix, kind] of KIND_BY_MIME_PREFIX) {
     if (mime.startsWith(prefix)) return kind;
   }
@@ -112,7 +129,10 @@ function refuseActiveDocument(): never {
  * whatever the configured policy says, and an SVG is always stored as
  * `image/svg+xml`, the one type the file route serves it under.
  */
-function storedMimeFor(input: UploadInput, sniffed: string | undefined): string {
+function storedMimeFor(
+  input: { filename: string; declaredMime: string },
+  sniffed: string | undefined,
+): string {
   if (sniffed) {
     if (isActiveDocument({ filename: '', mimeType: sniffed })) refuseActiveDocument();
     return sniffed;
@@ -123,10 +143,63 @@ function storedMimeFor(input: UploadInput, sniffed: string | undefined): string 
   return input.declaredMime || 'application/octet-stream';
 }
 
+/** One staged write: the file checked against the policy and streamed to `locator`. */
+export interface StageInput {
+  /** The adapter of the backend the object is written to. */
+  adapter: StorageAdapter;
+  locator: string;
+  filename: string;
+  declaredMime: string;
+  stream: NodeJS.ReadableStream;
+  /** Best-effort byte count from headers; `0` when unknown. */
+  declaredSize: number;
+  visibility: AssetVisibility;
+  /**
+   * A hard ceiling on the bytes actually streamed, whatever the configured
+   * policy allows — the 5 GiB a single S3 request accepts, for a replace of an
+   * S3 asset (specs/156-asset-stable-url/ research R-1).
+   */
+  sizeCapBytes?: number;
+}
+
+export interface StageResult {
+  /** The type the object is stored and served as. */
+  storedMime: string;
+  /** What the bytes were recognised as; `undefined` when nothing was. */
+  detectedMime: string | undefined;
+  /** The bytes actually streamed (the declared size when none were counted). */
+  sizeBytes: number;
+}
+
+const MIB = 1024 * 1024;
+
+function tooLarge(maxFileSizeMb: number, message: string): HttpError {
+  return new HttpError(
+    413,
+    ERROR_CODES.ASSET_UPLOAD_TOO_LARGE,
+    message,
+    // Issue #86 — the figure the bundle sentence names, in megabytes.
+    { maxFileSizeMb },
+  );
+}
+
+/** Raised inside the counting stream; turned into the 413 once `put` has failed on it. */
+class SizeCapExceeded extends Error {
+  override readonly name = 'SizeCapExceeded';
+}
+
 export class UploadPipeline {
   constructor(private readonly deps: UploadPipelineDeps) {}
 
-  async run(input: UploadInput): Promise<Asset> {
+  /**
+   * The checks and the write an upload and a replace share
+   * (specs/156-asset-stable-url/ research R-4): the size pre-flight, the
+   * declared-type check, the sniff, `storedMimeFor` (documents a browser would
+   * run are refused, an SVG is stored as `image/svg+xml`), the sniffed-type
+   * re-check, and the counting `put` with the cloud object metadata. Writes no
+   * row. On a refusal before the `put`, nothing is written.
+   */
+  async stage(input: StageInput): Promise<StageResult> {
     const policy = await this.deps.loadPolicy();
     const ext = extensionOf(input.filename);
 
@@ -134,17 +207,16 @@ export class UploadPipeline {
     if (
       policy.maxFileSizeMb > 0 &&
       input.declaredSize > 0 &&
-      input.declaredSize > policy.maxFileSizeMb * 1024 * 1024
+      input.declaredSize > policy.maxFileSizeMb * MIB
     ) {
-      throw new HttpError(
-        413,
-        ERROR_CODES.ASSET_UPLOAD_TOO_LARGE,
+      throw tooLarge(
+        policy.maxFileSizeMb,
         `File exceeds the configured maximum of ${policy.maxFileSizeMb} MB.`,
-        // Issue #86 — the figure the sentence above carried and the bundle
-        // sentence that replaces it did not. It is the value of the
-        // `assets.max_file_size_mb` setting, in the unit that setting is in.
-        { maxFileSizeMb: policy.maxFileSizeMb },
       );
+    }
+    const capMb = input.sizeCapBytes !== undefined ? Math.floor(input.sizeCapBytes / MIB) : 0;
+    if (input.sizeCapBytes !== undefined && input.declaredSize > input.sizeCapBytes) {
+      throw tooLarge(capMb, `File exceeds the ${capMb} MB a single storage request accepts.`);
     }
     if (
       !isAllowed(policy.allowedTypes, input.declaredMime, ext)
@@ -175,6 +247,70 @@ export class UploadPipeline {
       );
     }
 
+    // — Stream into the adapter (storage-first commit) —
+    // Multipart parts frequently carry no per-part Content-Length, so
+    // `declaredSize` is often 0. Count the bytes as they flow to the adapter so
+    // the persisted `sizeBytes` is accurate; the file-serving route sends this
+    // value as `Content-Length`, and a wrong 0 makes browsers render an empty
+    // image (broken preview in admin and missing placeholder on the storefront).
+    //
+    // The counted bytes are held to the live policy too: a multipart part
+    // declares no size, so the pre-flight above cannot see it, and the parser's
+    // own limit is the one read at boot.
+    const policyCapBytes = policy.maxFileSizeMb > 0 ? policy.maxFileSizeMb * MIB : undefined;
+    const usePolicyCap =
+      policyCapBytes !== undefined &&
+      (input.sizeCapBytes === undefined || policyCapBytes <= input.sizeCapBytes);
+    const cap = usePolicyCap ? policyCapBytes : input.sizeCapBytes;
+    let observedSize = 0;
+    let capExceeded = false;
+    const countingStream = sniffedStream.pipe(
+      new Transform({
+        transform(chunk: Buffer, _enc, cb): void {
+          observedSize += chunk.length;
+          if (cap !== undefined && observedSize > cap) {
+            capExceeded = true;
+            cb(new SizeCapExceeded(`more than ${cap} bytes`));
+            return;
+          }
+          cb(null, chunk);
+        },
+      }),
+    );
+    // The cap can trip before the adapter attaches to the stream (the local
+    // adapter creates its directory first). The error stays on the stream for
+    // the adapter to read; this only keeps it from being reported as uncaught.
+    countingStream.on('error', () => undefined);
+    try {
+      await input.adapter.put({
+        locator: input.locator,
+        mimeType: sniffedMime,
+        visibility: input.visibility,
+        stream: countingStream,
+        sizeBytes: input.declaredSize,
+        cacheControl: 'no-cache',
+        contentDisposition: cloudContentDisposition(sniffedMime, input.filename),
+      });
+    } catch (err) {
+      if (capExceeded) {
+        throw usePolicyCap
+          ? tooLarge(
+              policy.maxFileSizeMb,
+              `File exceeds the configured maximum of ${policy.maxFileSizeMb} MB.`,
+            )
+          : tooLarge(capMb, `File exceeds the ${capMb} MB a single storage request accepts.`);
+      }
+      throw storageUnavailable(err);
+    }
+
+    return {
+      storedMime: sniffedMime,
+      detectedMime: fileType?.mime,
+      sizeBytes: observedSize > 0 ? observedSize : input.declaredSize,
+    };
+  }
+
+  async run(input: UploadInput): Promise<Asset> {
     // — Allocate id, locator —
     const assetId = randomUUID();
     const adapter = await this.deps.adapters.getActive();
@@ -183,37 +319,16 @@ export class UploadPipeline {
       originalFilename: input.filename,
     });
 
-    // — Stream into the adapter (storage-first commit) —
-    // Multipart parts frequently carry no per-part Content-Length, so
-    // `declaredSize` is often 0. Count the bytes as they flow to the adapter so
-    // the persisted `sizeBytes` is accurate; the file-serving route sends this
-    // value as `Content-Length`, and a wrong 0 makes browsers render an empty
-    // image (broken preview in admin and missing placeholder on the storefront).
-    let observedSize = 0;
-    const countingStream = sniffedStream.pipe(
-      new Transform({
-        transform(chunk: Buffer, _enc, cb): void {
-          observedSize += chunk.length;
-          cb(null, chunk);
-        },
-      }),
-    );
-    try {
-      await adapter.put({
-        locator,
-        mimeType: sniffedMime,
-        visibility: input.visibility,
-        stream: countingStream,
-        sizeBytes: input.declaredSize,
-      });
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      throw new HttpError(
-        503,
-        ERROR_CODES.ASSET_STORAGE_UNAVAILABLE,
-        `Storage adapter failed to persist the upload: ${reason}`,
-      );
-    }
+    const staged = await this.stage({
+      adapter,
+      locator,
+      filename: input.filename,
+      declaredMime: input.declaredMime,
+      stream: input.stream,
+      declaredSize: input.declaredSize,
+      visibility: input.visibility,
+    });
+    const sniffedMime = staged.storedMime;
 
     // — Resolve the *public* URL form once, for back-compat with code paths
     // (notably storefront catalog responses) that still read `storage_url`
@@ -236,7 +351,7 @@ export class UploadPipeline {
         kind: mimeToKind(sniffedMime),
         filename: input.filename,
         mimeType: sniffedMime,
-        sizeBytes: String(observedSize > 0 ? observedSize : input.declaredSize),
+        sizeBytes: String(staged.sizeBytes),
         storageUrl: publicForm.url,
         storageLocator: locator,
         storageBackend: adapter.code,

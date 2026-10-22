@@ -4,7 +4,7 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
+import { SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID } from '../../helpers/seed-catalog.js';
 import { seedCustomFieldAudienceCases } from '../../helpers/custom-field-audience.js';
 import { adminUserIdKeys, deepStrict, disagreements, keyPaths } from '../../helpers/strict-schema.js';
 import { quoteRequestSchema } from '@endora-commerce/contracts';
@@ -368,5 +368,152 @@ describe('Customer Quote Requests routes (US1)', () => {
     expect(Object.keys(event?.payload['validity'] as object).sort()).toEqual(['after', 'before']);
     expect((event?.payload['validity'] as { after: string }).after).toBe(events.expiresAt);
     expect(adminUserIdKeys(detail.json())).toEqual([]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Feature 159 — line groups as the customer sees them (T036)
+  // ---------------------------------------------------------------------------
+
+  describe('159 — line groups', () => {
+    const CUSTOMER = { b2b_session: 'stub-customer-session' };
+    const ADMIN = { b2b_session: 'stub-admin-session' };
+
+    interface Reply {
+      id: string;
+      version: number;
+      status: string;
+      currentRevisionNumber: number;
+      itemGroups: Array<{ id: string; name: string; position: number }>;
+      items: Array<{ id: string; productId: string; groupId: string | null; position: number }>;
+      comparisonAgainstLastSeen: { diff: Array<Record<string, unknown>> } | null;
+    }
+
+    async function raise(): Promise<Reply> {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/quote-requests',
+        cookies: CUSTOMER,
+        payload: { items: [{ productId: SEED_PRODUCT_101_ID, quantity: 2 }, { productId: SEED_PRODUCT_102_ID, quantity: 1 }] },
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      return (res.json() as { data: Reply }).data;
+    }
+
+    /** A representative prices both lines, groups the second, and keeps an empty group. */
+    async function regroup(quote: Reply): Promise<Reply> {
+      const res = await h.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/quote-requests/${quote.id}`,
+        cookies: ADMIN,
+        headers: { 'if-match': `"${quote.version}"` },
+        payload: {
+          groups: [
+            { key: 'hall', name: 'Hall A' },
+            { key: 'spare', name: 'Spare' },
+          ],
+          items: [
+            { productId: SEED_PRODUCT_102_ID, quantity: 1, agreedUnitPrice: 5, groupKey: 'hall' },
+            { productId: SEED_PRODUCT_101_ID, quantity: 2, agreedUnitPrice: 9, groupKey: null },
+          ],
+        },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      return (res.json() as { data: Reply }).data;
+    }
+
+    const customerRead = async (id: string): Promise<Reply> => {
+      const res = await h.app.inject({ method: 'GET', url: `/api/v1/quote-requests/${id}`, cookies: CUSTOMER });
+      expect(res.statusCode, res.body).toBe(200);
+      return (res.json() as { data: Reply }).data;
+    };
+
+    it('answers the customer only the groups holding a line, the lines in display order, and a bare grouping notice', async () => {
+      const quote = await raise();
+      const admin = await regroup(quote);
+      expect(admin.itemGroups.map((group) => group.name)).toEqual(['Hall A', 'Spare']);
+
+      const reply = await customerRead(quote.id);
+      expect(reply.itemGroups.map((group) => group.name)).toEqual(['Hall A']);
+      expect(JSON.stringify(reply)).not.toContain('Spare');
+      expect(reply.items.map((item) => [item.productId, item.groupId === reply.itemGroups[0]!.id, item.position])).toEqual([
+        [SEED_PRODUCT_102_ID, true, 0],
+        [SEED_PRODUCT_101_ID, false, 0],
+      ]);
+      const grouping = reply.comparisonAgainstLastSeen?.diff.filter((entry) => entry['kind'] === 'grouping') ?? [];
+      expect(grouping).toEqual([{ kind: 'grouping' }]);
+      // The stored `modified` event carries the same bare entry.
+      const event = (reply as unknown as { events: Array<{ eventType: string; payload: { diff?: unknown[] } }> }).events.find(
+        (e) => e.eventType === 'modified',
+      );
+      expect(event?.payload.diff).toContainEqual({ kind: 'grouping' });
+      expect(disagreements(deepStrict(quoteRequestSchema), reply)).toEqual([]);
+    });
+
+    it('accepting a revision that regrouped the lines works as any other (FR-024)', async () => {
+      const quote = await raise();
+      const admin = await regroup(quote);
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/quote-requests/${quote.id}/accept-revision`,
+        cookies: CUSTOMER,
+        payload: { expectedRevisionNumber: admin.currentRevisionNumber },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      expect((res.json() as { data: Reply }).data.status).toBe('Approved');
+    });
+
+    it('takes no grouping from a customer: PATCH with groups is refused (400), a groupKey and a create body’s groups are dropped (FR-025, SC-007)', async () => {
+      const created = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/quote-requests',
+        cookies: CUSTOMER,
+        payload: {
+          groups: [{ key: 'mine', name: 'Mine' }],
+          items: [{ productId: SEED_PRODUCT_101_ID, quantity: 1, groupKey: 'mine' }],
+        },
+      });
+      expect(created.statusCode, created.body).toBe(201);
+      const quote = (created.json() as { data: Reply }).data;
+      expect(quote.itemGroups).toEqual([]);
+      expect(quote.items.map((item) => item.groupId)).toEqual([null]);
+
+      const refused = await h.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/quote-requests/${quote.id}`,
+        cookies: CUSTOMER,
+        payload: { groups: [{ key: 'mine', name: 'Mine' }], items: [{ productId: SEED_PRODUCT_101_ID, quantity: 1, groupKey: 'mine' }] },
+      });
+      expect(refused.statusCode, refused.body).toBe(400);
+      const rows = await h.em().getConnection().execute<Array<{ count: string }>>(
+        `select count(*)::text as "count" from "quote_request_item_groups" where "quote_request_id" = ?`,
+        [quote.id],
+      );
+      expect(rows).toEqual([{ count: '0' }]);
+    });
+
+    it('a resubmission copies no group (FR-026)', async () => {
+      const quote = await raise();
+      const admin = await regroup(quote);
+      const rejected = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/quote-requests/${quote.id}/reject-revision`,
+        cookies: CUSTOMER,
+        payload: { expectedRevisionNumber: admin.currentRevisionNumber },
+      });
+      expect(rejected.statusCode, rejected.body).toBe(200);
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/quote-requests/${quote.id}/resubmit`,
+        cookies: CUSTOMER,
+        payload: {},
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const copy = (res.json() as { data: Reply }).data;
+      expect(copy.id).not.toBe(quote.id);
+      expect(copy.itemGroups).toEqual([]);
+      expect(copy.items.map((item) => item.groupId)).toEqual([null, null]);
+      // In the order the buyer was shown: the grouped line first.
+      expect(copy.items.map((item) => item.productId)).toEqual([SEED_PRODUCT_102_ID, SEED_PRODUCT_101_ID]);
+    });
   });
 });

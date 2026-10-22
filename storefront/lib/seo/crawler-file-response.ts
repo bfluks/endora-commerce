@@ -15,6 +15,8 @@
  * means no browser renders it, whatever it looks like.
  */
 
+import { SALES_CHANNEL_HEADER, SALES_CHANNEL_REQUEST_HEADER } from '../channel/channel-header';
+
 /**
  * Marks a response as coming from a storefront that serves operator-configured
  * crawler files. On every answer of both handlers, `404` and `503` included.
@@ -30,16 +32,14 @@ export const CRAWLER_FILES_CAPABILITY_HEADER = 'X-Endora-Crawler-Files';
 /** How long a crawler is asked to wait before asking again, on `503`. */
 export const CRAWLER_FILE_RETRY_AFTER_SECONDS = 120;
 
-/**
- * The request header a sales channel is named in. A reverse proxy stamps it
- * per host; a storefront reached directly has none and the backend resolves
- * its system-default channel.
- */
-const SALES_CHANNEL_HEADER = 'x-sales-channel';
 
-/** The sales channel `request` is for, or `undefined` when it names none. */
+/**
+ * The sales channel `request` is for, or `undefined` when it names none. A
+ * reverse proxy stamps it per host, and `middleware.ts` stamps the channel the
+ * backend resolves for this storefront on a request no proxy stamped.
+ */
 export function requestChannelCode(request: Request): string | undefined {
-  return request.headers.get(SALES_CHANNEL_HEADER) ?? undefined;
+  return request.headers.get(SALES_CHANNEL_REQUEST_HEADER) ?? undefined;
 }
 
 /** The headers of every answer; only what a cache may do with it varies. */
@@ -51,7 +51,7 @@ export function crawlerFileHeaders(cacheControl: string): Headers {
     'X-Content-Type-Options': 'nosniff',
     // The body is one sales channel's. A cache that keys on the address alone
     // would serve it for every channel behind that address.
-    Vary: 'X-Sales-Channel',
+    Vary: SALES_CHANNEL_HEADER,
     [CRAWLER_FILES_CAPABILITY_HEADER]: '1',
   });
 }

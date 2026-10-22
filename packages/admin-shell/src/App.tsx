@@ -25,6 +25,7 @@ import {
 import type { SupportedAdminLanguage } from './i18n/types.js';
 import { HomePage } from './modules/home/HomePage.js';
 import { ModulesPage as PlatformModulesPage } from './modules/platform/ModulesPage.js';
+import { ApiDescriptionPage } from './modules/platform/ApiDescriptionPage.js';
 import { ProfilePage } from './modules/profile/ProfilePage.js';
 
 function NotFoundPage(): ReactNode {
@@ -294,6 +295,7 @@ export function App({ contributions, modulePresence }: AppProps): ReactNode {
             subpath, decided from the component's own signature (Z1: `data` in,
             `onChange` back, so the consumer decides that it appears). */}
         <Route path="/platform/modules" element={<PlatformModulesPage />} />
+        <Route path="/api-description" element={<ApiDescriptionPage />} />
         {/*
           `/settings`, `/settings/groups`, `/settings/cache` and `/settings/pwa`
           are declared by the modules that own them since feature 091's Phase 4

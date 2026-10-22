@@ -79,6 +79,10 @@ first and only propose a glossary edit if the term genuinely does not fit.
 | saved view              | zapisany widok              | a named list setup; plural "zapisane widoki"        |
 | shared (saved view)     | udostępniony                | not "współdzielony"                                |
 | credit limit            | limit kredytowy             |                                                     |
+| minimum order quantity  | minimalna ilość zamówienia  | "Minimum" alone once the context is clear           |
+| packaging unit          | jednostka opakowania        |                                                     |
+| returnable              | podlega zwrotowi            | negated: "niepodlegający zwrotowi"                  |
+| bulk edit               | edycja masowa               | button: "Edycja masowa"                             |
 | asset                   | zasób                       | generic file/image asset                            |
 | integration             | integracja                  |                                                     |
 | webhook                 | webhook                     | proper noun; remains untranslated                   |

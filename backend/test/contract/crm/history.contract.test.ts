@@ -10,6 +10,7 @@ import {
   CRM_ADMIN,
   CRM_API,
   createCrmOpportunity,
+  defineCrmCustomField,
   restoreDefaultCrmWorkflow,
   seedCrmAdmin,
   transitionCrmOpportunity,
@@ -144,5 +145,75 @@ describe('crm opportunity history (contract)', () => {
     expect(refused.statusCode, refused.body).toBe(403);
     const anonymous = await h.app.inject({ method: 'GET', url: `${CRM_API}/opportunities/${opportunity.id}/history` });
     expect(anonymous.statusCode).toBe(401);
+  });
+});
+
+/**
+ * Owner ruling P2 = a (`specs/162-custom-fields-value-carry/`, review fixes
+ * 2026-10-21): the history serves an Opportunity's custom-field values only to
+ * a caller who may read custom fields. `crm:read`'s `requires` is advisory
+ * (D-175), so a role holding `crm:read` alone exists, and for it every entry's
+ * `before` and `after` come without `customFieldValues` — the rest of the
+ * entry as it was audited.
+ */
+describe('crm opportunity history — custom-field values need custom_fields:read (contract)', () => {
+  let h: BackendServerHandle;
+  let reader: { cookies: { b2b_session: string }; undo: () => void };
+  let definitionId: string;
+  const key = `cfc_${randomUUID().slice(0, 8)}_history`;
+
+  const history = (id: string, cookies: Record<string, string>) =>
+    h.app.inject({ method: 'GET', url: `${CRM_API}/opportunities/${id}/history`, cookies });
+
+  beforeAll(async () => {
+    h = await setupBackendServer();
+    await restoreDefaultCrmWorkflow(h.em());
+    reader = await seedCrmAdmin(h.em(), 'history-reader', ['crm:read', 'orders:read']);
+    definitionId = (await defineCrmCustomField(h, { key, valueType: 'text' })).id;
+  });
+
+  afterAll(async () => {
+    reader.undo();
+    await h.app.inject({ method: 'DELETE', url: `/api/v1/admin/custom-fields/definitions/${definitionId}`, cookies: CRM_ADMIN });
+    await teardownBackendServer(h);
+  });
+
+  const seedHistory = async () => {
+    const opportunity = await createCrmOpportunity(h, { title: 'Valued', customFieldValues: { [key]: 'first secret' } });
+    const edited = await h.app.inject({
+      method: 'PATCH',
+      url: `${CRM_API}/opportunities/${opportunity.id}`,
+      cookies: CRM_ADMIN,
+      payload: { title: 'Valued again', customFieldValues: { [key]: 'second secret' } },
+    });
+    expect(edited.statusCode, edited.body).toBe(200);
+    return opportunity.id;
+  };
+
+  it('serves the values to an administrator who may read custom fields', async () => {
+    const id = await seedHistory();
+    const response = await history(id, CRM_ADMIN);
+    expect(response.statusCode, response.body).toBe(200);
+    const [edit, creation] = OpportunityHistoryResponseSchema.parse(response.json()).data;
+    expect(edit).toMatchObject({
+      before: { customFieldValues: { [key]: 'first secret' } },
+      after: { title: 'Valued again', customFieldValues: { [key]: 'second secret' } },
+    });
+    expect(creation).toMatchObject({ after: { customFieldValues: { [key]: 'first secret' } } });
+  });
+
+  it('strips them from every entry for a crm:read caller without custom_fields:read, and keeps the rest', async () => {
+    const id = await seedHistory();
+    const response = await history(id, reader.cookies);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.body).not.toContain('secret');
+    const entries = OpportunityHistoryResponseSchema.parse(response.json()).data;
+    expect(entries).toHaveLength(2);
+    for (const entry of entries) {
+      for (const state of [entry.before, entry.after]) {
+        if (state !== null) expect(Object.hasOwn(state as object, 'customFieldValues')).toBe(false);
+      }
+    }
+    expect(entries[0]).toMatchObject({ before: { title: 'Valued' }, after: { title: 'Valued again' } });
   });
 });

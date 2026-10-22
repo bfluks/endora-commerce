@@ -56,7 +56,7 @@ describe('ProductCard — semantic markup with name + price + SKU', () => {
       stockIndicator: 'available',
       stockLevel: 12,
     };
-    const html = renderToString(<ProductCard product={product} locale="en-US" />);
+    const html = renderToString(<ProductCard product={product} locale="en-US" salesChannelCode="retail" />);
     expect(html).toContain('<h3');
     expect(html).toContain('Widget 1000');
     expect(html).toContain('href="/p/widget-1000"');

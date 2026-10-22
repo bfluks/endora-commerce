@@ -163,7 +163,7 @@ async function saveAction(formData: FormData): Promise<void> {
       defaultShippingAddressId: field('defaultShippingAddressId'),
     });
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not save preferences.';
+    const message = err instanceof StorefrontApiError ? err.detail : 'Could not save preferences.';
     redirect(`/preferences?error=${encodeURIComponent(message)}`);
   }
   redirect('/preferences?saved=1');

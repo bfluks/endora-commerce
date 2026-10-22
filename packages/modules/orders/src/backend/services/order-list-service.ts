@@ -1,5 +1,12 @@
-import type { EntityManager, FilterQuery, Knex } from '@mikro-orm/postgresql';
-import type { CustomerAccountReadPort, OrganizationDetailsPort } from '@endora-commerce/contracts';
+import { raw, type EntityManager, type FilterQuery, type Knex } from '@mikro-orm/postgresql';
+import {
+  customFieldFilterUnavailable,
+  type CustomerAccountReadPort,
+  type CustomFieldFilters,
+  type CustomFieldListFilterCondition,
+  type CustomFieldListFilterPort,
+  type OrganizationDetailsPort,
+} from '@endora-commerce/contracts';
 import { Order } from '../entities/order.entity.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import type { OrderStatusGraphService } from './order-status-graph-service.js';
@@ -32,6 +39,12 @@ export interface OrderListQuery {
   placedTo?: string | undefined;
   totalMin?: number | undefined;
   totalMax?: number | undefined;
+  /**
+   * Filters on the Order custom fields marked as list filters
+   * (`specs/157-custom-fields-list-filters/`), turned into one condition by
+   * `custom_fields`' `customFieldListFilterPort`.
+   */
+  customFieldFilters?: CustomFieldFilters | undefined;
   sort?: string | undefined;
   page: number;
   pageSize: number;
@@ -104,6 +117,13 @@ export class OrderListService {
      */
     private readonly organizationDetails: OrganizationDetailsPort,
     private readonly customerAccountRead: CustomerAccountReadPort,
+    /**
+     * `customFieldListFilterPort` — the custom-field filters as one condition
+     * (feature 157). Absent where the list is never asked to filter on custom
+     * fields; a request that does is then refused rather than answered
+     * unfiltered.
+     */
+    private readonly customFieldListFilter: Pick<CustomFieldListFilterPort, 'condition'> | null = null,
   ) {}
 
   async list(query: OrderListQuery, scope?: OrderListScope): Promise<OrderListResult> {
@@ -161,6 +181,21 @@ export class OrderListService {
     }
     if (and.length) base.$and = and;
 
+    // One condition per request, awaited once; each statement below wraps it in
+    // a raw fragment of its own, because a raw fragment is not reused.
+    const customFieldCondition = await this.customFieldCondition(query.customFieldFilters);
+    const narrowed = (where: FilterQuery<Order>): FilterQuery<Order> => {
+      if (customFieldCondition === null) return where;
+      const object = where as Record<string, unknown> & { $and?: FilterQuery<Order>[] };
+      return {
+        ...object,
+        $and: [
+          ...(object.$and ?? []),
+          { id: { $in: raw(`(${customFieldCondition.sql})`, [...customFieldCondition.params]) } },
+        ],
+      } as FilterQuery<Order>;
+    };
+
     // The two axis filters, kept out of `base` so each axis's counts can be
     // taken over every filter but its own — which is what makes an option's
     // number mean "this is what selecting it would yield". With no
@@ -172,12 +207,12 @@ export class OrderListService {
       : {};
 
     const [counts, paymentStatusCounts] = await Promise.all([
-      this.countsBy(em, { ...base, ...paymentStatusFilter }, 'status'),
-      this.countsBy(em, { ...base, ...statusFilter }, 'paymentStatus'),
+      this.countsBy(em, narrowed({ ...base, ...paymentStatusFilter }), 'status'),
+      this.countsBy(em, narrowed({ ...base, ...statusFilter }), 'paymentStatus'),
     ]);
 
     // Page query adds both axis filters on top of the base.
-    const where: FilterQuery<Order> = { ...base, ...statusFilter, ...paymentStatusFilter };
+    const where: FilterQuery<Order> = narrowed({ ...base, ...statusFilter, ...paymentStatusFilter });
     const { field, dir } = parseSort(query.sort);
     const offset = (query.page - 1) * query.pageSize;
     const [orders, total] = await em.findAndCount(Order, where, {
@@ -291,6 +326,15 @@ export class OrderListService {
         statusName: r.statusName,
       })),
     };
+  }
+
+  /** The request's custom-field filters as one condition, or `null` when none applies. */
+  private async customFieldCondition(
+    filters: CustomFieldFilters | undefined,
+  ): Promise<CustomFieldListFilterCondition | null> {
+    if (filters === undefined || Object.keys(filters).length === 0) return null;
+    if (this.customFieldListFilter === null) throw customFieldFilterUnavailable(Object.keys(filters));
+    return this.customFieldListFilter.condition('order', filters);
   }
 
   /** Counts over `where`, grouped by one of the order's two status axes. */

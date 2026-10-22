@@ -207,6 +207,12 @@ export class CatalogBulkUpdateService {
       partial.visibility = fields.visibility;
       touchedAny = true;
     }
+    // Feature 155 (FR-003) — "Set returnable". Audited per product by the
+    // legacy `updateProduct` below, whose before/after carry the flag.
+    if (fields.returnable !== undefined) {
+      partial.returnable = fields.returnable;
+      touchedAny = true;
+    }
 
     // Attribute Set — assign (or clear, with null) on every selected product.
     if (fields.attributeSetId !== undefined) {
@@ -256,6 +262,7 @@ export class CatalogBulkUpdateService {
         Object.keys(allowed).length === 0 &&
         fields.status === undefined &&
         fields.visibility === undefined &&
+        fields.returnable === undefined &&
         fields.categories === undefined &&
         fields.salesChannels === undefined &&
         fields.attributeSetId === undefined
@@ -267,7 +274,7 @@ export class CatalogBulkUpdateService {
       }
     }
 
-    // Apply updateProduct (status / visibility / categories / attributeValues).
+    // Apply updateProduct (status / visibility / returnable / categories / attributeValues).
     let changedFields: string[] = [];
     if (touchedAny) {
       try {

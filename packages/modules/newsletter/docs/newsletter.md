@@ -69,10 +69,46 @@ never double-send.
 
 ## Engagement
 
-Open tracking uses a 1×1 pixel; click tracking rewrites links through a signed
-redirect. Per-campaign counts of sent / delivered / failed / opened / clicked
-(plus per-link clicks) are aggregated from `newsletter_send_records` and
-`newsletter_engagement_events`. Tracking can be disabled per campaign.
+Campaign e-mails can carry open and click tracking, added when each
+recipient's message is sent. Both kinds are **off** until an operator switches
+them on (see the settings below); an untouched instance sends campaigns without
+either.
+
+- **Opens** — an invisible 1×1 image,
+  `GET /api/v1/newsletter/open.gif?token=…`, is added before the end of the
+  message body. Loading it records an open against the recipient's send record.
+- **Clicks** — every absolute `http(s)` link is rewritten to
+  `GET /api/v1/newsletter/click?token=…&u=<destination>`. The token is signed,
+  bound to the send record, to a link id numbered in document order
+  (`link-1`, `link-2`, …) and to the destination, so the redirect only ever
+  leads to the link the e-mail was sent with. A token that does not verify
+  answers `410`; a destination that does not match the token leads to the
+  storefront home page. `mailto:` and `tel:` links, in-page anchors, relative
+  links and the module's own links (unsubscribe, confirmation) are left as
+  they are. The plain-text part of the message is sent unchanged.
+
+Both URLs are built on the public API base URL the unsubscribe link uses, and
+both tokens stay valid for one year. Following a tracked link also counts as an
+open, so a reader whose mail client blocks images is counted once they click.
+
+Two settings in the **Newsletter** group switch the two kinds independently.
+Both are **off** by default, so a campaign is tracked only after an operator
+switches them on on the Settings screen. Each can be set per sales channel (a
+campaign with no sales channel reads the default sales channel's values):
+
+| Setting | While off (the default) |
+| --- | --- |
+| `newsletter.tracking.opens_enabled` | no image is added and no opens are counted |
+| `newsletter.tracking.clicks_enabled` | links lead straight to their destination and no clicks are counted |
+
+A campaign created through the API with `trackingEnabled: false` is sent with
+neither. Automation e-mails are not tracked.
+
+Per-campaign counts of sent / delivered / failed / opened / clicked (plus
+per-link clicks) are aggregated from `newsletter_send_records` and
+`newsletter_engagement_events`. Opens are approximate: a mail client that
+blocks images reports none, and one that loads images for the reader reports
+an open that may not be one.
 
 ## Permissions
 

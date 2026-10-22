@@ -24,5 +24,9 @@
   "nav.tags.label": "Tagi i pola",
   "nav.blocks.label": "Bloki",
   "nav.provider.label": "Usługa wysyłki",
-  "pageBuilder.blockPreview.unavailable": "Ten blok nie ma podglądu w edytorze. Jego pola można edytować w panelu bocznym."
+  "pageBuilder.blockPreview.unavailable": "Ten blok nie ma podglądu w edytorze. Jego pola można edytować w panelu bocznym.",
+  "settingLabels.newsletter.tracking.opens_enabled.name": "Śledź otwarcia kampanii",
+  "settingLabels.newsletter.tracking.opens_enabled.description": "Dodaje do każdego e-maila kampanii niewidoczny obrazek 1×1, dzięki któremu statystyki kampanii liczą, kto ją otworzył. Otwarcia są zapisywane dla każdego odbiorcy. Po wyłączeniu e-maile kampanii nie zawierają obrazka, a otwarcia nie są liczone. Domyślnie wyłączone. E-maile automatyzacji nigdy nie są śledzone.",
+  "settingLabels.newsletter.tracking.clicks_enabled.name": "Śledź kliknięcia linków w kampaniach",
+  "settingLabels.newsletter.tracking.clicks_enabled.description": "Kieruje linki w każdym e-mailu kampanii przez przekierowanie na tej platformie, dzięki czemu statystyki kampanii liczą kliknięcia każdego odbiorcy i każdego linku. Po wyłączeniu linki prowadzą prosto do celu, a kliknięcia nie są liczone. Domyślnie wyłączone. E-maile automatyzacji nigdy nie są śledzone."
 }

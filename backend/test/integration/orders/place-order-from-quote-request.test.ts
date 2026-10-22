@@ -254,7 +254,11 @@ describe('orders — an order placed from an accepted quote request', () => {
       // The same line at the same price, through the port a reorder uses: only
       // the missing option tells this seed from the conversion's.
       await cartWritePortOf(h).replaceItemsForCustomer(
-        { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID },
+        {
+          customerAccountId: TEST_CUSTOMER_ID,
+          organizationId: TEST_ORGANIZATION_ID,
+          salesChannelId: await systemDefaultSalesChannelId(h.em()),
+        },
         [{ productId: SEED_PRODUCT_101_ID, quantity: 7, unitPrice: '11.25', currency: 'PLN' }],
       );
       const cart = await h

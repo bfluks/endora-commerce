@@ -348,7 +348,13 @@ body,
   color: var(--sidebar-fg);
   display: flex; flex-direction: column;
   height: 100vh;
-  position: sticky; top: 0;
+  /* A sticky box is a stacking context of its own, so the collapsed rail's
+     fly-out (`.b2b-sidebar__rail-popover`) is only ever as high as the sidebar
+     itself. Above the topbar (35) and everything in the page — sticky
+     form-action bars (30), sticky table columns — so the fly-out is drawn over
+     the content (#380); below the mobile nav backdrop (40) and the
+     scrim, drawers and palette (50/60). The mobile drawer sets its own. */
+  position: sticky; top: 0; z-index: 36;
   border-right: 1px solid #000;
   width: 248px;
 }
@@ -495,9 +501,36 @@ body,
    one, so the order is logo, divider, release, divider, the rest. Its left
    edge is the brand link's (16px), so the badge lines up with the logo tile. */
 .b2b-sidebar__version {
-  display: flex; align-items: center;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 8px 16px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+/* *Send feedback* (#379): a quiet link beside the release, in the sidebar's
+   muted text (5.32:1 on the sidebar), brightening on hover like the nav. The
+   row grows its hit area to 44px on touch screens (Fitts). */
+.b2b-sidebar__feedback {
+  display: inline-flex; align-items: center; gap: 4px;
+  min-height: 24px;
+  padding: 0 4px;
+  margin-left: auto;
+  background: transparent; border: none; border-radius: var(--r-sm);
+  color: var(--sidebar-fg-muted);
+  font-size: 11px; font-weight: 500; line-height: 16px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.b2b-sidebar__feedback:hover { color: var(--sidebar-fg-active); background: var(--bg-sidebar-hover); }
+.b2b-sidebar__feedback:focus-visible,
+.b2b-sidebar__feedback-rail:focus-visible {
+  outline: 2px solid var(--ring-color);
+  outline-offset: 1px;
+}
+@media (pointer: coarse) {
+  .b2b-sidebar__feedback { min-height: 44px; }
+}
+.b2b-sidebar__feedback-rail-row {
+  display: flex; justify-content: center;
+  padding: 8px 0 0;
 }
 /* Sidebar tokens rather than the badge's own: the sidebar is #1a1c1e in both
    themes, and the `outline` variant's `text-foreground` is near-black in the

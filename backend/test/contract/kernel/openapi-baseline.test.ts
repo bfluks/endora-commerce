@@ -88,7 +88,13 @@ describe('OpenAPI document — frozen against the feature 072 baseline', () => {
 
   beforeAll(async () => {
     h = await setupBackendServer();
-    const res = await h.app.inject({ method: 'GET', url: '/api/v1/_openapi.json' });
+    // Read as the platform administrator, whose wildcard role holds
+    // `platform.api_description.read`.
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/_openapi.json',
+      cookies: { b2b_session: 'stub-admin-session' },
+    });
     expect(res.statusCode).toBe(200);
     served = `${JSON.stringify(canonicalize(res.json()), null, 2)}\n`;
     if (process.env['UPDATE_OPENAPI_BASELINE'] === '1') {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ANONYMOUS_PRODUCT_AUDIENCE } from '@endora-commerce/contracts';
 import { parseCsvRows } from './import-rows.js';
 import {
+  QUICK_ORDER_IMPORT_ROWS_CEILING,
   QuickOrderImportPipeline,
   type ProductLike,
   type QuickOrderCatalogLookup,
@@ -131,5 +132,129 @@ describe('QuickOrderImportPipeline', () => {
     expect(result.summary.truncated).toBe(true);
     expect(result.rejected.map((r) => r.reason)).toEqual(['row_limit_exceeded']);
     expect(result.recognized).toHaveLength(2);
+  });
+
+  /**
+   * Feature 155 (P1, US4 #1a–#1d, FR-011 (a)) — the preview judges each
+   * product's total across the file, all variants summed after the merge,
+   * never with the cart.
+   */
+  describe('order minimums (feature 155)', () => {
+    const A = (minOrderQuantity: number | null = 10): ProductLike => ({
+      id: 'pA',
+      sku: 'A',
+      status: 'active',
+      deletedAt: null,
+      type: 'configurable',
+      minOrderQuantity,
+    });
+    const D: ProductLike = { id: 'pD', sku: 'D', status: 'active', deletedAt: null, type: 'simple', minOrderQuantity: null };
+    const VARIANTS: VariantBySku[] = [
+      { id: 'vRed', sku: 'A-RED', parentProductId: 'pA', parent: { type: 'configurable', minOrderQuantity: 10 } },
+      { id: 'vBlue', sku: 'A-BLUE', parentProductId: 'pA', parent: { type: 'configurable', minOrderQuantity: 10 } },
+    ];
+    const BUYER = { organizationId: 'org-1', authenticated: true } as const;
+
+    it('recognises A-red × 4 and A-blue × 6 — the file total is 10', async () => {
+      const pipeline = new QuickOrderImportPipeline(lookupOf({ products: [A()], variantsBySku: VARIANTS }));
+      const result = await pipeline.run(parseCsvRows('sku,quantity\nA-RED,4\nA-BLUE,6'), { audience: BUYER });
+      expect(result.recognized.map((r) => [r.variantId, r.quantity])).toEqual([
+        ['vRed', 4],
+        ['vBlue', 6],
+      ]);
+      expect(result.recognized.every((r) => r.warning === undefined)).toBe(true);
+      expect(result.rejected).toEqual([]);
+    });
+
+    it('buyer: rejects both A-red × 4 and A-blue × 3 below_minimum with minimum 10 and productTotal 7', async () => {
+      const pipeline = new QuickOrderImportPipeline(
+        lookupOf({ products: [A(), D], variantsBySku: VARIANTS }),
+      );
+      const result = await pipeline.run(parseCsvRows('sku,quantity\nA-RED,4\nA-BLUE,3\nD,1'), {
+        audience: BUYER,
+      });
+      expect(result.recognized.map((r) => r.productId)).toEqual(['pD']);
+      expect(result.rejected).toEqual([
+        { line: 2, raw: 'A-RED,4', reason: 'below_minimum', minimum: 10, productTotal: 7 },
+        { line: 3, raw: 'A-BLUE,3', reason: 'below_minimum', minimum: 10, productTotal: 7 },
+      ]);
+      expect(result.summary).toMatchObject({ recognizedCount: 1, rejectedCount: 2, mergedCount: 0 });
+      expect(result.summary.warningCount).toBeUndefined();
+    });
+
+    it('sums duplicate rows before judging; the merged row is rejected once, at its first line', async () => {
+      const pipeline = new QuickOrderImportPipeline(lookupOf({ products: [A()] }));
+      const ok = await pipeline.run(parseCsvRows('sku,quantity\nA,5\nA,5'), { audience: BUYER });
+      expect(ok.recognized).toHaveLength(1);
+      expect(ok.recognized[0]).toMatchObject({ quantity: 10, mergedFromLines: [3] });
+
+      const below = await pipeline.run(parseCsvRows('sku,quantity\nA,2\nA,3'), { audience: BUYER });
+      expect(below.recognized).toEqual([]);
+      expect(below.rejected).toEqual([
+        { line: 2, raw: 'A,2', reason: 'below_minimum', minimum: 10, productTotal: 5 },
+      ]);
+      expect(below.summary).toMatchObject({ recognizedCount: 0, rejectedCount: 1, mergedCount: 1 });
+    });
+
+    it('a row rejected for an existing reason counts toward no total', async () => {
+      const pipeline = new QuickOrderImportPipeline(
+        lookupOf({
+          products: [A()],
+          variantsByParent: [
+            { id: 'vRed', sku: 'A-RED', parentProductId: 'pA', variantAttributeValues: { color: 'Red' } },
+          ],
+        }),
+      );
+      // Line 3 names a colour A does not have — rejected `variant_not_resolved`,
+      // so its 6 pieces never reach A's total.
+      const csv = 'sku,quantity,color\nA,4,Red\nA,6,Green';
+      const result = await pipeline.run(parseCsvRows(csv), { audience: BUYER });
+      const byReason = new Map(result.rejected.map((r) => [r.reason, r]));
+      expect(byReason.get('variant_not_resolved')).toMatchObject({ line: 3 });
+      expect(byReason.get('below_minimum')).toMatchObject({ line: 2, minimum: 10, productTotal: 4 });
+    });
+
+    it('ignores a product with no minimum, a minimum of 1, and a stored minimum on an ineligible type', async () => {
+      const bundle: ProductLike = { id: 'pB', sku: 'B', status: 'active', deletedAt: null, type: 'bundle', minOrderQuantity: 10 };
+      const pipeline = new QuickOrderImportPipeline(lookupOf({ products: [A(1), D, bundle] }));
+      const result = await pipeline.run(parseCsvRows('sku,quantity\nA,1\nD,1\nB,1'), { audience: BUYER });
+      expect(result.recognized).toHaveLength(3);
+      expect(result.rejected).toEqual([]);
+    });
+
+    it('operator (unrestricted): keeps the rows recognised with a warning and counts warningCount', async () => {
+      const pipeline = new QuickOrderImportPipeline(
+        lookupOf({ products: [A(), D], variantsBySku: VARIANTS }),
+      );
+      const result = await pipeline.run(parseCsvRows('sku,quantity\nA-RED,4\nA-BLUE,3\nD,1'), {
+        audience: 'unrestricted',
+      });
+      expect(result.rejected).toEqual([]);
+      expect(result.recognized.map((r) => [r.variantId ?? r.productId, r.warning ?? null])).toEqual([
+        ['vRed', { reason: 'below_minimum', minimum: 10, productTotal: 7 }],
+        ['vBlue', { reason: 'below_minimum', minimum: 10, productTotal: 7 }],
+        ['pD', null],
+      ]);
+      expect(result.summary).toMatchObject({ recognizedCount: 3, rejectedCount: 0, warningCount: 2 });
+    });
+
+    it('operator: warningCount is 0 when nothing is below a minimum', async () => {
+      const pipeline = new QuickOrderImportPipeline(lookupOf({ products: [A()] }));
+      const result = await pipeline.run(parseCsvRows('sku,quantity\nA,10'), { audience: 'unrestricted' });
+      expect(result.summary.warningCount).toBe(0);
+    });
+  });
+
+  /** Feature 155 (R20, threat F4) — the resolved row cap never exceeds the ceiling. */
+  it('clamps maxRows to the 10 000-row ceiling', async () => {
+    expect(QUICK_ORDER_IMPORT_ROWS_CEILING).toBe(10_000);
+    const pipeline = new QuickOrderImportPipeline(lookupOf({ products: [ACTIVE('p1', 'A')] }));
+    const rows = Array.from({ length: QUICK_ORDER_IMPORT_ROWS_CEILING + 2 }, () => 'A,1');
+    const result = await pipeline.run(parseCsvRows(['sku,quantity', ...rows].join('\n')), {
+      maxRows: 1_000_000,
+      audience: AUDIENCE,
+    });
+    expect(result.summary.truncated).toBe(true);
+    expect(result.rejected.filter((r) => r.reason === 'row_limit_exceeded')).toHaveLength(2);
   });
 });

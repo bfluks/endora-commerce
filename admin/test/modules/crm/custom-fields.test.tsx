@@ -129,8 +129,6 @@ describe('custom fields on the Opportunity (Overview)', () => {
         onChange={onChange}
         reload={async (): Promise<void> => {}}
         orderStatuses={[]}
-        editing={false}
-        onEditingChange={(): void => {}}
       />,
       { permissions },
     );

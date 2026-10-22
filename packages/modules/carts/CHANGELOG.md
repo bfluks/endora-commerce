@@ -1,5 +1,128 @@
 # @endora-commerce/mod-carts
 
+## 0.107.0
+
+### Minor Changes
+
+- 70bb5e5: Converting a cart into a quote request no longer records the cart's unit prices as the customer's proposed prices. Each cart line's unit price is passed to `RfqCustomerPort.createForCustomer` as that line's reference price instead (`options.lineReferencePrices`), so the resulting quote lines carry no proposal and conversion keeps working for a customer who may not propose prices.
+- 34f97ae: The basket belongs to the sales channel it is used on (`specs/154-sales-channel-access/`, User
+  Story 6). It used to be created on the system-default channel and priced there whatever
+  storefront it was used on.
+
+  - A customer holds one active basket per channel; every storefront cart route addresses the
+    basket of the request's channel, and a line of another channel's basket answers 404.
+  - An anonymous cookie token whose basket is another channel's names no basket on this one: reads
+    answer the empty cart, and the first write replaces the `b2b_cart_anon` cookie with a new token.
+  - Line prices, the "sold on request only" decision, the read-time recompute and the placement
+    price check resolve on the basket's own channel; the system-default fallback is gone.
+  - Merge at sign-in merges the anonymous basket of the sign-in channel into the customer's basket
+    of that channel; an anonymous basket of another channel is left alone (`noop_no_anon`).
+  - `cartPlacementApplyPort.readActiveForPlacement` reads the basket of `ctx.salesChannelId`.
+  - New migration `Migration20261019T043854CartsChannelBackfill` records baskets with no channel on
+    the system-default channel.
+  - Composition-facing API: `CartService.getOrCreateForAnon(em, token, salesChannelId)` returns
+    `Cart | null`; `CartService` methods take a `CartActor` whose customer context carries
+    `salesChannelId`; `CartLinePricing.contextFor` takes `salesChannelId`;
+    `CartShoppingListBridge.appendShoppingListToCart` receives `salesChannelId`.
+
+- 31175b7: `CartsDeps.cartCouponService`, `cartConversionService`, `pushLineToShoppingList` and `appendShoppingListToCart` are required. A composition that left one out made the matching cart route answer `503` with the `NOT_FOUND` code and an untranslated token as its message (`promotions_unavailable`, `quote_requests_unavailable`, `shopping_lists_unavailable`). Those branches are gone. The module's own `registerModule` already wires all four, so a deployment using it sees no change: a cross-module owner that is off still answers `503 MODULE_DISABLED` naming the module, with the translated sentence. Code calling `registerCartRoutes` directly must now pass all four.
+
+### Patch Changes
+
+- 649fe8d: Documentation for sales-channel access (`specs/154-sales-channel-access/`), shipped in each
+  package's `docs/` directory, English and Polish.
+
+  - `@endora-commerce/mod-sales-channels`: the access rule (anonymous visitors only on channels open
+    to them, customers only on channels assigned to their Organization), the _Open to anonymous
+    visitors_ option, `GET /api/v1/storefront/sales-channel/access`, and a corrected multi-storefront
+    section. The developer guide tells module authors to declare
+    `config: { salesChannelAccess: 'open' }` on every provider callback their module receives
+    (payment gateway notifications, carrier webhooks, provider return URLs) — such requests arrive
+    without a session and are refused on a store closed to anonymous visitors otherwise — and
+    describes `SalesChannelAccessPort`.
+  - `@endora-commerce/mod-organizations`: the _Sales channels_ panel, the _New organization_ screen,
+    which channel a new Organization gets, and that invitations change no channel.
+  - `@endora-commerce/mod-carts`: one basket per store, and the `ORDER_SALES_CHANNEL_MISMATCH`
+    refusal at order placement.
+
+- 3d5a203: A product sold on request only is refused by the cart whether or not a price list holds it. `CartService.addItem` read the display mode off the resolved list price, so a product no price list prices — priced from the catalogue attribute — resolved nothing, the `CART_PRODUCT_QUOTE_ONLY` guard was skipped, and `POST /api/v1/cart/items` added the line with `200`. It now answers `400 CART_PRODUCT_QUOTE_ONLY` for it too.
+
+  `@endora-commerce/contracts` publishes `ProductDisplayModePort` — `resolveDisplayMode({ productId, organizationId, salesChannelId, customerKind })` — and `@endora-commerce/mod-price-lists` provides it as `productDisplayModePort`, over the same Product → Category → Organization → Settings chain its storefront display-mode route answers with. `CartService` takes it as a new required constructor argument, after `channelMembership`; the module's own composition wires it.
+
+- edac0be: `POST /api/v1/admin/orders` now honours the sales channel the operator chose for the order.
+
+  - A `salesChannelId` that names no sales channel is refused with `404 NOT_FOUND` before anything is written; the customer's basket is left as it was. It used to be accepted and the order was placed on the system-default channel.
+  - The ordered products are checked against the assortment of the order's channel rather than the channel the admin request itself resolved (the system default, unless a channel header is sent). A product the chosen channel sells is now accepted even when the default channel does not sell it, and a product the chosen channel does not sell is refused with `404 PRODUCT_NOT_FOUND` even when the default channel sells it.
+
+  `CartWritePort.addItem` accepts an optional `salesChannelId` in its input: the channel whose assortment decides whether the product may be added. Without it the request's resolved channel decides, as before. Buyer-facing cart, shopping-list and quick-order paths do not pass it and behave exactly as before.
+
+- 7d2d00f: A cart line's stored unit price is now always the price for its current quantity.
+
+  - Adding more of a product already in the cart, changing a line's quantity, merging an
+    anonymous cart at login and seeding a basket from a past order
+    (`CartWritePort.replaceItemsForCustomer` without `sourceQuoteRequestId`) store the price for the
+    resulting quantity, so a quantity-tier bracket applies to the quantity actually ordered and a
+    reorder is priced at today's prices.
+  - A product that no price list and no price of its own (`defaultPrice` attribute) applies to is
+    refused with `422 CART_PRODUCT_UNPRICED` instead of being added at `0.00`.
+  - A line seeded from an accepted quote request (`CartWritePort.replaceItemsForCustomer` with
+    `sourceQuoteRequestId`) records the quantity its price was agreed for in three new nullable
+    `cart_items` columns (`agreed_quantity`, `agreed_unit_price`, `agreed_currency`; one migration).
+    It keeps the agreed price only at that quantity and is priced from the list at any other.
+  - `CartPlacementApplyPort` (`./ports`) gains `findPriceDrift(em, { cartId, organizationId })` and
+    `refreshLinePrices({ cartId, organizationId })`, which order placement uses to refuse and then
+    bring up to date a cart whose stored prices are no longer current. An implementation of the port
+    outside this package has to add both.
+  - Two new error sentences in the `carts` bundles: `errors.CART_PRODUCT_UNPRICED` and
+    `errors.CART_PRICE_CHANGED`.
+
+  A cart converted from an accepted quote before this release carries no agreed quantity; its lines
+  are priced from the list at placement, and converting the quote again restores the agreed prices.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

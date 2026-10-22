@@ -193,6 +193,15 @@ export const PERMISSIONLESS_ADMIN_ROUTES: Readonly<Record<string, Permissionless
       'the per-type count and the record types the caller may search, already filtered by the ' +
       "caller's permissions. It discloses no record.",
   },
+  // Issue #379 — the "Send feedback" dialog in the admin shell.
+  'POST /api/v1/admin/feedback': {
+    guard: 'session',
+    reason:
+      'Feedback to the makers of Endora Commerce, in the words the caller typed. It reads no ' +
+      "record and changes nothing on the instance: it forwards the message, the caller's own " +
+      'name and the release to the configured relay. Whoever is signed in may report a problem, ' +
+      'whatever their role; a per-administrator rate limit bounds it.',
+  },
   'POST /api/v1/admin/impersonation/end': {
     guard: 'none',
     reason:

@@ -11,6 +11,8 @@ export function ProductGrid(props: {
   columns?: 3 | 4;
   /** Render mode — `grid` (cards) or `list` (rows). Defaults to `grid`. */
   view?: 'grid' | 'list';
+  /** The active sales channel, handed to each card's browser-side calls. */
+  salesChannelCode: string | undefined;
 }): ReactNode {
   const t = tForLocale(props.locale);
   if (props.products.length === 0) {
@@ -38,7 +40,7 @@ export function ProductGrid(props: {
     <ul className={cls}>
       {props.products.map((p) => (
         <li key={p.id}>
-          <ProductCard product={p} locale={props.locale} />
+          <ProductCard product={p} locale={props.locale} salesChannelCode={props.salesChannelCode} />
         </li>
       ))}
     </ul>

@@ -11,6 +11,7 @@ import {
 import { SEED_PAYMENT_METHOD_ID } from '../../helpers/seed-commerce.js';
 import { cartWritePortOf } from '../../helpers/orders-neighbour-ports.js';
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 import {
   createTieredProduct,
   TIER_UNIT_PRICE,
@@ -28,11 +29,17 @@ describe('POST /api/v1/orders — the line price is the price for its current qu
   let h: BackendServerHandle;
   let productId: string;
   const customer = { b2b_session: 'stub-customer-session' };
-  const customerCtx = { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID };
+  /** The basket of the system-default channel — the one `place()` (no channel named) uses. */
+  let customerCtx: { customerAccountId: string; organizationId: string; salesChannelId: string };
 
   beforeAll(async () => {
     h = await setupBackendServer();
     productId = await createTieredProduct(h, `order-${Date.now()}`);
+    customerCtx = {
+      customerAccountId: TEST_CUSTOMER_ID,
+      organizationId: TEST_ORGANIZATION_ID,
+      salesChannelId: await systemDefaultSalesChannelId(h.em()),
+    };
   });
 
   afterAll(async () => {

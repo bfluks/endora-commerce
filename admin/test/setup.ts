@@ -151,3 +151,22 @@ beforeEach(() => {
     })),
   });
 });
+
+/**
+ * jsdom lays nothing out, and ProseMirror — the editor under the CRM's
+ * formatted fields (`specs/158-crm-opportunity-inline-editing/`) — asks the
+ * layout where the caret is after every keystroke it reads. These answer "at
+ * the origin, with no size", which is what a DOM without layout means; a
+ * screen that positions something by them falls back as it would in a browser
+ * that could not say.
+ */
+const emptyRect = (): DOMRect =>
+  ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }) as DOMRect;
+const emptyRects = (): DOMRectList => Object.assign([], { item: () => null }) as unknown as DOMRectList;
+if (typeof document !== 'undefined') {
+  document.elementFromPoint ??= (() => null) as typeof document.elementFromPoint;
+  Range.prototype.getClientRects ??= emptyRects;
+  Range.prototype.getBoundingClientRect ??= emptyRect;
+  const text = Text.prototype as unknown as { getClientRects?: () => DOMRectList };
+  text.getClientRects ??= emptyRects;
+}

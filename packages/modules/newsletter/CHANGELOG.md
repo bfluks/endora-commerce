@@ -1,5 +1,99 @@
 # @endora-commerce/mod-newsletter
 
+## 0.107.0
+
+### Minor Changes
+
+- dd9ab59: Campaign e-mails can carry open and click tracking, switched on by an operator. When it is on
+  and a campaign is sent, each recipient's message gets an invisible 1×1 image and its absolute
+  `http(s)` links are routed through the click redirect, each with a signed token bound to the recipient's send record, a link id
+  (`link-1`, `link-2`, … in document order) and the link's destination. `mailto:`, `tel:`, in-page
+  anchors, relative links and the module's own unsubscribe and confirmation links are left as they
+  are; the plain-text part is sent unchanged. The per-campaign opened and clicked counts and the
+  per-link clicks reflect what recipients do while tracking is on.
+
+  The two public trackers take their token in the query string, because a signed token is longer
+  than the router's 100-character path-parameter limit and the path form was answered `414`
+  before reaching the handler:
+
+  - `GET /api/v1/newsletter/o/:token.gif` is now `GET /api/v1/newsletter/open.gif?token=<token>`
+  - `GET /api/v1/newsletter/c/:token?u=<url>` is now `GET /api/v1/newsletter/click?token=<token>&u=<url>`
+
+  The click redirect still leads only to the destination its token binds, sends a mismatching
+  destination to the storefront home page and answers an invalid or missing token `410`.
+
+  Two new settings in the Newsletter group, `newsletter.tracking.opens_enabled` and
+  `newsletter.tracking.clicks_enabled`, switch the two kinds of tracking independently. Both
+  default to off, so an instance sends campaigns untracked until an operator switches them on; they
+  can be set per sales channel, and are labelled in English and Polish on the
+  Settings screen. A campaign with `trackingEnabled: false` is sent without either. Automation
+  e-mails are not tracked. `NEWSLETTER_SETTING_CODES` in `@endora-commerce/contracts` gains
+  `TRACKING_OPENS_ENABLED` and `TRACKING_CLICKS_ENABLED`.
+
+### Patch Changes
+
+- 248a9df: Routes a visitor reaches before signing in, or that arrive with no storefront channel, declare
+  `salesChannelAccess: 'open'` and stay reachable when an operator closes a sales channel to
+  anonymous visitors: administrator sign-in and sign-out, second-factor verification and set-up
+  tickets and federated sign-in (both surfaces), `GET /api/v1/i18n/config`, the dictionary reads the
+  registration form uses, the crawler policy, product-feed downloads by token, and the newsletter
+  confirmation, unsubscribe and tracking links.
+- ad55813: E-mail HTML previews are drawn in sandboxed frames that do not run scripts: the e-mail editor's full preview and the newsletter campaign preview carry `sandbox=""`, and the e-mail editor's inline preview of an embedded block or template is drawn in a script-less frame sized to its content instead of being injected into the editor's document. The inline frame's title is the new `core` key `pageBuilder.emailPreview.embedTitle` (English and Polish).
+- 4f9daef: The newsletter click tracker (`GET /api/v1/newsletter/c/:token?u=<url>`) redirects only when its
+  token verifies, and only to the `u` destination the token was minted for: a click token now binds
+  its destination through a `urlHash` claim signed into it at send time. A token that does not
+  verify answers `410`; a valid token that binds no destination, or whose binding does not match
+  `u`, records the click and lands on the storefront home page.
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [ad55813]
+- Updated dependencies [ad55813]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+  - @endora-commerce/page-builder-admin@0.107.0
+  - @endora-commerce/page-builder-core@0.107.0
+  - @endora-commerce/email-components@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

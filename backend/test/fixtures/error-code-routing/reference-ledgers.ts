@@ -611,6 +611,164 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'a Send PDF to customer every recipient of which the mail transport refused. The one raise ' +
       'site is `quote_requests`\' send Command.',
   },
+  SALES_CHANNEL_SIGN_IN_REQUIRED: {
+    to: 'sales_channels',
+    reason:
+      'Minted by feature 154 (`specs/154-sales-channel-access/`, FR-005) for the refusal an ' +
+      'anonymous request earns on a sales channel closed to anonymous visitors. The thrower is the ' +
+      'kernel\'s access step in the channel resolver; the noun is the sales channel, so it is ' +
+      'declared by `sales_channels`, as `INACTIVE_SALES_CHANNEL` is for the same thrower (D-95.2).',
+  },
+  SALES_CHANNEL_NOT_PERMITTED: {
+    to: 'sales_channels',
+    reason:
+      'Minted by feature 154 (`specs/154-sales-channel-access/`, FR-005) for the refusal a ' +
+      'customer request earns on a sales channel its Organization is not assigned to — by the ' +
+      'kernel\'s access step, and by the customer sign-in paths. Owned by the domain noun, as ' +
+      '`INACTIVE_SALES_CHANNEL` is (D-95.2).',
+  },
+  ORDER_SALES_CHANNEL_MISMATCH: {
+    to: 'orders',
+    reason:
+      'Minted by feature 154 (`specs/154-sales-channel-access/`, FR-033) for the refusal order ' +
+      'placement earns when the basket it is handed belongs to another sales channel. The raise ' +
+      'site is `orders`\' placement; the noun is the order.',
+  },
+  ASSET_REPLACE_KIND_MISMATCH: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal of a replacement file whose kind (image, video, PDF, other) differs from the kind the asset already holds, so every page embedding it keeps rendering. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_LEGACY_CANNOT_REPLACE: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal to replace in place an asset whose file sits at an address the platform did not issue. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_REPLACE_CONFLICT: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal of a replace or a restore whose expected file versions no longer match the asset, because another write changed its file first. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_NO_PREVIOUS_VERSION: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal to restore a previous version of an asset that keeps none. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_PERMALINK_TAKEN: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal of a permalink another asset already holds. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_PERMALINK_PREVIOUSLY_USED: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal, until it is confirmed, of a permalink whose last holder was a different asset. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_PERMALINK_INVALID: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal of a permalink that breaks the shared permalink rule, the broken rule named by the `details.code` token. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  PRODUCT_BELOW_MINIMUM_QUANTITY: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 155 (`specs/155-catalog-order-constraints/`) for the refusal of an ' +
+      'order line whose product falls short of its minimum order quantity in pieces. D-121 T1: ' +
+      'the noun is the minimum, a column on `catalog`\'s product row, so `catalog` owns the ' +
+      'sentence although it raises nothing — the raisers are `carts` (adding and editing a ' +
+      'line), `orders` (placement, admin create, API intake) and `quote_requests` (create, ' +
+      'draft edit, resubmit), each of them reading the rule through the catalogue port.',
+  },
+  PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 155 beside `PRODUCT_BELOW_MINIMUM_QUANTITY`, for a line short of the ' +
+      'minimum number of units of its packaging unit. D-121 T1 decides it the way it decided ' +
+      '`PACKAGING_UNIT_NOT_FOUND`: a packaging unit is a row on `catalog`\'s product, and the ' +
+      'raisers — `carts`, `orders` and `quote_requests` — are callers reading that row.',
+  },
+  PACKAGING_UNIT_MISMATCH: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 155 for a quote-request line whose packaging unit is not one of its ' +
+      'product\'s units, by id or by name and base quantity. The noun is the packaging unit, ' +
+      '`catalog`\'s row (D-121 T1); the raiser is `quote_requests` on create and draft edit.',
+  },
+  RETURN_LINE_NOT_RETURNABLE: {
+    to: 'returns',
+    reason:
+      'Minted by feature 155 (`specs/155-catalog-order-constraints/`) for the refusal of a ' +
+      '`return`-kind case that names an order line recorded as not returnable at purchase. ' +
+      'The noun is the return case and the policy reading the stamp is `returns`\' own — ' +
+      '`orders` only reports the stamp through `OrderReturnContextPort` — so `returns` owns ' +
+      'the sentence, and its `createCase` is the one raise site.',
+  },
+  CUSTOM_FIELD_FILTER_UNAVAILABLE: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`, FR-011) for the refusal ' +
+      'an admin list earns when it is asked to filter on a custom field it does not offer. The ' +
+      'noun is the definition and its list-filter attribute, and the deciding seam is ' +
+      '`custom_fields`\' list-filter port (D-121 T1). `orders`, `quote_requests` and `crm` raise ' +
+      'it from what that port answers, as the hosts raise `CUSTOM_FIELD_VALUE_INVALID`.',
+  },
+  CUSTOM_FIELD_OPTION_IN_USE: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`) for the refusal removing a ' +
+      'select option earns while records still hold it. It shared `CUSTOM_FIELD_DEFINITION_INVALID` ' +
+      'and an English message naming the raw value; the noun is the option, `custom_fields`\' own ' +
+      'row, and its admin routes are the raise site (D-121 T1).',
+  },
+  CUSTOM_FIELD_VALUE_TYPE_LOCKED: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`) for the refusal changing a ' +
+      'definition\'s value type earns while records hold values under its key. The noun is the ' +
+      'definition, raised from `custom_fields`\' admin routes (D-121 T1).',
+  },
+  CUSTOM_FIELD_STORED_VALUES_EXIST: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`) for the refusal a ' +
+      'customer-visible definition earns over values a deleted field left under its key. The noun ' +
+      'is the definition, raised from `custom_fields`\' admin routes (D-121 T1).',
+  },
+  ADMIN_FEEDBACK_NOT_CONFIGURED: {
+    to: 'admin_feedback',
+    reason:
+      'Minted with the `admin_feedback` module (issue #379), which did not exist when the prefix ' +
+      'chain was deleted: the refusal to send feedback while the relay address is empty or not an ' +
+      'http(s) URL. The noun is the feedback, the module\'s one route.',
+  },
+  ADMIN_FEEDBACK_DELIVERY_FAILED: {
+    to: 'admin_feedback',
+    reason:
+      'Minted with the `admin_feedback` module (issue #379): the relay could not be reached in time, ' +
+      'refused the message or redirected. The noun is the feedback, the module\'s one route.',
+  },
+  CUSTOM_FIELD_CARRY_INCOMPATIBLE: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 162 (`specs/162-custom-fields-value-carry/`, FR-003, FR-011) for turning ' +
+      'on a definition\'s carry option towards a target that cannot take its values, named by the ' +
+      '`details.code` token. The noun is the custom-field definition and its carry option, and the ' +
+      'judgement is `custom_fields`\' own definition Command (D-121 T1).',
+  },
 };
 
 /**

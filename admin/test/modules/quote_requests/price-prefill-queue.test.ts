@@ -31,14 +31,16 @@ function rig(): {
       new Promise<string | null>((resolve, reject) => {
         calls.push({ request, resolve, reject });
       }),
-    onResult: (productId, amount) => {
-      results.push([productId, amount]);
+    onResult: (key, amount) => {
+      results.push([key, amount]);
     },
   });
   return { calls, results, queue };
 }
 
-const req = (productId: string, quantity = 1, customerId = 'cust-1'): PricePrefillRequest => ({
+/** A line's question; the line is keyed by its product unless `key` says otherwise. */
+const req = (productId: string, quantity = 1, customerId = 'cust-1', key = productId): PricePrefillRequest => ({
+  key,
   productId,
   quantity,
   customerId,
@@ -166,6 +168,27 @@ describe('price prefill queue', () => {
     await flush();
     // Disposal empties the queue: nothing waiting is sent afterwards.
     expect(fetch).toHaveBeenCalledTimes(7);
+  });
+
+  it('keys questions by line, so two lines of one product are each answered (feature 159, N-31)', async () => {
+    const { calls, results, queue } = rig();
+    queue.request(req('p1', 5, 'cust-1', 'line-a'));
+    queue.request(req('p1', 3, 'cust-1', 'line-b'));
+    calls[1]!.resolve('9.00');
+    calls[0]!.resolve('10.00');
+    await flush();
+    expect(results).toEqual([
+      ['line-b', '9.00'],
+      ['line-a', '10.00'],
+    ]);
+    // Forgetting one line leaves the other's question alone.
+    queue.request(req('p1', 6, 'cust-1', 'line-a'));
+    queue.request(req('p1', 2, 'cust-1', 'line-b'));
+    queue.forget('line-a');
+    calls[2]!.resolve('1.00');
+    calls[3]!.resolve('2.00');
+    await flush();
+    expect(results.slice(2)).toEqual([['line-b', '2.00']]);
   });
 
   it('applies nothing once disposed', async () => {

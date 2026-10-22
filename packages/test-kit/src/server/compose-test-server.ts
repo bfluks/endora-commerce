@@ -367,6 +367,7 @@ export async function composeTestServer(
       emFactory: em,
       eventBus,
       redis,
+      redisSubscriber,
       auditLogService,
     });
     const settings = composeSettingsKernel({

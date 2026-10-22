@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql';
 
-import { AssetReadService, type AssetStorageRegistry } from './asset-read-port.js';
+import { AssetReadService, toAssetRecord, type AssetStorageRegistry } from './asset-read-port.js';
 import { AdapterRegistry } from './storage/adapter-registry.js';
 import { HmacSigner } from './hmac.js';
 import type { Asset } from '../entities/asset.entity.js';
@@ -41,11 +41,13 @@ function seededAsset(id: string, overrides: Partial<Asset> = {}): Asset {
     purgeAfterAt: null,
     pendingCleanup: false,
     mimeTypeOverridden: false,
+    contentVersion: 'a1b2c3d4e5f6',
+    permalink: null,
     ...overrides,
   } as unknown as Asset;
 }
 
-function makeService(rows: Asset[]): {
+function makeService(rows: Asset[], loadRetentionDays?: () => Promise<number>): {
   service: AssetReadService;
   filters: Array<FilterQuery<Asset>>;
 } {
@@ -74,7 +76,10 @@ function makeService(rows: Asset[]): {
     publicApiBaseUrl: API_ORIGIN,
   });
 
-  return { service: new AssetReadService(() => em, () => adapters), filters };
+  return {
+    service: new AssetReadService(() => em, () => adapters, ...(loadRetentionDays ? [loadRetentionDays] : [])),
+    filters,
+  };
 }
 
 const PUBLIC_ID = 'aaaaaaaa-1111-2222-3333-444444444444';
@@ -86,7 +91,8 @@ describe('AssetReadService.resolvePublicUrls', () => {
 
     const urls = await service.resolvePublicUrls([PUBLIC_ID]);
 
-    expect(urls.get(PUBLIC_ID)).toBe(`${API_ORIGIN}/assets/file/${PUBLIC_ID}`);
+    // specs/156-asset-stable-url/ T061 (deliberate, R-20): versioned.
+    expect(urls.get(PUBLIC_ID)).toBe(`${API_ORIGIN}/assets/file/${PUBLIC_ID}?v=a1b2c3d4e5f6`);
   });
 
   it('narrows the read itself to live and public rows', async () => {
@@ -229,5 +235,70 @@ describe('AssetReadService.openAssetBytes', () => {
       bytes: new Uint8Array([0x68, 0x69]),
       mimeType: 'image/jpeg',
     });
+  });
+});
+
+/** specs/156-asset-stable-url/ T010 — `storageUrl` stays unchanged until Phase 9. */
+describe('toAssetRecord — stable URL members (feature 156)', () => {
+  it('carries contentVersion and permalink', () => {
+    const record = toAssetRecord(
+      seededAsset(PUBLIC_ID, { permalink: 'docs/a.pdf' } as Partial<Asset>),
+    );
+    expect(record.contentVersion).toBe('a1b2c3d4e5f6');
+    expect(record.permalink).toBe('docs/a.pdf');
+    expect(record.storageUrl).toBe(`/assets/file/${PUBLIC_ID}?v=a1b2c3d4e5f6`);
+  });
+
+  it('answers a null permalink when none is set', () => {
+    expect(toAssetRecord(seededAsset(PUBLIC_ID)).permalink).toBeNull();
+  });
+});
+
+/** specs/156-asset-stable-url/ T042a — the reported purge date follows the setting read now (P1). */
+describe('AssetRecord.purgeAfterAt (feature 156)', () => {
+  it('is deletedAt + the retention read at call time, once per batch, and null for a live asset', async () => {
+    const deletedAt = new Date('2026-10-01T12:00:00.000Z');
+    const deleted = seededAsset(PUBLIC_ID, {
+      deletedAt,
+      purgeAfterAt: new Date('2027-01-01T00:00:00.000Z'),
+    } as Partial<Asset>);
+    const live = seededAsset(PRIVATE_ID);
+    let reads = 0;
+    const { service } = makeService([deleted, live], async () => {
+      reads += 1;
+      return 7;
+    });
+    const records = await service.findByIds([PUBLIC_ID, PRIVATE_ID]);
+    const byId = Object.fromEntries(records.map((r) => [r.id, r]));
+    expect(byId[PUBLIC_ID]!.purgeAfterAt).toEqual(new Date(deletedAt.getTime() + 7 * 24 * 60 * 60 * 1000));
+    expect(byId[PRIVATE_ID]!.purgeAfterAt).toBeNull();
+    expect(reads).toBe(1);
+  });
+});
+
+/** specs/156-asset-stable-url/ T061 — `AssetRecord.storageUrl` serves the current version. */
+describe('AssetRecord.storageUrl (feature 156)', () => {
+  it.each(['local', 's3', 'gcs'] as const)('is versioned for a %s row', (backend) => {
+    const record = toAssetRecord(
+      seededAsset(PUBLIC_ID, { storageBackend: backend, storageUrl: `https://cdn.example.test/${PUBLIC_ID}.jpg` } as Partial<Asset>),
+    );
+    expect(record.storageUrl).toBe(`https://cdn.example.test/${PUBLIC_ID}.jpg?v=a1b2c3d4e5f6`);
+  });
+
+  it.each([
+    ['a legacy row', { storageBackend: 'legacy', storageUrl: 'https://old.example.test/a.jpg' }],
+    ['a data: URL', { storageUrl: 'data:application/pdf;base64,JVBERi0=' }],
+  ])('is unchanged for %s', (_label, over) => {
+    const record = toAssetRecord(seededAsset(PUBLIC_ID, over as Partial<Asset>));
+    expect(record.storageUrl).toBe(over.storageUrl);
+  });
+});
+
+describe('AssetRecord.storageUrl without a storage key (feature 156)', () => {
+  it('is the stored URL unchanged — no adapter of this platform wrote it', () => {
+    const record = toAssetRecord(
+      seededAsset(PUBLIC_ID, { storageLocator: '', storageUrl: 'https://cdn.example.test/a.jpg' } as Partial<Asset>),
+    );
+    expect(record.storageUrl).toBe('https://cdn.example.test/a.jpg');
   });
 });

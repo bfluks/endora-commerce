@@ -12,6 +12,8 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
+import { TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 
 /**
  * A Quote Request records the sales channel it was raised on (issue #266,
@@ -95,6 +97,8 @@ describe('a quote request records the channel it was raised on', () => {
           `on conflict (sales_channel_id, product_id) do nothing`,
         [id, SEED_PRODUCT_101_ID],
       );
+    // Feature 154 — the buyer raising the quote shops on the probe channel.
+    await addOrganizationChannels(h, TEST_ORGANIZATION_ID, [code]);
     return id;
   }
 

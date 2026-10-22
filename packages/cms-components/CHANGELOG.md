@@ -1,5 +1,14 @@
 # @endora-commerce/cms-components
 
+## 0.107.0
+
+### Patch Changes
+
+- 5b4312a: `sanitizeHtml` and `sanitizeRichHtml` now share one DOM-free sanitiser, so a server render and a client render of the same props produce identical markup. The input is tokenised and the output rebuilt from the tokens the policy admits: event handler attributes are always removed, `href`/`src` and other URL attributes keep only `http`, `https`, `mailto`, `tel` and relative URLs (character references are decoded before the scheme is read), and a `<` that does not start an emitted tag is escaped. With sanitising on, the tag and attribute allowlist is unchanged and is now applied on the server too. With sanitising off (trusted HTML), arbitrary elements and attributes are still kept, but scripts, event handlers, `srcdoc`, URLs outside the schemes above (including `data:`), and inline styles containing `url(` or `expression` are removed. `sanitizeRichHtml` keeps the markup the rich text editor writes — colour and alignment styles, `class`, link `target`/`rel`, image `title` — and drops other attributes.
+- 39c8e03: `CmsProductCardView` formats its price in the language of the tree it is rendered in — `useBlockRenderEnvironment().language` from `@endora-commerce/page-builder-core/contributions`, which the storefront sets to the request's locale — instead of a hard-coded `pl-PL`. Product cards in `ProductGrid` and `ProductSlider`, which never passed a locale, now follow the shopper's language. An explicit `locale` prop on `CmsProductCardView` or `CmsProductCardLoader` still wins. A host that provides no block render environment gets that environment's default, `en`, where it used to get `pl-PL`.
+- Updated dependencies [dd939be]
+  - @endora-commerce/page-builder-core@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

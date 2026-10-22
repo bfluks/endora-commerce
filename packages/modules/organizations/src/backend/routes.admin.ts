@@ -19,6 +19,11 @@ import {
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
   type CustomerRolePort,
+  AdminOrganizationCreateBodySchema,
+  DictionaryReferenceError,
+  OrganizationSalesChannelsUpdateBodySchema,
+  type DictionaryValidator,
+  type OrganizationSalesChannelsResponse,
 } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -28,6 +33,7 @@ import { hasChildrenRefusal } from './services/organization-tree-service.js';
 import { makeSetParentCommand } from './commands/set-parent.command.js';
 import { makeMoveCommand } from './commands/move.command.js';
 import { makeSetCreditModeCommand } from './commands/set-credit-mode.command.js';
+import { makeCreateOrganizationCommand } from './commands/create-organization.command.js';
 import { Organization } from './entities/organization.entity.js';
 import type { RequireAdminAnyFactory } from '@endora-commerce/platform/kernel';
 import type { InvitationService } from './services/invitation-service.js';
@@ -35,7 +41,11 @@ import {
   emitCustomerAccountCreated,
   type OrganizationEventBus,
 } from './services/registration-service.js';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import {
+  SalesChannel,
+  type AuditPort,
+  type SalesChannelMembershipPort,
+} from '@endora-commerce/platform/kernel';
 import type {
   OrganizationModerationService} from './services/organization-moderation-service.js';
 import {
@@ -146,6 +156,18 @@ export interface AdminOrgsDeps {
    */
   treeService?: OrganizationTreeService;
   commandBus?: CommandBus;
+  /**
+   * Feature 154 — the kernel's audited channel-membership writer. When provided,
+   * mounts the Organization's *Sales channels* endpoints, and — with
+   * `commandBus` — the admin create, which assigns channels in its own
+   * transaction.
+   */
+  salesChannelMembership?: Pick<
+    SalesChannelMembershipPort,
+    'replaceChannelsForEntity' | 'listChannelsForEntity'
+  >;
+  /** Feature 154 — validates the country of an Organization an operator creates. */
+  dictionaryValidator?: DictionaryValidator;
 }
 
 export async function registerOrganizationsAdminRoutes(
@@ -345,6 +367,122 @@ export async function registerOrganizationsAdminRoutes(
       return { data: serializeOrg(org) };
     },
   );
+
+  // ── Sales channels (feature 154) ───────────────────────────────────────
+  // The stores an Organization's members may sign in and shop on, managed from
+  // the Organization's own page, and the admin create that chooses them.
+  // `specs/154-sales-channel-access/contracts/admin-api-and-ui.md` §2–§3.
+
+  if (deps.salesChannelMembership) {
+    const membership = deps.salesChannelMembership;
+
+    /**
+     * The assignment and every channel it may hold — inactive ones included and
+     * flagged, since an Organization may be assigned to one and a form that
+     * could not show it would drop it on the next save. Answered here, behind
+     * this module's read codes, so the panel needs no `sales_channels:read`:
+     * the delivery-methods precedent (`/api/v1/admin/delivery-methods/sales-channels`).
+     */
+    const channelOptions = async (
+      em: EntityManager,
+    ): Promise<OrganizationSalesChannelsResponse['data']['options']> =>
+      (await em.find(SalesChannel, {}, { orderBy: { code: 'asc' } })).map((c) => ({
+        id: c.id,
+        code: c.code,
+        name: c.name,
+        active: c.active,
+        systemDefault: c.systemDefault,
+      }));
+
+    const channelAssignmentOf = async (
+      em: EntityManager,
+      organizationId: string,
+    ): Promise<OrganizationSalesChannelsResponse['data']> => {
+      const [assigned, options] = await Promise.all([
+        membership.listChannelsForEntity('organization', organizationId),
+        channelOptions(em),
+      ]);
+      return {
+        organizationId,
+        assignedSalesChannelIds: assigned.map((c) => c.id).sort(),
+        options,
+      };
+    };
+
+    const requireOrganization = async (em: EntityManager, id: string): Promise<Organization> => {
+      const org = await em.findOne(Organization, { id, deletedAt: null });
+      if (!org) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+      return org;
+    };
+
+    app.get<{ Params: { id: string } }>(
+      '/api/v1/admin/organizations/:id/sales-channels',
+      { preHandler: customersRead },
+      async (request) => {
+        const em = emFactory();
+        await requireOrganization(em, request.params.id);
+        return { data: await channelAssignmentOf(em, request.params.id) };
+      },
+    );
+
+    /**
+     * Replace the whole set. No Command around it: the kernel's membership
+     * writer is the audited path for a bridge row — one entry per membership
+     * added or removed, with the acting admin — and wrapping it would record the
+     * same change twice under two object types (research R-10). The writer also
+     * drops the access cache, so the Organization's next request is decided on
+     * the new set; the same set again is a no-op that audits nothing.
+     */
+    app.put<{ Params: { id: string } }>(
+      '/api/v1/admin/organizations/:id/sales-channels',
+      {
+        preHandler: requireAdmin('customers:manage'),
+        schema: { body: OrganizationSalesChannelsUpdateBodySchema },
+      },
+      async (request) => {
+        const body = OrganizationSalesChannelsUpdateBodySchema.parse(request.body);
+        const em = emFactory();
+        await requireOrganization(em, request.params.id);
+        await assertSalesChannelsExist(em, body.salesChannelIds);
+        const [first, ...rest] = body.salesChannelIds as [string, ...string[]];
+        await membership.replaceChannelsForEntity('organization', request.params.id, [first, ...rest], {
+          actorAdminUserId: adminActorOf(request)?.adminUserId ?? null,
+        });
+        return { data: await channelAssignmentOf(em, request.params.id) };
+      },
+    );
+
+    if (deps.commandBus) {
+      const commandBus = deps.commandBus;
+      const dictionaryValidator = deps.dictionaryValidator;
+
+      // The options of the *New organization* form's *Sales channels* field,
+      // before there is an Organization to ask about. Gated on the create's own
+      // code: the form is its only reader. A static segment, so it is matched
+      // ahead of `/:id`.
+      app.get(
+        '/api/v1/admin/organizations/sales-channel-options',
+        { preHandler: requireAdmin('customers:manage') },
+        async () => ({ data: await channelOptions(emFactory()) }),
+      );
+
+      app.post(
+        '/api/v1/admin/organizations',
+        {
+          preHandler: requireAdmin('customers:manage'),
+          schema: { body: AdminOrganizationCreateBodySchema },
+        },
+        async (request, reply) => {
+          const body = AdminOrganizationCreateBodySchema.parse(request.body);
+          await assertCountryAvailable(dictionaryValidator, body.registeredAddress.country);
+          await assertSalesChannelsExist(emFactory(), body.salesChannelIds);
+          const org = await commandBus.run(makeCreateOrganizationCommand({ membership }, body));
+          reply.status(201);
+          return { data: serializeOrg(org) };
+        },
+      );
+    }
+  }
 
   // ── Moderation lifecycle (feature 026) ─────────────────────────────────
   // Approve / Reject / Block / Unblock. Mounted only when the moderation
@@ -1089,3 +1227,56 @@ function mapModerationError(err: unknown): HttpError {
 }
 
 void (null as FastifyRequest | null);
+
+/**
+ * Refuses a channel id that names no channel — one deleted while the form was
+ * open, or a mistyped id from an API caller — with a field error naming its
+ * position, before anything is written. An inactive channel is a channel, and
+ * an Organization may be assigned to one.
+ */
+async function assertSalesChannelsExist(
+  em: EntityManager,
+  salesChannelIds: readonly string[],
+): Promise<void> {
+  const known = new Set(
+    (
+      await em.find(SalesChannel, { id: { $in: [...new Set(salesChannelIds)] } }, { fields: ['id'] })
+    ).map((c) => c.id),
+  );
+  const unknown = salesChannelIds
+    .map((id, index) => ({ id, index }))
+    .filter(({ id }) => !known.has(id));
+  if (unknown.length === 0) return;
+  throw new HttpError(
+    422,
+    ERROR_CODES.VALIDATION_FAILED,
+    'One or more of the sales channels do not exist. Reload and choose again.',
+    unknown.map(({ id, index }) => ({ path: `salesChannelIds.${index}`, issue: id })),
+  );
+}
+
+/**
+ * The country check self-registration makes (`RegistrationService`), with the
+ * same answer: 409 and the Dictionary's code on the address field.
+ */
+async function assertCountryAvailable(
+  validator: DictionaryValidator | undefined,
+  country: string,
+): Promise<void> {
+  if (!validator) return;
+  try {
+    await validator.validateCountryCode(country, 'create-or-change');
+  } catch (err) {
+    if (err instanceof DictionaryReferenceError) {
+      throw new HttpError(
+        409,
+        err.code,
+        err.code === 'DICTIONARY_ENTRY_INACTIVE'
+          ? `Country code ${err.entryCode} is no longer available.`
+          : `Country code ${err.entryCode} is not recognised.`,
+        [{ path: 'registeredAddress.country', issue: err.code }],
+      );
+    }
+    throw err;
+  }
+}

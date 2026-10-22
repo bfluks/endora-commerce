@@ -14,7 +14,10 @@
  * not reach the response.
  */
 import {
+  customFieldCarrySkipRecord,
+  customFieldCarrySkipSchema,
   quoteRequestHistoryChangeSchema,
+  uuidSchema,
   type AdminUserRecord,
   type CatalogProductVariantRecord,
   type CustomerAccountRecord,
@@ -237,6 +240,8 @@ function singleKind(event: HistoryEventInput): QuoteRequestHistoryEntryKind {
       return 'note_added';
     case 'pdf-sent':
       return 'pdf_sent';
+    case 'custom-field-carry-skipped':
+      return 'custom_field_carry_skipped';
   }
 }
 
@@ -263,7 +268,34 @@ function toEntry(
         : null,
     orderId: kind === 'completed' ? firstUuid(group, 'orderId') : null,
     delivery: kind === 'pdf_sent' ? deliveryOf(first) : null,
+    customFieldCarry: kind === 'custom_field_carry_skipped' ? customFieldCarryOf(first) : null,
   };
+}
+
+/**
+ * Feature 162 — the Sales Opportunity a value came from and every key not
+ * carried, with its reason. Read field by field, as `deliveryOf` reads its
+ * payload: a skip that is not well formed is left out, and a source that is
+ * not one — or nothing left to name — reads as none.
+ */
+function customFieldCarryOf(event: HistoryEventInput): QuoteRequestHistoryEntry['customFieldCarry'] {
+  const source = event.payload['source'];
+  if (typeof source !== 'object' || source === null) return null;
+  const { entityType, recordId, reference } = source as Record<string, unknown>;
+  if (
+    entityType !== 'opportunity' ||
+    !uuidSchema.safeParse(recordId).success ||
+    typeof reference !== 'string'
+  ) {
+    return null;
+  }
+  const raw = Array.isArray(event.payload['skipped']) ? (event.payload['skipped'] as unknown[]) : [];
+  const skipped = raw.flatMap((item) => {
+    const parsed = customFieldCarrySkipSchema.safeParse(item);
+    return parsed.success ? [customFieldCarrySkipRecord(parsed.data)] : [];
+  });
+  if (skipped.length === 0) return null;
+  return { source: { entityType, recordId: recordId as string, reference }, skipped };
 }
 
 /**

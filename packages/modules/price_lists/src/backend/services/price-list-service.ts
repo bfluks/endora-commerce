@@ -124,8 +124,13 @@ export class PriceListService {
      * `invalidateAll()` so the next read repopulates from the DB.
      * Coarse but correct — fan-out makes per-tuple invalidation
      * unprofitable until profiling shows otherwise.
+     *
+     * Called **after** the write has committed (D-287 P0): from inside the
+     * Command Bus callback, a read racing the write re-cached the pre-write
+     * price for a whole TTL. Production hands in `PricingGeneration`, whose
+     * `invalidateAll` also announces the bump to every other process.
      */
-    private readonly pricingCache?: { invalidateAll: () => void },
+    private readonly pricingCache?: { invalidateAll: () => void | Promise<void> },
     /** Feature 024 — optional audit log writer. When omitted, no audit
      *  rows are emitted (tests that don't care about audit pass nothing). */
     private readonly auditLog?: AuditPort,
@@ -233,8 +238,8 @@ export class PriceListService {
     });
   }
 
-  private invalidatePricingCache(): void {
-    this.pricingCache?.invalidateAll();
+  private async invalidatePricingCache(): Promise<void> {
+    await this.pricingCache?.invalidateAll();
   }
 
   private async audit(
@@ -282,23 +287,28 @@ export class PriceListService {
     }>,
   ): Promise<T> {
     if (this.commandBus) {
-      return this.commandBus.run({
+      // D-287 P0 — the cache is told once the bus has returned, i.e. once the
+      // transaction committed. A write that changed nothing tells it nothing.
+      let mutated = false;
+      const result = await this.commandBus.run({
         action,
         objectType: 'price_list',
         objectId,
         run: async ({ em }) => {
           const w = await write(em);
           if (w.skipAudit) return { result: w.result, skipAudit: true };
-          this.invalidatePricingCache();
+          mutated = true;
           return { result: w.result, before: w.before, after: w.after };
         },
       });
+      if (mutated) await this.invalidatePricingCache();
+      return result;
     }
     const em = this.emFactory();
     const w = await write(em);
     await em.flush();
     if (!w.skipAudit) {
-      this.invalidatePricingCache();
+      await this.invalidatePricingCache();
       await this.audit(action, w.row, w.before, w.after, auditCtx);
     }
     return w.result;
@@ -447,21 +457,29 @@ export class PriceListService {
     // Feature 054 — audited path: the Command Bus records the update
     // co-transactionally. No-op patches (nothing changed) skip the audit row.
     if (this.commandBus) {
-      return this.commandBus.run(this.#patchCommand(id, input));
+      const mutated = { value: false };
+      const row = await this.commandBus.run(this.#patchCommand(id, input, mutated));
+      // D-287 P0 — after commit, as `#runAudited` does.
+      if (mutated.value) await this.invalidatePricingCache();
+      return row;
     }
     // Legacy fallback (bus-less construction): unaudited unless auditCtx given.
     const em = this.emFactory();
     const r = await this.#applyPatch(em, id, input);
     await em.flush();
     if (r.mutated) {
-      this.invalidatePricingCache();
+      await this.invalidatePricingCache();
       await this.audit('price_list.update', r.row, r.stateBefore, r.stateAfter, auditCtx);
     }
     return r.row;
   }
 
   /** The `patch` write expressed as a Command (audited via the bus). */
-  #patchCommand(id: string, input: PatchPriceListInput): Command<PriceList> {
+  #patchCommand(
+    id: string,
+    input: PatchPriceListInput,
+    mutated: { value: boolean },
+  ): Command<PriceList> {
     return {
       action: 'price_list.update',
       objectType: 'price_list',
@@ -472,7 +490,7 @@ export class PriceListService {
           // Nothing changed → commit without an audit row.
           return { result: r.row, skipAudit: true };
         }
-        this.invalidatePricingCache();
+        mutated.value = true;
         return { result: r.row, before: r.stateBefore, after: r.stateAfter };
       },
     };
@@ -952,7 +970,7 @@ export class PriceListService {
     if (mode === 'inherit') {
       if (existing) {
         await em.removeAndFlush(existing);
-        this.invalidatePricingCache();
+        await this.invalidatePricingCache();
       }
       return null;
     }
@@ -960,12 +978,12 @@ export class PriceListService {
       existing.mode = mode;
       existing.updatedAt = new Date();
       await em.flush();
-      this.invalidatePricingCache();
+      await this.invalidatePricingCache();
       return existing;
     }
     const row = em.create(PriceDisplayModeOverride, { scope, targetId, mode });
     await em.persistAndFlush(row);
-    this.invalidatePricingCache();
+    await this.invalidatePricingCache();
     return row;
   }
 

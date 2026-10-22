@@ -49,8 +49,17 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from '
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { findInstanceRoot } from '../generate/index.js';
-import { ownReleaseIndexPath, parseReleaseIndex } from '../lib/release-index.js';
+import {
+  movableVersion,
+  ownReleaseIndexPath,
+  parseReleaseIndex,
+  rewriteRange,
+} from '../lib/release-index.js';
 import { workspaceGlobs } from '../new-module/host.js';
+
+// The range rule lives beside the release index because `endora generate`
+// writes a release range too, and this file already imports that one.
+export { rewriteRange };
 
 /** A refusal the operator can act on — exit 1. */
 export class UpgradeInputError extends Error {
@@ -145,27 +154,12 @@ export interface UpgradeResult {
 }
 
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
-/** An exact version with an optional `^` or `~` — the only specs this verb moves. */
-const MOVABLE = /^([~^]?)(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 const DEPENDENCY_FIELDS = [
   'dependencies',
   'devDependencies',
   'optionalDependencies',
   'peerDependencies',
 ] as const;
-
-/**
- * The spec moved to `target` with its operator kept, or `null` when the spec
- * is not a version range this verb may move (FR-003): an exact pin stays exact
- * — the reason it is exact is that the release moves as one number — `^` stays
- * `^` and `~` stays `~`. Anything else (`file:`, `workspace:`, a tag, a range
- * with a bound) was written by somebody on purpose, so it is theirs.
- */
-export function rewriteRange(spec: string, target: string): string | null {
-  const match = MOVABLE.exec(spec.trim());
-  if (match === null) return null;
-  return `${match[1]!}${target}`;
-}
 
 /** Semver precedence over `x.y.z[-pre]`, which is every version a release carries. */
 export function compareVersions(left: string, right: string): number {
@@ -449,7 +443,7 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<UpgradeR
   // every instance scaffolded from a release after its next patch was out.
   const platformSpec = rootManifest.dependencies?.[platformName];
   const declaredVersion =
-    typeof platformSpec === 'string' ? (MOVABLE.exec(platformSpec.trim())?.[2] ?? null) : null;
+    typeof platformSpec === 'string' ? movableVersion(platformSpec) : null;
   if (installed === null) {
     refusals.push(
       `${platformName} is not installed in ${instanceDir}, so there is no installed release to ` +

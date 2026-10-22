@@ -15,6 +15,11 @@ export * from './pagination.js';
 export * from './common.js';
 export * from './scope-notice.js';
 export * from './catalog.js';
+// Feature 155 — the minimum-order rule (specs/155-catalog-order-constraints/).
+export * from './order-minimums.js';
+export * from './localized-name.js';
+// Feature 159 — named, ordered line groups shared by quotes and orders.
+export * from './line-groups.js';
 export * from './quote-requests.js';
 export * from './organizations.js';
 export * from './customers.js';
@@ -36,6 +41,7 @@ export * from './admin.js';
 export * from './credit-limits.js';
 // CRM — Sales Opportunities (specs/143-crm-sales-opportunities/).
 export * from './crm.js';
+export * from './crm-rich-text.js';
 export * from './api-keys.js';
 export * from './webhooks.js';
 export * from './analytics.js';
@@ -180,6 +186,7 @@ export * from './blog.js';
 export * from './dictionary.js';
 export * from './modules.js';
 export * from './platform-info.js';
+export * from './admin-feedback.js';
 export * from './admin-actions.js';
 export * from './admin-contributions.js';
 export * from './product-scope-overrides.js';

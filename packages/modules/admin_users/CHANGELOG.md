@@ -1,5 +1,97 @@
 # @endora-commerce/mod-admin-users
 
+## 0.107.0
+
+### Patch Changes
+
+- 248a9df: Routes a visitor reaches before signing in, or that arrive with no storefront channel, declare
+  `salesChannelAccess: 'open'` and stay reachable when an operator closes a sales channel to
+  anonymous visitors: administrator sign-in and sign-out, second-factor verification and set-up
+  tickets and federated sign-in (both surfaces), `GET /api/v1/i18n/config`, the dictionary reads the
+  registration form uses, the crawler policy, product-feed downloads by token, and the newsletter
+  confirmation, unsubscribe and tracking links.
+- fe48d6d: Administrators hand out only the permissions their own role holds. A holder of the wildcard `*` is unaffected.
+
+  - `PUT /api/v1/admin/admin-roles/:code` refuses a role holding a permission the actor lacks, and refuses to change a role that already holds one, with `403 ADMIN_ROLE_GRANT_EXCEEDED` (`details.permissions` names the missing codes). A role the platform or a module seeds — `platform_admin` included, with its `requiresTwoFactor` flag — is changed only by a holder of `*`; anybody else is answered `409 ADMIN_ROLE_PROTECTED` with `details.code: 'modify'`.
+  - `POST` and `PATCH /api/v1/admin/admin-users` assign a role only if the actor holds every permission it grants (`403 ADMIN_ROLE_GRANT_EXCEEDED`). An account whose role holds a permission the actor lacks is not edited, given a password, deactivated or deleted by them: `403 ADMIN_USER_OUTRANKS_ACTOR`.
+  - `POST /api/v1/admin/api-keys` issues a key only with scopes the issuing administrator's role holds: `403 API_KEY_SCOPE_NOT_HELD`, with the missing scopes in `details.scopes`. `api_keys` now declares `admin_roles` as a dependency.
+
+  `AdminRolePort.upsertByCode(input, options?)` takes an optional `{ grantor: { permissions } }`. Pass it for a write made on an administrator's behalf; leave it out for a platform write — a module seeding its roles, an upgrade step, the bootstrap command — which is not held to the ceiling. `@endora-commerce/contracts` exports `permissionsNotHeld(requested, held)` and `ADMIN_PERMISSION_WILDCARD`, and three new `ERROR_CODES` members.
+
+- 1525d86: Customer sign-in, the customer second factor and password-reset requests are now limited per
+  account, the way administrator sign-in already was.
+
+  - `@endora-commerce/platform/kernel` publishes `AuthenticationAttemptThrottle`, the attempt
+    counter administrator sign-in used, with the profile types an owner of accounts builds one
+    over (`AttemptThrottleProfile`, `AttemptPolicy`, `AttemptCounterStore`, `ThrottledAttempt`,
+    `ThrottledCheckResult`, `ThrottledCredentialState`) and `ADDRESS_POLICY`, `ACCOUNT_POLICY`,
+    `ABANDONED_AFTER_SECONDS`, `DEFAULT_STORE_DEADLINE_MS`, `addressOrigin`. `admin_users`' own
+    throttle is now a profile over it; its keys, cookie values, codes and audit rows are unchanged.
+  - `@endora-commerce/contracts` adds `CustomerAuthenticationThrottlePort` (container name
+    `customerAuthenticationThrottlePort`, owner `customer_accounts`) with
+    `CustomerAuthenticationAttempt`, `CustomerAuthenticationCheckResult`,
+    `CustomerAuthenticationOrigin` and `CustomerAuthenticationFactor`; the error codes
+    `CUSTOMER_AUTHENTICATION_THROTTLED` (429, with `Retry-After`) and
+    `CUSTOMER_AUTHENTICATION_UNAVAILABLE` (503); the cookie name
+    `CUSTOMER_KNOWN_DEVICE_COOKIE_NAME` (`b2b_customer_device`) and its lifetime. Optional
+    additions: `CustomerLoginInput.knownDevice`, `CustomerLoginResult.knownDevice`, and a second
+    `context` argument on `CustomerPasswordResetPort.requestReset`.
+  - `customer_accounts` counts wrong passwords per folded e-mail address (50 in 30 minutes from a
+    device the account has not signed in on, 10 from a known one), and password-reset requests per
+    address (5 an hour). There is no per-address counter: the storefront signs shoppers in from its
+    own server. A completed sign-in sets the signed `b2b_customer_device` cookie, and an attempt
+    carrying it is held to that device's own budget. Asking for a new reset link retires the
+    earlier unused ones.
+  - `mfa` checks customer second-factor codes inside the customer throttle (20 in 30 minutes,
+    10 from a known device) and sets the customer known-device cookie when a customer sign-in
+    completes there.
+  - `organizations` reads and sets the customer known-device cookie on
+    `POST /api/v1/auth/customer/login` and reads it on `POST /api/v1/auth/password-reset/request`.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

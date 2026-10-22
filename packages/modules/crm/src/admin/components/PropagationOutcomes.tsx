@@ -6,6 +6,7 @@ import { Alert, AlertDescription, Button } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { crmApi, type OrderStatusOption } from '../api.js';
 import { errorMessage, orderStatusLabel } from '../lib/labels.js';
+import { useReturnHere } from '../lib/return-here.js';
 
 type Tone = 'done' | 'neutral' | 'refused';
 
@@ -46,6 +47,7 @@ export interface PropagationOutcomesProps {
  * mapping or the Order) or dismisses it.
  */
 export function PropagationOutcomes(props: PropagationOutcomesProps): ReactNode {
+  const returnHere = useReturnHere();
   const { opportunityId, outcomes, unresolvedIds, orderStatuses, language, canWrite } = props;
   const t = useTranslation('crm');
   const headingId = useId();
@@ -123,7 +125,7 @@ export function PropagationOutcomes(props: PropagationOutcomesProps): ReactNode 
                 <div className="min-w-0 space-y-0.5 text-sm">
                   <p id={describedBy}>
                     <Link
-                      to={`/orders/${outcome.orderId}`}
+                      to={returnHere(`/orders/${outcome.orderId}`)}
                       className="font-medium text-primary underline-offset-4 hover:underline"
                     >
                       {outcome.orderNumber

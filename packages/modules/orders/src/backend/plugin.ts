@@ -38,6 +38,8 @@ import type {
   AddressReadPort,
   AddressServicePort,
   AssetReadPort,
+  CustomFieldCarryPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
   CartReadPort,
   CartWritePort,
@@ -90,6 +92,8 @@ export interface OrdersModuleOptions {
   auditLogService?: AuditPort;
   /** Feature 055 — validates + persists Order custom-field values on the admin edit path. */
   customFieldValues?: CustomFieldValuePort;
+  /** Feature 157 — the admin list's custom-field filters (offered fields and one condition). */
+  customFieldListFilter?: CustomFieldListFilterPort;
   /** Feature 034 — mailer for the order-confirmation e-mail (best-effort, post-commit). */
   mailer?: EmailMailerPort;
   /**
@@ -224,6 +228,12 @@ export interface OrdersModuleOptions {
    * nothing.
    */
   quoteRequestRead: () => QuoteRequestReadPort | null;
+  /**
+   * `custom_fields`' carry port (`specs/162-custom-fields-value-carry/`): the
+   * vouched Quote Request's custom-field values the new Order receives. An
+   * accessor resolved per call; `custom_fields` is not deactivatable.
+   */
+  customFieldCarry: () => CustomFieldCarryPort;
   /**
    * The payment row placement opens (feature 080, T048; D-179). A value and not
    * an accessor, unlike the two `invoices` names above and unlike `inventory`:
@@ -504,6 +514,7 @@ export function commerceModule(options: OrdersModuleOptions) {
           cartRead: options.cartRead,
           invoicePlacementApply: options.invoicePlacementApply,
           quoteRequestRead: options.quoteRequestRead,
+          customFieldCarry: options.customFieldCarry,
           paymentPlacementApply: options.paymentPlacementApply,
         },
         ...(options.mailer ? { mailer: options.mailer } : {}),
@@ -563,6 +574,7 @@ export function commerceModule(options: OrdersModuleOptions) {
       orderStatusGraphService,
       options.organizationDetails,
       options.customerAccountRead,
+      options.customFieldListFilter ?? null,
     );
     if (options.exposeOrderListService) options.exposeOrderListService(orderListService);
     const orderListViewService = new OrderListViewService(options.emFactory, options.log);
@@ -637,6 +649,7 @@ export function commerceModule(options: OrdersModuleOptions) {
         ? { resolveAdminOrdersScope: options.resolveAdminOrdersScope }
         : {}),
       ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
+      ...(options.customFieldListFilter ? { customFieldListFilter: options.customFieldListFilter } : {}),
       ...(options.commandBus ? { commandBus: options.commandBus } : {}),
     });
 

@@ -165,3 +165,4 @@ export const entities = [
  * subpath.
  */
 export type { ShoppingListService } from './services/shopping-list-service.js';
+

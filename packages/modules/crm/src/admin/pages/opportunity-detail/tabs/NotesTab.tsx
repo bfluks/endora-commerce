@@ -14,6 +14,7 @@ export function NotesTab(props: OpportunityTabProps): ReactNode {
       opportunityId={props.opportunity.id}
       organizationId={props.opportunity.organization.id}
       kind="note"
+      orderStatuses={props.orderStatuses}
       // The tab's label counts the notes; the page reads that count again.
       onCountChange={props.reload}
       copy={{

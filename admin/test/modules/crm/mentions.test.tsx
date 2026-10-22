@@ -212,11 +212,18 @@ describe('typing @ in a text of an Opportunity', () => {
     await userEvent.type(field, '@pio');
     await within(panel).findByRole('option', { name: 'Piotr Zielony' });
 
+    // As a browser sends it: the keys of a composition arrive between its start and its end.
+    fireEvent.compositionStart(field);
     fireEvent.keyDown(field, { key: 'Enter', isComposing: true });
     expect(storedText(field)).toBe('@pio');
     expect(within(panel).getByRole('listbox')).toBeInTheDocument();
     fireEvent.keyDown(field, { key: 'Tab', isComposing: true });
     expect(storedText(field)).toBe('@pio');
+    fireEvent.compositionEnd(field);
+    // jsdom reports itself as Safari, where the editor also ignores the one
+    // Enter that arrives within half a second of a composition's end — the key
+    // that confirmed the character. A later Enter is the operator's.
+    await new Promise((resolve) => setTimeout(resolve, 550));
 
     // Positive control: the same key, once the composition is over, chooses.
     fireEvent.keyDown(field, { key: 'Enter' });
@@ -286,9 +293,9 @@ describe('typing @ in a text of an Opportunity', () => {
     // Ten characters short of the limit: the letters fit, a token of 51 does not.
     const filler = 'x'.repeat(COMMENT_MAX_LENGTH - 10);
     field.focus();
-    fireEvent.paste(field, { clipboardData: { getData: (): string => `${filler} ` } });
-    expect(storedText(field)).toHaveLength(COMMENT_MAX_LENGTH - 9);
-    await userEvent.type(field, '@pio');
+    fireEvent.paste(field, { clipboardData: { getData: (type: string): string => (type === 'text/plain' ? filler : '') } });
+    expect(storedText(field)).toHaveLength(COMMENT_MAX_LENGTH - 10);
+    await userEvent.type(field, ' @pio');
     await within(panel).findByRole('option', { name: 'Piotr Zielony' });
     await userEvent.keyboard('{Enter}');
 

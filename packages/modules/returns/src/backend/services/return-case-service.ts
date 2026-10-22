@@ -21,6 +21,12 @@ import { isWithinFreeWindow } from '../domain/free-return-window.js';
 import { defaultRefundForQuantity } from '../domain/refund-math.js';
 import type { ReturnStatusGraphService } from './return-status-graph-service.js';
 import type { ReturnTransitionService } from './return-transition-service.js';
+import {
+  checkRequestedQuantities,
+  isLineReturnable,
+  nonReturnableRequestedLines,
+  returnableVerdict,
+} from './return-eligibility.js';
 
 /** Statuses whose cases do NOT consume returnable quantity (FR-003). */
 const VOID_STATUS_CODES = new Set(['rejected', 'cancelled']);
@@ -59,22 +65,30 @@ export class ReturnCaseService {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Order not found.');
     }
     const consumed = await this.consumedQuantities(orderId);
-    const lines = ctx.lines.map((l) => ({
-      orderItemId: l.orderItemId,
-      productId: l.productId,
-      name: l.name,
-      purchasedQty: l.purchasedQty,
-      remainingReturnableQty: Math.max(0, l.purchasedQty - (consumed.get(l.orderItemId) ?? 0)),
-      paidUnitAmount: l.paidUnitAmount,
-      currency: ctx.currency,
-    }));
+    const lines = ctx.lines.map((l) => {
+      // Feature 155 (FR-017, FR-025) — the stamp recorded at placement governs;
+      // `null` (placed before the feature) is returnable.
+      const returnable = isLineReturnable(l.returnableAtPurchase);
+      return {
+        orderItemId: l.orderItemId,
+        productId: l.productId,
+        name: l.name,
+        purchasedQty: l.purchasedQty,
+        remainingReturnableQty: Math.max(0, l.purchasedQty - (consumed.get(l.orderItemId) ?? 0)),
+        paidUnitAmount: l.paidUnitAmount,
+        currency: ctx.currency,
+        returnable,
+        ...(returnable ? {} : { notReturnableReason: 'product_not_returnable' as const }),
+      };
+    });
 
-    const freeReturnEligible = await this.isWithinFreeWindow(ctx.salesChannelId, ctx.completingStatusEnteredAt);
-    if (ctx.completingStatusEnteredAt === null) {
+    const verdict = returnableVerdict(ctx.completingStatusEnteredAt !== null, lines);
+    if (verdict.eligible === false && verdict.reason === 'order_not_completing') {
       return { eligible: false, reason: 'order_not_completing', freeReturnEligible: false, lines };
     }
-    if (lines.every((l) => l.remainingReturnableQty === 0)) {
-      return { eligible: false, reason: 'fully_returned', freeReturnEligible, lines };
+    const freeReturnEligible = await this.isWithinFreeWindow(ctx.salesChannelId, ctx.completingStatusEnteredAt);
+    if (verdict.eligible === false) {
+      return { eligible: false, reason: verdict.reason, freeReturnEligible, lines };
     }
     return { eligible: true, freeReturnEligible, lines };
   }
@@ -103,27 +117,47 @@ export class ReturnCaseService {
       (await this.deps.emFactory().find(ReturnReason, { isActive: true })).map((r) => [r.id, r]),
     );
 
+    // Feature 155 (FR-033, SC-006) — judged on the per-line sum, for both
+    // kinds, so a request cannot exceed a line's remaining quantity by naming
+    // it more than once. The entries are still stored as sent.
+    const quantityRefusal = checkRequestedQuantities(input.lines, ctx.lines, consumed);
+    if (quantityRefusal?.code === 'unknown_line') {
+      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'Unknown order line.', {
+        code: 'unknown_line',
+      });
+    }
+    if (quantityRefusal?.code === 'qty_exceeds_returnable') {
+      throw new HttpError(
+        422,
+        ERROR_CODES.VALIDATION_FAILED,
+        `Requested quantity (${quantityRefusal.requested}) exceeds the returnable quantity (${quantityRefusal.remaining}).`,
+        { code: 'qty_exceeds_returnable' },
+      );
+    }
     for (const line of input.lines) {
-      const ctxLine = byOrderItem.get(line.orderItemId);
-      if (!ctxLine) {
-        throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'Unknown order line.', {
-          code: 'unknown_line',
-        });
-      }
-      const remaining = ctxLine.purchasedQty - (consumed.get(line.orderItemId) ?? 0);
-      if (line.quantity > remaining) {
-        throw new HttpError(
-          422,
-          ERROR_CODES.VALIDATION_FAILED,
-          `Requested quantity (${line.quantity}) exceeds the returnable quantity (${remaining}).`,
-          { code: 'qty_exceeds_returnable' },
-        );
-      }
       if (!reasons.has(line.reasonId)) {
         throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'Unknown or inactive reason.', {
           code: 'unknown_reason',
         });
       }
+    }
+
+    // Feature 155 (FR-019, FR-020) — a `return` case may not include a line
+    // recorded as not returnable; a complaint is never checked. Existing
+    // cases are never re-evaluated (FR-022).
+    const notReturnable = nonReturnableRequestedLines(input.kind, input.lines, ctx.lines);
+    const firstNotReturnable = notReturnable[0];
+    if (firstNotReturnable) {
+      throw new HttpError(
+        422,
+        ERROR_CODES.RETURN_LINE_NOT_RETURNABLE,
+        `"${firstNotReturnable.productName}" cannot be returned. You can still file a complaint.`,
+        {
+          productName: firstNotReturnable.productName,
+          orderItemIds: notReturnable.map((l) => l.orderItemId),
+          lines: notReturnable,
+        },
+      );
     }
 
     const em = this.deps.emFactory();
@@ -150,6 +184,12 @@ export class ReturnCaseService {
     for (const line of input.lines) {
       const ctxLine = byOrderItem.get(line.orderItemId)!;
       const defaultRefund = defaultRefundForQuantity(ctxLine.paidUnitAmount, line.quantity);
+      // Owner ruling R1 (feature 155, FR-020) — a complaint may name a line that
+      // was not returnable at purchase, but nothing refunds it by default: its
+      // approved amount starts at 0 for the operator to set. The default refund
+      // stays the amount paid, because it is the cap settlement lets the
+      // operator approve up to (`exceedsCap`).
+      const approvedRefund = isLineReturnable(ctxLine.returnableAtPurchase) ? defaultRefund : 0;
       em.persist(
         em.create(ReturnCaseItem, {
           returnCaseId: rc.id,
@@ -160,7 +200,7 @@ export class ReturnCaseService {
           reasonId: line.reasonId,
           description: line.description ?? null,
           defaultRefundAmount: defaultRefund.toFixed(2),
-          approvedRefundAmount: defaultRefund.toFixed(2),
+          approvedRefundAmount: approvedRefund.toFixed(2),
         }),
       );
     }
@@ -286,6 +326,13 @@ export class ReturnCaseService {
       em.findOne(Refund, { returnCaseId: id }),
     ]);
     const visibleComments = comments.filter((c) => !opts.customerView || c.isCustomerVisible);
+    // Feature 155 (owner ruling R1) — each line's returnable-at-purchase record,
+    // read through the port that already carries it, so the admin case view can
+    // mark a complaint line that was not returnable when bought.
+    const orderContext = await this.deps.orderContext.getReturnContext(rc.orderId);
+    const returnableAtPurchase = new Map(
+      (orderContext?.lines ?? []).map((l) => [l.orderItemId, l.returnableAtPurchase] as const),
+    );
     return {
       ...this.toSummary(rc, graph.get(rc.statusCode)?.defaultName ?? rc.statusCode),
       salesChannelId: rc.salesChannelId,
@@ -308,6 +355,7 @@ export class ReturnCaseService {
         inspectionOutcome: it.inspectionOutcome ?? null,
         defaultRefundAmount: Number(it.defaultRefundAmount),
         approvedRefundAmount: Number(it.approvedRefundAmount),
+        returnableAtPurchase: returnableAtPurchase.get(it.orderItemId) ?? null,
       })),
       comments: visibleComments.map((c) => ({
         id: c.id,

@@ -157,3 +157,148 @@ describe('historyDiff', () => {
     for (const change of changes) expect(quoteRequestHistoryChangeSchema.safeParse(change).success).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Feature 159 — the grouping (T034, FR-022, research R-11)
+// ---------------------------------------------------------------------------
+
+describe('historyDiff — grouping', () => {
+  const G1 = '44444444-4444-4444-8444-444444444441';
+  const G2 = '44444444-4444-4444-8444-444444444442';
+  const refQ = { productId: Q, variantId: null, productName: 'Product Q', variantLabel: null };
+  const refR = { productId: R, variantId: null, productName: 'Product R', variantLabel: null };
+  const at = (
+    productId: string,
+    position: number,
+    group: { id: string; name: string; position: number } | null,
+  ): QuoteRequestRevisionLine =>
+    line({
+      productId,
+      productName: productId === P ? 'Product P' : productId === Q ? 'Product Q' : 'Product R',
+      position,
+      groupId: group?.id ?? null,
+      groupName: group?.name ?? null,
+      groupPosition: group?.position ?? null,
+    });
+  const ground = { id: G1, name: 'Ground floor', position: 0 };
+  const first = { id: G2, name: 'First floor', position: 1 };
+
+  it('lists a group added and the line moved into it, from ungrouped (to/from null)', () => {
+    const changes = historyDiff(
+      snap([at(P, 0, null), at(Q, 1, null)]),
+      snap([at(P, 0, ground), at(Q, 0, null)]),
+    );
+    expect(changes).toEqual([
+      { kind: 'group_added', group: { id: G1, name: 'Ground floor' } },
+      { kind: 'line_group', line: refP, before: null, after: 'Ground floor' },
+    ]);
+  });
+
+  it('lists a removed group and its lines going to ungrouped', () => {
+    const changes = historyDiff(snap([at(P, 0, ground), at(Q, 0, null)]), snap([at(Q, 0, null), at(P, 1, null)]));
+    expect(changes).toEqual([
+      { kind: 'group_removed', group: { id: G1, name: 'Ground floor' } },
+      { kind: 'line_group', line: refP, before: 'Ground floor', after: null },
+    ]);
+  });
+
+  it('lists a rename by group id, and a line moving between two groups by their names', () => {
+    const changes = historyDiff(
+      snap([at(P, 0, ground), at(Q, 0, first)]),
+      snap([at(P, 0, { ...ground, name: 'Hall' }), at(Q, 1, { ...ground, name: 'Hall' })]),
+    );
+    expect(changes).toEqual([
+      { kind: 'group_removed', group: { id: G2, name: 'First floor' } },
+      { kind: 'group_renamed', groupId: G1, before: 'Ground floor', after: 'Hall' },
+      { kind: 'line_group', line: refQ, before: 'First floor', after: 'Hall' },
+    ]);
+  });
+
+  it('lists line_order once when only the order of groups changed', () => {
+    const changes = historyDiff(
+      snap([at(P, 0, ground), at(Q, 0, first)]),
+      snap([at(Q, 0, { ...first, position: 0 }), at(P, 0, { ...ground, position: 1 })]),
+    );
+    expect(changes).toEqual([{ kind: 'line_order' }]);
+  });
+
+  it('lists line_order once when only the order of lines within a section changed', () => {
+    const changes = historyDiff(
+      snap([at(P, 0, ground), at(Q, 1, ground), at(R, 0, null)]),
+      snap([at(Q, 0, ground), at(P, 1, ground), at(R, 0, null)]),
+    );
+    expect(changes).toEqual([{ kind: 'line_order' }]);
+  });
+
+  it('does not list line_order for an order a move, an addition or a removal explains', () => {
+    const changes = historyDiff(
+      snap([at(P, 0, ground), at(Q, 1, ground)]),
+      snap([at(Q, 0, ground), at(R, 1, ground), at(P, 0, null)]),
+    );
+    expect(changes.map((change) => change.kind)).toEqual(['line_added', 'line_group']);
+    expect(changes).toContainEqual({ kind: 'line_group', line: refP, before: 'Ground floor', after: null });
+    void refR;
+  });
+
+  it('a revision written before the feature, against the first grouped one: group_added and line_group, no line_order', () => {
+    const legacy = [line({ productId: Q, productName: 'Product Q' }), line()];
+    const changes = historyDiff(snap(legacy), snap([at(P, 0, ground), at(Q, 0, null)]));
+    expect(changes).toEqual([
+      { kind: 'group_added', group: { id: G1, name: 'Ground floor' } },
+      { kind: 'line_group', line: refP, before: null, after: 'Ground floor' },
+    ]);
+  });
+
+  it('two ungrouped snapshots in the same order list nothing', () => {
+    expect(historyDiff(snap([at(P, 0, null), at(Q, 1, null)]), snap([at(P, 0, null), at(Q, 1, null)]))).toEqual([]);
+  });
+
+  // Feature 159 (research N-32) — one product on several lines, in different groups.
+  it('pairs a split product by its group, whatever the order, and names the group on its line', () => {
+    const before = [
+      { ...at(P, 0, ground), quantity: 5 },
+      { ...at(P, 0, first), quantity: 3 },
+    ];
+    // First floor moved above Ground floor, and its P went from 3 to 2.
+    const after = [
+      { ...at(P, 0, { ...first, position: 0 }), quantity: 2 },
+      { ...at(P, 0, { ...ground, position: 1 }), quantity: 5 },
+    ];
+    expect(historyDiff(snap(before), snap(after))).toEqual([
+      { kind: 'line_quantity', line: { ...refP, groupName: 'First floor' }, before: 3, after: 2 },
+      { kind: 'line_order' },
+    ]);
+  });
+
+  it('a line split off into another group: the rest is a quantity change, the new line an addition, each named by its group', () => {
+    const changes = historyDiff(
+      snap([{ ...at(P, 0, ground), quantity: 8 }]),
+      snap([
+        { ...at(P, 0, ground), quantity: 5 },
+        { ...at(P, 0, first), quantity: 3 },
+      ]),
+    );
+    expect(changes).toEqual([
+      { kind: 'line_quantity', line: { ...refP, groupName: 'Ground floor' }, before: 8, after: 5 },
+      { kind: 'line_added', line: { ...refP, groupName: 'First floor' }, quantity: 3, agreedUnitPrice: null, currency: 'PLN' },
+      { kind: 'group_added', group: { id: G2, name: 'First floor' } },
+    ]);
+  });
+
+  it('an ungrouped line of a split product is named as ungrouped (`groupName: null`)', () => {
+    const changes = historyDiff(
+      snap([{ ...at(P, 0, ground), quantity: 5 }, { ...at(P, 0, null), quantity: 3 }]),
+      snap([{ ...at(P, 0, ground), quantity: 5 }]),
+    );
+    expect(changes).toEqual([{ kind: 'line_removed', line: { ...refP, groupName: null } }]);
+  });
+
+  it('every grouping change parses with the published schema', () => {
+    const changes = historyDiff(
+      snap([at(P, 0, ground), at(Q, 0, first)]),
+      snap([at(Q, 0, { ...ground, name: 'Hall', position: 0 }), at(P, 1, { ...ground, name: 'Hall', position: 0 })]),
+    );
+    expect(changes.length).toBeGreaterThan(0);
+    for (const change of changes) expect(quoteRequestHistoryChangeSchema.safeParse(change).success).toBe(true);
+  });
+});

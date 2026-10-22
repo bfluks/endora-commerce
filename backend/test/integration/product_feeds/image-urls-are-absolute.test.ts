@@ -214,6 +214,9 @@ describe('product feed image URLs [integration]', () => {
     // another network needs.
     expect(artefact.body).toContain(`${resolvePublicApiBaseUrl()}/assets/file/${assetId}`);
     expect(artefact.body).not.toContain(`>/assets/file/${assetId}`);
+    // specs/156-asset-stable-url/ T065: the published image carries the marker
+    // of the file it shows, so a replace reaches feed readers' caches.
+    expect(artefact.body).toContain(`/assets/file/${assetId}?v=`);
   });
 
   it('publishes neither a private image nor one whose asset is deleted (FR-043)', async () => {

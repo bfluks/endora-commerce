@@ -1,5 +1,76 @@
 # @endora-commerce/mod-import-export
 
+## 0.107.0
+
+### Patch Changes
+
+- ecd23de: Each import/export entity now requires the permission that protects the same rows on the module
+  that owns them, instead of `catalog:write` for every entity.
+
+  | Entity                   | Export           | Import            |
+  | ------------------------ | ---------------- | ----------------- |
+  | `products`, `categories` | `catalog:read`   | `catalog:write`   |
+  | `stock`                  | `inventory:read` | `inventory:write` |
+  | `customers`              | `customers:read` | —                 |
+  | `orders`                 | `orders:read`    | —                 |
+  - `GET /api/v1/admin/import-export/entities`, `GET /api/v1/admin/export/:entity.csv` and
+    `POST /api/v1/admin/import/:entity` require one of these codes; the export and import routes
+    then require the entity's own code and answer `403` without it. An import of an export-only
+    entity is refused with `403` for a caller who may not export it, and with `405` otherwise.
+  - The entity listing offers a caller only the entities they may export or import, and each entry
+    carries `canExport` and `canImport`.
+  - The admin screen and its sidebar entry open for an operator holding any of the codes above, and
+    each entity card shows only the export and import controls the operator's role permits.
+
+  **For an operator upgrading.** A role that used `catalog:write` to export customers, orders or
+  stock, or to import stock, needs `customers:read`, `orders:read`, `inventory:read` or
+  `inventory:write` granted on `/admin-roles`. A role holding `catalog:read` can now export
+  products and categories.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

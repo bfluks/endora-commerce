@@ -10,6 +10,7 @@
 import type {
   DisplayMode,
   ListingPrice,
+  ListingPriceDetail,
   ListingPriceOrderChunk,
   ListingPriceOrderQuery,
   ListingPriceViewerContext,
@@ -62,6 +63,13 @@ export interface PricingResolutionInput {
     organization?: PricingOrganizationRef | null;
     /** Feature 040 — customer's direct group overrides the org's (R6). */
     customerGroupId?: string | null;
+    /**
+     * D-287 P0 — the signed-in customer account. The engine reads its own
+     * customer group (when it belongs to `organization`) and applies the one
+     * rule, `customerGroupId ?? account's group ?? organization's group`
+     * (`effectiveCustomerGroupId`).
+     */
+    customerAccountId?: string | null;
     /** The request's resolved sales channel (only `id` + `defaultCurrency` read). */
     salesChannel: { id: string; defaultCurrency: string };
     currencyCode?: string;
@@ -101,9 +109,30 @@ export interface ListingPricesInput {
     organization?: PricingOrganizationRef | null;
     /** Feature 040 — customer's direct group overrides the org's (R6). */
     customerGroupId?: string | null;
+    /** D-287 P0 — see {@link PricingResolutionInput}. */
+    customerAccountId?: string | null;
     salesChannel: { id: string; defaultCurrency: string };
     currencyCode?: string;
   };
+}
+
+/** One line of {@link LinePricesInput}. */
+export interface PricingLineRequest {
+  /** The answer's map key; unique per call. */
+  key: string;
+  product: PricedProductRef;
+  variantId?: string | null;
+  quantity: number;
+}
+
+/**
+ * D-287 P0 — many lines, each at its own quantity, for one buyer: the cart,
+ * the placement drift check, a quote's reference prices, the external bulk
+ * price request.
+ */
+export interface LinePricesInput {
+  lines: readonly PricingLineRequest[];
+  context: Omit<PricingResolutionInput['context'], 'quantity'>;
 }
 
 export interface PricingServiceContract {
@@ -120,6 +149,24 @@ export interface PricingServiceContract {
    * differently. Four of them did, which is what the issue reports.
    */
   resolveListingPrices(input: ListingPricesInput): Promise<Map<string, ListingPrice>>;
+  /**
+   * D-287 P0 — `resolveListingPrices` plus the base / sale / display-mode split,
+   * from the same single resolution, for the surfaces that render it (product
+   * detail, home-page cards, typeahead). Every requested product gets an entry.
+   */
+  resolveListingPriceDetails(input: ListingPricesInput): Promise<Map<string, ListingPriceDetail>>;
+  /**
+   * D-287 P0 — `resolveLinePrice` for many lines in one call, in a number of
+   * statements that does not grow with the lines. Answers, key by key, exactly
+   * what one `resolveLinePrice` per line answers
+   * (`backend/test/integration/price_lists/line-prices-batch.test.ts`). Every
+   * requested key gets an entry; `null` is "nothing applies".
+   *
+   * On this interface because it is what an overlay decorates: a deployment
+   * that overrides line pricing has to override the batch too, or the cart
+   * would price by the core while checkout priced by the overlay.
+   */
+  resolveLinePrices(input: LinePricesInput): Promise<Map<string, PricingLineResult | null>>;
   /**
    * The lowest-quantity bracket amount on one **named** price list, per
    * product, for callers that use a list verbatim rather than resolving it

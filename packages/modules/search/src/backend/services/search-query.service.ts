@@ -1,6 +1,7 @@
 import { Meilisearch, MeilisearchApiError, type SearchResponse } from 'meilisearch';
 import {
   ERROR_CODES,
+  isOrderMinimumEligibleType,
   isProductVisibleTo,
   listingPriceChannelContext,
   listingPriceMoney,
@@ -8,7 +9,8 @@ import {
   type CatalogProductReadPort,
   type CatalogProductRecord,
   type ListingPrice,
-  type ListingPricePort,
+  type ListingPriceDetail,
+  type ListingPriceDetailPort,
   type OrganizationDetailsPort,
   type PriceOrganization,
   type ProductAudience,
@@ -136,7 +138,7 @@ export class SearchQueryService {
      * hit shows; the price it hydrates now comes from the engine for the same
      * reason.
      */
-    private readonly listingPrices?: ListingPricePort,
+    private readonly listingPrices?: ListingPriceDetailPort,
     /**
      * `organizations`' read model, for the customer group a group-targeted
      * price list is selected by. The module already resolves this port for the
@@ -276,18 +278,24 @@ export class SearchQueryService {
     const viewerOrganization = priceable
       ? await this.#viewerOrganization(ctx.audience)
       : null;
+    // D-287 P0 — the details call, so a Meilisearch page carries the same
+    // `resolvedPrice` a Postgres page does, from the same single resolution.
     const resolvedPrices =
       priceable
-        ? await this.#requireListingPrices().resolveListingPrices({
+        ? await this.#requireListingPrices().resolveListingPriceDetails({
             products,
             context: {
               // Issue #249 — the currency the catalogue route resolved for this
               // page, so a Meilisearch page and a Postgres page price alike.
               ...listingPriceChannelContext(channel, ctx.currency),
               organization: viewerOrganization,
+              // The customer's own group, as on the Postgres page.
+              ...(viewerOrganization && ctx.audience.customerAccountId
+                ? { customerAccountId: ctx.audience.customerAccountId }
+                : {}),
             },
           })
-        : new Map<string, ListingPrice>();
+        : new Map<string, ListingPriceDetail>();
     const summaries: ProductSummary[] = [];
     for (const hit of hits) {
       const product = productById.get(hit.id);
@@ -299,6 +307,7 @@ export class SearchQueryService {
           hit,
           channel,
           ctx.preferredLanguage,
+          resolvedPrices.get(product.id)?.price,
           resolvedPrices.get(product.id),
         ),
       );
@@ -310,7 +319,7 @@ export class SearchQueryService {
     };
   }
 
-  #requireListingPrices(): ListingPricePort {
+  #requireListingPrices(): ListingPriceDetailPort {
     if (!this.listingPrices) {
       throw new Error(
         'SearchQueryService: the pricing port is not wired — a search hit cannot be priced.',
@@ -491,6 +500,11 @@ export function searchHitSummary(
   channel: ResolvedSearchChannel,
   preferredLanguage: string | undefined,
   resolvedPrice: ListingPrice | undefined,
+  /**
+   * D-287 P0 — the base / sale / display-mode split from the same resolution,
+   * projected onto `ProductSummary.resolvedPrice`. Omitted, the field is too.
+   */
+  detail?: ListingPriceDetail,
 ): ProductSummary {
   const price = resolvedPrice === undefined ? null : listingPriceMoney(resolvedPrice);
 
@@ -505,6 +519,18 @@ export function searchHitSummary(
     price,
     stockIndicator: null,
     stockLevel: null,
+    // Feature 155 (FR-014) — from the hydrated record, never from the index;
+    // emitted for the types the minimum applies to only.
+    minOrderQuantity: isOrderMinimumEligibleType(product.type) ? product.minOrderQuantity : null,
+    ...(detail
+      ? {
+          resolvedPrice: {
+            basePrice: detail.basePrice,
+            salePrice: detail.salePrice,
+            displayMode: detail.displayMode,
+          },
+        }
+      : {}),
   };
 }
 

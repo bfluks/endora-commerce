@@ -9,7 +9,7 @@ The platform exposes a single, documented HTTP surface, API-first. The
 API is described in two complementary places:
 
 1. **The live OpenAPI document** at `GET /api/v1/_openapi.json`
-   (HTML viewer at `GET /api/v1/_docs`). This is the **source of truth**
+   (interactive reference at `GET /api/v1/_docs`). This is the **source of truth**
    for the runtime — generated at startup from the Zod schemas in
    `@endora-commerce/contracts` that Fastify itself validates against, so it cannot
    drift from the running server.
@@ -23,14 +23,29 @@ API is described in two complementary places:
 
 ## Live OpenAPI
 
-In a development environment:
+The API description is available to administrators whose admin role holds the
+`platform.api_description.read` permission (*Read the API description*) and to
+API keys issued with the `platform.api_description.read` scope. Anybody else is
+answered `401 UNAUTHORIZED` (no administrator session or API key) or
+`403 FORBIDDEN` (an administrator or a key without the code). The platform
+administrator grants the permission on the **Roles** screen; a key with the
+scope can be issued only by an administrator who holds it.
+
+- **In the Admin Panel** — **System → API description** (or ⌘K / CTRL+K,
+  *API description*) shows the document's title, version and endpoint count,
+  downloads it as JSON, and opens the interactive reference
+  (`GET /api/v1/_docs`, Swagger UI) in a new tab. The reference is served by
+  the API itself and uses your administrator session.
+- **From an integration** — send the key as a bearer token:
 
 ```bash
 pnpm run dev:infra && pnpm --filter backend run dev
-# in another shell:
-curl http://localhost:3001/api/v1/_openapi.json | jq .info
-open  http://localhost:3001/api/v1/_docs           # Swagger UI in the browser
+# in another shell, with a key issued with the platform.api_description.read scope:
+curl -H "Authorization: Bearer sk_live_…" http://localhost:3001/api/v1/_openapi.json | jq .info
 ```
+
+The reference page loads Swagger UI from jsDelivr at an exact
+`swagger-ui-dist` version, with a Subresource Integrity digest on both files.
 
 Every Fastify route is auto-registered into the document on boot via the
 `onRoute` hook in `packages/platform/src/http/openapi.ts`; modules may opt into a

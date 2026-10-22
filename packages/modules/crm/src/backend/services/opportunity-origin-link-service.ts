@@ -56,6 +56,13 @@ export interface OpportunityOriginLinkServiceDeps {
   adminScope: AdminTenantScopePort;
   /** A refusal is said to the operator's log and to nobody else. */
   warn: (fields: Record<string, unknown>, message: string) => void;
+  /**
+   * Feature 162 (research R-10) — push the Opportunity's custom-field values
+   * to the document's owner, which carries them into its empty fields in a
+   * Command of its own. Called once, and only for a link just made: the rule
+   * that decides the link decides the carry.
+   */
+  carryIntoDocument: (document: OriginatedDocument, opportunity: CrmOpportunity) => Promise<void>;
 }
 
 /**
@@ -100,12 +107,30 @@ export class OpportunityOriginLinkService {
       return this.#refuse(origin, document, 'the opportunity is out of reach of the administrator who created the document');
     }
 
-    return this.deps.links.linkAutomatically({
+    const outcome = await this.deps.links.linkAutomatically({
       opportunityId: opportunity.id,
       documentKind: document.kind,
       documentId: document.id,
       linkSource: 'created_from_opportunity',
     });
+    if (outcome === 'linked') await this.#carry(document, opportunity);
+    return outcome;
+  }
+
+  /**
+   * The carry follows a link that has committed, so a carry that throws must
+   * not undo it or reach the subscriber: the document stays linked, and the
+   * operator's log says which document did not receive the values.
+   */
+  async #carry(document: OriginatedDocument, opportunity: CrmOpportunity): Promise<void> {
+    try {
+      await this.deps.carryIntoDocument(document, opportunity);
+    } catch (error) {
+      this.deps.warn(
+        { opportunityId: opportunity.id, documentKind: document.kind, documentId: document.id, error },
+        'crm: the custom-field carry into a document created from an opportunity failed; the link stands',
+      );
+    }
   }
 
   async #canReach(adminUserId: string, organizationId: string): Promise<boolean> {

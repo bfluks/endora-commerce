@@ -63,20 +63,37 @@ describe('the language a buyer is answered in (issue #234)', () => {
         }),
       );
     }
+    // The R3/R4 basket is this channel's, so the channel sells its line.
+    const channel = await em.findOneOrFail(SalesChannel, { code: PL_CHANNEL_CODE });
+    await em
+      .getConnection()
+      .execute(
+        'insert into sales_channel_products (sales_channel_id, product_id) values (?, ?) ' +
+          'on conflict (sales_channel_id, product_id) do nothing',
+        [channel.id, SEED_PRODUCT_101_ID],
+      );
   });
 
   afterAll(async () => {
     await teardownBackendServer(h);
   });
 
-  /** An anonymous cart holding one line, so the coupon route gets past `CART_EMPTY`. */
-  async function cartWithALine(label: string): Promise<Record<string, string>> {
+  /**
+   * An anonymous cart holding one line, so the coupon route gets past
+   * `CART_EMPTY` — on the channel the coupon request names, since a basket
+   * belongs to its channel (`specs/154-sales-channel-access/`).
+   */
+  async function cartWithALine(
+    label: string,
+    channelCode: string | undefined,
+  ): Promise<Record<string, string>> {
     const cookies = { b2b_cart_anon: `anon-w234-${label}-${Date.now()}` };
     const add = await h.app.inject({
       method: 'POST',
       url: '/api/v1/cart/items',
       payload: { productId: SEED_PRODUCT_101_ID, quantity: 1 },
       cookies,
+      ...(channelCode ? { headers: { 'x-sales-channel': channelCode } } : {}),
     });
     expect(add.statusCode).toBe(200);
     return cookies;
@@ -87,7 +104,7 @@ describe('the language a buyer is answered in (issue #234)', () => {
     label: string,
     headers: Record<string, string>,
   ): Promise<{ message: string; contentLanguage: string | undefined; vary: string | undefined }> {
-    const cookies = await cartWithALine(label);
+    const cookies = await cartWithALine(label, headers['x-sales-channel']);
     const res = await h.app.inject({
       method: 'POST',
       url: '/api/v1/cart/coupon',

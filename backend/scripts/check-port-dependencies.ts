@@ -232,6 +232,12 @@ export const PLATFORM_OWNED_NAMES: ReadonlySet<string> = new Set([
   'settingsChannelResolver',
   'salesChannelResolutionPort',
   'salesChannelMembershipPort',
+  // Feature 154 — the sales-channel access rule (`SalesChannelAccessPort`) and
+  // the invalidating half of its per-Organization cache, both composed off
+  // `composeSalesChannelsKernel` and contributed by both roots. The rule is a
+  // property of channel resolution, which no module owns.
+  'salesChannelAccessPort',
+  'salesChannelAccessCache',
   // The channel cache the kernel resolver reads through. Composed by the root
   // via `composeSalesChannelsKernel` (T110), because channel resolution backs
   // every channel-scoped read and must not be gated on any one module.

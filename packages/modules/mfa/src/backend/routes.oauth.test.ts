@@ -52,6 +52,9 @@ interface Harness {
   setCustomerResult: (result: SocialSignInResult) => void;
   setAdminResult: (result: SocialSignInResult) => void;
   setDecision: (decision: MfaLoginDecision) => void;
+  permits: ReturnType<typeof vi.fn>;
+  signInCustomer: ReturnType<typeof vi.fn>;
+  setPermitted: (permitted: boolean) => void;
 }
 
 async function build(): Promise<Harness> {
@@ -62,6 +65,9 @@ async function build(): Promise<Harness> {
   let customerResult: SocialSignInResult = { ok: true, subjectId: 'c1', organizationId: 'o1' };
   let adminResult: SocialSignInResult = { ok: true, subjectId: 'a1', organizationId: null };
   let decision: MfaLoginDecision = { kind: 'proceed' };
+  let permitted = true;
+  const permits = vi.fn(async () => permitted);
+  const signInCustomer = vi.fn(async () => customerResult);
 
   const beginLogin = vi.fn(async () => decision);
   const createSession = vi.fn(async () => ({
@@ -88,7 +94,7 @@ async function build(): Promise<Harness> {
       resolve: async () => ({ googleEnabled: true, microsoftEnabled: true, totpEnforced: false }),
     } as unknown as MfaPolicyResolver,
     socialIdentityService: {
-      signInCustomer: async () => customerResult,
+      signInCustomer,
       signInAdmin: async () => adminResult,
     } as unknown as SocialIdentityService,
     loginService: { beginLogin } as unknown as MfaLoginPort,
@@ -96,6 +102,10 @@ async function build(): Promise<Harness> {
     backendBaseUrl: 'https://api.test',
     storefrontBaseUrl: STOREFRONT,
     adminBaseUrl: ADMIN,
+    customerChannelAccess: {
+      permits,
+      assertAccountMayUse: async () => undefined,
+    },
   });
   await app.ready();
 
@@ -112,6 +122,11 @@ async function build(): Promise<Harness> {
     },
     setDecision: (d) => {
       decision = d;
+    },
+    permits,
+    signInCustomer,
+    setPermitted: (p) => {
+      permitted = p;
     },
   };
 }
@@ -318,5 +333,61 @@ describe('federated sign-in — the second factor', () => {
     const res = await callback(h, state, { [OAUTH_BINDING_COOKIE_NAME]: binding! }, 'admin');
     expect(res.headers['location']).toBe(`${ADMIN}/`);
     expect(sessionCookie(res, 'b2b_admin_session')?.value).toBe('session-cookie');
+  });
+});
+
+describe('federated sign-in — the sales-channel access rule (feature 154)', () => {
+  let h: Harness;
+  beforeEach(async () => {
+    h = await build();
+  });
+  afterEach(async () => {
+    await h.app.close();
+  });
+
+  it('sends a customer whose Organization may not use the started-on channel back to the sign-in page', async () => {
+    h.setPermitted(false);
+    const { state, binding } = await start(h);
+    const res = await callback(h, state, { [OAUTH_BINDING_COOKIE_NAME]: binding! });
+
+    expect(res.statusCode).toBe(302);
+    expect(res.headers['location']).toBe(`${STOREFRONT}/login?error=sales_channel_not_permitted`);
+    // Decided on the transaction's channel and the account's Organization …
+    expect(h.permits).toHaveBeenCalledWith('o1', null);
+    // … before a second factor is started or a session issued.
+    expect(h.beginLogin).not.toHaveBeenCalled();
+    expect(h.createSession).not.toHaveBeenCalled();
+    expect(sessionCookie(res, 'b2b_session')).toBeUndefined();
+  });
+
+  it('does not ask about an administrator', async () => {
+    h.setPermitted(false);
+    const { state, binding } = await start(h, 'admin');
+    const res = await callback(h, state, { [OAUTH_BINDING_COOKIE_NAME]: binding! }, 'admin');
+    expect(h.permits).not.toHaveBeenCalled();
+    expect(sessionCookie(res, 'b2b_admin_session')?.value).toBe('session-cookie');
+  });
+
+  it('passes the started-on channel to the account resolution', async () => {
+    const { state, binding } = await start(h);
+    await callback(h, state, { [OAUTH_BINDING_COOKIE_NAME]: binding! });
+    expect(h.signInCustomer).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'buyer@example.com' }),
+      { salesChannelId: null },
+    );
+  });
+
+  it('sends a would-be new account on a channel closed to anonymous visitors back to the sign-in page', async () => {
+    h.setCustomerResult({ ok: false, reason: 'sales_channel_sign_in_required' });
+    const { state, binding } = await start(h);
+    const res = await callback(h, state, { [OAUTH_BINDING_COOKIE_NAME]: binding! });
+
+    expect(res.statusCode).toBe(302);
+    expect(res.headers['location']).toBe(
+      `${STOREFRONT}/login?error=sales_channel_sign_in_required`,
+    );
+    expect(h.beginLogin).not.toHaveBeenCalled();
+    expect(h.createSession).not.toHaveBeenCalled();
+    expect(sessionCookie(res, 'b2b_session')).toBeUndefined();
   });
 });

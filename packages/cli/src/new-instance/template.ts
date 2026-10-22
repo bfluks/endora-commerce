@@ -1613,7 +1613,7 @@ const README_COMMANDS: readonly (readonly [script: string, argument: string, not
   ['dev:services', '', 'PostgreSQL, Redis, Meilisearch and a mail catcher, from\n`compose.dev.yml` beside this file. It waits for each one to\nreport healthy'],
   ['dev:services:down', '', 'stops them, keeping their data'],
   ['setup', '', 'generate, build, migrate and install every module — the four\nsteps below, in one line. Each still exists on its own'],
-  ['generate', '', 'the files the admin and the docs site are built from,\nand your deployment\'s divergence report'],
+  ['generate', '', 'the files the admin and the docs site are built from,\nand your deployment\'s divergence report. A module of the\nrelease that an installed module needs is declared and\ninstalled first'],
   ['build', '', 'the entry points, compiled, and every member built'],
   ['build:backend', '', 'one layer at a time. Each of the three is deployed on its own\nhost, on its own schedule, so each is built on its own too'],
   ['build:admin', '', ''],

@@ -21,11 +21,20 @@ export function signOutReleasingPush(signOut: () => Promise<void>): () => Promis
   };
 }
 
-export function SignOutButton({ signOut }: { signOut: () => Promise<void> }): React.ReactElement {
+export function SignOutButton({
+  signOut,
+  label = 'Sign out',
+  className = 'b2b-account__logout',
+}: {
+  signOut: () => Promise<void>;
+  /** The button's caption, already translated by the caller. */
+  label?: string;
+  className?: string;
+}): React.ReactElement {
   return (
     <form action={signOutReleasingPush(signOut)}>
-      <button type="submit" className="b2b-account__logout">
-        Sign out
+      <button type="submit" className={className}>
+        {label}
       </button>
     </form>
   );

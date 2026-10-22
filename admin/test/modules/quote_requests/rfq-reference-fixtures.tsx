@@ -5,6 +5,7 @@ import { render } from '@testing-library/react';
 import { ApiError } from '@endora-commerce/admin-kit/lib';
 import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/TranslationProvider';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import type { Bundle } from '../../../../packages/admin-shell/src/i18n/types';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
 
 /**
@@ -174,7 +175,11 @@ export function installGet(
   });
 }
 
-export function renderRfqDetail(detailScreen: () => ReactNode, language: 'en' | 'pl' = 'en'): void {
+export function renderRfqDetail(
+  detailScreen: () => ReactNode,
+  language: 'en' | 'pl' = 'en',
+  bundle: Bundle = BUNDLE,
+): ReturnType<typeof render> {
   const ui = (
     <StrictMode>
       {withSession(
@@ -193,12 +198,9 @@ export function renderRfqDetail(detailScreen: () => ReactNode, language: 'en' | 
       )}
     </StrictMode>
   );
-  if (language === 'en') {
-    renderWithI18n(ui, BUNDLE);
-    return;
-  }
-  render(
-    <TranslationProvider language={language} initialBundle={BUNDLE}>
+  if (language === 'en') return renderWithI18n(ui, bundle);
+  return render(
+    <TranslationProvider language={language} initialBundle={bundle}>
       {ui}
     </TranslationProvider>,
   );

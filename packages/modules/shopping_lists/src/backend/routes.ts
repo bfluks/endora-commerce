@@ -7,6 +7,7 @@ import {
   updateShoppingListItemRequestSchema,
 } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
+import { getResolvedChannel } from '@endora-commerce/platform/kernel';
 import type { ShoppingListService } from './services/shopping-list-service.js';
 import type { ShoppingList } from './entities/shopping-list.entity.js';
 import { ShoppingListItem } from './entities/shopping-list-item.entity.js';
@@ -190,7 +191,13 @@ export async function registerShoppingListRoutes(
     async (request) => {
       const ctx = resolveCustomerContext(request);
       const body = convertShoppingListRequestSchema.parse(request.body ?? {});
-      const result = await service.convertToCart(ctx, request.params.id, body.itemIds);
+      // Into the basket of the storefront the buyer is on (`specs/154-sales-channel-access/`).
+      const result = await service.convertToCart(
+        ctx,
+        request.params.id,
+        body.itemIds,
+        getResolvedChannel(request).id,
+      );
       return { data: result };
     },
   );
@@ -201,7 +208,9 @@ export async function registerShoppingListRoutes(
     async (request) => {
       const ctx = resolveCustomerContext(request);
       const body = convertShoppingListRequestSchema.parse(request.body ?? {});
-      const result = await service.convertToRfq(ctx, request.params.id, body.itemIds);
+      const result = await service.convertToRfq(ctx, request.params.id, body.itemIds, {
+        language: await request.responseLanguage(),
+      });
       return { data: result };
     },
   );

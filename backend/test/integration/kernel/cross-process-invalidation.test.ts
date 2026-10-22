@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Redis } from 'ioredis';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -8,6 +9,11 @@ import {
   CUSTOM_FIELDS_CHANGED_CHANNEL,
   type CachedDefinition,
 } from '../../../../packages/modules/custom_fields/src/backend/services/custom-field-definitions-cache.js';
+import {
+  PRICING_GENERATION_CHANNEL,
+  type PricingGeneration,
+} from '../../../../packages/modules/price_lists/src/backend/services/pricing-generation.js';
+import type { PriceListService } from '../../../../packages/modules/price_lists/src/backend/services/price-list-service.js';
 
 /**
  * The one cross-process invalidation path the platform has (feature 072, T073).
@@ -130,5 +136,68 @@ describe('cross-process invalidation over Redis pub/sub', () => {
     // everything instead of continuing to serve what might be stale.
     await cache.getForEntity('customer', customer.load);
     expect(customer.calls()).toBe(2);
+  });
+});
+
+/**
+ * D-287 P0 — the pricing cache joins the cross-process path.
+ *
+ * `price_lists`' LRU was per process: a price write cleared the writer's copy
+ * and no other, so every other API and worker replica served the old price for
+ * up to the 60 s TTL (`specs/pricing/read-paths-and-performance.md` §2.4). The
+ * module's boot hook now subscribes its `PricingGeneration` on the
+ * composition's shared subscriber, and every write after commit — and every
+ * status sweep that flips a list — announces a bump on
+ * `PRICING_GENERATION_CHANNEL`.
+ *
+ * The harness runs the LRU with a zero TTL, so the cache itself holds nothing
+ * to observe; what is observed is the composed process's handler receiving
+ * another process's announcement, and the composed writer announcing its own.
+ */
+describe('cross-process pricing cache invalidation over Redis pub/sub', () => {
+  function pricingGeneration(): PricingGeneration {
+    return (
+      h.container.cradle as unknown as {
+        priceLists: { handle: { pricingGeneration: PricingGeneration } };
+      }
+    ).priceLists.handle.pricingGeneration;
+  }
+
+  it("clears this process's pricing cache when another process bumps the generation", async () => {
+    const generation = pricingGeneration();
+    const handled = vi.spyOn(generation, 'handleMessage');
+    try {
+      // Published on the MAIN client, standing in for a second process.
+      await h.redis.publish(PRICING_GENERATION_CHANNEL, JSON.stringify({ origin: 'another-replica' }));
+      await settle();
+      expect(handled).toHaveBeenCalledWith(JSON.stringify({ origin: 'another-replica' }));
+    } finally {
+      handled.mockRestore();
+    }
+  });
+
+  it('announces a bump after an audited price-list write commits', async () => {
+    const url = process.env['REDIS_URL'] ?? 'redis://localhost:6379';
+    const listener = new Redis(url, { maxRetriesPerRequest: null });
+    const received: string[] = [];
+    try {
+      await listener.subscribe(PRICING_GENERATION_CHANNEL);
+      listener.on('message', (channel, message) => {
+        if (channel === PRICING_GENERATION_CHANNEL) received.push(message);
+      });
+      const service = (h.container.cradle as unknown as { priceListService: PriceListService })
+        .priceListService;
+      await service.create({
+        name: `Cross-process bump ${Date.now()}`,
+        type: 'base',
+        applicationRule: { kind: 'criterion', type: 'currency', values: ['PLN'] },
+      });
+      await settle();
+      expect(received.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      listener.removeAllListeners('message');
+      await listener.unsubscribe();
+      listener.disconnect();
+    }
   });
 });

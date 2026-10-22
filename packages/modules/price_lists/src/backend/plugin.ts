@@ -8,6 +8,10 @@ import type { PriceListTargetReads } from './services/price-list-service.js';
 import type { PricingServiceContract } from './services/pricing-service.interface.js';
 import { PriceListStatusWorker, type SweepResult } from './services/price-list-status-worker.js';
 import { PricingCache } from './services/pricing-cache.js';
+import {
+  PricingGeneration,
+  type PricingGenerationPublisher,
+} from './services/pricing-generation.js';
 import { BuyerLinePriceService } from './services/buyer-line-price-service.js';
 import { registerPricingRoutes } from './routes.js';
 import { registerStorefrontPricingRoutes } from './routes.storefront.js';
@@ -85,6 +89,12 @@ export interface PriceListsModuleOptions {
   enableStatusSweeper?: boolean;
   /** Pass `0` to disable the in-memory pricing LRU (tests). */
   pricingCacheTtlMs?: number;
+  /**
+   * D-287 P0 — where a pricing generation bump is announced to every other
+   * process. Absent, a bump clears this process only (the behaviour before it
+   * existed). The subscribing half is armed by the module's boot hook.
+   */
+  pricingGenerationPublisher?: PricingGenerationPublisher;
   /** Feature 024 — optional cross-module hook so price-list mutations land in the audit log. */
   auditLogService?: AuditPort;
   /** Feature 054 — audits `patch` co-transactionally when provided. */
@@ -129,6 +139,11 @@ export interface PriceListsModuleHandle {
    * `buyerLinePricePort`, so the two cannot drift (research R2).
    */
   buyerLinePriceService: BuyerLinePriceService;
+  /**
+   * D-287 P0 — this process's pricing generation: the boot hook arms its
+   * subscriber, and every writer bumps it after commit.
+   */
+  pricingGeneration: PricingGeneration;
 }
 
 export function priceListsModule(options: PriceListsModuleOptions): {
@@ -138,9 +153,12 @@ export function priceListsModule(options: PriceListsModuleOptions): {
   const pricingCache = new PricingCache<Awaited<ReturnType<PricingService['resolveEngine']>>>(
     options.pricingCacheTtlMs !== undefined ? { ttlMs: options.pricingCacheTtlMs } : {},
   );
+  // Every writer tells the generation, never the LRU directly: a bump clears
+  // this process's LRU and announces itself to every other process.
+  const pricingGeneration = new PricingGeneration(pricingCache, options.pricingGenerationPublisher);
   const priceListService = new PriceListService(
     options.emFactory,
-    pricingCache,
+    pricingGeneration,
     options.auditLogService,
     options.commandBus,
     options.targetReads,
@@ -161,8 +179,10 @@ export function priceListsModule(options: PriceListsModuleOptions): {
     pricingCache,
     options.resolveOrgChain,
     options.targetReads,
+    // D-287 P0 — the customer's own group, for callers that name the account.
+    options.customerAccountRead,
   );
-  const statusWorker = new PriceListStatusWorker(options.emFactory);
+  const statusWorker = new PriceListStatusWorker(options.emFactory, pricingGeneration);
   // One engine instance behind the probe and the port alike: a quote's "price
   // at request" and its "current price" must be the same question.
   const buyerLinePriceService = new BuyerLinePriceService({
@@ -177,7 +197,13 @@ export function priceListsModule(options: PriceListsModuleOptions): {
   });
 
   return {
-    handle: { priceListService, pricingService, statusWorker, buyerLinePriceService },
+    handle: {
+      priceListService,
+      pricingService,
+      statusWorker,
+      buyerLinePriceService,
+      pricingGeneration,
+    },
     plugin: async (app: FastifyInstance) => {
       await registerPricingRoutes(app, {
         priceListService,
@@ -190,6 +216,7 @@ export function priceListsModule(options: PriceListsModuleOptions): {
         customerAccountRead: options.customerAccountRead,
         buyerLinePriceService,
         salesRepScope: options.salesRepScope,
+        statusWorker,
         ...(options.resolveAdminAuditContext
           ? { resolveAdminAuditContext: options.resolveAdminAuditContext }
           : {}),

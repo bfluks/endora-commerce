@@ -15,6 +15,7 @@ import {
   DEFAULT_PRICE_LIST_ID,
 } from '../../../../packages/modules/price_lists/src/backend/services/default-price-list-migration.js';
 import { neighbourReadPorts } from '../../helpers/price-list-neighbour-ports.js';
+import { CUSTOMER_COOKIES } from '../../helpers/test-actors.js';
 
 /**
  * Issue #124, the price half — an absent `price_lists` must refuse, not price
@@ -83,10 +84,26 @@ describe('price_lists — an absent owner refuses to price a cart line [integrat
   it('refuses to re-price a cart that already has lines while `price_lists` is absent', async () => {
     // The cart read re-prices every line, so it is the same question as adding
     // one: the platform either has a price list to answer with or it says so.
+    //
+    // A basket of its own: the buyer's basket on this channel is shared with
+    // every other file of the run, and a re-price another file cached for it
+    // would answer this read without asking `price_lists` at all.
+    const retail = await h.em().findOneOrFail(SalesChannel, { code: SALES_CHANNEL_HEADER['x-sales-channel'] });
+    await h.cartService()!.clearForCustomer({
+      ...CUSTOMER_COOKIES[CUSTOMER.b2b_session]!,
+      salesChannelId: retail.id,
+    });
     expect((await addItem()).statusCode).toBe(200);
 
     registryCache.__setEnabledForTesting(ALL_IDS.filter((id) => id !== 'price_lists'));
-    const res = await h.app.inject({ method: 'GET', url: '/api/v1/cart', cookies: CUSTOMER });
+    // On the channel the line was added on: a basket belongs to its channel
+    // (`specs/154-sales-channel-access/`), and another channel's is empty.
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/cart',
+      headers: SALES_CHANNEL_HEADER,
+      cookies: CUSTOMER,
+    });
 
     expect(res.statusCode).toBe(503);
     expect((res.json() as { error: { code: string } }).error.code).toBe('MODULE_DISABLED');

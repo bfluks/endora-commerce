@@ -408,6 +408,10 @@ export class ProductLinkService {
             context: {
               ...listingPriceChannelContext(ctx.resolvedChannel, ctx.currency),
               organization: viewerOrganization,
+              // D-287 P0 — the customer's own group, as on the catalogue listing.
+              ...(viewerOrganization && ctx.audience.customerAccountId
+                ? { customerAccountId: ctx.audience.customerAccountId }
+                : {}),
             },
           })
         : new Map();

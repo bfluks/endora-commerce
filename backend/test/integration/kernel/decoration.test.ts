@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   DisplayMode,
   ListingPrice,
+  ListingPriceDetail,
   ListingPriceOrderChunk,
   ListingPriceOrderQuery,
   ListingPriceViewerContext,
@@ -19,6 +20,7 @@ import {
 import { createRootContainer, type KernelContainer } from '@endora-commerce/platform/composition';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import type {
+  LinePricesInput,
   ListingPricesInput,
   PricingEngineResult,
   PricingLineResult,
@@ -82,6 +84,21 @@ class CorePricingService implements PricingServiceContract {
     return new Map();
   }
 
+  async resolveListingPriceDetails(): Promise<Map<string, ListingPriceDetail>> {
+    return new Map();
+  }
+
+  async resolveLinePrices(input: LinePricesInput): Promise<Map<string, PricingLineResult | null>> {
+    const out = new Map<string, PricingLineResult | null>();
+    for (const line of input.lines) {
+      out.set(
+        line.key,
+        await this.resolveLinePrice({ product: line.product, context: { ...input.context, quantity: line.quantity } }),
+      );
+    }
+    return out;
+  }
+
   async namedListPrices(): Promise<Map<string, string>> {
     return new Map();
   }
@@ -128,6 +145,23 @@ class TaggingPricingService implements PricingServiceContract {
     input: ListingPricesInput,
   ): Promise<Map<string, ListingPrice>> {
     return this.inner.resolveListingPrices(input);
+  }
+
+  async resolveListingPriceDetails(
+    input: ListingPricesInput,
+  ): Promise<Map<string, ListingPriceDetail>> {
+    return this.inner.resolveListingPriceDetails(input);
+  }
+
+  /** The batched line path carries the same adjustment as the single one. */
+  async resolveLinePrices(input: LinePricesInput): Promise<Map<string, PricingLineResult | null>> {
+    const lines = await this.inner.resolveLinePrices(input);
+    return new Map(
+      [...lines].map(([key, line]) => [
+        key,
+        line === null ? null : { ...line, priceListId: `${this.tag}:${line.priceListId}` },
+      ]),
+    );
   }
 
   async namedListPrices(input: {
@@ -211,6 +245,19 @@ describe('T062 — a client wraps core instead of replacing it', () => {
     // The consumer asked for `pricingService`. It never learns that a client
     // module exists, which is the point: 40-odd call sites stay untouched.
     expect(line?.priceListId).toBe('acme:core');
+  });
+
+  it('the batched line path carries the same decoration (D-287 P0)', async () => {
+    // The cart, the placement drift check and a quote's reference prices price
+    // through `resolveLinePrices`; a decoration of the single call alone would
+    // leave the basket priced by core.
+    const { container } = compose([coreModule(), decoratingModule('acme_pricing', 'acme')]);
+    const pricing = container.cradle['pricingService'] as PricingServiceContract;
+    const lines = await pricing.resolveLinePrices({
+      lines: [{ key: 'a', product: { id: 'p1', attributeValues: {} }, quantity: 1 }],
+      context: { salesChannel: { id: 'ch', defaultCurrency: 'PLN' } },
+    });
+    expect(lines.get('a')?.priceListId).toBe('acme:core');
   });
 
   it('core still runs — the override delegates rather than reimplementing', async () => {

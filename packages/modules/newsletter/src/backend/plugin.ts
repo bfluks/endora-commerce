@@ -26,6 +26,7 @@ import { NewsletterTagService } from './services/tag.service.js';
 import { NewsletterCustomFieldService } from './services/custom-field.service.js';
 import { NewsletterAutomationService } from './services/automation.service.js';
 import { NewsletterTrackingService } from './services/tracking.service.js';
+import { newsletterTrackingLinks, resolveEngagementTracking } from './services/engagement-tracking.js';
 import { NewsletterStatsService } from './services/stats.service.js';
 import { NewsletterEmailBlockService } from './services/email-block.service.js';
 import { NewsletterProviderAdminService, type SettingsWriter } from './services/provider-admin.service.js';
@@ -207,6 +208,11 @@ export function newsletterModule(options: NewsletterModuleOptions): ModuleAttach
       ? { resolveEmailBranding: options.resolveEmailBranding }
       : {}),
     resolveDefaultChannelId: options.resolveDefaultChannelId,
+    tracking: {
+      tokens,
+      links: newsletterTrackingLinks(options.publicBaseUrl),
+      resolveSwitches: (salesChannelId) => resolveEngagementTracking(options.settings, salesChannelId),
+    },
   });
 
   // Producer-side queues (needed by the API to enqueue, regardless of worker role).

@@ -18,7 +18,11 @@ export function MfaCodeForm({
     <div className="b2b-auth">
       <h1>Two-step verification</h1>
       <p>Enter the 6-digit code from your authenticator app, or a recovery code.</p>
-      {error ? <div className="b2b-auth__error">{error}</div> : null}
+      {error ? (
+        <div className="b2b-auth__error" role="alert">
+          {error}
+        </div>
+      ) : null}
       <form action={action} className="b2b-auth__form">
         <input type="hidden" name="next" value={next} />
         <div className="b2b-auth__field">

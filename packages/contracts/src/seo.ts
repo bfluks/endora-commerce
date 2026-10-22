@@ -184,6 +184,17 @@ export const storefrontCrawlerFilesSchema = storefrontRobotsPolicySchema.extend(
   }),
   /** The members above that could not be read. Absent means none. */
   unreadable: z.array(z.string()).optional(),
+  /**
+   * Whether the channel is open to anonymous visitors
+   * (`specs/154-sales-channel-access/`). `false` is a store with nothing
+   * public: its `robots.txt` disallows everything and names no sitemap, and
+   * its `llms.txt` names the store and lists nothing — whatever the texts and
+   * the policy above say. The texts are still answered as stored.
+   *
+   * Optional and additive: a backend older than it never sends it, and its
+   * channels are all open; a consumer reads its absence as `true`.
+   */
+  anonymousAccess: z.boolean().optional(),
 });
 export type StorefrontCrawlerFiles = z.infer<typeof storefrontCrawlerFilesSchema>;
 

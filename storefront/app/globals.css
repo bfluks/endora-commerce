@@ -839,6 +839,8 @@
   .b2b-auth__social-btn:focus-visible { @apply outline-2 outline-offset-2 outline-[color:var(--brand-600)]; }
   .b2b-auth__error { @apply rounded-sm border border-bad-soft bg-bad-soft px-[12px] py-[10px] text-[13px] text-bad; }
   .b2b-auth__success { @apply rounded-sm border border-ok-soft bg-ok-soft px-[12px] py-[10px] text-[13px] text-ok; }
+  /* Why the visitor is on the sign-in page — information, not an error. */
+  .b2b-auth__notice { @apply m-0 rounded-sm border border-line bg-surface-alt px-[12px] py-[10px] text-[13px] text-fg-soft; }
   .b2b-auth__hint { @apply mt-4 text-[12px] text-muted; }
   .b2b-account { @apply mx-auto grid max-w-[1360px] grid-cols-[240px_minmax(0,1fr)] gap-6 p-[24px] max-[720px]:grid-cols-1 max-[720px]:p-[16px]; }
   .b2b-account__nav { @apply flex flex-col gap-[2px]; }

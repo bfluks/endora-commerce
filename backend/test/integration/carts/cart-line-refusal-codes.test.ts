@@ -6,6 +6,7 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 import { DECLARED_ERROR_TRANSLATION_TARGETS } from '../../helpers/error-code-targets.js';
 import {
   PriceDisplayModeOverride,
@@ -230,7 +231,11 @@ describe('cart line refusals carry their own code and sentence (issue #86)', () 
       if (!service) throw new Error('the composed CartService is not available');
       return service
         .addItem(
-          { anonymousToken: `anon-i86-quantity-${randomUUID()}` },
+          {
+            anonymousToken: `anon-i86-quantity-${randomUUID()}`,
+            // An anonymous basket is the one of a channel (`specs/154-sales-channel-access/`).
+            anonymousSalesChannelId: await systemDefaultSalesChannelId(h.em()),
+          },
           { productId: SEED_PRODUCT_101_ID, quantity },
         )
         .then(

@@ -7,6 +7,7 @@ import { getModulePresence, type ModulePresenceSet } from './api/module-presence
 import { resolveLocale } from './i18n/locale';
 import { getSessionCookie } from './session';
 import type { RequestContext } from './api/client';
+import { SALES_CHANNEL_REQUEST_HEADER } from './channel/channel-header';
 
 /**
  * Per-request context resolution. Pages call `getRequestContext()` once
@@ -15,8 +16,12 @@ import type { RequestContext } from './api/client';
  *
  * The Sales Channel header is read from `X-Sales-Channel` so a reverse
  * proxy / multi-storefront deployment can stamp it per-host. When no proxy
- * stamps the header (local dev, single-channel deployment), the code is
- * left undefined and the backend resolves its system-default channel.
+ * stamps it, `middleware.ts` stamps the code of the channel the backend
+ * resolves for this storefront, so the header is there on every request it
+ * served (`specs/154-sales-channel-access/contracts/storefront-ux.md` §1.2).
+ * Should the middleware have been unable to read that channel, the code of
+ * the channel identity read here is used instead; only when neither is known
+ * is the code left undefined and the backend resolves its default.
  */
 export interface ServerContext {
   config: I18nConfigResponse;
@@ -43,13 +48,20 @@ export interface ServerContext {
    * theme this storefront does not have (feature 102).
    */
   theme: ResolvedStorefrontTheme;
+  /**
+   * Whether this store serves anonymous visitors
+   * (`specs/154-sales-channel-access/`). `false` only when the channel says so;
+   * a channel that could not be read counts as open, because the backend
+   * refuses on its own and the storefront must not invent a closed store.
+   */
+  anonymousAccess: boolean;
 }
 
 export async function getServerContext(input?: { langOverride?: string | null }): Promise<ServerContext> {
   const h = await headers();
   const jar = await cookies();
   const acceptLanguage = h.get('accept-language');
-  const salesChannelCode = h.get('x-sales-channel') ?? undefined;
+  const stampedChannelCode = h.get(SALES_CHANNEL_REQUEST_HEADER) || undefined;
 
   // All three resolve on every page. Fetched together rather than in sequence
   // so neither presence nor the channel identity costs a round-trip on the
@@ -61,9 +73,10 @@ export async function getServerContext(input?: { langOverride?: string | null })
     getI18nConfig(),
     getModulePresence(),
     getPublicSalesChannel(
-      salesChannelCode !== undefined ? { salesChannelCode } : {},
+      stampedChannelCode !== undefined ? { salesChannelCode: stampedChannelCode } : {},
     ),
   ]);
+  const salesChannelCode = stampedChannelCode ?? channel?.code;
   // A channel that could not be read is not a channel with no theme, but the
   // buyer-facing answer is the same one: the reference token set. See
   // `lib/theme/theme.ts` for what "refuses rather than guesses" means here.
@@ -93,6 +106,7 @@ export async function getServerContext(input?: { langOverride?: string | null })
     currency,
     modules,
     theme,
+    anonymousAccess: channel?.anonymousAccess !== false,
     ctx: {
       ...(salesChannelCode !== undefined ? { salesChannelCode } : {}),
       locale,

@@ -14,6 +14,8 @@ import {
   DEFAULT_PRICE_LIST_ID,
 } from '../../../../packages/modules/price_lists/src/backend/services/default-price-list-migration.js';
 import { neighbourReadPorts } from '../../helpers/price-list-neighbour-ports.js';
+import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
+import { TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 
 /**
  * Feature 146, Phase 5 (T027) — the reference price is captured, server-side,
@@ -62,6 +64,8 @@ describe('146 — reference price captured at customer submission [integration]'
     });
 
     const channelA = await ensureSalesChannel(em, CHANNEL_A);
+    // Feature 154 — the buyer shops on channel A.
+    await addOrganizationChannels(h, TEST_ORGANIZATION_ID, [CHANNEL_A]);
     // A quote line is refused on a channel that does not publish its product (#259).
     await em
       .getConnection()

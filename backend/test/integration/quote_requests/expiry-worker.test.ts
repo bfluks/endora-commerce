@@ -6,13 +6,9 @@ import {
 } from '../../helpers/test-server.js';
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { ageQuoteRequest } from '../../helpers/quote-request-age.js';
-import { RfqExpiryWorker } from '../../../../packages/modules/quote_requests/src/backend/services/rfq-expiry-worker.js';
-import { RfqEventService } from '../../../../packages/modules/quote_requests/src/backend/services/rfq-event-service.js';
-import { RfqNotificationService } from '../../../../packages/modules/quote_requests/src/backend/services/rfq-notification-service.js';
-import { SalesRepAssignmentService } from '../../../../packages/modules/organizations/src/backend/services/sales-rep-assignment-service.js';
+import type { RfqExpiryWorker } from '../../../../packages/modules/quote_requests/src/backend/services/rfq-expiry-worker.js';
 import { EventBus } from '@endora-commerce/platform/events';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
-import type { AdminUserReadPort } from '@endora-commerce/contracts';
 
 /**
  * T074 — Expiry worker honours `quote_requests.expiryDays`.
@@ -43,18 +39,20 @@ describe('RfqExpiryWorker (US7 / T074)', () => {
       const channels = await h.em().find(SalesChannel, {});
       return { byChannel: new Map(channels.map((channel) => [channel.id, days])), withoutChannel: days };
     };
-    return new RfqExpiryWorker({
-      emFactory: () => h.em(),
-      events: new EventBus() as unknown as RfqExpiryWorker['deps' & 'events'] extends never ? never : never,
-      eventService: new RfqEventService(() => h.em()),
-      notificationService: new RfqNotificationService(() => h.em()),
-      salesRepAssignment: new SalesRepAssignmentService(() => h.em()),
-      // Feature 075, Phase C — the unassigned-organisation fan-out reads
-      // `admin_users`' published port instead of `em.find(AdminUser, {})`.
-      adminUsers: (h.container.cradle as never as { adminUserReadPort: AdminUserReadPort })
-        .adminUserReadPort,
-      resolveExpiryRule,
-    } as never);
+    // The module's own worker class and dependencies, as composed — not this
+    // module's source files imported a second time beside the composed
+    // package. Loading `src/` would register a second `QuoteRequest` entity
+    // class, and since feature 159 an entity is transitively scoped through
+    // that class name (`QuoteRequestItemGroup`), which the ORM refuses as
+    // ambiguous. A fresh event bus keeps this file's announcements its own.
+    const composed = (
+      h.container.cradle as unknown as {
+        // `deps` is the worker's private constructor parameter, read at runtime.
+        quoteRequests: { handle(): { expiryWorker: { deps: Record<string, unknown>; constructor: unknown } } };
+      }
+    ).quoteRequests.handle().expiryWorker;
+    const Worker = composed.constructor as new (deps: unknown) => RfqExpiryWorker;
+    return new Worker({ ...composed.deps, events: new EventBus(), resolveExpiryRule });
   }
 
   it('expiryDays=0 is a no-op', async () => {

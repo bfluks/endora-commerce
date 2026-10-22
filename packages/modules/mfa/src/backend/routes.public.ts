@@ -26,6 +26,7 @@ import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { MfaLoginService } from './services/mfa-login-service.js';
 import type { ChallengeStore } from './services/challenge-store.js';
 import type { MfaEnrolmentService } from './services/mfa-enrolment-service.js';
+import type { CustomerChannelAccess } from './services/customer-channel-access.js';
 
 /**
  * Public MFA endpoints (feature 042). Per surface (customer US1 / admin US2):
@@ -46,6 +47,13 @@ export interface MfaPublicDeps {
    */
   adminAuthenticationThrottle: Pick<AdminAuthenticationThrottlePort, 'issueKnownDevice'>;
   customerAuthenticationThrottle: Pick<CustomerAuthenticationThrottlePort, 'issueKnownDevice'>;
+  /**
+   * Feature 154 — both routes below complete a customer sign-in begun earlier,
+   * and both are open to the kernel's access step, so the access rule is
+   * re-decided here on the channel the sign-in was begun on: an assignment
+   * removed between the password and the code issues no session.
+   */
+  customerChannelAccess: Pick<CustomerChannelAccess, 'assertAccountMayUse'>;
 }
 
 interface SurfaceCfg {
@@ -89,7 +97,9 @@ function registerSetupTicketRoutes(
   deps: MfaPublicDeps,
   cfg: SurfaceCfg,
 ): void {
-  app.post(cfg.setupBeginPath, { schema: { body: mfaSetupTicketBeginSchema } }, async (request) => {
+  // Feature 154 — reachable whatever the sales-channel access rule decides:
+  // a second-factor set-up ticket is completed before a session exists.
+  app.post(cfg.setupBeginPath, { schema: { body: mfaSetupTicketBeginSchema }, config: { salesChannelAccess: 'open' } }, async (request) => {
     const body = mfaSetupTicketBeginSchema.parse(request.body);
     const ticket = await resolveTicket(deps, body.setupTicket, cfg.subjectType);
     return {
@@ -102,10 +112,18 @@ function registerSetupTicketRoutes(
 
   app.post(
     cfg.setupCompletePath,
-    { schema: { body: mfaSetupTicketCompleteSchema } },
+    { schema: { body: mfaSetupTicketCompleteSchema }, config: { salesChannelAccess: 'open' } },
     async (request, reply) => {
       const body = mfaSetupTicketCompleteSchema.parse(request.body);
       const ticket = await resolveTicket(deps, body.setupTicket, cfg.subjectType);
+      // Feature 154 — before the enrolment is activated, so a refused sign-in
+      // leaves the account as it found it.
+      if (cfg.subjectType === 'customer') {
+        await deps.customerChannelAccess.assertAccountMayUse(
+          ticket.subjectId,
+          ticket.salesChannelId,
+        );
+      }
       const subject = { subjectType: cfg.subjectType, subjectId: ticket.subjectId } as const;
       const { recoveryCodes } = await deps.enrolmentService.activate(subject, body.code);
       await deps.challengeStore.consumeSetupTicket(body.setupTicket);
@@ -125,12 +143,12 @@ async function resolveTicket(
   deps: MfaPublicDeps,
   setupTicket: string,
   subjectType: 'customer' | 'admin',
-): Promise<{ subjectId: string }> {
+): Promise<{ subjectId: string; salesChannelId: string | null }> {
   const ticket = await deps.challengeStore.getSetupTicket(setupTicket);
   if (!ticket || ticket.subjectType !== subjectType) {
     throw new HttpError(400, 'MFA_INVALID_CHALLENGE', 'This setup session has expired. Please sign in again.');
   }
-  return { subjectId: ticket.subjectId };
+  return { subjectId: ticket.subjectId, salesChannelId: ticket.salesChannelId };
 }
 
 function registerVerifyRoute(
@@ -138,7 +156,9 @@ function registerVerifyRoute(
   deps: MfaPublicDeps,
   cfg: { path: string; subjectType: 'customer' | 'admin'; cookieName: string },
 ): void {
-  app.post(cfg.path, { schema: { body: mfaVerifyRequestSchema } }, async (request, reply) => {
+  // Feature 154 — reachable whatever the sales-channel access rule decides:
+  // the second factor of a sign-in is verified before a session exists.
+  app.post(cfg.path, { schema: { body: mfaVerifyRequestSchema }, config: { salesChannelAccess: 'open' } }, async (request, reply) => {
     const body = mfaVerifyRequestSchema.parse(request.body);
     const objectType = cfg.subjectType === 'customer' ? 'customer_account' : 'admin_user';
     const knownDevice = readKnownDevice(request, cfg.subjectType);
@@ -171,6 +191,13 @@ function registerVerifyRoute(
         objectId: result.subject.subjectId,
         ...(request.ip ? { ipAddress: request.ip } : {}),
       });
+    }
+    // Feature 154 — the access rule, on the channel the sign-in was begun on.
+    if (cfg.subjectType === 'customer') {
+      await deps.customerChannelAccess.assertAccountMayUse(
+        result.subject.subjectId,
+        result.salesChannelId,
+      );
     }
     const session = await deps.sessionService.createSession(
       cfg.subjectType === 'customer'

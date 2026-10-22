@@ -55,7 +55,13 @@ export function productAudienceOf(request: FastifyRequest): ProductAudience {
   const actor = request.actor as Actor | undefined;
   if (!actor) return ANONYMOUS_PRODUCT_AUDIENCE;
   if (actor.kind === 'customer') {
-    return { organizationId: actor.organizationId ?? null, authenticated: true };
+    // D-287 P0 — the account rides along for pricing (its own customer group);
+    // visibility never reads it.
+    return {
+      organizationId: actor.organizationId ?? null,
+      authenticated: true,
+      customerAccountId: actor.customerAccountId,
+    };
   }
   if (actor.kind === 'api_key') {
     return { organizationId: actor.organizationId ?? null, authenticated: true };

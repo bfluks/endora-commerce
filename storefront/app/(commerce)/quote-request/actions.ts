@@ -1,7 +1,9 @@
 'use server';
 
+import { headers } from 'next/headers';
 import { createRfq, type CreateRfqLine } from '../../../lib/api/rfq';
-import { StorefrontApiError } from '../../../lib/api/client';
+import { getProductMinimumsBySlugs } from '../../../lib/api/catalog';
+import { StorefrontApiError, type RequestContext } from '../../../lib/api/client';
 import { getSessionCookie } from '../../../lib/session';
 
 /**
@@ -44,4 +46,24 @@ export async function submitQuoteRequest(input: {
     }
     throw err;
   }
+}
+
+/**
+ * Feature 155 (FR-032, US4 #14) — the current pieces minimum of the draft's products, by slug,
+ * so the draft page can floor each line and show one already below its minimum.
+ *
+ * Read as the buyer (the session is forwarded, so their catalogue visibility applies) in the
+ * request's sales channel (Constitution XII). The bounds and the failure tolerance are
+ * `getProductMinimumsBySlugs`'s (threat S8, plan I5). Its argument comes from the browser, so
+ * anything that is not a list of strings reads nothing.
+ */
+export async function readDraftMinimums(slugs: string[]): Promise<Record<string, number | null>> {
+  if (!Array.isArray(slugs)) return {};
+  const [session, requestHeaders] = await Promise.all([getSessionCookie(), headers()]);
+  const salesChannelCode = requestHeaders.get('x-sales-channel') ?? undefined;
+  const ctx: RequestContext = {
+    ...(salesChannelCode !== undefined ? { salesChannelCode } : {}),
+    ...(session ? { viewerSession: session } : {}),
+  };
+  return getProductMinimumsBySlugs(slugs, ctx);
 }

@@ -15,7 +15,7 @@ import type { CartService } from './services/cart-service.js';
 import type { CartApprovalService } from './services/cart-approval-service.js';
 import type { CartOrganizationVisibilityService } from './services/cart-organization-visibility-service.js';
 import { HttpError } from '@endora-commerce/platform/http';
-import type { RequireCustomerGuard } from '@endora-commerce/platform/kernel';
+import { getResolvedChannel, type RequireCustomerGuard } from '@endora-commerce/platform/kernel';
 
 /**
  * Storefront routes scoped to an Organization Admin (feature 027 US4).
@@ -191,11 +191,20 @@ export async function registerCartsOrganizationRoutes(
         'Invariant violated: a customer account has no Organization (Principle XI).',
       );
     }
-    const cart = await cartService.getOrCreateForCustomer(actor.customer);
-    await cartApprovalService.submitForApproval(cart, {
-      customerAccountId: actor.customer.customerAccountId,
-      organizationId: actor.customer.organizationId,
+    // The basket of the storefront the buyer is on (`specs/154-sales-channel-access/`).
+    const cart = await cartService.getOrCreateForCustomer({
+      ...actor.customer,
+      salesChannelId: getResolvedChannel(request).id,
     });
+    const language = await request.responseLanguage();
+    await cartApprovalService.submitForApproval(
+      cart,
+      {
+        customerAccountId: actor.customer.customerAccountId,
+        organizationId: actor.customer.organizationId,
+      },
+      { language },
+    );
     return { data: { ok: true, approvalStatus: cart.approvalStatus } };
   });
 

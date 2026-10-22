@@ -3,6 +3,7 @@ import type {
   DocumentBlockRenderer,
   DocumentFieldDefinition,
   DocumentItem,
+  DocumentItemSection,
   DocumentTypeRegistration,
   ModuleManifest,
 } from '@endora-commerce/contracts';
@@ -305,7 +306,14 @@ describe('DocumentRenderer — a type declaring a line collection (153)', () => 
   }
 
   /** A test-only type, under a test-only module id — it adopts the table by declaring data alone (SC-007). */
-  function linesSetup(over: { fields?: () => Promise<DocumentFieldDefinition[]>; items?: (data: LinesData) => DocumentItem[]; tables?: unknown[] } = {}) {
+  function linesSetup(
+    over: {
+      fields?: () => Promise<DocumentFieldDefinition[]>;
+      items?: (data: LinesData) => DocumentItem[];
+      tables?: unknown[];
+      sections?: (data: LinesData) => readonly DocumentItemSection[];
+    } = {},
+  ) {
     const isPresent = (id: string) => id === 'fixturemod' || id === 'document_templates';
     const registry = new DocumentTypeRegistry(isPresent, () => undefined);
     const fields = vi.fn(over.fields ?? (async () => [
@@ -313,6 +321,7 @@ describe('DocumentRenderer — a type declaring a line collection (153)', () => 
       { path: 'qty', label: 'Qty', valueKind: 'number' as const, group: 'line', audience: 'customer' as const },
     ]));
     const items = vi.fn(over.items ?? ((data: LinesData) => data.lines.map((l) => ({ values: { name: { kind: 'text' as const, value: l.name }, qty: { kind: 'number' as const, value: l.qty } } }))));
+    const sections = over.sections ? vi.fn(over.sections) : undefined;
     const tableNode = (cols: string[], extra: Record<string, unknown> = {}) =>
       node('document_templates.ItemsTable', { columns: cols.map((f, i) => ({ id: `c${i}`, field: f })), ...extra });
     registry.register({
@@ -335,6 +344,7 @@ describe('DocumentRenderer — a type declaring a line collection (153)', () => 
           items,
           summaryFields: async () => [{ path: 'count', label: 'Count', valueKind: 'number', group: 'total', audience: 'customer' }],
           summary: (data: LinesData) => ({ count: { kind: 'number', value: data.lines.length } }),
+          ...(sections ? { sections } : {}),
         },
       ],
     } as DocumentTypeRegistration<LinesData>);
@@ -347,7 +357,7 @@ describe('DocumentRenderer — a type declaring a line collection (153)', () => 
       now: () => new Date('2026-10-17T10:00:00.000Z'),
       log,
     });
-    return { renderer, fields, items, log, tableNode };
+    return { renderer, fields, items, sections, log, tableNode };
   }
 
   const linesInput = { documentType: 'fixturemod.lines_doc', salesChannelId: null, language: 'en-US', data: { lines: [{ name: 'Bolt', qty: 3 }, { name: 'Nut', qty: 5 }] } };
@@ -397,6 +407,72 @@ describe('DocumentRenderer — a type declaring a line collection (153)', () => 
     });
     const built = await renderer.buildDefinition(input());
     expect(texts(built.definition)).toEqual(['kept|Real|-|calm']);
+  });
+
+  // Feature 159 (`specs/159-quote-request-item-groups/contracts/document-sections.md` §1, §3).
+  const twoSections = (data: LinesData): DocumentItemSection[] => [
+    { key: 'g1', kind: 'group', label: 'Hall A', itemIndexes: [0], summary: { count: { kind: 'number', value: 1 } } },
+    {
+      key: 'ungrouped',
+      kind: 'ungrouped',
+      label: null,
+      itemIndexes: data.lines.slice(1).map((_, i) => i + 1),
+      summary: { count: { kind: 'number', value: data.lines.length - 1 } },
+    },
+  ];
+
+  it('159 — a type declaring sections prints them with no facility change (FR-040)', async () => {
+    const s = linesSetup({ sections: twoSections });
+    const built = await s.renderer.buildDefinition(linesInput);
+    expect(bodyOf(built.definition)).toEqual([
+      ['No.', 'Name', 'Qty'],
+      ['Hall A · 1 item', '', ''],
+      ['1', 'Bolt', '3'],
+      ['Other items · 1 item', '', ''],
+      ['2', 'Nut', '5'],
+    ]);
+  });
+
+  it('159 — sections() once per collection per render, however many tables use it', async () => {
+    const s = linesSetup({ sections: twoSections });
+    const twice = linesSetup({ sections: twoSections, tables: [s.tableNode(['name']), s.tableNode(['qty'], { grouping: { by: 'none' } })] });
+    await twice.renderer.buildDefinition(linesInput);
+    expect(twice.sections).toHaveBeenCalledTimes(1);
+  });
+
+  it('159 — sections() throwing prints the table flat, logs once, and the document renders', async () => {
+    const { renderer, log } = linesSetup({ sections: () => { throw new Error('bad groups'); } });
+    const built = await renderer.buildDefinition(linesInput);
+    expect(bodyOf(built.definition)).toEqual([
+      ['No.', 'Name', 'Qty'],
+      ['1', 'Bolt', '3'],
+      ['2', 'Nut', '5'],
+    ]);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(
+      '[document_templates] a collection’s sections could not be read; the table prints flat',
+      expect.objectContaining({ documentType: 'fixturemod.lines_doc', collection: 'lines', error: 'bad groups' }),
+    );
+  });
+
+  it('159 — a partition that does not cover the lines prints flat, logged once with the document type', async () => {
+    const { renderer, log } = linesSetup({
+      sections: () => [{ key: 'g1', kind: 'group', label: 'Hall A', itemIndexes: [1], summary: {} }],
+    });
+    const built = await renderer.buildDefinition(linesInput);
+    expect(bodyOf(built.definition)).toHaveLength(3);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(
+      '[document_templates] a collection’s sections do not partition its lines; the table prints flat',
+      expect.objectContaining({ documentType: 'fixturemod.lines_doc', collection: 'lines' }),
+    );
+  });
+
+  it('159 — a type that declares no sections is not asked and prints as 153', async () => {
+    const { renderer, log } = linesSetup();
+    const built = await renderer.buildDefinition(linesInput);
+    expect(bodyOf(built.definition)).toHaveLength(3);
+    expect(log).not.toHaveBeenCalled();
   });
 
   it('produces PDF bytes with a long table (smoke)', async () => {

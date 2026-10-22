@@ -11,7 +11,7 @@ import type { SalesChannel } from './sales-channel.entity.js';
  *   1. Per-process LRU (cap {@link LRU_MAX}, entries older than
  *      {@link SALES_CHANNELS_LRU_TTL_MS} ignored) — absorbs intra-request
  *      bursts and removes the Redis hop entirely on warm processes.
- *   2. Redis (`sales-channels:v2:<code>`, TTL {@link TTL_SECONDS}) —
+ *   2. Redis (`sales-channels:v3:<code>`, TTL {@link TTL_SECONDS}) —
  *      cross-process consistency in multi-instance deployments.
  *
  * Invalidation flows write → drop in Redis → drop in LRU → announce. It is the
@@ -37,8 +37,10 @@ import type { SalesChannel } from './sales-channel.entity.js';
 // v2 (feature 053): `isPublic` added to the cached shape so storefront
 // consumers read price-visibility off the resolved channel instead of
 // re-querying. Bumped from v1 so entries cached without the field are ignored.
+// v3 (feature 154): `anonymousAccess` added, read by the kernel's access step on
+// every anonymous request. An entry cached without it would decide nothing.
 /** Shared with the operator-facing cache-clear surface, so the two cannot drift. */
-export const SALES_CHANNELS_CACHE_KEY_PREFIX = 'sales-channels:v2:';
+export const SALES_CHANNELS_CACHE_KEY_PREFIX = 'sales-channels:v3:';
 export const SALES_CHANNELS_CACHE_NAMESPACE = 'sales_channels';
 
 /** Maximum age of an entry in the per-process layer; see `SETTINGS_LRU_TTL_MS`. */
@@ -55,6 +57,8 @@ export interface CachedChannel {
   code: string;
   name: Record<string, string>;
   active: boolean;
+  /** May an anonymous request use this channel (feature 154)? Read by the access step. */
+  anonymousAccess: boolean;
   /** Price-visibility flag (display concern, distinct from resolution). */
   isPublic: boolean;
   systemDefault: boolean;
@@ -73,6 +77,7 @@ export function toCachedChannel(channel: SalesChannel): CachedChannel {
     code: channel.code,
     name: channel.name,
     active: channel.active,
+    anonymousAccess: channel.anonymousAccess,
     isPublic: channel.isPublic,
     systemDefault: channel.systemDefault,
     defaultLanguage: channel.defaultLanguage,

@@ -35,7 +35,18 @@ const PEOPLE = [admin(TOMASZ), admin(INACTIVE, { status: 'inactive' }), admin(DE
 
 function build(mayReadOrders = false) {
   const findAdmins = vi.fn(async (ids: readonly string[]) => PEOPLE.filter((person) => ids.includes(person.id)));
-  const findOrders = vi.fn(async (ids: readonly string[]) => ids.map((id) => ({ id, businessId: 'ORD-1' })));
+  const findOrders = vi.fn(async (ids: readonly string[]) =>
+    ids.map((id) => ({
+      id,
+      businessId: 'ORD-1',
+      status: 'processing',
+      total: '1234.50',
+      currency: 'PLN',
+      placedAt: new Date('2026-10-01T09:30:00.000Z'),
+      billingAddress: { recipientName: 'Jan Kowalski', companyName: 'Acme sp. z o.o.' },
+      deliveryAddress: { recipientName: 'Magazyn' },
+    })),
+  );
   const service = new ReferenceService({
     products: { findByIds: vi.fn(async () => []) } as never,
     orders: { findByIds: findOrders } as never,
@@ -83,5 +94,45 @@ describe('ReferenceService — a mentioned person', () => {
     const other = build(true);
     await other.service.resolveMany([`[[order:${ORDER}]]`, 'plain']);
     expect(other.findAdmins).not.toHaveBeenCalled();
+  });
+});
+
+describe('ReferenceService — a mentioned Order', () => {
+  it('says more than the number: status, total, when it was placed and for whom', async () => {
+    const { service } = build(true);
+    expect(await service.resolve(`[[order:${ORDER}]]`)).toEqual([
+      {
+        type: 'order',
+        id: ORDER,
+        available: true,
+        label: 'ORD-1',
+        url: `/orders/${ORDER}`,
+        order: {
+          status: 'processing',
+          total: '1234.50',
+          currency: 'PLN',
+          placedAt: '2026-10-01T09:30:00.000Z',
+          customerName: 'Acme sp. z o.o.',
+        },
+      },
+    ]);
+  });
+
+  it('names the recipient when the billing address carries no company', async () => {
+    const { service, findOrders } = build(true);
+    findOrders.mockImplementationOnce(async (ids: readonly string[]) =>
+      ids.map((id) => ({
+        id,
+        businessId: 'ORD-2',
+        status: 'new',
+        total: '10.00',
+        currency: 'EUR',
+        placedAt: new Date('2026-10-02T00:00:00.000Z'),
+        billingAddress: { recipientName: 'Jan Kowalski', companyName: null },
+        deliveryAddress: { recipientName: 'Magazyn' },
+      })),
+    );
+    const [reference] = await service.resolve(`[[order:${ORDER}]]`);
+    expect(reference?.order?.customerName).toBe('Jan Kowalski');
   });
 });

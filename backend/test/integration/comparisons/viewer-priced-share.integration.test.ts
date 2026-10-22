@@ -16,6 +16,7 @@ import {
   DEFAULT_PRICE_LIST_ID,
 } from '../../../../packages/modules/price_lists/src/backend/services/default-price-list-migration.js';
 import { neighbourReadPorts } from '../../helpers/price-list-neighbour-ports.js';
+import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
 
 /**
  * A share token grants the comparison, never what is in it.
@@ -203,6 +204,11 @@ async function seedBuyers(h: BackendServerHandle): Promise<void> {
   }
   // Flushed on its own: the accounts below carry a foreign key to these rows.
   await em.flush();
+  // Feature 154 — every buyer shops on the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(
+    em,
+    buyers.map(([orgId]) => orgId),
+  );
 
   for (const [orgId, customerId, email, cookie] of buyers) {
     em.create(CustomerAccount, {

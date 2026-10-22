@@ -20,6 +20,8 @@ interface HarnessProps {
   busy?: boolean;
   useInitialFocus?: boolean;
   useFinalFocus?: boolean;
+  /** Feature 162 — describe the dialog by its body paragraph. */
+  describe?: boolean;
 }
 
 function Harness(props: HarnessProps): ReactElement {
@@ -47,6 +49,7 @@ function Harness(props: HarnessProps): ReactElement {
           onClose={close}
           busy={props.busy ?? false}
           {...extra}
+          {...(props.describe ? { 'aria-describedby': 'rename-help' } : {})}
           footer={
             <>
               <button type="button" onClick={close}>
@@ -58,6 +61,7 @@ function Harness(props: HarnessProps): ReactElement {
             </>
           }
         >
+          <p id="rename-help">Every opportunity carrying the tag shows the new name.</p>
           <label htmlFor="tag-name">Tag name</label>
           <input id="tag-name" />
         </ModalDialog>
@@ -82,6 +86,20 @@ describe('ModalDialog (admin-kit)', () => {
     await openHarness();
     const dialog = screen.getByRole('dialog', { name: 'Rename tag' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
+  });
+
+  it('is described by the element aria-describedby names (162)', async () => {
+    await openHarness({ describe: true });
+    expect(screen.getByRole('dialog', { name: 'Rename tag' })).toHaveAccessibleDescription(
+      'Every opportunity carrying the tag shows the new name.',
+    );
+  });
+
+  it('carries no aria-describedby when none is given', async () => {
+    await openHarness();
+    const dialog = screen.getByRole('dialog', { name: 'Rename tag' });
+    expect(dialog).not.toHaveAttribute('aria-describedby');
+    expect(dialog).toHaveAccessibleDescription('');
   });
 
   it('focuses the first focusable element on open by default', async () => {

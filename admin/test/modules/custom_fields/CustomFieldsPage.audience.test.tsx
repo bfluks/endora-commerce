@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { AuthProvider } from '@endora-commerce/admin-kit/lib';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
+import { adminSession } from '../../helpers/render-with-session';
 import en from '../../../../packages/modules/custom_fields/i18n/en.json';
 import pl from '../../../../packages/modules/custom_fields/i18n/pl.json';
 
@@ -53,6 +55,13 @@ const { CustomFieldsPage } = await import(
 const BUNDLE = { custom_fields: en };
 const NEW_FIELD_AUDIENCE = 'Who can see the value';
 
+/** The page reads `useAuth` for its write controls; this operator may write. */
+const page = (
+  <AuthProvider initial={adminSession({ permissions: ['custom_fields:read', 'custom_fields:write'] })}>
+    <CustomFieldsPage />
+  </AuthProvider>
+);
+
 describe('CustomFieldsPage — the audience of a definition', () => {
   beforeEach(() => {
     create.mockClear();
@@ -60,7 +69,7 @@ describe('CustomFieldsPage — the audience of a definition', () => {
   });
 
   it('offers the choice with a plain explanation, internal by default', async () => {
-    renderWithI18n(<CustomFieldsPage />, BUNDLE);
+    renderWithI18n(page, BUNDLE);
     const select = (await screen.findByLabelText(NEW_FIELD_AUDIENCE)) as HTMLSelectElement;
     expect(select.value).toBe('internal');
     expect(
@@ -72,7 +81,7 @@ describe('CustomFieldsPage — the audience of a definition', () => {
   });
 
   it('creates an internal field when the choice is left alone', async () => {
-    renderWithI18n(<CustomFieldsPage />, BUNDLE);
+    renderWithI18n(page, BUNDLE);
     fireEvent.change(screen.getByPlaceholderText('po_number'), { target: { value: 'internal_note' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add field' }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
@@ -80,7 +89,7 @@ describe('CustomFieldsPage — the audience of a definition', () => {
   });
 
   it('creates a customer-visible field when the administrator says so', async () => {
-    renderWithI18n(<CustomFieldsPage />, BUNDLE);
+    renderWithI18n(page, BUNDLE);
     fireEvent.change(screen.getByPlaceholderText('po_number'), { target: { value: 'gift_note' } });
     fireEvent.change(await screen.findByLabelText(NEW_FIELD_AUDIENCE), {
       target: { value: 'customer' },
@@ -91,7 +100,7 @@ describe('CustomFieldsPage — the audience of a definition', () => {
   });
 
   it('shows the audience of an existing field and lets it be changed', async () => {
-    renderWithI18n(<CustomFieldsPage />, BUNDLE);
+    renderWithI18n(page, BUNDLE);
     const rowSelect = (await screen.findByLabelText(
       'Who can see the value of po_number',
     )) as HTMLSelectElement;

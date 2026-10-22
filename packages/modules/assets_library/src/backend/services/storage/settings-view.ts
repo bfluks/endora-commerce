@@ -35,14 +35,24 @@ export function createSettingsView(
     if (!setting) return fallback;
     const override = await em.findOne(SettingValue, { setting: setting });
     const raw = override ? override.value : setting.globalValue ?? setting.defaultValue;
-    const n = typeof raw === 'number' ? raw : Number(raw);
+    // Only a number, or a string that spells one, is a value: `Number('')`,
+    // `Number(null)` and `Number([])` are 0, which is not what an empty setting
+    // means (FR-035 — a missing or non-numeric value applies as the fallback).
+    const n =
+      typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string' && raw.trim() !== ''
+          ? Number(raw)
+          : Number.NaN;
     return Number.isFinite(n) ? n : fallback;
   }
 
   return {
     async softDeleteRetentionDays() {
+      // At least one day (owner ruling P3, specs/156-asset-stable-url/): a zero
+      // setting must not make a deletion or a replaced file due at once.
       const days = await readNumber('assets.soft_delete_retention_days', 30);
-      return days >= 0 ? days : 30;
+      return days >= 0 ? Math.max(1, days) : 30;
     },
     async activeAdapter() {
       const v = (await readString('assets.storage.adapter')).trim();
