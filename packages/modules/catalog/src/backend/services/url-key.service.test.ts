@@ -9,6 +9,7 @@ import {
   type UrlKeyWritePlan,
   type UrlKeyWriteState,
   type UrlRedirectRow,
+  UrlKeyService,
 } from './url-key.service.js';
 
 /**
@@ -537,5 +538,29 @@ describe('urlKeysToLock', () => {
       }),
     );
     expect(keys).toEqual(['a-new', 'drill', 'drill-2', 'pro', 'wiertarka']);
+  });
+});
+
+// Phase 16 review — a `:id` that is not a UUID is a product that does not exist (404),
+// answered before the database is asked (Postgres would refuse the cast as a 500).
+describe('UrlKeyService — a non-UUID id', () => {
+  const untouched = (): never => {
+    throw new Error('the database must not be reached');
+  };
+  const service = new UrlKeyService(untouched, {} as never);
+
+  it.each([
+    ['read', () => service.read('not-a-uuid'), ERROR_CODES.PRODUCT_NOT_FOUND],
+    ['update', () => service.update('not-a-uuid', put({ globalKey: 'drill' })), ERROR_CODES.PRODUCT_NOT_FOUND],
+    ['deleteRedirect (product)', () => service.deleteRedirect('not-a-uuid', P), ERROR_CODES.URL_REDIRECT_NOT_FOUND],
+    ['deleteRedirect (redirect)', () => service.deleteRedirect(P, 'not-a-uuid'), ERROR_CODES.URL_REDIRECT_NOT_FOUND],
+  ] as const)('%s answers 404', async (_name, call, code) => {
+    const err = await call().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).statusCode).toBe(404);
+    expect((err as HttpError).code).toBe(code);
   });
 });
