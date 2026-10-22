@@ -228,10 +228,11 @@ describe('ProductScopeControls — status per channel and channel × language (U
     const channelStatus = await screen.findByRole('combobox', { name: 'Status in B2B' });
     expect(channelStatus).toHaveValue('');
     expect(within(channelStatus).getByRole('option', { name: 'Use inherited (Active)' })).toBeInTheDocument();
-    expect(screen.getByText('Inherited from global: Active')).toBeInTheDocument();
+    // The source (FR-040) is the select's description, so it is read with the value.
+    expect(channelStatus).toHaveAccessibleDescription('Inherited from global: Active');
 
     await user.selectOptions(channelStatus, 'inactive');
-    expect(screen.getByText('Set for this channel')).toBeInTheDocument();
+    expect(channelStatus).toHaveAccessibleDescription('Set for this channel');
     await user.click(screen.getByRole('button', { name: 'Save availability' }));
 
     await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
@@ -249,6 +250,7 @@ describe('ProductScopeControls — status per channel and channel × language (U
     const de = await screen.findByRole('combobox', { name: 'Status in B2B · DE' });
     const en = screen.getByRole('combobox', { name: 'Status in B2B · EN' });
     expect(de).toHaveValue('draft');
+    expect(de).toHaveAccessibleDescription('Set for this language');
     expect(en).toHaveValue('');
     // The language row inherits from the channel row, which inherits from global.
     expect(within(en).getByRole('option', { name: 'Use inherited (Active)' })).toBeInTheDocument();
@@ -267,7 +269,7 @@ describe('ProductScopeControls — status per channel and channel × language (U
     await user.selectOptions(await screen.findByRole('combobox', { name: 'Status in B2B' }), 'draft');
     const en = screen.getByRole('combobox', { name: 'Status in B2B · EN' });
     expect(within(en).getByRole('option', { name: 'Use inherited (Draft)' })).toBeInTheDocument();
-    expect(screen.getByText('Inherited from B2B: Draft')).toBeInTheDocument();
+    expect(en).toHaveAccessibleDescription('Inherited from B2B: Draft');
   });
 
   it('marks an orphaned language setting as ignored and removes it with null (FR-015)', async () => {
