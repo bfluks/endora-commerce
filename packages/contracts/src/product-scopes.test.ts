@@ -357,6 +357,11 @@ describe('pairsTurningOn — the completeness gate pairs (R18, N3, M3 → A)', (
     );
   });
 
+  it('a deleted product never turns on, whatever its overrides say', () => {
+    const after = snap({ channelRows: [channelRow({ status: 'active' })], global: global({ deletedAt: NOW }) });
+    expect(pairsTurningOn(snap(), after, [b2b])).toEqual([]);
+  });
+
   describe('M3 → A: only a status change produces a pair', () => {
     const activeEverywhere = global({ status: 'active' });
 
