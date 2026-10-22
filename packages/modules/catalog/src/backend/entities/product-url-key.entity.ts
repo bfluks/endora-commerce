@@ -15,6 +15,10 @@ import { GlobalEntity } from '@endora-commerce/platform/tenancy';
  * An override whose channel the product left, or whose language the channel
  * dropped, stays and keeps reserving its key (FR-015, FR-070). Platform-global like
  * `products` (FR-083).
+ *
+ * A soft-deleted product's rows stop reserving their keys (another product may take
+ * them), while its `products.slug` stays taken; a future un-delete must therefore
+ * re-check every key it would bring back.
  */
 @GlobalEntity()
 @Entity({ tableName: 'product_url_keys' })
