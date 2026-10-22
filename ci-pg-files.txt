@@ -1,0 +1,5 @@
+test/contract/catalog/product-scopes-api.test.ts
+test/integration/catalog/product-scopes-schema.test.ts
+test/contract/admin_users/permission-inventory.test.ts
+test/integration/catalog/url-key-uniqueness.test.ts
+test/contract/catalog/url-keys-api.test.ts
