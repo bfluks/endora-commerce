@@ -222,6 +222,7 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
 - [x] T028 [S1] Delete propagation: product soft-delete leaves scope rows (edge case) — assert in T022, no code expected
   - Asserted in T022 (soft delete keeps both rows).
 - [x] T029 [S1] Build `mod-catalog`; type-check
+  - CI fix after the Phase 4 push: `check:port-shape` refused the four new port types' `Container name:` markers (no registration yet) — markers removed until each port is registered (Block B / T111 / T122 / P18); `check:fixture-substitution` refused three `?? 0` count reads in the new [PG] tests — now throw.
   - `mod-catalog` build + typecheck (backend + UI) + lint clean; `backend` typecheck clean; `mod-catalog` tests 10 files / 111 green; checks module-boundary, command-coverage, action-route-permissions, transaction-context, port-catches, test-ownership: 0 violations; generators moved nothing.
 
 **Verification**:
