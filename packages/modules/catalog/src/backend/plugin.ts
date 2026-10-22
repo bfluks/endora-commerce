@@ -61,6 +61,7 @@ import { ProductEditorPreferencesService } from './services/product-editor-prefe
 import { ProductListViewService } from './services/product-list-view-service.js';
 import { ProductOverridesService } from './services/product-overrides.service.js';
 import { ProductScopesService } from './services/product-scopes.service.js';
+import { UrlKeyService } from './services/url-key.service.js';
 import { ProductScopeContextService } from './services/product-scope-context.service.js';
 import { ProductValueResolverService } from './services/product-value-resolver.service.js';
 import { registerCatalogPublicRoutes } from './routes.public.js';
@@ -512,6 +513,10 @@ export function catalogModule(options: CatalogModuleOptions) {
     const scopesService = options.salesChannelMembership
       ? new ProductScopesService(options.emFactory, options.salesChannelMembership, options.commandBus)
       : undefined;
+    // Feature 162 — URL keys per language and channel × language, and their redirects.
+    const urlKeyService = options.salesChannelMembership
+      ? new UrlKeyService(options.emFactory, options.salesChannelMembership, options.commandBus)
+      : undefined;
 
     await registerCatalogAdminRoutes(app, {
       adminService,
@@ -540,6 +545,7 @@ export function catalogModule(options: CatalogModuleOptions) {
       ...(valueResolverService ? { productValueResolverService: valueResolverService } : {}),
       ...(overridesService ? { productOverridesService: overridesService } : {}),
       ...(scopesService ? { productScopesService: scopesService } : {}),
+      ...(urlKeyService ? { urlKeyService } : {}),
     });
 
     // Consumer side (Principle X). The BullMQ worker claims each queued
