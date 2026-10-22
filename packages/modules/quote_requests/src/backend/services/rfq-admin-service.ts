@@ -770,6 +770,13 @@ export class RfqAdminService {
         await em.removeAndFlush(existing);
         const groupIds = await writeLineGroups(em, rfq.id, storedGroups, plan);
         const items: QuoteRequestItem[] = [];
+        // Feature 163 (FR-017 d, N2) — a line the operator adds is named at the
+        // request channel's default language; a stored line keeps its snapshot.
+        const lineNames = await this.deps.rfqService.lineNames(
+          [...productById.values()],
+          rfq.salesChannelId ?? null,
+          null,
+        );
         for (const [index, lineInput] of body.items.entries()) {
           const product = productById.get(lineInput.productId)!;
           // Feature 159 (research N-33) — a new line split off a stored line of
@@ -787,7 +794,7 @@ export class RfqAdminService {
             em.create(QuoteRequestItem, {
               quoteRequestId: rfq.id,
               productId: product.id,
-              productName: row?.productName ?? anyLocaleValue(product.name),
+              productName: row?.productName ?? lineNames.get(product.id) ?? anyLocaleValue(product.name),
               productSlug: product.slug,
               variantId,
               variantLabel:
