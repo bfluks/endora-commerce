@@ -1,8 +1,8 @@
 import { Migration } from '@mikro-orm/migrations';
 
 /**
- * Feature 162 — URL keys per language and per sales channel × language, and the
- * redirects their changes leave behind (`specs/162-product-data-scopes/data-model.md`
+ * Feature 163 — URL keys per language and per sales channel × language, and the
+ * redirects their changes leave behind (`specs/163-product-data-scopes/data-model.md`
  * §5, research R11).
  *
  * - `product_url_keys` — one row per (product, language) for the language key

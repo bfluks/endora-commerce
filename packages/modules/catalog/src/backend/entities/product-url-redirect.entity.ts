@@ -2,7 +2,7 @@ import { Entity, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 
 /**
- * ProductUrlRedirect — feature 162 (`specs/162-product-data-scopes/` data-model.md
+ * ProductUrlRedirect — feature 163 (`specs/163-product-data-scopes/` data-model.md
  * §5, research R11, R12).
  *
  * A former URL key that answers a permanent redirect to the product's current URL

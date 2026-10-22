@@ -3,7 +3,7 @@ import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import type { ProductScopeStatus, ProductVisibility } from '@endora-commerce/contracts';
 
 /**
- * ProductChannelScope — feature 162 (`specs/162-product-data-scopes/`
+ * ProductChannelScope — feature 163 (`specs/163-product-data-scopes/`
  * data-model.md §1, research R1).
  *
  * One row per (product, sales channel) holding the channel overrides of the

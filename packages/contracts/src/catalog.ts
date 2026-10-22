@@ -738,7 +738,7 @@ export const updateProductRequestSchema = baseProductRequestObject
   .omit({ type: true })
   .extend({
     /**
-     * Feature 162 (FR-023) — the global publication window, inclusive at both
+     * Feature 163 (FR-023) — the global publication window, inclusive at both
      * ends; `null` opens that side. A start not before the end is refused by the
      * service (`422 VALIDATION_FAILED`, `details.field = 'window'`).
      */
@@ -811,7 +811,7 @@ const bulkUpdateFieldsObject = z.object({
   /** Feature 155 — set (or unset) the returnable flag on every selected product. */
   returnable: z.boolean().optional(),
   /**
-   * Feature 162 (FR-050) — the status at one channel (`languageCode: null`) or one
+   * Feature 163 (FR-050) — the status at one channel (`languageCode: null`) or one
    * channel × language; `inherit` removes the override. Never combined with `status`.
    */
   scopedStatus: z
@@ -859,7 +859,7 @@ export const bulkUpdateProductResultSchema = z.object({
       'permission_denied',
       'concurrent_modification',
       'product_not_found',
-      // Feature 162 — a scope the product cannot hold (FR-051), and the
+      // Feature 163 — a scope the product cannot hold (FR-051), and the
       // completeness gate in `refuse` mode (FR-061).
       'scope_invalid',
       'completeness_gate',
@@ -1978,7 +1978,7 @@ export interface CatalogProductRecord {
   /** Feature 155 — the product's current flag; order lines record their own copy at placement. */
   returnable: boolean;
   /**
-   * Feature 162 — the global publication window, inclusive at both ends; `null` =
+   * Feature 163 — the global publication window, inclusive at both ends; `null` =
    * open on that side. Optional for good, so a record literal built without it keeps
    * compiling; the channel-effective window comes from `catalogProductAvailabilityPort`.
    */

@@ -11,7 +11,7 @@ import {
 } from './product-url-keys.js';
 
 /**
- * Feature 162 — URL-key shapes (`contracts/url-keys-and-redirects.md` §1–§5) and the
+ * Feature 163 — URL-key shapes (`contracts/url-keys-and-redirects.md` §1–§5) and the
  * one seam every emitted product URL is composed by (D7, Q-B → C).
  */
 
