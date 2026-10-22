@@ -7,6 +7,7 @@ import type {
   CartQueryPort,
   CartReadPort,
   CartWritePort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   LinePricesPort,
@@ -200,6 +201,7 @@ export function registerModule(ctx: ModuleContext): void {
             lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
             lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
             lazyPort<OrderQuoteSourcePort>(ctx, 'orderQuoteSourcePort'),
+            lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
           ),
       )
       .singleton(),
@@ -242,8 +244,8 @@ export function registerModule(ctx: ModuleContext): void {
             lazyPort<LinePricesPort>(ctx, 'pricingService'),
             lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
             lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
-            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
             lazyPort<ProductDisplayModePort>(ctx, 'productDisplayModePort'),
+            lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
             cartApprovalService,
             cartAuditService,
             cartRecomputeCache,
@@ -341,9 +343,11 @@ export function registerModule(ctx: ModuleContext): void {
       requireCustomer,
       cartService,
       catalogProducts: lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+      catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
       cartUpsellService: new CartUpsellService(
         emFactory,
         lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+        lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
       ),
       cartCouponService: new CartCouponService(
         emFactory,

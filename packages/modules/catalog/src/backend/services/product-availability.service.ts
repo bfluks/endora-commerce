@@ -246,7 +246,7 @@ export class ProductAvailabilityService implements CatalogProductAvailabilityPor
     const condition = availabilityCondition(
       {
         channelId: channel.id,
-        languageCode: scope.languageCode,
+        languageCode: scope.languageCode ?? channel.defaultLanguage,
         channelLanguages: channel.languages,
         audience: scope.audience,
         now: scope.now ?? new Date(),

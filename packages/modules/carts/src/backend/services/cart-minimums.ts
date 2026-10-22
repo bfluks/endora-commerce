@@ -373,11 +373,19 @@ export async function assertCartMeetsMinimums(
      * the mark's quote id.
      */
     confirmQuoteSource: (quoteRequestId: string) => Promise<boolean>;
+    /**
+     * Feature 163 (FR-006) — narrows the records to the products still
+     * available at the basket's (channel, language) to its buyer. A record
+     * left out is a line whose product is unavailable: the unknown-id 404.
+     */
+    availableOnly: (products: CatalogProductRecord[]) => Promise<CatalogProductRecord[]>;
   },
 ): Promise<void> {
   const { items } = input;
   if (items.length === 0) return;
-  const products = await catalogProducts.findByIds(Array.from(new Set(items.map((item) => item.productId))));
+  const products = await input.availableOnly(
+    await catalogProducts.findByIds(Array.from(new Set(items.map((item) => item.productId)))),
+  );
   const eligibleIds = products.filter((p) => isOrderMinimumEligibleType(p.type)).map((p) => p.id);
   const packagingUnits: CatalogPackagingUnitRecord[] =
     eligibleIds.length > 0 ? await catalogProducts.listPackagingUnitsByProductIds(eligibleIds) : [];

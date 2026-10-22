@@ -5,6 +5,7 @@ import { Cart } from '../entities/cart.entity.js';
 import type { CartApprovalStatus } from '../entities/cart.entity.js';
 import { CartItem } from '../entities/cart-item.entity.js';
 import type {
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   OrganizationCartApprovalWritePort,
@@ -14,6 +15,7 @@ import type {
 } from '@endora-commerce/contracts';
 import type { CartAuditService } from './cart-audit-service.js';
 import { assertCartMeetsMinimums, toCartMinimumItem } from './cart-minimums.js';
+import { availableRecords, basketScopeLanguage } from './cart-availability.js';
 
 /**
  * Approval-workflow state machine (feature 027 US4).
@@ -93,6 +95,12 @@ export class CartApprovalService {
      * while its quote is still valid, as at placement.
      */
     private readonly quoteSource: OrderQuoteSourcePort,
+    /**
+     * Feature 163 (FR-006) — `catalog`'s availability answer: a basket holding
+     * a product no longer available at its (channel, language) is refused at
+     * submit as placement refuses it.
+     */
+    private readonly availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
     private readonly emailDispatch?: CartEmailDispatch,
   ) {}
 
@@ -154,6 +162,12 @@ export class CartApprovalService {
       cart: { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
       items: items.map(toCartMinimumItem),
       language: options.language,
+      availableOnly: (products) =>
+        availableRecords(this.availability, products, {
+          channelId: cart.salesChannelId,
+          languageCode: cart.salesChannelId ? basketScopeLanguage(cart.salesChannelId, options.language) : null,
+          audience: { organizationId: actor.organizationId, authenticated: true },
+        }),
       confirmQuoteSource: (quoteRequestId) =>
         this.quoteSource.quoteSourceHonoursExemptions({
           organizationId: actor.organizationId,
