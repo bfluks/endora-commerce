@@ -424,7 +424,7 @@ describe('URL-key uniqueness and redirects (spec 162, T100)', () => {
           .em()
           .getConnection()
           .execute<Array<{ n: string }>>(`select count(*)::text as n from sales_channels where languages @> '["fr-FR"]'::jsonb`);
-        if (Number(offered[0]?.n ?? 0) === 0) {
+        if (Number(offered[0]!.n) === 0) {
           await putOk(p, { languageKeys: [{ languageCode: 'fr-FR', key: null }] });
           expect((await keysOf(p)).filter((r) => r.language_code === 'fr-FR')).toEqual([]);
         }
@@ -490,7 +490,7 @@ describe('URL-key uniqueness and redirects (spec 162, T100)', () => {
           const waiting = await knex.raw(
             `select count(*)::int as n from pg_locks where locktype = 'advisory' and not granted`,
           );
-          if (Number((waiting.rows as Array<{ n: number }>)[0]?.n ?? 0) > 0) break;
+          if (Number((waiting.rows as Array<{ n: number }>)[0]!.n) > 0) break;
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
         await trx.raw(
