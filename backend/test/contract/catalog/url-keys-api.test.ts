@@ -14,8 +14,8 @@ import {
 import { AdminRole, AdminUser } from '../../helpers/package-entities.js';
 
 /**
- * Feature 162, Phase 16 (T101) — the admin URL-key routes
- * (`specs/162-product-data-scopes/contracts/url-keys-and-redirects.md` §1–§3).
+ * Feature 163, Phase 16 (T101) — the admin URL-key routes
+ * (`specs/163-product-data-scopes/contracts/url-keys-and-redirects.md` §1–§3).
  *
  * - `GET|PUT /api/v1/admin/catalog/products/:id/url-keys` and
  *   `DELETE /api/v1/admin/catalog/products/:id/url-redirects/:redirectId` behind
@@ -33,7 +33,7 @@ import { AdminRole, AdminUser } from '../../helpers/package-entities.js';
  * The gate sessions are the catalogue reader and the admin without `catalog:read` of
  * `product-scopes-api.test.ts` (same users, same custom roles, ensured here too).
  */
-describe('Product URL keys — admin routes (spec 162, T101)', () => {
+describe('Product URL keys — admin routes (spec 163, T101)', () => {
   let h: BackendServerHandle;
   const run = randomUUID().slice(0, 8);
   const admin = { cookies: { b2b_session: 'stub-admin-session' } };

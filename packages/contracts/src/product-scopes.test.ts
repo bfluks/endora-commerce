@@ -19,7 +19,7 @@ import {
 } from './product-scopes.js';
 
 /**
- * Feature 162 (`specs/162-product-data-scopes/`) — the one definition of effective
+ * Feature 163 (`specs/163-product-data-scopes/`) — the one definition of effective
  * availability (FR-001, FR-002), every row of `data-model.md` §4, the scope language
  * (R7) and the completeness gate's pair computation (R18, M3 → A).
  */

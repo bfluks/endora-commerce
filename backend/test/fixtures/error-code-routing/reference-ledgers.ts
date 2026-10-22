@@ -811,7 +811,7 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
   SCOPE_INVALID: {
     to: 'catalog',
     reason:
-      'Minted by feature 162 (`specs/162-product-data-scopes/`, FR-014) for a scoped write that ' +
+      'Minted by feature 163 (`specs/163-product-data-scopes/`, FR-014) for a scoped write that ' +
       'names a sales channel the product is not a member of, or a language that channel does ' +
       'not offer. The noun is a product scope, a row `catalog` owns (D-121 T1), and every raise ' +
       'site is one of its admin writes — scoped values, URL keys, media. `VALIDATION_FAILED` is ' +
@@ -821,7 +821,7 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
   SCOPE_INCOMPLETE: {
     to: 'catalog',
     reason:
-      'Minted by feature 162 (FR-060) for the completeness gate in `refuse` mode: a status write ' +
+      'Minted by feature 163 (FR-060) for the completeness gate in `refuse` mode: a status write ' +
       'that would turn the product on at a (channel, language) still missing its name, a ' +
       'required language-scoped attribute or its URL key. The noun is the product scope, ' +
       '`catalog`\'s row, and the gate is `catalog`\'s own service.',
@@ -829,7 +829,7 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
   URL_KEY_TAKEN: {
     to: 'catalog',
     reason:
-      'Minted by feature 162 (FR-070) for a URL-key write meeting another product\'s current key ' +
+      'Minted by feature 163 (FR-070) for a URL-key write meeting another product\'s current key ' +
       'in the same language. The noun is a product URL key, a `catalog` row; the one raise site ' +
       'is its URL-key write. `VALIDATION_FAILED` is not reused: the key is well formed, and the ' +
       'operator has to choose another one.',
@@ -837,14 +837,14 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
   URL_KEY_REDIRECT_TAKEOVER_REQUIRED: {
     to: 'catalog',
     reason:
-      'Minted by feature 162 (FR-072) for a URL-key write meeting another product\'s redirect: ' +
+      'Minted by feature 163 (FR-072) for a URL-key write meeting another product\'s redirect: ' +
       'the operator must confirm that the other product loses it. The noun is a product URL ' +
       'redirect, a `catalog` row, raised only by `catalog`\'s URL-key write.',
   },
   URL_REDIRECT_NOT_FOUND: {
     to: 'catalog',
     reason:
-      'Minted by feature 162 for deleting a URL redirect that is not the product\'s. The noun is ' +
+      'Minted by feature 163 for deleting a URL redirect that is not the product\'s. The noun is ' +
       'a product URL redirect, a `catalog` row; `NOT_FOUND` is not reused because the admin ' +
       'needs to tell this apart from the product itself being gone.',
   },

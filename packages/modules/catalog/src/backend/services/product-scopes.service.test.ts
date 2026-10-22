@@ -12,7 +12,7 @@ import {
 } from './product-scopes.service.js';
 
 /**
- * Feature 162, Phase 4 (T021) — the decision core of `ProductScopesService.apply`:
+ * Feature 163, Phase 4 (T021) — the decision core of `ProductScopesService.apply`:
  * what a `PATCH /admin/catalog/products/:id/scopes` writes, what it refuses, and the
  * audit projection it records (`contracts/admin-scopes-api.md` §2; FR-012–FR-015,
  * FR-030, FR-080, C4).
@@ -422,7 +422,7 @@ describe('planProductScopeWrite — the audit projection (FR-080, Q-D → A)', (
   });
 });
 
-describe('ProductScopesService.apply — concurrent writes (security review, 162 Block A)', () => {
+describe('ProductScopesService.apply — concurrent writes (security review, 163 Block A)', () => {
   function rig(flush: () => Promise<void> = async () => {}) {
     const reads: Array<{ entity: unknown; lockMode: LockMode | undefined }> = [];
     const product = {

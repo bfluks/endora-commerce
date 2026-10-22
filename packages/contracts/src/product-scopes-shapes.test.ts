@@ -15,7 +15,7 @@ import {
 } from './product-scopes.js';
 
 /**
- * Feature 162 — the admin shapes of `contracts/admin-scopes-api.md` §1–§4 and the
+ * Feature 163 — the admin shapes of `contracts/admin-scopes-api.md` §1–§4 and the
  * additive edits to `catalog.ts` (T007, T010).
  */
 
