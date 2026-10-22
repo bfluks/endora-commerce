@@ -104,7 +104,7 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
       .execute(
         `select state_before, state_after from audit_log_entries
           where action = 'product.scopes.update' and object_type = 'product' and object_id = ?
-          order by created_at`,
+          order by acted_at`,
         [productId],
       );
   }
