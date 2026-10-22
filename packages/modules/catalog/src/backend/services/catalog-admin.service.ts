@@ -56,6 +56,8 @@ export type CatalogWarehouseThresholdCopy = (input: {
 import { HttpError } from '@endora-commerce/platform/http';
 import { Category } from '../entities/category.entity.js';
 import { Product } from '../entities/product.entity.js';
+import { ProductUrlRedirect } from '../entities/product-url-redirect.entity.js';
+import { isUrlKeyFree, lockUrlKeys } from './url-key.service.js';
 import { ProductVariant } from '../entities/product-variant.entity.js';
 import {
   assertVirtualDownloadFields,
@@ -1109,13 +1111,21 @@ export class CatalogAdminService {
    * Feature 068 — used by the create path as well as the duplication path; a
    * name collision on create used to reach the database and be reported as a
    * SKU conflict.
+   *
+   * Feature 162 (A-11) — a new product's slug is its key in every language, so
+   * "free" means free as a URL key: no product's global key, and no live
+   * product's current or redirecting key in any language. The candidate's URL-key
+   * lock is taken before the decisive check, so a concurrent key write cannot
+   * claim it in between; only the chosen candidate's lock is ever held, so this
+   * never waits in an order a key writer could deadlock against.
    */
   private async allocateUniqueSlug(em: EntityManager, source: string): Promise<string> {
     const root = this.slugify(source);
     for (let i = 0; i < 1000; i += 1) {
       const candidate = i === 0 ? root : this.slugify(`${root}-${i + 1}`);
-      const hit = await em.findOne(Product, { slug: candidate });
-      if (!hit) return candidate;
+      if (!(await isUrlKeyFree(em, candidate))) continue;
+      await lockUrlKeys(em, [candidate]);
+      if (await isUrlKeyFree(em, candidate)) return candidate;
     }
     throw new HttpError(
       409,
@@ -1207,11 +1217,18 @@ export class CatalogAdminService {
           name: { ...product.name },
           deletedAt: product.deletedAt ?? null,
         };
+        // Feature 162 (FR-072) — a deleted product's old URL keys stop redirecting.
+        const urlRedirects = (await em.find(ProductUrlRedirect, { productId: id })).map((row) => ({
+          id: row.id,
+          languageCode: row.languageCode ?? null,
+          key: row.key,
+        }));
+        if (urlRedirects.length > 0) await em.nativeDelete(ProductUrlRedirect, { productId: id });
         product.deletedAt = new Date();
         await em.flush();
         return {
           result: { id: product.id },
-          before: stateBefore,
+          before: { ...stateBefore, urlRedirects },
           after: {
             ...stateBefore,
             deletedAt: product.deletedAt?.toISOString() ?? null,
