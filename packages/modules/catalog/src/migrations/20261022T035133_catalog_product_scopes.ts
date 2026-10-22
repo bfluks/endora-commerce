@@ -72,10 +72,6 @@ export class Migration20261022T035133CatalogProductScopes extends Migration {
       );
     `);
     this.addSql(`
-      create index "product_channel_language_scopes_channel_language_status_idx"
-        on "product_channel_language_scopes" ("sales_channel_id", "language_code", "status");
-    `);
-    this.addSql(`
       alter table "products"
         add column "publish_from" timestamptz null,
         add column "publish_until" timestamptz null,
