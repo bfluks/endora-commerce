@@ -568,6 +568,9 @@ export class CatalogAdminService {
       // whether or not this write touched it.
       minOrderQuantity: product.minOrderQuantity ?? null,
       returnable: product.returnable,
+      // Feature 162 (FR-023) — the global publication window.
+      publishFrom: product.publishFrom?.toISOString() ?? null,
+      publishUntil: product.publishUntil?.toISOString() ?? null,
     };
     const changedFields: string[] = [];
     let archived = false;
@@ -710,6 +713,39 @@ export class CatalogAdminService {
       product.returnable = req.returnable;
       changedFields.push('returnable');
     }
+    // Feature 162 (FR-023) — the global publication window, written as a pair:
+    // an omitted bound keeps its stored value, and the pair that results must
+    // start before it ends. It never touches a channel's window (FR-013).
+    if (req.publishFrom !== undefined || req.publishUntil !== undefined) {
+      const from =
+        req.publishFrom === undefined
+          ? (product.publishFrom ?? null)
+          : req.publishFrom === null
+            ? null
+            : new Date(req.publishFrom);
+      const until =
+        req.publishUntil === undefined
+          ? (product.publishUntil ?? null)
+          : req.publishUntil === null
+            ? null
+            : new Date(req.publishUntil);
+      if (from !== null && until !== null && from.getTime() >= until.getTime()) {
+        throw new HttpError(
+          422,
+          ERROR_CODES.VALIDATION_FAILED,
+          'The publication window must start before it ends.',
+          { field: 'window' },
+        );
+      }
+      if (
+        (from?.getTime() ?? null) !== (product.publishFrom?.getTime() ?? null) ||
+        (until?.getTime() ?? null) !== (product.publishUntil?.getTime() ?? null)
+      ) {
+        product.publishFrom = from;
+        product.publishUntil = until;
+        changedFields.push('publicationWindow');
+      }
+    }
     const stateAfter: Record<string, unknown> = {
       name: { ...product.name },
       description: { ...product.description },
@@ -721,6 +757,8 @@ export class CatalogAdminService {
       allowedOrganizationIds: [...product.allowedOrganizationIds],
       minOrderQuantity: product.minOrderQuantity ?? null,
       returnable: product.returnable,
+      publishFrom: product.publishFrom?.toISOString() ?? null,
+      publishUntil: product.publishUntil?.toISOString() ?? null,
     };
     return { product, stateBefore, stateAfter, changedFields, archived };
   }
