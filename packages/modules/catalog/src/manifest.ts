@@ -609,7 +609,19 @@ export const manifest = defineModuleManifest({
       icon: 'Package',
       targetRoute: '/catalog/products',
       requiredPermission: 'catalog:read',
-      keywords: ['products', 'catalog', 'items', 'produkty', 'katalog'],
+      // Feature 162 (R23, FR-042) — the scope controls and overview are part of the
+      // product editor, which a palette route cannot open by id; these find it.
+      keywords: [
+        'products',
+        'catalog',
+        'items',
+        'produkty',
+        'katalog',
+        'scope',
+        'zakres',
+        'visibility per channel',
+        'publication window',
+      ],
       weight: 200,
     },
     {
