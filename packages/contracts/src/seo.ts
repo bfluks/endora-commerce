@@ -417,3 +417,40 @@ export interface SeoMetaWritePort {
     description?: string | null;
   }): Promise<void>;
 }
+
+/** The product-page metadata fields an SEO override can set (feature 162, FR-075). */
+export type SeoProductMetaField = 'title' | 'description' | 'ogTitle' | 'ogDescription' | 'ogImageUrl';
+
+/** Where an effective metadata value came from; `derived` = the product page's own fallback. */
+export type SeoProductMetaSource = 'channel_language' | 'channel' | 'language' | 'derived';
+
+export interface SeoProductMetaValues {
+  title: string;
+  description: string;
+  ogTitle: string;
+  ogDescription: string;
+  ogImageUrl: string | null;
+}
+
+/**
+ * Container name: `seoProductMetaPort`. Owner: `seo` (feature 162, R13).
+ *
+ * Product metadata per sales channel × language. Each field resolves channel ×
+ * language → channel → language → the caller's derived fallback (FR-075).
+ * `catalog` declares the edge as degrades-without and probes `seo`'s presence before
+ * resolving it.
+ *
+ * **Owner off:** resolving this port throws `ModuleDisabledError` (503).
+ */
+export interface SeoProductMetaPort {
+  resolveForProduct(input: {
+    productId: string;
+    channelId: string;
+    languageCode: string;
+    fallback: SeoProductMetaValues;
+  }): Promise<SeoProductMetaValues & { sources: Record<SeoProductMetaField, SeoProductMetaSource> }>;
+  /** Every scope holding an override for the product, for the scope overview. */
+  listScopesForProduct(
+    productId: string,
+  ): Promise<Array<{ channelId: string | null; locale: string | null; fields: SeoProductMetaField[] }>>;
+}
