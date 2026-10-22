@@ -741,7 +741,16 @@ export type CreateProductRequest = z.infer<typeof createProductRequestSchema>;
 // frozen at snapshot time.
 export const updateProductRequestSchema = baseProductRequestObject
   .partial()
-  .omit({ type: true });
+  .omit({ type: true })
+  .extend({
+    /**
+     * Feature 162 (FR-023) — the global publication window, inclusive at both
+     * ends; `null` opens that side. A start not before the end is refused by the
+     * service (`422 VALIDATION_FAILED`, `details.field = 'window'`).
+     */
+    publishFrom: isoDateTimeSchema.nullable().optional(),
+    publishUntil: isoDateTimeSchema.nullable().optional(),
+  });
 export type UpdateProductRequest = z.infer<typeof updateProductRequestSchema>;
 
 // Admin batch-by-id lookup. The body carries the id set (deduped server-

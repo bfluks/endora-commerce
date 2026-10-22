@@ -588,6 +588,7 @@
   "errors.URL_KEY_REDIRECT_TAKEOVER_REQUIRED": "This URL key still redirects to another product. Confirm that you want to take it over; the other product will lose that redirect.",
   "errors.URL_REDIRECT_NOT_FOUND": "This redirect no longer exists. Refresh the page to see the product's current redirects.",
   "auditLog.product.update": "Product updated",
+  "auditLog.product.scopes.update": "Product settings per sales channel updated",
   "auditLog.attribute_set.create": "Attribute set created",
   "auditLog.attribute_set.update": "Attribute set updated",
   "auditLog.attribute_set.delete": "Attribute set deleted",
