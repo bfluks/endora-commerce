@@ -16,6 +16,7 @@ import type {
 import type { CartAuditService } from './cart-audit-service.js';
 import { assertCartMeetsMinimums, toCartMinimumItem } from './cart-minimums.js';
 import { availableRecords, basketScopeLanguage } from './cart-availability.js';
+import { cartAudience } from './cart-service.js';
 
 /**
  * Approval-workflow state machine (feature 027 US4).
@@ -166,7 +167,9 @@ export class CartApprovalService {
         availableRecords(this.availability, products, {
           channelId: cart.salesChannelId,
           languageCode: cart.salesChannelId ? basketScopeLanguage(cart.salesChannelId, options.language) : null,
-          audience: { organizationId: actor.organizationId, authenticated: true },
+          audience: cartAudience({
+            customer: { ...actor, salesChannelId: cart.salesChannelId ?? '' },
+          }),
         }),
       confirmQuoteSource: (quoteRequestId) =>
         this.quoteSource.quoteSourceHonoursExemptions({

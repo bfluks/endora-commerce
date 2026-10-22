@@ -1550,7 +1550,7 @@ function groupBy<T, K>(arr: T[], key: (t: T) => K): Map<K, T[]> {
  * the one the RFQ is filed under — so it is also the one the product's
  * allow-list has to name.
  */
-function rfqAudience(ctx: CustomerContext): ProductAudience {
+export function rfqAudience(ctx: Pick<CustomerContext, 'organizationId'>): ProductAudience {
   return { organizationId: ctx.organizationId, authenticated: true };
 }
 
