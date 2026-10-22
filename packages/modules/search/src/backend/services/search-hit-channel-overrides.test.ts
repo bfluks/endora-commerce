@@ -93,7 +93,12 @@ function serviceWith(
   } as unknown as CatalogProductReadPort;
   // Names are this file's subject, not prices: the pricing port resolves nothing.
   const prices = { resolveListingPriceDetails: async () => new Map() } as unknown as ListingPriceDetailPort;
-  return { service: new SearchQueryService(port, undefined, {}, prices), listValueOverridesByProductIds };
+  // Feature 163 — every hit is available here; this file is about names.
+  const availableEverywhere = { filterAvailable: async (ids: readonly string[]) => new Set(ids) };
+  return {
+    service: new SearchQueryService(port, undefined, {}, prices, undefined, availableEverywhere),
+    listValueOverridesByProductIds,
+  };
 }
 
 const ctx = (preferredLanguage?: string) => ({

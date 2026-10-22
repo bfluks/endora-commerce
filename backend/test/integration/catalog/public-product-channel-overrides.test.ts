@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   ANONYMOUS_PRODUCT_AUDIENCE,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type ListingPriceDetailPort,
 } from '@endora-commerce/contracts';
@@ -388,6 +389,9 @@ describe('Issue #384 — public product reads honour channel value overrides', (
       {},
       // Names are this case's subject, not prices: the pricing port resolves nothing.
       { resolveListingPriceDetails: async () => new Map() } as unknown as ListingPriceDetailPort,
+      undefined,
+      // Feature 163 — hydration asks `catalog` for every hit.
+      h.container.resolve<CatalogProductAvailabilityPort>('catalogProductAvailabilityPort'),
     );
     const searchCardName = async (
       channelId: string,

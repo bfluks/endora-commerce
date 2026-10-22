@@ -3,11 +3,12 @@ import {
   ERROR_CODES,
   effectiveSystemText,
   isOrderMinimumEligibleType,
-  isProductVisibleTo,
   listingPriceChannelContext,
+  resolveScopeLanguage,
   listingPriceMoney,
   overrideLanguages,
   type CatalogAttributeReadPort,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
   type ListingPrice,
@@ -22,6 +23,7 @@ import {
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { encodeCursor, decodeCursor } from '@endora-commerce/platform/http';
+import { availabilityFilter } from './search-availability.js';
 import {
   indexUidFor,
   type IndexedDocument,
@@ -57,6 +59,19 @@ export interface ResolvedSearchChannel {
   code: string;
   defaultCurrency: string;
   defaultLanguage: string;
+  /** Feature 163 — the channel's content languages (the published `ResolvedSearchChannel`). */
+  languages?: readonly string[] | undefined;
+}
+
+/**
+ * Feature 163 — the scope language L of a query: the request's pick resolved
+ * against the channel's own languages (R7); the default language always counts
+ * as offered.
+ */
+export function searchScopeLanguage(channel: ResolvedSearchChannel, preferredLanguage: string | undefined): string {
+  const languages = [...(channel.languages ?? [])];
+  if (!languages.includes(channel.defaultLanguage)) languages.unshift(channel.defaultLanguage);
+  return resolveScopeLanguage({ id: channel.id, languages, defaultLanguage: channel.defaultLanguage }, preferredLanguage);
 }
 
 export interface SearchQueryContext {
@@ -152,6 +167,13 @@ export class SearchQueryService {
      * Optional only in the signature, and never reached by an anonymous query.
      */
     private readonly organizations?: OrganizationDetailsPort,
+    /**
+     * Feature 163 — `catalog`'s availability answer, asked again for every
+     * hit at (channel, L) for the caller, now. Optional only in the
+     * signature: hydration without it fails loudly rather than trusting the
+     * index.
+     */
+    private readonly availability?: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
   ) {
     const host =
       options.meilisearchHost ??
@@ -201,7 +223,17 @@ export class SearchQueryService {
     const index = this.client.index<DocumentHit & { updatedAt: number }>(indexUid);
 
     const offset = decodeOffsetCursor(params.cursor) ?? 0;
-    const filter = buildFilterExpression(params);
+    // Feature 163 (R8) — availability at (channel, L), the window at query time
+    // and the audience go into the filter the page is cut from (issue #151),
+    // never only into hydration.
+    const filter = [
+      ...buildFilterExpression(params),
+      availabilityFilter({
+        languageCode: searchScopeLanguage(channel, ctx.preferredLanguage),
+        audience: ctx.audience,
+        nowMs: Date.now(),
+      }),
+    ];
     const sort = buildSort(params.sort);
 
     let response: SearchResponse<DocumentHit & { updatedAt: number }>;
@@ -272,9 +304,20 @@ export class SearchQueryService {
     // the next author, as though the question were settled upstream. The cost
     // is the one this path already pays for a stale index: a page can come
     // back shorter than `limit`.
-    const products = (await this.products.findByIds(hits.map((h) => h.id))).filter((p) =>
-      isProductVisibleTo(p, ctx.audience),
+    //
+    // Feature 163 — the question is now the whole of availability, asked of
+    // `catalog` at (channel, L) for this caller, now: the index filter narrows
+    // the page and this pass keeps a stale document from deciding a disclosure.
+    const records = await this.products.findByIds(hits.map((h) => h.id));
+    const available = await this.#requireAvailability().filterAvailable(
+      records.map((p) => p.id),
+      {
+        channelId: channel.id,
+        languageCode: searchScopeLanguage(channel, ctx.preferredLanguage),
+        audience: ctx.audience,
+      },
     );
+    const products = records.filter((p) => available.has(p.id));
     const productById = new Map(products.map((p) => [p.id, p]));
     // The price is the *viewer's*, while the document stays everybody's. A
     // Meilisearch document has never carried a price and does not start now:
@@ -331,6 +374,15 @@ export class SearchQueryService {
     }
 
     return summaries;
+  }
+
+  #requireAvailability(): Pick<CatalogProductAvailabilityPort, 'filterAvailable'> {
+    if (!this.availability) {
+      throw new Error(
+        'SearchQueryService: the availability port is not wired — a hit cannot be hydrated without it.',
+      );
+    }
+    return this.availability;
   }
 
   /** Every override row `channelId` holds for the page's products, bucketed by product. */

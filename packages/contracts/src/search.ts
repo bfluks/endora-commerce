@@ -209,6 +209,13 @@ export interface ResolvedSearchChannel {
   code: string;
   defaultCurrency: string;
   defaultLanguage: string;
+  /**
+   * Feature 163 — the channel's content languages, from the resolved channel
+   * record. The scope language a query filters on is the request's
+   * `Accept-Language` pick resolved against them. Absent: the default
+   * language alone.
+   */
+  languages?: readonly string[] | undefined;
 }
 
 export interface SearchQueryContext {
