@@ -268,19 +268,26 @@ webhook registry entry.
   (nullable; `NULL` = the language key), `key`. Unique per (product, language) where channel is null and
   per (product, channel, language) otherwise.
 - **`product_url_redirects`** (catalog): `product_id`, `language_code` (nullable; `NULL` = a former
-  *global* key, redirecting in every language where the product has no language key), `key`. Partial
+  *global* key that was free in every language when it was released), `key`. Partial
   unique `(language_code, key)` where not null and `(key)` where null. A `NULL`-language redirect resolves
   in **every** language of every channel (analyze H1, 2026-10-21): conditioning it on "where the product has
   no L key" made a former global key stop resolving in L the day the product got its first L key — an
-  expiry FR-072 forbids. A current key always wins over a redirect with the same key.
+  expiry FR-072 forbids. In resolution a current key ranks above a redirect with the same key, but the write
+  rules (data-model §5) never let a current key and **another** product's redirect share a key in one
+  language, so that ranking only ever decides between a product's own current key and its own redirect.
 - **Uniqueness is enforced in the write service, inside the Command, under
   `pg_advisory_xact_lock(hashtextextended('catalog.url-key:' || key, 0))`** taken for every key the write
   touches, in sorted order (no deadlock). The check is the closed list of FR-070/072: another product's
   global slug, language key, any-channel C×L key (orphans included), or redirect in the same language
   (and for a global key: in any language). The indexes above and `products.slug`'s unique index are
   backstops for the expressible half.
-- Changing a key writes the old key as a redirect **in its language** (a language or C×L key) or with
-  `language_code NULL` (the global key); giving a product its first L key inserts a redirect `(L, slug)`
+- Changing a key writes the old key as a redirect **in its language** (a language or C×L key — always free
+  there, it was the product's current key) or, for the global key, with `language_code NULL` **only if the
+  old slug is free in every language**; otherwise as `(L, old)` rows for the languages where it is free and
+  none where another product holds it (re-analyze HIGH-2, 2026-10-22: a global slug is the product's key
+  only where it has no language key, so another product may hold it as an L key; an unconditional `NULL`
+  row would then share the key in L with that product's current key). Removing a language key makes the
+  slug the product's key in L again and is checked as a write of the slug in L; giving a product its first L key inserts a redirect `(L, slug)`
   (FR-072 consequence 1); a key written back that is the product's own redirect deletes that redirect (no
   chain, no self-redirect). Redirect rows store the *product*, never a target URL, so they never chain
   (FR-072): the target is resolved at request time.
@@ -303,7 +310,9 @@ are **served**. Resolution of key `k` at (C, L): (1) a `product_url_keys` row of
 product with no L key → that product; serve if `k` is its effective key at (C, L), else 301 to it;
 (2) else a redirect row of L, else a global redirect (`language_code NULL`) of any product — regardless of
 the language keys that product holds (H1) — → 301 to the product's effective key at (C, L), **only if `seo`
-is effectively present**; (3) else not-found.
+is effectively present**; (3) else not-found. Step (1) never hides another product's redirect: the write
+rules (R11, data-model §5) keep a current key and another product's redirect from sharing a key in one
+language — including a released global slug, which becomes a `NULL` row only where that holds everywhere.
 Availability (FR-001) is then evaluated for the product the key resolved to (FR-071) — an unavailable
 target answers not-found, an archived one answers "gone" (edge cases). The public route answers a redirect
 as `{ data: { redirect: { key, language } } }` with HTTP 200 on a dedicated resolve endpoint (contract
@@ -452,6 +461,17 @@ K3). `warn`: save and return `warnings: [{ channelId, languageCode, missing: [..
 `SCOPE_INCOMPLETE` with the same details, nothing saved (N3). Bulk: per-product skip with reason
 `completeness_gate` (FR-061). Ports and imports never call it.
 
+**M3 decided (owner, 2026-10-22): option A — only a status write fires the gate.** `pairsTurningOn`
+compares `isOn(effectiveStatus)` alone: window and audience are not inputs, and one `channels` list serves
+both snapshots, so a scopes PATCH that changes only the window, the audience or order rules returns no pair,
+and membership (`PUT /api/v1/admin/sales-channels/:code/:entityType/:entityId`) and channel-language
+(`PATCH /api/v1/admin/sales-channels/:code`) writes — owned by `sales_channels` — never reach it. What such a
+change leaves missing is surfaced instead by the scope overview: every evaluable cell carries
+`missing: ScopeMissingValue[]` from the same `checkCompleteness` (FR-041, `admin-scopes-api.md` §3), whatever
+its status. *Rejected (option B):* gating membership and channel-language writes would put a catalog rule
+into `sales_channels`' write path (a call back into catalog from the module whose membership port catalog
+consumes) and refuse a channel edit for one product's missing translation.
+
 ## R19 — Effective names everywhere (FR-017)
 
 **Decision.**
@@ -586,14 +606,14 @@ convention — a single-row Command is not `reversible`, and its audit `stateBef
 restores from by re-sending it. This plan's earlier "undo handler registered for `product.scopes.update`"
 named machinery that does not exist.
 
-**Decision (interim, `plan.md` Q-D).** Bulk scoped writes are undone by the existing bulk-operation undo
+**Decision (owner, Q-D → A, 2026-10-22).** Bulk scoped writes are undone by the existing bulk-operation undo
 (all-or-nothing per product, conflict report — T073). Single scoped writes (`product.scopes.update`,
 `product.url_keys.update`, `product.url_redirect.delete`, `product.media.update`, the attachment and
 packaging-unit updates, `seo_meta_override.upsert/.delete`) are Commands whose `before` / `after` are the
 **complete** projection of every row touched, so re-applying `before` through the same route restores it;
-tests assert that projection, not an undo endpoint. No new machinery.
+tests assert that projection, not an undo endpoint. No new machinery, and no single-write undo (FR-081).
 
-**Alternative rejected (for now).** A generic single-Command undo (revert records on the audit row or a
+**Alternative rejected (Q-D option B).** A generic single-Command undo (revert records on the audit row or a
 new table, a generic undo route, conflict detection per object type) is platform work owned by
-`audit_logs`/the platform, a new phase, and a Complexity Tracking entry. It becomes the plan only if the
-owner answers Q-D that one-click undo of a single scoped write is required.
+`audit_logs`/the platform, a new phase, and a Complexity Tracking entry. The owner placed it out of scope;
+it is a possible future issue, not part of 162.
