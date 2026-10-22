@@ -14,6 +14,7 @@ import {
   type RfqComparisonAgainstLastSeen,
   type AdminUserReadPort,
   type CartWritePort,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CatalogPackagingUnitRecord,
   type CatalogProductRecord,
@@ -42,8 +43,7 @@ import type { RfqNotificationService} from './rfq-notification-service.js';
 import { type NotificationRecipient } from './rfq-notification-service.js';
 import type { QuoteRequestBusinessIdGenerator } from './quote-request-business-id-generator.js';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
-import { productIdsInRequestChannel } from '@endora-commerce/platform/kernel';
-import { raisedOnChannelId } from './raised-on-channel.js';
+import { raisedInScopeLanguage, raisedOnChannelId } from './raised-on-channel.js';
 import { hasUnpricedLine, quoteIncompleteError, unitPriceText } from './agreed-price.js';
 import { underRowLock } from './transition-lock.js';
 import { summarize } from './summarize.js';
@@ -152,6 +152,12 @@ export interface RfqServiceDeps {
    * module's, so it is not one of the four edges the block above declares.
    */
   channelMembership: SalesChannelMembershipPort;
+  /**
+   * Feature 163 — `catalog`'s one answer to "may this buyer acquire this
+   * product here, now" (FR-004, FR-018): membership, effective status at
+   * (channel, L), window and effective audience.
+   */
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
   customerAccounts: CustomerAccountReadPort;
   adminUsers: AdminUserReadPort;
   carts: CartWritePort;
@@ -218,16 +224,23 @@ export class RfqService {
   async #acquirableProductsById(
     productIds: readonly string[],
     ctx: CustomerContext,
+    /** The request's language (feature 163): L is it resolved against the channel. */
+    languageTag?: string,
   ): Promise<Map<string, CatalogProductRecord>> {
-    const visible = (await this.deps.catalogProducts.findByIds(productIds)).filter((p) =>
-      isProductVisibleTo(p, rfqAudience(ctx)),
+    const records = await this.deps.catalogProducts.findByIds(productIds);
+    const channelId = raisedOnChannelId();
+    // Outside a request there is no channel to ask about (FR-007): the
+    // audience filter alone, as before.
+    if (channelId === null) {
+      return new Map(records.filter((p) => isProductVisibleTo(p, rfqAudience(ctx))).map((p) => [p.id, p]));
+    }
+    // Feature 163 (FR-018) — the request's channel and language; one answer for
+    // every reason a line is not acquirable.
+    const available = await this.deps.catalogAvailability.filterAvailable(
+      records.map((p) => p.id),
+      { channelId, languageCode: raisedInScopeLanguage(languageTag), audience: rfqAudience(ctx) },
     );
-    const publishedHere = await productIdsInRequestChannel(
-      this.deps.channelMembership,
-      visible.map((p) => p.id),
-    );
-    const acquirable = publishedHere ? visible.filter((p) => publishedHere.has(p.id)) : visible;
-    return new Map(acquirable.map((p) => [p.id, p]));
+    return new Map(records.filter((p) => available.has(p.id)).map((p) => [p.id, p]));
   }
 
   /**
@@ -404,6 +417,7 @@ export class RfqService {
     const productById = await this.#acquirableProductsById(
       input.items.map((it) => it.productId),
       ctx,
+      options.language,
     );
     if (productById.size !== new Set(input.items.map((it) => it.productId)).size) {
       // Issues #227 and #259 — a line the buyer may not see, and a line the
@@ -568,6 +582,7 @@ export class RfqService {
       const productById = await this.#acquirableProductsById(
         body.items.map((it) => it.productId),
         ctx,
+        options.language,
       );
       if (productById.size !== new Set(body.items.map((it) => it.productId)).size) {
         // Issues #227 and #259 — see `createForCustomer`. A revision may not
@@ -755,11 +770,13 @@ export class RfqService {
     //
     // Whole-request 404, the same answer `createForCustomer` gives, because a
     // resubmit *is* a create over lines the buyer already chose.
-    const publishedHere = await productIdsInRequestChannel(
-      this.deps.channelMembership,
-      sourceItems.map((it) => it.productId),
+    // Feature 163 — and every other reason a line is not acquirable here, now.
+    const acquirable = await this.#acquirableProductsById(
+      Array.from(new Set(sourceItems.map((it) => it.productId))),
+      ctx,
+      options.language,
     );
-    if (publishedHere && sourceItems.some((it) => !publishedHere.has(it.productId))) {
+    if (sourceItems.some((it) => !acquirable.has(it.productId))) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
     }
 

@@ -3,7 +3,7 @@ import { ERROR_CODES } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { productAudienceOf } from '@endora-commerce/platform/http';
 import { getResolvedChannel } from '@endora-commerce/platform/kernel';
-import type { ComparisonOwner, ComparisonService } from './services/comparison-service.js';
+import type { ComparisonOwner, ComparisonService, ComparisonViewer } from './services/comparison-service.js';
 import { readAnonymousToken } from './services/anonymous-token-cookie.js';
 import { customerActor } from './request-actor.js';
 
@@ -51,7 +51,7 @@ export async function registerComparisonsShareRoutes(
       const view = await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        buyerViewerOf(request),
       );
       const viewerIsOwner = comparisonService.isOwnedBy(
         comparison,
@@ -92,4 +92,19 @@ function viewerIdentity(request: FastifyRequest): ComparisonOwner | null {
   }
   const token = readAnonymousToken(request);
   return token ? { kind: 'anonymous', anonymousToken: token } : null;
+}
+
+/**
+ * Feature 163 — the reader as a comparison view takes it: the session's
+ * audience and the request's language tag, which the scope language L of the
+ * column's availability is resolved from.
+ */
+function buyerViewerOf(request: FastifyRequest): ComparisonViewer {
+  const header = request.headers['accept-language'];
+  const tag = typeof header === 'string' ? header.split(',')[0]?.split(';')[0]?.trim() : undefined;
+  return {
+    kind: 'buyer',
+    audience: productAudienceOf(request),
+    ...(tag ? { languageTag: tag } : {}),
+  };
 }

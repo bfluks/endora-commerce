@@ -29,6 +29,7 @@ import type {
   Order as OrderResponse,
   OrderPendingEffect,
   AssetReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   CustomFieldListFilterPort,
@@ -149,6 +150,8 @@ export interface OrdersDeps {
    * returning rows from tables deactivation does not drop.
    */
   catalogProductRead: CatalogProductReadPort;
+  /** Feature 163 — the admin preview reports a line no longer available in the channel. */
+  catalogProductAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
   customerAccountRead: CustomerAccountReadPort;
   organizationDetails: OrganizationDetailsPort;
   /**
@@ -934,15 +937,27 @@ export async function registerOrderRoutes(
             inChannel: true,
           }).available,
       );
-      const inChannel = new Set(
+      const members =
         idsToCheck.length > 0
           ? await salesChannelMembership.filterEntityIdsInChannel(
               body.salesChannelId,
               'product',
               idsToCheck,
             )
-          : [],
-      );
+          : [];
+      // Feature 163 — a member that is not available in the channel now
+      // (switched off at the channel's default language — the operator's, N2 —,
+      // outside its window, or outside the channel's audience rule) is reported
+      // as not offered in the channel: the order placement would refuse it.
+      const availableHere =
+        members.length > 0
+          ? await deps.catalogProductAvailability.filterAvailable(members, {
+              channelId: body.salesChannelId,
+              languageCode: null,
+              audience: { organizationId, authenticated: true },
+            })
+          : new Set<string>();
+      const inChannel = new Set(members.filter((id) => availableHere.has(id)));
 
       // Steps 1–4 per line, first match wins; an orderable line keeps its price.
       type EvaluatedLine =
