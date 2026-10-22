@@ -43,6 +43,8 @@ import {
   ProductScopeEditor,
   type ProductScopeEditorHandle,
 } from '../components/ProductScopeEditor.js';
+import { checkWindowInputs, isoToLocalInput } from '../lib/product-scope-drafts.js';
+import { getProductScopes } from '../lib/product-scopes-api.js';
 
 const LOCALES = ['en-US', 'pl-PL'] as const;
 type Locale = (typeof LOCALES)[number];
@@ -140,6 +142,13 @@ export function ProductEditor(): ReactNode {
   const [attributeSetId, setAttributeSetId] = useState<string>('');
   // Editable attribute values keyed by attribute `key` (Attributes tab).
   const [attrValues, setAttrValues] = useState<Record<string, unknown>>({});
+  // Feature 162 (FR-023) — the global publication window, as `datetime-local`
+  // values in the operator's zone. `loadedWindow` is what the server holds, so
+  // the page PATCH carries the window only when it changed.
+  const [publishFrom, setPublishFrom] = useState('');
+  const [publishUntil, setPublishUntil] = useState('');
+  const [loadedWindow, setLoadedWindow] = useState({ from: '', until: '' });
+  const [windowError, setWindowError] = useState<'order' | 'invalidDate' | null>(null);
   // Feature 023 — imperative handle on the scope-editor so the page Save
   // can flush every pending channel-scoped override in a single PATCH.
   const scopeEditorRef = useRef<ProductScopeEditorHandle | null>(null);
@@ -162,6 +171,8 @@ export function ProductEditor(): ReactNode {
     categoryIds,
     attributeSetId,
     attrValues,
+    publishFrom,
+    publishUntil,
   });
   const dirty =
     !loading &&
@@ -197,6 +208,8 @@ export function ProductEditor(): ReactNode {
           categoryIds: [],
           attributeSetId: defaultSet?.id ?? '',
           attrValues: {},
+          publishFrom: '',
+          publishUntil: '',
         });
       }
       if (id) {
@@ -224,6 +237,22 @@ export function ProductEditor(): ReactNode {
         setAttrValues(p.attributeValues ?? {});
         setAttributeSetId(p.attributeSetId);
         setCategoryIds(p.categoryIds ?? []);
+        // Feature 162 — the global window is read from the scopes answer (the
+        // product answer does not carry it). A failed read leaves the fields
+        // empty and unchanged, so nothing is sent for them on save.
+        let loadedFrom = '';
+        let loadedUntil = '';
+        try {
+          const scopes = await getProductScopes(id);
+          loadedFrom = isoToLocalInput(scopes?.global?.publishFrom ?? null);
+          loadedUntil = isoToLocalInput(scopes?.global?.publishUntil ?? null);
+        } catch {
+          // Best effort — the rest of the editor stays usable.
+        }
+        setPublishFrom(loadedFrom);
+        setPublishUntil(loadedUntil);
+        setLoadedWindow({ from: loadedFrom, until: loadedUntil });
+        setWindowError(null);
         // Capture the loaded state as the clean baseline for dirty-tracking.
         initialSnapshotRef.current = stableSnapshot({
           sku: p.sku,
@@ -236,6 +265,8 @@ export function ProductEditor(): ReactNode {
           categoryIds: p.categoryIds ?? [],
           attributeSetId: p.attributeSetId,
           attrValues: p.attributeValues ?? {},
+          publishFrom: loadedFrom,
+          publishUntil: loadedUntil,
         });
       }
     } catch (err) {
@@ -276,6 +307,19 @@ export function ProductEditor(): ReactNode {
         }
         attributeValues['defaultPrice'] = v;
       }
+      // Feature 162 (FR-023) — the window travels only when it changed, and
+      // a window that does not start before it ends is refused here, beside
+      // its fields, without a request.
+      let windowPatch: { publishFrom: string | null; publishUntil: string | null } | null = null;
+      if (publishFrom !== loadedWindow.from || publishUntil !== loadedWindow.until) {
+        const check = checkWindowInputs(publishFrom, publishUntil);
+        if (!check.ok) {
+          setWindowError(check.reason);
+          return;
+        }
+        windowPatch = { publishFrom: check.from, publishUntil: check.until };
+      }
+      setWindowError(null);
       try {
         if (isNew) {
           const res = await apiClient.post<{ data: AdminProduct }>(
@@ -310,6 +354,7 @@ export function ProductEditor(): ReactNode {
                 attributeValues,
                 visibility,
                 ...(attributeSetId ? { attributeSetId } : {}),
+                ...(windowPatch ?? {}),
               },
             ),
             scopeEditorRef.current?.flushOverrides() ?? Promise.resolve(),
@@ -319,10 +364,19 @@ export function ProductEditor(): ReactNode {
           await refresh();
         }
       } catch (err) {
-        setError(err instanceof ApiError ? err.envelope.error.message : 'Save failed.');
+        const windowRefused =
+          err instanceof ApiError &&
+          (err.envelope.error as { details?: { field?: unknown } }).details?.field === 'window';
+        setError(
+          windowRefused
+            ? t('productEditor.error.publishWindow')
+            : err instanceof ApiError
+              ? err.envelope.error.message
+              : 'Save failed.',
+        );
       }
     },
-    [isNew, id, sku, status, type, name, description, categoryIds, defaultPrice, attrValues, attributeSetId, visibility, navigate, refresh],
+    [isNew, id, sku, status, type, name, description, categoryIds, defaultPrice, attrValues, attributeSetId, visibility, navigate, refresh, publishFrom, publishUntil, loadedWindow, t],
   );
 
   const handleAttrChange = useCallback((key: string, value: unknown): void => {
@@ -561,6 +615,7 @@ export function ProductEditor(): ReactNode {
                     productId={id}
                     baselineName={name}
                     baselineDescription={description}
+                    globalStatus={status}
                     onBaselineNameChange={(next): void =>
                       setName({
                         'en-US': next['en-US'] ?? '',
@@ -678,6 +733,62 @@ export function ProductEditor(): ReactNode {
                     </div>
                   </div>
                 </div>
+
+                {/* Feature 162 (FR-023) — the global publication window. A channel
+                    may set its own in the scope controls above. No constraint
+                    attributes: the check is ours and translated, never a
+                    browser bubble. */}
+                {id ? (
+                  <div>
+                    <div className="b2b-label">{t('productEditor.field.publishWindow')}</div>
+                    <div className="b2b-row" style={{ gap: 12, flexWrap: 'wrap' }}>
+                      <div>
+                        <Label htmlFor="ppublish-from">{t('productEditor.field.publishFrom')}</Label>
+                        <Input
+                          id="ppublish-from"
+                          type="datetime-local"
+                          value={publishFrom}
+                          aria-describedby={windowError ? 'ppublish-help ppublish-error' : 'ppublish-help'}
+                          aria-invalid={windowError === 'invalidDate' ? true : undefined}
+                          onKeyDown={(e): void => {
+                            if (e.key === 'Enter') e.preventDefault();
+                          }}
+                          onChange={(e): void => {
+                            setPublishFrom(e.target.value);
+                            setWindowError(null);
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="ppublish-until">{t('productEditor.field.publishUntil')}</Label>
+                        <Input
+                          id="ppublish-until"
+                          type="datetime-local"
+                          value={publishUntil}
+                          aria-describedby={windowError ? 'ppublish-help ppublish-error' : 'ppublish-help'}
+                          aria-invalid={windowError ? true : undefined}
+                          onKeyDown={(e): void => {
+                            if (e.key === 'Enter') e.preventDefault();
+                          }}
+                          onChange={(e): void => {
+                            setPublishUntil(e.target.value);
+                            setWindowError(null);
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <p id="ppublish-help" className="b2b-help">
+                      {t('productEditor.field.publishWindow.help')}
+                    </p>
+                    {windowError ? (
+                      <p id="ppublish-error" role="alert" className="text-sm text-destructive" style={{ margin: 0 }}>
+                        {windowError === 'order'
+                          ? t('productEditor.scopeControls.window.invalidOrder')
+                          : t('productEditor.scopeControls.window.invalidDate')}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 {/* Feature 023 — on existing products the
                     ProductScopeEditor panel above is the sole editor for
