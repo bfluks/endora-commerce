@@ -92,6 +92,13 @@ import {
 // re-exports keep the long-standing import site (routes, tests) stable.
 export { dbToApiAttributeType, resolveAttributeApiType } from './attribute-type-mapping.js';
 
+
+/**
+ * How many free-looking slug candidates `allocateUniqueSlug` locks at once (Phase 16
+ * review): enough that a concurrent writer winning one does not fail the allocation.
+ */
+const SLUG_CANDIDATE_LOCKS = 3;
+
 /*
  * `CatalogCustomFieldsPort` used to stand here — this module's own widening of
  * `custom_fields`' apply seam with one extra method, `getById`. T053(b)
@@ -842,10 +849,13 @@ export class CatalogAdminService {
     if (this.commandBus) {
       return this.commandBus.run({ action, objectType, objectId, run: ({ em }) => write(em) });
     }
-    const em = this.emFactory();
-    const w = await write(em);
-    await em.flush();
-    return w.result;
+    // Unaudited without a Command Bus, but still one transaction: the URL-key
+    // advisory locks a write takes (`allocateUniqueSlug`) hold only inside one.
+    return this.emFactory().transactional(async (em) => {
+      const w = await write(em);
+      await em.flush();
+      return w.result;
+    });
   }
 
   async duplicateProduct(id: string): Promise<Product> {
@@ -855,14 +865,15 @@ export class CatalogAdminService {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
 
-    const newSku = await this.allocateCopySku(em, source.sku);
-    const newSlug = await this.allocateCopySlug(em, source.slug);
-
     // The dup product row + its audit are co-transactional; the bridge copies
     // run AFTER on this em (matches the pre-054 two-step) — the dup FK target
     // exists once committed, and a partially-copied dup is no worse than today.
     const dupId = randomUUID();
     const dup = await this.#auditedWrite('product.duplicate', 'product', dupId, async (cem) => {
+      // Inside the Command's transaction (Phase 16 review): the slug's URL-key lock is
+      // a transaction lock, so on a bare em it was released before the insert.
+      const newSku = await this.allocateCopySku(cem, source.sku);
+      const newSlug = await this.allocateCopySlug(cem, source.slug);
       const created = cem.create(Product, {
         id: dupId,
         sku: newSku,
@@ -1114,18 +1125,30 @@ export class CatalogAdminService {
    *
    * Feature 162 (A-11) — a new product's slug is its key in every language, so
    * "free" means free as a URL key: no product's global key, and no live
-   * product's current or redirecting key in any language. The candidate's URL-key
-   * lock is taken before the decisive check, so a concurrent key write cannot
-   * claim it in between; only the chosen candidate's lock is ever held, so this
-   * never waits in an order a key writer could deadlock against.
+   * product's current or redirecting key in any language.
+   *
+   * Must run inside the caller's transaction (the Command's): the decisive check is
+   * made under the candidates' URL-key locks, which are transaction locks. The first
+   * {@link SLUG_CANDIDATE_LOCKS} candidates that look free without a lock are locked
+   * together, **once and in sorted order** — the order every key writer locks in, so
+   * the two cannot deadlock — and re-checked under the locks in index order; the first
+   * still free wins. A held lock is never released before the transaction ends, so
+   * locking candidates one at a time after a lost race would acquire them out of
+   * sorted order (`root-10` sorts before `root-9`). Losing every candidate of the set
+   * to concurrent writers is refused like an exhausted search.
    */
   private async allocateUniqueSlug(em: EntityManager, source: string): Promise<string> {
     const root = this.slugify(source);
-    for (let i = 0; i < 1000; i += 1) {
+    const probes: string[] = [];
+    for (let i = 0; i < 1000 && probes.length < SLUG_CANDIDATE_LOCKS; i += 1) {
       const candidate = i === 0 ? root : this.slugify(`${root}-${i + 1}`);
-      if (!(await isUrlKeyFree(em, candidate))) continue;
-      await lockUrlKeys(em, [candidate]);
-      if (await isUrlKeyFree(em, candidate)) return candidate;
+      if (!probes.includes(candidate) && (await isUrlKeyFree(em, candidate))) probes.push(candidate);
+    }
+    if (probes.length > 0) {
+      await lockUrlKeys(em, probes);
+      for (const candidate of probes) {
+        if (await isUrlKeyFree(em, candidate)) return candidate;
+      }
     }
     throw new HttpError(
       409,
