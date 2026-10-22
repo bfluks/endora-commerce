@@ -416,6 +416,13 @@ export const productScopesSchema = z.object({
       orphaned: z.boolean(),
     }),
   ),
+  /**
+   * Owner decision U1 — the names of the organizations the global rule and the channel
+   * audience rules name (non-members included), resolved by the server so an operator
+   * without `customers:read` can read them. An organization that cannot be read (deleted,
+   * or `organizations` not answering) is absent: the consumer shows its id.
+   */
+  organizations: z.array(z.object({ id: uuidSchema, name: z.string() })),
 });
 export type ProductScopes = z.infer<typeof productScopesSchema>;
 

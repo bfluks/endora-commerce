@@ -1,5 +1,4 @@
 import type {
-  OrganizationStatus,
   PatchProductScopesRequest,
   PatchProductScopesResponse,
   ProductScopes,
@@ -37,34 +36,11 @@ export async function getProductScopeContext(productId: string): Promise<ScopeCo
   return res.data;
 }
 
-export type OrganizationLabels = Record<string, { name: string; status: OrganizationStatus }>;
-
-/** Bounded so a long audience list cannot fan out into hundreds of reads. */
-const ORGANIZATION_LABEL_LIMIT = 50;
-
 /**
- * Names for organization ids the scopes answer carries (an audience list, its
- * non-members), so the warning of FR-030 can name them. Best effort: an id that cannot be
- * read (no permission, deleted) is simply absent and the caller shows a short id instead.
+ * Names of the organizations the scopes answer carries (owner decision U1), keyed by id.
+ * No status: the answer does not carry it, and the picker's chip shows none without one.
  */
-export async function fetchOrganizationLabels(ids: readonly string[]): Promise<OrganizationLabels> {
-  const unique = [...new Set(ids)].slice(0, ORGANIZATION_LABEL_LIMIT);
-  const rows = await Promise.all(
-    unique.map((id) =>
-      apiClient
-        .get<{ data: { id: string; name: string; status: OrganizationStatus } }>(
-          `/api/v1/admin/organizations/${encodeURIComponent(id)}`,
-        )
-        .then((res) => res.data)
-        .catch(() => null),
-    ),
-  );
-  const labels: OrganizationLabels = {};
-  for (const row of rows) {
-    if (row && typeof row.name === 'string') labels[row.id] = { name: row.name, status: row.status };
-  }
-  return labels;
-}
+export type OrganizationLabels = Record<string, { name: string }>;
 
 /** A short, stable stand-in for an organization whose name could not be read. */
 export function shortId(id: string): string {
