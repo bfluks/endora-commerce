@@ -119,6 +119,13 @@ export function scopeSaveErrorMessage(
   if (code === 'VALIDATION_FAILED' && details?.['field'] === 'window') {
     return t('productEditor.scopeControls.error.window');
   }
+  if (code === 'VALIDATION_FAILED' && details?.['field'] === 'languageStatuses') {
+    return t('productEditor.scopeControls.error.languageRepeated', {
+      channel: channelName(String(details['channelId'] ?? '')),
+      language: String(details['languageCode'] ?? '').toUpperCase(),
+    });
+  }
+  if (code === 'VERSION_CONFLICT') return t('productEditor.scopeControls.error.conflict');
   if (code === 'SCOPE_INCOMPLETE' && details && Array.isArray(details['pairs'])) {
     const pairs = details['pairs'] as Array<{
       channelId: string;
