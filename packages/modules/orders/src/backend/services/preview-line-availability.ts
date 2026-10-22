@@ -86,6 +86,6 @@ export function previewBelowMinimums(
  * customer is a signed-in buyer of that Organization — the same audience
  * `cartAudience` yields when the order is placed through the cart.
  */
-function customerAudience(organizationId: string): ProductAudience {
+export function customerAudience(organizationId: string): ProductAudience {
   return { organizationId, authenticated: true };
 }
