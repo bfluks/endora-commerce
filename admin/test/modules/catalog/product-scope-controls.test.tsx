@@ -10,7 +10,7 @@ import catalogPl from '../../../../packages/modules/catalog/i18n/pl.json';
 import { adminSession, withSession } from '../../helpers/render-with-session';
 
 /**
- * Feature 162 / T087 (US1–US3, US10; FR-012, FR-013, FR-023, FR-030, FR-040, FR-042, FR-100) —
+ * Feature 163 / T087 (US1–US3, US10; FR-012, FR-013, FR-023, FR-030, FR-040, FR-042, FR-100) —
  * the product editor's scope controls: status per channel and channel × language with
  * "use inherited", the publication window and the audience rule per channel, and the
  * order rules (minimum, returnable) per channel. Every write goes through

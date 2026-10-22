@@ -418,7 +418,7 @@ export interface SeoMetaWritePort {
   }): Promise<void>;
 }
 
-/** The product-page metadata fields an SEO override can set (feature 162, FR-075). */
+/** The product-page metadata fields an SEO override can set (feature 163, FR-075). */
 export type SeoProductMetaField = 'title' | 'description' | 'ogTitle' | 'ogDescription' | 'ogImageUrl';
 
 /** Where an effective metadata value came from; `derived` = the product page's own fallback. */
@@ -433,7 +433,7 @@ export interface SeoProductMetaValues {
 }
 
 /**
- * Owner: `seo` (feature 162, R13). Not registered yet: published as
+ * Owner: `seo` (feature 163, R13). Not registered yet: published as
  * `seoProductMetaPort` with its implementation, and the container-name marker
  * arrives with that registration.
  *
