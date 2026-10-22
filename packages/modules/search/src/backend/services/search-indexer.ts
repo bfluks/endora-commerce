@@ -1,6 +1,8 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { Meilisearch, type Index } from 'meilisearch';
 import {
+  effectiveSystemText,
+  overrideLanguages,
   resolveAttribute,
   SYSTEM_ATTRIBUTE_SCOPES,
   type CatalogAttributeReadPort,
@@ -205,6 +207,12 @@ export interface IndexedDocument {
   publishFromMs: number;
   publishUntilMs: number;
   allowedOrganizationIds: string[];
+  /**
+   * Feature 163 (FR-017 b) — the effective Name per live channel language: the
+   * channel's override where #384's walk lands on one, else the storefront's
+   * baseline pick. A query searches `localizedNames.<L>` (`attributesToSearchOn`).
+   */
+  localizedNames: Record<string, string>;
 }
 
 /**
@@ -770,7 +778,9 @@ export class SearchIndexer {
     // label aggregator for every isSearchable select-style attribute. It
     // joins the customer's mental model ("brass") with the operator's
     // canonical option value ("brass_001" / "Mosiądz").
-    const searchable = ['name', 'sku', 'description', 'searchableOptions'];
+    // Feature 163 — `localizedNames` (its per-language keys are what a query
+    // names in `attributesToSearchOn`).
+    const searchable = ['name', 'localizedNames', 'sku', 'description', 'searchableOptions'];
     const filterable: string[] = [
       'categoryIds',
       'categorySlugs',
@@ -949,7 +959,43 @@ function buildDocument(
     updatedAt: product.updatedAt.getTime(),
     // Feature 163 — `visibility` and the allow-list are the channel-effective rule.
     ...documentAvailabilityFields(availability),
+    localizedNames: localizedNamesOf(product, availability.liveLanguages, resolverInputs),
   };
+}
+
+/**
+ * Feature 163 (FR-017 b) — the Name a storefront card shows at (channel, L) for
+ * each live language L: `effectiveSystemText` over this channel's override rows
+ * with the storefront's baseline pick (L, the channel default, `en-US`, `en`,
+ * the first key) — the same walk the catalogue's cards and `hydrateHits` use.
+ */
+function localizedNamesOf(
+  product: CatalogProductRecord,
+  liveLanguages: readonly string[],
+  resolverInputs: { overrides: CatalogProductValueOverrideRecord[]; channelId: string; languageCode: string } | undefined,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const channelDefault = resolverInputs?.languageCode;
+  const rows: OverrideRow[] = (resolverInputs?.overrides ?? [])
+    .filter((o) => o.channelId === resolverInputs?.channelId)
+    .map((o) => ({ attributeKey: o.attributeKey, channelId: o.channelId, languageCode: o.languageCode ?? null, value: o.value }));
+  for (const language of liveLanguages) {
+    const pick =
+      [language, channelDefault, 'en-US', 'en']
+        .filter((l): l is string => typeof l === 'string')
+        .map((l) => product.name[l])
+        .find((v) => typeof v === 'string' && v.length > 0) ?? Object.values(product.name)[0] ?? '';
+    out[language] = resolverInputs
+      ? effectiveSystemText(
+          rows,
+          'name',
+          { channelId: resolverInputs.channelId, languages: overrideLanguages(language, channelDefault) },
+          product.name,
+          pick,
+        )
+      : pick;
+  }
+  return out;
 }
 
 function pickLocale(value: Record<string, string>, locale: string): string {
