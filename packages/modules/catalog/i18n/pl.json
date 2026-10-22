@@ -763,6 +763,8 @@
   "productEditor.scopeControls.error.forbidden": "Nie masz uprawnień do zmiany dostępności produktu.",
   "productEditor.scopeControls.error.notAMember": "Produkt nie należy już do kanału {channel}. Odśwież stronę, aby zobaczyć jego aktualne kanały.",
   "productEditor.scopeControls.error.languageNotOffered": "Kanał {channel} nie oferuje już języka {language}. Odśwież stronę i spróbuj ponownie.",
+  "productEditor.scopeControls.error.conflict": "Ktoś inny zmienił w tym samym czasie dostępność tego produktu. Odśwież stronę i wprowadź zmianę ponownie.",
+  "productEditor.scopeControls.error.languageRepeated": "Język {language} jest ustawiony więcej niż raz dla kanału {channel}. Odśwież stronę i spróbuj ponownie.",
   "productEditor.scopeControls.error.window": "Okres publikacji musi zaczynać się przed swoim końcem.",
   "productEditor.scopeControls.error.windowIn": "Przed zapisaniem sprawdź okres publikacji w kanale {channel}.",
   "productEditor.scopeControls.error.incomplete": "Nie zapisano: produktu nie można włączyć tam, gdzie brakuje wartości. {details}",
