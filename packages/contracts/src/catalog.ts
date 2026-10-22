@@ -3380,6 +3380,16 @@ export interface CatalogSellableProductQuery {
   afterId?: string | null;
   /** Page size. Defaults to 500, the size the feed pipeline already walks in. */
   limit?: number;
+  /**
+   * Feature 163 — where the products are sold: the feed's sales channel and
+   * its language tag (resolved by `catalog` against the channel's own
+   * languages; absent or unknown = the channel's default). When given, the
+   * floor is **effective availability** there for the anonymous audience, now
+   * (`isProductEffectivelyAvailable`: the scoped status at (channel, language),
+   * the publication window and the channel's audience rule) instead of the
+   * global `status` and audience columns — still not overridable by `filter`.
+   */
+  scope?: { channelId: string; languageTag?: string | null | undefined } | undefined;
 }
 
 /**

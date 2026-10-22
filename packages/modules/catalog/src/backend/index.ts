@@ -91,6 +91,10 @@ import type { CustomFieldDefinitionApplyApi } from './commands/attribute-command
 import { CatalogAdminService } from './services/catalog-admin.service.js';
 import { CatalogBulkImportService } from './services/catalog-bulk-import.service.js';
 import { ProductAvailabilityService } from './services/product-availability.service.js';
+import {
+  PublicationWindowSweep,
+  startPublicationWindowSweep,
+} from './services/publication-window-sweep.js';
 import { CategoryAdminService } from './services/category-admin.service.js';
 import { AttributeSetService } from './services/attribute-set.service.js';
 import { GalleryService } from './services/gallery.service.js';
@@ -179,6 +183,11 @@ export interface CatalogCradle {
   readonly commandBus: CommandBus;
   readonly auditLogService: AuditPort;
   readonly moduleQueueRedis: Redis | undefined;
+  /**
+   * Whether this process consumes queues — the host's answer; the shared test
+   * server says no and drives the publication-window sweep directly.
+   */
+  readonly processRunsWorkers: boolean;
   /**
    * The process connection, distinct from `moduleQueueRedis`: the assistant's
    * bulk tools delegate over the same queue in both compositions, which is a
@@ -691,7 +700,18 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.providePort<CatalogProductFilterPort>(
     'catalogProductFilterPort',
     ctx
-      .asFunction(({ emFactory }: CatalogCradle) => new CatalogProductFilterService(emFactory))
+      .asFunction(
+        ({ emFactory }: CatalogCradle) =>
+          new CatalogProductFilterService(
+            emFactory,
+            // Feature 163 — a feed's scoped floor is effective availability.
+            new ProductAvailabilityService(
+              emFactory,
+              lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+              lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
+            ),
+          ),
+      )
       .singleton(),
   );
 
@@ -1130,6 +1150,24 @@ export function registerModule(ctx: ModuleContext): void {
 
   ctx.routes(async (app) => {
     await cradle().catalog(app);
+
+    // Feature 163 (R9, FR-024) — the publication-window sweep's clock: a Job
+    // Scheduler and its consumer, where the host says this process consumes
+    // queues. `ctx.worker` stops the consumer with the module; the watermark
+    // lives on the process connection, beside nothing it could be mistaken for.
+    const c = cradle();
+    await startPublicationWindowSweep({
+      processRunsWorkers: c.processRunsWorkers,
+      moduleQueueRedis: c.moduleQueueRedis,
+      sweep: new PublicationWindowSweep(c.emFactory, c.redis, (event) =>
+        c.eventBus.emit('product.updated.v1', event),
+      ),
+      log: ctx.log,
+      attach: (worker) => ctx.worker(worker, { logger: app.log }),
+      onClose: (close) => {
+        app.addHook('onClose', close);
+      },
+    });
   });
 
   /**

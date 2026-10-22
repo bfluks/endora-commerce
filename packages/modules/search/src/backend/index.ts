@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
   CatalogCategoryReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   ListingPriceDetailPort,
   OrganizationDetailsPort,
@@ -105,6 +106,12 @@ export function registerModule(ctx: ModuleContext): void {
           // reserves for the membership accessor. A statement names no import
           // specifier, so neither was visible to Phase C.
           catalogCategories: lazyPort<CatalogCategoryReadPort>(ctx, 'catalogCategoryReadPort'),
+          // Feature 163 — documents carry availability per channel language,
+          // and hydration asks `catalog` again for every hit.
+          catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(
+            ctx,
+            'catalogProductAvailabilityPort',
+          ),
           salesChannelMembership: lazyPort<SalesChannelMembershipPort>(
             ctx,
             'salesChannelMembershipPort',

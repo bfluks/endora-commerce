@@ -6,11 +6,14 @@ import {
   type CatalogAttributeReadPort,
   type CatalogCategoryReadPort,
   type CatalogProductReadPort,
+  type CatalogProductAvailabilityPort,
   type CatalogProductRecord,
   type CatalogProductValueOverrideRecord,
+  type ChannelAvailability,
   type OverrideRow,
   type ResolverContext,
 } from '@endora-commerce/contracts';
+import { AVAILABILITY_FILTERABLE_ATTRIBUTES, documentAvailabilityFields } from './search-availability.js';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { DEFAULT_INDEX_TASK_TIMEOUT_SECONDS, SEARCH_SETTING_CODES } from '../../manifest.js';
@@ -116,6 +119,13 @@ export interface SearchIndexerOptions {
    */
   channelMembership: SalesChannelMembershipPort;
   /**
+   * Feature 163 — `catalog`'s availability projection per channel (R8): which
+   * members are on in which channel language, with the effective window and
+   * audience a document carries. Required: an index built without it would
+   * publish products switched off where they are off.
+   */
+  availability: Pick<CatalogProductAvailabilityPort, 'describeChannelAvailability'>;
+  /**
    * How long to wait for one Meilisearch task, in milliseconds, re-read per
    * wait so an operator raising `search.index_task_timeout_seconds` takes
    * effect without a restart — the property `search.reindex_interval_minutes`
@@ -185,6 +195,16 @@ export interface IndexedDocument {
   createdAt: number;
   /** Epoch milliseconds. The freshness marker; no sort token names it. */
   updatedAt: number;
+  /**
+   * Feature 163 (R8, data-model §11) — the channel languages the product is
+   * effectively on in, its effective window and its channel-effective audience
+   * (`visibility` above is the channel-effective one too). Filter inputs; the
+   * query never retrieves the allow-list. See `search-availability.ts`.
+   */
+  liveLanguages: string[];
+  publishFromMs: number;
+  publishUntilMs: number;
+  allowedOrganizationIds: string[];
 }
 
 /**
@@ -326,6 +346,7 @@ export class SearchIndexer {
   private readonly products: CatalogProductReadPort;
   private readonly categories: CatalogCategoryReadPort;
   private readonly channelMembership: SalesChannelMembershipPort;
+  private readonly availability: Pick<CatalogProductAvailabilityPort, 'describeChannelAvailability'>;
   private readonly resolveTaskTimeoutMs: () => Promise<number>;
 
   constructor(options: SearchIndexerOptions) {
@@ -343,6 +364,7 @@ export class SearchIndexer {
     this.products = options.products;
     this.categories = options.categories;
     this.channelMembership = options.channelMembership;
+    this.availability = options.availability;
     this.resolveTaskTimeoutMs =
       options.resolveTaskTimeoutMs ?? (async () => DEFAULT_INDEX_TASK_TIMEOUT_MS);
   }
@@ -380,12 +402,15 @@ export class SearchIndexer {
     const indexUid = indexUidFor(channel);
     const index = await this.ensureIndex(indexUid);
 
-    // The membership accessor answers which products the channel carries; the
-    // publishable narrowing that used to ride along in the same join is now
-    // `isPublishable`, the one predicate the incremental upsert already used.
-    // Two owners, two reads, one definition of publishable.
+    // The membership accessor answers which products the channel carries;
+    // `catalog` answers which of them are on in at least one channel language
+    // (feature 163, R8) — the one definition of publishable, shared with the
+    // incremental upsert. No status is tested here.
     const memberIds = await this.channelMemberProductIds(channel.id);
-    const products = (await this.products.findByIds(memberIds)).filter(isPublishable);
+    const availability = await this.availability.describeChannelAvailability(memberIds, channel.id);
+    const products = (await this.products.findByIds(memberIds)).filter((p) =>
+      isPublishableIn(availability.get(p.id)),
+    );
     const productIds = products.map((p) => p.id);
     // Feature 068 — an inactive category must not survive in the indexed
     // `categorySlugs`, or it keeps working as a storefront PLP filter.
@@ -417,11 +442,18 @@ export class SearchIndexer {
     }
 
     const documents: IndexedDocument[] = products.map((p) =>
-      buildDocument(p, categoriesByProduct.get(p.id) ?? [], this.locale, optionLookup, {
-        overrides: overridesByProduct.get(p.id) ?? [],
-        channelId: channel.id,
-        languageCode: channel.defaultLanguage,
-      }),
+      buildDocument(
+        p,
+        categoriesByProduct.get(p.id) ?? [],
+        this.locale,
+        optionLookup,
+        {
+          overrides: overridesByProduct.get(p.id) ?? [],
+          channelId: channel.id,
+          languageCode: channel.defaultLanguage,
+        },
+        availability.get(p.id)!,
+      ),
     );
 
     // Wipe the index first so removed-from-channel products disappear from
@@ -506,18 +538,28 @@ export class SearchIndexer {
     // Fetch once; the resolver then runs per (channel, channel.defaultLanguage).
     const overrides = await this.products.listValueOverridesByProductIds([productId]);
 
-    const publishable = isPublishable(product);
-
     const touched: string[] = [];
     for (const channel of channels) {
       const indexUid = indexUidFor(channel);
       const index = await this.ensureIndex(indexUid);
-      if (linkedChannelIds.has(channel.id) && publishable) {
-        const document = buildDocument(product, categories, this.locale, optionLookup, {
-          overrides,
-          channelId: channel.id,
-          languageCode: channel.defaultLanguage,
-        });
+      // Feature 163 — on in at least one language of this channel, as `catalog`
+      // answers it; a non-member is absent from the answer.
+      const availability = linkedChannelIds.has(channel.id)
+        ? (await this.availability.describeChannelAvailability([productId], channel.id)).get(productId)
+        : undefined;
+      if (availability !== undefined && isPublishableIn(availability)) {
+        const document = buildDocument(
+          product,
+          categories,
+          this.locale,
+          optionLookup,
+          {
+            overrides,
+            channelId: channel.id,
+            languageCode: channel.defaultLanguage,
+          },
+          availability,
+        );
         const task = await index.addDocuments([document], { primaryKey: 'id' });
         await this.awaitTask(task, `upsert of product ${productId} into ${indexUid}`);
       } else {
@@ -729,7 +771,13 @@ export class SearchIndexer {
     // joins the customer's mental model ("brass") with the operator's
     // canonical option value ("brass_001" / "Mosiądz").
     const searchable = ['name', 'sku', 'description', 'searchableOptions'];
-    const filterable: string[] = ['categoryIds', 'categorySlugs', 'visibility', 'status'];
+    const filterable: string[] = [
+      'categoryIds',
+      'categorySlugs',
+      'status',
+      // Feature 163 — `visibility` among them (R8).
+      ...AVAILABILITY_FILTERABLE_ATTRIBUTES,
+    ];
     for (const attr of attributes) {
       const path = `attributes.${attr.key}`;
       if (attr.isSearchable) searchable.push(path);
@@ -778,13 +826,13 @@ export class SearchIndexer {
 }
 
 /**
- * What a channel index carries. Archived and soft-deleted rows are excluded
- * here and not by `CatalogProductLookupOptions`, whose `activeOnly` covers
- * `status` and `deletedAt` but not `archivedAt` — and an archived product must
- * not stay searchable.
+ * What a channel index carries (feature 163, R8): a channel member that is
+ * effectively on in at least one channel language. `catalog` answers it —
+ * archived and soft-deleted products are on in no language — and the query's
+ * filter narrows to the request's language, window and audience.
  */
-function isPublishable(product: CatalogProductRecord): boolean {
-  return product.status === 'active' && !product.deletedAt && !product.archivedAt;
+function isPublishableIn(availability: ChannelAvailability | undefined): boolean {
+  return availability !== undefined && availability.liveLanguages.length > 0;
 }
 
 export function indexUidFor(channel: { code: string }): string {
@@ -796,11 +844,12 @@ function buildDocument(
   categories: Array<{ id: string; slug: string }>,
   locale: string,
   searchableOptionLookup: Map<string, Map<string, string>>,
-  resolverInputs?: {
+  resolverInputs: {
     overrides: CatalogProductValueOverrideRecord[];
     channelId: string;
     languageCode: string;
-  },
+  } | undefined,
+  availability: ChannelAvailability,
 ): IndexedDocument {
   // Feature 022 — when resolver inputs are supplied, route the system
   // Name / Description through the four-step fallback chain so
@@ -890,7 +939,6 @@ function buildDocument(
     description,
     type: product.type,
     status: product.status,
-    visibility: product.visibility,
     slug: product.slug,
     primaryAssetUrl: null,
     categoryIds: categories.map((c) => c.id),
@@ -899,6 +947,8 @@ function buildDocument(
     searchableOptions,
     createdAt: product.createdAt.getTime(),
     updatedAt: product.updatedAt.getTime(),
+    // Feature 163 — `visibility` and the allow-list are the channel-effective rule.
+    ...documentAvailabilityFields(availability),
   };
 }
 
