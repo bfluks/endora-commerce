@@ -5,6 +5,7 @@ import {
   QUOTE_REQUEST_HISTORY_EVENT_WINDOW,
   RFQ_CREATED_BY_ADMIN_EVENT,
   type AdminCreateQuoteRequest,
+  type AdminQuoteRequestWarning,
   type AdminPatchQuoteRequest,
   type QuoteRequest as RfqDto,
   type QuoteRequestHistory,
@@ -12,6 +13,7 @@ import {
   customFieldFilterUnavailable,
   isCustomFieldValidationFailure,
   type AdminUserReadPort,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
@@ -131,6 +133,11 @@ export interface RfqAdminServiceDeps {
    * published ports the same reads fail closed with their owners.
    */
   catalogProducts: CatalogProductReadPort;
+  /**
+   * Feature 163 (FR-018) — `catalog`'s availability answer, asked about an
+   * operator's lines only to warn: `createOnBehalf` accepts them either way.
+   */
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
   customerAccounts: CustomerAccountReadPort;
   organizations: OrganizationDetailsPort;
   adminUsers: AdminUserReadPort;
@@ -878,6 +885,29 @@ export class RfqAdminService {
   // -------------------------------------------------------------------------
   // Create on behalf (US4)
   // -------------------------------------------------------------------------
+
+  /**
+   * Feature 163 (FR-018) — the lines of an operator-created request whose
+   * product is not available to the Organization at the request's channel, in
+   * the channel's default language (N2), now. Accepted regardless: this is a
+   * warning for the operator, never a refusal (the exemption of
+   * {@link createOnBehalf} stands). Empty outside a request, where there is no
+   * channel to ask about (FR-007).
+   */
+  async onBehalfWarnings(body: Pick<AdminCreateQuoteRequest, 'organizationId' | 'items'>): Promise<AdminQuoteRequestWarning[]> {
+    const channelId = raisedOnChannelId();
+    if (channelId === null) return [];
+    const productIds = Array.from(new Set(body.items.map((it) => it.productId)));
+    if (productIds.length === 0) return [];
+    const available = await this.deps.catalogAvailability.filterAvailable(productIds, {
+      channelId,
+      languageCode: null,
+      audience: { organizationId: body.organizationId, authenticated: true },
+    });
+    return productIds
+      .filter((productId) => !available.has(productId))
+      .map((productId) => ({ productId, code: 'PRODUCT_UNAVAILABLE_IN_SCOPE' as const }));
+  }
 
   async createOnBehalf(
     ctx: AdminContext,

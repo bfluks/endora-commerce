@@ -43,6 +43,7 @@ import type {
   CustomFieldValuePort,
   CartReadPort,
   CartWritePort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   DeliveryMethodReadPort,
@@ -176,6 +177,12 @@ export interface OrdersModuleOptions {
    * create path resolve from the modules that own the rows (feature 075).
    */
   catalogProductRead: CatalogProductReadPort;
+  /**
+   * Feature 163 — `catalog`'s availability answer: placement refuses a line
+   * whose product is no longer available at the order's (channel, language)
+   * to its Organization (FR-006), and the admin preview reports it.
+   */
+  catalogProductAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
   customerAccountRead: CustomerAccountReadPort;
   organizationDetails: OrganizationDetailsPort;
   /**
@@ -508,6 +515,7 @@ export function commerceModule(options: OrdersModuleOptions) {
           customerAccountRead: options.customerAccountRead,
           addressRead: options.addressRead,
           catalogProductRead: options.catalogProductRead,
+          catalogProductAvailability: options.catalogProductAvailability,
           paymentMethodRead: options.paymentMethodRead,
           deliveryMethodRead: options.deliveryMethodRead,
           inventory: options.inventory,
@@ -633,6 +641,7 @@ export function commerceModule(options: OrdersModuleOptions) {
       pricingService: options.pricingService,
       resolveTaxRate: options.resolveTaxRate,
       catalogProductRead: options.catalogProductRead,
+      catalogProductAvailability: options.catalogProductAvailability,
       customerAccountRead: options.customerAccountRead,
       organizationDetails: options.organizationDetails,
       ...(options.salesChannelMembership

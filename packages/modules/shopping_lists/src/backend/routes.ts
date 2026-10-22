@@ -143,6 +143,7 @@ export async function registerShoppingListRoutes(
         ...(body.variantId ? { variantId: body.variantId } : {}),
         quantity: body.quantity,
         ...(body.note ? { note: body.note } : {}),
+        ...languageTagOf(request),
       });
       const { list, items } = await service.getByIdWithItems(ctx, request.params.id);
       reply.status(201);
@@ -236,4 +237,11 @@ function serializeWithItems(list: ShoppingList, items: ShoppingListItem[]): Reco
     createdAt: list.createdAt.toISOString(),
     updatedAt: list.updatedAt.toISOString(),
   };
+}
+
+/** Feature 163 — the request's first `Accept-Language` tag, as `{ languageTag }` when present. */
+function languageTagOf(request: FastifyRequest): { languageTag?: string } {
+  const header = request.headers['accept-language'];
+  const tag = typeof header === 'string' ? header.split(',')[0]?.split(';')[0]?.trim() : undefined;
+  return tag ? { languageTag: tag } : {};
 }

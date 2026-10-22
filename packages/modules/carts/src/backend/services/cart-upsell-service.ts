@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   isProductVisibleTo,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
   type ProductAudience,
@@ -38,6 +39,12 @@ export class CartUpsellService {
      * cart's up-sell strip with products the platform had stopped serving.
      */
     private readonly catalogProducts: CatalogProductReadPort,
+    /**
+     * Feature 163 — `catalog`'s availability answer for the strip's targets.
+     * Optional only in the signature: a call that names a channel without it
+     * fails loudly rather than showing the strip unfiltered.
+     */
+    private readonly availability?: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
   ) {}
 
   async forCart(
@@ -50,6 +57,11 @@ export class CartUpsellService {
      * defaulted its audience would silently show the wrong one.
      */
     audience: ProductAudience,
+    /**
+     * Feature 163 — the basket's channel and scope language. A target is shown
+     * only where it is effectively available there to `audience`, now.
+     */
+    scope?: { channelId: string; languageCode: string | null },
   ): Promise<CartUpsellCandidate[]> {
     if (limit <= 0) return [];
     const em = this.emFactory();
@@ -80,9 +92,19 @@ export class CartUpsellService {
     // Issue #227 — an up-sell target is a product the buyer never named, so
     // the strip is a listing. A link from a product they may see to one they
     // may not does not make the second one theirs to see.
-    const products = (await this.catalogProducts.findByIds(targetIds)).filter((p) =>
+    let products = (await this.catalogProducts.findByIds(targetIds)).filter((p) =>
       isProductVisibleTo(p, audience),
     );
+    if (scope) {
+      if (!this.availability) {
+        throw new Error('[carts] CartUpsellService: the availability port is not wired.');
+      }
+      const available = await this.availability.filterAvailable(
+        products.map((p) => p.id),
+        { channelId: scope.channelId, languageCode: scope.languageCode, audience },
+      );
+      products = products.filter((p) => available.has(p.id));
+    }
     const byId = new Map(products.map((p) => [p.id, p]));
 
     const candidates: CartUpsellCandidate[] = targetIds
