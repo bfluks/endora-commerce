@@ -277,7 +277,9 @@ export interface ChannelAvailability {
 }
 
 /**
- * Container name: `catalogProductAvailabilityPort`. Owner: `catalog`.
+ * Owner: `catalog`. Not registered yet: feature 162 publishes it as
+ * `catalogProductAvailabilityPort` when the read path lands (Block B), and the
+ * container-name marker arrives with that registration.
  *
  * The one way another module asks whether a product is available (FR-002). `catalog`
  * is non-deactivatable, so the port is always present. Never asked for an unresolved
@@ -322,7 +324,9 @@ export interface ProductScopeWriteResult {
 }
 
 /**
- * Container name: `catalogProductScopeWritePort`. Owner: `catalog` (R17).
+ * Owner: `catalog` (R17). Not registered yet: feature 162 publishes it as
+ * `catalogProductScopeWritePort` with its implementation (T122), and the
+ * container-name marker arrives with that registration.
  *
  * Scoped writes for imports and connectors. Writes only the scopes named, so writing
  * global values removes no operator override (FR-091); never runs the completeness

@@ -83,7 +83,9 @@ async function count(em: EntityManager, table: string, productId: string): Promi
   const rows = await em.execute<{ n: string }[]>(`select count(*)::text as "n" from "${table}" where "product_id" = ?`, [
     productId,
   ]);
-  return Number(rows[0]?.n ?? 0);
+  const [row] = rows;
+  if (!row) throw new Error('count(*) returned no row');
+  return Number(row.n);
 }
 
 describe('162 — product scope tables [integration]', () => {
