@@ -59,6 +59,11 @@ deleted (FR-012).
 "Use inherited" deletes the row. Rows for a language later removed from the channel are retained and
 ignored (FR-015); the overview lists them as orphaned.
 
+No index beyond the primary key: every reader — the availability predicate's keyed sub-select (R2,
+`coalesce(cl.status, c.status, p.status)`), the scopes read, the write — seeks by product first, which the
+PK `(product_id, sales_channel_id, language_code)` serves. A `(sales_channel_id, language_code, status)`
+index had no reader and was dropped before the migration merged (162 Block A review).
+
 ## 3. `products` additions (catalog)
 
 | Column | Type | Null | Meaning |
