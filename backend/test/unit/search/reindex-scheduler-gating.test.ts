@@ -142,6 +142,7 @@ function searchOptions(settingsGet: () => Promise<number>): SearchModuleOptions 
     catalogAttributeRead: {} as SearchModuleOptions['catalogAttributeRead'],
     catalogProducts: {} as SearchModuleOptions['catalogProducts'],
     catalogCategories: {} as SearchModuleOptions['catalogCategories'],
+    catalogAvailability: {} as SearchModuleOptions['catalogAvailability'],
     salesChannelMembership: {} as SearchModuleOptions['salesChannelMembership'],
     listingPrices: {
       resolveListingPrices: notCalled('resolveListingPrices'),
