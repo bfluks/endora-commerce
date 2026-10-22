@@ -461,6 +461,14 @@ export const manifest = defineModuleManifest({
    * line — `carts`, `orders` and `quote_requests` raise them, and none of them
    * owns the noun. Each arrives with its sentence in both bundles. No token:
    * their `details` carry the line's product, minimum and `lines[]`, no `code`.
+   *
+   * **Five were minted by feature 162** (`specs/162-product-data-scopes/`
+   * `contracts/error-codes.md`): `SCOPE_INVALID`, `SCOPE_INCOMPLETE`,
+   * `URL_KEY_TAKEN`, `URL_KEY_REDIRECT_TAKEOVER_REQUIRED` and
+   * `URL_REDIRECT_NOT_FOUND`. D-121 T1: the nouns are product scopes, URL keys
+   * and URL redirects, all rows of this module, and every raise site is one of
+   * its admin writes. Each arrives with a token-free sentence in both bundles —
+   * their `details` carry channel ids, keys and product names, never a `code`.
    */
   errorCodes: [
     { code: 'ASSET_KIND_NOT_SUPPORTED' },
@@ -513,6 +521,8 @@ export const manifest = defineModuleManifest({
     { code: 'PRODUCT_SAVED_VIEW_NAME_TAKEN' },
     { code: 'PRODUCT_TYPE_MISMATCH' },
     { code: 'PRODUCT_UNMANAGED_STOCK' },
+    { code: 'SCOPE_INCOMPLETE' },
+    { code: 'SCOPE_INVALID' },
     { code: 'SELECTION_TOO_LARGE' },
     { code: 'SELF_LINK_NOT_ALLOWED' },
     { code: 'SKU_ALREADY_EXISTS' },
@@ -520,6 +530,9 @@ export const manifest = defineModuleManifest({
     { code: 'SYSTEM_ATTRIBUTE_SET_IMMUTABLE' },
     { code: 'TARGET_PRODUCT_NOT_FOUND' },
     { code: 'UNKNOWN_OPTION' },
+    { code: 'URL_KEY_REDIRECT_TAKEOVER_REQUIRED' },
+    { code: 'URL_KEY_TAKEN' },
+    { code: 'URL_REDIRECT_NOT_FOUND' },
     { code: 'VARIANT_AXIS_MISSING' },
     { code: 'VARIANT_COMBINATION_EXISTS' },
   ],
