@@ -433,7 +433,9 @@ export interface SeoProductMetaValues {
 }
 
 /**
- * Container name: `seoProductMetaPort`. Owner: `seo` (feature 162, R13).
+ * Owner: `seo` (feature 162, R13). Not registered yet: published as
+ * `seoProductMetaPort` with its implementation, and the container-name marker
+ * arrives with that registration.
  *
  * Product metadata per sales channel × language. Each field resolves channel ×
  * language → channel → language → the caller's derived fallback (FR-075).
