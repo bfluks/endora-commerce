@@ -305,7 +305,7 @@ export class ProductAvailabilityService implements CatalogProductAvailabilityPor
 
   async effectiveNames(
     productIds: readonly string[],
-    scope: { channelId: string; languageCode: string },
+    scope: { channelId: string; languageCode: string | null },
   ): Promise<Map<string, string>> {
     const out = new Map<string, string>();
     const ids = [...new Set(productIds)];
@@ -313,7 +313,7 @@ export class ProductAvailabilityService implements CatalogProductAvailabilityPor
     const channel = await this.scopeChannel(scope.channelId);
     const em = this.emFactory();
     const products = await em.find(Product, { id: { $in: ids } }, { fields: ['id', 'name'] });
-    const languages = overrideLanguages(scope.languageCode, channel?.defaultLanguage);
+    const languages = overrideLanguages(scope.languageCode ?? undefined, channel?.defaultLanguage);
     const overrides = channel
       ? await loadChannelOverridesByProduct(em, ids, channel.id)
       : new Map();
