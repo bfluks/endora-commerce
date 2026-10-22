@@ -7,6 +7,7 @@ import {
   type CartRecord,
   type CartItemRecord,
   type CatalogPackagingUnitRecord,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
   type OrderMinimumBelowViolation,
@@ -42,10 +43,17 @@ export interface BasketCatalogueRecords {
 export async function readBasketCatalogue(
   catalogProducts: Pick<CatalogProductReadPort, 'findByIds' | 'listPackagingUnitsByProductIds'>,
   items: ReadonlyArray<Pick<CartItemRecord, 'productId'>>,
+  /**
+   * Feature 163 (FR-006) — narrows the records to the products still
+   * available at the order's (channel, language): a record left out is a line
+   * whose product is unavailable, which the rule reports as
+   * `product_unavailable` and placement refuses with the unknown-id 404.
+   */
+  narrow: (products: CatalogProductRecord[]) => Promise<CatalogProductRecord[]>,
 ): Promise<BasketCatalogueRecords> {
   const productIds = Array.from(new Set(items.map((item) => item.productId)));
   if (productIds.length === 0) return { products: [], packagingUnits: [] };
-  const products = await catalogProducts.findByIds(productIds);
+  const products = await narrow(await catalogProducts.findByIds(productIds));
   const eligibleIds = products.filter((p) => isOrderMinimumEligibleType(p.type)).map((p) => p.id);
   const packagingUnits =
     eligibleIds.length > 0 ? await catalogProducts.listPackagingUnitsByProductIds(eligibleIds) : [];
@@ -127,4 +135,26 @@ export function belowMinimumLinesOf(
       ...(v.kind === 'packaging_unit' ? { packagingUnitName: v.packagingUnitName } : {}),
     };
   });
+}
+
+/**
+ * Feature 163 (FR-006) — the records whose product is available at
+ * (`channelId`, `languageCode`) to the Organization, now, as `catalog` answers
+ * it. The availability rule is `catalog`'s; nothing here tests a status.
+ */
+export async function availableOnly(
+  availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
+  products: CatalogProductRecord[],
+  scope: { channelId: string; languageCode: string | null; organizationId: string },
+): Promise<CatalogProductRecord[]> {
+  if (products.length === 0) return products;
+  const available = await availability.filterAvailable(
+    products.map((p) => p.id),
+    {
+      channelId: scope.channelId,
+      languageCode: scope.languageCode,
+      audience: { organizationId: scope.organizationId, authenticated: true },
+    },
+  );
+  return products.filter((p) => available.has(p.id));
 }

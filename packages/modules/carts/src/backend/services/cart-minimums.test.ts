@@ -300,6 +300,7 @@ describe('assertCartMeetsMinimums — the quote source is confirmed, not trusted
       assertCartMeetsMinimums(catalogue(calls), {
         cart: QUOTE_SOURCE,
         items: seeded,
+        availableOnly: async (products) => products,
         confirmQuoteSource: async (quoteRequestId: string) => {
           calls.push(`confirm:${quoteRequestId}`);
           return true;
@@ -315,10 +316,22 @@ describe('assertCartMeetsMinimums — the quote source is confirmed, not trusted
     const refusal = await assertCartMeetsMinimums(catalogue([]), {
       cart: QUOTE_SOURCE,
       items: seeded,
+      availableOnly: async (products) => products,
       confirmQuoteSource: async () => false,
     }).catch((error: unknown) => error);
     expect(refusal).toBeInstanceOf(HttpError);
     expect(refusal).toMatchObject({ statusCode: 422, code: 'PRODUCT_BELOW_MINIMUM_QUANTITY' });
+  });
+
+  it('feature 163 (FR-006) — a line whose product is no longer available refuses with the unknown-id 404', async () => {
+    const refusal = await assertCartMeetsMinimums(catalogue([]), {
+      cart: { sourceQuoteRequestId: null },
+      items: seeded,
+      availableOnly: async () => [],
+      confirmQuoteSource: async () => true,
+    }).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(HttpError);
+    expect(refusal).toMatchObject({ statusCode: 404, code: 'PRODUCT_NOT_FOUND' });
   });
 
   it('a basket without a mark never asks for a confirmation', async () => {
@@ -326,6 +339,7 @@ describe('assertCartMeetsMinimums — the quote source is confirmed, not trusted
     await assertCartMeetsMinimums(catalogue(calls), {
       cart: NO_SOURCE,
       items: [item({ id: 'i1', productId: A, quantity: 12 })],
+      availableOnly: async (products) => products,
       confirmQuoteSource: async () => {
         calls.push('confirm');
         return true;
