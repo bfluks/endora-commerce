@@ -19,7 +19,6 @@ import {
 } from '../lib/product-scope-drafts.js';
 import {
   describeIncompletePair,
-  fetchOrganizationLabels,
   getProductScopes,
   patchProductScopes,
   scopeSaveErrorMessage,
@@ -81,7 +80,6 @@ export function ProductScopeControls({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<ScopeWarning[]>([]);
   const [status, setStatus] = useState('');
-  const [orgLabels, setOrgLabels] = useState<OrganizationLabels>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -103,26 +101,12 @@ export function ProductScopeControls({
     };
   }, [productId, reloadToken]);
 
-  // Names for every organization an audience names, so the non-member warning can say who.
-  useEffect(() => {
-    if (!scopes) return;
-    const ids = new Set<string>();
-    for (const row of scopes.channels) {
-      for (const id of row.audience?.allowedOrganizationIds ?? []) ids.add(id);
-      for (const id of row.audience?.nonMemberOrganizationIds ?? []) ids.add(id);
-    }
-    const missing = [...ids].filter((id) => !(id in orgLabels));
-    if (missing.length === 0) return;
-    let cancelled = false;
-    void fetchOrganizationLabels(missing).then((labels) => {
-      if (!cancelled) setOrgLabels((prev) => ({ ...prev, ...labels }));
-    });
-    return (): void => {
-      cancelled = true;
-    };
-    // `orgLabels` is read, not tracked: a label arriving must not refetch the rest.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopes]);
+  // Owner decision U1 — the scopes answer names the organizations its rules name, so the
+  // non-member warning can say who without a `customers:read` read of each one.
+  const orgLabels = useMemo<OrganizationLabels>(
+    () => Object.fromEntries((scopes?.organizations ?? []).map((org) => [org.id, { name: org.name }])),
+    [scopes],
+  );
 
   const channelName = useCallback(
     (channelId: string): string => {
