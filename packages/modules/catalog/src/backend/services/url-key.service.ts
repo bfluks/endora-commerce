@@ -75,7 +75,7 @@ export interface UrlKeyWriteState {
   ownRedirects: readonly UrlRedirectRow[];
   /** Other live products' key rows whose key is a touched key. */
   otherKeys: readonly UrlKeyRow[];
-  /** Other live products whose global key is a touched key. */
+  /** Other products — soft-deleted ones included — whose global key is a touched key. */
   otherSlugs: readonly OtherProductSlug[];
   /** Other products' redirects whose key is a touched key. */
   otherRedirects: readonly UrlRedirectRow[];
@@ -154,6 +154,29 @@ export function urlKeysToLock(
     if (prev) keys.add(prev.key);
   }
   return [...keys].sort();
+}
+
+/**
+ * The other products whose global key is a touched key, as the planner reads them.
+ * `products.slug` is unique across soft-deleted rows too, so a deleted product is kept
+ * — its global key stays taken — but its language keys no longer count, which makes
+ * that key taken in **every** language (Phase 16 review: without it the planner said
+ * "free" and the flush answered a unique violation as a 500).
+ */
+export function otherProductSlugs(
+  products: ReadonlyArray<{ id: string; slug: string; deletedAt?: Date | null }>,
+  languageKeys: readonly UrlKeyRow[],
+): OtherProductSlug[] {
+  return products.map((product) => ({
+    productId: product.id,
+    slug: product.slug,
+    languageKeyLanguages:
+      product.deletedAt != null
+        ? []
+        : languageKeys
+            .filter((row) => row.productId === product.id && row.channelId === null)
+            .map((row) => row.languageCode),
+  }));
 }
 
 function collectScopeOps(state: UrlKeyWriteState, request: PutProductUrlKeysRequest): ScopeOp[] {
@@ -612,20 +635,19 @@ export class UrlKeyService {
           em.find(ProductUrlRedirect, { productId }),
           em.find(ProductUrlKey, { key: { $in: keys }, productId: { $ne: productId } }),
           em.find(ProductUrlRedirect, { key: { $in: keys }, productId: { $ne: productId } }),
-          em.find(Product, { slug: { $in: keys }, id: { $ne: productId }, deletedAt: null }),
+          // Deleted products included: `products.slug` is unique across them (`otherProductSlugs`).
+          em.find(Product, { slug: { $in: keys }, id: { $ne: productId } }),
           em.find(SalesChannel, {}),
           this.membership.listChannelsForEntity('product', productId),
         ]);
         const holderIds = [...new Set([...otherKeys.map((row) => row.productId), ...otherRedirects.map((row) => row.productId)])];
         const holders = holderIds.length === 0 ? [] : await em.find(Product, { id: { $in: holderIds } });
         const liveHolders = new Set(holders.filter((p) => p.deletedAt == null).map((p) => p.id));
+        const liveSlugProductIds = otherSlugProducts.filter((p) => p.deletedAt == null).map((p) => p.id);
         const slugLanguageKeys =
-          otherSlugProducts.length === 0
+          liveSlugProductIds.length === 0
             ? []
-            : await em.find(ProductUrlKey, {
-                productId: { $in: otherSlugProducts.map((p) => p.id) },
-                salesChannelId: null,
-              });
+            : await em.find(ProductUrlKey, { productId: { $in: liveSlugProductIds }, salesChannelId: null });
         const channelLanguages = new Map<string, string>();
         for (const channel of channels) {
           for (const code of channel.languages) if (!channelLanguages.has(lower(code))) channelLanguages.set(lower(code), code);
@@ -638,11 +660,7 @@ export class UrlKeyService {
             ownKeys,
             ownRedirects: ownRedirects.map(toRedirectRow),
             otherKeys: otherKeys.filter((row) => liveHolders.has(row.productId)).map(toKeyRow),
-            otherSlugs: otherSlugProducts.map((p) => ({
-              productId: p.id,
-              slug: p.slug,
-              languageKeyLanguages: slugLanguageKeys.filter((row) => row.productId === p.id).map((row) => row.languageCode),
-            })),
+            otherSlugs: otherProductSlugs(otherSlugProducts, slugLanguageKeys.map(toKeyRow)),
             otherRedirects: otherRedirects.map(toRedirectRow),
             productNames: new Map([...holders, ...otherSlugProducts].map((p) => [p.id, displayName(p)])),
             channelLanguages: [...channelLanguages.values()],
