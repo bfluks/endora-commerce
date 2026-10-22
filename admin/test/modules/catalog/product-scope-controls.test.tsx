@@ -110,6 +110,8 @@ function scopesFixture(): ProductScopes {
         orphaned: false,
       },
     ],
+    // Owner decision U1 — the names come with the scopes answer.
+    organizations: [{ id: ORG_W, name: 'Westfield Ltd' }],
   };
 }
 
@@ -131,9 +133,6 @@ function primeGets(scopes: ProductScopes = scopesFixture()): void {
       return Promise.resolve({
         data: { id: PRODUCT_ID, type: 'simple', minOrderQuantity: 10, returnable: true },
       });
-    }
-    if (path === `/api/v1/admin/organizations/${ORG_W}`) {
-      return Promise.resolve({ data: { id: ORG_W, name: 'Westfield Ltd', status: 'active' } });
     }
     if (path.startsWith('/api/v1/admin/organizations')) {
       return Promise.resolve({ data: [], pagination: { cursor: null, hasMore: false, limit: 20 } });
@@ -388,6 +387,21 @@ describe('ProductScopeControls — audience per channel (US3, FR-030)', () => {
         'Not members of B2C, so they will not see the product there: Westfield Ltd',
       ),
     ).toBeInTheDocument();
+  });
+
+  it('takes the names from the scopes answer and reads no organization itself (U1)', async () => {
+    const scopes = scopesFixture();
+    // An organization the answer could not name (deleted, unreadable) shows its short id.
+    scopes.organizations = [];
+    primeGets(scopes);
+    render(wrap(controls(B2C)));
+    expect(
+      await screen.findByText(`Not members of B2C, so they will not see the product there: ${ORG_W.slice(0, 8)}`),
+    ).toBeInTheDocument();
+    const organizationReads = getSpy.mock.calls.filter(([path]) =>
+      String(path).startsWith(`/api/v1/admin/organizations/${ORG_W}`),
+    );
+    expect(organizationReads).toEqual([]);
   });
 
   it('sends the whole rule as one value, with an empty list unless organization-restricted', async () => {
