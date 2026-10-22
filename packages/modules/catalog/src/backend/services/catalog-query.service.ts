@@ -32,6 +32,12 @@ import {
   type ListingCondition,
 } from './product-availability.sql.js';
 import {
+  effectiveAttributeSql,
+  effectiveTextSql,
+  type EffectiveValueScope,
+  type SqlExpression,
+} from './effective-value.sql.js';
+import {
   availableAmong,
   globalScopeFields,
   loadChannelScopeRows,
@@ -381,21 +387,30 @@ interface PriceWalkScope {
   categoryIds: ReadonlySet<string> | null;
   /** Feature 163 — the read's availability scope, applied to every chunk of the walk. */
   availability: PageAvailabilityScope;
+  /** Feature 163 — the free-text and attribute filters over effective values, likewise. */
+  filters: ListingFilters;
 }
 
 /**
  * The cursor a listing that pages by a keyset issues. Opaque to every caller,
- * and **shaped by the ordering it was issued under** — see `keysetFor`.
+ * and **shaped by the ordering it was issued under** — see `#keysetFor`.
  */
-type ListingKeysetCursor = { createdAt: string; id: string } | { slug: string; id: string };
+type ListingKeysetCursor = { createdAt: string; id: string } | { name: string; id: string };
 
 /**
  * A keyset: how to name the last row of a chunk, and how to ask for the rows
  * that sort strictly after it.
  */
 interface ListingKeyset {
-  /** The cursor payload for a row a chunk ended on. */
-  of(product: Product): ListingKeysetCursor;
+  /**
+   * The cursor payload for a row a chunk ended on. Under a name ordering it
+   * carries the row's **effective** name (feature 163, D6), which `nameOf`
+   * answers — the value the statement sorted on, by the parity of
+   * `effectiveTextSql` with #384's walk.
+   */
+  of(product: Product, nameOf: (productId: string) => string | undefined): ListingKeysetCursor;
+  /** Whether {@link of} needs the effective name. */
+  readonly byName: boolean;
   /**
    * The decoded cursor, or `null` when it was issued under another ordering.
    * Discarding it is the existing behaviour for a cursor that does not parse,
@@ -403,8 +418,23 @@ interface ListingKeyset {
    * reinterpret one column's value as another's.
    */
   parse(decoded: unknown): ListingKeysetCursor | null;
-  /** The `where` fragment selecting everything strictly after that row. */
+  /**
+   * The `where` fragment selecting everything strictly after that row. Under a
+   * name ordering it holds a `raw()` key, so it is called **in the expression
+   * that executes it**, like every other fragment in this file.
+   */
   after(cursor: ListingKeysetCursor): Record<string, unknown>;
+  /** The ordering — a `raw()` key under a name ordering; same rule as {@link after}. */
+  orderBy(): Record<string, 'asc' | 'desc'>;
+}
+
+/**
+ * Feature 163 — what narrows a listing beside availability: statement
+ * conditions and their page-side twin (`#listingFilters`).
+ */
+interface ListingFilters {
+  readonly conditions: ListingCondition[];
+  passes(em: EntityManager, products: readonly Product[]): Promise<Set<string>>;
 }
 
 /**
@@ -419,10 +449,8 @@ function afterKeysetCursor(
   cursor: ListingKeysetCursor,
   op: '$gt' | '$lt',
 ): Record<string, unknown> {
-  if ('slug' in cursor) {
-    return {
-      $or: [{ slug: { [op]: cursor.slug } }, { slug: cursor.slug, id: { [op]: cursor.id } }],
-    };
+  if (!('createdAt' in cursor)) {
+    throw new Error('afterKeysetCursor: a name cursor is the name keyset\'s own (`#keysetFor`).');
   }
   const at = new Date(cursor.createdAt);
   return { $or: [{ createdAt: { [op]: at } }, { createdAt: at, id: { [op]: cursor.id } }] };
@@ -910,17 +938,19 @@ export class CatalogQueryService {
     // A price walk that began in the default order, for want of a price order,
     // continues in it to its end — the default listing's page, so nothing the
     // price path would read first is read (review 2, finding 7).
-    const priceCursor = isPriceSort(params.sort) && params.cursor ? this.#priceCursor(params.cursor) : null;
+    const priceCursor = isPriceSort(params.sort) && params.cursor ? this.#priceCursor(params.cursor, ctx) : null;
     if (priceCursor?.stream === 'unordered') return this.#listUnordered(params, ctx, priceCursor.cursor);
     const em = this.emFactory();
     const channel = ctx.resolvedChannel;
 
     // --- Filter validation: any filter[attr.<key>] where the attribute is
     // not filterable must return 400 FILTER_NOT_ALLOWED (FR-005, T043).
+    let attributeViews: CatalogAttributeView[] = [];
     if (params.attributeFilters) {
       const keys = Object.keys(params.attributeFilters);
       if (keys.length > 0) {
         const views = await this.#requireAttributeRead().listAll();
+        attributeViews = views;
         const byKey = new Map(views.map((a) => [a.key, a]));
         for (const k of keys) {
           const a = byKey.get(k);
@@ -943,28 +973,10 @@ export class CatalogQueryService {
       deletedAt: null,
     };
     const scope = this.#availabilityScope(ctx);
-    if (params.q) {
-      // MVP: DB-only search. Production target uses Meilisearch behind this
-      // same query method (T067/T068 — Phase 10 polish); for now we match:
-      //   1. SKU ILIKE (covers the seeded EXAMPLE-… ids)
-      //   2. attributeValues at any key flagged isSearchable=true
-      // The attribute-values match uses Postgres ILIKE on the JSONB cast to
-      // text, which is fine for the test corpus and good enough until Meili.
-      const searchableKeys = await this.searchableAttributeKeys(em);
-      const orClauses: Array<Record<string, unknown>> = [
-        { sku: { $ilike: `%${params.q}%` } },
-      ];
-      for (const key of searchableKeys) {
-        // MikroORM's `expr()` would be cleaner; raw cast keeps the dependency
-        // surface minimal here.
-        orClauses.push({
-          // Match any product whose attributeValues[key] (case-insensitive)
-          // contains the query.
-          attributeValues: this.searchableJsonbClause(key, params.q),
-        });
-      }
-      where['$or'] = orClauses;
-    }
+    // Feature 163 (FR-017 b) — free text and attribute filters over the
+    // effective values a card shows at (channel, language), as conditions of
+    // every statement below (issue #151), with their page-side twin.
+    const filters = await this.#listingFilters(params, ctx, attributeViews);
     if (params.changedSince) {
       where['updatedAt'] = { $gt: new Date(params.changedSince) };
     }
@@ -973,20 +985,20 @@ export class CatalogQueryService {
     // chunked and both are bounded; everything else takes the single fetch it
     // always took.
     if (isPriceSort(params.sort)) {
-      return this.#listByViewerPrice(em, params, ctx, where, params.sort, priceCursor, scope);
+      return this.#listByViewerPrice(em, params, ctx, where, params.sort, priceCursor, scope, filters);
     }
     if (params.minPrice !== undefined || params.maxPrice !== undefined) {
-      return this.#listWithPriceRange(em, params, ctx, where, scope);
+      return this.#listWithPriceRange(em, params, ctx, where, scope, filters);
     }
 
     // Cursor decoding — over the keyset this ordering pages by, which is
-    // `{ createdAt, id }` for the default sort and `{ slug, id }` for `name`.
-    const keyset = this.keysetFor(params.sort);
-    let cursorClause: Record<string, unknown> | null = null;
-    if (params.cursor) {
-      const decoded = keyset.parse(decodeObjectCursor<unknown>(params.cursor));
-      if (decoded) cursorClause = keyset.after(decoded);
-    }
+    // `{ createdAt, id }` for the default sort and `{ name, id }` (the effective
+    // name, feature 163 D6) for `name`. Decoded here; its `where` fragment is
+    // made in the statement below, because under `name` it is a `raw()` key.
+    const keyset = this.#keysetFor(params.sort, ctx);
+    const decodedCursor = params.cursor
+      ? keyset.parse(decodeObjectCursor<unknown>(params.cursor))
+      : null;
 
     // Issue #151 — everything that decides whether a row is on the listing is
     // part of the statement the page is cut from. See `#listingNarrowing`.
@@ -1013,17 +1025,20 @@ export class CatalogQueryService {
       {
         $and: [
           where,
-          ...(cursorClause ? [cursorClause] : []),
-          ...narrowing.map((c) => ({ [raw(c.sql, c.params)]: [] })),
+          ...(decodedCursor ? [keyset.after(decodedCursor)] : []),
+          ...[...narrowing, ...filters.conditions].map((c) => ({ [raw(c.sql, c.params)]: [] })),
         ],
       },
-      { limit: params.limit + 1, orderBy: this.orderForSort(params.sort) },
+      { limit: params.limit + 1, orderBy: keyset.orderBy() },
     );
 
     const hasMore = products.length > params.limit;
     const page = hasMore ? products.slice(0, params.limit) : products;
+    const lastOfPage = page[page.length - 1];
     const nextCursor =
-      hasMore && page.length > 0 ? encodeObjectCursor(keyset.of(page[page.length - 1]!)) : null;
+      hasMore && lastOfPage
+        ? encodeObjectCursor(keyset.of(lastOfPage, await this.#cursorNames(em, keyset, [lastOfPage], ctx)))
+        : null;
 
     // The availability and attribute predicates once more, over the rows the
     // statement returned — kept deliberately, as defence in depth.
@@ -1036,9 +1051,8 @@ export class CatalogQueryService {
     // two agree it removes nothing — which is what the parity test holds them
     // to (`availability-parity.test.ts`).
     const available = await this.#availableAmong(em, page, scope, true);
-    const priceable = page.filter(
-      (p) => available.has(p.id) && this.#passesPageFilters(p, params),
-    );
+    const passing = await filters.passes(em, page);
+    const priceable = page.filter((p) => available.has(p.id) && passing.has(p.id));
 
     // Build the summaries. The page is resolved **once** — `toSummary` used to
     // ask `price_lists` for a batch of one, so a 50-card page made 50 calls and
@@ -1121,10 +1135,6 @@ export class CatalogQueryService {
       });
     }
 
-    for (const [key, values] of Object.entries(params.attributeFilters ?? {})) {
-      conditions.push(this.#attributeCondition(key, values));
-    }
-
     return conditions;
   }
 
@@ -1142,38 +1152,96 @@ export class CatalogQueryService {
    * is a question about what the filter means, and answering it in the
    * statement only would make the page-side predicate disagree with it.
    */
-  #attributeCondition(key: string, values: readonly string[]): ListingCondition {
+  #attributeCondition(value: SqlExpression, values: readonly string[]): ListingCondition {
     const wanted = values.map((v) => String(v));
     if (wanted.length === 0) return { sql: () => 'false', params: [] };
     return {
       sql: (alias) =>
         `(select ${jsStringOfJsonb('val.v')} ` +
-        `from (select ${alias}.attribute_values -> ?::text as v) val) ` +
+        `from (select ${value.sql(alias)} as v) val) ` +
         `in (${wanted.map(() => '?').join(',')})`,
-      params: [key, ...wanted],
+      params: [...value.params, ...wanted],
     };
   }
 
   /**
-   * The attribute predicate a fetched page is narrowed by, for one product.
-   *
-   * Availability (channel, status, window, audience — feature 163) is the
-   * caller's, because it is one batched check for the whole chunk
-   * (`#availableAmong`) behind the statement's own `availabilityCondition`.
-   * Both are applied identically by the default path and the price paths below
-   * — a price ordering that filtered differently would make a hidden row
-   * observable through a position or a page boundary, which is the disclosure
-   * FR-014 forbids and which neither the relevance sort nor the name sort could
-   * have had.
+   * Feature 163 (FR-017 b) — what narrows a listing beside availability and the
+   * category: the free-text match and each `filter[attr.<key>]`, over the
+   * **effective** values a card shows at the request's (channel, language)
+   * (#384's walk, `effective-value.sql.ts`). `conditions` go into every
+   * statement a page is cut from; `passes` is their page-side twin over the
+   * same walk in TypeScript (`effectiveAttributeValues`), kept as defence in
+   * depth like the availability one.
    */
-  #passesPageFilters(product: Product, params: ListProductsParams): boolean {
-    if (!params.attributeFilters) return true;
-    for (const [k, values] of Object.entries(params.attributeFilters)) {
-      const av = product.attributeValues[k];
-      if (av === undefined) return false;
-      if (!values.map((v) => String(v)).includes(String(av))) return false;
+  async #listingFilters(
+    params: ListProductsParams,
+    ctx: CatalogQueryContext,
+    attributeViews: readonly CatalogAttributeView[],
+  ): Promise<ListingFilters> {
+    const channel = ctx.resolvedChannel;
+    const effective: EffectiveValueScope = this.#overrideContext(channel, ctx.preferredLanguage);
+    const conditions: ListingCondition[] = [];
+    if (params.q) conditions.push(await this.#textSearchCondition(params.q, ctx, effective));
+    const scopeOf = new Map(
+      attributeViews.map((a) => [a.key, { channelScoped: a.channelScoped, languageScoped: a.languageScoped }]),
+    );
+    const notScoped = { channelScoped: false, languageScoped: false };
+    const attributeFilters = Object.entries(params.attributeFilters ?? {});
+    for (const [key, values] of attributeFilters) {
+      conditions.push(
+        this.#attributeCondition(effectiveAttributeSql(key, scopeOf.get(key) ?? notScoped, effective), values),
+      );
     }
-    return true;
+    return {
+      conditions,
+      passes: async (em, products) => {
+        const out = new Set<string>();
+        if (attributeFilters.length === 0) {
+          for (const p of products) out.add(p.id);
+          return out;
+        }
+        if (products.length === 0) return out;
+        const overrides = await loadChannelOverridesByProduct(em, products.map((p) => p.id), channel.id);
+        for (const product of products) {
+          const values = await effectiveAttributeValues(
+            product.attributeValues ?? {},
+            overrides.get(product.id),
+            effective,
+            async () => scopeOf,
+          );
+          const ok = attributeFilters.every(([key, wanted]) => {
+            const v = values[key];
+            return v !== undefined && wanted.map((w) => String(w)).includes(String(v));
+          });
+          if (ok) out.add(product.id);
+        }
+        return out;
+      },
+    };
+  }
+
+  /**
+   * The free-text match (FR-017 b): the SKU, the effective Name, and the
+   * effective value of every searchable attribute, case-insensitive substring.
+   */
+  async #textSearchCondition(
+    q: string,
+    ctx: CatalogQueryContext,
+    effective: EffectiveValueScope,
+  ): Promise<ListingCondition> {
+    const searchable = await this.#requireAttributeRead().listByFlag('isSearchable');
+    const like = `%${q}%`;
+    const name = this.#effectiveNameExpr(ctx);
+    const attributes = searchable.map((a) =>
+      effectiveAttributeSql(a.key, { channelScoped: a.channelScoped, languageScoped: a.languageScoped }, effective),
+    );
+    return {
+      sql: (alias) =>
+        `(${alias}.sku ilike ? or ${name.sql(alias)} ilike ?` +
+        attributes.map((e) => ` or (${e.sql(alias)} #>> '{}') ilike ?`).join('') +
+        `)`,
+      params: [like, ...name.params, like, ...attributes.flatMap((e) => [...e.params, like])],
+    };
   }
 
   /** The two range bounds as four-place decimal strings ({@link amountBound}), for every price path. */
@@ -1223,6 +1291,7 @@ export class CatalogQueryService {
     /** The request's cursor as `#priceCursor` read it: `null` starts the walk. */
     decoded: PriceListingCursor | null,
     availability: PageAvailabilityScope,
+    filters: ListingFilters,
   ): Promise<ListResult<ProductSummary>> {
     const channel = ctx.resolvedChannel;
     const direction = sort === 'price' ? 'asc' : 'desc';
@@ -1230,7 +1299,7 @@ export class CatalogQueryService {
     // page and handed to whichever walk serves it — every chunk of it (review
     // 3, A5). An `unordered` walk is decided earlier, in `listProducts`, and
     // reads neither (review 2, finding 7).
-    const scope = await this.#priceWalkScope(em, params, ctx, availability);
+    const scope = await this.#priceWalkScope(em, params, ctx, availability, filters);
     const { context } = scope;
     // A walk whose price order went missing carries on in the default order
     // from the last price it served, to its end.
@@ -1310,8 +1379,8 @@ export class CatalogQueryService {
         em,
         chunk.rows.map((row) => row.productId),
         where,
-        params,
         scope.availability,
+        scope.filters,
       );
       for (const row of chunk.rows) {
         const product = byId.get(row.productId);
@@ -1349,7 +1418,13 @@ export class CatalogQueryService {
         const narrowing = this.#availabilityNarrowing(scope.availability);
         const rows = await em.find(
           Product,
-          { $and: [where, ...tailAfter, { [raw(narrowing.sql, narrowing.params)]: [] }] },
+          {
+            $and: [
+              where,
+              ...tailAfter,
+              ...[narrowing, ...filters.conditions].map((c) => ({ [raw(c.sql, c.params)]: [] })),
+            ],
+          },
           {
             limit: chunkSize,
             // The listing's own default ordering, in both directions: the tail is
@@ -1370,9 +1445,10 @@ export class CatalogQueryService {
           (r) => !priced.has(r.id) && (categoryIds === null || categoryIds.has(r.id)),
         );
         const visibleIds = await this.#availableAmong(em, candidates, scope.availability, true);
+        const passing = await scope.filters.passes(em, candidates);
         for (const product of candidates) {
           if (!visibleIds.has(product.id)) continue;
-          if (!this.#passesPageFilters(product, params)) continue;
+          if (!passing.has(product.id)) continue;
           collected.push(product);
           cursors.push({
             stream: 'tail',
@@ -1434,11 +1510,13 @@ export class CatalogQueryService {
     params: ListProductsParams,
     ctx: CatalogQueryContext,
     availability: PageAvailabilityScope,
+    filters: ListingFilters,
   ): Promise<PriceWalkScope> {
     return {
       context: await this.#viewerPricingContext(ctx),
       categoryIds: params.categorySlug ? await this.productIdsInCategoryTree(em, params.categorySlug) : null,
       availability,
+      filters,
     };
   }
 
@@ -1450,10 +1528,10 @@ export class CatalogQueryService {
    * the default listing's keyset; an `unordered` cursor wraps the default
    * listing's own, which that listing checks.
    */
-  #priceCursor(cursor: string): PriceListingCursor | null {
+  #priceCursor(cursor: string, ctx: CatalogQueryContext): PriceListingCursor | null {
     const decoded = this.#openCursor(PRICE_WALK_CURSOR_PURPOSE, cursor);
     if (!isRecord(decoded)) return null;
-    const keyset = this.keysetFor(undefined);
+    const keyset = this.#keysetFor(undefined, ctx);
     switch (decoded['stream']) {
       case 'priced': {
         const amount = cursorAmount(decoded['amount']);
@@ -1527,12 +1605,13 @@ export class CatalogQueryService {
     ctx: CatalogQueryContext,
     where: Record<string, unknown>,
     scope: PageAvailabilityScope,
+    filters: ListingFilters,
   ): Promise<ListResult<ProductSummary>> {
     const range = this.#amountRange(params);
     // The chunk walk and the page it hands back page by the same keyset, and
     // that keyset is the one this ordering sorts on — `keysetFor`.
-    const keyset = this.keysetFor(params.sort);
-    return this.#walkKeepingByPrice(em, params, ctx, where, await this.#priceWalkScope(em, params, ctx, scope), {
+    const keyset = this.#keysetFor(params.sort, ctx);
+    return this.#walkKeepingByPrice(em, params, ctx, where, await this.#priceWalkScope(em, params, ctx, scope, filters), {
       sort: params.sort,
       start: params.cursor ? keyset.parse(this.#openCursor(PRICE_RANGE_WALK_CURSOR_PURPOSE, params.cursor)) : null,
       keep: (price) => price !== null && withinAmountRange(price.amount, range),
@@ -1635,7 +1714,8 @@ export class CatalogQueryService {
   ): Promise<ListResult<ProductSummary>> {
     const channel = ctx.resolvedChannel;
     const categoryFilteredIds = scope.categoryIds;
-    const keyset = this.keysetFor(walk.sort);
+    const filters = scope.filters;
+    const keyset = this.#keysetFor(walk.sort, ctx);
     let cursor: ListingKeysetCursor | null = walk.start;
     const budget = PRICE_PAGE_SCAN_BUDGET_MULTIPLE * params.limit;
     const target = params.limit + 1;
@@ -1662,24 +1742,25 @@ export class CatalogQueryService {
           $and: [
             where,
             ...(cursor ? [keyset.after(cursor)] : []),
-            { [raw(narrowing.sql, narrowing.params)]: [] },
+            ...[narrowing, ...filters.conditions].map((c) => ({ [raw(c.sql, c.params)]: [] })),
           ],
         },
         {
           limit: chunkSize,
-          orderBy: this.orderForSort(walk.sort),
+          orderBy: keyset.orderBy(),
         },
       );
       spent += rows.length;
       if (rows.length === 0) break;
       const lastRow = rows[rows.length - 1]!;
-      cursor = keyset.of(lastRow);
+      cursor = keyset.of(lastRow, await this.#cursorNames(em, keyset, [lastRow], ctx));
 
       const visibleIds = await this.#availableAmong(em, rows, scope.availability, true);
+      const passing = await filters.passes(em, rows);
       const candidates = rows.filter(
         (r) =>
           visibleIds.has(r.id) &&
-          this.#passesPageFilters(r, params) &&
+          passing.has(r.id) &&
           (categoryFilteredIds === null || categoryFilteredIds.has(r.id)),
       );
       // The walk decides on the viewer's own price — the figure the price
@@ -1721,7 +1802,8 @@ export class CatalogQueryService {
     const full = collected.length > params.limit;
     const page = collected.slice(0, params.limit);
     const last = page[page.length - 1];
-    const resumeAt = full && last ? keyset.of(last) : bound ? cursor : null;
+    const resumeAt =
+      full && last ? keyset.of(last, await this.#cursorNames(em, keyset, [last], ctx)) : bound ? cursor : null;
     const hasMore = resumeAt !== null;
     const nextCursor = resumeAt === null ? null : walk.cursorOf(resumeAt);
     const cardReads = await this.#listingCardReadsFor(
@@ -1751,20 +1833,25 @@ export class CatalogQueryService {
     em: EntityManager,
     productIds: readonly string[],
     where: Record<string, unknown>,
-    params: ListProductsParams,
     scope: PageAvailabilityScope,
+    filters: ListingFilters,
   ): Promise<Map<string, Product>> {
     const out = new Map<string, Product>();
     if (productIds.length === 0) return out;
     // Feature 163 — the `raw()` key is made in the expression that executes it.
     const narrowing = this.#availabilityNarrowing(scope);
     const rows = await em.find(Product, {
-      $and: [where, { id: { $in: [...productIds] } }, { [raw(narrowing.sql, narrowing.params)]: [] }],
+      $and: [
+        where,
+        { id: { $in: [...productIds] } },
+        ...[narrowing, ...filters.conditions].map((c) => ({ [raw(c.sql, c.params)]: [] })),
+      ],
     });
     const visibleIds = await this.#availableAmong(em, rows, scope, true);
+    const passing = await filters.passes(em, rows);
     for (const product of rows) {
       if (!visibleIds.has(product.id)) continue;
-      if (!this.#passesPageFilters(product, params)) continue;
+      if (!passing.has(product.id)) continue;
       out.set(product.id, product);
     }
     return out;
@@ -2389,6 +2476,20 @@ export class CatalogQueryService {
     });
     const visibleIds = await this.#availableAmong(em, products, scope, true);
     const visible = products.filter((p) => visibleIds.has(p.id));
+    // Feature 163 (FR-017 b) — counts over the effective values a card shows at
+    // (channel, language): #384's walk over this channel's override rows.
+    const effective = this.#overrideContext(channel, ctx.preferredLanguage);
+    const scopeOf = new Map(
+      attrs.map((a) => [a.key, { channelScoped: a.channelScoped, languageScoped: a.languageScoped }]),
+    );
+    const overrides = await loadChannelOverridesByProduct(em, visible.map((p) => p.id), channel.id);
+    const valuesOf = new Map<string, Record<string, unknown>>();
+    for (const p of visible) {
+      valuesOf.set(
+        p.id,
+        await effectiveAttributeValues(p.attributeValues ?? {}, overrides.get(p.id), effective, async () => scopeOf),
+      );
+    }
 
     const definitions = attrs.map((a) => {
       const label = this.pickLang(a.label, ctx.preferredLanguage, channel);
@@ -2407,7 +2508,7 @@ export class CatalogQueryService {
       ) {
         const optionCounts = new Map<string, number>();
         for (const p of visible) {
-          const v = p.attributeValues[a.key];
+          const v = valuesOf.get(p.id)?.[a.key];
           if (v === undefined || v === null) continue;
           // multiselect carries an array of selected option values.
           if (Array.isArray(v)) {
@@ -2429,7 +2530,7 @@ export class CatalogQueryService {
         let min: number | undefined;
         let max: number | undefined;
         for (const p of visible) {
-          const raw = p.attributeValues[a.key];
+          const raw = valuesOf.get(p.id)?.[a.key];
           const n = typeof raw === 'number' ? raw : Number(raw);
           if (!Number.isFinite(n)) continue;
           if (min === undefined || n < min) min = n;
@@ -2628,12 +2729,6 @@ export class CatalogQueryService {
     return items;
   }
 
-  /** Cached per-call list of attribute keys that should match free-text search. */
-  private async searchableAttributeKeys(_em: EntityManager): Promise<string[]> {
-    const attrs = await this.#requireAttributeRead().listByFlag('isSearchable');
-    return attrs.map((a) => a.key);
-  }
-
   /**
    * Feature 007 — list of attribute keys flagged `is_comparable=true`,
    * sorted alphabetically. Consumed by the comparisons module's
@@ -2700,70 +2795,45 @@ export class CatalogQueryService {
   }
 
   /**
-   * Build a MikroORM where-clause for "attributeValues[key] contains query
-   * (case-insensitive)". MikroORM doesn't have a first-class JSONB query
-   * helper for the `->>` operator, so we use `$jsonb` style by selecting the
-   * value via the operators object.
-   */
-  private searchableJsonbClause(key: string, query: string): Record<string, unknown> {
-    // expr` returns the property at `key` cast to text; ILIKE handles
-    // case-insensitivity. We rely on MikroORM's `raw()` operator-form passed
-    // through to Knex.
-    return { [key]: { $ilike: `%${query}%` } };
-  }
-
-  private orderForSort(sort: ListProductsParams['sort']): Record<string, 'asc' | 'desc'> {
-    switch (sort) {
-      case 'name':
-        return { slug: 'asc', id: 'asc' };
-      case '-name':
-        return { slug: 'desc', id: 'desc' };
-      case '-createdAt':
-      case 'relevance':
-      default:
-        return { createdAt: 'desc', id: 'desc' };
-    }
-  }
-
-  /**
    * The keyset a listing pages by — **derived from the ordering it serves**,
-   * never assumed.
+   * never assumed. The ordering and the "everything after this row" predicate
+   * are one decision, and they had come apart once: the `after` predicate was
+   * written over `created_at` whatever the ordering, so under `sort=name` the
+   * walk both repeated products and skipped the ones between the repeats.
    *
-   * A chunk is fetched with `orderForSort(sort)` and the walk then asks for
-   * "everything after the last row of it". Those are one decision, and they had
-   * come apart: the `after` predicate was written over `created_at` whatever the
-   * ordering, so under `sort=name` — which orders by `slug` — it excluded the
-   * rows *newer* than the last one served instead of the rows already served.
-   * That set has no relation to the page, so the walk both repeats products and
-   * never reaches the ones between the repeats:
-   * `?q=…&sort=name&minPrice=0&maxPrice=100000&limit=3` served
-   * `[A, B, A]` on one page and then re-issued a cursor pointing at `B`.
-   *
-   * Deriving it here is what keeps the two in step for the next ordering
-   * somebody adds: `orderForSort` is the only place that says what a sort orders
-   * by, and this is the only place that says how to page it.
+   * Feature 163 (D6) — the name ordering is the **effective** name a card shows
+   * at the request's (channel, language), `effectiveTextSql`, with `id` as the
+   * tie-break (the name is not unique). It replaced an ordering by `slug`.
    */
-  private keysetFor(sort: ListProductsParams['sort']): ListingKeyset {
-    const order = this.orderForSort(sort);
-    const slugDirection = order['slug'];
-    if (slugDirection !== undefined) {
-      // `slug` is unique, so the `id` tie-break can never fire. It is written
-      // anyway because the ordering names it, and a keyset that drops a column
-      // its ordering carries is the defect above in miniature.
-      const op = slugDirection === 'asc' ? '$gt' : '$lt';
+  #keysetFor(sort: ListProductsParams['sort'], ctx: CatalogQueryContext): ListingKeyset {
+    if (sort === 'name' || sort === '-name') {
+      const direction = sort === 'name' ? 'asc' : 'desc';
+      const cmp = direction === 'asc' ? '>' : '<';
+      const name = this.#effectiveNameExpr(ctx);
       return {
-        of: (product) => ({ slug: product.slug, id: product.id }),
+        byName: true,
+        of: (product, nameOf) => ({ name: nameOf(product.id) ?? '', id: product.id }),
         parse: (decoded) =>
-          isRecord(decoded) && typeof decoded['slug'] === 'string' && isUuidText(decoded['id'])
-            ? { slug: decoded['slug'], id: decoded['id'] }
+          isRecord(decoded) && typeof decoded['name'] === 'string' && isUuidText(decoded['id'])
+            ? { name: decoded['name'], id: decoded['id'] }
             : null,
-        after: (cursor) => afterKeysetCursor(cursor, op),
+        after: (cursor) => {
+          if (!('name' in cursor)) return {};
+          return {
+            [raw(
+              (alias: string) =>
+                `(${name.sql(alias)} ${cmp} ? or (${name.sql(alias)} = ? and ${alias}.id ${cmp} ?))`,
+              [...name.params, cursor.name, ...name.params, cursor.name, cursor.id],
+            )]: [],
+          };
+        },
+        orderBy: () => ({ [raw((alias: string) => name.sql(alias), name.params)]: direction, id: direction }),
       };
     }
     // The default ordering is `createdAt desc, id desc`, in every sort that
-    // reaches here, so the direction is not read off the map the way the slug
-    // one is — it has nothing to read.
+    // reaches here.
     return {
+      byName: false,
       of: (product) => ({ createdAt: product.createdAt.toISOString(), id: product.id }),
       // The id is compared with a uuid column: a cursor naming anything else is
       // discarded here rather than refused by the database as a 500.
@@ -2775,7 +2845,55 @@ export class CatalogQueryService {
           ? { createdAt: decoded['createdAt'], id: decoded['id'] }
           : null,
       after: (cursor) => afterKeysetCursor(cursor, '$lt'),
+      orderBy: () => ({ createdAt: 'desc', id: 'desc' }),
     };
+  }
+
+  /**
+   * Feature 163 (FR-017 b) — the effective Name a card shows at the request's
+   * (channel, language), as SQL: the value the listing searches and sorts on.
+   * The same two language chains `toSummary` uses (`#overrideContext` and
+   * `pickLang`).
+   */
+  #effectiveNameExpr(ctx: CatalogQueryContext): SqlExpression {
+    const channel = ctx.resolvedChannel;
+    return effectiveTextSql(
+      'name',
+      this.#overrideContext(channel, ctx.preferredLanguage),
+      [ctx.preferredLanguage, channel.defaultLanguage, 'en-US', 'en'].filter(
+        (v): v is string => typeof v === 'string',
+      ),
+    );
+  }
+
+  /**
+   * The effective names of `products` as a card shows them — for a name cursor,
+   * which must carry the value the statement sorted on. One read for any number
+   * of products; nothing when the keyset does not need it.
+   */
+  async #cursorNames(
+    em: EntityManager,
+    keyset: ListingKeyset,
+    products: readonly Product[],
+    ctx: CatalogQueryContext,
+  ): Promise<(productId: string) => string | undefined> {
+    if (!keyset.byName || products.length === 0) return () => undefined;
+    const channel = ctx.resolvedChannel;
+    const overrides = await loadChannelOverridesByProduct(em, products.map((p) => p.id), channel.id);
+    const overrideCtx = this.#overrideContext(channel, ctx.preferredLanguage);
+    const names = new Map(
+      products.map((p) => [
+        p.id,
+        effectiveSystemText(
+          overrides.get(p.id),
+          'name',
+          overrideCtx,
+          p.name,
+          this.pickLang(p.name, ctx.preferredLanguage, channel),
+        ),
+      ]),
+    );
+    return (productId) => names.get(productId);
   }
 
   private async filterByChannel(
