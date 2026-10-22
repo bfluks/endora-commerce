@@ -23,6 +23,7 @@ import { twoFactorEnrolmentsFor } from './two-factor-enrolments.js';
 import { OrganizationDetailsService } from '../../../packages/modules/organizations/src/backend/services/organization-details-port.js';
 import { OrganizationRestrictionService } from '../../../packages/modules/organizations/src/backend/services/organization-restriction-service.js';
 import { CatalogProductReadService } from '../../../packages/modules/catalog/dist/backend/services/catalog-product-read.service.js';
+import { ProductAvailabilityService } from '../../../packages/modules/catalog/dist/backend/services/product-availability.service.js';
 import { AddressReadService } from '../../../packages/modules/addresses/src/backend/services/address-ports.js';
 import { DeliveryMethodReadService } from '../../../packages/modules/delivery_methods/src/backend/services/delivery-method-read-port.js';
 import { PaymentMethodReadService } from '../../../packages/modules/payment_methods/src/backend/services/payment-method-read-port.js';
@@ -50,6 +51,7 @@ import type { OrderServiceNeighbourPorts } from '../../../packages/modules/order
 import type { BackendServerHandle } from './test-server.js';
 import { EventBus } from '@endora-commerce/platform/events';
 import { SalesChannelMembershipService } from '../../src/kernel/sales-channels/sales-channel-membership.service.js';
+import { SalesChannel, type ResolvedChannel } from '@endora-commerce/platform/kernel';
 
 /**
  * The neighbouring modules' ports an `orders` service needs when a test builds
@@ -122,6 +124,17 @@ export function orderServiceNeighbours(
     organizationDetails: base.organizationDetails,
     customerAccountRead: base.customerAccountRead,
     catalogProductRead: base.catalogProductRead,
+    // Feature 163 — the real availability service over this rig's
+    // `EntityManager`, so a hand-built placement refuses an unavailable line as
+    // the composed one does. The channel record is read off the same manager.
+    catalogProductAvailability: new ProductAvailabilityService(emFactory, channelMembership, {
+      getById: async (id: string) => {
+        const channel = await emFactory().findOne(SalesChannel, { id });
+        return channel
+          ? ({ ...channel, languages: [...channel.languages] } as unknown as ResolvedChannel)
+          : null;
+      },
+    }),
     addressRead,
     deliveryMethodRead: () => deliveryMethodRead,
     paymentMethodRead: () => paymentMethodRead,
