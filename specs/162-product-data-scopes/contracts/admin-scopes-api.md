@@ -34,10 +34,13 @@ patchProductScopesRequestSchema = z.object({
     channelId: uuid,
     status: productScopeStatusSchema.nullable().optional(),             // null = use inherited
     window: z.object({ from: iso.nullable(), until: iso.nullable() }).nullable().optional(),
-    audience: z.object({ visibility, allowedOrganizationIds: z.array(uuid) }).nullable().optional(),
+    audience: z.object({ visibility, allowedOrganizationIds: z.array(uuid).max(1000) }).nullable().optional(),
     minOrderQuantity: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
     returnable: z.boolean().nullable().optional(),
-    languageStatuses: z.array(z.object({ languageCode: z.string(), status: productScopeStatusSchema.nullable() })).optional(),
+    languageStatuses: z.array(z.object({
+      languageCode: z.string().max(16).regex(/^[a-z]{2,3}(-[a-z]{2})?$/i),  // BCP-47 shape, any case
+      status: productScopeStatusSchema.nullable(),
+    })).max(64).optional(),
   })).max(64),
   global: z.object({ publishFrom: iso.nullable(), publishUntil: iso.nullable() }).partial().optional(),
 })
@@ -60,6 +63,12 @@ Behaviour:
   `reason: 'language_not_offered', languageCode` — **except** `null` (removing an orphaned override is
   always allowed, FR-015).
 - `window.from >= window.until` → `422 VALIDATION_FAILED details.field = 'window'`.
+- A `channelId` named twice in `channels` → `422 VALIDATION_FAILED details: { field: 'channels', channelId }`.
+- A `languageCode` named twice in one entry's `languageStatuses` (compared in the channel's spelling, so
+  `de-DE` and `de-de` are one language) → `422 VALIDATION_FAILED details: { field: 'languageStatuses', channelId, languageCode }`.
+- The write reads the product under a row lock (`FOR UPDATE`), so concurrent writes on one product
+  serialise and each audit `before` is its true predecessor; a residual unique violation is
+  `409 VERSION_CONFLICT`, never a 500.
 - Emits `product.updated.v1` with the `changedFields` of R10 after commit.
 - Completeness gate (R18): `warn` → saved, `warnings[].kind = 'completeness'`; `refuse` →
   `422 SCOPE_INCOMPLETE details: { pairs: [{ channelId, languageCode, missing }] }`, nothing saved.
