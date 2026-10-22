@@ -2784,6 +2784,12 @@ export interface CatalogQuickSearchHit {
   slug: string;
   /** Per-locale JSONB as stored — the caller picks its own language. */
   name: Record<string, string>;
+  /**
+   * Feature 163 (FR-017 a) — the Name the storefront shows at the request's
+   * (channel, language): the channel's override where one applies, else the
+   * baseline pick. What a type-ahead should display.
+   */
+  effectiveName?: string;
   status: ProductStatus;
   matchedOn: CatalogQuickSearchField[];
 }
