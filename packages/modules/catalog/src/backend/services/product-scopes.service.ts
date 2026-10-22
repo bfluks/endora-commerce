@@ -490,7 +490,9 @@ export class ProductScopesService {
         orphaned: !isMember,
       });
     }
-    const named = new Set(data.global.allowedOrganizationIds);
+    // The channel audience rules only (owner decision U1): each is capped, while the global
+    // rule is not, so naming its organizations could fan out without bound.
+    const named = new Set<string>();
     for (const channel of data.channels) {
       for (const id of channel.audience?.allowedOrganizationIds ?? []) named.add(id);
     }
