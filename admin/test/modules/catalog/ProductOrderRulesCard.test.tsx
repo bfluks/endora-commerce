@@ -6,6 +6,7 @@ import { ApiError } from '@endora-commerce/admin-kit/lib';
 import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/TranslationProvider';
 import catalogEn from '../../../../packages/modules/catalog/i18n/en.json';
 import catalogPl from '../../../../packages/modules/catalog/i18n/pl.json';
+import { adminSession, withSession } from '../../helpers/render-with-session';
 
 /**
  * Feature 155 / T098 (US1, US5; FR-001, FR-003) — the Inventory tab's order-rules card:
@@ -47,6 +48,29 @@ function primeProduct(values: { minOrderQuantity: number | null; returnable: boo
     if (path === PATH) {
       return Promise.resolve({ data: { id: PRODUCT_ID, type: 'simple', ...values } });
     }
+    // Feature 162 — the per-channel rules below the global ones; this file's
+    // subject is the global pair, so the product is in no channel here
+    // (`product-scope-controls.test.tsx` covers the channel table).
+    if (path === `${PATH}/scopes`) {
+      return Promise.resolve({
+        data: {
+          global: {
+            status: 'active',
+            publishFrom: null,
+            publishUntil: null,
+            visibility: 'public',
+            allowedOrganizationIds: [],
+            ...values,
+          },
+          channels: [],
+        },
+      });
+    }
+    if (path === `${PATH}/scope-context`) {
+      return Promise.resolve({
+        data: { productId: PRODUCT_ID, channels: [], languagesUnion: [], primaryAdminLanguage: 'en', preference: null },
+      });
+    }
     return Promise.reject(new Error(`unexpected GET ${path}`));
   });
 }
@@ -56,7 +80,9 @@ function renderCard(productType: ProductType, language: 'en' | 'pl' = 'en'): voi
   render(
     <StrictMode>
       <TranslationProvider language={language} initialBundle={{ catalog }}>
-        <ProductOrderRulesCard productId={PRODUCT_ID} productType={productType} />
+        {withSession(<ProductOrderRulesCard productId={PRODUCT_ID} productType={productType} />, {
+          session: adminSession({ permissions: ['catalog:read', 'catalog:write'] }),
+        })}
       </TranslationProvider>
     </StrictMode>,
   );
