@@ -33,7 +33,9 @@ export class Product {
     | 'fulfilmentStrategy'
     | 'fulfilmentStrategyWarehouseOrder'
     | 'minOrderQuantity'
-    | 'returnable';
+    | 'returnable'
+    | 'publishFrom'
+    | 'publishUntil';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -241,4 +243,17 @@ export class Product {
     nullable: true,
   })
   readonly adminSearchKeyPl?: string;
+
+  /**
+   * Feature 162 (FR-023) — the global publication window, inclusive at both
+   * ends; `null` = open on that side. A channel may replace the pair
+   * (`product_channel_scopes.window_overridden`). Never changes `status`: the
+   * window is evaluated at read time (A-4).
+   */
+  @Property({ type: 'datetime', nullable: true })
+  publishFrom?: Date | null;
+
+  /** Feature 162 (FR-023) — the end of the global publication window, inclusive. */
+  @Property({ type: 'datetime', nullable: true })
+  publishUntil?: Date | null;
 }
