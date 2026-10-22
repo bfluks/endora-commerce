@@ -74,6 +74,8 @@ import { ProductAttachment } from './entities/product-attachment.entity.js';
 import { ProductAttribute } from './entities/product-attribute.entity.js';
 import { ProductChannelLanguageScope } from './entities/product-channel-language-scope.entity.js';
 import { ProductChannelScope } from './entities/product-channel-scope.entity.js';
+import { ProductUrlKey } from './entities/product-url-key.entity.js';
+import { ProductUrlRedirect } from './entities/product-url-redirect.entity.js';
 import { ProductEditorPreference } from './entities/product-editor-preference.entity.js';
 import { ProductLink } from './entities/product-link.entity.js';
 import { ProductListSavedView } from './entities/product-list-saved-view.entity.js';
@@ -1175,6 +1177,8 @@ export const entities = [
   ProductLink,
   ProductListSavedView,
   ProductPackagingUnit,
+  ProductUrlKey,
+  ProductUrlRedirect,
   ProductValueOverride,
   ProductVariant,
   Product,
