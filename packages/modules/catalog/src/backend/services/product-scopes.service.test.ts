@@ -3,6 +3,7 @@ import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 import { ERROR_CODES, type ProductChannelScopeRecord } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { Product } from '../entities/product.entity.js';
+import { ProductChannelScope } from '../entities/product-channel-scope.entity.js';
 import {
   nonMemberOrganizationIds,
   planProductScopeWrite,
@@ -475,5 +476,73 @@ describe('ProductScopesService.apply — concurrent writes (security review, 162
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).statusCode).toBe(409);
     expect((err as HttpError).code).toBe(ERROR_CODES.VERSION_CONFLICT);
+  });
+});
+
+// Owner decision U1 — the answer names the organizations its rules name, so the admin
+// needs no `customers:read` to show them; an unreadable one is simply absent.
+describe('ProductScopesService.read — organization names (U1)', () => {
+  const ORG_GONE = '00000000-0000-4000-8000-0000000000e9';
+  function rig(organizations?: { findByIds: (ids: readonly string[]) => Promise<Array<{ id: string; name: string }>> }) {
+    const product = {
+      id: P,
+      type: 'simple',
+      status: 'active',
+      publishFrom: null,
+      publishUntil: null,
+      visibility: 'organization_restricted',
+      allowedOrganizationIds: [ORG_A],
+      minOrderQuantity: null,
+      returnable: true,
+    };
+    const channelRow = {
+      productId: P,
+      salesChannelId: B2B,
+      status: null,
+      windowOverridden: false,
+      visibility: 'organization_restricted',
+      allowedOrganizationIds: [ORG_B, ORG_GONE, ORG_A],
+      minOrderQuantity: null,
+      returnable: null,
+    };
+    const em = {
+      findOne: async () => product,
+      find: async (entity: unknown) => (entity === ProductChannelScope ? [channelRow] : []),
+    };
+    const membership = {
+      listChannelsForEntity: async () => [{ id: B2B, code: 'b2b', languages: ['pl-PL'] }],
+      filterEntityIdsAvailableInChannel: async () => [ORG_A],
+    };
+    return new ProductScopesService(() => em as never, membership as never, undefined, organizations as never);
+  }
+
+  it('names every organization the global and channel rules name, once; an unknown one is absent', async () => {
+    const asked: string[][] = [];
+    const service = rig({
+      findByIds: async (ids) => {
+        asked.push([...ids]);
+        return [
+          { id: ORG_A, name: 'Acme' },
+          { id: ORG_B, name: 'Westfield Ltd' },
+        ].filter((org) => ids.includes(org.id));
+      },
+    });
+    const scopes = await service.read(P);
+    expect(asked).toEqual([[ORG_A, ORG_B, ORG_GONE]]);
+    expect(scopes.organizations).toEqual([
+      { id: ORG_A, name: 'Acme' },
+      { id: ORG_B, name: 'Westfield Ltd' },
+    ]);
+    expect(scopes.channels[0]?.audience?.nonMemberOrganizationIds).toEqual([ORG_B, ORG_GONE]);
+  });
+
+  it('answers without names, never an error, when the organizations port refuses or is not wired', async () => {
+    const failing = rig({
+      findByIds: async () => {
+        throw new HttpError(503, ERROR_CODES.MODULE_DISABLED, 'organizations is off');
+      },
+    });
+    expect((await failing.read(P)).organizations).toEqual([]);
+    expect((await rig().read(P)).organizations).toEqual([]);
   });
 });

@@ -496,6 +496,14 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
     `migrations-registry.generated.ts` is a separate S2-only commit. `GET …/url-keys` lists `redirects`
     unconditionally until T110 adds the `seo` presence probe with the T118b edge. A language key for a language no
     channel offers is `422 VALIDATION_FAILED` (`field: 'languageKeys'`): `SCOPE_INVALID`'s details need a channel.
+- [x] T106a [S1] Phase 16 review fixes (2026-10-22): a duplicate's slug and SKU are allocated inside the
+  `product.duplicate` Command, its candidate URL-key locks taken once in sorted order (`#auditedWrite`'s
+  no-bus fallback is now a transaction); a soft-deleted product's slug counts as taken (`409 URL_KEY_TAKEN`,
+  never a 500); the PUT's three lists capped at 64; `product_url_keys (product_id)` index; a non-UUID `:id` is
+  404; the lock-wait race test fails when no waiter was observed. Owner decision U1 applied with it: the scopes
+  answer carries `organizations: [{ id, name }]` (`admin-scopes-api.md` §1) and `ProductScopeControls` reads
+  names from it instead of `GET /admin/organizations/:id`. New `[PG]` cases in the two files below and in
+  `backend/test/contract/catalog/product-scopes-api.test.ts`; unit cases in `catalog-admin-duplicate.test.ts`.
 
 **Verification** (one invocation per line):
 - `[PG] backend/test/integration/catalog/url-key-uniqueness.test.ts`
