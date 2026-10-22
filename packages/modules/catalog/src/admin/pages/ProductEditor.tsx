@@ -142,7 +142,7 @@ export function ProductEditor(): ReactNode {
   const [attributeSetId, setAttributeSetId] = useState<string>('');
   // Editable attribute values keyed by attribute `key` (Attributes tab).
   const [attrValues, setAttrValues] = useState<Record<string, unknown>>({});
-  // Feature 162 (FR-023) — the global publication window, as `datetime-local`
+  // Feature 163 (FR-023) — the global publication window, as `datetime-local`
   // values in the operator's zone. `loadedWindow` is what the server holds, so
   // the page PATCH carries the window only when it changed.
   const [publishFrom, setPublishFrom] = useState('');
@@ -237,7 +237,7 @@ export function ProductEditor(): ReactNode {
         setAttrValues(p.attributeValues ?? {});
         setAttributeSetId(p.attributeSetId);
         setCategoryIds(p.categoryIds ?? []);
-        // Feature 162 — the global window is read from the scopes answer (the
+        // Feature 163 — the global window is read from the scopes answer (the
         // product answer does not carry it). A failed read leaves the fields
         // empty and unchanged, so nothing is sent for them on save.
         let loadedFrom = '';
@@ -307,7 +307,7 @@ export function ProductEditor(): ReactNode {
         }
         attributeValues['defaultPrice'] = v;
       }
-      // Feature 162 (FR-023) — the window travels only when it changed, and
+      // Feature 163 (FR-023) — the window travels only when it changed, and
       // a window that does not start before it ends is refused here, beside
       // its fields, without a request.
       let windowPatch: { publishFrom: string | null; publishUntil: string | null } | null = null;
@@ -734,7 +734,7 @@ export function ProductEditor(): ReactNode {
                   </div>
                 </div>
 
-                {/* Feature 162 (FR-023) — the global publication window. A channel
+                {/* Feature 163 (FR-023) — the global publication window. A channel
                     may set its own in the scope controls above. No constraint
                     attributes: the check is ours and translated, never a
                     browser bubble. */}

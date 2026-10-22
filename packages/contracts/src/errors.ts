@@ -69,7 +69,7 @@ export const ERROR_CODES = {
   PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY: 'PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY',
   PACKAGING_UNIT_MISMATCH: 'PACKAGING_UNIT_MISMATCH',
 
-  // Catalog 162 — product data scopes and URL keys (owned by `catalog`)
+  // Catalog 163 — product data scopes and URL keys (owned by `catalog`)
   SCOPE_INVALID: 'SCOPE_INVALID',
   SCOPE_INCOMPLETE: 'SCOPE_INCOMPLETE',
   URL_KEY_TAKEN: 'URL_KEY_TAKEN',

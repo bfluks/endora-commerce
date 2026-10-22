@@ -8,9 +8,9 @@ import {
 } from '../../helpers/test-server.js';
 
 /**
- * Feature 162, Phase 16 (T100) — URL keys are unique per language across every
+ * Feature 163, Phase 16 (T100) — URL keys are unique per language across every
  * channel, and the redirects they leave behind keep that invariant
- * (`specs/162-product-data-scopes/data-model.md` §5, research R11; FR-014, FR-015,
+ * (`specs/163-product-data-scopes/data-model.md` §5, research R11; FR-014, FR-015,
  * FR-070, FR-072, SC-008, US7 #2, #4, #5, #7, #8; re-analyze H1 and HIGH-2).
  *
  * Every write goes through `PUT /api/v1/admin/catalog/products/:id/url-keys`, the
@@ -23,7 +23,7 @@ import {
  * `afterAll`, their key rows go with them by cascade). Every key carries the run
  * suffix, so two runs against one database never meet.
  */
-describe('URL-key uniqueness and redirects (spec 162, T100)', () => {
+describe('URL-key uniqueness and redirects (spec 163, T100)', () => {
   let h: BackendServerHandle;
   const run = randomUUID().slice(0, 8);
   const admin = { cookies: { b2b_session: 'stub-admin-session' } };

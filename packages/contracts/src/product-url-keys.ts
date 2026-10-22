@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
 
 /**
- * Feature 162 (`specs/162-product-data-scopes/`) — product URL keys per language and
+ * Feature 163 (`specs/163-product-data-scopes/`) — product URL keys per language and
  * per sales channel × language, their redirects, and the one helper that composes a
  * product URL (`contracts/url-keys-and-redirects.md`, research R11, R12, R17, R28).
  *
@@ -190,7 +190,7 @@ export interface ProductUrlKeyWrite {
 // --- Port — catalogProductUrlKeyReadPort (owner `catalog`, R28) ------------------
 
 /**
- * Owner: `catalog`. Not registered yet: feature 162 publishes it as
+ * Owner: `catalog`. Not registered yet: feature 163 publishes it as
  * `catalogProductUrlKeyReadPort` with its implementation (T111), and the
  * container-name marker arrives with that registration.
  *

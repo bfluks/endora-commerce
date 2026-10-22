@@ -137,7 +137,7 @@ interface Props {
   onBaselineNameChange: (next: Record<string, string>) => void;
   onBaselineDescriptionChange: (next: Record<string, string>) => void;
   /**
-   * Feature 162 — the global status as the page form holds it, so the scope
+   * Feature 163 — the global status as the page form holds it, so the scope
    * controls' inherited labels follow it (and never warn about it, FR-013).
    */
   globalStatus?: ProductScopeStatus;
@@ -658,7 +658,7 @@ export const ProductScopeEditor = forwardRef<ProductScopeEditorHandle, Props>(
             ) : null}
           </div>
 
-          {/* Feature 162 — status, publication window and audience for the
+          {/* Feature 163 — status, publication window and audience for the
               channel picked above (US1–US3). */}
           <hr className="b2b-hr" />
           <ProductScopeControls

@@ -28,7 +28,7 @@ import {
 import type { Channel } from './ProductScopeEditor.js';
 
 /**
- * Feature 162 (T089; US1–US3, FR-012, FR-013, FR-023, FR-030, FR-040, FR-042) — the scope
+ * Feature 163 (T089; US1–US3, FR-012, FR-013, FR-023, FR-030, FR-040, FR-042) — the scope
  * controls of the product editor: status per channel and per channel × language, the
  * publication window and the audience rule per channel, each with "use inherited" and the
  * source of the value it shows.
