@@ -147,7 +147,7 @@ export interface CatalogModuleOptions {
    * the pricing engine needs beyond the id — the customer group a
    * group-targeted list is selected by — lives on that row.
    *
-   * Feature 162 (owner decision U1) — the product scopes answer names the
+   * Feature 163 (owner decision U1) — the product scopes answer names the
    * organizations its audience rules name, best effort.
    */
   organizations?: OrganizationDetailsPort;
@@ -511,7 +511,7 @@ export function catalogModule(options: CatalogModuleOptions) {
         )
       : undefined;
 
-    // Feature 162 — scoped values per channel and channel × language. Needs the
+    // Feature 163 — scoped values per channel and channel × language. Needs the
     // membership accessor for FR-014 and the C4 warning, like the overrides.
     // Owner decision U1 — `organizations` names the audience's organizations in the answer.
     const scopesService = options.salesChannelMembership
@@ -522,7 +522,7 @@ export function catalogModule(options: CatalogModuleOptions) {
           options.organizations,
         )
       : undefined;
-    // Feature 162 — URL keys per language and channel × language, and their redirects.
+    // Feature 163 — URL keys per language and channel × language, and their redirects.
     const urlKeyService = options.salesChannelMembership
       ? new UrlKeyService(options.emFactory, options.salesChannelMembership, options.commandBus)
       : undefined;

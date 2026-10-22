@@ -1,8 +1,8 @@
 import { Migration } from '@mikro-orm/migrations';
 
 /**
- * Feature 162 — product data scopes per sales channel and language
- * (`specs/162-product-data-scopes/data-model.md` §1–§3, research R1–R4).
+ * Feature 163 — product data scopes per sales channel and language
+ * (`specs/163-product-data-scopes/data-model.md` §1–§3, research R1–R4).
  *
  * - `product_channel_scopes` — one row per (product, channel) holding the channel
  *   overrides of status, publication window, audience, minimum order quantity and

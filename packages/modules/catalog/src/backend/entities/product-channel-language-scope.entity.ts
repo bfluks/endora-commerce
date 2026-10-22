@@ -3,7 +3,7 @@ import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import type { ProductScopeStatus } from '@endora-commerce/contracts';
 
 /**
- * ProductChannelLanguageScope — feature 162 (`specs/162-product-data-scopes/`
+ * ProductChannelLanguageScope — feature 163 (`specs/163-product-data-scopes/`
  * data-model.md §2, research R2).
  *
  * The product's status at one (sales channel, language) — the only typed field

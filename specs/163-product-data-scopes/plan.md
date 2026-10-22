@@ -1,13 +1,14 @@
 # Implementation Plan: product data scopes per sales channel and language
 
-**Branch**: `feat/162-product-data-scopes` (from `origin/master`) | **Date**: 2026-10-21 | **Spec**:
-`specs/162-product-data-scopes/spec.md` (clarify rounds 1–4)
-**Input**: Feature specification from `specs/162-product-data-scopes/spec.md`; issue #385; depends on #384
+**Branch**: `feat/163-product-data-scopes` (from `origin/master`) | **Date**: 2026-10-21 | **Spec**:
+`specs/163-product-data-scopes/spec.md` (clarify rounds 1–4)
+**Input**: Feature specification from `specs/163-product-data-scopes/spec.md`; issue #385; depends on #384
 (`fork/fix/storefront-channel-value-overrides`, `f855ffc8a`, not yet on `master`).
 **Measured on**: `origin/master` `aa6891d63`.
 
-> **Renumbered from 159.** `origin/master` holds `specs/159-quote-request-item-groups/`, so this feature
-> was renumbered to 162 before its first push. `.specify/feature.json` on this branch is left at
+> **Renumbered from 159, then from 162.** `origin/master` holds `specs/159-quote-request-item-groups/`, so this feature
+> was renumbered to 162 before its first push; `origin/master` then took `specs/162-custom-fields-value-carry/`
+> (PR #401), so it was renumbered again to 163. `.specify/feature.json` on this branch is left at
 > `origin/master`'s value so that merging never repoints master's feature pointer.
 
 ## Summary
@@ -137,7 +138,7 @@ changes* (R21)
 - **Q-A — decided 2026-10-21: serve** existing per-language SEO overrides (D1; *Intended behaviour
   changes* 4).
 - **Q-B — decided 2026-10-21: option C, as a separate issue.** A language prefix in the storefront path
-  (`/en/p/drill`) is out of scope for 162. 162 keeps the interim: `?lang=<L>` on every URL the platform
+  (`/en/p/drill`) is out of scope for 163. 163 keeps the interim: `?lang=<L>` on every URL the platform
   emits (canonical, alternates, sitemap, redirect targets, admin preview) when L is not the channel default,
   through the one `productPath()` seam (D7); **no** cross-language rendering. **Accepted residual gap**
   until the prefix issue lands: a link without `?lang` (typically a default-language link) opened by a
@@ -184,7 +185,7 @@ changes* (R21)
 ### Documentation (this feature)
 
 ```text
-specs/162-product-data-scopes/
+specs/163-product-data-scopes/
 ├── spec.md, checklists/requirements.md
 ├── plan.md            # this file
 ├── research.md        # R0–R29
@@ -272,7 +273,7 @@ commit artefacts together.
    link without `?lang` opened in another channel language answers not-found once the product holds a key
    in that language. Every emitted URL carries `?lang`; the prefix issue changes `productPath()` for every
    emitted URL, **plus** the in-page storefront links (32 `/p/` sites in 23 files of `storefront/` and
-   `packages/cms-components/` today), which stay `/p/<key>` in 162 — size that issue accordingly.
+   `packages/cms-components/` today), which stay `/p/<key>` in 163 — size that issue accordingly.
 4. **#384 drift.** #384 may change before merging; the gated phases re-read its final API.
 5. **Name sort order change (D6).**
 6. **Concurrency of key writes** — advisory locks per key; covered by a two-connection test.

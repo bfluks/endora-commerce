@@ -13,9 +13,9 @@ import {
 } from './url-key.service.js';
 
 /**
- * Feature 162, Phase 16 (T100, T103) — the decision core of `UrlKeyService.update`:
+ * Feature 163, Phase 16 (T100, T103) — the decision core of `UrlKeyService.update`:
  * what a `PUT /admin/catalog/products/:id/url-keys` writes, refuses and records
- * (`specs/162-product-data-scopes/data-model.md` §5, `contracts/url-keys-and-redirects.md` §2,
+ * (`specs/163-product-data-scopes/data-model.md` §5, `contracts/url-keys-and-redirects.md` §2,
  * research R11; FR-014, FR-015, FR-070, FR-072, SC-008).
  *
  * `planUrlKeyWrite` is pure: it takes the product's own keys and redirects, the rows

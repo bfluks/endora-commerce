@@ -577,7 +577,7 @@ export class CatalogAdminService {
       // whether or not this write touched it.
       minOrderQuantity: product.minOrderQuantity ?? null,
       returnable: product.returnable,
-      // Feature 162 (FR-023) — the global publication window.
+      // Feature 163 (FR-023) — the global publication window.
       publishFrom: product.publishFrom?.toISOString() ?? null,
       publishUntil: product.publishUntil?.toISOString() ?? null,
     };
@@ -722,7 +722,7 @@ export class CatalogAdminService {
       product.returnable = req.returnable;
       changedFields.push('returnable');
     }
-    // Feature 162 (FR-023) — the global publication window, written as a pair:
+    // Feature 163 (FR-023) — the global publication window, written as a pair:
     // an omitted bound keeps its stored value, and the pair that results must
     // start before it ends. It never touches a channel's window (FR-013).
     if (req.publishFrom !== undefined || req.publishUntil !== undefined) {
@@ -1131,7 +1131,7 @@ export class CatalogAdminService {
    * name collision on create used to reach the database and be reported as a
    * SKU conflict.
    *
-   * Feature 162 (A-11) — a new product's slug is its key in every language, so
+   * Feature 163 (A-11) — a new product's slug is its key in every language, so
    * "free" means free as a URL key: no product's global key, and no live
    * product's current or redirecting key in any language.
    *
@@ -1248,7 +1248,7 @@ export class CatalogAdminService {
           name: { ...product.name },
           deletedAt: product.deletedAt ?? null,
         };
-        // Feature 162 (FR-072) — a deleted product's old URL keys stop redirecting.
+        // Feature 163 (FR-072) — a deleted product's old URL keys stop redirecting.
         const urlRedirects = (await em.find(ProductUrlRedirect, { productId: id })).map((row) => ({
           id: row.id,
           languageCode: row.languageCode ?? null,

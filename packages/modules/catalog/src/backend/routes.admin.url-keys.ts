@@ -4,7 +4,7 @@ import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { UrlKeyService } from './services/url-key.service.js';
 
 /**
- * Feature 162 (`specs/162-product-data-scopes/contracts/url-keys-and-redirects.md`
+ * Feature 163 (`specs/163-product-data-scopes/contracts/url-keys-and-redirects.md`
  * §1–§3) — a product's URL keys and redirects in the admin.
  *
  * - `GET /api/v1/admin/catalog/products/:id/url-keys` (`catalog:read`);

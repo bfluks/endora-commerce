@@ -5,7 +5,7 @@ import { Product } from '../entities/product.entity.js';
 import { CatalogAdminService, type CatalogEventBus } from './catalog-admin.service.js';
 
 /**
- * Feature 162, Phase 16 review — `duplicateProduct` allocates the copy's slug under the
+ * Feature 163, Phase 16 review — `duplicateProduct` allocates the copy's slug under the
  * URL-key advisory lock (`pg_advisory_xact_lock`), which only holds inside a
  * transaction. The allocation therefore has to run on the em the Command hands its
  * body, not on a bare `emFactory()` em, where autocommit released the lock at once and
