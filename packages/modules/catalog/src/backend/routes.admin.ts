@@ -57,7 +57,11 @@ import type { ProductEditorPreferencesService } from './services/product-editor-
 import type { ProductListViewService } from './services/product-list-view-service.js';
 import type { ProductValueResolverService } from './services/product-value-resolver.service.js';
 import type { ProductOverridesService } from './services/product-overrides.service.js';
-import { productValueOverridesPatchRequestSchema } from '@endora-commerce/contracts';
+import type { ProductScopesService } from './services/product-scopes.service.js';
+import {
+  patchProductScopesRequestSchema,
+  productValueOverridesPatchRequestSchema,
+} from '@endora-commerce/contracts';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { ProductVariant } from './entities/product-variant.entity.js';
 import type { Product } from './entities/product.entity.js';
@@ -145,6 +149,12 @@ export interface CatalogAdminDeps {
    * write surface in dev/test setups that haven't wired it yet.
    */
   productOverridesService?: ProductOverridesService;
+  /**
+   * Feature 162 — a product's scoped values per sales channel and language
+   * (`GET|PATCH /admin/catalog/products/:id/scopes`). When omitted, the two
+   * routes are NOT registered.
+   */
+  productScopesService?: ProductScopesService;
   /**
    * Feature 022 (products bulk edit) — POST /products/bulk-update. Optional
    * so tests / dev composition roots that don't yet wire the service stay
@@ -692,6 +702,28 @@ export async function registerCatalogAdminRoutes(
             })),
           },
         };
+      },
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Feature 162 — scoped status, publication window, audience and order rules
+  // per sales channel and channel × language (`contracts/admin-scopes-api.md`
+  // §1–§2). The body is parsed inside the handler, after the gate, so an
+  // unauthenticated or unauthorised caller is answered 401/403 whatever it sent.
+  if (deps.productScopesService) {
+    const scopesSvc = deps.productScopesService;
+    app.get<{ Params: { id: string } }>(
+      '/api/v1/admin/catalog/products/:id/scopes',
+      { preHandler: requireAdmin('catalog:read') },
+      async (request) => ({ data: await scopesSvc.read(request.params.id) }),
+    );
+    app.patch<{ Params: { id: string } }>(
+      '/api/v1/admin/catalog/products/:id/scopes',
+      { preHandler: requireAdmin('catalog:write') },
+      async (request) => {
+        const body = patchProductScopesRequestSchema.parse(request.body);
+        return scopesSvc.apply(request.params.id, body);
       },
     );
   }

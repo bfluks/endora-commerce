@@ -11,3 +11,4 @@ Product data scopes per sales channel and language: the availability rule, the a
 - **New error codes in `ERROR_CODES`:** `SCOPE_INVALID`, `SCOPE_INCOMPLETE`, `URL_KEY_TAKEN`, `URL_KEY_REDIRECT_TAKEOVER_REQUIRED`, `URL_REDIRECT_NOT_FOUND`.
 - **Bulk product update:** `fields.scopedStatus` (`{ channelId, languageCode | null, value: 'draft' | 'active' | 'inactive' | 'inherit' }`) is accepted and counts as a field; combined with `fields.status` it is refused on the `scopedStatus` path. Result reasons gain `scope_invalid` and `completeness_gate`.
 - **`CatalogProductRecord`** gains optional `publishFrom` and `publishUntil` (the global publication window); they stay optional, so record literals built without them keep compiling.
+- **`updateProductRequestSchema`** accepts optional, nullable `publishFrom` / `publishUntil` (ISO instants).
