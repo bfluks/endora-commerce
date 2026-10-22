@@ -342,7 +342,20 @@ export interface CatalogProductScopeWritePort {
 
 // --- 4. Admin shapes (admin-scopes-api.md) -----------------------------------------
 
-const languageCodeSchema = z.string().min(1).max(16);
+/**
+ * A channel content language as a request names it: the BCP-47 shape the dictionary
+ * and i18n contracts use (`pl`, `pl-PL`), matched case-insensitively because the
+ * write resolves it to the channel's own spelling (`de-de` → `de-DE`).
+ */
+const languageCodeSchema = z
+  .string()
+  .max(16)
+  .regex(/^[a-z]{2,3}(-[a-z]{2})?$/i, 'BCP-47 language tag');
+
+/** The most organizations one channel audience override names (security review, 162 Block A). */
+const SCOPE_AUDIENCE_ORGANIZATIONS_MAX = 1000;
+/** The most language statuses one channel entry of a scopes PATCH carries. */
+const SCOPE_LANGUAGE_STATUSES_MAX = 64;
 
 /**
  * What the completeness gate reports missing at a (channel, language) — one
@@ -356,9 +369,15 @@ export const scopeMissingValueSchema = z.union([
 ]);
 export type ScopeMissingValue = z.infer<typeof scopeMissingValueSchema>;
 
+/**
+ * A channel audience override. Capped: the only writer is the scopes PATCH, so the
+ * read shape carries the same bound. The global rule in §1 is deliberately not capped:
+ * the product update writes it without a bound (`catalog.ts`), so a cap on the read
+ * shape would describe products the platform already holds as invalid.
+ */
 const audienceRuleSchema = z.object({
   visibility: productVisibilitySchema,
-  allowedOrganizationIds: z.array(uuidSchema),
+  allowedOrganizationIds: z.array(uuidSchema).max(SCOPE_AUDIENCE_ORGANIZATIONS_MAX),
 });
 
 const orderMinimumSchema = z.number().int().min(1).max(ORDER_MINIMUM_MAX);
@@ -424,6 +443,7 @@ export const patchProductScopesRequestSchema = z.object({
         returnable: z.boolean().nullable().optional(),
         languageStatuses: z
           .array(z.object({ languageCode: languageCodeSchema, status: productScopeStatusSchema.nullable() }))
+          .max(SCOPE_LANGUAGE_STATUSES_MAX)
           .optional(),
       }),
     )
