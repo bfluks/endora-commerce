@@ -429,12 +429,15 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
 
 ### Phase 13: [admin UI] Scope controls (US1–US3, US10) — after Block A
 
-- [ ] T087 [P] [US1] [S3] RED component tests: per channel and channel × language status selector with "use inherited"; source shown (FR-040); window inputs in `datetime-local` converting local ↔ ISO (US2 #4 with a mocked zone); audience override with organization picker and non-member warning (US3 #4); MOQ/returnable per channel; no warning about overrides when the global value changes (FR-013); read-only without `catalog:write` — `admin/test/modules/catalog/product-scope-controls.test.tsx`
-- [ ] T088 [US1] [S3] API calls for `…/scopes` the way `ProductScopeEditor.tsx` already calls `…/scope-context` and `…/value-overrides` (through the admin-kit API client; a small `src/admin/lib/product-scopes-api.ts` if it grows past two calls) — `packages/modules/catalog/src/admin/lib/product-scopes-api.ts`
-- [ ] T089 [US1] [S3] Extend `ProductScopeEditor.tsx` with the scope-control section (admin-kit primitives only, IX); global window on the general tab — `src/admin/components/ProductScopeEditor.tsx`, `src/admin/pages/ProductEditor.tsx`
-- [ ] T090 [US10] [S3] Per-channel MOQ/returnable in `ProductOrderRulesCard.tsx`
-- [ ] T091 [S3] Every string as a flat key in `catalog/i18n/{en,pl}.json` (handover commit) — `i18n:hardcoded` stays at baseline
-- [ ] T092 [S3] Palette: `open-products` keywords extended (handover commit to `manifest.ts`) (R23)
+- [x] T087 [P] [US1] [S3] RED component tests: per channel and channel × language status selector with "use inherited"; source shown (FR-040); window inputs in `datetime-local` converting local ↔ ISO (US2 #4 with a mocked zone); audience override with organization picker and non-member warning (US3 #4); MOQ/returnable per channel; no warning about overrides when the global value changes (FR-013); read-only without `catalog:write` — `admin/test/modules/catalog/product-scope-controls.test.tsx`
+- [x] T088 [US1] [S3] API calls for `…/scopes` the way `ProductScopeEditor.tsx` already calls `…/scope-context` and `…/value-overrides` (through the admin-kit API client; a small `src/admin/lib/product-scopes-api.ts` if it grows past two calls) — `packages/modules/catalog/src/admin/lib/product-scopes-api.ts`
+- [x] T089 [US1] [S3] Extend `ProductScopeEditor.tsx` with the scope-control section (admin-kit primitives only, IX); global window on the general tab — `src/admin/components/ProductScopeEditor.tsx`, `src/admin/pages/ProductEditor.tsx`
+- [x] T090 [US10] [S3] Per-channel MOQ/returnable in `ProductOrderRulesCard.tsx`
+- [x] T091 [S3] Every string as a flat key in `catalog/i18n/{en,pl}.json` (handover commit) — `i18n:hardcoded` stays at baseline
+- [x] T092 [S3] Palette: `open-products` keywords extended (handover commit to `manifest.ts`) (R23)
+  - S3 (2026-10-22), applied by S1: the scope controls are a new `ProductScopeControls.tsx` mounted from
+    `ProductScopeEditor.tsx`/`ProductEditor.tsx`; i18n and palette keywords in `chore(162): s3 handover P13`. S1
+    added the Block A refusals (409 `VERSION_CONFLICT`, repeated language 422) to the admin error mapping.
 
 **Verification**:
 - `pnpm --filter admin exec vitest run test/modules/catalog/product-scope-controls.test.tsx`
@@ -483,7 +486,9 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
 - [x] T103 [US7] [S2] `UrlKeyService` (advisory locks in sorted order, the closed check list, redirect bookkeeping, Commands `product.url_keys.update`, `product.url_redirect.delete`) — `services/url-key.service.ts`
 - [x] T104 [US7] [S2] `allocateUniqueSlug` widened (A-11) and the product delete Command removes redirects (FR-072) — **handover commit** for `catalog-admin.service.ts`
 - [x] T105 [US7] [S2] Routes in `routes.admin.url-keys.ts`; registration line + composition as a handover commit
-- [ ] T106 [S2] Handover: S1 regenerates artefacts after applying T102
+- [x] T106 [S2] Handover: S1 regenerates artefacts after applying T102
+  - S1 (2026-10-22): S2's registry commit was not applied; `composer:generate` re-derived the same two lines,
+    `manifests:generate` moved nothing (no lockfile change).
   - S2 (2026-10-22): T100/T101 written, type-checked, **unrun** (no local Postgres) — run in fork `ci-pg`. Pure
     planner rules covered by `packages/modules/catalog/src/backend/services/url-key.service.test.ts` (35, green).
     Shared-file lines (entity registration, plugin/route composition, T104 in `catalog-admin.service.ts`, audit
