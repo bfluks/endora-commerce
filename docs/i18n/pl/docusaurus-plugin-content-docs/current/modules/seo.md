@@ -20,9 +20,9 @@ dowiadują się o całym sklepie danego kanału sprzedaży.
 | `POST /api/v1/admin/seo/sitemap/:channelCode/regenerate` | administrator (`catalog:write`) | Wymuszenie ponownego wygenerowania dla tego kanału |
 | `GET /api/v1/admin/seo/sitemap/:channelCode/status` | administrator (`catalog:write`) | Czas ostatniego wygenerowania, rozmiar i liczba adresów URL dla tego kanału |
 | `GET /api/v1/admin/seo/sitemap/:channelCode/xml` | administrator (`catalog:write`) | Zapisany XML tego kanału, do podglądu lub pobrania (`?download=1`) |
-| `GET /api/v1/admin/seo/meta/:entityType/:entityId` | administrator (`catalog:write`) | Wyznaczone meta tagi i wiersz nadpisania dla (encja, język) |
-| `PUT /api/v1/admin/seo/meta/:entityType/:entityId` | administrator (`catalog:write`) | Utworzenie lub aktualizacja nadpisania (dla danego języka) |
-| `DELETE /api/v1/admin/seo/meta/:entityType/:entityId` | administrator (`catalog:write`) | Usunięcie nadpisania (wracają wartości wyznaczane z reguły) |
+| `GET /api/v1/admin/seo/meta/:entityType/:entityId` | administrator (`catalog:write`) | Wyznaczone meta tagi w danym zakresie (`?locale=`, `?channelId=`) i wiersz nadpisania dokładnie w tym zakresie |
+| `PUT /api/v1/admin/seo/meta/:entityType/:entityId` | administrator (`catalog:write`) | Utworzenie lub aktualizacja nadpisania w danym zakresie (`locale`, `channelId` w treści żądania) |
+| `DELETE /api/v1/admin/seo/meta/:entityType/:entityId` | administrator (`catalog:write`) | Usunięcie nadpisania w danym zakresie (`?locale=`, `?channelId=`); znów obowiązuje kolejny zakres |
 
 ## Roboty wyszukiwarek
 
@@ -549,28 +549,57 @@ połączony z częścią generowaną, a zamknięty sklep serwuje powyższy plik 
 
 ## Wyznaczanie meta tagów
 
-`MetaTagResolverService.resolve({ entityType, entityId, locale })` zwraca
-`{ title, description, openGraph, source, locale }`. Kolejność:
+Nadpisanie należy do jednego z trzech **zakresów**:
 
-1. Wyszukanie wiersza nadpisania dla pary (encja, język).
-2. Jeśli pole jest ustawione w nadpisaniu, zostaje użyte dosłownie.
-3. W przeciwnym razie używana jest reguła wyprowadzona z encji (nazwa i opis produktu, nazwa
-   kategorii i automatyczne podsumowanie).
-4. Wartość zastępcza języka dla każdego pola: gdy produkt nie ma tekstu w `pl-PL`, reguła używa
-   `en-US`, a potem dowolnego dostępnego języka.
+| Zakres | Wskazywany przez | Obowiązuje |
+| --- | --- | --- |
+| Język | `locale` | w tym języku, we wszystkich kanałach sprzedaży |
+| Kanał sprzedaży | `channelId` | we wszystkich językach tego kanału |
+| Kanał sprzedaży × język | `channelId` i `locale` | w tym języku w tym kanale |
+
+Żądanie, które nie wskazuje żadnego z nich, dotyczy nadpisania dla języka `en-US` — tak jak każde
+żądanie przed wprowadzeniem zakresów, więc dotychczasowe integracje działają bez zmian. Zakres
+kanału sprzedaży ma tylko produkt: `channelId` dla kategorii lub strony CMS jest odrzucany z kodem
+`422 VALIDATION_FAILED`. Zapis nadpisania dla kanału, do którego produkt nie należy, albo dla
+języka, którego kanał nie oferuje, jest odrzucany z kodem `422 SCOPE_INVALID`; usunięcie jest
+zawsze możliwe, więc nadpisanie pozostawione po wyjęciu produktu z kanału da się sprzątnąć.
+
+Każde z pięciu pól — tytuł, opis, tytuł, opis i obraz Open Graph — jest wyznaczane osobno,
+z najbardziej szczegółowego zakresu, który je ustawia: kanał sprzedaży × język, potem kanał
+sprzedaży, potem język, a na końcu wartość wyprowadzona z encji (nazwa i opis produktu, nazwa
+kategorii i automatyczne podsumowanie). Pole puste w jednym zakresie jest brane z kolejnego.
+Nadpisanie nigdy nie obowiązuje w innym języku. Nadpisania zapisane przed wprowadzeniem zakresów
+są nadpisaniami dla języka, bez zmian.
+
+**Strona produktu je wyświetla.** Strona produktu w sklepie bierze tytuł, opis i znaczniki Open
+Graph z tego wyznaczania, dla kanału sprzedaży i języka żądania. Wcześniej nadpisania produktów
+były zapisywane, ale strona ich nie pokazywała; teraz pokazuje. Gdy moduł `seo` jest wyłączony,
+strona pokazuje metadane wyprowadzone z produktu, a po ponownym włączeniu modułu wszystkie
+nadpisania wracają.
+
+**Każda zmiana trafia do dziennika zdarzeń.** Zapis nadpisania to jeden wpis
+`seo_meta_override.upsert`, usunięcie — jeden wpis `seo_meta_override.delete`, każdy z pełnym
+nadpisaniem przed zmianą i po niej. Aby przywrócić wcześniejszą wersję, zapisz wartości ze stanu
+*przed* tego wpisu. Usunięcie nieistniejącego nadpisania niczego nie zmienia i nie tworzy wpisu.
 
 Tytuł i opis są skracane do 60 / 160 znaków z wielokropkiem. Skracanie odbywa się w jednej funkcji
 pomocniczej, więc zmiany limitów SEO wprowadza się w jednym miejscu.
 
 ## Mapa witryny
 
-`SitemapGeneratorService.regenerate()` przechodzi przez aktywne produkty z publiczną widocznością
-oraz niezarchiwizowane i nieusunięte kategorie, buduje bezwzględne adresy URL względem
-`STOREFRONT_BASE_URL` i zapisuje treść XML w jednym wierszu `sitemap_cache`.
+`SitemapGeneratorService.regenerate()` przechodzi przez produkty, kategorie i strony CMS kanału,
+buduje bezwzględne adresy URL względem adresu sklepu kanału i zapisuje treść XML w wierszu
+`sitemap_cache` kanału. Produkt pojawia się raz dla każdego języka, w którym jest dostępny
+w kanale, a każdy adres URL używa klucza URL produktu w tym języku — klucza dla tego kanału
+i języka, w przeciwnym razie klucza dla języka, a w ostatniej kolejności klucza globalnego —
+z `?lang=<język>` dla każdego języka innego niż domyślny język kanału.
 
 Trasa publiczna (`GET /catalog/sitemap.xml`) zwraca treść z pamięci podręcznej; gdy wiersz jest
-starszy niż `staleAfterMs` (domyślnie 6 h), mapa jest generowana od razu w trakcie żądania.
-Odpowiedź ma nagłówek `Cache-Control: public, max-age=3600`, więc poprawnie działające CDN
+starszy niż `staleAfterMs` (domyślnie 6 h), mapa jest generowana od razu w trakcie żądania. Zmiana
+produktu, która wpływa na zawartość mapy — jego status w kanale lub języku, okno publikacji
+(również chwila, w której okno się otwiera lub zamyka), grupa odbiorców albo klucze URL — oznacza
+mapy wszystkich kanałów w pamięci podręcznej jako nieaktualne, więc następne żądanie buduje je od
+nowa. Odpowiedź ma nagłówek `Cache-Control: public, max-age=3600`, więc poprawnie działające CDN
 przechowują ją przez godzinę.
 
 ## Tylko to, co widzi anonimowy użytkownik
@@ -586,8 +615,8 @@ klient.
 
 ## Encje
 
-`SeoMetaOverride` (entityType, entityId, locale, title?, description?, ogTitle?, ogDescription?,
-ogImageUrl?), `SitemapCache` (pojedynczy klucz, treść, urlCount, byteSize, generatedAt).
+`SeoMetaOverride` (entityType, entityId, salesChannelId?, locale?, title?, description?, ogTitle?,
+ogDescription?, ogImageUrl?; co najmniej jedno z `salesChannelId` i `locale`), `SitemapCache` (pojedynczy klucz, treść, urlCount, byteSize, generatedAt).
 
 ## Punkty rozszerzenia
 

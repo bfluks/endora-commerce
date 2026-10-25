@@ -84,6 +84,7 @@ import {
   type ProductPagePaths,
   type ProductSummary,
   type ProductVariant as VariantDto,
+  type SeoProductMetaValues,
 } from '@endora-commerce/contracts';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -494,6 +495,19 @@ function jsStringOfJsonb(value: string): string {
   );
 }
 
+/**
+ * Feature 163 (R13, FR-075) — `seo`'s product metadata at (channel, language),
+ * each field walked channel × language → channel → language → `fallback`.
+ * `null` when `seo` is not effectively present: the page then shows its derived
+ * metadata (the declared `degrades-without` edge on `seoProductMetaPort`).
+ */
+export type ResolveSeoProductMeta = (input: {
+  productId: string;
+  channelId: string;
+  languageCode: string;
+  fallback: SeoProductMetaValues;
+}) => Promise<SeoProductMetaValues | null>;
+
 export interface ListResult<T> {
   data: T[];
   pagination: { cursor: string | null; hasMore: boolean; limit: number };
@@ -601,6 +615,11 @@ export class CatalogQueryService {
      * binds never reaches it.
      */
     private readonly log?: { warn(obj: object, msg: string): void },
+    /**
+     * Feature 163 — the product page's metadata through `seo` (R13). Optional: a
+     * composition without it, like `seo` off, serves the derived metadata.
+     */
+    private readonly seoProductMeta?: ResolveSeoProductMeta,
   ) {}
 
   #requireChannelMembership(): SalesChannelMembershipPort {
@@ -2055,6 +2074,31 @@ export class CatalogQueryService {
       listAttributeViews,
     );
 
+    // T097 — OG image prefers gallery Base Image (then Thumbnail, then
+    // primaryAssetUrl). Base Image is the marketer's hero shot, so social
+    // shares should land on it.
+    const labelled = (label: 'base_image' | 'thumbnail'): AssetRecord | null =>
+      galleryItems
+        .map((g) => ({ asset: galleryAssetsById.get(g.assetId) ?? null, labels: labelsByItem.get(g.id) ?? [] }))
+        .find((g) => g.asset && g.labels.includes(label))?.asset ?? null;
+    const derivedSeo: SeoProductMetaValues = {
+      title: nameText,
+      description: descriptionText.slice(0, 160),
+      ogTitle: nameText,
+      ogDescription: descriptionText.slice(0, 240),
+      ogImageUrl:
+        labelled('base_image')?.storageUrl ?? labelled('thumbnail')?.storageUrl ?? summary.primaryAssetUrl,
+    };
+    // Feature 163 (R13, Q-A) — the operator's overrides at (C, L), field by
+    // field, over the derived values; the derived ones alone while `seo` is off.
+    const seoMeta =
+      (await this.seoProductMeta?.({
+        productId: product.id,
+        channelId: channel.id,
+        languageCode: this.#availabilityScope(ctx).languageCode,
+        fallback: derivedSeo,
+      })) ?? derivedSeo;
+
     const detail: ProductDetail = {
       ...summary,
       description: descriptionText,
@@ -2078,31 +2122,12 @@ export class CatalogQueryService {
       })),
       paths: await this.#pagePaths(em, product, scopeRows, ctx),
       seo: {
-        metaTitle: nameText,
-        metaDescription: descriptionText.slice(0, 160),
+        metaTitle: seoMeta.title,
+        metaDescription: seoMeta.description,
         openGraph: {
-          title: nameText,
-          description: descriptionText.slice(0, 240),
-          // T097 — OG image prefers gallery Base Image (then Thumbnail,
-          // then primaryAssetUrl). Base Image is the marketer's hero
-          // shot, so social shares should land on it.
-          imageUrl: (() => {
-            const base = galleryItems
-              .map((g) => ({
-                asset: galleryAssetsById.get(g.assetId) ?? null,
-                labels: labelsByItem.get(g.id) ?? [],
-              }))
-              .find((g) => g.asset && g.labels.includes('base_image'));
-            if (base?.asset) return base.asset.storageUrl;
-            const thumb = galleryItems
-              .map((g) => ({
-                asset: galleryAssetsById.get(g.assetId) ?? null,
-                labels: labelsByItem.get(g.id) ?? [],
-              }))
-              .find((g) => g.asset && g.labels.includes('thumbnail'));
-            if (thumb?.asset) return thumb.asset.storageUrl;
-            return summary.primaryAssetUrl;
-          })(),
+          title: seoMeta.ogTitle,
+          description: seoMeta.ogDescription,
+          imageUrl: seoMeta.ogImageUrl,
         },
       },
       structuredDataJsonLd: {
