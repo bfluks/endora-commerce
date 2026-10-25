@@ -148,14 +148,14 @@ export class QuickOrderBuildService {
     };
     // Feature 155 (FR-030, R12.2, threat F10) — only the operator's build
     // warns; a buyer's is judged by the request's own rules (FR-012).
+    // Feature 163 — the buyer's lines are asked about at the build's channel.
     const rfq =
       options.actor === 'operator'
         ? await this.rfq.createForCustomer(rfqCtx, request, { minimums: 'warn' })
-        : await this.rfq.createForCustomer(
-            rfqCtx,
-            request,
-            options.language ? { language: options.language } : undefined,
-          );
+        : await this.rfq.createForCustomer(rfqCtx, request, {
+            salesChannelId: ctx.salesChannelId,
+            ...(options.language ? { language: options.language } : {}),
+          });
     return {
       target: 'quote_request',
       quoteRequestId: rfq.id,

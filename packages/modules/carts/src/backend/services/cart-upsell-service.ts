@@ -92,9 +92,10 @@ export class CartUpsellService {
     // Issue #227 — an up-sell target is a product the buyer never named, so
     // the strip is a listing. A link from a product they may see to one they
     // may not does not make the second one theirs to see.
-    let products = (await this.catalogProducts.findByIds(targetIds)).filter((p) =>
-      isProductVisibleTo(p, audience),
-    );
+    // Feature 163 — with a scope, `catalog`'s availability answer holds the
+    // channel-effective audience already, so it is the whole filter; without
+    // one (outside a request) the global audience rule is, as before.
+    let products = await this.catalogProducts.findByIds(targetIds);
     if (scope) {
       if (!this.availability) {
         throw new Error('[carts] CartUpsellService: the availability port is not wired.');
@@ -104,6 +105,8 @@ export class CartUpsellService {
         { channelId: scope.channelId, languageCode: scope.languageCode, audience },
       );
       products = products.filter((p) => available.has(p.id));
+    } else {
+      products = products.filter((p) => isProductVisibleTo(p, audience));
     }
     const byId = new Map(products.map((p) => [p.id, p]));
 
