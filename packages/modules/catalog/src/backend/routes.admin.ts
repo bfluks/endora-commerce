@@ -60,6 +60,8 @@ import type { ProductListViewService } from './services/product-list-view-servic
 import type { ProductValueResolverService } from './services/product-value-resolver.service.js';
 import type { ProductOverridesService } from './services/product-overrides.service.js';
 import type { ProductScopesService } from './services/product-scopes.service.js';
+import type { ScopeOverviewService } from './services/scope-overview.service.js';
+import type { AttributeScopePreviewService } from './services/attribute-scope-preview.js';
 import type { UrlKeyService } from './services/url-key.service.js';
 import { registerCatalogUrlKeyAdminRoutes } from './routes.admin.url-keys.js';
 import {
@@ -187,6 +189,18 @@ export interface CatalogAdminDeps {
    * routes are NOT registered.
    */
   productScopesService?: ProductScopesService;
+  /**
+   * Feature 163 — the product's scope overview
+   * (`GET /admin/catalog/products/:id/scope-overview`, US4). When omitted, the
+   * route is NOT registered.
+   */
+  scopeOverviewService?: ScopeOverviewService;
+  /**
+   * Feature 163 — the FR-090 preview of an attribute's scope-flag change
+   * (`GET /admin/catalog/attributes/:idOrKey/scope-change-preview`). When
+   * omitted, the route is NOT registered.
+   */
+  attributeScopePreviewService?: AttributeScopePreviewService;
   /**
    * Feature 163 — a product's URL keys and redirects
    * (`GET|PUT /admin/catalog/products/:id/url-keys`,
@@ -768,6 +782,27 @@ export async function registerCatalogAdminRoutes(
         const body = patchProductScopesRequestSchema.parse(request.body);
         return scopesSvc.apply(request.params.id, body);
       },
+    );
+  }
+  // Feature 163 — the scope overview (§3) and the attribute scope-flag change
+  // preview (§6). Both are reads behind `catalog:read`; the writes they lead to
+  // stay on their owning routes and gates.
+  if (deps.scopeOverviewService) {
+    const overviewSvc = deps.scopeOverviewService;
+    app.get<{ Params: { id: string } }>(
+      '/api/v1/admin/catalog/products/:id/scope-overview',
+      { preHandler: requireAdmin('catalog:read') },
+      async (request) => ({ data: await overviewSvc.read(request.params.id) }),
+    );
+  }
+  if (deps.attributeScopePreviewService) {
+    const previewSvc = deps.attributeScopePreviewService;
+    app.get<{ Params: { idOrKey: string } }>(
+      '/api/v1/admin/catalog/attributes/:idOrKey/scope-change-preview',
+      { preHandler: requireAdmin('catalog:read') },
+      async (request) => ({
+        data: await previewSvc.preview(request.params.idOrKey, (request.query ?? {}) as Record<string, unknown>),
+      }),
     );
   }
   if (deps.urlKeyService) {
