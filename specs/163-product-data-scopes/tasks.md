@@ -560,8 +560,19 @@ matrix file); P17's other tasks need not wait for it. **Stream-ownership excepti
 extends S1's `scoped-availability-matrix.test.ts` (T031); S2 edits it in its own commit and S1's T146
 (Phase 24) rebases over it. Reviewed in checkpoint E.
 
-- [ ] T156s [PG] [S2] RED: extend `backend/test/contract/catalog/scoped-availability-matrix.test.ts` — a non-archived member with global `inactive` answers the absent product's 404 at every (C, L), even where a C or C×L override is `active` (FR-005, FR-010); an archived product with global `inactive` and no overrides answers 410 at every (C, L) of its channels (O-3, O-4: today's archived products keep their "gone"); archived with a C×L `inactive` override → 404 there and 410 elsewhere; archived outside its window or audience → 404; the 410 body names `PRODUCT_ARCHIVED` with the new message
-- [ ] T156t [S2] `getProductByIdOrSlug`: the 410 branch tests `product.archivedAt` only (`:1816`) — never `status` — and answers 410 **only** where the product would be effectively available at (C, L) to this buyer with `archivedAt` taken away and the **global** status read as `active`, every C and C×L status override, membership, the channel's languages, the window and the audience still applying (FR-005, O-3); everywhere else 404 like any unavailable product. Today's check (T036's deviation) covers membership and audience only, so this widens it; the comment is rewritten (no `draft`, no "global `inactive`"), message "Product is archived."; `storefront/test/catalog/pdp-redirect.test.ts:94` string follows — `catalog-query.service.ts`
+- [x] T156s [PG] [S2] RED: extend `backend/test/contract/catalog/scoped-availability-matrix.test.ts` — a non-archived member with global `inactive` answers the absent product's 404 at every (C, L), even where a C or C×L override is `active` (FR-005, FR-010); an archived product with global `inactive` and no overrides answers 410 at every (C, L) of its channels (O-3, O-4: today's archived products keep their "gone"); archived with a C×L `inactive` override → 404 there and 410 elsewhere; archived outside its window or audience → 404; the 410 body names `PRODUCT_ARCHIVED` with the new message
+- [x] T156t [S2] `getProductByIdOrSlug`: the 410 branch tests `product.archivedAt` only (`:1816`) — never `status` — and answers 410 **only** where the product would be effectively available at (C, L) to this buyer with `archivedAt` taken away and the **global** status read as `active`, every C and C×L status override, membership, the channel's languages, the window and the audience still applying (FR-005, O-3); everywhere else 404 like any unavailable product. Today's check (T036's deviation) covers membership and audience only, so this widens it; the comment is rewritten (no `draft`, no "global `inactive`"), message "Product is archived."; `storefront/test/catalog/pdp-redirect.test.ts:94` string follows — `catalog-query.service.ts`
+
+- S2 (2026-10-26, integration onto S1 `50922e6ef`): **T156t was done in P17** (`31431a03e`, `assertReachable`: the
+  410 branch tests `archivedAt` only and answers 410 only where `isAvailableWith` holds with `archivedAt` cleared and
+  global status read `active` — every C and C×L status, membership, channel languages, window and audience still
+  apply); after the rebase the comment is rewritten without `draft` and the message is "Product is archived."
+  (`pdp-redirect.test.ts:94` follows). **T156s** adds three cases to the matrix test: OFF (global `inactive`, not
+  archived, with an `active` C1 row and an `active` C2 × pl-PL row) answers the absent 404 at every pair; A answers
+  410 `PRODUCT_ARCHIVED` at every pair ("Product is archived." in en-US); AR (archived, organisation-restricted)
+  answers the absent 404 anonymously and 410 to its organisation's buyer. Outside the window and a C×L `inactive`
+  override are the existing AW/AL case. `url-key-resolution.test.ts` keeps its archived → 410 and non-archived
+  `inactive` → 404 cases.
 
 **Verification**:
 - `[PG] backend/test/contract/catalog/scoped-availability-matrix.test.ts`
