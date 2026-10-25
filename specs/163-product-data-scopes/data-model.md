@@ -14,7 +14,7 @@ another module's table (`check:module-boundary` R2).
 | `catalog`, `product_url_keys` | catalog | US7 | `product_url_keys`, `product_url_redirects` |
 | `seo`, `meta_override_channel_scope` | seo | US8 | `seo_meta_overrides.sales_channel_id`, `locale` nullable, uniques |
 | `catalog`, `product_media_scopes` | catalog | US9 | `gallery_item_channel_labels`, `gallery_item_channel_hidden`, `gallery_items.alt_text` |
-| `catalog`, `product_status_drop_draft` (suggested; §13 — the architect may fold the scope-table half into `product_scopes`) | catalog | Q1 block | `products.status` data + default; `CHECK`s of `product_channel_scopes`, `product_channel_language_scopes` |
+| `catalog`, `product_status_drop_draft` (suggested; §13 — the architect may fold the scope-table half into `product_scopes`; decided: not folded, one new migration, research R30.1) | catalog | Q1 block | `products.status` data + default; `CHECK`s of `product_channel_scopes`, `product_channel_language_scopes` |
 | `catalog`, `attachment_packaging_translations` | catalog | US9 | `product_attachments.name_translations`, `.description_translations`, `product_attachment_channel_hidden`, `product_packaging_units.name_translations` |
 
 Foreign keys to `sales_channels` (a kernel table) need no manifest edge beyond the `sales_channels`
@@ -228,7 +228,8 @@ scope language (N2) and are never re-resolved.
 `BulkUpdateProductsRequest.fields.scopedStatus?: { channelId: uuid; languageCode: string | null; value:
 'active' | 'inactive' | 'inherit' }`; result reasons gain `scope_invalid`, `completeness_gate`. A `draft`
 or `archived` value in `fields.status` or `fields.scopedStatus` is refused by the schema (FR-112, O-1). Bulk Archive / Restore
-(FR-053) are bulk-operation kinds of their own on the same path; their payload shape is the architect's (§14).
+(FR-053) are bulk-operation kinds of their own on the same path; their payload shape is the architect's (§14) —
+decided 2026-10-25: `fields.archived: boolean` (`true` Archive, `false` Restore), alone in its request (research R30.3).
 Revert records store the per-product before-state of the one scope row touched.
 
 ## 11. Search document (search) — R8
@@ -267,7 +268,7 @@ searchable attributes.
 | `products.status` rows already `inactive` | status unchanged and the row stays archived (Q1-c): a set `archived_at` is kept; where `archived_at` is null it is set to the row's `updated_at` (owner O-4, 2026-10-25) — `update products set archived_at = updated_at where status = 'inactive' and archived_at is null`, run **before** the `draft` conversion so converted rows are never caught |
 | `products.status` default | `inactive` (entity default and column default); a duplicate is always `inactive` with `archived_at` cleared (Q1-d) |
 | `CHECK` on both scope tables | `status in ('active','inactive')` (`product_channel_scopes` admits `NULL` as inherit) |
-| `CHECK` on `products.status` | if the column carries one, rewritten to `('active','inactive')`; else the value set is enforced by `productStatusSchema` alone (architect to confirm) |
+| `CHECK` on `products.status` | if the column carries one, rewritten to `('active','inactive')`; else the value set is enforced by `productStatusSchema` alone (architect to confirm) — **confirmed 2026-10-25: none exists; `products_status_check (status in ('active','inactive'))` is added after the conversion** (research R30.2) |
 
 Order inside the migration: backfill `archived_at` on today's `inactive` rows, then convert `draft`, then
 replace the `CHECK`s, so no converted row is archived and no row violates the new constraint. The `down` direction cannot tell a converted `draft` from an original `inactive`; it restores
@@ -280,6 +281,8 @@ is part of this unreleased feature branch. The architect decides whether to amen
 add one new migration that converts the data and replaces the `CHECK`s on all three tables. Either way the
 `products.status` conversion is a new, scaffolded `catalog` migration (suggested `--name`
 `product_status_drop_draft`), since `products` predates this feature.
+**Decided 2026-10-25 (research R30.1):** one new migration does all of it; `20261022T035133` is not amended,
+because a database that already ran it would never re-run an edited body.
 
 ## 14. Archive / Restore (catalog) — FR-019, FR-053
 
@@ -292,4 +295,6 @@ No new column: the action reads and writes the existing `products.archived_at`.
 | Bulk Archive / Restore | the single Commands per product on the durable bulk-operation path; revert records hold each product's before `archived_at`; undo as a whole | `catalog:write` | one entry per product |
 
 Neither Command reads or writes any status column, and neither fires the completeness gate. Route shape,
-Command names and the `changedFields` value of `product.updated.v1` are the architect's.
+Command names and the `changedFields` value of `product.updated.v1` are the architect's — **decided
+2026-10-25 (research R30.3)**: `POST /api/v1/admin/catalog/products/:id/archive` and `…/restore`, Commands
+`product.archive` / `product.restore`, `changedFields: ['archivedAt']`.
