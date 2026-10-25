@@ -26,7 +26,9 @@ sprawdzane względem katalogu:
 - Odpowiedź dzieli wiersze na `recognized` i `rejected` (każdy odrzucony z powodem: `sku_missing`,
   `quantity_invalid`, `product_not_found`, `product_archived`, `malformed_row`,
   `variant_not_resolved`, `variant_ambiguous`, `row_limit_exceeded`, `below_minimum`) i zawiera
-  `summary`.
+  `summary`. `product_archived` oznacza, że produkt jest zarchiwizowany (akcją Archiwizuj
+  katalogu), niezależnie od statusu; produkt jedynie wyłączony w kanale kupującego dostaje
+  `product_not_found`, jak każdy produkt, którego kupujący nie może tam zamówić.
 - Powtórzone SKU są łączone (ilości się sumują); wiersze powyżej `quick_order.import_max_rows` są
   odrzucane. Ustawienie jest ograniczane do zakresu **1–10 000** bez względu na zapisaną wartość.
 
