@@ -111,7 +111,6 @@ export type ProductPickerProps =
 
 const SEARCH_DEBOUNCE_MS = 250;
 const STATUS_LABEL_KEY: Record<AdminProductSummary['status'], string> = {
-  draft: 'productBrowser.status.draft',
   active: 'productBrowser.status.active',
   inactive: 'productBrowser.status.inactive',
 };
