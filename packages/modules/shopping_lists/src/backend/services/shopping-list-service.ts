@@ -1,5 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES, isProductVisibleTo, resolveScopeLanguage } from '@endora-commerce/contracts';
+import { ERROR_CODES, isProductVisibleTo, scopeLanguageOf } from '@endora-commerce/contracts';
 import type {
   CartWritePort,
   CatalogProductAvailabilityPort,
@@ -268,15 +268,9 @@ export class ShoppingListService {
       // Outside a request there is no channel to ask about (FR-007).
       if (!isProductVisibleTo(product, audience)) throw notFound();
     } else {
-      const languages = channel.languages.includes(channel.defaultLanguage)
-        ? channel.languages
-        : [channel.defaultLanguage, ...channel.languages];
       const available = await this.#requireAvailability().filterAvailable([product.id], {
         channelId: channel.id,
-        languageCode: resolveScopeLanguage(
-          { id: channel.id, languages, defaultLanguage: channel.defaultLanguage },
-          input.languageTag,
-        ),
+        languageCode: scopeLanguageOf(channel, input.languageTag),
         audience,
       });
       if (!available.has(product.id)) throw notFound();

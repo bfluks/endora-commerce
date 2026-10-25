@@ -415,8 +415,9 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
 > default language. Code review: W1 boot pass `SearchIndexer.ensureQuerySettings` (worker process,
 > settings pushed only where missing); W2 `= any(?::uuid[])` / chunked `$in`; W4 name cursor read by
 > the statement's own `effectiveTextSql`; N3–N6 done; N1/N2 one home (`toScopeChannel`,
-> `scopeLanguageOf`, `firstLanguageTag` in contracts) used by the new seams; the older per-module
-> copies (carts, comparisons, shopping lists) still carry their own normalisation — follow-up.
+> `scopeLanguageOf`, `firstLanguageTag` in contracts), read by carts, comparisons, shopping lists,
+> quote requests, price lists and inventory; the route-local `Accept-Language` parsers predating 163
+> are left as they were.
 
 ---
 
