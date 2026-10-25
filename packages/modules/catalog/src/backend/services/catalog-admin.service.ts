@@ -15,7 +15,10 @@ import {
   type CreateVariantRequest,
   type UpdateAttributeRequest,
   type UpdateProductRequest,
+  type ProductArchivedMode,
+  type ProductStatus,
   type UpdateVariantRequest,
+  uuidSchema,
 } from '@endora-commerce/contracts';
 import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 
@@ -32,6 +35,14 @@ export interface CatalogEvents extends Record<string, EventBase> {
 }
 
 export type CatalogEventBus = EventBus<CatalogEvents>;
+
+/** Feature 163 (R30.4) — the admin product list's tab badges. */
+export interface ProductListCounts {
+  all: number;
+  active: number;
+  inactive: number;
+  archived: number;
+}
 
 /**
  * How a duplicate inherits the source's per-warehouse low-stock thresholds
@@ -344,7 +355,8 @@ export class CatalogAdminService {
           sku: req.sku,
           slug,
           type: req.type,
-          status: req.status ?? 'draft',
+          // Feature 163 (Q1-d) — a product starts switched off.
+          status: req.status ?? 'inactive',
           name: req.name,
           description: req.description,
           stockMode: req.stockMode ?? null,
@@ -435,45 +447,23 @@ export class CatalogAdminService {
         ...(auditCtx.requestId !== undefined ? { requestId: auditCtx.requestId } : {}),
       });
     }
-    const announceUpdated = (): void =>
-      this.events.emit('product.updated.v1', {
-        eventId: randomUUID(),
-        occurredAt: new Date().toISOString(),
-        productId: r.product.id,
-        changedFields: r.changedFields,
-      });
-    if (r.archived) {
-      // Two announcements of one write, in one event scope: outside a scope the
-      // bus starts each emit's subscribers at once and waits for none, so the
-      // two ran side by side and a subscriber could be handed
-      // `product.archived.v1` first. A scope dispatches in order and waits, so
-      // every subscriber sees "updated, then archived" — the order the audited
-      // path already had — and the search indexer's removal has finished
-      // before this returns, which is what keeps a reactivation that follows
-      // from being undone by a removal still on its way.
-      await this.events.run(async () => {
-        announceUpdated();
-        this.#emitArchived(r.product.id);
-      });
-    } else {
-      announceUpdated();
-    }
+    // Feature 163 (FR-010) — a status write never archives, so this write has
+    // one announcement; `product.archived.v1` belongs to the Archive action.
+    this.events.emit('product.updated.v1', {
+      eventId: randomUUID(),
+      occurredAt: new Date().toISOString(),
+      productId: r.product.id,
+      changedFields: r.changedFields,
+    });
     return r.product;
   }
 
   /**
-   * `product.archived.v1` — the product's status moved to `inactive`.
-   *
-   * Emitted by the update paths themselves, after the write has committed and
-   * after the `product.updated.v1` of the same write, inside an event scope
-   * the path opens — see the two call sites for why. It used to be emitted
-   * only by `archiveProduct`, which nothing calls: archiving has been "update
-   * with `status: 'inactive'`" since feature 022, so the event the search
-   * indexer subscribes to and outbound webhooks are offered was announced by
-   * no path an operator, an importer or a PIM sync can take.
-   *
-   * Once per transition: a product that is already inactive is not archived
-   * again by a further edit, nor by a write naming the same status.
+   * `product.archived.v1` — the product was archived by the Archive action
+   * (feature 163, FR-019). Emitted by {@link archiveProduct} alone, after the
+   * write has committed and after its `product.updated.v1` `['archivedAt']`,
+   * inside the event scope that method opens. Once per transition: archiving an
+   * archived product announces nothing.
    */
   #emitArchived(productId: string): void {
     this.events.emit('product.archived.v1', {
@@ -490,29 +480,10 @@ export class CatalogAdminService {
    */
   async updateProductAudited(id: string, req: UpdateProductRequest): Promise<Product> {
     if (!this.commandBus) return this.updateProduct(id, req);
-    const commandBus = this.commandBus;
-    const outcome = { archived: false };
-    // A Command declares one event, and archiving is a second announcement of
-    // the same write. The Command Bus opens its own event scope, which ends —
-    // dispatching `product.updated.v1` and waiting for its subscribers — once
-    // the write has committed; `product.archived.v1` is emitted after that,
-    // into the scope opened here, so it is dispatched second and waited for as
-    // well. Emitted outside any scope it was started and not waited for: this
-    // method returned while the search indexer's removal was still on its way,
-    // and a reactivation that followed could be undone by it.
-    return this.events.run(async () => {
-      const product = await commandBus.run(this.#updateProductCommand(id, req, outcome));
-      if (outcome.archived) this.#emitArchived(product.id);
-      return product;
-    });
+    return this.commandBus.run(this.#updateProductCommand(id, req));
   }
 
-  #updateProductCommand(
-    id: string,
-    req: UpdateProductRequest,
-    /** Written by `run`: whether this write moved the product to `inactive`. */
-    outcome: { archived: boolean },
-  ): Command<Product> {
+  #updateProductCommand(id: string, req: UpdateProductRequest): Command<Product> {
     let changedFields: string[] = [];
     return {
       action: 'product.update',
@@ -521,7 +492,6 @@ export class CatalogAdminService {
       run: async ({ em }) => {
         const r = await this.#applyProductUpdate(em, id, req);
         changedFields = r.changedFields;
-        outcome.archived = r.archived;
         return {
           result: r.product,
           before: r.stateBefore,
@@ -553,8 +523,6 @@ export class CatalogAdminService {
     stateBefore: Record<string, unknown>;
     stateAfter: Record<string, unknown>;
     changedFields: string[];
-    /** Whether this write moved the status to `inactive` from another one. */
-    archived: boolean;
   }> {
     refusePriceFields(req.attributeValues as Record<string, unknown> | undefined, 'attributeValues.');
     const product = await em.findOne(Product, { id });
@@ -582,7 +550,6 @@ export class CatalogAdminService {
       publishUntil: product.publishUntil?.toISOString() ?? null,
     };
     const changedFields: string[] = [];
-    let archived = false;
     // Feature 012 / FR-016 — SKU is mutable. Refused with 400 sku_in_use
     // when the new SKU collides with another product. The internal UUID
     // (product.id) is the canonical reference; snapshot tables keep the
@@ -625,16 +592,11 @@ export class CatalogAdminService {
     if (req.description) { product.description = req.description; changedFields.push('description'); }
     if (req.stockMode !== undefined) { product.stockMode = req.stockMode; changedFields.push('stockMode'); }
     if (req.visibility) { product.visibility = req.visibility; changedFields.push('visibility'); }
-    // Feature 022 / 032 — status field. Cross-field rule: transitioning to
-    // `inactive` sets archivedAt; transitioning away clears it.
+    // Feature 022 — status field. Feature 163 (FR-010, FR-019, O-5): a status
+    // write never sets or clears `archivedAt` — `inactive` is plain off and
+    // `active` does not restore. Archiving is the Archive / Restore action.
     if (req.status !== undefined && req.status !== product.status) {
       product.status = req.status;
-      if (req.status === 'inactive') {
-        product.archivedAt = new Date();
-        archived = true;
-      } else {
-        product.archivedAt = null;
-      }
       changedFields.push('status');
     }
     // Feature 002 (T034) — attribute_set_id swap. Persist BEFORE
@@ -769,7 +731,7 @@ export class CatalogAdminService {
       publishFrom: product.publishFrom?.toISOString() ?? null,
       publishUntil: product.publishUntil?.toISOString() ?? null,
     };
-    return { product, stateBefore, stateAfter, changedFields, archived };
+    return { product, stateBefore, stateAfter, changedFields };
   }
 
   /**
@@ -834,8 +796,9 @@ export class CatalogAdminService {
    *
    * The duplicated row gets a fresh UUID; the SKU is derived from the
    * source by appending `-copy`, then `-copy-2`, `-copy-3`, … until a
-   * free slot is found. Status is reset to `'draft'` and `archivedAt`
-   * is cleared so the operator can review before publishing.
+   * free slot is found. Status is reset to `'inactive'` and `archivedAt`
+   * is cleared (feature 163, Q1-d) so the operator can review before
+   * switching it on — also when the source is archived and `active`.
    *
    * Variants have their own globally-unique SKUs; each is suffixed in
    * the same way against the variant SKU space.
@@ -888,7 +851,8 @@ export class CatalogAdminService {
         sku: newSku,
         slug: newSlug,
       type: source.type,
-      status: 'draft',
+      status: 'inactive',
+      archivedAt: null,
       name: this.suffixCopyNames(source.name),
       description: { ...source.description },
       stockMode: source.stockMode ?? null,
@@ -1183,12 +1147,84 @@ export class CatalogAdminService {
   }
 
   /**
-   * @deprecated Use `updateProduct` with `status: 'inactive'` instead — it is
-   * what this method does, and it is the update that emits
-   * `product.archived.v1` when the status actually moves.
+   * Feature 163 (FR-019, research R30.3) — Archive one product: the `product.archive`
+   * Command sets `archivedAt` and touches no status at any scope, and no
+   * completeness gate runs. Announces `product.updated.v1` `['archivedAt']`, then
+   * `product.archived.v1`, both after commit and in that order (one event scope,
+   * dispatched in order and waited for — the search indexer's removal has finished
+   * before this returns). Archiving an archived product is a no-op: no audit row,
+   * no event, `changed: false`.
+   *
+   * 404 `PRODUCT_NOT_FOUND` for an unknown, soft-deleted or non-UUID id.
    */
-  async archiveProduct(id: string, auditCtx?: AdminAuditContext): Promise<void> {
-    await this.updateProduct(id, { status: 'inactive' }, auditCtx);
+  async archiveProduct(id: string): Promise<{ product: Product; changed: boolean }> {
+    return this.#setArchived(id, true);
+  }
+
+  /**
+   * Feature 163 (FR-019) — Restore one product: the `product.restore` Command clears
+   * `archivedAt`, announces `product.updated.v1` `['archivedAt']`, and leaves the
+   * status where it is (an `inactive` product stays off). No-op on a product that is
+   * not archived.
+   */
+  async restoreProduct(id: string): Promise<{ product: Product; changed: boolean }> {
+    return this.#setArchived(id, false);
+  }
+
+  async #setArchived(id: string, archive: boolean): Promise<{ product: Product; changed: boolean }> {
+    // A non-UUID id would reach PostgreSQL as an invalid `uuid` literal.
+    if (!uuidSchema.safeParse(id).success) {
+      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    }
+    const outcome = { changed: false };
+    // The Command declares `product.updated.v1`; the Command Bus dispatches it
+    // when its own scope ends, after commit. `product.archived.v1` is emitted
+    // after that, into the scope opened here, so it is dispatched second.
+    return this.events.run(async () => {
+      const product = await this.#runCommand(this.#archiveCommand(id, archive, outcome));
+      if (outcome.changed && archive) this.#emitArchived(product.id);
+      return { product, changed: outcome.changed };
+    });
+  }
+
+  #archiveCommand(id: string, archive: boolean, outcome: { changed: boolean }): Command<Product> {
+    return {
+      action: archive ? 'product.archive' : 'product.restore',
+      objectType: 'product',
+      objectId: id,
+      run: async ({ em }) => {
+        const product = await em.findOne(Product, { id, deletedAt: null });
+        if (!product) {
+          throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+        }
+        const before = product.archivedAt ?? null;
+        if ((before !== null) === archive) {
+          outcome.changed = false;
+          return { result: product, skipAudit: true };
+        }
+        product.archivedAt = archive ? new Date() : null;
+        em.persist(product);
+        await em.flush();
+        outcome.changed = true;
+        return {
+          result: product,
+          before: { archivedAt: before?.toISOString() ?? null },
+          after: { archivedAt: product.archivedAt?.toISOString() ?? null },
+        };
+      },
+      event: (product) =>
+        outcome.changed
+          ? {
+              eventName: 'product.updated.v1',
+              payload: {
+                eventId: randomUUID(),
+                occurredAt: new Date().toISOString(),
+                productId: product.id,
+                changedFields: ['archivedAt'],
+              },
+            }
+          : undefined,
+    };
   }
 
   async assertProductDeletable(em: EntityManager, productId: string): Promise<void> {
@@ -1365,8 +1401,12 @@ export class CatalogAdminService {
 
   async listProducts(
     options: {
-      includeArchived?: boolean;
-      status?: 'active' | 'draft' | 'inactive';
+      /**
+       * Feature 163 (FR-113, R30.4) — which archived products are listed, on
+       * `archived_at` and independently of the status. Default `exclude`.
+       */
+      archived?: ProductArchivedMode;
+      status?: ProductStatus;
       type?: 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
       q?: string;
       /** When set, restrict to products in this category or any descendant. */
@@ -1379,21 +1419,19 @@ export class CatalogAdminService {
     page: number;
     pageSize: number;
     total: number;
-    counts: { all: number; active: number; draft: number; inactive: number };
+    counts: ProductListCounts;
   }> {
     const em = this.emFactory();
     const page = Math.max(0, options.page ?? 0);
     const pageSize = Math.min(Math.max(1, options.pageSize ?? 20), 500);
+    const archivedMode = options.archived ?? 'exclude';
 
-    // `status` overrides `includeArchived` — if the caller explicitly asks for
-    // a specific status (including `inactive`), we honour it; otherwise the
-    // legacy `includeArchived` flag controls whether inactive rows appear.
+    // Feature 163 (R30.4) — the status and the archived mode are two independent
+    // filters: `status` reads the status column, `archived` reads `archived_at`.
     const where: Record<string, unknown> = { deletedAt: null };
-    if (options.status) {
-      where['status'] = options.status;
-    } else if (!options.includeArchived) {
-      where['status'] = { $ne: 'inactive' };
-    }
+    if (options.status) where['status'] = options.status;
+    if (archivedMode === 'exclude') where['archivedAt'] = null;
+    else if (archivedMode === 'only') where['archivedAt'] = { $ne: null };
     if (options.type) {
       where['type'] = options.type;
     }
@@ -1402,22 +1440,7 @@ export class CatalogAdminService {
       ? await this.productIdsInCategoryTree(em, options.categorySlug.trim())
       : null;
     if (categoryProductIds && categoryProductIds.size === 0) {
-      // `em.execute`, not `em.getKnex()`: a knex handle takes its own pooled
-      // connection, so the status badges would be counted from outside a
-      // transaction the caller holds open while `em.find` above answers from
-      // inside it — one screen, two views of `products` (issue #207).
-      const countRowsEmpty = (await em.execute(
-        `select status, count(*) as count from products where deleted_at is null group by status`,
-      )) as Array<{ status: string; count: string | number }>;
-      const countsEmpty = { all: 0, active: 0, draft: 0, inactive: 0 };
-      for (const row of countRowsEmpty) {
-        const n = Number(row.count) || 0;
-        countsEmpty.all += n;
-        if (row.status === 'active') countsEmpty.active = n;
-        else if (row.status === 'draft') countsEmpty.draft = n;
-        else if (row.status === 'inactive') countsEmpty.inactive = n;
-      }
-      return { items: [], page, pageSize, total: 0, counts: countsEmpty };
+      return { items: [], page, pageSize, total: 0, counts: await this.#productListCounts(em) };
     }
     if (categoryProductIds) {
       where['id'] = { $in: [...categoryProductIds] };
@@ -1432,7 +1455,8 @@ export class CatalogAdminService {
       const baseQuery = knex('products').where((qb) => {
         qb.whereNull('deleted_at');
         if (options.status) qb.where('status', options.status);
-        else if (!options.includeArchived) qb.whereNot('status', 'inactive');
+        if (archivedMode === 'exclude') qb.whereNull('archived_at');
+        else if (archivedMode === 'only') qb.whereNotNull('archived_at');
         if (options.type) qb.where('type', options.type);
         if (categoryProductIds) qb.whereIn('id', [...categoryProductIds]);
         if (trimmedQ) {
@@ -1478,24 +1502,38 @@ export class CatalogAdminService {
       });
     }
 
-    // Counts are computed across the *full* product set (including archived)
-    // so the admin's status tabs always have honest badges, regardless of
-    // which tab is currently active.
-    // `em.execute`, not `em.getKnex()` — same reason as the empty-category
-    // branch above.
-    const countRows = (await em.execute(
-      `select status, count(*) as count from products where deleted_at is null group by status`,
-    )) as Array<{ status: string; count: string | number }>;
-    const counts = { all: 0, active: 0, draft: 0, inactive: 0 };
-    for (const row of countRows) {
-      const n = Number(row.count) || 0;
-      counts.all += n;
-      if (row.status === 'active') counts.active = n;
-      else if (row.status === 'draft') counts.draft = n;
-      else if (row.status === 'inactive') counts.inactive = n;
-    }
+    return { items, page, pageSize, total, counts: await this.#productListCounts(em) };
+  }
 
-    return { items, page, pageSize, total, counts };
+  /**
+   * The admin list's tab badges, across the *full* product set whatever tab is
+   * active, so they stay honest (feature 163, R30.4): `all`, `active` and
+   * `inactive` over non-archived, non-deleted rows; `archived` over archived,
+   * non-deleted rows of either status.
+   *
+   * `em.execute`, not `em.getKnex()`: a knex handle takes its own pooled
+   * connection, so the badges would be counted from outside a transaction the
+   * caller holds open while the page above answers from inside it — one screen,
+   * two views of `products` (issue #207).
+   */
+  async #productListCounts(em: EntityManager): Promise<ProductListCounts> {
+    const rows = (await em.execute(
+      `select status, (archived_at is not null) as archived, count(*) as count
+         from products where deleted_at is null
+        group by status, (archived_at is not null)`,
+    )) as Array<{ status: string; archived: boolean; count: string | number }>;
+    const counts: ProductListCounts = { all: 0, active: 0, inactive: 0, archived: 0 };
+    for (const row of rows) {
+      const n = Number(row.count) || 0;
+      if (row.archived) {
+        counts.archived += n;
+        continue;
+      }
+      counts.all += n;
+      if (row.status === 'active') counts.active += n;
+      else if (row.status === 'inactive') counts.inactive += n;
+    }
+    return counts;
   }
 
   /**
@@ -1504,8 +1542,9 @@ export class CatalogAdminService {
    */
   async resolveProductIds(
     options: {
-      includeArchived?: boolean;
-      status?: 'active' | 'draft' | 'inactive';
+      /** Feature 163 (R30.4) — as {@link listProducts}; the route's default is `include`. */
+      archived?: ProductArchivedMode;
+      status?: ProductStatus;
       type?: 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
       q?: string;
     } = {},
@@ -1514,16 +1553,17 @@ export class CatalogAdminService {
     const em = this.emFactory();
     const trimmedQ = options.q?.trim();
     const knex = em.getKnex();
+    const archivedMode = options.archived ?? 'exclude';
 
     const applyListFilters = (qb: ReturnType<typeof knex>): ReturnType<typeof knex> => {
-      // Mirror listProducts: soft-deleted rows are never selectable, and the
-      // withdrawn status is `inactive` (feature 032 renamed `archived`).
+      // Mirror listProducts: soft-deleted rows are never selectable; the status
+      // and the archived mode are independent filters (feature 163, R30.4).
       qb.whereNull('deleted_at');
       if (options.status) {
         qb.where('status', options.status);
-      } else if (!options.includeArchived) {
-        qb.whereNot('status', 'inactive');
       }
+      if (archivedMode === 'exclude') qb.whereNull('archived_at');
+      else if (archivedMode === 'only') qb.whereNotNull('archived_at');
       if (options.type) {
         qb.where('type', options.type);
       }

@@ -98,7 +98,7 @@ describe('buildScopeOverview (spec 163, T069)', () => {
   it('names the status source per cell: channel × language, channel, global (US4 #1)', () => {
     const overview = buildScopeOverview(
       input({
-        channelRows: [channelRow({ status: 'draft' })],
+        channelRows: [channelRow({ status: 'inactive' })],
         languageRows: [languageRow({ languageCode: 'de-DE', status: 'active' })],
       }),
     );
@@ -108,7 +108,7 @@ describe('buildScopeOverview (spec 163, T069)', () => {
       available: true,
     });
     expect(cell(overview, B2B, 'pl-PL')).toMatchObject({
-      effectiveStatus: 'draft',
+      effectiveStatus: 'inactive',
       statusSource: 'channel',
       available: false,
     });

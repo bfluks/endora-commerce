@@ -813,7 +813,7 @@ export const recentActivity = defineModuleRecentActivity({
     { action: 'product.create', icon: 'Plus', labelKey: 'activity.verb.product.create' },
     { action: 'product.update', icon: 'Edit', labelKey: 'activity.verb.product.update' },
     { action: 'product.archive', icon: 'Archive', labelKey: 'activity.verb.product.archive' },
-    { action: 'product.unarchive', icon: 'Box', labelKey: 'activity.verb.product.unarchive' },
+    { action: 'product.restore', icon: 'Box', labelKey: 'activity.verb.product.restore' },
     {
       action: 'product.bulk_update',
       icon: 'Edit',

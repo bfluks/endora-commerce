@@ -35,7 +35,13 @@ export const productTypeSchema = z.enum([
 ]);
 export type ProductType = z.infer<typeof productTypeSchema>;
 
-export const productStatusSchema = z.enum(['draft', 'active', 'inactive']);
+/**
+ * Feature 163, spec Session 2026-10-25 (FR-010, FR-112) — `active` | `inactive` at
+ * every scope; `inactive` is plain off. `draft` is gone and the legacy `archived`
+ * write alias is refused: archiving is the separate Archive / Restore action
+ * (`archivedAt`), never a status.
+ */
+export const productStatusSchema = z.enum(['active', 'inactive']);
 export type ProductStatus = z.infer<typeof productStatusSchema>;
 
 /**
@@ -45,18 +51,6 @@ export type ProductStatus = z.infer<typeof productStatusSchema>;
  * screen and the endpoint cannot disagree about it.
  */
 export const ADMIN_PRODUCT_SELECTION_MAX = 200;
-
-/** Maps legacy `archived` writes to `inactive` (feature 032). */
-export function coerceProductStatusWrite(
-  value: unknown,
-): 'draft' | 'active' | 'inactive' | unknown {
-  return value === 'archived' ? 'inactive' : value;
-}
-
-export const productStatusWriteSchema = z.preprocess(
-  coerceProductStatusWrite,
-  productStatusSchema,
-);
 
 export const stockModeSchema = z.enum(['categorical', 'numeric']);
 export type StockMode = z.infer<typeof stockModeSchema>;
@@ -670,10 +664,9 @@ const baseProductRequestObject = z.object({
   stockMode: stockModeSchema.optional(),
   visibility: productVisibilitySchema,
   // Feature 022 — accepted by the single-product PATCH and the bulk
-  // update endpoint. Cross-field rule on `archivedAt` is enforced in
-  // the service layer (CatalogAdminService.updateProduct).
-  // Feature 032 — `archived` write alias → `inactive`.
-  status: productStatusWriteSchema.optional(),
+  // update endpoint. Feature 163 — a status write never touches
+  // `archivedAt` (FR-010); `draft` / `archived` are refused (FR-112).
+  status: productStatusSchema.optional(),
   allowedOrganizationIds: z.array(uuidSchema).optional(),
   assetIds: z.array(uuidSchema).optional(),
   initialStock: z.number().int().nonnegative().optional(),
@@ -776,11 +769,22 @@ export type BatchByIdProductsRequest = z.infer<typeof batchByIdProductsRequestSc
 
 export const MAX_RESOLVE_SELECTION_SIZE = 10_000;
 
+/**
+ * Feature 163 (FR-113, research R30.4) — which archived products a list or a
+ * selection shows, independently of the status: `exclude` hides them, `include`
+ * shows them beside the rest, `only` shows nothing else.
+ */
+export const productArchivedModeSchema = z.enum(['exclude', 'include', 'only']);
+export type ProductArchivedMode = z.infer<typeof productArchivedModeSchema>;
+
 export const resolveProductIdsRequestSchema = z.object({
   status: productStatusSchema.optional(),
   type: productTypeSchema.optional(),
   q: z.string().trim().min(1).optional(),
+  /** Legacy: `true` means `archived: 'include'`. `archived` wins when both are sent. */
   includeArchived: z.boolean().optional(),
+  /** Feature 163 (R30.4) — absent: `includeArchived`, else `include`, as before. */
+  archived: productArchivedModeSchema.optional(),
 });
 export type ResolveProductIdsRequest = z.infer<typeof resolveProductIdsRequestSchema>;
 
@@ -802,7 +806,7 @@ const bulkEditModeSchema = z.enum(['add', 'replace']);
 const bulkEditCategoryModeSchema = z.enum(['add', 'replace', 'remove']);
 
 const bulkUpdateFieldsObject = z.object({
-  status: productStatusWriteSchema.optional(),
+  status: productStatusSchema.optional(),
   visibility: productVisibilitySchema.optional(),
   salesChannels: z
     .object({
@@ -833,6 +837,12 @@ const bulkUpdateFieldsObject = z.object({
       value: z.enum([...productStatusSchema.options, 'inherit']),
     })
     .optional(),
+  /**
+   * Feature 163 (FR-053, research R30.3) — Archive (`true`) or Restore (`false`)
+   * every selected product, through the single-product Commands. Alone in its
+   * request: one meaning per bulk action.
+   */
+  archived: z.boolean().optional(),
 });
 
 export const bulkUpdateProductsRequestSchema = z.object({
@@ -852,12 +862,18 @@ export const bulkUpdateProductsRequestSchema = z.object({
       f.attributeSetId !== undefined ||
       f.returnable !== undefined ||
       f.scopedStatus !== undefined ||
+      f.archived !== undefined ||
       (f.attributeValues !== undefined && Object.keys(f.attributeValues).length > 0),
     { message: 'at least one field must be present' },
   ).refine((f) => f.scopedStatus === undefined || f.status === undefined, {
     message: 'scopedStatus cannot be combined with status',
     path: ['scopedStatus'],
-  }),
+  }).refine(
+    (f) =>
+      f.archived === undefined ||
+      Object.entries(f).every(([key, value]) => key === 'archived' || value === undefined),
+    { message: 'archived cannot be combined with any other field', path: ['archived'] },
+  ),
 });
 export type BulkUpdateProductsRequest = z.infer<typeof bulkUpdateProductsRequestSchema>;
 
@@ -3611,8 +3627,10 @@ export const ProductUpdatedEventV1Schema = z
 export type ProductUpdatedEventV1 = z.infer<typeof ProductUpdatedEventV1Schema>;
 
 /**
- * Payload of `product.archived.v1` — a product's status moved to `inactive`.
- * Emitted beside the `product.updated.v1` of the same write, after it.
+ * Payload of `product.archived.v1` — the product was archived by the Archive action
+ * (feature 163, FR-019; `POST …/products/:id/archive` or bulk `fields.archived`).
+ * Emitted after the `product.updated.v1` `['archivedAt']` of the same action. A
+ * status write never emits it: `inactive` is plain off.
  */
 export const ProductArchivedEventV1Schema = z
   .object({
