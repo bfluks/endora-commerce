@@ -18,7 +18,8 @@ import { Product } from '../entities/product.entity.js';
  *  - Per-product atomicity (each product writes inside its own transaction).
  *  - No batch abort: a single failure does NOT roll back other products.
  *  - One summary `audit_logs` row per bulk operation; per-product audit
- *    rows are emitted by `CatalogAdminService.updateProduct` as before.
+ *    rows are emitted by `CatalogAdminService.updateProduct` as before, and
+ *    by the Archive / Restore Commands for `fields.archived` (feature 163).
  */
 
 export interface BulkUpdateOutcome {
@@ -190,6 +191,23 @@ export class CatalogBulkUpdateService {
     const product = await em.findOne(Product, { id: productId });
     if (!product) {
       return { productId, status: 'skipped', reason: 'product_not_found' };
+    }
+
+    // Feature 163 (FR-053, research R30.3) — bulk Archive / Restore. `archived` is
+    // alone in its request (the schema refuses it beside any other field), and each
+    // product runs the single-product Command — never `updateProduct` — so it gets
+    // its own `product.archive` / `product.restore` entry and its own events. A
+    // product already in the requested state is `succeeded` with no change, no
+    // entry and no event (O-6).
+    if (req.fields.archived !== undefined) {
+      try {
+        const { changed } = req.fields.archived
+          ? await this.catalogAdmin.archiveProduct(productId)
+          : await this.catalogAdmin.restoreProduct(productId);
+        return { productId, status: 'succeeded', changedFields: changed ? ['archivedAt'] : [] };
+      } catch (err) {
+        return this.classifyPerProductError(productId, err);
+      }
     }
 
     // Partition attributeValues into those allowed for the product's set

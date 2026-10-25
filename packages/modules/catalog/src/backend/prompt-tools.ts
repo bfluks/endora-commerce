@@ -329,7 +329,7 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
     moduleId: 'catalog',
     kind: 'mutation',
     description:
-      'Set the status (draft | active | inactive) of one or more products. Resolve products via catalog.search_products first. Captured into a plan the operator must confirm; not executed immediately.',
+      'Set the status (active | inactive) of one or more products: inactive switches a product off and does not archive it. Resolve products via catalog.search_products first. Captured into a plan the operator must confirm; not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: SetProductStatusParamsSchema,
     preview: async (params) =>

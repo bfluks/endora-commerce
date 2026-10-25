@@ -509,7 +509,9 @@ export class ShoppingListService {
         skipped.push({ itemId: item.id, productId: item.productId, reason: 'product_not_found' });
         continue;
       }
-      if (product.status === 'inactive' || product.deletedAt) {
+      // Feature 163 (FR-010, FR-019) — archived is `archivedAt`, whatever the
+      // status; a product merely switched off is the availability answer's below.
+      if (product.archivedAt || product.deletedAt) {
         skipped.push({ itemId: item.id, productId: item.productId, reason: 'product_archived' });
         continue;
       }
