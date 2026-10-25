@@ -669,7 +669,13 @@ export class BulkOperationService {
             const p = await tem.findOne(Product, { id: rec.recordId });
             if (!p) return;
             const wasArchived = (p.archivedAt ?? null) !== null;
-            tem.assign(p, rec.before);
+            // The revert record is JSON: a captured `archivedAt` is an ISO string,
+            // which the column takes back as the instant it names.
+            const before =
+              typeof rec.before['archivedAt'] === 'string'
+                ? { ...rec.before, archivedAt: new Date(rec.before['archivedAt']) }
+                : rec.before;
+            tem.assign(p, before);
             tem.persist(p);
             restored.push({
               productId: p.id,
