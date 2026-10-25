@@ -9,7 +9,7 @@ import type {
   SearchReindexPort,
 } from '@endora-commerce/contracts';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
-import { effectiveState, lazyPort } from '@endora-commerce/platform/kernel';
+import { lazyPort } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { createSearchQueryPort } from './services/search-query-port.js';
@@ -260,40 +260,6 @@ export function registerModule(ctx: ModuleContext): void {
    */
   ctx.subscribe('settings.value_changed', async (payload) => {
     await subscriber().onSettingChanged(payload as SettingChangedPayload);
-  });
-
-  /**
-   * Feature 163 (code review W1) — bring every existing channel index up to the
-   * settings this release's queries name (the availability fields filterable,
-   * `localizedNames` searchable). Without it an index built before the upgrade
-   * refuses every query's availability filter and the whole listing falls back
-   * to Postgres until an operator reindexes. Bounded: one settings read per
-   * channel index, and an update only where a setting is missing — once, on the
-   * first boot after the upgrade.
-   *
-   * A **work** hook, so presence is asked first (D-68). Detached rather than
-   * awaited: a boot must not wait on, or die with, a search engine that is slow
-   * or down — the listing already degrades to Postgres for that — so a failure
-   * is logged and the next boot tries again. A deployment that serves search
-   * from Postgres (`CATALOG_SEARCH_BACKEND=postgres`) has no index to bring up.
-   * Run by the composition that runs this module's workers (`searchRunWorkers`)
-   * — one process of an instance, never the test harness.
-   */
-  ctx.onBoot(() => {
-    if (!effectiveState.isPresent('search')) return;
-    if (process.env['CATALOG_SEARCH_BACKEND'] === 'postgres') return;
-    const cradle = ctx.cradle<SearchCradle>();
-    if (!cradle.searchRunWorkers) return;
-    void cradle.search.handle.indexer.ensureQuerySettings(cradle.emFactory()).then(
-      (channels) => {
-        if (channels.length > 0) {
-          ctx.log.info({ channels }, 'search: brought pre-upgrade channel indexes up to the query settings');
-        }
-      },
-      (error: unknown) => {
-        ctx.log.warn({ err: error }, 'search: could not check the channel index settings at boot');
-      },
-    );
   });
 
   ctx.routes(async (app) => {
