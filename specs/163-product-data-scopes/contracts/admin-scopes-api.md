@@ -91,8 +91,9 @@ Behaviour:
   path now runs the gate too (US6 #3) and never warns about overrides (FR-013). Since spec Session
   2026-10-25 it accepts `active` | `inactive` only (`draft` or the legacy `archived` → `400 VALIDATION_FAILED`, FR-112, O-1), and a
   write of `inactive` no longer archives: it neither sets nor clears `archivedAt` (FR-010).
-- **Archive / Restore** (FR-019, FR-053) are separate `catalog:write` Commands for one product and bulk-operation
-  kinds for a selection; they touch `archivedAt` only. Shapes (research R30.3, decided 2026-10-25):
+- **Archive / Restore** (FR-019, FR-053) are separate `catalog:write` Commands for one product and, for a
+  selection, an exclusive `fields.archived` field on the existing bulk-update operation (not a bulk-operation
+  kind of its own, R30.3); they touch `archivedAt` only. Shapes (research R30.3, decided 2026-10-25):
   `POST /api/v1/admin/catalog/products/:id/archive` and `…/restore` — no body, `catalog:write`, `200 { data:
   AdminProduct }` also on a no-op, Commands `product.archive` / `product.restore`, `changedFields: ['archivedAt']`;
   bulk `fields.archived: boolean` on `POST …/products/bulk-update`, alone in its request. The admin list's
