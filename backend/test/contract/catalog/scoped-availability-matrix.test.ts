@@ -21,9 +21,10 @@ import { errorBodyOf } from '../../helpers/product-scope-fixture.js';
  *
  * Also: a product with no scope rows inherits everywhere ("use inherited"); an
  * archived one answers 410 to a caller who may see it; an unresolvable channel
- * matches nothing (FR-007). The case of a member switched off by status (which used
- * to be the `draft` member) moved with the 410 rule to Phase 9c (T156s, spec Session
- * 2026-10-25).
+ * matches nothing (FR-007). Phase 9c (T156s, spec Session 2026-10-25): a member
+ * switched off by its global status but not archived answers the absent 404 at every
+ * scope, overrides or not; the 410 is an archived product's only, and only where it
+ * would be available to the caller with the archive taken away.
  *
  * Every fixture name carries a per-run token; the channels are this suite's own.
  */
@@ -277,6 +278,82 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
     } finally {
       await sql(`delete from product_channel_language_scopes where product_id = ?`, [ids['al']]);
     }
+  });
+
+  // Phase 9c (T156s, FR-005, FR-010, O-3, O-4) — the product page's "gone" answer.
+  it('T156s: a member switched off globally but not archived answers the absent 404 at every (C, L), overrides or not', async () => {
+    // OFF is `inactive` globally; C1 says `active`, and so does C2 × pl-PL.
+    await sql(
+      `insert into product_channel_scopes (product_id, sales_channel_id, status, created_at, updated_at)
+       values (?, ?, 'active', now(), now())`,
+      [ids['off'], c1.id],
+    );
+    await sql(
+      `insert into product_channel_language_scopes (product_id, sales_channel_id, language_code, status, created_at, updated_at)
+       values (?, ?, 'pl-PL', 'active', now(), now())`,
+      [ids['off'], c2.id],
+    );
+    try {
+      for (const [channel, language] of pairs()) {
+        const absent = await h.app.inject({
+          method: 'GET',
+          url: `/api/v1/catalog/products/does-not-exist-${RUN}`,
+          headers: headers(channel, language),
+        });
+        const res = await h.app.inject({
+          method: 'GET',
+          url: `/api/v1/catalog/products/${slugs['off']}`,
+          headers: headers(channel, language),
+        });
+        expect(res.statusCode, `OFF at ${channel.code}/${language}`).toBe(404);
+        expect(errorBodyOf(res)).toEqual(errorBodyOf(absent));
+      }
+    } finally {
+      await sql(`delete from product_channel_language_scopes where product_id = ?`, [ids['off']]);
+      await sql(`delete from product_channel_scopes where product_id = ?`, [ids['off']]);
+    }
+  });
+
+  it('T156s: an archived product with no overrides answers 410 at every (C, L) of its channels, naming PRODUCT_ARCHIVED', async () => {
+    for (const [channel, language] of pairs()) {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/catalog/products/${slugs['a']}`,
+        headers: headers(channel, language),
+      });
+      expect(res.statusCode, `A at ${channel.code}/${language}`).toBe(410);
+      const error = (res.json() as { error: { code: string; message: string } }).error;
+      expect(error.code).toBe('PRODUCT_ARCHIVED');
+      if (language === 'en-US') expect(error.message).toBe('Product is archived.');
+    }
+  });
+
+  it('T156s: an archived product outside the caller’s audience answers the absent 404', async () => {
+    await insertProduct('ar', { status: 'inactive', archived: true, channels: [c1, c2] });
+    await sql(
+      `update products set visibility = 'organization_restricted', allowed_organization_ids = ?::jsonb where id = ?`,
+      [JSON.stringify([TEST_ORGANIZATION_ID]), ids['ar']],
+    );
+    const absent = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/catalog/products/does-not-exist-${RUN}`,
+      headers: headers(c1, 'pl-PL'),
+    });
+    const anonymous = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/catalog/products/${slugs['ar']}`,
+      headers: headers(c1, 'pl-PL'),
+    });
+    expect(anonymous.statusCode).toBe(404);
+    expect(errorBodyOf(anonymous)).toEqual(errorBodyOf(absent));
+    // Its organisation's buyer, who could see it were it not archived, is told it is gone.
+    const member = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/catalog/products/${slugs['ar']}`,
+      headers: headers(c1, 'pl-PL'),
+      cookies: BUYER,
+    });
+    expect(member.statusCode).toBe(410);
   });
 
   it('shows P among S’s links only where P is on', async () => {

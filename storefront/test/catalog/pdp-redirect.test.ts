@@ -91,7 +91,7 @@ describe('productIdForKey', () => {
   });
 
   it('lets any other failure through (a 410 is the error page, as before)', async () => {
-    const gone = new StorefrontApiError(410, 'PRODUCT_ARCHIVED', 'Product is inactive.');
+    const gone = new StorefrontApiError(410, 'PRODUCT_ARCHIVED', 'Product is archived.');
     catalogApi.resolveProductKey.mockRejectedValue(gone);
 
     await expect(productIdForKey('old-drill', ctx)).rejects.toBe(gone);

@@ -1848,17 +1848,16 @@ export class CatalogQueryService {
       throw notFound();
     }
 
-    // FR-005 — 410 iff archived (`archived_at` set); otherwise 404 unless
-    // effectively available at (C, L): a `draft` member, and an `inactive` one
-    // that is not archived, are not reachable by their URL. Owner decision Q1
-    // (2026-10-25, T156s/T156t) makes archiving its own action, so `archived_at`
-    // alone says "gone"; today writing `inactive` still sets it, so for rows the
-    // app wrote this is behaviour-neutral.
+    // FR-005, O-3 (T156t) — 410 iff archived: `archived_at` alone says "gone"
+    // (archiving is its own action, owner decision Q1); the status never does.
+    // Otherwise 404 unless effectively available at (C, L) — a product switched
+    // off globally, in the channel or in the language is not reachable by its URL.
     //
     // The 410 says "this was here and is gone", so it is answered only where
-    // the product would be available with the archive taken away — global
-    // status and `archived_at` neutralised, every scope row, the window and
-    // the language still applied (security review, checkpoint B). An archived
+    // the product would be available to this buyer with the archive taken away —
+    // `archived_at` cleared and the global status read as `active`, while every
+    // channel and channel × language status, membership, the channel's languages,
+    // the window and the audience still apply (security review, checkpoint B). An archived
     // product that is also switched off in this channel or language, or
     // outside its window, answers the absent product's 404: its existence
     // here is not this caller's to learn.
@@ -1876,7 +1875,7 @@ export class CatalogQueryService {
         returnable: product.returnable,
       };
       if (!isAvailableWith(asIfLive, scopeRows, true, scope)) throw notFound();
-      throw new HttpError(410, ERROR_CODES.PRODUCT_ARCHIVED, 'Product is inactive.');
+      throw new HttpError(410, ERROR_CODES.PRODUCT_ARCHIVED, 'Product is archived.');
     }
     const available = await availableAmong(em, this.#requireChannelMembership(), [product], scope, {
       membersKnown: true,
