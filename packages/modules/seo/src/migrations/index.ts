@@ -6,7 +6,7 @@
  * `src/packages/package-runtime.ts` takes `exported['migrations']` and refuses
  * the package outright when it is absent (D-168).
  *
- * **One class**, stamped inside the frozen historical prefix
+ * The first class is stamped inside the frozen historical prefix
  * (`BASELINE_THROUGH`, `db/migration-order.ts`), so its position is history and
  * the manifest graph does not move it.
  *
@@ -19,7 +19,8 @@
  */
 
 import { Migration20260425T154404SeoInit } from './20260425T154404_seo_init.js';
+import { Migration20261025T215911SeoMetaOverrideChannelScope } from './20261025T215911_seo_meta_override_channel_scope.js';
 
-export const migrations = [Migration20260425T154404SeoInit];
+export const migrations = [Migration20260425T154404SeoInit, Migration20261025T215911SeoMetaOverrideChannelScope];
 
-export { Migration20260425T154404SeoInit };
+export { Migration20260425T154404SeoInit, Migration20261025T215911SeoMetaOverrideChannelScope };
