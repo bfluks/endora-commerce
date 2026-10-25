@@ -182,7 +182,7 @@ describe('Scope overview — GET /admin/catalog/products/:id/scope-overview (spe
       ...admin,
       payload: {
         channels: [
-          { channelId: b2b, status: 'draft', minOrderQuantity: 4, languageStatuses: [{ languageCode: 'de-DE', status: 'active' }] },
+          { channelId: b2b, status: 'inactive', minOrderQuantity: 4, languageStatuses: [{ languageCode: 'de-DE', status: 'active' }] },
         ],
       },
     });
@@ -213,7 +213,7 @@ describe('Scope overview — GET /admin/catalog/products/:id/scope-overview (spe
         { field: 'urlKey', level: 'language' },
       ]),
     );
-    expect(cell(data, b2b, 'pl-PL')).toMatchObject({ effectiveStatus: 'draft', statusSource: 'channel', available: false });
+    expect(cell(data, b2b, 'pl-PL')).toMatchObject({ effectiveStatus: 'inactive', statusSource: 'channel', available: false });
     expect(cell(data, b2b, 'pl-PL').overriddenFields).toEqual(
       expect.arrayContaining([
         { field: 'status', level: 'channel' },

@@ -131,7 +131,7 @@ describe.skipIf(!shouldRun)('catalog list — the cost of product data scopes (1
          (product_id, sales_channel_id, status, window_overridden, publish_from, publish_until,
           visibility, allowed_organization_ids, created_at, updated_at)
        select p.id, ?::uuid,
-              case when ${ordinal} % 10 = 0 then 'draft' else 'active' end,
+              case when ${ordinal} % 10 = 0 then 'inactive' else 'active' end,
               true, now() - interval '1 day', now() + interval '30 days',
               'public', '[]'::jsonb, now(), now()
          from products p where p.sku like ? and ${ordinal} % 5 = 0`,

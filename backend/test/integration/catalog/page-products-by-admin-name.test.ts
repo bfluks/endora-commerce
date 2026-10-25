@@ -54,7 +54,7 @@ describe('CatalogProductReadService.pageProductsByAdminName (161 G15)', () => {
       make('brick', 'G15N-C', { 'pl-PL': 'Wkręt', 'en-US': 'Brick' }),
       make('lacznik', 'G15N-L', { 'pl-PL': 'Łącznik' }),
       make('empty', 'G15N-E', {}),
-      make('gone', 'G15N-F', { 'en-US': 'Fastener' }, { deletedAt: new Date(), status: 'draft' }),
+      make('gone', 'G15N-F', { 'en-US': 'Fastener' }, { deletedAt: new Date(), status: 'inactive' }),
       make('outside', 'G15N-O', { 'en-US': 'Aardvark' }),
     ]);
     await em.persistAndFlush(em.create(ProductVariant, { parentProductId: ids['anchor']!, sku: `G15N-AV-${stamp}`, variantAttributeValues: {} }));

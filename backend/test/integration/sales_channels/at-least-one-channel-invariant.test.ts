@@ -62,7 +62,7 @@ describe('membership invariant: at-least-one-channel (T022)', () => {
       sku: `T022-${suffix}`,
       slug: `t022-${suffix.toLowerCase()}`,
       type: 'simple',
-      status: 'draft',
+      status: 'inactive',
       name: { en: `T022 ${suffix}` },
       description: { en: 'fixture' },
       visibility: 'public',

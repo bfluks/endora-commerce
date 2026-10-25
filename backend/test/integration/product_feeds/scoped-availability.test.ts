@@ -64,11 +64,11 @@ describe('163 — product feeds select only available products [integration]', (
     const em = h.em();
     const withProduct = await previewCount();
 
-    await setChannelStatus(em, product.id, [channelId], 'draft');
+    await setChannelStatus(em, product.id, [channelId], 'inactive');
     expect(await previewCount()).toBe(withProduct - 1);
 
     // Off globally, on in this channel: selected.
-    await em.getConnection().execute(`update products set status = 'draft' where id = ?`, [product.id]);
+    await em.getConnection().execute(`update products set status = 'inactive' where id = ?`, [product.id]);
     await setChannelStatus(em, product.id, [channelId], 'active');
     expect(await previewCount()).toBe(withProduct);
 

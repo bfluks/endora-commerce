@@ -19,10 +19,11 @@ import { errorBodyOf } from '../../helpers/product-scope-fixture.js';
  * "Off" answers exactly what "absent" answers (one `PRODUCT_NOT_FOUND`, the same
  * body), so the reason is never disclosed.
  *
- * Also: a product with no scope rows inherits everywhere ("use inherited"); a
- * `draft` member is no longer reachable by its URL (FR-005); an archived one
- * answers 410 to a caller who may see it; an unresolvable channel matches
- * nothing (FR-007).
+ * Also: a product with no scope rows inherits everywhere ("use inherited"); an
+ * archived one answers 410 to a caller who may see it; an unresolvable channel
+ * matches nothing (FR-007). The case of a member switched off by status (which used
+ * to be the `draft` member) moved with the 410 rule to Phase 9c (T156s, spec Session
+ * 2026-10-25).
  *
  * Every fixture name carries a per-run token; the channels are this suite's own.
  */
@@ -113,23 +114,24 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
     c2 = await insertChannel('c2');
 
     // P — on at (C1, pl-PL) and (C2, pl-PL) only:
-    //   C1 inherits global `active`, but C1 × en-US is `draft`;
-    //   C2 is `draft`, but C2 × pl-PL is `active`.
+    //   C1 inherits global `active`, but C1 × en-US is `inactive`;
+    //   C2 is `inactive`, but C2 × pl-PL is `active`.
     await insertProduct('p', { channels: [c1, c2] });
     await sql(
       `insert into product_channel_language_scopes (product_id, sales_channel_id, language_code, status, created_at, updated_at)
-       values (?, ?, 'en-US', 'draft', now(), now()), (?, ?, 'pl-PL', 'active', now(), now())`,
+       values (?, ?, 'en-US', 'inactive', now(), now()), (?, ?, 'pl-PL', 'active', now(), now())`,
       [ids['p'], c1.id, ids['p'], c2.id],
     );
     await sql(
       `insert into product_channel_scopes (product_id, sales_channel_id, status, created_at, updated_at)
-       values (?, ?, 'draft', now(), now())`,
+       values (?, ?, 'inactive', now(), now())`,
       [ids['p'], c2.id],
     );
     // Q — no scope rows: inherits `active` everywhere.
     await insertProduct('q', { channels: [c1, c2] });
-    // D — a `draft` member (FR-005); A — archived.
-    await insertProduct('d', { status: 'draft', channels: [c1, c2] });
+    // O — a member switched off by its global status (not archived); its PDP answer
+    // is Phase 9c's (T156s). A — archived.
+    await insertProduct('off', { status: 'inactive', channels: [c1, c2] });
     await insertProduct('a', { status: 'inactive', archived: true, channels: [c1, c2] });
     // S — names P as related; B — a bundle offering P.
     await insertProduct('s', { channels: [c1, c2] });
@@ -196,7 +198,7 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
       const listed = (res.json() as { data: Array<{ id: string }> }).data.map((p) => p.id);
       expect(listed.includes(ids['p']!), `P listed at ${channel.code}/${language}`).toBe(pOn(channel, language));
       expect(listed, `Q inherits at ${channel.code}/${language}`).toContain(ids['q']);
-      expect(listed, 'a draft member is never listed').not.toContain(ids['d']);
+      expect(listed, 'a member switched off is never listed').not.toContain(ids['off']);
       expect(listed, 'an archived product is never listed').not.toContain(ids['a']);
     }
   });
@@ -240,9 +242,7 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
     }
   });
 
-  it('a draft member answers 404 by slug (FR-005); an archived one 410', async () => {
-    const draft = await h.app.inject({ method: 'GET', url: `/api/v1/catalog/products/${slugs['d']}`, headers: headers(c1, 'pl-PL') });
-    expect(draft.statusCode).toBe(404);
+  it('an archived product answers 410 by slug where it would otherwise be on', async () => {
     const archived = await h.app.inject({ method: 'GET', url: `/api/v1/catalog/products/${slugs['a']}`, headers: headers(c1, 'pl-PL') });
     expect(archived.statusCode).toBe(410);
   });
@@ -257,7 +257,7 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
     await insertProduct('al', { status: 'inactive', archived: true, channels: [c1, c2] });
     await sql(
       `insert into product_channel_language_scopes (product_id, sales_channel_id, language_code, status, created_at, updated_at)
-       values (?, ?, 'en-US', 'draft', now(), now())`,
+       values (?, ?, 'en-US', 'inactive', now(), now())`,
       [ids['al'], c1.id],
     );
     try {
@@ -323,7 +323,7 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
       const hits = (res.json() as { data: Array<{ productId: string }> }).data.map((hit) => hit.productId);
       expect(hits.includes(ids['p']!), `quick search at ${channel.code}/${language}`).toBe(pOn(channel, language));
       expect(hits).toContain(ids['q']);
-      expect(hits).not.toContain(ids['d']);
+      expect(hits).not.toContain(ids['off']);
     }
   });
 
@@ -343,7 +343,7 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
   });
 
   it('keeps ADMIN reads unaffected (the admin session is not a buyer)', async () => {
-    const res = await h.app.inject({ method: 'GET', url: `/api/v1/admin/catalog/products/${ids['d']}`, cookies: ADMIN });
+    const res = await h.app.inject({ method: 'GET', url: `/api/v1/admin/catalog/products/${ids['off']}`, cookies: ADMIN });
     expect(res.statusCode).toBe(200);
   });
 });

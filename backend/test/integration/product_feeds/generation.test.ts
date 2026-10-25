@@ -21,7 +21,7 @@ import { FeedArtefact, FeedRun, ProductFeed } from '../../helpers/package-entiti
  *
  * Three things are proved here that no unit test can:
  *  - the **eligibility floor** is server-side and not expressible in a rule:
- *    draft, inactive, archived, non-public and other-channel products are
+ *    inactive, archived, non-public and other-channel products are
  *    absent no matter what the operator asked for (FR-026, Principle XII);
  *  - prices come from the named list when there is one, and from the anonymous
  *    channel resolution when there is not (FR-020);
@@ -41,7 +41,6 @@ describe('product feed generation [integration]', () => {
   let namedListId: string;
   let unboundListId: string;
 
-  const DRAFT_ID = '00000000-0000-4000-8000-0000000f0001';
   const INACTIVE_ID = '00000000-0000-4000-8000-0000000f0002';
   const ARCHIVED_ID = '00000000-0000-4000-8000-0000000f0003';
   const PRIVATE_ID = '00000000-0000-4000-8000-0000000f0004';
@@ -68,7 +67,6 @@ describe('product feed generation [integration]', () => {
 
     // --- Products that must never appear, whatever the selection rule says ---
     const ineligible = [
-      { id: DRAFT_ID, sku: 'FEED-DRAFT', slug: 'feed-draft', status: 'draft' as const },
       { id: INACTIVE_ID, sku: 'FEED-INACTIVE', slug: 'feed-inactive', status: 'inactive' as const },
       { id: ARCHIVED_ID, sku: 'FEED-ARCHIVED', slug: 'feed-archived', status: 'active' as const },
       { id: PRIVATE_ID, sku: 'FEED-PRIVATE', slug: 'feed-private', status: 'active' as const },
@@ -99,7 +97,7 @@ describe('product feed generation [integration]', () => {
     const conn = em.getConnection();
     // Everything except the VIP-only product belongs to the retail channel, so
     // "absent" cannot be explained away by missing membership.
-    for (const id of [DRAFT_ID, INACTIVE_ID, ARCHIVED_ID, PRIVATE_ID, ALLOWLISTED_ID]) {
+    for (const id of [INACTIVE_ID, ARCHIVED_ID, PRIVATE_ID, ALLOWLISTED_ID]) {
       await conn.execute(
         `insert into sales_channel_products (sales_channel_id, product_id) values (?,?)`,
         [retailChannelId, id],
@@ -209,7 +207,6 @@ describe('product feed generation [integration]', () => {
         expect(document).toContain(sku);
       }
       for (const sku of [
-        'FEED-DRAFT',
         'FEED-INACTIVE',
         'FEED-ARCHIVED',
         'FEED-PRIVATE',

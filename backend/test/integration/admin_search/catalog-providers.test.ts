@@ -42,7 +42,14 @@ describe('admin global search — Product and Category providers (spec 150)', ()
     });
     const product = async (
       key: string,
-      over: { sku: string; slug?: string; name?: Record<string, string>; status?: string; attributeValues?: Record<string, unknown> },
+      over: {
+        sku: string;
+        slug?: string;
+        name?: Record<string, string>;
+        status?: string;
+        archivedAt?: Date;
+        attributeValues?: Record<string, unknown>;
+      },
     ) => {
       const row = em.create(Product, {
         sku: over.sku,
@@ -53,6 +60,7 @@ describe('admin global search — Product and Category providers (spec 150)', ()
         description: { 'en-US': '' },
         visibility: 'public',
         attributeValues: over.attributeValues ?? {},
+        ...(over.archivedAt ? { archivedAt: over.archivedAt } : {}),
       } as never);
       await em.persistAndFlush(row);
       ids[key] = (row as { id: string }).id;
@@ -62,7 +70,8 @@ describe('admin global search — Product and Category providers (spec 150)', ()
     await product('slug', { sku: `S-${T}`, slug: `slug${T}-red` });
     await product('quickSearchAttributes', { sku: `F-${T}`, attributeValues: { [`gs_flag_${T}`]: `FLAG${T}` } });
     await product('plain', { sku: `P-${T}`, attributeValues: { [`gs_plain_${T}`]: `HIDDEN${T}` } });
-    await product('draft', { sku: `ST${T}-draft`, status: 'draft' });
+    // Feature 163 — `draft` is gone; an archived product is listed like any other.
+    await product('archived', { sku: `ST${T}-archived`, status: 'inactive', archivedAt: new Date() });
     await product('inactive', { sku: `ST${T}-inactive`, status: 'inactive' });
     await product('deleted', { sku: `ST${T}-deleted` });
     await em.nativeUpdate(Product, { id: ids['deleted']! }, { deletedAt: new Date() });
@@ -117,10 +126,10 @@ describe('admin global search — Product and Category providers (spec 150)', ()
     expect(pl?.targetRoute).toBe(`/catalog/products/${ids['name']}`);
   });
 
-  it('finds draft and inactive products with their status, never a deleted one (FR-016)', async () => {
+  it('finds inactive and archived products with their status, never a deleted one (FR-016)', async () => {
     const result = await searchAsPlatform(product(), providerQuery(`ST${T}`, ['sku'], { language: 'pl' }));
     const byId = new Map(result.hits.map((hit) => [hit.id, hit]));
-    expect(byId.get(ids['draft']!)?.status).toEqual({ code: 'draft', label: 'Roboczy' });
+    expect(byId.get(ids['archived']!)?.status).toEqual({ code: 'inactive', label: 'Nieaktywny' });
     expect(byId.get(ids['inactive']!)?.status).toEqual({ code: 'inactive', label: 'Nieaktywny' });
     expect(byId.has(ids['deleted']!)).toBe(false);
     expect(await productIds(ids['deleted']!, ['sku'])).toEqual([]);

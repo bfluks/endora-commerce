@@ -100,7 +100,7 @@ describe('bidirectional membership: every bridge (T043)', () => {
     await rawExec(
       `insert into "products" ("id","sku","slug","type","status","name","description","visibility",` +
         `"attribute_values","allowed_organization_ids","created_at","updated_at") values ` +
-        `(?, ?, ?, 'simple', 'draft', ?::jsonb, ?::jsonb, 'public', '{}'::jsonb, '[]'::jsonb, now(), now())`,
+        `(?, ?, ?, 'simple', 'inactive', ?::jsonb, ?::jsonb, 'public', '{}'::jsonb, '[]'::jsonb, now(), now())`,
       [id, `T043-${id.slice(0, 8)}`, slug, '{"en":"P"}', '{"en":"P"}'],
     );
     return id;
