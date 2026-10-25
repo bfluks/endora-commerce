@@ -67,7 +67,9 @@ import { ScopeOverviewService } from './services/scope-overview.service.js';
 import { AttributeScopePreviewService } from './services/attribute-scope-preview.js';
 import { ProductScopeContextService } from './services/product-scope-context.service.js';
 import { ProductValueResolverService } from './services/product-value-resolver.service.js';
-import { registerCatalogPublicRoutes } from './routes.public.js';
+import { readContext as readCatalogContext, registerCatalogPublicRoutes } from './routes.public.js';
+import { registerCatalogUrlKeyPublicRoutes } from './routes.public.url-keys.js';
+import { UrlKeyResolutionService } from './services/url-key-resolution.service.js';
 import { registerCatalogAdminRoutes } from './routes.admin.js';
 import { registerCatalogApiKeyRoutes } from './routes.api-key.js';
 import { registerCatalogExternalRoutes } from './routes.external.js';
@@ -411,6 +413,13 @@ export function catalogModule(options: CatalogModuleOptions) {
       // Feature 086 / FR-016 — the route's own refusal reads the page's display
       // mode off the same container the ordering comes from.
       ...(options.pricingService ? { listingPriceOrder: options.pricingService } : {}),
+    });
+    // Feature 163 (R12) — which product a storefront key names at (C, L). It asks
+    // the product page's own reachability decision, so a key never resolves to a
+    // product the page would refuse.
+    await registerCatalogUrlKeyPublicRoutes(app, {
+      resolutionService: new UrlKeyResolutionService(options.emFactory, queryService),
+      readContext: readCatalogContext,
     });
     const categoryAdminService = new CategoryAdminService(
       options.emFactory,
