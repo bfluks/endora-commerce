@@ -51,7 +51,7 @@ const clRow = (over: Partial<ProductChannelLanguageScopeRecord> = {}): ProductCh
   productId: P,
   channelId: CH,
   languageCode: 'de-DE',
-  status: 'draft',
+  status: 'inactive',
   ...over,
 });
 const available = (input: Partial<Parameters<typeof isProductEffectivelyAvailable>[0]> = {}): boolean =>
@@ -65,7 +65,7 @@ const available = (input: Partial<Parameters<typeof isProductEffectivelyAvailabl
     ...input,
   });
 
-const STATUSES: readonly ProductScopeStatus[] = ['draft', 'active', 'inactive'];
+const STATUSES: readonly ProductScopeStatus[] = ['active', 'inactive'];
 
 describe('163 QA — status precedence cl ?? c ?? global, every combination (US1)', () => {
   const grid: Array<[ProductScopeStatus, ProductScopeStatus | null, ProductScopeStatus | null]> = [];
@@ -82,14 +82,14 @@ describe('163 QA — status precedence cl ?? c ?? global, every combination (US1
     expect(available(input)).toBe(expected === 'active');
   });
 
-  it('draft at channel×language beats active at the channel and at global', () => {
-    expect(available({ channelRow: cRow({ status: 'active' }), clRow: clRow({ status: 'draft' }) })).toBe(false);
+  it('inactive at channel×language beats active at the channel and at global', () => {
+    expect(available({ channelRow: cRow({ status: 'active' }), clRow: clRow({ status: 'inactive' }) })).toBe(false);
     // ...and only for that language
     expect(
       available({
         languageCode: 'pl-PL',
         channelRow: cRow({ status: 'active' }),
-        clRow: clRow({ status: 'draft' }),
+        clRow: clRow({ status: 'inactive' }),
       }),
     ).toBe(true);
   });
@@ -114,7 +114,7 @@ describe('163 QA — a language the channel does not offer (FR-015)', () => {
 
   it('comes back unchanged when the channel offers it again (the override was never destroyed)', () => {
     const row = clRow({ languageCode: 'fr-FR', status: 'active' });
-    const base = { global: global({ status: 'draft' }), languageCode: 'fr-FR', clRow: row };
+    const base = { global: global({ status: 'inactive' }), languageCode: 'fr-FR', clRow: row };
     expect(available({ ...base })).toBe(false);
     expect(available({ ...base, channel: { ...channel, languages: ['pl-PL', 'de-DE', 'fr-FR'] } })).toBe(true);
   });
@@ -126,7 +126,7 @@ describe('163 QA — a product that leaves a channel keeps its overrides, unseen
     clRow: clRow({ status: 'active' }),
   };
   it('non-member is unavailable whatever the rows say; re-joining restores them', () => {
-    const base = { global: global({ status: 'draft' }), ...rows };
+    const base = { global: global({ status: 'inactive' }), ...rows };
     expect(available({ ...base, isMember: false })).toBe(false);
     expect(available({ ...base, isMember: true })).toBe(true);
   });
