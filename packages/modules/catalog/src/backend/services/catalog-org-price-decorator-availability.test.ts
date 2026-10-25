@@ -11,6 +11,8 @@ import { CatalogOrgPriceDecorator } from './catalog-org-price-decorator.js';
  * SKU answers (`sku_not_in_assortment`), and is never priced.
  */
 const CHANNEL = { id: 'channel-1', defaultCurrency: 'PLN' };
+/** As `productAudienceOf` answers for a key bound to `org-1`. */
+const AUDIENCE = { organizationId: 'org-1', authenticated: true };
 const ON = { id: 'p-on', sku: 'SKU-ON', status: 'active' };
 const OFF = { id: 'p-off', sku: 'SKU-OFF', status: 'active' };
 
@@ -40,7 +42,7 @@ describe('CatalogOrgPriceDecorator.resolveBulkPrices — scoped availability (16
         { sku: 'SKU-OFF', quantity: 1 },
         { sku: 'SKU-NONE', quantity: 1 },
       ],
-      { organizationId: 'org-1', salesChannel: CHANNEL },
+      { organizationId: 'org-1', salesChannel: CHANNEL, audience: AUDIENCE },
     );
 
     expect(out.map((line) => line.price === null ? line.reason : 'priced')).toEqual([
@@ -53,7 +55,7 @@ describe('CatalogOrgPriceDecorator.resolveBulkPrices — scoped availability (16
     expect(filterAvailable).toHaveBeenCalledWith([ON.id, OFF.id], {
       channelId: CHANNEL.id,
       languageCode: null,
-      audience: { organizationId: 'org-1', authenticated: true },
+      audience: AUDIENCE,
     });
   });
 });
