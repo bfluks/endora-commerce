@@ -355,7 +355,7 @@ export async function nonMemberOrganizationIds(
 
 // --- Row ↔ record ---------------------------------------------------------------
 
-function toChannelRecord(row: ProductChannelScope): ProductChannelScopeRecord {
+export function toChannelRecord(row: ProductChannelScope): ProductChannelScopeRecord {
   return {
     productId: row.productId,
     channelId: row.salesChannelId,
@@ -370,7 +370,7 @@ function toChannelRecord(row: ProductChannelScope): ProductChannelScopeRecord {
   };
 }
 
-function toLanguageRecord(row: ProductChannelLanguageScope): ProductChannelLanguageScopeRecord {
+export function toLanguageRecord(row: ProductChannelLanguageScope): ProductChannelLanguageScopeRecord {
   return {
     productId: row.productId,
     channelId: row.salesChannelId,
