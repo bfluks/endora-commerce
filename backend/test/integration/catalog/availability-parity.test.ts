@@ -159,9 +159,11 @@ function buildGrid(channel: ScopeChannel, otherChannelId: string): Fixture[] {
 
   // Status: G × C × C×L(pl-PL) — the C×L row sits on the default language, so
   // de-DE reads the channel/global value and pl-PL the language one.
-  const G: ProductScopeStatus[] = ['draft', 'active'];
-  const C: Array<ProductScopeStatus | null> = [null, 'draft', 'active', 'inactive'];
-  const CL: Array<ProductScopeStatus | null> = [null, 'draft', 'active', 'inactive'];
+  // Feature 163 (spec Session 2026-10-25) — two values; a global `inactive` is plain
+  // off and, without `archivedAt`, never "gone".
+  const G: ProductScopeStatus[] = ['inactive', 'active'];
+  const C: Array<ProductScopeStatus | null> = [null, 'active', 'inactive'];
+  const CL: Array<ProductScopeStatus | null> = [null, 'active', 'inactive'];
   for (const g of G) {
     for (const c of C) {
       for (const cl of CL) {
@@ -195,19 +197,19 @@ function buildGrid(channel: ScopeChannel, otherChannelId: string): Fixture[] {
   add({
     label: 'non-member with an active channel row (orphan)',
     isMember: false,
-    global: baseGlobal({ status: 'draft' }),
+    global: baseGlobal({ status: 'inactive' }),
     channelRow: channelRow('', channel.id, { status: 'active' }),
   });
   add({
     label: 'orphan C×L row on a language the channel does not offer',
     isMember: true,
-    global: baseGlobal({ status: 'draft' }),
+    global: baseGlobal({ status: 'inactive' }),
     clRows: [{ productId: '', channelId: channel.id, languageCode: 'fr-FR', status: 'active' }],
   });
   add({
     label: 'rows for another channel only',
     isMember: true,
-    global: baseGlobal({ status: 'draft' }),
+    global: baseGlobal({ status: 'inactive' }),
     channelRow: channelRow('', otherChannelId, { status: 'active' }),
   });
 

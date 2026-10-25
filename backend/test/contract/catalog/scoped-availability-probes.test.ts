@@ -24,7 +24,7 @@ import {
  * price display mode, the stock figure and both notify-when-available routes.
  *
  * Each of them answered about any product the global audience rule let through,
- * so a draft, a product outside its window or one sold on another channel had
+ * so a switched-off product, one outside its window or one sold on another channel had
  * its price, its existence and its stock disclosed by id. They now ask
  * `catalogProductAvailabilityPort` at the request's (channel, language) for the
  * caller, and every "no" is the route's own single not-found — the same body an
@@ -56,7 +56,7 @@ describe('163 — storefront probes by product id honour scoped availability [co
     unavailable['switched off in the channel'] = await create('OFF', channels);
     unavailable['outside its window'] = await create('ENDED', channels);
     unavailable['sold on no channel of the request'] = await create('ELSEWHERE', []);
-    await setChannelStatus(em, unavailable['switched off in the channel']!.id, channels, 'draft');
+    await setChannelStatus(em, unavailable['switched off in the channel']!.id, channels, 'inactive');
     await setGlobalWindow(em, unavailable['outside its window']!.id, {
       from: null,
       until: new Date(Date.now() - 60_000),

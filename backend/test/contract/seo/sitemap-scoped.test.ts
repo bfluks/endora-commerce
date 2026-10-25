@@ -59,8 +59,8 @@ describe('163 — the sitemap honours scoped availability [contract]', () => {
     channelOn = await create('ON');
     ended = await create('ENDED');
     plain = await create('PLAIN');
-    await setChannelStatus(em, channelOff.id, [channel.id], 'draft');
-    await em.getConnection().execute(`update products set status = 'draft' where id = ?`, [channelOn.id]);
+    await setChannelStatus(em, channelOff.id, [channel.id], 'inactive');
+    await em.getConnection().execute(`update products set status = 'inactive' where id = ?`, [channelOn.id]);
     await setChannelStatus(em, channelOn.id, [channel.id], 'active');
     await setGlobalWindow(em, ended.id, { from: null, until: new Date(Date.now() - 1000) });
   });

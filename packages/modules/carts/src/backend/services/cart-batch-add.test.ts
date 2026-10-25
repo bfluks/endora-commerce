@@ -46,7 +46,7 @@ const B = 'prod-b'; // no minimum
 const C = 'prod-c'; // pieces minimum 10, Pallet of 64 with a minimum of 2 units
 const H = 'prod-h'; // minimum 10, restricted to another organisation — hidden
 const Q = 'prod-q'; // quote-only
-const D = 'prod-d'; // a draft member — feature 163: not acquirable
+const D = 'prod-d'; // a member switched off — feature 163: not acquirable
 const UNKNOWN = 'prod-unknown';
 const PALLET = 'unit-pallet';
 const RED = 'var-red';
@@ -75,7 +75,7 @@ const PRODUCTS = new Map<string, CatalogProductRecord>([
   [C, product(C, { minOrderQuantity: 10, name: { en: 'Cement', pl: 'Cement PL' } })],
   [H, product(H, { minOrderQuantity: 10, allowedOrganizationIds: ['org-other'] })],
   [Q, product(Q)],
-  [D, product(D, { status: 'draft' })],
+  [D, product(D, { status: 'inactive' })],
 ]);
 
 const UNITS: CatalogPackagingUnitRecord[] = [

@@ -154,7 +154,7 @@ describe('membership: clearing every channel of an entity', () => {
         sku: 'CLEAR-PRODUCT',
         slug: 'clear-product',
         type: 'simple',
-        status: 'draft',
+        status: 'inactive',
         name: { en: 'Clear product' },
         description: { en: 'fixture' },
         visibility: 'public',

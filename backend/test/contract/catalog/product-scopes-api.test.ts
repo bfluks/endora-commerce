@@ -22,7 +22,8 @@ import { seedOrganization } from '../../helpers/admin-search-fixtures.js';
  * - `product.updated.v1` after commit with `changedFields` `scopedStatus`,
  *   `publicationWindow`, `audience`, `orderRules` (FR-082);
  * - the FR-014 refusals and the FR-015 exception, with nothing written;
- * - the global `inactive` still archives once, a scope `inactive` never does (FR-010);
+ * - neither a scope `inactive` nor the global one archives (FR-010; spec Session
+ *   2026-10-25 — archiving is the separate Archive action, T156j);
  * - a soft-deleted product keeps its scope rows (edge case, T028).
  *
  * Every channel this file uses is its own, created with a per-run code and deleted
@@ -200,7 +201,7 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
       const productId = await createProduct();
       const get = await h.app.inject({ method: 'GET', url: url(productId), ...reader });
       expect(get.statusCode).toBe(200);
-      const write = await patch(productId, { channels: [{ channelId: b2b, status: 'draft' }] }, reader);
+      const write = await patch(productId, { channels: [{ channelId: b2b, status: 'inactive' }] }, reader);
       expect(write.statusCode).toBe(403);
       expect(await scopeRowCounts(productId)).toEqual({ channel: 0, language: 0 });
     });
@@ -261,7 +262,7 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
         channels: [
           {
             channelId: b2b,
-            status: 'draft',
+            status: 'inactive',
             window: { from: '2026-12-01T00:00:00.000Z', until: null },
             audience: { visibility: 'organization_restricted', allowedOrganizationIds: [ORG_X] },
             minOrderQuantity: 5,
@@ -275,7 +276,7 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
       const body = res.json() as PatchProductScopesResponse;
       const row = body.data.channels.find((c) => c.channelId === b2b)!;
       expect(row).toMatchObject({
-        status: 'draft',
+        status: 'inactive',
         window: { from: '2026-12-01T00:00:00.000Z', until: null },
         audience: { visibility: 'organization_restricted', allowedOrganizationIds: [ORG_X], nonMemberOrganizationIds: [ORG_X] },
         minOrderQuantity: 5,
@@ -304,7 +305,7 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
         channels: [
           {
             channelId: b2b,
-            status: 'draft',
+            status: 'inactive',
             window: { from: '2026-12-01T00:00:00.000Z', until: null },
             audience: { visibility: 'organization_restricted', allowedOrganizationIds: [ORG_X] },
             minOrderQuantity: 5,
@@ -319,7 +320,7 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
 
     it('re-sending the audit before-state restores the previous state exactly (R29, Q-D → A)', async () => {
       const productId = await createProduct();
-      const first = await patch(productId, { channels: [{ channelId: b2b, status: 'draft', returnable: false }] });
+      const first = await patch(productId, { channels: [{ channelId: b2b, status: 'inactive', returnable: false }] });
       expect(first.statusCode).toBe(200);
       const snapshot = (await h.app.inject({ method: 'GET', url: url(productId), ...admin })).json() as ProductScopesResponse;
 
@@ -341,7 +342,7 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
 
     it('"use inherited" on the last override deletes the row (FR-012)', async () => {
       const productId = await createProduct();
-      await patch(productId, { channels: [{ channelId: b2b, status: 'draft', languageStatuses: [{ languageCode: 'de-DE', status: 'draft' }] }] });
+      await patch(productId, { channels: [{ channelId: b2b, status: 'inactive', languageStatuses: [{ languageCode: 'de-DE', status: 'inactive' }] }] });
       expect(await scopeRowCounts(productId)).toEqual({ channel: 1, language: 1 });
       const res = await patch(productId, {
         channels: [{ channelId: b2b, status: null, languageStatuses: [{ languageCode: 'de-DE', status: null }] }],
@@ -352,9 +353,9 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
 
     it('a request that changes nothing writes no audit row and emits no event', async () => {
       const productId = await createProduct();
-      await patch(productId, { channels: [{ channelId: b2b, status: 'draft' }] });
+      await patch(productId, { channels: [{ channelId: b2b, status: 'inactive' }] });
       const events = captureUpdates(productId);
-      const res = await patch(productId, { channels: [{ channelId: b2b, status: 'draft' }] });
+      const res = await patch(productId, { channels: [{ channelId: b2b, status: 'inactive' }] });
       events.stop();
       expect(res.statusCode).toBe(200);
       expect(await auditRows(productId)).toHaveLength(1);
@@ -412,7 +413,7 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
       const productId = await createProduct();
       const res = await patch(productId, {
         channels: [
-          { channelId: b2b, status: 'draft' },
+          { channelId: b2b, status: 'inactive' },
           { channelId: notMember, status: 'active' },
         ],
       });
@@ -452,13 +453,13 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
 
     it('removing an orphaned override is always allowed (FR-015)', async () => {
       const productId = await createProduct();
-      await patch(productId, { channels: [{ channelId: b2c, status: 'draft' }] });
+      await patch(productId, { channels: [{ channelId: b2c, status: 'inactive' }] });
       await h
         .em()
         .getConnection()
         .execute(`delete from sales_channel_products where sales_channel_id = ? and product_id = ?`, [b2c, productId]);
       const read = (await h.app.inject({ method: 'GET', url: url(productId), ...admin })).json() as ProductScopesResponse;
-      expect(read.data.channels.find((c) => c.channelId === b2c)).toMatchObject({ isMember: false, orphaned: true, status: 'draft' });
+      expect(read.data.channels.find((c) => c.channelId === b2c)).toMatchObject({ isMember: false, orphaned: true, status: 'inactive' });
 
       const refused = await patch(productId, { channels: [{ channelId: b2c, status: 'active' }] });
       expect(refused.statusCode).toBe(422);
@@ -469,7 +470,7 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
   });
 
   describe('status semantics (FR-010)', () => {
-    it('a scope inactive never archives; the global inactive still archives once', async () => {
+    it('a scope inactive never archives, and neither does the global inactive', async () => {
       const productId = await createProduct();
       const archived: string[] = [];
       const off = h.eventBus.on('product.archived.v1', (payload) => {
@@ -495,7 +496,12 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
       });
       expect(global.statusCode).toBe(200);
       off();
-      expect(archived).toHaveLength(1);
+      expect(archived).toHaveLength(0);
+      const [after] = await h
+        .em()
+        .getConnection()
+        .execute<Array<{ status: string; archived_at: Date | null }>>(`select status, archived_at from products where id = ?`, [productId]);
+      expect(after).toEqual({ status: 'inactive', archived_at: null });
     });
   });
 
@@ -503,7 +509,7 @@ describe('Product scopes — GET|PATCH /admin/catalog/products/:id/scopes (spec 
     it('a soft-deleted product keeps its scope rows', async () => {
       const productId = await createProduct();
       await patch(productId, {
-        channels: [{ channelId: b2b, status: 'draft', languageStatuses: [{ languageCode: 'de-DE', status: 'active' }] }],
+        channels: [{ channelId: b2b, status: 'inactive', languageStatuses: [{ languageCode: 'de-DE', status: 'active' }] }],
       });
       const del = await h.app.inject({ method: 'DELETE', url: `/api/v1/admin/catalog/products/${productId}`, ...admin });
       expect(del.statusCode).toBe(204);
