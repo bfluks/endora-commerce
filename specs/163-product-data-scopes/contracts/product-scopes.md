@@ -7,8 +7,8 @@ All shapes land in `packages/contracts/src/product-scopes.ts` (new file, exporte
 
 Since the owner's Q1 decision (spec Session 2026-10-25) the value set is `active` | `inactive` at every
 scope, and `productStatusSchema` (`packages/contracts/src/catalog.ts`) narrows to the same set — a breaking
-change shipped with a major changeset (spec *Compatibility and release*; recorded at `minor` with a breaking
-body, because D-225 refuses `major` while a package is in `0.x` — research R30.6). The legacy `archived` write alias
+change shipped as a changeset marked BREAKING at bump level `minor` (spec *Compatibility and release*; D-225
+refuses `major` while a package is in `0.x` — research R30.6). The legacy `archived` write alias
 (`coerceProductStatusWrite`, `productStatusWriteSchema`'s preprocess) is removed too: `archived` is refused
 like `draft` (owner O-1, 2026-10-25). `inactive` is plain off everywhere;
 `archivedAt` is set only by the Archive Command (FR-019) and is independent of `status`.
