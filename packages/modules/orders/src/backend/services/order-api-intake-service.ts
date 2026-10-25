@@ -6,6 +6,7 @@ import {
   type AddressServicePort,
   type ApiPlaceOrderRequest,
   type CartWritePort,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
   type LinePricePort,
@@ -15,7 +16,6 @@ import {
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import { Order } from '../entities/order.entity.js';
 import { OrderPlacementIntent } from '../entities/order-placement-intent.entity.js';
@@ -54,11 +54,14 @@ export interface OrderApiIntakeDeps {
   /** `organizations`' row, for the pricing context of the price probe. */
   organizationDetails: OrganizationDetailsPort;
   /**
-   * Sanctioned bridge accessor (feature 052 pattern) — the bound channel's
-   * published assortment gate. Absent (legacy rigs) ⇒ fail closed: every SKU
-   * is out of assortment.
+   * Feature 163 (owner decision W5 = A) — `catalog`'s availability answer at
+   * the key's channel (its default language) for the bound Organization:
+   * membership of the channel (the sanctioned bridge accessor, inside it),
+   * effective status, publication window and the channel's audience rule. It
+   * replaces the membership-only gate. Required: an absent gate would be an
+   * intake that answers without one.
    */
-  salesChannelMembership?: SalesChannelMembershipPort | undefined;
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
   /**
    * The SAME resolver cart pricing uses.
    *
@@ -198,21 +201,27 @@ export class OrderApiIntakeService {
       paymentMethodId: body.paymentMethodId,
     });
 
-    // Step 4 — SKU → product + bound-channel assortment + resolvable price.
-    // Refusals are whole-order 422 with per-line issues; nothing persists.
+    // Step 4 — SKU → product + availability at the bound channel + resolvable
+    // price. Refusals are whole-order 422 with per-line issues; nothing persists.
     const skus = Array.from(new Set(body.lines.map((l) => l.sku)));
-    const products = await this.deps.catalogProductRead.findBySkus(skus, {
-      liveOnly: true,
-      activeOnly: true,
-    });
+    const products = await this.deps.catalogProductRead.findBySkus(skus, { liveOnly: true });
     const productBySku = new Map(products.map((p) => [p.sku, p]));
-    const inChannel = new Set<string>();
-    for (const product of products) {
-      const channels = this.deps.salesChannelMembership
-        ? await this.deps.salesChannelMembership.listChannelsForEntity('product', product.id)
-        : [];
-      if (channels.some((c) => c.id === binding.salesChannelId)) inChannel.add(product.id);
-    }
+    // Feature 163 (W5 = A) — one batched question for every resolved SKU: is
+    // the product available at the key's channel, in its default language (an
+    // API order carries no storefront language), to the bound Organization,
+    // now. Its status is the effective one, so the global `active` filter the
+    // SKU read used to apply is the rule's to decide.
+    const inChannel =
+      products.length === 0
+        ? new Set<string>()
+        : await this.deps.catalogAvailability.filterAvailable(
+            products.map((p) => p.id),
+            {
+              channelId: binding.salesChannelId,
+              languageCode: null,
+              audience: { organizationId: binding.organizationId, authenticated: true },
+            },
+          );
 
     const issues: Array<{ path: string; issue: string; sku: string }> = [];
     const resolvedLines: Array<{ productId: string; quantity: number }> = [];
@@ -233,7 +242,8 @@ export class OrderApiIntakeService {
     for (const [index, line] of body.lines.entries()) {
       const product = assorted.get(index);
       if (!product) {
-        // Unknown / inactive / unpublished are indistinguishable — no leak.
+        // Unknown / unavailable at the channel (switched off, outside its
+        // window or audience, not published there) are indistinguishable — no leak.
         issues.push({
           path: `lines.${index}.sku`,
           issue: ERROR_CODES.SKU_NOT_IN_ASSORTMENT,

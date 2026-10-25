@@ -166,9 +166,9 @@ describe('OrderApiIntakeService — inline-address cleanup', () => {
       organizationDetails: {
         findById: async () => null,
       } as never,
-      salesChannelMembership: {
-        listChannelsForEntity: async () => [{ id: CHANNEL_ID }],
-      } as never,
+      catalogAvailability: {
+        filterAvailable: async (ids: readonly string[]) => new Set(ids),
+      },
       // Feature 160 — the intake prices its lines in one batched resolution.
       pricingService: {
         resolveLinePrices: async (input: { lines: Array<{ key: string }> }) =>

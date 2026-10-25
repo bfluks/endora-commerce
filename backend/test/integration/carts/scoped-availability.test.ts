@@ -73,7 +73,17 @@ describe('163 — basket acquisition seams honour scoped availability [integrati
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/cart', cookies: CUSTOMER });
     expect(res.statusCode, res.body).toBe(200);
     return (res.json() as {
-      data: { items: Array<{ id: string; productId: string; unavailable: boolean; unavailableReason: string | null }> };
+      data: {
+        items: Array<{
+          id: string;
+          productId: string;
+          unavailable: boolean;
+          unavailableReason: string | null;
+          productName: string | null;
+          productSlug: string | null;
+          productSku: string | null;
+        }>;
+      };
     }).data.items;
   };
 
@@ -143,6 +153,7 @@ describe('163 — basket acquisition seams honour scoped availability [integrati
     expect((await add(on.id)).statusCode).toBeLessThan(300);
     const [line] = await view();
     expect(line?.unavailable).toBe(false);
+    expect(line?.productSlug).toBe(on.sku.toLowerCase());
 
     await setChannelStatus(h.em(), on.id, channels, 'inactive');
 
@@ -150,6 +161,11 @@ describe('163 — basket acquisition seams honour scoped availability [integrati
     expect(stale?.productId).toBe(on.id);
     expect(stale?.unavailable).toBe(true);
     expect(stale?.unavailableReason).toBe('not_purchasable');
+    // Owner decision S1 = A — the line keeps its name and SKU, so the buyer can
+    // tell which line it is, and loses its link: the product page answers 404 here.
+    expect(stale?.productName).toBeTruthy();
+    expect(stale?.productSku).toBe(on.sku);
+    expect(stale?.productSlug).toBeNull();
 
     const res = await place();
     expect(res.statusCode, res.body).toBe(404);
