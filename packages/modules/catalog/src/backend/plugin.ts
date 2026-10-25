@@ -8,6 +8,7 @@ import {
   type AssetReadPort,
   type SearchQueryPort,
   type AdminUserReadPort,
+  type CatalogProductAvailabilityPort,
   type EmailMailerPort,
   type LanguageReadPort,
   type ListingPriceOrderPort,
@@ -158,6 +159,12 @@ export interface CatalogModuleOptions {
    * pre-feature-005 fixtures.
    */
   salesChannelMembership?: SalesChannelMembershipPort;
+  /**
+   * Feature 163 — this module's own `catalogProductAvailabilityPort` (the
+   * registered instance), for the external bulk-price probe (W5 = A). The
+   * external namespace is not mounted without it.
+   */
+  productAvailability?: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
   /**
    * Issue #185 — `inventory`'s per-warehouse threshold copy, used by product
    * duplication. Contributed as a presence-decided closure rather than resolved
@@ -450,13 +457,15 @@ export function catalogModule(options: CatalogModuleOptions) {
       // Issue #185 — the assortment check goes through the channel-membership
       // accessor, so the namespace is not mounted without it rather than
       // falling back to a hand-written bridge read.
-      options.salesChannelMembership
+      options.salesChannelMembership &&
+      // Feature 163 (W5 = A) — the bulk-price probe asks availability.
+      options.productAvailability
     ) {
       const decorator = new CatalogOrgPriceDecorator({
         emFactory: options.emFactory,
         pricingService: options.pricingService,
         organizations: options.organizations,
-        channelMembership: options.salesChannelMembership,
+        availability: options.productAvailability,
         ...(options.resolveExternalAvailability
           ? { resolveAvailability: options.resolveExternalAvailability }
           : {}),

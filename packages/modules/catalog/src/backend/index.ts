@@ -597,6 +597,12 @@ export function registerModule(ctx: ModuleContext): void {
               ctx,
               'salesChannelMembershipPort',
             ),
+            // Feature 163 (W5 = A) — the registered availability port, for the
+            // external bulk-price probe.
+            productAvailability: lazyPort<CatalogProductAvailabilityPort>(
+              ctx,
+              'catalogProductAvailabilityPort',
+            ),
             // Feature 075 — the *read* port rather than the whole admin service.
             // The two consumers in this module ask two questions between them,
             // `listActive` and `getDefault`, which is what `languageReadPort`

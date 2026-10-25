@@ -673,7 +673,7 @@ export function commerceModule(options: OrdersModuleOptions) {
         addressService: options.addressService,
         catalogProductRead: options.catalogProductRead,
         organizationDetails: options.organizationDetails,
-        salesChannelMembership: options.salesChannelMembership,
+        catalogAvailability: options.catalogProductAvailability,
         pricingService: options.pricingService,
         redis: options.redis,
         auditLogService: options.auditLogService,

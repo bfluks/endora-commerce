@@ -147,7 +147,15 @@ export const cartViewLineSchema = z.object({
   productId: uuidSchema,
   variantId: uuidSchema.nullable(),
   productName: z.string(),
-  productSlug: z.string().optional(),
+  /**
+   * Feature 163 (owner decision S1 = A) — `null` when the product is not
+   * available at the basket's (channel, language): the line keeps its name and
+   * SKU and reads `unavailable`, and links nowhere, because the product page
+   * answers 404 there.
+   */
+  productSlug: z.string().nullable().optional(),
+  /** The product's SKU, kept on an unavailable line too. */
+  productSku: z.string().nullable().optional(),
   productThumbnailUrl: z.string().nullable(),
   quantity: z.number().int().positive(),
   unitPrice: moneySchema,
