@@ -1,11 +1,11 @@
 # Tasks: product data scopes per sales channel and language
 
 **Feature**: `specs/163-product-data-scopes/` | **Issues**: #385, depends on #384
-**Input**: `spec.md` (clarify rounds 1–4), `plan.md`, `research.md` (R0–R29), `data-model.md`,
+**Input**: `spec.md` (clarify rounds 1–4, Session 2026-10-25), `plan.md`, `research.md` (R0–R30), `data-model.md`,
 `contracts/{product-scopes,admin-scopes-api,url-keys-and-redirects,consumers,seo-media-attachments,error-codes}.md`,
 `quickstart.md`. Measured on `origin/master` `aa6891d63`; Block B onwards runs on `6f66ea18e` (#384 merged).
 
-**Organisation**: 25 phases, each ≤ 10 tasks and sized for part of one builder spawn, grouped into **7
+**Organisation**: 25 phases plus Block Q's 9a, 9b, 9c and 15a (owner Q1, 2026-10-25), each ≤ 10 tasks and sized for part of one builder spawn, grouped into **7
 blocks of ≤ 4 phases** (one builder spawn each), with a **review checkpoint after every backend block and
 every UI block**. Tests are mandatory (Principle III): inside every phase each `RED` task precedes the task
 that makes it pass — run it and see it fail first. Task ids are stable: a task added later takes a letter
@@ -91,16 +91,18 @@ cherry-picked — S1 regenerates them on its tip and commits the result.
 | — | **Review checkpoint A** (code review + security review, parallel) | | | |
 | B | 5–8 | S1 | backend | ⛔384 merged, branch rebased |
 | — | **Review checkpoint B** | | | |
-| C | 9–12 | S1 | backend | Block B, **and P16 applied on S1** (T069 reads `product_url_keys`); P12 also after P18 is applied (`catalog-query.service.ts` sequence) |
+| Q | 9a–9b | S1 | backend | after P9 (done 2026-10-25); **P10 and P11 wait for it** (T073–T080 build on the two-value set, the rewritten global status path and `revertibleFieldKeys`) |
+| — | **Review checkpoint Q** (code review + security review, parallel) | | | |
+| C | 9–12, 9c | S1 | backend | Block B, **and P16 applied on S1** (T069 reads `product_url_keys`); P10–P11 after **Block Q (9a–9b)**; 9c and P12 after P18 is applied (`catalog-query.service.ts` sequence; 9c first) |
 | — | **Review checkpoint C** | | | |
-| D | 13–15 | S3 | admin UI | P13 after Block A; P14 after P9 (T093 needs T070, T095a–b need T071); P15 after P10–P11 |
-| — | **Review checkpoint D** (code review + designer UX audit) | | | |
+| D | 13–15, 15a | S3 | admin UI | P13 after Block A; P14 after P9 (T093 needs T070, T095a–b need T071); **15a after Block Q (9a–9b) is applied on S3's base**; P15 after P10–P11 **and 15a** (both edit `ProductsBulkEditDialog.tsx`) |
+| — | **Review checkpoint D** (code review + designer UX audit; covers 15a as checkpoint Q-UI) | | | |
 | E | 16–19 | S2 | backend + storefront | P16 after Block A; P17–P19 after **Block B complete** (⛔384; P8 and P17 both edit `catalog-query.service.ts`, P7 and P17 both edit `sitemap-generator.service.ts`) |
 | — | **Review checkpoint E** | | | |
 | F | 20–23 | S3 (20, 23), S1 (21, 22) | mixed | P21–P22 after Block B **and P18 applied on S1** (P21 hosts the SEO overview tasks T118a/T118c, and `catalog-query.service.ts` runs in sequence); P20 after P17–P18; P23 after P21–P22 |
 | — | **Review checkpoint F** (backend: 21–22; UI: 20, 23 with designer) | | | |
 | G | 24–25 | S1 | cross-cutting | every block merged |
-| — | **Final review pack** + green remote CI; coordinator re-asks Q1 (T156) | | | |
+| — | **Final review pack** + green remote CI (Q1 answered 2026-10-25 — T156; its work is Block Q) | | | |
 
 ## Dependency chain
 
@@ -111,7 +113,10 @@ P1 ─► P2 (contracts, codes) ─► P3 (schema) ─► P4 (scope writes, even
 ⛔384 ─► P5 (availability SQL, port, catalog reads) ─► P6 (acquisition seams) ─► P7 (search, sitemap, feeds, sweep) ─► P8 (effective names, perf)
 P8 (Block B done) ─► P17 (key resolution, storefront redirect) ─► P18 (SEO C×L) ─► P19 (connectors, import)   [S2]
 P8, P16 ─► P9 (overview, FR-090) ─► P14 (overview UI)                                           [S3]
-P8 ─► P10 (bulk) ─► P11 (gate; T080a fills the overview's `missing`) ─► P15 (bulk + gate UI)   [S3]
+P9 ─► P9a (status values, migration, Archive/Restore, list) ─► P9b (bulk archive, consumers, docs, release)   [Block Q]
+P9b ─► P15a (status + archive UI)                                                                [S3]
+P9b ─► P10 (bulk) ─► P11 (gate; T080a fills the overview's `missing`) ─► P15 (bulk + gate UI; after P15a)   [S3]
+P17, P18 ─► P9c (410 for archived only) ─► P12
 P8 ─► P12 (order rules per channel)
 P8 ─► P21 (media) ─► P22 (attachments, packaging) ─► P23 (media UI)                             [S3]
 P17, P18 ─► P20 (URL-key + SEO UI)
@@ -120,7 +125,8 @@ P9 ─► P14 (attribute scope-flag preview UI: T095a/T095b)
 all ─► P24 (off-state, parity, docs, changesets) ─► P25 (final gate)
 ```
 
-`catalog-query.service.ts` is edited by P5, P8, P12, P17, P18, P21, P22: those phases run **in sequence**.
+`catalog-query.service.ts` is edited by P5, P8, P9c, P12, P17, P18, P21, P22: those phases run **in sequence**
+(Block Q keeps its one edit of that file — the 410 condition — in 9c for this reason; 9a–9b do not touch it).
 S2 starts P17 only after Block B is merged and rebases onto S1's tip first; while P17–P18 run, S1's P12,
 P21 and P22 wait (S1 works on P9–P11 meanwhile, which do not touch that file).
 
@@ -158,6 +164,7 @@ consumer still compiles.
   - `product-scopes-shapes.test.ts` + `product-url-keys.test.ts`; RED then green. The T026 `updateProductRequestSchema` window test lands with T026 (Phase 4).
 - [x] T008 [S1] Implement `product-scopes.ts` per `contracts/product-scopes.md` §1–§3 and `admin-scopes-api.md` (shapes — one `scopeMissingValueSchema` used by `ScopeWarning`, `SCOPE_INCOMPLETE` details and `scopeOverviewResponseSchema.cells[].missing`; `pairsTurningOn` compares effective status only, M3 → A), incl. `CatalogProductAvailabilityPort`, `CatalogProductScopeWritePort` types — `packages/contracts/src/product-scopes.ts`
   - Deviation (import cycle): `PRODUCT_SCOPE_STATUSES = productStatusSchema.options` and catalog.ts's bulk enum spreads `productStatusSchema.options` — `product-scopes.ts` imports `catalog.ts` (for `isProductVisibleTo`), so catalog.ts must not import back; still one list. `pairsTurningOn` treats a deleted/archived global as off (archive = global `inactive`), so un-archiving gates the pairs an active override already covered. `ScopeSnapshot = { global, channelRows, languageRows }`.
+  - *Q1 (2026-10-25)*: the value set is now `active | inactive` (one list still, `productStatusSchema.options`), and `pairsTurningOn` compares effective **status** only — archiving is not an input (FR-060, research R3). Superseded by T156a / T156e.
 - [x] T009 [S1] Create `product-url-keys.ts` with the shapes of `contracts/url-keys-and-redirects.md` §1–§5, `CatalogProductUrlKeyReadPort` and the pure `productPath()` helper — the **only** place a product URL is composed; storefront, `seo`'s sitemap and catalog's admin/resolve answers import it, so the owner's later language-path-prefix issue edits this function alone (S2 owns the file from Phase 16 on) — `packages/contracts/src/product-url-keys.ts`
   - `productSlugSchema` defined here (none existed): kebab-case, 1–160. `productPath` compares L to the default exactly.
 - [x] T010 [S1] Additive edits: bulk `scopedStatus` + reasons `scope_invalid`, `completeness_gate` (`catalog.ts:791`, `:817`); `CatalogProductRecord.publishFrom?/publishUntil?` (optional, permanently — fixtures build record literals); `SeoProductMetaPort` in `seo.ts`; barrel exports — `packages/contracts/src/{catalog,seo,index}.ts`
@@ -166,6 +173,7 @@ consumer still compiles.
   - One commit; composer/manifests generators moved no artefact (no module-reference change). `check:error-translations` violations=0.
 - [x] T012 [S1] Changeset: `@endora-commerce/contracts` `minor` (new exports `product-scopes`, `product-url-keys`, `SeoProductMetaPort`) — `.changeset/163-product-scopes-contracts.md`
   - Plus `.changeset/163-catalog-product-scopes.md` (`mod-catalog` minor) because the catalog manifest and bundles changed; extended by later phases. `check:release-intent --since origin/master` violations=0.
+  - *Q1 (2026-10-25)*: narrowing `productStatusSchema` and removing `coerceProductStatusWrite` / `productStatusWriteSchema` is **breaking**. That changeset is T156q, written as breaking at bump level `minor` — D-225 refuses `major` while a package is in `0.x`, so the spec's "major" cannot be recorded literally (research R30.6). This file's own `minor` is unchanged.
 - [x] T013 [S1] Build contracts; type-check consumers by name
   - contracts build + typecheck + lint clean; `mod-catalog` typecheck (backend + UI tsconfig) clean.
 
@@ -211,6 +219,7 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
   - RED (module missing) then green: 25 tests over the pure `planProductScopeWrite` (the decision core `apply` runs inside its Command) and `nonMemberOrganizationIds`. Also refuses a duplicated channel (`VALIDATION_FAILED`, field `channels`) and a channel MOQ on a type that takes none (the 155 rule).
 - [x] T022 [P] [US1] [PG] [S1] RED contract test of both routes: `catalog:read` / `catalog:write` gates (401/403 before validation), one audit row per request whose before/after hold the complete projection of every touched scope row — re-sending `before` through the route restores the previous state exactly (FR-080, FR-081; R29, owner Q-D → A — no undo endpoint is asserted because none exists), `product.updated.v1` with `changedFields` `scopedStatus` / `publicationWindow` / `audience` / `orderRules` after commit (FR-082), global status `inactive` still archives once and a scope `inactive` never does (FR-010) — `backend/test/contract/catalog/product-scopes-api.test.ts`
   - Written; [PG] — unrun locally, typechecks. Adds stub sessions `stub-product-scopes-{reader,no-catalog}-session` to `test/helpers/test-actors.ts`; uses its own channels (per-run codes, deleted in `afterAll`). Includes T026 and T028 cases.
+  - *Q1 (2026-10-25)*: the assertion "global status `inactive` still archives once" flips — a status write at any scope, global included, never archives; archiving is the Archive Command (FR-010, FR-019). Updated in T156j; Archive / Restore are tested in T156c.
 - [x] T023 [US1] [S1] Implement `ProductScopesService` (Command `product.scopes.update`, `objectType: 'product'`, membership via `SalesChannelMembershipPort.listChannelIdsForEntity`, channel languages from `SalesChannel`) — `packages/modules/catalog/src/backend/services/product-scopes.service.ts`
   - Audit `before`/`after` use the PATCH body's shape (only the touched rows, every field explicit); a no-op request is `skipAudit` with no event. Membership via `listChannelsForEntity` (returns the languages too); non-member organizations via `filterEntityIdsAvailableInChannel(…, 'organization', …)`.
 - [x] T024 [US1] [S1] Routes `GET|PATCH /api/v1/admin/catalog/products/:id/scopes` (`requireAdmin` as `preHandler`) — `packages/modules/catalog/src/backend/routes.admin.ts`
@@ -249,6 +258,7 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
   - Written; [PG] — unrun locally, typechecks. Grid: status G×C×C×L(pl) (32) + archived/deleted/non-member/orphan-language/other-channel rows; 6 windows × (global, channel override over a bounded global); 6 audience rules × (global, channel override); 4 buyers × {pl-PL, de-DE, fr-FR (not offered)}. Holds `filterAvailable` (SQL) **and** `availableAmong` (page-side) to the rule; plus the non-array allow-list edge and unknown channel.
 - [x] T031 [P] [US1] [PG] [S1] RED matrix test (Independent Test of US1): one product, two channels × two languages, overrides at C and C×L → listing, facets, PDP, **quick search** (`GET …/products/quick-search`), **links/related** of a visible product naming the off one, and **bundle configuration** with an off child, per pair; "use inherited"; a `draft` member answers 404 by slug (FR-005); archived answers 410; unresolved channel matches nothing (FR-007) — `backend/test/contract/catalog/scoped-availability-matrix.test.ts`
   - Written; [PG] — unrun locally. Listing, facets (unique per-run value on a seeded filterable attribute), PDP (unavailable body == absent body), draft 404 / archived 410, links, bundle validate (`UNKNOWN_OPTION`), quick search (`/api/v1/quick-order/search`), unknown channel code. The search-off variant is T146 (Phase 24).
+  - *Q1 (2026-10-25)*: a `draft` member cannot exist after the migration (`CHECK`, T156f), so the "draft 404 by slug" case is removed in T156j and replaced in Phase 9c (T156s) by "a non-archived `inactive` member answers 404 at every scope, an archived one 410 only where it would be available with global `active`" (FR-005, O-3).
 - [x] T032 [US1] [S1] `availabilityCondition` as a description (no `raw()` here) per `contracts/product-scopes.md` §4 — `packages/modules/catalog/src/backend/services/product-availability.sql.ts`
   - `availabilityCondition` = one correlated `exists` (keyed left joins of `c`/`cl` on `products ap`) + the kernel membership subquery; L ∉ channel languages is decided in TS (`false`). `audienceCaseSql` is the only audience SQL left in the listing (the old `#audienceCondition` removed). Unit test `product-availability.sql.test.ts` pins placeholder/param order.
 - [x] T033 [US1] [S1] `ProductAvailabilityService` implementing `CatalogProductAvailabilityPort` (`filterAvailable`, `describeChannelAvailability`, `effectiveNames` stub → filled in P8, `effectiveOrderRules`); `providePort('catalogProductAvailabilityPort', …)` — `services/product-availability.service.ts`, `src/backend/index.ts`
@@ -263,6 +273,7 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
   - Links: `listForStorefront` drops its `status: 'active'` + membership for `availableAmong` (closes the #227 audience residue on link tiles). Bundle: `validateConfiguration(…, availableProductIds?)` — the public route passes `filterAvailableForRequest`; composite children/options (`summariesForIds`) are filtered too. Quick search: `availabilityCondition` replaces the raw `sales_channel_products` join, status and audience; takes membership + resolution ports; `CatalogQuickSearchParams.languageCode?` added and `quick_order` passes the request's tag. `quick-search-audience-parity.test.ts` [PG] constructor updated.
 - [x] T038 [S1] The existing `public-read-visibility.test.ts`, `products-status-inactive.test.ts`, `product-acquisition-visibility.test.ts` still pass or are updated **only** where FR-005 changes the answer (draft by slug → 404); note each change in the PR
   - `public-read-visibility`, `products-status-inactive` (admin only) unchanged. `integration/catalog/public-product-language-resolution.test.ts` read drafts by slug — now publishes its two products (FR-005). `product-acquisition-visibility` is Phase 6's.
+  - *Q1 (2026-10-25)*: "draft by slug → 404" now reads "non-archived `inactive` by slug → 404" (T156s); `products-status-inactive.test.ts` changes meaning — `inactive` no longer archives — and is updated in T156j.
 
 **Verification**:
 - `[PG] backend/test/integration/catalog/availability-parity.test.ts`
@@ -421,6 +432,115 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
 
 ---
 
+## Block Q — the status model after the owner's final Q1 (added 2026-10-25)
+
+Spec Session 2026-10-25 answers T156: `draft` is removed, status is `active` | `inactive` at every scope,
+`inactive` anywhere is plain off, and archiving is a separate global Archive / Restore action (FR-010,
+FR-019, FR-053, FR-110, FR-112, FR-113, SC-009). Decisions and the full inventory: `research.md` R30; data:
+`data-model.md` §13–§14. **Placement**: this block sits here in the file to keep the merge with S1's Phase 9
+ticks clean; it **runs after Phase 9 (done 2026-10-25) and before Phase 10**. Phase 9c runs later, after
+P17–P18 are applied on S1 (R30.7); Phase 15a is S3's and runs before Phase 15.
+
+### Phase 9a: [backend] Status values, the migration, Archive / Restore for one product, the admin list (FR-010, FR-019, FR-110, FR-112, FR-113, SC-009)
+
+**Goal**: `draft` is gone from contracts, entity and data; a status write never touches `archivedAt`;
+Archive / Restore are their own audited Commands and routes; the admin list filters archived by
+`archivedAt`. Every package still type-checks.
+
+- [ ] T156a [P] [S1] RED contracts unit tests: `productStatusSchema` accepts `active` / `inactive` and refuses `draft` and `archived`; `createProductRequestSchema`, `updateProductRequestSchema`, `resolveProductIdsRequestSchema`, bulk `fields.status` and `fields.scopedStatus.value` refuse both (`inherit` still accepted for scoped); `coerceProductStatusWrite` and `productStatusWriteSchema` are no longer exported; `PRODUCT_SCOPE_STATUSES` equals `['active','inactive']`; bulk `fields.archived: boolean` accepted alone and refused beside any other field; `pairsTurningOn` compares effective **status** only — an archived product whose global status goes `inactive` → `active` returns its pairs, a snapshot pair differing only in `archivedAt` (Restore) returns `[]` (FR-060, R3) — `packages/contracts/src/{product-scopes.test.ts,product-scopes-shapes.test.ts}`, a new `packages/contracts/src/catalog-product-status.test.ts`
+- [ ] T156b [P] [PG] [S1] RED migration test (data-model §13): run the new migration class's `down` (the three-value `CHECK`s and the `draft` default back), seed through raw SQL an `active`, a `draft`, an `inactive` with `archived_at`, an `inactive` without it (known `updated_at`), and `draft` rows in both scope tables; then run `up`: `draft` → `inactive` with `archived_at` still null, the archived-less `inactive` has `archived_at = updated_at`, the rest unchanged, no row other than `active` / `inactive` in any of the three tables (SC-009); all three `CHECK`s refuse `draft`; the column default is `inactive`; `up` is correct on a database whose scope tables were created by the old three-value body (R30.1); all inside **one transaction that the test rolls back** (PostgreSQL DDL is transactional), so the worker's clone is left exactly as it was — `up`'s backfill is table-wide and would otherwise archive every `inactive` fixture earlier files on that worker created (files on one worker share its clone one after another, `specs/conventions/backend-test-suite.md`); only if the migration cannot run on the test's transaction, fall back to `down` → seed → `up` with `up` in a `finally` and seed-scoped assertions — `backend/test/integration/catalog/product-status-drop-draft-migration.test.ts`
+- [ ] T156c [P] [PG] [S1] RED contract test (FR-019, FR-082, FR-010): `POST …/products/:id/archive` and `…/restore` answer 401/403 before anything, 404 for unknown / soft-deleted / non-UUID ids; Archive sets `archivedAt`, leaves status unchanged globally and in every scope row, writes one `product.archive` audit row with `before` / `after` `{ archivedAt }`, emits `product.updated.v1` `['archivedAt']` then `product.archived.v1` once; a second Archive answers 200 with no audit row and no event; Restore clears it, one `product.restore` row, `product.updated.v1` only; `PATCH …/products/:id` with `status: 'inactive'` leaves `archivedAt` null and emits no `product.archived.v1`; `status: 'active'` on an archived product leaves it archived (O-5); `status: 'draft'` and `'archived'` → `400 VALIDATION_FAILED`, `details.field = 'status'`, on the admin create / update **and** the API-key upsert `PUT /api/v1/catalog/products/by-sku/:sku` (`routes.api-key.ts`), whose update of an existing product with `status: 'inactive'` no longer archives either; a create without status is `inactive`; a duplicate is `inactive` with `archivedAt` null, also from an archived `active` source (Q1-d) — `backend/test/contract/catalog/product-archive-restore.test.ts`. Same task, unit side: rewrite `backend/test/unit/catalog/catalog-admin-update-product-status.test.ts` (no status write sets or clears `archivedAt`) and `catalog-admin-audit-emissions.test.ts` (`archiveProduct` is the Archive Command)
+- [ ] T156d [P] [PG] [S1] RED admin list and selection (FR-113, R30.4): by default no archived product of any status is listed; a non-archived `inactive` product is listed under no filter and under `status=inactive`; `archived=only` lists archived products of both statuses; `archived=include` and the legacy `includeArchived=1` list both; `status=draft` and `status=archived` → `400 VALIDATION_FAILED`; `counts` = `{ all, active, inactive, archived }` with `all` / `active` / `inactive` over non-archived rows; `resolve-ids` with `archived: 'only'` — `backend/test/contract/catalog/products-admin-list-archived.test.ts`; update `backend/test/contract/catalog/products-resolve-ids.test.ts`
+- [ ] T156e [S1] Contracts: `productStatusSchema = z.enum(['active','inactive'])`; delete `coerceProductStatusWrite` and `productStatusWriteSchema` and use `productStatusSchema` at `:664`, `:793`; `bulkUpdateFieldsObject.archived` + its exclusivity refine (the "at least one field" refine counts it); `resolveProductIdsRequestSchema.archived`; the list-count shape if the contract carries one; `product.archived.v1` doc comment ("the product was archived by the Archive action", `:3602`); `statusOnAt` and the `pairsTurningOn` docstring (`product-scopes.ts:196-227`) on status only; `prompt-actions.ts:257` and `quick-order.ts:193` without `draft`; switch `import_export/…/adapters/products.adapter.ts` (`:3`, `:80`, and its comment `:17-22`) to `productStatusSchema` (it imports the removed schema). **Compile-only edits beyond S1's files are part of this task**: whatever `pnpm --filter <pkg> run typecheck` refuses once `ProductStatus` loses `draft` — at `829ce2995` at least `packages/admin-kit/src/components/product-browser/ProductBrowserDialog.tsx:84-98` (`Record<ProductBrowserStatus…>` literals keyed `draft`) and any S3-owned `packages/modules/catalog/src/admin/**` file that passes its local `'draft' | …` union into a contract type — is fixed by **removing the `draft` literal only**, nothing else, in one commit titled `chore(163): q1 compile-only — drop draft literals` that S3's Phase 15a rebases over (stream-ownership exception, recorded here) — `packages/contracts/src/{catalog,product-scopes,prompt-actions,quick-order}.ts`, `packages/modules/import_export/src/backend/services/adapters/products.adapter.ts`
+- [ ] T156f [S1] Migration `pnpm --filter backend run migration:new -- --module catalog --name product_status_drop_draft` per R30.1–R30.2 (backfill → convert → `drop constraint if exists` + re-add the scope `CHECK`s → `products_status_check` → default `inactive`; `down` per R30.1); `Product.status: 'active' | 'inactive' = 'inactive'` with a doc comment citing FR-010 / FR-019; `composer:generate`, `manifests:generate`, `pnpm install --lockfile-only`, artefacts in the same commit — `packages/modules/catalog/src/{migrations,backend/entities/product.entity.ts}`. **Do not edit `20261022T035133_catalog_product_scopes.ts`** (R30.1)
+- [ ] T156g [S1] `CatalogAdminService`: the status write never sets or clears `archivedAt` (`:629-636`) and the `archived` outcome / `#emitArchived` plumbing leaves the update paths (`:445-530`); `archiveProduct(id)` (reimplemented, no longer deprecated, no longer `updateProduct`) and `restoreProduct(id)` as Commands `product.archive` / `product.restore` per R30.3 — `skipAudit` and no event on a no-op, `product.archived.v1` after `product.updated.v1` inside one `events.run` scope; create defaults to `inactive` (`:347`), duplicate is always `inactive` with `archivedAt` cleared (`:891`, doc `:837`) — `services/catalog-admin.service.ts`
+- [ ] T156h [S1] Routes `POST /api/v1/admin/catalog/products/:id/archive` and `…/restore` (`requireAdmin('catalog:write')` as `preHandler`, no body, `serializeAdminProduct`); list: `status` validated (`draft` / `archived` / unknown → 400; the `status=archived` mapping `:560-566` deleted), `archived` mode with `includeArchived` as `include`, counts per R30.4; `resolveProductIds` / `resolve-ids` the same `archived` mode — `routes.admin.ts`, `services/catalog-admin.service.ts:1369-1525`. `check:action-route-permissions` and `permission-inventory` see the two routes under `catalog:write`
+- [ ] T156i [S1] Bundles (S1-owned): `errors.PRODUCT_ARCHIVED` → "Product is archived." / "Produkt jest zarchiwizowany." (the PDP message itself changes in T156t); `auditLog.product.archive` / `auditLog.product.restore` en+pl; `adminSearch.product.status.draft` removed with its use (`admin-search-provider.ts:28`); `audit-references.ts` resolves the two actions by object type (no code expected); regenerate if a module-reference page moves (Polish refresh in the same commit) — `packages/modules/catalog/i18n/{en,pl}.json`, `packages/modules/catalog/src/backend/admin-search-provider.ts`
+- [ ] T156j [S1] Existing backend tests that assert the old model, updated in the same commits as the code they cover: delete `backend/test/unit/catalog/product-status-coerce.test.ts` (and its entry in `backend/test/service-dependent-unit-tests.ts` if listed — grep `backend/test/**` for `coerceProductStatusWrite`, `productStatusWriteSchema`, `archiveProduct` first, AGENTS.md trap); `contract/catalog/products-status-inactive.test.ts` (inactive no longer archives), `contract/catalog/product-scopes-api.test.ts` (T022's "global `inactive` still archives once" flips: a global `inactive` never archives), `contract/catalog/admin-duplicate-product.test.ts`, `contract/catalog/scoped-availability-matrix.test.ts` (the `draft` member case is removed here; its replacement is T156s), `integration/catalog/webhooks.test.ts` (`product.archived.v1` from Archive only), `integration/search/archive-then-reactivate.test.ts` and `integration/search/event-subscriber.test.ts` (archive / reactivate through Archive / Restore; a global `inactive` leaves the index through `product.updated.v1` alone); every other file that seeds `status: 'draft'` gets `inactive` — the T156r grep lists them (at `829ce2995`: `contract/catalog/{gallery-resolution,products-bulk-update-atomicity,products-bulk-update-untouched-fields,scope-overview,scoped-availability-probes}`, `contract/{product_feeds/selection-preview,sales_channels/admin-membership.contract,seo/sitemap-scoped}`, `integration/{admin_search/catalog-providers,carts/scoped-availability,catalog/availability-parity,catalog/inventory-columns,catalog/product-filter-port,catalog/product-scopes-schema,catalog/publication-window-sweep,comparisons/scoped-availability,inventory/product-threshold-copy-port,product_feeds/generation,product_feeds/pinned-book-withdrawal,product_feeds/scoped-availability,product_feeds/selection,quick_order/scoped-availability,sales_channels/*,search/scoped-availability,shopping_lists/scoped-availability}`, `perf/catalog/listing-scoped-availability.bench.ts`, `unit/packages/module-package-ports-surface.test.ts`, and the module-local `carts/…/cart-batch-add.test.ts`, `catalog/…/{admin-search-provider,product-scopes.service,scope-overview.service}.test.ts`, `megamenu/…/cross-module-ports.test.ts`, `search/…/search-availability-filter.test.ts`, `contracts/src/product-scopes-matrix.test.ts`)
+
+**Verification** (one invocation per line):
+- `pnpm --filter @endora-commerce/contracts exec vitest run src/catalog-product-status.test.ts src/product-scopes.test.ts src/product-scopes-shapes.test.ts`
+- `pnpm --filter @endora-commerce/contracts run build && pnpm --filter @endora-commerce/contracts run typecheck`
+- `pnpm --filter backend exec vitest run --config vitest.unit.config.ts test/unit/catalog/catalog-admin-update-product-status.test.ts test/unit/catalog/catalog-admin-audit-emissions.test.ts test/unit/db/migrations-registry.test.ts`
+- `[PG] backend/test/integration/catalog/product-status-drop-draft-migration.test.ts`
+- `[PG] backend/test/contract/catalog/product-archive-restore.test.ts`
+- `[PG] backend/test/contract/catalog/products-admin-list-archived.test.ts`
+- `[PG] backend/test/contract/catalog/products-status-inactive.test.ts`
+- `[PG] backend/test/contract/catalog/product-scopes-api.test.ts`
+- `[PG] backend/test/integration/search/archive-then-reactivate.test.ts`
+- `[PG] backend/test/integration/catalog/webhooks.test.ts`
+- `[PG] backend/test/contract/admin_users/permission-inventory.test.ts`
+- `pnpm --filter @endora-commerce/mod-catalog run typecheck && pnpm --filter @endora-commerce/mod-import-export run typecheck && pnpm --filter @endora-commerce/admin-kit run typecheck && pnpm --filter admin run typecheck && pnpm --filter backend run typecheck`
+- `pnpm --filter backend run check:action-route-permissions && pnpm --filter backend run check:command-coverage && pnpm --filter backend run check:module-boundary`
+
+### Phase 9b: [backend] Bulk Archive / Restore, consumers, typed consumers, docs, release (FR-053, FR-082, FR-092, FR-112)
+
+**Goal**: bulk Archive / Restore on the existing durable path with undo; no consumer reads `status` as
+"archived"; nothing outside the admin screens types `draft`; the operator documentation and the breaking
+release notes exist.
+
+- [ ] T156k [P] [PG] [S1] RED bulk (FR-053, R30.3): `fields.archived: true` archives every selected product through one `product.archive` audit entry each and `product.updated.v1` + `product.archived.v1` per transition; already-archived products → `succeeded` with `changedFields: []`, no entry, no event; `false` restores; `archived` beside any other field → 400; the queued path above `BULK_ASYNC_THRESHOLD`; undo restores `archivedAt` as a whole with the per-product conflict report and **emits** `product.updated.v1` per reverted product (and `product.archived.v1` where it re-archives); a bulk **status** change leaves `archivedAt` alone and its undo restores status only — `backend/test/contract/catalog/products-bulk-archive.test.ts`; update `integration/commands/bulk-undo.test.ts` and `contract/catalog/products-bulk-update-db-invariants.test.ts`
+- [ ] T156l [P] [S1] RED consumers: quick-order import rejects `product_archived` for an archived product whatever its status, and not for a non-archived `inactive` one (that one is the port's not-found, P6); shopping-list conversion likewise; reorder drops archived products and keeps a non-archived `inactive` one for placement to refuse (consumers row 20); the import adapter refuses `draft` and `archived` per record with `invalid status` (FR-092) — the module-local tests beside `quick_order/…/import-pipeline.ts`, `shopping_lists/…/shopping-list-service.ts`, `orders/…/order-reorder-service.ts`, `import_export/…/adapters/products.adapter.ts` (create where none exists)
+- [ ] T156m [S1] Bulk: `catalog-bulk-update.service.ts` applies `fields.archived` through `archiveProduct` / `restoreProduct` (never `updateProduct`); `bulk-operation.service.ts` `revertibleFieldKeys` maps `archived` → `archivedAt` and drops `status` → `archivedAt` (`:675-676`); the undo Command emits per R30.3 after commit
+- [ ] T156n [S1] Consumers read "archived" from `archivedAt`: `quick_order/src/backend/services/import-pipeline.ts:143`, `shopping_lists/src/backend/services/shopping-list-service.ts:512`, `orders/src/backend/services/order-reorder-service.ts:93` (comments too)
+- [ ] T156o [S1] Remaining typed consumers outside the admin screens: `catalog/src/backend/prompt-tools.ts:332` description; `catalog-admin-search.service.ts:14` and `admin-search-provider.ts:89` comments; `storefront/lib/api/quick-order.ts:88` (what a type-check refused was already fixed in T156e; the screens are Phase 15a)
+- [ ] T156p [S1] Docs EN + PL (spec *Compatibility and release* § Documentation): `packages/modules/catalog/docs/catalog.md` — the two status values, "off" at each scope, Archive / Restore single and bulk under `catalog:write`, the 410 rule of FR-005, the operator note that a product archived before this feature (every product `inactive` today) needs an explicit Restore and setting `active` does not restore it, the events table (`:223-254`: `product.archived.v1` from Archive only; reactivation = Restore), the endpoint rows `:32`, `:36` and the admin-search line `:527`; `quick_order/docs/quick_order.md:28` (`product_archived` = archived); no `draft` and no `archived`-as-status left; Polish cache entries and materialised pages in the same commit; `check:docs-translations`, `check:module-docs`
+- [ ] T156q [S1] Changesets, **breaking at bump level `minor`** (D-225 refuses `major` in `0.x`, R30.6): `.changeset/163-product-status-model.md` for `@endora-commerce/contracts` and `@endora-commerce/mod-catalog` naming each removed symbol with old → new call (`productStatusSchema` narrowed; `coerceProductStatusWrite`, `productStatusWriteSchema` → `productStatusSchema`; `status: 'draft'` → `'inactive'`; archiving by status → `POST …/:id/archive` / bulk `fields.archived`; `counts.draft` → `counts.archived`; `status=archived` → `archived=only`; `product.archived.v1` meaning; new / duplicated products `inactive`; the API-key upsert `PUT /api/v1/catalog/products/by-sku/:sku` refuses `draft` / `archived`; the migration and its operator note); `patch` notes for `mod-import-export`, `mod-quick-order`, `mod-shopping-lists`, `mod-orders`; `pnpm --filter backend run check:release-intent -- --since origin/master` reports no `major-bump-in-a-zero-series`
+- [ ] T156r [S1] Self-check: `git grep -n -E "['\"\`]draft['\"\`]" -- packages backend storefront admin` returns no product-status site (quote requests, CMS, blog, newsletter, price books keep theirs); `git grep -n -E "status (===|!==) 'inactive'" -- packages/modules` returns no "archived" reading; `git grep -n -E "coerceProductStatusWrite|productStatusWriteSchema" -- .` returns only CHANGELOGs; record the three results here
+
+**Verification** (one invocation per line):
+- `[PG] backend/test/contract/catalog/products-bulk-archive.test.ts`
+- `[PG] backend/test/integration/commands/bulk-undo.test.ts`
+- `[PG] backend/test/contract/catalog/products-bulk-update-db-invariants.test.ts`
+- `[PG] backend/test/contract/catalog/bulk-operation-undo.contract.test.ts`
+- `pnpm --filter @endora-commerce/mod-quick-order run test && pnpm --filter @endora-commerce/mod-shopping-lists run test && pnpm --filter @endora-commerce/mod-orders run test && pnpm --filter @endora-commerce/mod-import-export run test`
+- `pnpm --filter @endora-commerce/mod-catalog run typecheck && pnpm --filter storefront run typecheck`
+- `pnpm --filter backend run check:docs-translations && pnpm --filter backend run check:module-docs`
+- `pnpm --filter backend run check:release-intent -- --since origin/master`
+
+> **Review checkpoint Q** — code review + security review in parallel on Phases 9a–9b (focus: no status
+> write reaches `archivedAt`; Archive / Restore gated `catalog:write` before any read; the migration's order
+> and its `down`; undo emissions; no consumer reading `status` as "archived").
+
+### Phase 9c: [backend] The product page's "gone" answer (FR-005) — after P17–P18 are applied on S1
+
+**Goal**: 410 for an archived product only (R30.7). `catalog-query.service.ts` runs in sequence: this phase
+follows S2's P17–P18 on S1 and precedes P12. The coordinator may instead hand T156t to S2 as one line of P17.
+
+- [ ] T156s [PG] [S1] RED: extend `backend/test/contract/catalog/scoped-availability-matrix.test.ts` — a non-archived member with global `inactive` answers the absent product's 404 at every (C, L), even where a C or C×L override is `active` (FR-005, FR-010); an archived product with global `inactive` and no overrides answers 410 at every (C, L) of its channels (O-3, O-4: today's archived products keep their "gone"); archived with a C×L `inactive` override → 404 there and 410 elsewhere; archived outside its window or audience → 404; the 410 body names `PRODUCT_ARCHIVED` with the new message
+- [ ] T156t [S1] `getProductByIdOrSlug`: the 410 branch tests `product.archivedAt` only (`:1816`), its comment rewritten (no `draft`, no "global `inactive`"), message "Product is archived."; S2's `storefront/test/catalog/pdp-redirect.test.ts:94` string follows — `catalog-query.service.ts`
+
+**Verification**:
+- `[PG] backend/test/contract/catalog/scoped-availability-matrix.test.ts`
+- `[PG] backend/test/integration/catalog/url-key-resolution.test.ts` (S2's T107: archived → 410 still)
+- `pnpm --filter @endora-commerce/mod-catalog run typecheck`
+
+### Phase 15a: [admin UI] Status, Archive / Restore and the Archived filter (FR-019, FR-043, FR-053, FR-113) — after Phase 9b, before Phase 15
+
+**Goal**: the screens offer two status values, Archive / Restore single and bulk, and the Archived filter;
+no admin surface offers or labels `draft`.
+
+- [ ] T156u [P] [US1] [S3] RED catalog screens: the editor's global status selector offers `active` / `inactive` only, a new product starts `inactive`; an archived product shows an "Archived" state with **Restore**, a non-archived one **Archive**, each behind a confirmation that says what it does (Archive: gone from every channel, status kept; Restore: back where its status allows, setting `active` alone does not restore), both hidden for `catalog:read`; the duplicate confirmation no longer says "draft"; the list offers *All · Active · Inactive · Archived* with the counts of R30.4 and sends `archived` instead of `includeArchived=1`; an archived row shows its badge; a saved view holding `status: 'draft'` opens as "All"; the bulk dialog offers **Archive** and **Restore** (confirmation, per-product result, undo link as for other bulk edits) and no `draft` in "Set status"; keyboard reachable and labelled (WCAG 2.2 AA, `ux-laws`) — `admin/test/modules/catalog/product-archive-restore.test.tsx`, `admin/test/modules/catalog/products-list-archived.test.tsx`
+- [ ] T156v [P] [S3] RED the shared pickers: the admin-kit product browser's tabs and counts follow R30.4 (no `draft`), archived products are not selectable where a browser blocks them; `ProductPicker` labels; `page-builder-admin` catalog picker, blog related-products picker, the orders create page's browser (`blockedStatuses` → `['inactive']` plus archived) and the product-feeds criteria status options carry no `draft` — `admin/test/kit/kit-product-browser.test.tsx`, `admin/test/kit/kit-pickers.test.tsx`, `admin/test/kit/kit-product-browser-selectability.test.ts`, `admin/test/modules/orders/OrderCreatePage.product-browser.test.tsx`
+- [ ] T156w [S3] Catalog screens — `src/admin/pages/{ProductEditor,ProductsList}.tsx`, `src/admin/components/{ProductsBulkEditDialog,ProductScopeControls}.tsx`, `src/admin/lib/{resolve-product-selection,product-scope-drafts}.ts` (admin-kit primitives only, IX)
+- [ ] T156x [S3] Shared pickers — `packages/admin-kit/src/components/{product-browser/{types.ts,ProductBrowserDialog.tsx,product-browser-api.ts},product-picker/ProductPicker.tsx}`, `packages/page-builder-admin/src/chrome/CatalogPickers.tsx`, `packages/modules/blog/src/admin/components/RelatedProductsPicker.tsx`, `packages/modules/orders/src/admin/pages/OrderCreatePage.tsx`, `packages/modules/product_feeds/src/admin/components/FeedCriteriaPanel.tsx`; their bundles' `draft` labels removed
+- [ ] T156y [S3] Handover commit: catalog i18n keys en+pl for Archive / Restore, confirmations, the Archived tab and badge, bulk actions; `open-products` palette keywords gain "archive", "archived", "archiwum", "zarchiwizowane" (R23); changesets for `@endora-commerce/admin-kit` and `@endora-commerce/page-builder-admin`, breaking at `minor` (the product browser's status type and counts narrowed, R30.6)
+- [ ] T156z [S3] Existing admin tests that assert `draft`: `admin/test/modules/catalog/{product-scope-controls,ProductEditor.attribute-set-swap,ProductEditor.category-tree,ProductEditor.channels-tab,ProductEditor.no-own-price,ProductEditor.publish-window,ProductEditor.sku-status,ProductsList.saved-views}.test.tsx`, `admin/test/modules/webhooks/contributed-event-types.test.tsx` (event label wording only if it changed)
+
+**Verification** (one invocation per line):
+- `pnpm --filter admin exec vitest run test/modules/catalog/product-archive-restore.test.tsx test/modules/catalog/products-list-archived.test.tsx`
+- `pnpm --filter admin exec vitest run test/kit/kit-product-browser.test.tsx test/kit/kit-pickers.test.tsx test/kit/kit-product-browser-selectability.test.ts test/modules/orders/OrderCreatePage.product-browser.test.tsx`
+- `pnpm --filter admin exec vitest run test/modules/catalog`
+- `pnpm --filter admin run typecheck && pnpm --filter @endora-commerce/admin-kit run typecheck && pnpm --filter @endora-commerce/page-builder-admin run typecheck`
+- `pnpm --filter backend run i18n:hardcoded`
+- `pnpm --filter backend exec vitest run --config vitest.unit.config.ts test/unit/_i18n/registered-bundles-shape.test.ts`
+
+> **Review checkpoint Q-UI** — code review + **designer UX audit** on Phase 15a (confirmation wording,
+> where Archive / Restore sit in the editor and the bulk bar, the Archived tab), plus product-owner check of
+> FR-019 / FR-053 / FR-113 in the UI. May run together with checkpoint D.
+
+---
+
 ## Block C — S1 backend: overview, bulk, gate, order rules
 
 ### Phase 9: [backend] Scope overview and attribute scope-change preview (US4, FR-015, FR-041, FR-090)
@@ -466,10 +586,10 @@ review checkpoint C:
 
 ### Phase 10: [backend] Bulk scoped status (US5, FR-050–FR-052)
 
-- [ ] T073 [P] [US5] [PG] [S1] RED: selection + scope → only that scope's row changes per product; non-member skipped `scope_invalid` (US5 #3); per-product audit with scope (SC-006); undo as a whole with per-product conflict report (US5 #2); queued path above the threshold; 1 000 products undone in one action — `backend/test/contract/catalog/products-bulk-scoped-status.test.ts`
-- [ ] T074 [US5] [S1] `CatalogBulkUpdateService` applies `scopedStatus` through `ProductScopesService` inside the per-product Command; revert records hold the scope row before-state — `services/catalog-bulk-update.service.ts`, `services/bulk-operation.service.ts`
+- [ ] T073 [P] [US5] [PG] [S1] RED: selection + scope → only that scope's row changes per product; non-member skipped `scope_invalid` (US5 #3); per-product audit with scope (SC-006); undo as a whole with per-product conflict report (US5 #2); queued path above the threshold; 1 000 products undone in one action — `backend/test/contract/catalog/products-bulk-scoped-status.test.ts` *(Q1, 2026-10-25: the value is `active` / `inactive` / `inherit`; `draft` and `archived` are refused by the schema (FR-053, FR-112); the undo restores the scope row only and never `archivedAt`; bulk Archive / Restore is T156k, not this file.)*
+- [ ] T074 [US5] [S1] `CatalogBulkUpdateService` applies `scopedStatus` through `ProductScopesService` inside the per-product Command; revert records hold the scope row before-state — `services/catalog-bulk-update.service.ts`, `services/bulk-operation.service.ts` *(Q1: revert records never carry `archivedAt` for a status edit — T156m removed that coupling.)*
 - [ ] T075 [US5] [S1] Route validation: `scopedStatus` with `status` → 400; reasons wired — `routes.admin.ts`
-- [ ] T076 [S1] `bulk-operation-undo.contract.test.ts` and `products-bulk-update*.test.ts` stay green (no behaviour change for existing fields)
+- [ ] T076 [S1] `bulk-operation-undo.contract.test.ts` and `products-bulk-update*.test.ts` stay green (no behaviour change for existing fields **except** Q1's: a bulk global status change no longer sets or clears `archivedAt`, and its undo restores status only — those expectations were updated in T156j / T156k)
 
 **Verification**:
 - `[PG] backend/test/contract/catalog/products-bulk-scoped-status.test.ts`
@@ -479,10 +599,10 @@ review checkpoint C:
 
 ### Phase 11: [backend] Completeness gate (US6, FR-060, FR-061)
 
-- [ ] T077 [P] [US6] [S1] RED unit: `checkCompleteness` — name counts only at C×L override or baseline `name[L]` (never another language, FR-060 last sentence); required language-scoped attributes likewise; URL key satisfied by the effective key incl. global (K3, US6 #5); `checkCompleteness` answers for a cell whatever its status (the overview calls it for every evaluable cell, FR-041); the gate's entry over `pairsTurningOn` (T080) checks nothing for the M3 → A non-triggers — a window-only change (incl. one opening the window now) and an audience-only change on a product lacking `name[de]` — `packages/modules/catalog/src/backend/services/scope-completeness.test.ts`
-- [ ] T078 [P] [US6] [PG] [S1] RED: setting default `warn` (saved + warnings); `refuse` refuses a single edit as a whole naming every pair (US6 #3, N3) incl. the global switch via `PATCH /products/:id`; bulk skips + reports per product (US6 #4); import and `catalogProductScopeWritePort` never gated (A-6); **M3 → A non-triggers, all in `refuse` on a product active everywhere and lacking `name[de]`, each → saved, no `SCOPE_INCOMPLETE`, no warning**: (a) membership join through `PUT /api/v1/admin/sales-channels/:code/product/:id` (`sales_channels/src/backend/routes.admin.ts:377`) to a channel offering `de`, and through bulk `salesChannels: { mode: 'add' }` without `status`; (b) a channel gains `de` through `PATCH /api/v1/admin/sales-channels/:code` (`routes.admin.ts:196`); (c) a scopes PATCH changing only `window` so that it opens now; (d) a scopes PATCH changing only `audience` (US6 #6); after (a) and (b) `GET …/scope-overview` shows `missing: ['name']` on the (channel, `de`) cell and `[]` on complete cells, and a cell of a non-member channel has no `missing` (FR-041) — `backend/test/contract/catalog/scope-completeness-gate.test.ts`
+- [ ] T077 [P] [US6] [S1] RED unit: `checkCompleteness` — name counts only at C×L override or baseline `name[L]` (never another language, FR-060 last sentence); required language-scoped attributes likewise; URL key satisfied by the effective key incl. global (K3, US6 #5); `checkCompleteness` answers for a cell whatever its status (the overview calls it for every evaluable cell, FR-041); the gate's entry over `pairsTurningOn` (T080) checks nothing for the M3 → A non-triggers — a window-only change (incl. one opening the window now) and an audience-only change on a product lacking `name[de]` — `packages/modules/catalog/src/backend/services/scope-completeness.test.ts` *(Q1, 2026-10-25: `pairsTurningOn` compares status only — on an archived product a global `inactive` → `active` write returns its pairs, and a change of `archivedAt` alone (Restore) returns none.)*
+- [ ] T078 [P] [US6] [PG] [S1] RED: setting default `warn` (saved + warnings); `refuse` refuses a single edit as a whole naming every pair (US6 #3, N3) incl. the global switch via `PATCH /products/:id`; bulk skips + reports per product (US6 #4); import and `catalogProductScopeWritePort` never gated (A-6); **M3 → A non-triggers, all in `refuse` on a product active everywhere and lacking `name[de]`, each → saved, no `SCOPE_INCOMPLETE`, no warning**: (a) membership join through `PUT /api/v1/admin/sales-channels/:code/product/:id` (`sales_channels/src/backend/routes.admin.ts:377`) to a channel offering `de`, and through bulk `salesChannels: { mode: 'add' }` without `status`; (b) a channel gains `de` through `PATCH /api/v1/admin/sales-channels/:code` (`routes.admin.ts:196`); (c) a scopes PATCH changing only `window` so that it opens now; (d) a scopes PATCH changing only `audience` (US6 #6); after (a) and (b) `GET …/scope-overview` shows `missing: ['name']` on the (channel, `de`) cell and `[]` on complete cells, and a cell of a non-member channel has no `missing` (FR-041) — `backend/test/contract/catalog/scope-completeness-gate.test.ts` *(Q1, 2026-10-25, also in `refuse` on a product lacking `name[de]`: (e) **Restore** (`POST …/products/:id/restore`, and bulk `fields.archived: false`) → saved, no `SCOPE_INCOMPLETE`, no warning — it is not a status write (FR-019, FR-060); (f) **Archive** likewise; (g) `PATCH …/products/:id` `status: 'active'` on an **archived** product that was `inactive` → refused naming every pair, although the product stays archived — the gate reads status, not availability.)*
 - [ ] T079 [US6] [S1] Setting `catalog.scope_completeness_gate` in a new `settings` block (seo's shape), labels en+pl — `packages/modules/catalog/src/manifest.ts`, `i18n/{en,pl}.json`
-- [ ] T080 [US6] [S1] `scope-completeness.ts` + wiring into `ProductScopesService`, the global status path in `catalog-admin.service.ts`, and bulk
+- [ ] T080 [US6] [S1] `scope-completeness.ts` + wiring into `ProductScopesService`, the global status path in `catalog-admin.service.ts`, and bulk *(the global status path as T156g left it: no `archivedAt` side effect; `archiveProduct` / `restoreProduct` are not wired to the gate)*
 - [ ] T080a [US4] [US6] [S1] `ScopeOverviewService` fills `cells[].missing` from `checkCompleteness` for every cell whose channel the product is a member of and whose language the channel offers, whatever its status; absent otherwise (FR-041, `admin-scopes-api.md` §3; T078's overview assertions go green) — `services/scope-overview.service.ts`
 - [ ] T081 [S1] Regenerate artefacts (manifest change) and commit with Polish module-reference refresh
 
@@ -549,8 +669,8 @@ review checkpoint C:
 
 ### Phase 15: [admin UI] Bulk scoped status and the gate (US5, US6) — after Phases 10–11
 
-- [ ] T096 [P] [US5] [S3] RED: bulk dialog offers "Set status in scope" (channel, optional language, value or inherit); result lists skipped products with reason; gate warnings/refusals rendered per pair (US6 #1, #3) — `admin/test/modules/catalog/products-bulk-scoped-status.test.tsx`, `admin/test/modules/catalog/scope-completeness-messages.test.tsx`
-- [ ] T097 [US5] [S3] `ProductsBulkEditDialog.tsx` scoped-status action — `src/admin/components/ProductsBulkEditDialog.tsx`
+- [ ] T096 [P] [US5] [S3] RED: bulk dialog offers "Set status in scope" (channel, optional language, value or inherit); result lists skipped products with reason; gate warnings/refusals rendered per pair (US6 #1, #3) — `admin/test/modules/catalog/products-bulk-scoped-status.test.tsx`, `admin/test/modules/catalog/scope-completeness-messages.test.tsx` *(Q1, 2026-10-25: the value choices are `active`, `inactive` and inherit only — no `draft`; Archive / Restore are Phase 15a's, already in the dialog by then.)*
+- [ ] T097 [US5] [S3] `ProductsBulkEditDialog.tsx` scoped-status action — `src/admin/components/ProductsBulkEditDialog.tsx` *(after Phase 15a, which owns the dialog's Archive / Restore and the global status options)*
 - [ ] T098 [US6] [S3] Gate messages in scope controls and the global status save — `ProductScopeEditor.tsx`, `ProductEditor.tsx`
 - [ ] T099 [S3] i18n keys (handover)
 
@@ -649,9 +769,9 @@ review checkpoint C:
 ### Phase 19: [backend] Connectors and import/export (FR-091–FR-093)
 
 - [ ] T120 [P] [US7] [PG] [S2] RED `catalogProductScopeWritePort.applyScopes`: writes only named scopes, never removes operator overrides (FR-091); a taken key is not written, previous key kept, issue names record/language/holder, no takeover (FR-093, US7 #9); no completeness gate — `backend/test/integration/catalog/scope-write-port.test.ts`
-- [ ] T121 [P] [PG] [S2] RED CSV: export emits `status@<channel>` / `status@<channel>/<lang>`; import round-trips them (FR-092); whole-file rejection rule unchanged — `backend/test/integration/catalog/bulk-import-scoped-status.test.ts`
+- [ ] T121 [P] [PG] [S2] RED CSV: export emits `status@<channel>` / `status@<channel>/<lang>`; import round-trips them (FR-092); whole-file rejection rule unchanged — `backend/test/integration/catalog/bulk-import-scoped-status.test.ts` *(FR-092 after Q1: a `draft` or `archived` status at any scope is refused per record by the run's existing rule — the global column already is, T156l — and status import never archives or restores)*
 - [ ] T122 [S2] `catalogProductScopeWritePort` provided (status, window, audience, order rules via `ProductScopesService`; keys via `UrlKeyService` in import mode) — `services/catalog-write-ports.ts`
-- [ ] T123 [S2] CSV columns — `catalog-bulk-import.service.ts`, `packages/modules/import_export/src/backend/services/` adapter
+- [ ] T123 [S2] CSV columns — `catalog-bulk-import.service.ts`, `packages/modules/import_export/src/backend/services/` adapter *(the adapter's global status column moved to `productStatusSchema` in T156e — rebase onto it)*
 - [ ] T124 [S2] Connector-author note: which scope each field is read/written at (FR-091) — `packages/modules/catalog/docs/catalog/url-keys-and-redirects.md` § Integrations (+ PL)
 
 **Verification** (one invocation per line):
@@ -745,13 +865,13 @@ review checkpoint C:
 
 ### Phase 24: Off-state, deploy parity, docs, changesets
 
-- [ ] T144 [P] [PG] [S1] RED deploy parity (FR-110, SC-001): on a seeded pre-feature dataset, listed / searchable / reachable-by-URL / sitemap / feed sets per channel × language are identical before and after the migrations, except the four *Intended behaviour changes* of `plan.md` (non-`active` products not reachable by URL and not addable to a basket; name sort by effective name; existing per-language SEO overrides served — R21, D2, D6, Q-A) — `backend/test/integration/catalog/deploy-parity.test.ts`
+- [ ] T144 [P] [PG] [S1] RED deploy parity (FR-110, SC-001): on a seeded pre-feature dataset, listed / searchable / reachable-by-URL / sitemap / feed sets per channel × language are identical before and after the migrations, except the *Intended behaviour changes* of `plan.md` (products off and not archived — today's `draft`, `inactive` after the Q1 migration — not reachable by URL and not addable to a basket; name sort by effective name; existing per-language SEO overrides served — R21, D2, D6, Q-A) — `backend/test/integration/catalog/deploy-parity.test.ts` **Q1 additions (SC-009, FR-110, O-4)**: the seeded dataset includes `draft` products and scope rows and `inactive` products with and without `archived_at`; after the migrations no stored status other than `active` / `inactive`, no formerly `inactive` product without `archived_at`, and every formerly `inactive` product answers 410 exactly where it answered 410 before (T156b covers the migration itself)
 - [ ] T145 [P] [PG] [S1] SC-007 sweep: every FR-004 consumer (every row of `contracts/consumers.md`, CMS product blocks included) refuses a product off at (C, L) — one table-driven test reusing each seam's fixture — `backend/test/contract/catalog/scoped-availability-all-consumers.test.ts`
 - [ ] T146 [P] [PG] [S1] Test: `search` off → the Postgres listing applies the same predicate — add the search-backend-off case to `backend/test/contract/catalog/scoped-availability-matrix.test.ts` (`seo` off is already covered by T108/T115). Run it before T146a
 - [ ] T146a [S1] Make T146 pass if it is red (the degrade path's narrowing goes in the statement, issue #151); if green, record "no change" here
-- [ ] T147 [S1] Docs (EN): extend `packages/modules/catalog/docs/catalog/per-channel-per-language-overrides.md` (scopes, inheritance, status semantics, window, audience, overview, bulk, gate, order rules); new `url-keys-and-redirects.md`; `seo` and `search` pages updated
+- [ ] T147 [S1] Docs (EN): extend `packages/modules/catalog/docs/catalog/per-channel-per-language-overrides.md` (scopes, inheritance, status semantics, window, audience, overview, bulk, gate, order rules); new `url-keys-and-redirects.md`; `seo` and `search` pages updated *(Q1: status semantics = two values, `inactive` is plain off at every scope, archiving is the Archive / Restore action documented in `catalog.md` by T156p — link to it, do not restate)*
 - [ ] T148 [S1] Docs (PL): translation cache entries and materialised pages for every page above; `pnpm --filter backend run check:docs-translations`; `pnpm --filter backend run check:module-docs`
-- [ ] T149 [S1] Changesets: one per meaning for every published package touched (`contracts` minor; modules patch/minor as their exports changed); `pnpm changeset:status`
+- [ ] T149 [S1] Changesets: one per meaning for every published package touched (`contracts` minor; modules patch/minor as their exports changed; the Q1 status change is breaking and is written at `minor` with a breaking body — T156q, T156y, D-225 refuses `major` in `0.x`); `pnpm changeset:status`
 - [ ] T150 [S1] AGENTS.md traps: grep `backend/test/**` for every file path renamed or deleted in this feature; re-derive anything derived from moved files (e.g. `module-removal.test.ts` ledger); re-record a read size **only** if the band refuses it, after reading `specs/conventions/check-estate.md`
 
 **Verification** (one invocation per line): `[PG] backend/test/integration/catalog/deploy-parity.test.ts`; `[PG] backend/test/contract/catalog/scoped-availability-all-consumers.test.ts`; `[PG] backend/test/contract/catalog/scoped-availability-matrix.test.ts`; `pnpm --filter backend run check:docs-translations`; `pnpm --filter backend run check:module-docs`; `pnpm changeset:status`; `pnpm run check:naming && pnpm run check:language` (in Docker Ubuntu on the macOS host — the BSD-tool gap)
@@ -763,7 +883,8 @@ review checkpoint C:
 - [ ] T153 [S1] Every `check:*` in the `quality` job: `check:module-boundary`, `check:port-dependencies`, `check:port-catches`, `check:subscribe-seam`, `check:entry-presence`, `check:off-state-coverage`, `check:action-route-permissions`, `check:bundle-pairing`, `check:release-intent -- --since origin/master`, `manifests:check`, `overlay:check`
 - [ ] T154 [S1] Fork `ci-pg` fully green on the rebased tip; record the run URL
 - [ ] T155 [S1] Re-run `quickstart.md` §1–§9 on a dev stack; record findings in the PR
-- [ ] T156 **Coordinator re-asks owner Q1 (status values A — `draft`/`active`/`inactive` — vs B — enabled/disabled per scope + global archive action) before acceptance.** If B: add a phase (contract constant + `CHECK`s + data migration mapping scope values + admin control + archive action), per research R3; nothing else changes
+- [x] T156 **Coordinator re-asks owner Q1 (status values A — `draft`/`active`/`inactive` — vs B — enabled/disabled per scope + global archive action) before acceptance.** If B: add a phase (contract constant + `CHECK`s + data migration mapping scope values + admin control + archive action), per research R3; nothing else changes
+  - **Answered 2026-10-25** (spec Clarifications, Session 2026-10-25): B in the existing vocabulary — `active` / `inactive` at every scope, `draft` removed, `inactive` plain off everywhere, archiving a separate global Archive / Restore action, no alias. More than R3's "nothing else changes": the global status path, the PDP's 410, the bulk undo's revert keys, the gate's `statusOnAt` and three consumers also read "inactive" as "archived" (research R30). The work is **Block Q** (Phases 9a, 9b, 9c, 15a).
 
 **Verification**: as listed in T151–T154.
 
@@ -790,6 +911,9 @@ review checkpoint C:
 | SC-004 | T065 | SC-005 | T048, T050 |
 | SC-006 | T073 | SC-007 | T145 |
 | SC-008 | T100 | SC-001 | T144 |
+| FR-010 (Q1), FR-019, FR-082 (archive) | T156a, T156c | FR-053 | T156k, T156u |
+| FR-110 (Q1), SC-009 | T156b, T144 | FR-112 | T156a, T156c, T156d, T156l |
+| FR-113 | T156d, T156u | FR-005 (archived 410) | T156s |
 
 ## Parallel execution examples
 
