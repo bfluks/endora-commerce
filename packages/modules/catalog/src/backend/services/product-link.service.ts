@@ -374,11 +374,16 @@ export class ProductLinkService {
     // The channel is resolved once upstream (`getResolvedChannel()`) and handed
     // in; it is never taken from the client.
     const channel = ctx.resolvedChannel;
-    const scopeChannel = toScopeChannel({
-      id: channel.id,
-      languages: channel.languages,
-      defaultLanguage: channel.defaultLanguage ?? channel.languages?.[0] ?? '',
-    });
+    // A channel record always carries its default language; one that does not
+    // is a composition defect, never a language to answer in.
+    const defaultLanguage = channel.defaultLanguage ?? channel.languages?.[0];
+    if (!defaultLanguage) {
+      throw new Error(
+        `ProductLinkService: the resolved channel ${channel.id} names no default language — ` +
+          'availability cannot be asked without one.',
+      );
+    }
+    const scopeChannel = toScopeChannel({ id: channel.id, languages: channel.languages, defaultLanguage });
     const visibleIds = await availableAmong(em, this.#requireChannelMembership(), targets, {
       channel: scopeChannel,
       languageCode: resolveScopeLanguage(scopeChannel, ctx.preferredLanguage),

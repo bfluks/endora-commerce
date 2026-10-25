@@ -1,8 +1,8 @@
 ---
-'@endora-commerce/mod-carts': patch
+'@endora-commerce/mod-carts': minor
 '@endora-commerce/mod-orders': patch
 '@endora-commerce/mod-quote-requests': patch
-'@endora-commerce/mod-comparisons': patch
+'@endora-commerce/mod-comparisons': minor
 '@endora-commerce/mod-shopping-lists': patch
 ---
 

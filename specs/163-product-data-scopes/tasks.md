@@ -396,6 +396,27 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
 > **Review checkpoint B** — code review + security review in parallel on Phases 5–8 (focus: single
 > not-found preserved at every seam, no post-cut narrowing, SQL parameterisation of every new fragment,
 > port catches, benchmark evidence).
+>
+> **Checkpoint B fix round (2026-10-25).** ci-pg on `5d318dcf3`: 10 of 45 files red. Root cause of four
+> (effective-text parity, listing effective names ×2, quick search): `effective-value.sql.ts` `nonEmpty`
+> read a missing key (SQL `NULL`) as non-empty — a simple `case` over `jsonb_typeof(NULL)` fell to
+> `else true` — so the walk stopped at its first leg and a channel-only override never applied; fixed
+> (scalars named, `else false`), the parity grid re-run locally on PGlite (0 of 160 mismatches; 67
+> before). Test-side: 404 bodies compared without `requestId` and at the same language
+> (`errorBodyOf`); facet fixture accepts the seed's `enum` attributes; batch add expects feature 155's
+> whole-batch 404 (consumers.md preamble: the seam keeps its single not-found); the search window case
+> indexes an ended window (a DB change after indexing never reaches the index); the no-surface
+> statement comparison pins `Date` (the availability condition inlines the read's `now`; the two
+> statement lists differed in that literal only). Security: rows 21–22 (price and stock probes,
+> notify-when-available) on the port; `markPersonalisedPricing` stamps every authenticated caller and
+> runs on filters/categories; buyer seams name their channel (basket's own, RFQ
+> `salesChannelId` option, quick-order lookup); archived 410 only where available with the archive
+> neutralised; `validateConfiguration` filter required; link service throws on a channel with no
+> default language. Code review: W1 boot pass `SearchIndexer.ensureQuerySettings` (worker process,
+> settings pushed only where missing); W2 `= any(?::uuid[])` / chunked `$in`; W4 name cursor read by
+> the statement's own `effectiveTextSql`; N3–N6 done; N1/N2 one home (`toScopeChannel`,
+> `scopeLanguageOf`, `firstLanguageTag` in contracts) used by the new seams; the older per-module
+> copies (carts, comparisons, shopping lists) still carry their own normalisation — follow-up.
 
 ---
 

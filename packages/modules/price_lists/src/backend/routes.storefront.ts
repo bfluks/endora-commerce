@@ -3,8 +3,11 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import type { PriceListService } from './services/price-list-service.js';
 import type { PricingServiceContract } from './services/pricing-service.interface.js';
 import {
-  isProductVisibleTo,
+  firstLanguageTag,
+  scopeLanguageOf,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
+  type CatalogProductRecord,
   type OrganizationDetailsPort,
   type OrganizationRecord,
   type ProductAudience,
@@ -30,6 +33,14 @@ export interface StorefrontPricingRoutesDeps {
    * carries its id.
    */
   organizationDetails: OrganizationDetailsPort;
+  /**
+   * Feature 163 — `catalog`'s availability answer at the request's (channel,
+   * language) for this viewer (`contracts/consumers.md` row 21). A price or a
+   * display mode is a disclosure about the product, so it is answered only for
+   * a product the caller could reach in the catalogue: not a draft, not one
+   * outside its window, not one another channel sells.
+   */
+  catalogAvailability: CatalogProductAvailabilityPort;
 }
 
 /**
@@ -74,6 +85,31 @@ async function pricingViewerOf(
 }
 
 /**
+ * The product a probe answers about, or `null` for every product this viewer
+ * may not have — absent, or not available at the request's (channel, language)
+ * to this audience now (feature 163, FR-004). One `null` for every reason, so
+ * the route's single 404 is the only answer a refusal has.
+ */
+async function availableProduct(
+  request: FastifyRequest,
+  productId: string,
+  audience: ProductAudience,
+  catalogProductRead: CatalogProductReadPort,
+  catalogAvailability: CatalogProductAvailabilityPort,
+): Promise<CatalogProductRecord | null> {
+  const product = await catalogProductRead.findById(productId);
+  if (!product) return null;
+  // Feature 053 / FR-002: the channel the canonical middleware resolved.
+  const channel = getResolvedChannel(request);
+  const available = await catalogAvailability.filterAvailable([product.id], {
+    channelId: channel.id,
+    languageCode: scopeLanguageOf(channel, firstLanguageTag(request.headers['accept-language'])),
+    audience,
+  });
+  return available.has(product.id) ? product : null;
+}
+
+/**
  * Storefront pricing endpoints (T025/T026 / contracts/pricing-resolution).
  *
  *   GET /api/v1/storefront/products/:id/resolved-price
@@ -98,7 +134,8 @@ export async function registerStorefrontPricingRoutes(
   app: FastifyInstance,
   deps: StorefrontPricingRoutesDeps,
 ): Promise<void> {
-  const { priceListService, pricingService, catalogProductRead, organizationDetails } = deps;
+  const { priceListService, pricingService, catalogProductRead, organizationDetails, catalogAvailability } =
+    deps;
 
   app.get<{ Params: { productId: string } }>(
     '/api/v1/storefront/pricing/display-mode/:productId',
@@ -111,12 +148,19 @@ export async function registerStorefrontPricingRoutes(
       // window and a crawler hold (Principle VII).
       markPersonalisedPricing(reply, viewer.audience);
 
-      const product = await catalogProductRead.findById(request.params.productId);
       // Issue #227 — this route took a bare product id and answered about it.
       // Whether a price is even displayed for a product an operator restricted
-      // to one distributor is that operator's answer, so the row has to pass the
-      // audience test before this route says anything about it at all.
-      if (!product || !isProductVisibleTo(product, viewer.audience)) {
+      // to one distributor is that operator's answer, so the product has to be
+      // available to this viewer before this route says anything about it at
+      // all — since feature 163, at the request's (channel, language), now.
+      const product = await availableProduct(
+        request,
+        request.params.productId,
+        viewer.audience,
+        catalogProductRead,
+        catalogAvailability,
+      );
+      if (!product) {
         reply.status(404);
         return { error: { code: 'NOT_FOUND', message: 'Product not found.' } };
       }
@@ -155,10 +199,16 @@ export async function registerStorefrontPricingRoutes(
       // the representation a crawler indexes.
       markPersonalisedPricing(reply, viewer.audience);
 
-      const product = await catalogProductRead.findById(request.params.id);
-      // Issue #227 — see the display-mode route above. A resolved price is the
-      // most direct disclosure this module has.
-      if (!product || !isProductVisibleTo(product, viewer.audience)) {
+      // Issue #227 / feature 163 — see the display-mode route above. A resolved
+      // price is the most direct disclosure this module has.
+      const product = await availableProduct(
+        request,
+        request.params.id,
+        viewer.audience,
+        catalogProductRead,
+        catalogAvailability,
+      );
+      if (!product) {
         reply.status(404);
         return { error: { code: 'NOT_FOUND', message: 'Product not found.' } };
       }
