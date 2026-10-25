@@ -767,6 +767,13 @@ review checkpoint C:
   names from it instead of `GET /admin/organizations/:id`. New `[PG]` cases in the two files below and in
   `backend/test/contract/catalog/product-scopes-api.test.ts`; unit cases in `catalog-admin-duplicate.test.ts`.
 
+- [x] T105a [US4] [US7] [S2] Orphaned channel × language keys are deletable (coordinator, 2026-10-25, for S1's
+  Phase 9 overview): a `key: null` entry for a channel the product left, or a language its channel dropped, skips the
+  membership and language-offered checks and goes through `product.url_keys.update`; the removed key stays a redirect
+  in its language (Q3b). A value written to either scope is still `422 SCOPE_INVALID`. `planUrlKeyWrite` already
+  behaved so; the three unit cases in `url-key.service.test.ts` and the `[PG]` case at the end of
+  `url-key-uniqueness.test.ts` pin it. No code change. (S1's twin for value overrides is T071a.)
+
 **Verification** (one invocation per line):
 - `[PG] backend/test/integration/catalog/url-key-uniqueness.test.ts`
 - `[PG] backend/test/contract/catalog/url-keys-api.test.ts`
@@ -775,14 +782,28 @@ review checkpoint C:
 
 ### Phase 17: [backend + storefront] ⛔384 Key resolution, redirects, alternates (US7, FR-071–FR-074, FR-111) — after Block B
 
-- [ ] T107 [P] [US7] [PG] [S2] RED resolution at (C, L): current key serves; other current key of the product in L → redirect to effective key; redirect key → redirect at every (C, L) of its language (US7 #3); key of another language → 404 (K1, US7 #1); unavailable target → 404; archived → 410 where it would be available with the archive taken away, else 404 (FR-005, O-3; asserted in full by T156s); **H1**: a `NULL`-language redirect resolves at every (C, L) — including an L in which its product **gained its first L key after** the redirect was written (seed: slug s0 → s1 writes `(NULL, s0)`, then the first L key; `s0` at (C, L) → 301 to the L key) — and a product's own current L key wins over its own `NULL` redirect with the same key; `GET /api/v1/catalog/products/:idOrSlug` by **global slug** still answers after the product gains an L key (CMS blocks, R28), and never answers a redirect; the resolve answer's target equals `productPath()` — `backend/test/integration/catalog/url-key-resolution.test.ts`
-- [ ] T108 [P] [US7] [PG] [S2] RED `seo` off: redirects answer 404, rows persist, writes still enforce the invariant (a takeover still requires confirmation naming the loser), `GET …/url-keys` omits `redirects` (Q-C); `seo` on again → served and listed (FR-111) — `backend/test/integration/catalog/url-redirects-seo-off.test.ts`
-- [ ] T109 [P] [US7] [S2] RED storefront: PDP calls `resolve`, `permanentRedirect` on `kind: 'redirect'` to `productPath()`; canonical + `alternates.languages` use effective keys through `productPath()` (FR-074); no URL is composed outside `productPath()` — the PDP redirects to the resolve answer's `path` and takes canonical/alternates from the PDP response's `paths` verbatim; no product URL is composed in `storefront/app/(catalog)/p/[slug]/{page,seo}.ts*` (asserted by a source grep in the test) — `storefront/test/catalog/pdp-redirect.test.ts`
-- [ ] T110 [US7] [S2] `UrlKeyResolutionService` + `GET /api/v1/catalog/products/resolve/:key` in `routes.public.url-keys.ts` (resolution order of data-model §5, H1); `getProductByIdOrSlug` accepts an id, a current key at (C, L), else a global slug (R28) — never a redirect; `GET …/url-keys` omits `redirects` unless `effectiveState.isPresent('seo')`; admin `effective[].url`, the resolve answer's `path` and the PDP response's `paths` (canonical + alternates where available to the anonymous audience) all via `productPath()` (contract §4, §6); the additive `paths` field on the PDP shape in `packages/contracts/src/catalog.ts` goes in the phase's handover commit (S1 owns that file) — `services/url-key-resolution.service.ts`, `catalog-query.service.ts` (PDP method only)
-- [ ] T111 [US7] [S2] `ProductSummary.slug` = effective key at (C, L) on listing and PDP (R28); `catalogProductUrlKeyReadPort` provided
-- [ ] T112 [US7] [S2] Sitemap: one `<loc>` per live language with effective key, composed by `productPath()` — `seo/src/backend/services/sitemap-generator.service.ts`
-- [ ] T113 [US7] [S2] Storefront PDP + metadata using the backend's ready `path` / `paths` (the storefront does not know the channel default language, so it never calls `productPath()` itself) — `storefront/app/(catalog)/p/[slug]/page.tsx`, `storefront/lib/api/catalog.ts`. *(Q-B is decided as option C, a separate issue: no cross-language rendering task belongs here; the path prefix later replaces `productPath()`.)*
+- [x] T107 [P] [US7] [PG] [S2] RED resolution at (C, L): current key serves; other current key of the product in L → redirect to effective key; redirect key → redirect at every (C, L) of its language (US7 #3); key of another language → 404 (K1, US7 #1); unavailable target → 404; archived → 410 where it would be available with the archive taken away, else 404 (FR-005, O-3; asserted in full by T156s); **H1**: a `NULL`-language redirect resolves at every (C, L) — including an L in which its product **gained its first L key after** the redirect was written (seed: slug s0 → s1 writes `(NULL, s0)`, then the first L key; `s0` at (C, L) → 301 to the L key) — and a product's own current L key wins over its own `NULL` redirect with the same key; `GET /api/v1/catalog/products/:idOrSlug` by **global slug** still answers after the product gains an L key (CMS blocks, R28), and never answers a redirect; the resolve answer's target equals `productPath()` — `backend/test/integration/catalog/url-key-resolution.test.ts`
+- [x] T108 [P] [US7] [PG] [S2] RED `seo` off: redirects answer 404, rows persist, writes still enforce the invariant (a takeover still requires confirmation naming the loser), `GET …/url-keys` omits `redirects` (Q-C); `seo` on again → served and listed (FR-111) — `backend/test/integration/catalog/url-redirects-seo-off.test.ts`
+- [x] T109 [P] [US7] [S2] RED storefront: PDP calls `resolve`, `permanentRedirect` on `kind: 'redirect'` to `productPath()`; canonical + `alternates.languages` use effective keys through `productPath()` (FR-074); no URL is composed outside `productPath()` — the PDP redirects to the resolve answer's `path` and takes canonical/alternates from the PDP response's `paths` verbatim; no product URL is composed in `storefront/app/(catalog)/p/[slug]/{page,seo}.ts*` (asserted by a source grep in the test) — `storefront/test/catalog/pdp-redirect.test.ts`
+- [x] T110 [US7] [S2] `UrlKeyResolutionService` + `GET /api/v1/catalog/products/resolve/:key` in `routes.public.url-keys.ts` (resolution order of data-model §5, H1); `getProductByIdOrSlug` accepts an id, a current key at (C, L), else a global slug (R28) — never a redirect; `GET …/url-keys` omits `redirects` unless `effectiveState.isPresent('seo')`; admin `effective[].url`, the resolve answer's `path` and the PDP response's `paths` (canonical + alternates where available to the anonymous audience) all via `productPath()` (contract §4, §6); the additive `paths` field on the PDP shape in `packages/contracts/src/catalog.ts` goes in the phase's handover commit (S1 owns that file) — `services/url-key-resolution.service.ts`, `catalog-query.service.ts` (PDP method only)
+- [x] T111 [US7] [S2] `ProductSummary.slug` = effective key at (C, L) on listing and PDP (R28); `catalogProductUrlKeyReadPort` provided
+- [x] T112 [US7] [S2] Sitemap: one `<loc>` per live language with effective key, composed by `productPath()` — `seo/src/backend/services/sitemap-generator.service.ts`
+- [x] T113 [US7] [S2] Storefront PDP + metadata using the backend's ready `path` / `paths` (the storefront does not know the channel default language, so it never calls `productPath()` itself) — `storefront/app/(catalog)/p/[slug]/page.tsx`, `storefront/lib/api/catalog.ts`. *(Q-B is decided as option C, a separate issue: no cross-language rendering task belongs here; the path prefix later replaces `productPath()`.)*
 - **Phase 9c belongs to this phase** (coordinator, 2026-10-25): T156s (RED) then T156t, after T110 and once 9a is on S2's base — see *Phase 9c* under Block Q for the tasks and the ownership exception.
+
+- S2 (2026-10-25): T107/T108 written, type-checked, **unrun** (`[PG]`); T109 green locally (9). A case in
+  `contract/seo/sitemap.test.ts` (`[PG]`) and one in `unit/seo/cross-module-ports.test.ts` (green) cover T112.
+  `UrlKeyResolutionService` and `catalogProductUrlKeyReadPort` live in `services/url-key-resolution.service.ts`; the
+  page's reachability (404/410) is one method, `CatalogQueryService.assertReachable`, asked by both the PDP and the
+  resolution, so a key never resolves to a product the page refuses — and a redirect is answered only after it.
+  `paths` (shape `productPagePathsSchema` in `product-url-keys.ts`) is required on `ProductDetail`. Effective keys
+  are on the listing, PDP, grouped/bundle children and product-link tiles. **Not reached:** the Meilisearch listing
+  (`search-query.service.ts` hydrates `slug: product.slug` — S1's module) and every other module's in-page links
+  (cart lines, comparisons, shopping lists, quick order) still carry the global key: they redirect while `seo` is on,
+  and answer not-found in a language where the product has its own key while `seo` is off. The PDP passes `?lang=` to
+  `getServerContext({ langOverride })`; a `lang` cookie still wins over it (existing rule, left alone). Security
+  carry 4: `seo` marks every cached sitemap stale on `product.updated.v1` naming `scopedStatus`,
+  `publicationWindow`, `audience` or `urlKeys`. Shared-file lines are in `chore(163): s2 handover P17`.
 
 **Verification** (one invocation per line):
 - `[PG] backend/test/integration/catalog/url-key-resolution.test.ts`
