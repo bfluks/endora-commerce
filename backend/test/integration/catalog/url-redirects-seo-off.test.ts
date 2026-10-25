@@ -122,8 +122,13 @@ describe('URL redirects with seo off (spec 163, T108)', () => {
 
   it('answers not-found for a redirect key, omits the list, keeps the rows and the takeover rule while off', async () => {
     const rowsBefore = await redirectRows(p);
-    const absent = await resolveRaw(k('nobody-holds-this'), 'en-US');
-    expect(absent.statusCode).toBe(404);
+    // The localised message follows the request language: one reference per language.
+    const absent: Record<string, unknown> = {};
+    for (const language of ['en-US', 'pl-PL']) {
+      const res = await resolveRaw(k('nobody-holds-this'), language);
+      expect(res.statusCode).toBe(404);
+      absent[language] = errorBodyOf(res);
+    }
 
     await withModuleOff('seo', 'deactivated', async () => {
       for (const [key, language] of [
@@ -134,7 +139,7 @@ describe('URL redirects with seo off (spec 163, T108)', () => {
         const res = await resolveRaw(key, language);
         expect(res.statusCode, `${key} ${language}: ${res.body}`).toBe(404);
         expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
-        expect(errorBodyOf(res)).toEqual(errorBodyOf(absent));
+        expect(errorBodyOf(res)).toEqual(absent[language]);
       }
       // Current keys are catalog's and keep serving.
       const current = await resolveRaw(k('nowy'), 'pl-PL');
