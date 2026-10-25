@@ -30,7 +30,10 @@ export const seoMetaOverrideSchema = z.object({
   id: uuidSchema,
   entityType: seoEntityTypeSchema,
   entityId: uuidSchema,
-  locale: z.string().min(2).max(10),
+  /** `null` = a sales channel row (feature 163). */
+  locale: z.string().min(2).max(10).nullable(),
+  /** Feature 163 — `null` = a language row, for every channel. */
+  channelId: uuidSchema.nullable(),
   title: z.string().nullable(),
   description: z.string().nullable(),
   ogTitle: z.string().nullable(),
@@ -40,8 +43,24 @@ export const seoMetaOverrideSchema = z.object({
   updatedAt: isoDateTimeSchema,
 });
 
+/**
+ * Where an override sits (feature 163, `contracts/seo-media-attachments.md` §1):
+ * `locale` only = the language row, `channelId` only = the sales channel row,
+ * both = the channel × language row. Naming **neither** keeps the meaning every
+ * caller before feature 163 relied on — the `en-US` language row. Only a
+ * `product` takes a `channelId`.
+ */
+export const seoMetaScopeQuerySchema = z.object({
+  locale: z.string().min(2).max(10).optional(),
+  channelId: uuidSchema.optional(),
+});
+export type SeoMetaScopeQuery = z.infer<typeof seoMetaScopeQuerySchema>;
+
 export const upsertSeoMetaOverrideRequestSchema = z.object({
-  locale: z.string().min(2).max(10),
+  /** Optional since feature 163 — see {@link seoMetaScopeQuerySchema} for the addressing rule. */
+  locale: z.string().min(2).max(10).optional(),
+  /** Feature 163 — the sales channel scope of a product override. */
+  channelId: uuidSchema.optional(),
   title: z.string().min(1).max(160).nullable().optional(),
   description: z.string().min(1).max(400).nullable().optional(),
   ogTitle: z.string().min(1).max(160).nullable().optional(),
@@ -405,7 +424,9 @@ export type AdminCrawlerFilePreviewResponse = z.infer<typeof adminCrawlerFilePre
  * Container name: `seoMetaWritePort`. Owner: `seo`.
  *
  * Narrow write surface for PIM importers (feature 089 / FR-029): upsert product
- * meta overrides by locale. Channel dimension does not exist on Endora SEO rows.
+ * meta overrides by locale — the language rows. Feature 163 added channel and
+ * channel × language rows; this port writes none of them, so an import never
+ * touches an operator's channel override (FR-091).
  *
  * **Owner off:** resolving this port throws `ModuleDisabledError` (503).
  */
@@ -433,9 +454,7 @@ export interface SeoProductMetaValues {
 }
 
 /**
- * Owner: `seo` (feature 163, R13). Not registered yet: published as
- * `seoProductMetaPort` with its implementation, and the container-name marker
- * arrives with that registration.
+ * Container name: `seoProductMetaPort`. Owner: `seo` (feature 163, R13).
  *
  * Product metadata per sales channel × language. Each field resolves channel ×
  * language → channel → language → the caller's derived fallback (FR-075).

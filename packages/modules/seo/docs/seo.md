@@ -20,9 +20,9 @@ a sales channel's storefront as a whole.
 | `POST /api/v1/admin/seo/sitemap/:channelCode/regenerate` | admin (`catalog:write`) | Force a fresh build for that channel |
 | `GET /api/v1/admin/seo/sitemap/:channelCode/status` | admin (`catalog:write`) | Last-generated timestamp + size + URL count for that channel |
 | `GET /api/v1/admin/seo/sitemap/:channelCode/xml` | admin (`catalog:write`) | That channel's cached XML, inline or as a download (`?download=1`) |
-| `GET /api/v1/admin/seo/meta/:entityType/:entityId` | admin (`catalog:write`) | Resolved meta + override row for a (entity, locale) |
-| `PUT /api/v1/admin/seo/meta/:entityType/:entityId` | admin (`catalog:write`) | Upsert override (per locale) |
-| `DELETE /api/v1/admin/seo/meta/:entityType/:entityId` | admin (`catalog:write`) | Drop the override (resolver returns to rule output) |
+| `GET /api/v1/admin/seo/meta/:entityType/:entityId` | admin (`catalog:write`) | Resolved meta at a scope (`?locale=`, `?channelId=`) + the override row at exactly that scope |
+| `PUT /api/v1/admin/seo/meta/:entityType/:entityId` | admin (`catalog:write`) | Create or update the override at a scope (`locale`, `channelId` in the body) |
+| `DELETE /api/v1/admin/seo/meta/:entityType/:entityId` | admin (`catalog:write`) | Remove the override at a scope (`?locale=`, `?channelId=`); the next scope down applies again |
 
 ## Search engine robots
 
@@ -531,15 +531,38 @@ text joined to the generated part, while a closed store serves the file above wi
 
 ## Meta-tag resolution
 
-`MetaTagResolverService.resolve({ entityType, entityId, locale })` returns
-`{ title, description, openGraph, source, locale }`. The resolution order is:
+An override sits at one of three **scopes**:
 
-1. Look up the per-(entity, locale) override row.
-2. If a field is set on the override, use it verbatim.
-3. Otherwise fall back to the rule derived from the entity (Product name +
-   description, Category name + auto-summary).
-4. Per-field locale fallback: when a Product has no `pl-PL` text, the rule
-   uses `en-US`, then any available locale.
+| Scope | Addressed by | Applies to |
+| --- | --- | --- |
+| Language | `locale` | that language, in every sales channel |
+| Sales channel | `channelId` | every language of that channel |
+| Sales channel × language | `channelId` and `locale` | that language in that channel |
+
+A request naming neither is the `en-US` language override — what every request meant before
+scopes existed, so an existing caller keeps working. Only a product takes a sales channel scope:
+a `channelId` on a category or a CMS page is refused with `422 VALIDATION_FAILED`. Saving an
+override for a channel the product is not in, or for a language that channel does not offer, is
+refused with `422 SCOPE_INVALID`; removing one is always allowed, so an override left behind when
+a product leaves a channel can be cleaned up.
+
+Each of the five fields — title, description, Open Graph title, description and image — is
+resolved on its own, from the most specific scope that sets it: sales channel × language, then
+sales channel, then language, then the value derived from the entity (Product name + description,
+Category name + auto-summary). A field one scope leaves empty is taken from the next. An override
+never answers for another language. Overrides written before scopes existed are language
+overrides, unchanged.
+
+**The product page serves them.** The storefront's product page takes its title, description and
+Open Graph tags from this resolution at the request's sales channel and language. Product
+overrides were stored but not shown on the page before this; they are shown now. While `seo` is
+switched off the page shows the derived metadata, and every override comes back when the module
+is switched on.
+
+**Every change is audited.** Saving an override is one `seo_meta_override.upsert` entry in the
+audit log, removing one a `seo_meta_override.delete` entry, each with the whole override before
+and after. To put back an earlier version, save the values from the entry's *before* state.
+Removing an override that does not exist changes nothing and writes no entry.
 
 Title and description are truncated at 60 / 160 characters with an ellipsis.
 The truncation lives in one helper so changes to the SEO budget happen in
@@ -547,14 +570,19 @@ one place.
 
 ## Sitemap
 
-`SitemapGeneratorService.regenerate()` walks active, public-visibility,
-non-archived products and non-deleted categories, stamps absolute URLs
-against `STOREFRONT_BASE_URL`, and writes the XML payload to a singleton
-`sitemap_cache` row.
+`SitemapGeneratorService.regenerate()` walks the channel's products, categories and CMS pages,
+stamps absolute URLs against the channel's storefront address, and writes the XML payload to the
+channel's `sitemap_cache` row. A product is listed once for every language it is live in on the
+channel, each URL on the product's URL key in that language — its key for that channel and
+language, else its language key, else its global key — with `?lang=<language>` for every language
+other than the channel's default.
 
 The public route (`GET /catalog/sitemap.xml`) returns the cached payload;
 when the row is older than `staleAfterMs` (default 6 h) it regenerates
-inline. A `Cache-Control: public, max-age=3600` header is set on the
+inline. A product change that alters what a sitemap lists — its status in a channel or language,
+its publication window (including the moment a window opens or closes), its audience or its URL
+keys — marks every channel's cached sitemap stale, so the next request rebuilds it. A
+`Cache-Control: public, max-age=3600` header is set on the
 response so well-behaved CDNs hold the payload for an hour.
 
 ## Anonymous-only filtering
@@ -570,8 +598,8 @@ ever exposed to crawlers.
 
 ## Entities
 
-`SeoMetaOverride` (entityType, entityId, locale, title?, description?,
-ogTitle?, ogDescription?, ogImageUrl?), `SitemapCache` (singleton key,
+`SeoMetaOverride` (entityType, entityId, salesChannelId?, locale?, title?, description?,
+ogTitle?, ogDescription?, ogImageUrl?; at least one of `salesChannelId` and `locale`), `SitemapCache` (singleton key,
 payload, urlCount, byteSize, generatedAt).
 
 ## Extension points
