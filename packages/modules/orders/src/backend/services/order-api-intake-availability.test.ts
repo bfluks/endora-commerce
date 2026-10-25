@@ -7,11 +7,12 @@ import type { OrderService } from './order-service.js';
 
 /**
  * Feature 163 (owner decision W5 = A) — the external order intake asks
- * `catalogProductAvailabilityPort` at the key's channel for the bound
- * Organization: a product that is switched off there, outside its window or
- * outside the channel's audience is refused per line with the answer an
- * unknown SKU gets (`SKU_NOT_IN_ASSORTMENT` at `lines.<i>.sku`), inside the
- * intake's whole-order 422, and nothing is placed.
+ * `catalogProductAvailabilityPort` at the key's channel for the caller: a
+ * product that is switched off there, outside its window or outside the
+ * channel's audience answers exactly what a product hidden from the bound
+ * Organization always answered (feature 155, F1 / US4 #16) — `404
+ * PRODUCT_NOT_FOUND`, no name, nothing placed. An unknown SKU keeps its own
+ * per-line 422, which takes precedence.
  */
 const ORG_ID = '00000000-0000-4000-8000-000000000010';
 const CHANNEL_ID = '00000000-0000-4000-8000-000000000012';
@@ -44,6 +45,7 @@ function rig() {
     addressService: {} as never,
     catalogProductRead: { findBySkus: async () => [ON, OFF] } as never,
     organizationDetails: { findById: async () => null } as never,
+    salesChannelMembership: { listChannelsForEntity: async () => [{ id: CHANNEL_ID }] } as never,
     catalogAvailability: { filterAvailable },
     pricingService: {
       resolveLinePrices: async (input: { lines: Array<{ key: string }> }) =>
@@ -79,22 +81,37 @@ async function refusal(promise: Promise<unknown>): Promise<HttpError> {
   throw new Error('expected a refusal');
 }
 
+const AUDIENCE = { organizationId: ORG_ID, authenticated: true };
+
 describe('OrderApiIntakeService — scoped availability (163, W5)', () => {
-  it('refuses an unavailable product per line exactly as an unknown SKU, and places nothing', async () => {
+  it('refuses an unavailable product with the hidden product’s 404 and places nothing', async () => {
     const { service, placeOrder, filterAvailable } = rig();
-    const error = await refusal(service.place(binding, 'idem-1', bodyOf(['SKU-ON', 'SKU-OFF', 'SKU-NONE'])));
-    expect(error.statusCode).toBe(422);
-    expect(error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
-    expect(error.details).toEqual([
-      { path: 'lines.1.sku', issue: ERROR_CODES.SKU_NOT_IN_ASSORTMENT, sku: 'SKU-OFF' },
-      { path: 'lines.2.sku', issue: ERROR_CODES.SKU_NOT_IN_ASSORTMENT, sku: 'SKU-NONE' },
-    ]);
+    const error = await refusal(
+      service.place(binding, 'idem-1', bodyOf(['SKU-ON', 'SKU-OFF']), { audience: AUDIENCE }),
+    );
+    expect(error.statusCode).toBe(404);
+    expect(error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
+    expect(error.message).toBe('Product not found.');
+    expect(JSON.stringify(error.details ?? null)).not.toContain('SKU-OFF');
     expect(placeOrder).not.toHaveBeenCalled();
-    // Asked at the key's channel, in its default language, for the bound Organization.
+    // Asked at the key's channel, in its default language, for the request's audience.
     expect(filterAvailable).toHaveBeenCalledWith([ON.id, OFF.id], {
       channelId: CHANNEL_ID,
       languageCode: null,
-      audience: { organizationId: ORG_ID, authenticated: true },
+      audience: AUDIENCE,
     });
+  });
+
+  it('keeps the unknown SKU’s per-line 422, which wins over an unavailable line', async () => {
+    const { service, placeOrder } = rig();
+    const error = await refusal(
+      service.place(binding, 'idem-2', bodyOf(['SKU-OFF', 'SKU-NONE']), { audience: AUDIENCE }),
+    );
+    expect(error.statusCode).toBe(422);
+    expect(error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    expect(error.details).toEqual([
+      { path: 'lines.1.sku', issue: ERROR_CODES.SKU_NOT_IN_ASSORTMENT, sku: 'SKU-NONE' },
+    ]);
+    expect(placeOrder).not.toHaveBeenCalled();
   });
 });
