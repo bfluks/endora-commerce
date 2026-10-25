@@ -1,13 +1,12 @@
 import { randomUUID } from 'crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { scopeOverviewResponseSchema, type ScopeOverviewResponse } from '@endora-commerce/contracts';
 import {
   setupBackendServer,
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { AdminRole, AdminUser } from '../../helpers/package-entities.js';
+import { seedProductScopesAdmins } from '../../helpers/product-scopes-admins.js';
 
 /**
  * Feature 163, Phase 9 (T067) — `GET /api/v1/admin/catalog/products/:id/scope-overview`
@@ -30,8 +29,6 @@ describe('Scope overview — GET /admin/catalog/products/:id/scope-overview (spe
   const admin = { cookies: { b2b_session: 'stub-admin-session' } };
   const reader = { cookies: { b2b_session: 'stub-product-scopes-reader-session' } };
   const noCatalog = { cookies: { b2b_session: 'stub-product-scopes-no-catalog-session' } };
-  const READER_ID = '00000000-0000-4000-8000-0000000162a1';
-  const NO_CATALOG_ID = '00000000-0000-4000-8000-0000000162a2';
 
   let b2b: string;
   let b2c: string;
@@ -137,62 +134,12 @@ describe('Scope overview — GET /admin/catalog/products/:id/scope-overview (spe
     return found;
   }
 
-  /**
-   * `product-scopes-api.test.ts` sets up the same role and admins for the same stub
-   * sessions, and contract files may run in parallel: a lost insert race is retried
-   * once against the row the other file wrote (same code, same permissions).
-   */
-  async function once<T>(write: () => Promise<T>): Promise<T> {
-    try {
-      return await write();
-    } catch (err) {
-      if (!(err instanceof UniqueConstraintViolationException)) throw err;
-      return write();
-    }
-  }
-
-  async function ensureRole(code: string, permissions: string[]): Promise<string> {
-    return once(async () => {
-      const em = h.em().fork();
-      let role = await em.findOne(AdminRole, { code });
-      if (!role) role = em.create(AdminRole, { code, name: code, permissions });
-      else role.permissions = permissions;
-      await em.persistAndFlush(role);
-      return role.id;
-    });
-  }
-
-  async function ensureAdmin(id: string, email: string, roleId: string): Promise<void> {
-    await once(async () => {
-      const em = h.em().fork();
-      const existing = await em.findOne(AdminUser, { id });
-      if (existing) {
-        existing.adminRoleId = roleId;
-        existing.status = 'active';
-      } else {
-        em.create(AdminUser, {
-          id,
-          email,
-          passwordHash: 'x'.repeat(60),
-          firstName: 'Product',
-          lastName: 'Scopes',
-          adminRoleId: roleId,
-          status: 'active',
-        });
-      }
-      await em.flush();
-    });
-  }
-
   beforeAll(async () => {
     h = await setupBackendServer();
     b2b = await insertChannel(['pl-PL', 'de-DE']);
     b2c = await insertChannel(['pl-PL', 'en-GB']);
     left = await insertChannel(['pl-PL']);
-    const readerRole = await ensureRole('product_scopes_catalog_reader', ['catalog:read']);
-    const noCatalogRole = await ensureRole('product_scopes_no_catalog', ['orders:read']);
-    await ensureAdmin(READER_ID, 'product-scopes-reader@example.com', readerRole);
-    await ensureAdmin(NO_CATALOG_ID, 'product-scopes-no-catalog@example.com', noCatalogRole);
+    await seedProductScopesAdmins(h);
   }, 60_000);
 
   afterAll(async () => {
@@ -360,6 +307,70 @@ describe('Scope overview — GET /admin/catalog/products/:id/scope-overview (spe
     expect(cell(data, left, 'pl-PL')).toMatchObject({ available: false, statusSource: 'global', overriddenFields: [] });
     expect(cell(data, b2b, 'pl-PL')).toMatchObject({ statusSource: 'global', overriddenFields: [] });
     expect(data.channelRows.find((r) => r.channelId === left)).toEqual({ channelId: left, overriddenFields: [] });
+  });
+
+  it('each kind of orphaned value override can be deleted, audited, and leaves the overview (T071a, FR-015)', async () => {
+    const narrowedKey = `sov_narrow_${run}`;
+    const goneKey = `sov_gone_${run}`;
+    await createAttribute(narrowedKey);
+    const productId = await createProduct([b2b, left]);
+    await insertOverride(productId, 'name', left, 'pl-PL', 'Opuszczony'); // channel left
+    await insertOverride(productId, 'name', b2b, 'fr-FR', 'Perceuse'); // language not offered
+    await insertOverride(productId, narrowedKey, b2b, 'pl-PL', 'wartość'); // attribute narrowed
+    await insertOverride(productId, goneKey, b2b, null, 'x'); // attribute that does not exist
+    await sql(`delete from sales_channel_products where sales_channel_id = ? and product_id = ?`, [left, productId]);
+    const narrowed = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/catalog/attributes/${narrowedKey}`,
+      ...admin,
+      payload: { channelScoped: false },
+    });
+    expect(narrowed.statusCode).toBe(200);
+
+    const before = await overview(productId);
+    expect(before.orphans).toHaveLength(4);
+
+    const deletes = [
+      { attributeKey: 'name', channelId: left, languageCode: 'pl-PL' },
+      { attributeKey: 'name', channelId: b2b, languageCode: 'fr-FR' },
+      { attributeKey: narrowedKey, channelId: b2b, languageCode: 'pl-PL' },
+      { attributeKey: goneKey, channelId: b2b, languageCode: null },
+    ];
+    // A catalogue reader cannot delete them (US4 #3).
+    const refused = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/catalog/products/${productId}/value-overrides`,
+      ...reader,
+      payload: { upserts: [], deletes },
+    });
+    expect(refused.statusCode).toBe(403);
+
+    const res = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/catalog/products/${productId}/value-overrides`,
+      ...admin,
+      payload: { upserts: [], deletes },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { data: { applied: { deleted: number } } }).data.applied.deleted).toBe(4);
+
+    const after = await overview(productId);
+    expect(after.orphans).toEqual([]);
+    const audited = (await sql(
+      `select count(*)::text as n from audit_log_entries
+        where action = 'product.overrides_apply' and object_type = 'product' and object_id = ?`,
+      [productId],
+    )) as Array<{ n: string }>;
+    expect(Number(audited[0]?.n ?? 0)).toBe(1);
+
+    // An upsert into an orphaned slot is still refused.
+    const upsert = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/catalog/products/${productId}/value-overrides`,
+      ...admin,
+      payload: { upserts: [{ attributeKey: 'name', channelId: left, languageCode: 'pl-PL', value: { v: 'x' } }], deletes: [] },
+    });
+    expect(upsert.statusCode).toBe(422);
   });
 
   it('a product in no channel offers the global and language scopes only (US4 #4)', async () => {
