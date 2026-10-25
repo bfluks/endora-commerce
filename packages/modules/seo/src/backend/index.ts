@@ -6,9 +6,10 @@ import type {
   CatalogProductUrlKeyReadPort,
   CmsPageReadPort,
   SeoMetaWritePort,
+  SeoProductMetaPort,
   SettingWriteValidatorRegistryPort,
 } from '@endora-commerce/contracts';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { lazyPort } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
@@ -54,8 +55,9 @@ import { SitemapCache } from './entities/sitemap-cache.entity.js';
  * something stable to match — and a module should not have to know which of its
  * callers is a test.
  *
- * `auditLog` stops being optional: SEO overrides are admin writes, and an
- * optional audit sink defaults to not recording.
+ * SEO overrides are admin writes, and since feature 163 they run as Commands on
+ * the container's `commandBus` — one audit entry per request with the full row
+ * before and after — rather than through a hand-held audit sink.
  */
 
 /** The `product.updated.v1` fields that change what a sitemap lists (feature 163, R10). */
@@ -68,7 +70,8 @@ const SITEMAP_PRODUCT_FIELDS: ReadonlySet<string> = new Set([
 
 export interface SeoCradle {
   readonly emFactory: () => EntityManager;
-  readonly auditLogService: AuditPort;
+  /** Every SEO override write is a Command (feature 163, analyze C1). */
+  readonly commandBus: CommandBus;
   readonly requireAdmin: RequireAdminFactory;
   readonly settingsReadPort: StorefrontAddressSettingsPort;
   /** Composition-specific sitemap tuning; `{}` in production. */
@@ -86,16 +89,18 @@ export function registerModule(ctx: ModuleContext): void {
 
     seoMetaResolver: ctx
       .asFunction(
-        ({ emFactory, auditLogService }: SeoCradle) =>
+        ({ emFactory, commandBus }: SeoCradle) =>
           new MetaTagResolverService(
             emFactory,
-            auditLogService,
+            commandBus,
             // Feature 075, Phase C. Never captured: the proxies resolve per
             // call, so a switched-off owner answers 503 `MODULE_DISABLED` at
             // the call rather than through a gate frozen at composition time.
             lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
             lazyPort<CatalogCategoryReadPort>(ctx, 'catalogCategoryReadPort'),
             lazyPort<CmsPageReadPort>(ctx, 'cmsPageReadPort'),
+            // Feature 163 — a channel-scoped override needs the product in the channel (FR-014).
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
           ),
       )
       .singleton(),
@@ -148,6 +153,22 @@ export function registerModule(ctx: ModuleContext): void {
       )
       .singleton(),
   });
+
+  /**
+   * Feature 163 (R13) — product metadata per sales channel × language, for the
+   * product page `catalog` builds. `catalog` declares this edge `degrades-without`
+   * and probes `seo`'s presence before resolving it, so with `seo` off the page
+   * shows its derived metadata.
+   */
+  ctx.di.providePort<SeoProductMetaPort>(
+    'seoProductMetaPort',
+    ctx
+      .asFunction(({ seoMetaResolver }: SeoCradle): SeoProductMetaPort => ({
+        resolveForProduct: (input) => seoMetaResolver.resolveForProduct(input),
+        listScopesForProduct: (productId) => seoMetaResolver.listScopesForProduct(productId),
+      }))
+      .singleton(),
+  );
 
   ctx.di.providePort<SeoMetaWritePort>(
     'seoMetaWritePort',

@@ -174,10 +174,12 @@ describe('seo — the meta-tag rule sources arrive over published read ports', (
 
     const service = new MetaTagResolverService(
       fakeEm({ SeoMetaOverride: null }),
-      undefined,
+      // A read: the bus (feature 163 — writes are Commands) and the membership are never reached.
+      refusing('command bus'),
       catalogProducts,
       refusing('catalog categories'),
       refusing('cms'),
+      refusing('sales channel membership'),
     );
 
     const meta = await service.resolve({
@@ -202,10 +204,12 @@ describe('seo — the meta-tag rule sources arrive over published read ports', (
 
     const service = new MetaTagResolverService(
       fakeEm({ SeoMetaOverride: null }),
-      undefined,
+      // A read: the bus (feature 163 — writes are Commands) and the membership are never reached.
+      refusing('command bus'),
       refusing('catalog products'),
       catalogCategories,
       refusing('cms'),
+      refusing('sales channel membership'),
     );
 
     await expect(
@@ -221,10 +225,12 @@ describe('seo — the meta-tag rule sources arrive over published read ports', (
 
     const service = new MetaTagResolverService(
       fakeEm({ SeoMetaOverride: null }),
-      undefined,
+      // A read: the bus (feature 163 — writes are Commands) and the membership are never reached.
+      refusing('command bus'),
       refusing('catalog products'),
       refusing('catalog categories'),
       cmsPages,
+      refusing('sales channel membership'),
     );
 
     const meta = await service.resolve({
