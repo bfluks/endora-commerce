@@ -6,6 +6,7 @@ import {
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
 import { TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { errorBodyOf } from '../../helpers/product-scope-fixture.js';
 
 /**
  * Feature 163, Phase 5 (T031) — the Independent Test of US1: one product, two
@@ -103,7 +104,10 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
     // A filterable option-style attribute to count facets on.
     const filters = await h.app.inject({ method: 'GET', url: '/api/v1/catalog/filters' });
     const defs = (filters.json() as { data: Array<{ attributeKey: string; valueType: string }> }).data;
-    facetKey = defs.find((d) => d.valueType === 'string' || d.valueType === 'select')?.attributeKey ?? null;
+    // The seed's filterable attributes are `enum` (`color`, `material`); every
+    // option-style type is counted the same way (`getFilterDefinitions`).
+    const optionStyle = new Set(['enum', 'select', 'string']);
+    facetKey = defs.find((d) => optionStyle.has(d.valueType))?.attributeKey ?? null;
 
     c1 = await insertChannel('c1');
     c2 = await insertChannel('c2');
@@ -213,13 +217,14 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
   });
 
   it('serves P’s page where it is on and answers the absent product’s 404 elsewhere', async () => {
-    const absent = await h.app.inject({
-      method: 'GET',
-      url: `/api/v1/catalog/products/does-not-exist-${RUN}`,
-      headers: headers(c1, 'pl-PL'),
-    });
-    expect(absent.statusCode).toBe(404);
     for (const [channel, language] of pairs()) {
+      // Asked at the same (channel, language): the message is localised.
+      const absent = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/catalog/products/does-not-exist-${RUN}`,
+        headers: headers(channel, language),
+      });
+      expect(absent.statusCode).toBe(404);
       const res = await h.app.inject({
         method: 'GET',
         url: `/api/v1/catalog/products/${slugs['p']}`,
@@ -230,7 +235,7 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
       } else {
         expect(res.statusCode, `PDP at ${channel.code}/${language}`).toBe(404);
         // Same body as a product that does not exist: no reason leaks.
-        expect(res.json()).toEqual(absent.json());
+        expect(errorBodyOf(res)).toEqual(errorBodyOf(absent));
       }
     }
   });

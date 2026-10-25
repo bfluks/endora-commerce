@@ -107,3 +107,15 @@ export async function clearValueOverrides(em: EntityManager, productIds: readonl
     ...productIds,
   ]);
 }
+
+/**
+ * An error response's body without its `requestId` — the one field two
+ * otherwise identical refusals never share. "Answers what an absent product
+ * answers" compares this: the code and the (localised) message.
+ */
+export function errorBodyOf(res: { json(): unknown }): unknown {
+  const body = res.json() as { error?: Record<string, unknown> };
+  if (!body.error) return body;
+  const { requestId: _requestId, ...error } = body.error;
+  return { ...body, error };
+}
