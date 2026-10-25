@@ -10,7 +10,7 @@ import {
   ANONYMOUS_PRODUCT_AUDIENCE,
   isOrderMinimumEligibleType,
   isProductVisibleTo,
-  resolveScopeLanguage,
+  scopeLanguageOf,
   channelOverrideFor,
   effectiveSystemText,
   overrideLanguages,
@@ -858,8 +858,5 @@ export class ProductNotFoundError extends Error {
 function comparisonScopeLanguage(channelId: string, languageTag: string | undefined): string | null {
   const channel = currentSalesChannel();
   if (!channel || channel.id !== channelId) return null;
-  const languages = channel.languages.includes(channel.defaultLanguage)
-    ? channel.languages
-    : [channel.defaultLanguage, ...channel.languages];
-  return resolveScopeLanguage({ id: channel.id, languages, defaultLanguage: channel.defaultLanguage }, languageTag);
+  return scopeLanguageOf(channel, languageTag);
 }
