@@ -23,6 +23,7 @@ import {
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { encodeCursor, decodeCursor } from '@endora-commerce/platform/http';
+import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import { availabilityFilter } from './search-availability.js';
 import {
   indexUidFor,
@@ -267,6 +268,7 @@ export class SearchQueryService {
       try {
         response = await runSearch(true);
       } catch (err) {
+        rethrowIfModuleDisabled(err);
         if (!(searchOn && err instanceof MeilisearchApiError && err.cause?.code === 'invalid_search_attributes_to_search_on')) {
           throw err;
         }
