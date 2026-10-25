@@ -425,17 +425,39 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
 
 ### Phase 9: [backend] Scope overview and attribute scope-change preview (US4, FR-015, FR-041, FR-090)
 
-- [ ] T067 [P] [US4] [PG] [S1] RED overview: cells name overridden fields and the effective source (cell/channel/language/global); channel rows and language columns; orphans (non-member, language removed, attribute scope narrowed); product in no channel → only global and language scopes (US4 #4); `catalog:read` gets it, writes need `catalog:write` (US4 #3) — `backend/test/contract/catalog/scope-overview.test.ts`
-- [ ] T068 [P] [PG] [S1] RED FR-090 preview counts orphaned overrides per channel; widening reports 0; the attribute update still retains rows — `backend/test/contract/catalog/attribute-scope-change-preview.test.ts`
-- [ ] T069 [US4] [S1] `ScopeOverviewService` over scope rows, `product_value_overrides` and URL keys (P16 is merged before Block C — see the chain); leaves `cells[].missing` absent — T080a fills it once `checkCompleteness` exists (Phase 11); media/attachment fields join in T134a–T134b / T139a–T139b and SEO in T118a / T118c (all Phase 21–22, S1) — `services/scope-overview.service.ts`
-- [ ] T070 [US4] [S1] Route `GET …/products/:id/scope-overview` — `routes.admin.ts`
-- [ ] T071 [S1] Preview route `GET …/attributes/:idOrKey/scope-change-preview` — `routes.admin.ts`, `attribute-set.service.ts` or a new `attribute-scope-preview.ts`
+- [x] T067 [P] [US4] [PG] [S1] RED overview: cells name overridden fields and the effective source (cell/channel/language/global); channel rows and language columns; orphans (non-member, language removed, attribute scope narrowed); product in no channel → only global and language scopes (US4 #4); `catalog:read` gets it, writes need `catalog:write` (US4 #3) — `backend/test/contract/catalog/scope-overview.test.ts`
+- [x] T068 [P] [PG] [S1] RED FR-090 preview counts orphaned overrides per channel; widening reports 0; the attribute update still retains rows — `backend/test/contract/catalog/attribute-scope-change-preview.test.ts`
+- [x] T069 [US4] [S1] `ScopeOverviewService` over scope rows, `product_value_overrides` and URL keys (P16 is merged before Block C — see the chain); leaves `cells[].missing` absent — T080a fills it once `checkCompleteness` exists (Phase 11); media/attachment fields join in T134a–T134b / T139a–T139b and SEO in T118a / T118c (all Phase 21–22, S1) — `services/scope-overview.service.ts`
+- [x] T070 [US4] [S1] Route `GET …/products/:id/scope-overview` — `routes.admin.ts`
+- [x] T071 [S1] Preview route `GET …/attributes/:idOrKey/scope-change-preview` — `routes.admin.ts`, `attribute-set.service.ts` or a new `attribute-scope-preview.ts`
 - *T072 moved to Phase 18 as T118b — a port must be declared in the phase that provides it, or `check:port-dependencies` reports a port resolved and registered by nobody.*
 
 **Verification**:
 - `[PG] backend/test/contract/catalog/scope-overview.test.ts`
 - `[PG] backend/test/contract/catalog/attribute-scope-change-preview.test.ts`
 - `pnpm --filter @endora-commerce/mod-catalog run typecheck`
+
+**Phase 9 note** (S1): the pure cores are unit-tested beside their subjects
+(`services/scope-overview.service.test.ts`, `services/attribute-scope-preview.test.ts`); the two
+[PG] files are written and type-check, unrun locally. Decisions taken in the code, to confirm at
+review checkpoint C:
+- *Field names* are the owning write's: `status`, `window`, `audience`, `minOrderQuantity`,
+  `returnable`, `name`, `description`, `attribute:<key>`, `urlKey` — the `ScopeMissingValue`
+  spellings where the two meet. A cell lists each field once, at the level that wins there
+  (C×L, then C, then L).
+- *Language level* of a per-language baseline (`products.name`, `description`, a language-scoped
+  attribute's value) = a value in a language other than the platform default, as the resolver
+  reports it; a language URL key is always a language override of `products.slug`.
+- *Cells* cover every listed channel (members and channels holding orphaned rows) × the
+  languages axis; a cell outside membership or the channel's languages is not available and
+  marks nothing. `available` is composed from `isOn`/`effectiveStatus`/`effectiveWindow`/
+  `isInsideWindow` and `archivedAt`, never a status value.
+- *Orphan reasons* in order: `not_a_member`, `language_not_offered`, `attribute_scope_changed`
+  (the last includes an override whose attribute no longer exists).
+- *Preview* counts the rows the current flags let the resolver read and the requested ones do
+  not, by scope flag only (rows also orphaned by membership are counted); soft-deleted products'
+  rows are not. A system or unknown attribute answers `404 NOT_FOUND`; an absent flag keeps the
+  current one.
 
 ### Phase 10: [backend] Bulk scoped status (US5, FR-050–FR-052)
 
