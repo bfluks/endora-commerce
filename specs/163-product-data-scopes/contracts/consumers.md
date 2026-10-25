@@ -25,7 +25,7 @@ refusal keeps the seam's **existing single not-found answer** (#227, #259). Rese
 | 17 | shopping_lists · `shopping-list-service.ts:236-249`, `:462` | audience + channel | `filterAvailable` |
 | 18 | quick_order · `catalog-lookup.ts:56`, `routes.ts:106` | `productIdsInRequestChannel` + status | `filterAvailable`; `'unrestricted'` operator arm unchanged (exempt) |
 | 19 | cms · product blocks — `storefront/lib/page-builder/catalog-block-data.ts` over `packages/cms-components/src/utils/catalog-block-data.ts` (cms's own `storefront-resolver.ts` reads pages only, never products) | `listProducts` + `getProductBySlug` (slugs stored in the block) | through rows 1 and 3, no own predicate; the stored slug keeps resolving after the product gains a language key (R28 stable handle) — T045a, T107 |
-| 20 | orders · reorder (`order-reorder-service.ts:91`), quote `convertToOrder` | exempt (2026-08-21 ruling) | **unchanged** — commitments rebuild; placement (row 14) still refuses an unavailable line |
+| 20 | orders · reorder (`order-reorder-service.ts:91`), quote `convertToOrder` and the operator's `prepare-customer-basket` (issue #170 — both go through `RfqService.seedBasketFromApproved`) | exempt (2026-08-21 ruling) | **unchanged** — commitments rebuild; placement (row 14) still refuses an unavailable line |
 
 ## Events (R10)
 
