@@ -41,6 +41,7 @@ import type {
   CatalogQuickSearchPort,
   CatalogProductAvailabilityPort,
   CatalogProductUrlKeyReadPort,
+  SeoProductMetaPort,
   InventoryProductThresholdWritePort,
   SearchQueryPort,
   SearchReindexPort,
@@ -274,6 +275,8 @@ export interface CatalogCradle {
     CatalogModuleOptions['resolveProductImagePlaceholderUrl']
   >;
   readonly catalogSearchReindex: NonNullable<CatalogModuleOptions['reindexSearchIndexes']>;
+  /** Feature 163 — `seo`'s product metadata, `null` while `seo` is off (`seoProductMetaPort`). */
+  readonly catalogSeoProductMeta: NonNullable<CatalogModuleOptions['resolveSeoProductMeta']>;
   /**
    * Owned by `assets_library`: the registry that refuses to delete an asset a
    * product gallery, attachment, virtual download or category image points at.
@@ -490,6 +493,24 @@ export function registerModule(ctx: ModuleContext): void {
       .singleton(),
 
     /**
+     * Feature 163 (R13) — the product page's metadata per sales channel ×
+     * language. `catalog` declares `seoProductMetaPort` `degrades-without`: the
+     * probe comes **before** the resolution and the absent answer is `null` in
+     * the return type, so the page serves its derived metadata — there is no
+     * `catch` to swallow a genuine `seo` failure with the absence.
+     */
+    catalogSeoProductMeta: ctx
+      .asFunction((): CatalogCradle['catalogSeoProductMeta'] => {
+        const seoMeta = lazyPort<SeoProductMetaPort>(ctx, 'seoProductMetaPort');
+        return async (input) => {
+          if (!effectiveState.isPresent('seo')) return null;
+          const { sources: _sources, ...values } = await seoMeta.resolveForProduct(input);
+          return values;
+        };
+      })
+      .singleton(),
+
+    /**
      * The storefront product-image placeholder
      * (`general.product_image_placeholder_url`), resolved per channel.
      *
@@ -662,6 +683,7 @@ export function registerModule(ctx: ModuleContext): void {
             resolveProductImagePlaceholderUrl: (salesChannelCode) =>
               cradle().catalogImagePlaceholderUrl(salesChannelCode),
             reindexSearchIndexes: () => cradle().catalogSearchReindex(),
+            resolveSeoProductMeta: (input) => cradle().catalogSeoProductMeta(input),
             categoryRevalidator: cradle().catalogCategoryRevalidator,
             copyWarehouseThresholds,
           }),
