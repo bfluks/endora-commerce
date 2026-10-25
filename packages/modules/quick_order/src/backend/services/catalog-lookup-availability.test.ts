@@ -54,6 +54,18 @@ describe('CatalogPortLookup.findProductsBySku — availability (163)', () => {
     expect(filterAvailable).not.toHaveBeenCalled();
   });
 
+  it('security review (checkpoint B) — a channel the route names is asked even with no request scope', async () => {
+    channelState.current = null;
+    const { subject, filterAvailable } = lookup(['p-on']);
+    const out = await subject.findProductsBySku(['ON', 'OFF'], BUYER, 'channel-named');
+    expect(out.map((p) => p.sku)).toEqual(['ON']);
+    expect(filterAvailable).toHaveBeenCalledWith(['p-on', 'p-off'], {
+      channelId: 'channel-named',
+      languageCode: null,
+      audience: BUYER,
+    });
+  });
+
   it('records the pre-existing outside-a-request behaviour: no channel -> audience filter alone, port not asked', async () => {
     channelState.current = null;
     const { subject, filterAvailable } = lookup([]);

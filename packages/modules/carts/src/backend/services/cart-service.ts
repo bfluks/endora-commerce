@@ -4,7 +4,6 @@ import {
   ANONYMOUS_PRODUCT_AUDIENCE,
   ERROR_CODES,
   isOrderMinimumEligibleType,
-  isProductVisibleTo,
   minimumRefusal,
   pickLocalized,
   type CartBatchLineInput,
@@ -24,7 +23,7 @@ import type {
   ProductDisplayModePort,
   OrganizationDetailsPort,
 } from '@endora-commerce/contracts';
-import { currentSalesChannel, rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
+import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import { basketScopeLanguage } from './cart-availability.js';
 import type { CartApprovalService } from './cart-approval-service.js';
 import type { CartAuditService } from './cart-audit-service.js';
@@ -670,16 +669,15 @@ export class CartService {
   /**
    * Feature 163 (FR-017 d) — the effective names of a batch's products at the
    * basket's (channel, language): `catalog`'s answer, the walk a storefront card
-   * shows. Empty outside a channel — the caller falls back to the baseline pick.
-   * An operator naming the channel is answered in its default language (N2).
+   * shows. An operator naming the channel is answered in its default language (N2).
    */
   async #effectiveNamesFor(
     actor: CartActor,
     resolvedLines: ReadonlyArray<{ resolved: ResolvedCartLine; input: CartBatchLineInput }>,
   ): Promise<Map<string, string>> {
     const named = resolvedLines.find(({ input }) => input.salesChannelId)?.input.salesChannelId;
-    const channelId = named ?? currentSalesChannel()?.id ?? null;
-    if (channelId === null || resolvedLines.length === 0) return new Map();
+    if (resolvedLines.length === 0) return new Map();
+    const channelId = named ?? this.#basketChannelOf(actor);
     return this.availability.effectiveNames(
       [...new Set(resolvedLines.map(({ resolved }) => resolved.product.id))],
       { channelId, languageCode: named ? null : basketScopeLanguage(channelId, actor.languageTag) },
@@ -844,25 +842,21 @@ export class CartService {
     const notFound = (): HttpError =>
       new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     if (!product) throw notFound();
-    // The channel is a property of the request, read off the request scope and
-    // never re-resolved here. The one exception is a caller that names the
-    // channel itself: an administrator creating an order on a customer's
-    // behalf chooses the order's channel in the request body (buyer routes
-    // never pass `salesChannelId`), and is answered in that channel's default
-    // language (N2).
-    const channelId = input.salesChannelId ?? currentSalesChannel()?.id ?? null;
-    if (channelId === null) {
-      // Outside a request there is no channel to ask about (FR-007): the
-      // audience filter alone, as before.
-      if (!isProductVisibleTo(product, cartAudience(actor))) throw notFound();
-    } else {
-      const available = await this.availability.filterAvailable([product.id], {
-        channelId,
-        languageCode: input.salesChannelId ? null : basketScopeLanguage(channelId, actor.languageTag),
-        audience: cartAudience(actor),
-      });
-      if (!available.has(product.id)) throw notFound();
-    }
+    // The channel is the basket's: the one the route resolved and handed over
+    // on the actor (`#basketChannelOf`, which refuses an actor naming none), so
+    // there is no audience-only answer for a basket — every add is asked at a
+    // channel (security review, checkpoint B). The one exception is a caller
+    // that names the channel itself: an administrator creating an order on a
+    // customer's behalf chooses the order's channel in the request body (buyer
+    // routes never pass `salesChannelId`), and is answered in that channel's
+    // default language (N2).
+    const channelId = input.salesChannelId ?? this.#basketChannelOf(actor);
+    const available = await this.availability.filterAvailable([product.id], {
+      channelId,
+      languageCode: input.salesChannelId ? null : basketScopeLanguage(channelId, actor.languageTag),
+      audience: cartAudience(actor),
+    });
+    if (!available.has(product.id)) throw notFound();
 
     // Feature 043 — ordering by a packaging unit (e.g. a pallet): the line is
     // measured in base pieces (`baseQuantity × units`) and snapshots the unit

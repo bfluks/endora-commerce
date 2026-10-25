@@ -348,8 +348,9 @@ export class BundleService {
      * (channel, language, audience, now). An option whose product is not
      * available is answered as an unknown option, the same answer an absent
      * one gets, so the reason is never disclosed (edge case *child off*).
+     * Required: a storefront validation without it would offer every option.
      */
-    availableProductIds?: (productIds: readonly string[]) => Promise<ReadonlySet<string>>,
+    availableProductIds: (productIds: readonly string[]) => Promise<ReadonlySet<string>>,
   ): Promise<BundleValidationResult> {
     const em = this.emFactory();
     await this.assertBundleParent(em, parentProductId);
@@ -359,11 +360,8 @@ export class BundleService {
       slotIds.length > 0
         ? await em.find(BundleSlotOption, { slotId: { $in: slotIds } })
         : [];
-    const available = availableProductIds
-      ? await availableProductIds([...new Set(options.map((o) => o.optionProductId))])
-      : null;
-    const offered =
-      available === null ? options : options.filter((o) => available.has(o.optionProductId));
+    const available = await availableProductIds([...new Set(options.map((o) => o.optionProductId))]);
+    const offered = options.filter((o) => available.has(o.optionProductId));
     const slotsById = new Map(slots.map((s) => [s.id, s]));
     const optionsById = new Map(offered.map((o) => [o.id, o]));
 

@@ -18,6 +18,7 @@ import {
   type ProductScopeStatus,
   type ProductVisibility,
   type ScopeChannel,
+  toScopeChannel,
 } from '@endora-commerce/contracts';
 import type {
   SalesChannelMembershipPort,
@@ -29,6 +30,7 @@ import { ProductChannelScope } from '../entities/product-channel-scope.entity.js
 import { ProductChannelLanguageScope } from '../entities/product-channel-language-scope.entity.js';
 import { availabilityCondition } from './product-availability.sql.js';
 import { loadChannelOverridesByProduct } from './storefront-value-overrides.js';
+import { inIdChunks, uuidArrayLiteral } from './sql-id-arrays.js';
 
 /**
  * Feature 163 — `catalogProductAvailabilityPort` (`contracts/product-scopes.md`
@@ -56,20 +58,8 @@ export interface ScopedProduct {
   returnable: boolean;
 }
 
-/**
- * A channel record as the rule needs it. The default language is always one of
- * the languages: a channel whose list is empty (or omits its own default) still
- * offers its default, which is the language every request on it falls back to.
- */
-export function toScopeChannel(channel: {
-  id: string;
-  languages?: readonly string[] | undefined;
-  defaultLanguage: string;
-}): ScopeChannel {
-  const languages = [...(channel.languages ?? [])];
-  if (!languages.includes(channel.defaultLanguage)) languages.unshift(channel.defaultLanguage);
-  return { id: channel.id, languages, defaultLanguage: channel.defaultLanguage };
-}
+/** A channel record as the rule needs it — the one normalisation, in `@endora-commerce/contracts`. */
+export { toScopeChannel };
 
 /** The global values the rule reads off the product row. */
 export function globalScopeFields(product: ScopedProduct): ProductGlobalScopeFields {
@@ -119,9 +109,14 @@ export async function loadChannelScopeRows(
   const languageRows = new Map<string, ProductChannelLanguageScopeRecord[]>();
   if (productIds.length === 0) return { channelRows, languageRows };
   const ids = [...new Set(productIds)];
+  // Chunked: a caller can hand a whole channel's members (code review W2).
   const [cRows, clRows] = await Promise.all([
-    em.find(ProductChannelScope, { productId: { $in: ids }, salesChannelId: channelId }),
-    em.find(ProductChannelLanguageScope, { productId: { $in: ids }, salesChannelId: channelId }),
+    inIdChunks(ids, (chunk) =>
+      em.find(ProductChannelScope, { productId: { $in: chunk }, salesChannelId: channelId }),
+    ),
+    inIdChunks(ids, (chunk) =>
+      em.find(ProductChannelLanguageScope, { productId: { $in: chunk }, salesChannelId: channelId }),
+    ),
   ]);
   for (const row of cRows) channelRows.set(row.productId, toChannelRecord(row));
   for (const row of clRows) {
@@ -253,10 +248,12 @@ export class ProductAvailabilityService implements CatalogProductAvailabilityPor
       },
       this.membership,
     );
+    // One array parameter whatever the size of the set — the sitemap, a
+    // reindex and a feed's count hand a whole channel (code review W2).
     const rows = await this.emFactory().execute<Array<{ id: string }>>(
       `select p.id::text as id from products p ` +
-        `where p.id in (${ids.map(() => '?').join(',')}) and ${condition.sql('p')}`,
-      [...ids, ...condition.params],
+        `where p.id = any(?::uuid[]) and ${condition.sql('p')}`,
+      [uuidArrayLiteral(ids), ...condition.params],
     );
     return new Set(rows.map((row) => row.id));
   }
@@ -273,10 +270,8 @@ export class ProductAvailabilityService implements CatalogProductAvailabilityPor
     const em = this.emFactory();
     const members = new Set(await this.membership.filterEntityIdsInChannel(channel.id, 'product', ids));
     if (members.size === 0) return out;
-    const products = await em.find(
-      Product,
-      { id: { $in: [...members] } },
-      { fields: [...SCOPED_PRODUCT_FIELDS] },
+    const products = await inIdChunks([...members], (chunk) =>
+      em.find(Product, { id: { $in: chunk } }, { fields: [...SCOPED_PRODUCT_FIELDS] }),
     );
     const rows = await loadChannelScopeRows(em, [...members], channel.id);
     for (const product of products) {
@@ -312,7 +307,9 @@ export class ProductAvailabilityService implements CatalogProductAvailabilityPor
     if (ids.length === 0) return out;
     const channel = await this.scopeChannel(scope.channelId);
     const em = this.emFactory();
-    const products = await em.find(Product, { id: { $in: ids } }, { fields: ['id', 'name'] });
+    const products = await inIdChunks(ids, (chunk) =>
+      em.find(Product, { id: { $in: chunk } }, { fields: ['id', 'name'] }),
+    );
     const languages = overrideLanguages(scope.languageCode ?? undefined, channel?.defaultLanguage);
     const overrides = channel
       ? await loadChannelOverridesByProduct(em, ids, channel.id)
@@ -343,10 +340,8 @@ export class ProductAvailabilityService implements CatalogProductAvailabilityPor
     const ids = [...new Set(productIds)];
     if (ids.length === 0) return out;
     const em = this.emFactory();
-    const products = await em.find(
-      Product,
-      { id: { $in: ids } },
-      { fields: ['id', 'minOrderQuantity', 'returnable'] },
+    const products = await inIdChunks(ids, (chunk) =>
+      em.find(Product, { id: { $in: chunk } }, { fields: ['id', 'minOrderQuantity', 'returnable'] }),
     );
     const rows = await loadChannelScopeRows(em, ids, channelId);
     for (const product of products) {

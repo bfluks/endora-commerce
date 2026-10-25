@@ -377,8 +377,12 @@ export async function registerCatalogPublicRoutes(
   }
 
   // GET /api/v1/catalog/categories
-  app.get('/api/v1/catalog/categories', async (request) => {
+  app.get('/api/v1/catalog/categories', async (request, reply) => {
     const ctx = readContext(request);
+    // Feature 163 — the tree is cut by what this caller may reach (a category
+    // whose products are all restricted to an organisation is not shown to the
+    // public), so a caller's tree must not enter a shared cache.
+    markPersonalisedPricing(reply, ctx.audience);
     const tree = await queryService.getCategoryTree(ctx);
     return { data: tree };
   });
@@ -395,8 +399,11 @@ export async function registerCatalogPublicRoutes(
   );
 
   // GET /api/v1/catalog/filters
-  app.get('/api/v1/catalog/filters', async (request) => {
+  app.get('/api/v1/catalog/filters', async (request, reply) => {
     const ctx = readContext(request);
+    // Feature 163 — the facet counts are counted over what this caller may
+    // reach, so they are the caller's and must not enter a shared cache.
+    markPersonalisedPricing(reply, ctx.audience);
     const filters = await queryService.getFilterDefinitions(ctx);
     return { data: filters };
   });

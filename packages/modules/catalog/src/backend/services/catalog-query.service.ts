@@ -40,10 +40,13 @@ import {
 import {
   availableAmong,
   globalScopeFields,
+  isAvailableWith,
   loadChannelScopeRows,
   toScopeChannel,
   type PageAvailabilityScope,
+  type ScopedProduct,
 } from './product-availability.service.js';
+import { uuidArrayLiteral } from './sql-id-arrays.js';
 import {
   ERROR_CODES,
   compareDecimal,
@@ -1803,7 +1806,28 @@ export class CatalogQueryService {
     // FR-005 — 410 iff archived (the global `inactive`, which sets
     // `archived_at`); otherwise 404 unless effectively available at (C, L):
     // a `draft` member is no longer reachable by its URL.
+    //
+    // The 410 says "this was here and is gone", so it is answered only where
+    // the product would be available with the archive taken away — global
+    // status and `archived_at` neutralised, every scope row, the window and
+    // the language still applied (security review, checkpoint B). An archived
+    // product that is also switched off in this channel or language, or
+    // outside its window, answers the absent product's 404: its existence
+    // here is not this caller's to learn.
     if (product.archivedAt || product.status === 'inactive') {
+      const asIfLive: ScopedProduct = {
+        id: product.id,
+        status: 'active',
+        deletedAt: null,
+        archivedAt: null,
+        publishFrom: product.publishFrom ?? null,
+        publishUntil: product.publishUntil ?? null,
+        visibility: product.visibility,
+        allowedOrganizationIds: product.allowedOrganizationIds,
+        minOrderQuantity: product.minOrderQuantity ?? null,
+        returnable: product.returnable,
+      };
+      if (!isAvailableWith(asIfLive, scopeRows, true, scope)) throw notFound();
       throw new HttpError(410, ERROR_CODES.PRODUCT_ARCHIVED, 'Product is inactive.');
     }
     const available = await availableAmong(em, this.#requireChannelMembership(), [product], scope, {
@@ -2786,9 +2810,14 @@ export class CatalogQueryService {
   }
 
   /**
-   * The effective names of `products` as a card shows them — for a name cursor,
-   * which must carry the value the statement sorted on. One read for any number
-   * of products; nothing when the keyset does not need it.
+   * The names a name cursor carries — **the statement's own sort key**, read by
+   * the same `effectiveTextSql` expression the ordering and the `after`
+   * predicate use (`#keysetFor`), so the cursor can never disagree with the
+   * order it continues (code review W4). It used to be recomputed by the
+   * TypeScript walk, which is held equal to the SQL by a parity test but is a
+   * second implementation: when the two diverged, a walk repeated and skipped
+   * rows. One keyed statement over the page's last row — the read it replaces
+   * cost the same — and nothing when the keyset does not need it.
    */
   async #cursorNames(
     em: EntityManager,
@@ -2797,21 +2826,12 @@ export class CatalogQueryService {
     ctx: CatalogQueryContext,
   ): Promise<(productId: string) => string | undefined> {
     if (!keyset.byName || products.length === 0) return () => undefined;
-    const channel = ctx.resolvedChannel;
-    const overrides = await loadChannelOverridesByProduct(em, products.map((p) => p.id), channel.id);
-    const overrideCtx = this.#overrideContext(channel, ctx.preferredLanguage);
-    const names = new Map(
-      products.map((p) => [
-        p.id,
-        effectiveSystemText(
-          overrides.get(p.id),
-          'name',
-          overrideCtx,
-          p.name,
-          this.pickLang(p.name, ctx.preferredLanguage, channel),
-        ),
-      ]),
+    const name = this.#effectiveNameExpr(ctx);
+    const rows = await em.execute<Array<{ id: string; name: string | null }>>(
+      `select p.id::text as id, ${name.sql('p')} as name from products p where p.id = any(?::uuid[])`,
+      [...name.params, uuidArrayLiteral(products.map((p) => p.id))],
     );
+    const names = new Map(rows.map((row) => [row.id, row.name ?? '']));
     return (productId) => names.get(productId);
   }
 

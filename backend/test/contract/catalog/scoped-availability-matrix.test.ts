@@ -247,6 +247,38 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
     expect(archived.statusCode).toBe(410);
   });
 
+  it('an archived product that would not be available here anyway answers the absent product’s 404, not 410', async () => {
+    // Security review (checkpoint B) — the 410 discloses "this was here"; it is
+    // answered only where the product would be available with the archive taken
+    // away. AW is archived and its window has also ended; AL is archived and
+    // switched off in C1 × en-US.
+    await insertProduct('aw', { status: 'inactive', archived: true, channels: [c1, c2] });
+    await sql(`update products set publish_until = ? where id = ?`, [new Date(Date.now() - 60_000), ids['aw']]);
+    await insertProduct('al', { status: 'inactive', archived: true, channels: [c1, c2] });
+    await sql(
+      `insert into product_channel_language_scopes (product_id, sales_channel_id, language_code, status, created_at, updated_at)
+       values (?, ?, 'en-US', 'draft', now(), now())`,
+      [ids['al'], c1.id],
+    );
+    try {
+      for (const [slug, language] of [[slugs['aw']!, 'pl-PL'], [slugs['al']!, 'en-US']] as const) {
+        const absent = await h.app.inject({
+          method: 'GET',
+          url: `/api/v1/catalog/products/does-not-exist-${RUN}`,
+          headers: headers(c1, language),
+        });
+        const res = await h.app.inject({ method: 'GET', url: `/api/v1/catalog/products/${slug}`, headers: headers(c1, language) });
+        expect(res.statusCode, `${slug} at ${language}`).toBe(404);
+        expect(errorBodyOf(res)).toEqual(errorBodyOf(absent));
+      }
+      // The same archived product where it would be on still answers 410.
+      const elsewhere = await h.app.inject({ method: 'GET', url: `/api/v1/catalog/products/${slugs['al']}`, headers: headers(c1, 'pl-PL') });
+      expect(elsewhere.statusCode).toBe(410);
+    } finally {
+      await sql(`delete from product_channel_language_scopes where product_id = ?`, [ids['al']]);
+    }
+  });
+
   it('shows P among S’s links only where P is on', async () => {
     for (const [channel, language] of pairs()) {
       const res = await h.app.inject({
