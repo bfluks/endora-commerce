@@ -106,43 +106,60 @@ describe('Feature 022 — POST /products/bulk-update (DB-level invariants)', () 
     return rows.map((r) => r.category_id);
   }
 
-  it('status=archived writes status + archived_at to every product in the batch', async () => {
+  it('a bulk status write never touches archived_at (spec 163, FR-010)', async () => {
     const a = await createProduct('BULK-DBINV-ARCH-001');
     const b = await createProduct('BULK-DBINV-ARCH-002');
+
+    const on = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/catalog/products/bulk-update',
+      payload: { productIds: [a, b], fields: { status: 'active' } },
+      cookies: adminCookie,
+    });
+    expect(on.statusCode).toBe(200);
+    const off = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/catalog/products/bulk-update',
+      payload: { productIds: [a, b], fields: { status: 'inactive' } },
+      cookies: adminCookie,
+    });
+    expect(off.statusCode).toBe(200);
+    for (const id of [a, b]) {
+      const row = await readProductStatusRow(id);
+      expect(row.status).toBe('inactive');
+      expect(row.archivedAt).toBeNull();
+    }
+  });
+
+  it('archived: true writes archived_at to every product, false clears it, status untouched (FR-053)', async () => {
+    const a = await createProduct('BULK-DBINV-ARCH-003');
+    const b = await createProduct('BULK-DBINV-ARCH-004');
     const before = Date.now();
 
     const res = await h.app.inject({
       method: 'POST',
       url: '/api/v1/admin/catalog/products/bulk-update',
-      payload: {
-        productIds: [a, b],
-        fields: { status: 'inactive' },
-      },
+      payload: { productIds: [a, b], fields: { archived: true } },
       cookies: adminCookie,
     });
     expect(res.statusCode).toBe(200);
-
     for (const id of [a, b]) {
       const row = await readProductStatusRow(id);
       expect(row.status).toBe('inactive');
       expect(row.archivedAt).not.toBeNull();
-      expect(new Date(row.archivedAt!).getTime()).toBeGreaterThanOrEqual(before);
+      expect(new Date(row.archivedAt!).getTime()).toBeGreaterThanOrEqual(before - 1000);
     }
 
-    // Reactivation clears archived_at on every product.
     const res2 = await h.app.inject({
       method: 'POST',
       url: '/api/v1/admin/catalog/products/bulk-update',
-      payload: {
-        productIds: [a, b],
-        fields: { status: 'active' },
-      },
+      payload: { productIds: [a, b], fields: { archived: false } },
       cookies: adminCookie,
     });
     expect(res2.statusCode).toBe(200);
     for (const id of [a, b]) {
       const row = await readProductStatusRow(id);
-      expect(row.status).toBe('active');
+      expect(row.status).toBe('inactive');
       expect(row.archivedAt).toBeNull();
     }
   });

@@ -42,7 +42,7 @@ describe('QuickOrderImportPipeline', () => {
   it('recognizes valid rows and rejects unknown / archived / bad-qty / missing-sku rows', async () => {
     const pipeline = new QuickOrderImportPipeline(
       lookupOf({
-        products: [ACTIVE('p1', 'ABC'), { id: 'p2', sku: 'OLD', status: 'inactive', deletedAt: null }],
+        products: [ACTIVE('p1', 'ABC'), { id: 'p2', sku: 'OLD', status: 'active', deletedAt: null, archivedAt: new Date() }],
       }),
     );
     const csv = ['sku,quantity', 'ABC,2', 'NOPE,1', 'OLD,1', 'ABC,0', ',3'].join('\n');
@@ -52,6 +52,25 @@ describe('QuickOrderImportPipeline', () => {
     expect(result.recognized[0]).toMatchObject({ productId: 'p1', variantId: null, quantity: 2 });
     const reasons = result.rejected.map((r) => r.reason).sort();
     expect(reasons).toEqual(['product_archived', 'product_not_found', 'quantity_invalid', 'sku_missing']);
+  });
+
+  it('reads "archived" from archivedAt, never from the status (spec 163, FR-010, FR-019)', async () => {
+    const pipeline = new QuickOrderImportPipeline(
+      lookupOf({
+        products: [
+          { id: 'a1', sku: 'ARCH-ON', status: 'active', deletedAt: null, archivedAt: new Date() },
+          { id: 'a2', sku: 'ARCH-OFF', status: 'inactive', deletedAt: null, archivedAt: new Date() },
+          // Switched off but not archived: the pipeline does not judge the status —
+          // on a channel the lookup's availability filter answers it not-found (P6).
+          { id: 'i1', sku: 'OFF', status: 'inactive', deletedAt: null, archivedAt: null },
+        ],
+      }),
+    );
+    const csv = ['sku,quantity', 'ARCH-ON,1', 'ARCH-OFF,1', 'OFF,1'].join('\n');
+    const result = await pipeline.run(parseCsvRows(csv), { maxRows: 100, audience: AUDIENCE });
+
+    expect(result.rejected.map((r) => r.reason)).toEqual(['product_archived', 'product_archived']);
+    expect(result.recognized.map((r) => r.productId)).toEqual(['i1']);
   });
 
   it('rejects every data row as malformed when the header is unusable', async () => {
