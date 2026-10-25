@@ -19,7 +19,7 @@ import {
   minimumFixtureRun,
   type MinimumProductFixture,
 } from '../../helpers/order-minimum-fixture.js';
-import { clearProductScopes, setChannelStatus, setGlobalWindow } from '../../helpers/product-scope-fixture.js';
+import { clearProductScopes, errorBodyOf, setChannelStatus, setGlobalWindow } from '../../helpers/product-scope-fixture.js';
 
 /**
  * Feature 163, Phase 6 (T039) — the basket seams ask `catalogProductAvailabilityPort`
@@ -27,8 +27,9 @@ import { clearProductScopes, setChannelStatus, setGlobalWindow } from '../../hel
  *
  *  - adding a product that is not available at the basket's (channel, language)
  *    — here switched off at the channel scope — is refused with the same 404 an
- *    absent product gets, single add and batch add alike (FR-004, F1: the add
- *    path tested no status at all before);
+ *    absent product gets, single add and batch add alike (a batch naming one
+ *    is refused whole, as feature 155 refuses an unknown id) (FR-004, F1: the
+ *    add path tested no status at all before);
  *  - a line whose product goes off after it was added **stays** in the basket,
  *    reads `unavailable` in the full view, and refuses placement with the
  *    unknown-id 404 and its cart item id (FR-006);
@@ -106,28 +107,36 @@ describe('163 — basket acquisition seams honour scoped availability [integrati
     expect(absent.statusCode).toBe(404);
     const refused = await add(off.id);
     expect(refused.statusCode, refused.body).toBe(404);
-    expect(refused.json()).toEqual(absent.json());
+    expect(errorBodyOf(refused)).toEqual(errorBodyOf(absent));
     expect((refused.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
     const added = await add(on.id);
     expect(added.statusCode, added.body).toBeLessThan(300);
   });
 
-  it('batch add (quick order → cart) reports the switched-off line as failed with the same 404 and adds the rest', async () => {
-    const res = await h.app.inject({
-      method: 'POST',
-      url: '/api/v1/quick-order/build',
-      cookies: CUSTOMER,
-      payload: {
-        target: 'cart',
-        items: [
-          { productId: off.id, quantity: 1 },
-          { productId: on.id, quantity: 1 },
-        ],
-      },
-    });
-    expect(res.statusCode, res.body).toBeLessThan(300);
-    const lines = await view();
-    expect(lines.map((l) => l.productId)).toEqual([on.id]);
+  it('batch add (quick order → cart) refuses a batch naming a switched-off product with the same 404 and adds nothing', async () => {
+    // Feature 155 (FR-011 b, threat F1) — every line of a batch is resolved
+    // before any is added, and a line the buyer may not have answers the
+    // unknown id's 404 for the whole batch. Feature 163 keeps that seam's
+    // single not-found (`contracts/consumers.md`, preamble and row 13).
+    const build = (productId: string) =>
+      h.app.inject({
+        method: 'POST',
+        url: '/api/v1/quick-order/build',
+        cookies: CUSTOMER,
+        payload: {
+          target: 'cart',
+          items: [
+            { productId, quantity: 1 },
+            { productId: on.id, quantity: 1 },
+          ],
+        },
+      });
+    const absent = await build(randomUUID());
+    expect(absent.statusCode, absent.body).toBe(404);
+    const res = await build(off.id);
+    expect(res.statusCode, res.body).toBe(404);
+    expect(errorBodyOf(res)).toEqual(errorBodyOf(absent));
+    expect(await view()).toEqual([]);
   });
 
   it('keeps a line whose product went off, marks it unavailable, and refuses placement with its cart item id (FR-006)', async () => {
