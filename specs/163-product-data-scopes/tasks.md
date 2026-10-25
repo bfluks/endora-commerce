@@ -804,6 +804,11 @@ review checkpoint C:
   `getServerContext({ langOverride })`; a `lang` cookie still wins over it (existing rule, left alone). Security
   carry 4: `seo` marks every cached sitemap stale on `product.updated.v1` naming `scopedStatus`,
   `publicationWindow`, `audience` or `urlKeys`. Shared-file lines are in `chore(163): s2 handover P17`.
+  **T156s/T156t — done in P17 by S2** (coordinator, 2026-10-25, owner decision Q1): the page's "gone" answer is
+  `archivedAt` only (`CatalogQueryService.assertReachable`). A non-archived `inactive` product is the absent
+  product's 404; the 410 still goes only to a caller who could see the product were it not archived (global status
+  read as `active`). Behaviour-neutral for rows the app writes today (writing `inactive` still sets `archivedAt`).
+  `[PG]` case in `url-key-resolution.test.ts`.
 
 **Verification** (one invocation per line):
 - `[PG] backend/test/integration/catalog/url-key-resolution.test.ts`
