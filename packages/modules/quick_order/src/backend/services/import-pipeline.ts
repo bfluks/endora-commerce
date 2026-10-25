@@ -21,6 +21,11 @@ export interface ProductLike {
   sku: string;
   status: string;
   deletedAt?: Date | null;
+  /**
+   * Feature 163 — set when the product is archived (the Archive action). The one
+   * reading of "archived": the status is not one (FR-010, FR-019).
+   */
+  archivedAt?: Date | null;
   /** Feature 155 — the product type; minimums apply to `simple` / `configurable` only. */
   type?: string;
   /** Feature 155 — the pieces minimum; `null` or absent = none. */
@@ -138,9 +143,11 @@ interface ResolvedLine {
 }
 
 function isPurchasable(product: ProductLike): boolean {
-  // Feature 032 renamed the withdrawn product status `archived` → `inactive`.
-  // The `product_archived` rejection reason code is kept for contract stability.
-  return product.status !== 'inactive' && !product.deletedAt;
+  // Feature 163 (FR-010, FR-019) — `product_archived` means archived: `archivedAt`
+  // is set, whatever the status. A product merely switched off (`inactive`) is not
+  // judged here — on a channel the lookup's availability filter answers it
+  // not-found, like any product the buyer may not acquire there.
+  return !product.archivedAt && !product.deletedAt;
 }
 
 /**
