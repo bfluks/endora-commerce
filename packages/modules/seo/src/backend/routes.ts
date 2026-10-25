@@ -3,6 +3,7 @@ import {
   ERROR_CODES,
   adminCrawlerFilePreviewQuerySchema,
   seoEntityTypeSchema,
+  seoMetaScopeQuerySchema,
   upsertSeoMetaOverrideRequestSchema,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -334,26 +335,24 @@ export async function registerSeoRoutes(
   );
 
   // -- Meta editor ----------------------------------------------------------
+  //
+  // Feature 163 (`specs/163-product-data-scopes/contracts/seo-media-attachments.md`
+  // §1) — a row is addressed by (entity, `channelId?`, `locale?`): the query for
+  // GET and DELETE, the body for PUT. Naming neither is the `en-US` language row,
+  // as before. `resolved` is the walk at the named scope (channel × language →
+  // channel → language → the rule); `override` is the row at exactly the address.
 
   app.get<{
     Params: { entityType: string; entityId: string };
-    Querystring: { locale?: string };
   }>(
     '/api/v1/admin/seo/meta/:entityType/:entityId',
     { preHandler: requireAdmin('catalog:write') },
     async (request) => {
       const entityType = seoEntityTypeSchema.parse(request.params.entityType);
-      const locale = request.query.locale ?? 'en-US';
-      const resolved = await metaResolver.resolve({
-        entityType,
-        entityId: request.params.entityId,
-        locale,
-      });
-      const override = await metaResolver.getOverride({
-        entityType,
-        entityId: request.params.entityId,
-        locale,
-      });
+      const scope = seoMetaScopeQuerySchema.parse(request.query ?? {});
+      const target = { entityType, entityId: request.params.entityId, ...scope };
+      const resolved = await metaResolver.resolve(target);
+      const override = await metaResolver.getOverride(target);
       return {
         data: {
           resolved,
@@ -385,7 +384,8 @@ export async function registerSeoRoutes(
       const row = await metaResolver.upsertOverride({
         entityType,
         entityId: request.params.entityId,
-        locale: body.locale,
+        ...(body.channelId !== undefined ? { channelId: body.channelId } : {}),
+        ...(body.locale !== undefined ? { locale: body.locale } : {}),
         ...(body.title !== undefined ? { title: body.title } : {}),
         ...(body.description !== undefined ? { description: body.description } : {}),
         ...(body.ogTitle !== undefined ? { ogTitle: body.ogTitle } : {}),
@@ -395,7 +395,8 @@ export async function registerSeoRoutes(
       return {
         data: {
           id: row.id,
-          locale: row.locale,
+          locale: row.locale ?? null,
+          channelId: row.salesChannelId ?? null,
           title: row.title ?? null,
           description: row.description ?? null,
           ogTitle: row.ogTitle ?? null,
@@ -408,18 +409,13 @@ export async function registerSeoRoutes(
 
   app.delete<{
     Params: { entityType: string; entityId: string };
-    Querystring: { locale?: string };
   }>(
     '/api/v1/admin/seo/meta/:entityType/:entityId',
     { preHandler: requireAdmin('catalog:write') },
     async (request, reply) => {
       const entityType = seoEntityTypeSchema.parse(request.params.entityType);
-      const locale = request.query.locale ?? 'en-US';
-      await metaResolver.deleteOverride({
-        entityType,
-        entityId: request.params.entityId,
-        locale,
-      });
+      const scope = seoMetaScopeQuerySchema.parse(request.query ?? {});
+      await metaResolver.deleteOverride({ entityType, entityId: request.params.entityId, ...scope });
       return reply.status(204).send();
     },
   );
