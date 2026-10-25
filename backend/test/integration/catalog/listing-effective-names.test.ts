@@ -35,7 +35,10 @@ describe('163 — listing over effective names [integration]', () => {
     const em = h.em();
     channelId = (await em.findOneOrFail(SalesChannel, { code: 'pl_retail' })).id;
     // Baseline names sort A..E; the override renames C to "Zeta …" (last) and
-    // E to "Aardvark …" (first) on this channel only.
+    // E to "0 Aardvark …" (first) on this channel only. The leading digit sorts
+    // first under any collation: "Len Aardvark" would sort after "Len A " in a
+    // byte-order (C) collation, where the space precedes every letter, and
+    // before it in a linguistic one, which ignores the space.
     for (const letter of ['A', 'B', 'C', 'D', 'E']) {
       products.push(
         await createMinimumProduct(em, {
@@ -47,7 +50,7 @@ describe('163 — listing over effective names [integration]', () => {
       );
     }
     await setNameOverride(em, products[2]!.id, channelId, null, `Len Zeta ${RUN}`);
-    await setNameOverride(em, products[4]!.id, channelId, null, `Len Aardvark ${RUN}`);
+    await setNameOverride(em, products[4]!.id, channelId, null, `Len 0 Aardvark ${RUN}`);
     expected = [products[4]!, products[0]!, products[1]!, products[3]!, products[2]!].map((p) => p.id);
   });
 
@@ -87,6 +90,6 @@ describe('163 — listing over effective names [integration]', () => {
     expect(res.statusCode, res.body).toBe(200);
     const data = (res.json() as { data: Array<{ id: string; name: string }> }).data;
     expect(data.map((p) => p.id)).toEqual([products[4]!.id]);
-    expect(data[0]!.name).toBe(`Len Aardvark ${RUN}`);
+    expect(data[0]!.name).toBe(`Len 0 Aardvark ${RUN}`);
   });
 });
