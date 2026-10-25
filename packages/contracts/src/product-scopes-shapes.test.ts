@@ -47,7 +47,7 @@ describe('patchProductScopesRequestSchema', () => {
           minOrderQuantity: 1,
           returnable: false,
           languageStatuses: [
-            { languageCode: 'de-DE', status: 'draft' },
+            { languageCode: 'de-DE', status: 'inactive' },
             { languageCode: 'pl-PL', status: null },
           ],
         },
@@ -83,9 +83,14 @@ describe('patchProductScopesRequestSchema', () => {
   });
 
   it('refuses an unknown status, a non-uuid channel and more than 64 channels', () => {
-    expect(patchProductScopesRequestSchema.safeParse({ channels: [{ channelId: C, status: 'archived' }] }).success).toBe(
-      false,
-    );
+    for (const status of ['archived', 'draft']) {
+      expect(patchProductScopesRequestSchema.safeParse({ channels: [{ channelId: C, status }] }).success).toBe(false);
+      expect(
+        patchProductScopesRequestSchema.safeParse({
+          channels: [{ channelId: C, languageStatuses: [{ languageCode: 'de-DE', status }] }],
+        }).success,
+      ).toBe(false);
+    }
     expect(patchProductScopesRequestSchema.safeParse({ channels: [{ channelId: 'b2b' }] }).success).toBe(false);
     const many = Array.from({ length: 65 }, () => ({ channelId: C }));
     expect(patchProductScopesRequestSchema.safeParse({ channels: many }).success).toBe(false);
@@ -154,7 +159,7 @@ describe('productScopesResponseSchema', () => {
             channelId: C,
             isMember: true,
             languages: ['pl-PL', 'de-DE'],
-            status: 'draft',
+            status: 'inactive',
             window: null,
             audience: { visibility: 'organization_restricted', allowedOrganizationIds: [ORG], nonMemberOrganizationIds: [ORG] },
             minOrderQuantity: null,
@@ -243,7 +248,7 @@ describe('scopeOverviewResponseSchema', () => {
       channelId: C,
       languageCode: 'de-DE',
       available: false,
-      effectiveStatus: 'draft',
+      effectiveStatus: 'inactive',
       statusSource: 'channel_language',
       overriddenFields: [{ field: 'status', level: 'channel_language' }],
     };
@@ -288,7 +293,7 @@ describe('bulk update — scopedStatus (admin-scopes-api.md §4)', () => {
     expect(parsed.success).toBe(true);
   });
 
-  it.each(['draft', 'active', 'inactive', 'inherit'])('accepts value %s', (value) => {
+  it.each(['active', 'inactive', 'inherit'])('accepts value %s', (value) => {
     expect(
       bulkUpdateProductsRequestSchema.safeParse({
         ...base,
@@ -297,11 +302,11 @@ describe('bulk update — scopedStatus (admin-scopes-api.md §4)', () => {
     ).toBe(true);
   });
 
-  it('refuses an unknown value', () => {
+  it.each(['draft', 'archived', 'deleted'])('refuses the value %s (FR-112, O-1)', (value) => {
     expect(
       bulkUpdateProductsRequestSchema.safeParse({
         ...base,
-        fields: { scopedStatus: { channelId: C, languageCode: null, value: 'archived' } },
+        fields: { scopedStatus: { channelId: C, languageCode: null, value } },
       }).success,
     ).toBe(false);
   });
@@ -309,7 +314,7 @@ describe('bulk update — scopedStatus (admin-scopes-api.md §4)', () => {
   it('refuses scopedStatus combined with status, on the scopedStatus path', () => {
     const parsed = bulkUpdateProductsRequestSchema.safeParse({
       ...base,
-      fields: { status: 'active', scopedStatus: { channelId: C, languageCode: null, value: 'draft' } },
+      fields: { status: 'active', scopedStatus: { channelId: C, languageCode: null, value: 'inactive' } },
     });
     expect(parsed.success).toBe(false);
     expect(parsed.error?.issues.some((issue) => issue.path.includes('scopedStatus'))).toBe(true);
