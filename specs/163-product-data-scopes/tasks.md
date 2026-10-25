@@ -861,11 +861,27 @@ review checkpoint C:
 
 ### Phase 19: [backend] Connectors and import/export (FR-091–FR-093)
 
-- [ ] T120 [P] [US7] [PG] [S2] RED `catalogProductScopeWritePort.applyScopes`: writes only named scopes, never removes operator overrides (FR-091); a taken key is not written, previous key kept, issue names record/language/holder, no takeover (FR-093, US7 #9); no completeness gate — `backend/test/integration/catalog/scope-write-port.test.ts`
-- [ ] T121 [P] [PG] [S2] RED CSV: export emits `status@<channel>` / `status@<channel>/<lang>`; import round-trips them (FR-092); whole-file rejection rule unchanged — `backend/test/integration/catalog/bulk-import-scoped-status.test.ts` *(FR-092 after Q1: a `draft` or `archived` status at any scope is refused per record by the run's existing rule — the global column already is, T156l — and status import never archives or restores)*
-- [ ] T122 [S2] `catalogProductScopeWritePort` provided (status, window, audience, order rules via `ProductScopesService`; keys via `UrlKeyService` in import mode) — `services/catalog-write-ports.ts`
-- [ ] T123 [S2] CSV columns — `catalog-bulk-import.service.ts`, `packages/modules/import_export/src/backend/services/` adapter *(the adapter's global status column moved to `productStatusSchema` in T156e — rebase onto it)*
-- [ ] T124 [S2] Connector-author note: which scope each field is read/written at (FR-091) — `packages/modules/catalog/docs/catalog/url-keys-and-redirects.md` § Integrations (+ PL)
+- [x] T120 [P] [US7] [PG] [S2] RED `catalogProductScopeWritePort.applyScopes`: writes only named scopes, never removes operator overrides (FR-091); a taken key is not written, previous key kept, issue names record/language/holder, no takeover (FR-093, US7 #9); no completeness gate — `backend/test/integration/catalog/scope-write-port.test.ts`
+- [x] T121 [P] [PG] [S2] RED CSV: export emits `status@<channel>` / `status@<channel>/<lang>`; import round-trips them (FR-092); whole-file rejection rule unchanged — `backend/test/integration/catalog/bulk-import-scoped-status.test.ts` *(FR-092 after Q1: a `draft` or `archived` status at any scope is refused per record by the run's existing rule — the global column already is, T156l — and status import never archives or restores)*
+- [x] T122 [S2] `catalogProductScopeWritePort` provided (status, window, audience, order rules via `ProductScopesService`; keys via `UrlKeyService` in import mode) — `services/catalog-write-ports.ts`
+- [x] T123 [S2] CSV columns — `catalog-bulk-import.service.ts`, `packages/modules/import_export/src/backend/services/` adapter *(the adapter's global status column moved to `productStatusSchema` in T156e — rebase onto it)*
+- [x] T124 [S2] Connector-author note: which scope each field is read/written at (FR-091) — `packages/modules/catalog/docs/catalog/url-keys-and-redirects.md` § Integrations (+ PL)
+
+- S2 (2026-10-25): T120/T121 written, type-checked, **unrun** (`[PG]`). Local unit cover: `admitImportKeys` in
+  `url-key.service.test.ts`, `toScopesPatch` in `catalog-write-ports.test.ts`, the products adapter in
+  `import_export/.../adapters/products.adapter.test.ts` (all green). The port is `createCatalogProductScopeWritePort`
+  over the operator's `ProductScopesService.apply` (one `product.scopes.update`) and `UrlKeyService.importKeys` (one
+  `product.url_keys.update`, `source` in its after-state); a refusal other than a taken key (non-member channel,
+  unoffered language) refuses the call. **No gate today; when S1's T080 wires the completeness gate into
+  `ProductScopesService`, this port must keep bypassing it (A-6) — T120's third case pins that.** CSV: the
+  scoped-status cells are written by `CatalogBulkImportService.importProducts` inside the existing one-Command,
+  all-or-nothing run (not through `ProductScopesService`, so the file stays one transaction and one audit row), with
+  `product.updated.v1` `['scopedStatus']` per changed product after commit. Values are parsed with the contract's
+  `productScopeStatusSchema` — no status literal in the import code. Columns are keyed by channel **code**. The
+  export lists every channel in the database (inactive ones too). Shared-file lines (`contracts/catalog.ts`,
+  `product-scopes.ts` port marker, `index.ts`, the regenerated sidebar, changesets) are in
+  `chore(163): s2 handover P19`. T124 created `url-keys-and-redirects.md` (EN + PL) with an intro and § Integrations;
+  T147 (S1) extends it.
 
 **Verification** (one invocation per line):
 - `[PG] backend/test/integration/catalog/scope-write-port.test.ts`
