@@ -44,12 +44,16 @@ import {
   loadChannelScopeRows,
   toScopeChannel,
   type PageAvailabilityScope,
+  type ChannelScopeRows,
   type ScopedProduct,
 } from './product-availability.service.js';
 import { uuidArrayLiteral } from './sql-id-arrays.js';
+import { findCurrentKeyHolder, loadEffectiveKeys } from './url-key-resolution.service.js';
 import {
+  ANONYMOUS_PRODUCT_AUDIENCE,
   ERROR_CODES,
   compareDecimal,
+  productPath,
   decimalText,
   formatUnits,
   isOrderMinimumEligibleType,
@@ -77,6 +81,7 @@ import {
   type ProductAudience,
   type ProductDetail,
   type ProductListSort,
+  type ProductPagePaths,
   type ProductSummary,
   type ProductVariant as VariantDto,
 } from '@endora-commerce/contracts';
@@ -236,6 +241,12 @@ export interface ListingCardReads {
    * request's language legs pick among them when the card is built.
    */
   overridesByProduct: Map<string, OverrideRow[]>;
+  /**
+   * Feature 163 (R28) — product id -> its effective URL key at the request's
+   * (channel, language): every storefront link a card carries is built on it.
+   * Read page-wide like the rest; the language is the request's, not the viewer's.
+   */
+  effectiveKeyByProduct: Map<string, string>;
 }
 
 export interface ListProductsParams {
@@ -896,13 +907,20 @@ export class CatalogQueryService {
    */
   async #listingCardReadsFor(
     em: EntityManager,
-    productIds: readonly string[],
-    /** The request's resolved sales channel — the override rows are read for it alone. */
-    channelId: string,
+    products: readonly Product[],
+    /** The request: its resolved sales channel (override rows and keys are read for it alone) and language. */
+    ctx: CatalogQueryContext,
   ): Promise<ListingCardReads> {
+    const channelId = ctx.resolvedChannel.id;
+    const productIds = products.map((p) => p.id);
     const categorySlugsByProduct = new Map<string, string[]>();
     if (productIds.length === 0) {
-      return { assetUrlByProduct: new Map(), categorySlugsByProduct, overridesByProduct: new Map() };
+      return {
+        assetUrlByProduct: new Map(),
+        categorySlugsByProduct,
+        overridesByProduct: new Map(),
+        effectiveKeyByProduct: new Map(),
+      };
     }
 
     // Primary asset — for listings prefer the gallery's Thumbnail (US3),
@@ -926,8 +944,25 @@ export class CatalogQueryService {
     }
 
     const overridesByProduct = await loadChannelOverridesByProduct(em, ids, channelId);
+    const effectiveKeyByProduct = await this.#effectiveKeysAt(em, products, ctx);
 
-    return { assetUrlByProduct, categorySlugsByProduct, overridesByProduct };
+    return { assetUrlByProduct, categorySlugsByProduct, overridesByProduct, effectiveKeyByProduct };
+  }
+
+  /**
+   * Feature 163 (R28) — each product's effective URL key at the request's
+   * (channel, language), in one statement for the set.
+   */
+  async #effectiveKeysAt(
+    em: EntityManager,
+    products: ReadonlyArray<{ id: string; slug: string }>,
+    ctx: CatalogQueryContext,
+  ): Promise<Map<string, string>> {
+    const { channel, languageCode } = this.#availabilityScope(ctx);
+    const keys = await loadEffectiveKeys(em, products, { id: channel.id, languages: [languageCode] });
+    const out = new Map<string, string>();
+    for (const product of products) out.set(product.id, keys.get(product.id)?.get(languageCode) ?? product.slug);
+    return out;
   }
 
   // ------------------------------------------------------------------
@@ -1068,11 +1103,7 @@ export class CatalogQueryService {
     // same reason (issue #263): both helpers took an id list already, and both
     // were being handed one id at a time from inside the loop.
     const resolvedPrices = await this.#listingPricesFor(priceable, ctx);
-    const cardReads = await this.#listingCardReadsFor(
-      em,
-      priceable.map((p) => p.id),
-      channel.id,
-    );
+    const cardReads = await this.#listingCardReadsFor(em, priceable, ctx);
     const summaries = priceable.map((p) =>
       this.toSummary(p, channel, ctx.preferredLanguage, resolvedPrices, cardReads),
     );
@@ -1486,11 +1517,7 @@ export class CatalogQueryService {
     const nextCursor = resumeAt === null ? null : this.#sealCursor(PRICE_WALK_CURSOR_PURPOSE, resumeAt);
 
     const resolvedPrices = await this.#listingPricesFor(page, ctx, context);
-    const cardReads = await this.#listingCardReadsFor(
-      em,
-      page.map((p) => p.id),
-      channel.id,
-    );
+    const cardReads = await this.#listingCardReadsFor(em, page, ctx);
     return {
       data: page.map((p) =>
         this.toSummary(p, channel, ctx.preferredLanguage, resolvedPrices, cardReads),
@@ -1808,11 +1835,7 @@ export class CatalogQueryService {
       full && last ? keyset.of(last, await this.#cursorNames(em, keyset, [last], ctx)) : bound ? cursor : null;
     const hasMore = resumeAt !== null;
     const nextCursor = resumeAt === null ? null : walk.cursorOf(resumeAt);
-    const cardReads = await this.#listingCardReadsFor(
-      em,
-      page.map((p) => p.id),
-      channel.id,
-    );
+    const cardReads = await this.#listingCardReadsFor(em, page, ctx);
     return {
       data: page.map((p) =>
         this.toSummary(p, channel, ctx.preferredLanguage, prices, cardReads),
@@ -1857,16 +1880,19 @@ export class CatalogQueryService {
     return out;
   }
 
-  async getProductByIdOrSlug(idOrSlug: string, ctx: CatalogQueryContext): Promise<ProductDetail> {
+  /**
+   * Whether `product` may be shown to this request at (C, L), as the product page
+   * answers it — the one decision both the page and the key resolution
+   * (`UrlKeyResolutionService`) ask, so a key can never resolve to a product the
+   * page would refuse. Throws `404 PRODUCT_NOT_FOUND` or `410 PRODUCT_ARCHIVED`;
+   * answers the product's scope rows on the channel for a caller that reads on.
+   */
+  async assertReachable(product: Product, ctx: CatalogQueryContext): Promise<ChannelScopeRows> {
     const em = this.emFactory();
     const channel = ctx.resolvedChannel;
-
-    const isUuid =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrSlug);
-    const product = await em.findOne(Product, isUuid ? { id: idOrSlug } : { slug: idOrSlug });
     const notFound = (): HttpError =>
       new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
-    if (!product || product.deletedAt) throw notFound();
+    if (product.deletedAt) throw notFound();
 
     // Membership and the audience come first, for every product including an
     // archived one: a caller outside the channel, or outside the product's
@@ -1913,8 +1939,66 @@ export class CatalogQueryService {
       rows: scopeRows,
     });
     if (!available.has(product.id)) throw notFound();
+    return scopeRows;
+  }
 
-    const cardReads = await this.#listingCardReadsFor(em, [product.id], channel.id);
+  /**
+   * Feature 163 (FR-074, `contracts/url-keys-and-redirects.md` §6) — the page's
+   * canonical at the request's (C, L) and its alternate-language paths, built with
+   * `productPath()` here because only catalog knows the channel's default language
+   * and where the product is available. An alternate is listed only for a channel
+   * language where the product is available to the **anonymous** audience,
+   * whoever is asking: `hreflang` tells a crawler what it may open.
+   */
+  async #pagePaths(
+    em: EntityManager,
+    product: Product,
+    scopeRows: ChannelScopeRows,
+    ctx: CatalogQueryContext,
+  ): Promise<ProductPagePaths> {
+    const scope = this.#availabilityScope(ctx);
+    const channel = scope.channel;
+    const keys = (await loadEffectiveKeys(em, [product], channel)).get(product.id) ?? new Map<string, string>();
+    const pathAt = (languageCode: string): string =>
+      productPath({
+        key: keys.get(languageCode) ?? product.slug,
+        languageCode,
+        channelDefaultLanguage: channel.defaultLanguage,
+      });
+    const alternates = channel.languages
+      .filter((languageCode) =>
+        isAvailableWith(product, scopeRows, true, {
+          ...scope,
+          languageCode,
+          audience: ANONYMOUS_PRODUCT_AUDIENCE,
+        }),
+      )
+      .map((languageCode) => ({ languageCode, path: pathAt(languageCode) }));
+    return { canonical: pathAt(scope.languageCode), alternates };
+  }
+
+  /**
+   * The product page's read (R28): an id; else a **current** key of the request's
+   * language L (any channel's key of L counts — `findCurrentKeyHolder`); else a
+   * product's global key, the stable handle CMS product blocks store. Never a
+   * redirect: the storefront resolves a URL through `resolve` and reads by id.
+   */
+  async getProductByIdOrSlug(idOrSlug: string, ctx: CatalogQueryContext): Promise<ProductDetail> {
+    const em = this.emFactory();
+    const channel = ctx.resolvedChannel;
+
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrSlug);
+    const product = isUuid
+      ? await em.findOne(Product, { id: idOrSlug })
+      : ((await findCurrentKeyHolder(em, idOrSlug, this.#availabilityScope(ctx).languageCode)) ??
+        (await em.findOne(Product, { slug: idOrSlug })));
+    if (!product || product.deletedAt) {
+      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    }
+    const scopeRows = await this.assertReachable(product, ctx);
+
+    const cardReads = await this.#listingCardReadsFor(em, [product], ctx);
     const summary = this.toSummary(
       product,
       channel,
@@ -2067,6 +2151,7 @@ export class CatalogQueryService {
         name: this.pickLang(c.name, ctx.preferredLanguage, channel),
         slug: c.slug,
       })),
+      paths: await this.#pagePaths(em, product, scopeRows, ctx),
       seo: {
         metaTitle: nameText,
         metaDescription: descriptionText.slice(0, 160),
@@ -2332,12 +2417,14 @@ export class CatalogQueryService {
     // Issue #384 — one statement for every child's override rows on this channel.
     const overridesByProduct = await loadChannelOverridesByProduct(em, ids, channel.id);
     const overrideCtx = this.#overrideContext(channel, ctx.preferredLanguage);
+    // Feature 163 (R28) — a child's link is its effective key at (C, L).
+    const effectiveKeys = await this.#effectiveKeysAt(em, products, ctx);
     for (const p of products) {
       const price = this.#summaryPrice(resolvedPrices, p.id);
       result.set(p.id, {
         id: p.id,
         sku: p.sku,
-        slug: p.slug,
+        slug: effectiveKeys.get(p.id) ?? p.slug,
         name: effectiveSystemText(
           overridesByProduct.get(p.id),
           'name',
@@ -3069,7 +3156,8 @@ export class CatalogQueryService {
       sku: product.sku,
       type: product.type,
       name: nameText,
-      slug: product.slug,
+      // Feature 163 (R28) — the effective key at the request's (channel, language).
+      slug: cardReads.effectiveKeyByProduct.get(product.id) ?? product.slug,
       summary: productSummaryText(descriptionText),
       categorySlugs: cardReads.categorySlugsByProduct.get(product.id) ?? [],
       primaryAssetUrl: cardReads.assetUrlByProduct.get(product.id) ?? null,

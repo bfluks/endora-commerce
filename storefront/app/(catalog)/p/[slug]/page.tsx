@@ -35,7 +35,7 @@ import { Hook } from '../../../../components/Hook';
 import { JsonLd } from '../../../../lib/seo/JsonLd';
 import { ViewItemTracker } from '../../../../components/analytics/EcommerceTrackers';
 import { getStorefrontQuoteRequestSettings } from '../../../../lib/api/rfq';
-import { getProductBySlug } from '../../../../lib/api/catalog';
+import { getProductBySlug, resolveProductKey } from '../../../../lib/api/catalog';
 import { getResolvedPrice, PRICING_UNAVAILABLE } from '../../../../lib/api/pricing';
 import { getStorefrontProductStock } from '../../../../lib/api/inventory';
 import { getMe } from '../../../../lib/api/account';
@@ -51,8 +51,7 @@ import {
   placeOneClickOrder,
 } from '../../../../lib/api/quick-order';
 import { getServerContext } from '../../../../lib/server-context';
-import { canonicalPath } from '../../../../lib/seo/route-seo';
-import { seo } from './seo';
+import { alternateLanguages, productIdForKey, requestedLanguage } from './resolution';
 import { tForLocale } from '../../../../lib/i18n/messages';
 import { cartActionFailure } from '../../../../lib/cart-action-failure';
 import { StorefrontApiError, withoutViewer } from '../../../../lib/api/client';
@@ -60,7 +59,8 @@ import { publicApiBaseUrl } from '../../../../lib/env.mjs';
 
 interface PageProps {
   params: Promise<{ slug: string }>;
-  searchParams?: Promise<{ variant?: string | string[] }>;
+  /** `lang` — the language a link asked for (feature 163, FR-071); `variant` — a preselected variant SKU. */
+  searchParams?: Promise<{ variant?: string | string[]; lang?: string | string[] }>;
 }
 
 /**
@@ -77,13 +77,19 @@ export async function generateMetadata({
   const { slug } = await params;
   const search = searchParams ? await searchParams : {};
   const variantSku = typeof search.variant === 'string' ? search.variant : null;
-  const { ctx } = await getServerContext();
+  const { ctx } = await getServerContext({ langOverride: requestedLanguage(search.lang) });
+  // Deliberately the anonymous answer, even for a signed-in buyer (issue
+  // #265): this output is the crawler's and the social card's, it carries no
+  // price to personalise, and asking it as the buyer would cost the shared
+  // Data Cache entry every visitor to this page reuses.
+  const anonymous = withoutViewer(ctx);
   try {
-    // Deliberately the anonymous answer, even for a signed-in buyer (issue
-    // #265): this output is the crawler's and the social card's, it carries no
-    // price to personalise, and asking it as the buyer would cost the shared
-    // Data Cache entry every visitor to this page reuses.
-    const product = await getProductBySlug(slug, withoutViewer(ctx));
+    // Feature 163 — the key first (K1). A redirect key has no metadata of its
+    // own: the page answers the permanent redirect, so nothing here is indexed.
+    const resolution = await resolveProductKey(slug, anonymous);
+    if (resolution.kind === 'redirect') return { robots: { index: false, follow: true } };
+    const product = await getProductBySlug(resolution.productId, anonymous);
+    const languages = alternateLanguages(product.paths);
     // Feature 002 (T052) — if `?variant=<sku>` is present and the
     // SKU is a known variant, surface the variant's identity in the
     // social card title so different variants get distinct previews
@@ -102,8 +108,14 @@ export async function generateMetadata({
       // Indexable (FR-010/FR-012), and the canonical is the product's own path
       // **without** `?variant=`: every variant URL is the same product page
       // with a different preselection, so one of them is the page a crawler
-      // should hold and the rest point at it.
-      alternates: { canonical: canonicalPath(seo.route, { slug }) },
+      // should hold and the rest point at it. Feature 163 (FR-074) — both the
+      // canonical and the `hreflang` alternates are the backend's paths, built
+      // for the effective key per language; alternates only where the product
+      // is available to anonymous visitors.
+      alternates: {
+        canonical: product.paths.canonical,
+        ...(languages ? { languages } : {}),
+      },
       openGraph: {
         title: `${product.seo.openGraph.title}${titleSuffix}`,
         description: product.seo.openGraph.description,
@@ -122,12 +134,15 @@ export default async function ProductPage({
   const { slug } = await params;
   const search = searchParams ? await searchParams : {};
   const selectedVariantSku = typeof search.variant === 'string' ? search.variant : null;
-  const { ctx, locale } = await getServerContext();
+  const { ctx, locale } = await getServerContext({ langOverride: requestedLanguage(search.lang) });
   const t = tForLocale(locale);
 
+  // Feature 163 — which product the key names here, or the permanent redirect to
+  // where it moved (FR-071, FR-072); then the product, read by id.
+  const productId = await productIdForKey(slug, ctx);
   let product;
   try {
-    product = await getProductBySlug(slug, ctx);
+    product = await getProductBySlug(productId, ctx);
   } catch (err) {
     if (err instanceof StorefrontApiError && err.status === 404) notFound();
     throw err;
@@ -289,7 +304,8 @@ export default async function ProductPage({
           ...(primaryCategory
             ? [{ href: `/c/${primaryCategory.slug}`, label: primaryCategory.name }]
             : []),
-          { href: `/p/${product.slug}`, label: product.name },
+          // Feature 163 — the page's own URL as the backend built it (`productPath()`).
+          { href: product.paths.canonical, label: product.name },
         ]}
       />
       <Hook code="product.top" />

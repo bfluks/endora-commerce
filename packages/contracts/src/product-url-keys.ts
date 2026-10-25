@@ -157,6 +157,22 @@ export const productKeyResolutionSchema = z.discriminatedUnion('kind', [
 ]);
 export type ProductKeyResolution = z.infer<typeof productKeyResolutionSchema>;
 
+// --- Storefront product page — the PDP response's `paths` (§6) -----------------
+
+/**
+ * The product page's own URLs, ready-made by catalog with {@link productPath}: the
+ * canonical for the request's (channel, language), and one alternate per channel
+ * language where the product is available to the **anonymous** audience (FR-074 —
+ * `hreflang` advertises only what a crawler may open). The storefront renders them
+ * verbatim: it does not know the channel's default language, so it composes no
+ * product URL of its own.
+ */
+export const productPagePathsSchema = z.object({
+  canonical: z.string(),
+  alternates: z.array(z.object({ languageCode: languageCodeSchema, path: z.string() })),
+});
+export type ProductPagePaths = z.infer<typeof productPagePathsSchema>;
+
 // --- Connectors and import (§5) ------------------------------------------------
 
 /**
@@ -190,11 +206,10 @@ export interface ProductUrlKeyWrite {
 // --- Port — catalogProductUrlKeyReadPort (owner `catalog`, R28) ------------------
 
 /**
- * Owner: `catalog`. Not registered yet: feature 163 publishes it as
- * `catalogProductUrlKeyReadPort` with its implementation (T111), and the
- * container-name marker arrives with that registration.
+ * Container name: `catalogProductUrlKeyReadPort`. Owner: `catalog`.
  *
- * URL keys for whole-channel readers such as `seo`'s sitemap generator.
+ * URL keys for whole-channel readers such as `seo`'s sitemap generator (R28).
+ * `catalog` is non-deactivatable, so the port is always present.
  */
 export interface CatalogProductUrlKeyReadPort {
   /**
