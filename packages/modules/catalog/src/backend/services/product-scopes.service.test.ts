@@ -70,30 +70,30 @@ function refusal(fn: () => unknown): HttpError {
 
 describe('planProductScopeWrite — upsert and inherit (FR-012)', () => {
   it('a channel status creates the channel row', () => {
-    const plan = planProductScopeWrite(state(), { channels: [{ channelId: B2B, status: 'draft' }] });
-    expect(plan.channelRows).toEqual([{ channelId: B2B, next: row({ status: 'draft' }) }]);
+    const plan = planProductScopeWrite(state(), { channels: [{ channelId: B2B, status: 'inactive' }] });
+    expect(plan.channelRows).toEqual([{ channelId: B2B, next: row({ status: 'inactive' }) }]);
     expect(plan.changedFields).toEqual(['scopedStatus']);
   });
 
   it('an absent key leaves the stored value untouched', () => {
-    const plan = planProductScopeWrite(state({ channelRows: [row({ status: 'draft', returnable: false })] }), {
+    const plan = planProductScopeWrite(state({ channelRows: [row({ status: 'inactive', returnable: false })] }), {
       channels: [{ channelId: B2B, minOrderQuantity: 5 }],
     });
     expect(plan.channelRows).toEqual([
-      { channelId: B2B, next: row({ status: 'draft', returnable: false, minOrderQuantity: 5 }) },
+      { channelId: B2B, next: row({ status: 'inactive', returnable: false, minOrderQuantity: 5 }) },
     ]);
     expect(plan.changedFields).toEqual(['orderRules']);
   });
 
   it('null removes one override and keeps the others', () => {
-    const plan = planProductScopeWrite(state({ channelRows: [row({ status: 'draft', returnable: false })] }), {
+    const plan = planProductScopeWrite(state({ channelRows: [row({ status: 'inactive', returnable: false })] }), {
       channels: [{ channelId: B2B, status: null }],
     });
     expect(plan.channelRows).toEqual([{ channelId: B2B, next: row({ returnable: false }) }]);
   });
 
   it('a row whose every field inherits is deleted, never stored empty', () => {
-    const plan = planProductScopeWrite(state({ channelRows: [row({ status: 'draft' })] }), {
+    const plan = planProductScopeWrite(state({ channelRows: [row({ status: 'inactive' })] }), {
       channels: [{ channelId: B2B, status: null }],
     });
     expect(plan.channelRows).toEqual([{ channelId: B2B, next: null }]);
@@ -101,7 +101,7 @@ describe('planProductScopeWrite — upsert and inherit (FR-012)', () => {
 
   it('a language status upserts and null deletes the C×L row', () => {
     const plan = planProductScopeWrite(
-      state({ languageRows: [{ productId: P, channelId: B2B, languageCode: 'pl-PL', status: 'draft' }] }),
+      state({ languageRows: [{ productId: P, channelId: B2B, languageCode: 'pl-PL', status: 'inactive' }] }),
       {
         channels: [
           {
@@ -130,8 +130,8 @@ describe('planProductScopeWrite — upsert and inherit (FR-012)', () => {
   });
 
   it('writing the value already stored changes nothing', () => {
-    const plan = planProductScopeWrite(state({ channelRows: [row({ status: 'draft' })] }), {
-      channels: [{ channelId: B2B, status: 'draft' }],
+    const plan = planProductScopeWrite(state({ channelRows: [row({ status: 'inactive' })] }), {
+      channels: [{ channelId: B2B, status: 'inactive' }],
     });
     expect(plan.changedFields).toEqual([]);
   });
@@ -167,7 +167,7 @@ describe('planProductScopeWrite — upsert and inherit (FR-012)', () => {
 
 describe('planProductScopeWrite — the global window, and FR-013', () => {
   it('a global window change never touches an override', () => {
-    const current = state({ channelRows: [row({ status: 'draft' })] });
+    const current = state({ channelRows: [row({ status: 'inactive' })] });
     const plan = planProductScopeWrite(current, {
       channels: [],
       global: { publishFrom: '2026-12-01T00:00:00.000Z' },
@@ -218,7 +218,7 @@ describe('planProductScopeWrite — refusals (FR-014) and their one exception (F
   });
 
   it('removing an orphaned channel row is always allowed', () => {
-    const plan = planProductScopeWrite(state({ channelRows: [row({ channelId: GONE, status: 'draft' })] }), {
+    const plan = planProductScopeWrite(state({ channelRows: [row({ channelId: GONE, status: 'inactive' })] }), {
       channels: [{ channelId: GONE, status: null }],
     });
     expect(plan.channelRows).toEqual([{ channelId: GONE, next: null }]);
@@ -270,7 +270,7 @@ describe('planProductScopeWrite — refusals (FR-014) and their one exception (F
     const err = refusal(() =>
       planProductScopeWrite(state(), {
         channels: [
-          { channelId: B2B, status: 'draft' },
+          { channelId: B2B, status: 'inactive' },
           { channelId: B2B, status: 'active' },
         ],
       }),
@@ -286,7 +286,7 @@ describe('planProductScopeWrite — refusals (FR-014) and their one exception (F
           {
             channelId: B2B,
             languageStatuses: [
-              { languageCode: 'de-DE', status: 'draft' },
+              { languageCode: 'de-DE', status: 'inactive' },
               { languageCode: 'de-de', status: 'active' },
             ],
           },
@@ -301,7 +301,7 @@ describe('planProductScopeWrite — refusals (FR-014) and their one exception (F
   it('the same language in two different channels is not a duplicate', () => {
     const plan = planProductScopeWrite(state(), {
       channels: [
-        { channelId: B2B, languageStatuses: [{ languageCode: 'pl-PL', status: 'draft' }] },
+        { channelId: B2B, languageStatuses: [{ languageCode: 'pl-PL', status: 'inactive' }] },
         { channelId: B2C, languageStatuses: [{ languageCode: 'pl-PL', status: 'active' }] },
       ],
     });
@@ -343,7 +343,7 @@ describe('planProductScopeWrite — audience (C4)', () => {
 describe('planProductScopeWrite — the audit projection (FR-080, Q-D → A)', () => {
   it('before and after hold every touched row completely, in the request shape', () => {
     const current = state({
-      channelRows: [row({ status: 'draft', returnable: false })],
+      channelRows: [row({ status: 'inactive', returnable: false })],
       languageRows: [{ productId: P, channelId: B2B, languageCode: 'de-DE', status: 'inactive' }],
       globalWindow: { from: null, until: new Date('2027-01-01T00:00:00.000Z') },
     });
@@ -358,7 +358,7 @@ describe('planProductScopeWrite — the audit projection (FR-080, Q-D → A)', (
       channels: [
         {
           channelId: B2B,
-          status: 'draft',
+          status: 'inactive',
           window: null,
           audience: null,
           minOrderQuantity: null,
@@ -403,13 +403,13 @@ describe('planProductScopeWrite — the audit projection (FR-080, Q-D → A)', (
   });
 
   it('re-applying before restores the rows the write replaced', () => {
-    const current = state({ channelRows: [row({ status: 'draft', returnable: false })] });
+    const current = state({ channelRows: [row({ status: 'inactive', returnable: false })] });
     const forward = planProductScopeWrite(current, { channels: [{ channelId: B2B, status: 'active', returnable: null }] });
     const afterState = state({
       channelRows: forward.channelRows.flatMap((r) => (r.next ? [r.next] : [])),
     });
     const back = planProductScopeWrite(afterState, forward.before as never);
-    expect(back.channelRows).toEqual([{ channelId: B2B, next: row({ status: 'draft', returnable: false }) }]);
+    expect(back.channelRows).toEqual([{ channelId: B2B, next: row({ status: 'inactive', returnable: false }) }]);
   });
 
   it('a channel touched only through its languages records only the language rows', () => {
@@ -428,7 +428,7 @@ describe('ProductScopesService.apply — concurrent writes (security review, 163
     const product = {
       id: P,
       type: 'simple',
-      status: 'draft',
+      status: 'inactive',
       publishFrom: null,
       publishUntil: null,
       visibility: 'public',

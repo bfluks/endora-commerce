@@ -1,6 +1,6 @@
 import {
   ERROR_CODES,
-  productStatusWriteSchema,
+  productStatusSchema,
   productVisibilitySchema,
   type BulkImportReport,
   type BulkImportRowError,
@@ -16,10 +16,11 @@ import type { ImportExportAdapter, ImportExportPorts } from '../adapter.js';
  *
  * Feature 075 / D-74 — `catalog` owns the write. The two enum columns are
  * parsed against the **published** schemas rather than a private allow-list
- * this module kept: the old one still accepted `archived`, a status feature 032
- * renamed to `inactive` five months ago, and wrote it into a column no other
- * path can produce it in. `productStatusWriteSchema` is the interactive admin
- * API's own answer to a legacy `archived` write, so the two paths now agree.
+ * this module kept, so this path and the interactive admin API agree.
+ * Feature 163 (FR-092, FR-112) — the status is `active` | `inactive`: `draft` and
+ * the legacy `archived` alias are refused per record like any unknown value, and
+ * `inactive` switches a product off without archiving it (archiving is its own
+ * action, never a status).
  */
 export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
   return {
@@ -77,7 +78,7 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
 
         const statusRaw = record['status']?.trim();
         if (statusRaw) {
-          const parsed = productStatusWriteSchema.safeParse(statusRaw);
+          const parsed = productStatusSchema.safeParse(statusRaw);
           if (!parsed.success) {
             errors.push({ index, reason: `invalid status: ${statusRaw}` });
             continue;

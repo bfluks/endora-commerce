@@ -38,6 +38,8 @@ import {
   createProductSavedViewRequestSchema,
   updateProductSavedViewRequestSchema,
   ERROR_CODES,
+  productArchivedModeSchema,
+  productStatusSchema,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { savedViewActor } from './saved-view-actor.js';
@@ -380,6 +382,28 @@ export async function registerCatalogAdminRoutes(
     },
   );
 
+  // Feature 163 (FR-019, FR-082, research R30.3) — Archive / Restore one product.
+  // No body; `catalog:write` answers 401/403 before anything is read. Both are
+  // idempotent: a repeat answers 200 with the product and writes no audit row
+  // and no event. They touch `archivedAt` only — never a status at any scope.
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/catalog/products/:id/archive',
+    { preHandler: requireAdmin('catalog:write') },
+    async (request) => {
+      const { product } = await adminService.archiveProduct(request.params.id);
+      return { data: serializeAdminProduct(product) };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/catalog/products/:id/restore',
+    { preHandler: requireAdmin('catalog:write') },
+    async (request) => {
+      const { product } = await adminService.restoreProduct(request.params.id);
+      return { data: serializeAdminProduct(product) };
+    },
+  );
+
   // Feature 022 — Products Bulk Edit. Applies a sparse field-patch to a
   // selection of products in one call; returns a per-product outcome.
   //
@@ -556,14 +580,34 @@ export async function registerCatalogAdminRoutes(
     { preHandler: requireAdmin('catalog:read') },
     async (request) => {
       const q = (request.query ?? {}) as Record<string, string | undefined>;
-      const includeArchived = q['includeArchived'] === '1' || q['includeArchived'] === 'true';
+      // Feature 163 (FR-112, FR-113, R30.4) — the status is `active` | `inactive`;
+      // anything else, `draft` and the old `archived` filter included, is refused
+      // rather than ignored or mapped. Archived products are their own axis:
+      // `archived=exclude|include|only` (default `exclude`), with the legacy
+      // `includeArchived=1|true` meaning `include`; `archived` wins.
       const statusRaw = q['status'];
-      const status =
-        statusRaw === 'active' || statusRaw === 'draft' || statusRaw === 'inactive'
-          ? statusRaw
-          : statusRaw === 'archived'
-            ? 'inactive'
-            : undefined;
+      let status: 'active' | 'inactive' | undefined;
+      if (statusRaw !== undefined && statusRaw !== '') {
+        const parsed = productStatusSchema.safeParse(statusRaw);
+        if (!parsed.success) {
+          throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, `Unknown product status "${statusRaw}".`, {
+            field: 'status',
+          });
+        }
+        status = parsed.data;
+      }
+      const archivedRaw = q['archived'];
+      let archived: 'exclude' | 'include' | 'only' =
+        q['includeArchived'] === '1' || q['includeArchived'] === 'true' ? 'include' : 'exclude';
+      if (archivedRaw !== undefined && archivedRaw !== '') {
+        const parsed = productArchivedModeSchema.safeParse(archivedRaw);
+        if (!parsed.success) {
+          throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, `Unknown archived mode "${archivedRaw}".`, {
+            field: 'archived',
+          });
+        }
+        archived = parsed.data;
+      }
       const typeRaw = q['type'];
       const type =
         typeRaw === 'simple' ||
@@ -576,7 +620,7 @@ export async function registerCatalogAdminRoutes(
       const search = q['q']?.trim();
       const categorySlug = q['categorySlug']?.trim();
       const result = await adminService.listProducts({
-        includeArchived,
+        archived,
         ...(status ? { status } : {}),
         ...(type ? { type } : {}),
         ...(search ? { q: search } : {}),
@@ -608,9 +652,11 @@ export async function registerCatalogAdminRoutes(
     },
     async (request) => {
       const body = resolveProductIdsRequestSchema.parse(request.body);
-      const includeArchived = body.includeArchived ?? true;
+      // Feature 163 (R30.4) — the list's `archived` mode; without it the legacy
+      // `includeArchived` decides, and the selection's default stays "include".
+      const archived = body.archived ?? ((body.includeArchived ?? true) ? 'include' : 'exclude');
       const result = await adminService.resolveProductIds({
-        includeArchived,
+        archived,
         ...(body.status ? { status: body.status } : {}),
         ...(body.type ? { type: body.type } : {}),
         ...(body.q ? { q: body.q } : {}),
