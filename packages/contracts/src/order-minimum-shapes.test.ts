@@ -59,6 +59,18 @@ describe('cart view line', () => {
     expect(parsed).not.toHaveProperty('minOrderQuantity');
   });
 
+  it('feature 163 (S1 = A) — an unavailable line carries its SKU and no slug', () => {
+    const parsed = cartViewLineSchema.parse({
+      ...line,
+      unavailable: true,
+      unavailableReason: 'not_purchasable',
+      productSlug: null,
+      productSku: 'SKU-1',
+    });
+    expect(parsed.productSlug).toBeNull();
+    expect(parsed.productSku).toBe('SKU-1');
+  });
+
   it('carries minOrderQuantity and a pieces belowMinimum', () => {
     const parsed = cartViewLineSchema.parse({
       ...line,
