@@ -11,6 +11,7 @@ import type { FulfilmentStrategy } from './inventory.js';
 import type { BulkImportReport } from './import-export.js';
 import type { AttributeScope } from './product-value-resolver.js';
 import { ORDER_MINIMUM_MAX } from './order-minimums.js';
+import { productPagePathsSchema } from './product-url-keys.js';
 
 /**
  * Catalog module contracts — Source of truth per Principle V.
@@ -360,6 +361,11 @@ export const productDetailSchema = productSummarySchema.extend({
     }),
   ),
   seo: seoMetaSchema,
+  /**
+   * Feature 163 (FR-074) — the page's canonical and its alternate-language paths,
+   * built by catalog with `productPath()` (`contracts/url-keys-and-redirects.md` §6).
+   */
+  paths: productPagePathsSchema,
   structuredDataJsonLd: z.record(z.string(), z.unknown()),
   /**
    * Feature 002 — the AttributeSet wired to this Product. Optional so
