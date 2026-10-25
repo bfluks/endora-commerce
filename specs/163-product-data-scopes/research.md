@@ -1,6 +1,6 @@
 # Research: product data scopes per sales channel and language
 
-**Feature**: `specs/163-product-data-scopes/` | **Spec**: `spec.md` (clarify rounds 1–4) | **Measured on**:
+**Feature**: `specs/163-product-data-scopes/` | **Spec**: `spec.md` (clarify rounds 1–4, Session 2026-10-25) | **Measured on**:
 `origin/master` `aa6891d63` (2026-10-21), with #384 read from `fork/fix/storefront-channel-value-overrides`
 `f855ffc8a`.
 
@@ -102,21 +102,30 @@ shape) — the channel-only columns would be meaningless on C×L rows, and every
 partial-index discipline that `product_value_overrides` documents for itself. *A JSONB map
 `language_status` on the R1 row* — not indexable for the listing filter.
 
-## R3 — Status semantics, and keeping the owner's option B cheap
+## R3 — Status semantics: two values, and archiving apart from them
 
-**Decision.** The value set stays `draft | active | inactive` (FR-010, clarify Q1 option A) and is
-declared once, as `PRODUCT_SCOPE_STATUSES` in `packages/contracts/src/product-scopes.ts`. **Every
-predicate tests `= 'active'` and never enumerates the off values.** Below global scope, `inactive` is
-plain off (N1) and never archives; the archive transition in `catalog-admin.service.ts:448-488` is left
-untouched and keeps reading only the global column.
+**Decision (revised after the owner's final Q1, spec Session 2026-10-25).** The value set is
+`active | inactive` at every scope, global included, and is declared once, as `productStatusSchema` in
+`packages/contracts/src/catalog.ts`, from which `PRODUCT_SCOPE_STATUSES` in
+`packages/contracts/src/product-scopes.ts` is derived (one list; the import direction recorded under T008).
+`inactive` at **any** scope is plain off (N1, extended to the global scope by Q1-a): it never sets or
+clears `archivedAt` and never emits `product.archived.v1`. **Every predicate still tests `= 'active'` and
+never enumerates the off values.** Archiving is a separate, global state on `products.archived_at`, set and
+cleared only by the Archive / Restore Commands of R30 (FR-019). The completeness gate compares effective
+**status** only (`pairsTurningOn` / `statusOnAt`): the archived state is not an input to it, so setting
+`active` on an archived product gates exactly as on any other product, and Restore never gates (FR-060).
 
-**Rationale.** If the owner chooses option B at acceptance (enabled/disabled per scope + a global archive
-action), the change is: the scope tables' `CHECK` and the contract constant, a data migration mapping
-scope `draft`/`inactive` → `disabled` and `active` → `enabled`, and the admin control's options. No
-predicate, port signature or resolution function changes, because none of them names an off value.
+**Rationale.** The 2026-10-21 design kept option B cheap by never naming an off value in a predicate; that
+held — the change is the value set, the scope tables' `CHECK`s, one data migration, the global status write
+path and the admin controls (R30), and no predicate, port signature or resolution function. What the
+earlier design did name was archiving-as-`inactive` in four places outside the predicates (the global
+status write path, the PDP's 410 condition, the bulk undo's revert keys and the gate's `statusOnAt`), plus
+three consumers that read `status === 'inactive'` as "archived" (quick order import, shopping-list
+conversion, reorder); R30 lists them and Phase 9a–9c of `tasks.md` remove them.
 
-**Alternatives rejected.** *A boolean `enabled` column at scope level now* — decides the owner's open
-question for them.
+**Alternatives rejected.** *A boolean `enabled` column at scope level* — the owner chose the existing
+`active` / `inactive` vocabulary at every scope, so a second spelling would only add a mapping. *Keeping
+`draft` as an accepted alias for a period* — refused by the owner (Q1-e): no alias, a validation error.
 
 ## R4 — The publication window
 
@@ -251,7 +260,9 @@ at generation time, the same freshness a status change has today.
 
 **Decision.** Reuse **`product.updated.v1`** with `changedFields` naming what moved:
 `scopedStatus`, `publicationWindow`, `audience`, `urlKeys`, `orderRules`, `media`, `attachments`,
-`packagingUnits`. Global archive keeps `product.archived.v1` exactly as today.
+`packagingUnits`; Archive and Restore (R30) emit `changedFields: ['archivedAt']`. `product.archived.v1`
+is emitted by the Archive Command only, once per transition; a status change to `inactive` no longer emits
+it (FR-082, spec Session 2026-10-25).
 
 **Rationale.** `search` (`packages/modules/search/src/backend/index.ts:218`), `webhooks` and
 `product_feeds` already subscribe to it; a new event type would need a new subscription in each and a new
@@ -498,7 +509,8 @@ keep fresh. *Filtering effective names after fetch* — issue #151 again.
 
 **Decision.** Extend the existing bulk update (`bulkUpdateProductsRequestSchema`,
 `packages/contracts/src/catalog.ts:791`) with an optional `scopedStatus: { channelId, languageCode |
-null, value: 'draft' | 'active' | 'inactive' | 'inherit' }`. It rides the existing inline/queued paths
+null, value: 'active' | 'inactive' | 'inherit' }` (`draft` removed, spec Session 2026-10-25; bulk
+Archive / Restore is the separate `fields.archived` of R30). It rides the existing inline/queued paths
 (`BULK_ASYNC_THRESHOLD`, `BulkOperationService`), the per-product Command audit and the bulk undo
 (`bulk-operation-undo.contract.test.ts`), so FR-052 needs no new machinery. New per-product reasons:
 `scope_invalid` (not a member / language not offered, FR-051) and `completeness_gate` (FR-061). It may not
@@ -506,11 +518,14 @@ be combined with the global `status` field in one request (one meaning per actio
 
 ## R21 — Deployment and backfill (FR-110, SC-001)
 
-**Decision.** **No data backfill.** Every new table starts empty, which is "inherit everywhere"; the
-global values already hold today's status, audience, MOQ and returnable; `products.slug` is the global key;
-existing SEO rows become the L scope by having a `NULL` channel. The intended behaviour changes at deploy
-(`plan.md` § Intended behaviour changes) are written into SC-001's test: a `draft` (or member,
-non-`active`) product is no longer reachable by URL (FR-005) and no longer addable to a basket (F1);
+**Decision.** **No data backfill of the new tables.** Every new table starts empty, which is "inherit
+everywhere"; the global values already hold today's status, audience, MOQ and returnable; `products.slug`
+is the global key; existing SEO rows become the L scope by having a `NULL` channel. **The one data
+conversion is the status value set (R30, data-model §13)**: `archived_at = updated_at` on today's
+`inactive` rows that lack it, then `draft` → `inactive` in `products` and both scope tables, without
+archiving. The intended behaviour changes at deploy (`plan.md` § Intended behaviour changes) are written
+into SC-001's test: a product that is off and not archived (today's `draft`, `inactive` after the
+migration) is no longer reachable by URL (FR-005) and no longer addable to a basket (F1);
 listing name sort follows the effective name, not the slug (D6); existing per-language SEO overrides are
 served (Q-A). Search documents gain fields; documents without
 them are treated as before (R8), and the release note asks for one `search_reindex` per channel (the
@@ -617,3 +632,212 @@ tests assert that projection, not an undo endpoint. No new machinery, and no sin
 new table, a generic undo route, conflict detection per object type) is platform work owned by
 `audit_logs`/the platform, a new phase, and a Complexity Tracking entry. The owner placed it out of scope;
 it is a possible future issue, not part of 163.
+
+## R30 — The status model after the owner's final Q1: migration, Archive / Restore, inventory (2026-10-25)
+
+Spec Session 2026-10-25 (Q1, Q1-a…f, O-1…O-6) removes `draft`, makes `inactive` plain off at every scope,
+and turns archiving into a separate global Archive / Restore action. `data-model.md` §13–§14 and
+`contracts/admin-scopes-api.md` §2 left three things to the architect; they are decided here, followed by
+the inventory of what still assumes the old model. Measured on S1's tip `829ce2995`.
+
+### R30.1 — One new migration; `20261022T035133_catalog_product_scopes.ts` is not amended
+
+**Decision.** One new `catalog` migration, scaffolded with
+`pnpm --filter backend run migration:new -- --module catalog --name product_status_drop_draft`, does the
+whole transition in the order data-model §13 fixes:
+
+1. `update products set archived_at = updated_at where status = 'inactive' and archived_at is null` (O-4);
+2. `draft` → `inactive` in `products`, `product_channel_scopes` and `product_channel_language_scopes`, without
+   writing `archived_at` (Q1-b);
+3. `alter table … drop constraint if exists product_channel_scopes_status_check` /
+   `…product_channel_language_scopes_status_check`, re-added as `("status" is null or "status" in
+   ('active','inactive'))` and `("status" in ('active','inactive'))`; `products_status_check` added (R30.2);
+4. `alter table products alter column status set default 'inactive'` (Q1-d).
+
+`down` restores the three-value scope `CHECK`s, drops `products_status_check` and sets the default back to
+`draft`; it cannot tell a converted `draft` or a backfilled `archived_at` from an original one and leaves
+the data as it is (data-model §13). The migration file under `20261022T035133` keeps its three-value
+`CHECK`s as history.
+
+**Rationale.** `mikro_orm_migrations` records the class name, so a database that already ran
+`20261022T035133` never re-runs an amended body (`specs/conventions/module-migrations.md` item 5 states the
+same for a rename). Test templates would rebuild — `backend/test/template-identity.ts` digests every
+migration source — but every developer database built by `pnpm run setup` in the four 163 worktrees, and any
+long-lived database the fork's environments keep, would silently retain the three-value `CHECK` and any
+`draft` scope rows. `products` needs a new migration anyway (it predates this feature), and the backfill
+must precede the conversion; one file keeps that order in one place. `drop constraint if exists` makes the
+same file correct on a fresh database and on one that ran the old body. Catalog's own migrations order by
+timestamp, so the new one runs after `20261022T035133`.
+
+**Alternatives rejected.** *Amend `20261022T035133` in place* — leaves every already-migrated database wrong
+without a signal. *Amend in place and add a migration for `products` only* — splits one ordered transition
+across two files and still leaves the already-migrated scope tables wrong. *Rename `20261022T035133`* —
+costs every developer database a rebuild (`module-migrations.md` item 5) to buy nothing the new migration
+does not.
+
+### R30.2 — `products.status` has no `CHECK`; one is added
+
+**Finding.** `products` is created by `packages/platform/src/migrations/20260424T165847_core_foundation_init.ts`
+(`"status" varchar(16) not null default 'draft'`, no `CHECK`, an index `products_status_index`);
+`20260526T124736_catalog_product_status_inactive.ts` only updates rows. Nothing exists to rewrite.
+
+**Decision.** Add `products_status_check (status in ('active','inactive'))` in the same migration, after the
+conversion. Catalog migrations already write `products` (`catalog_product_status_inactive`,
+`catalog_order_rules`, `catalog_product_scopes`), so `check:module-boundary` R2 holds.
+
+**Rationale.** SC-009 asks for zero stored values other than `active` / `inactive` **after** deployment, not
+only at its instant. A process still running pre-163 code during a rolling deploy creates products with the
+old entity default `draft` after the conversion has run; without a `CHECK` that row persists silently and
+breaks the admin list's status filter (which now refuses `draft`), with one the stale write fails loudly. The
+two scope tables already enforce the same set; the global column would otherwise be the only place where it
+is not. Cost: one validating scan of `products` inside the migration, which the `update` of step 2 already
+pays for.
+
+**Alternative rejected.** *The application enum alone* — the precedent is `productTypeSchema` (feature 002
+R-1), which keeps the type set open for new types; the status set is closed by owner decision, so the
+precedent's reason does not carry.
+
+### R30.3 — Archive / Restore: routes, Commands, events (FR-019, FR-053, FR-080, FR-082)
+
+**Decision — single product.**
+
+| | Archive | Restore |
+| --- | --- | --- |
+| Route | `POST /api/v1/admin/catalog/products/:id/archive` | `POST /api/v1/admin/catalog/products/:id/restore` |
+| Body | none | none |
+| Gate | `requireAdmin('catalog:write')` as `preHandler` (401/403 first) | same |
+| Answer | `200 { data: AdminProduct }` (`serializeAdminProduct`, carries `archivedAt`) — also on a no-op | same |
+| Refusals | `404 PRODUCT_NOT_FOUND` for an unknown, soft-deleted or non-UUID id | same |
+| Command | `product.archive`, `objectType: 'product'` | `product.restore`, `objectType: 'product'` |
+| Audit | `before` / `after` = `{ archivedAt }`; no-op → `skipAudit`, no event | same |
+| Events | `product.updated.v1` `changedFields: ['archivedAt']`, then `product.archived.v1`, in one event scope (the ordering `updateProductAudited` uses today, `catalog-admin.service.ts` ~490–506) | `product.updated.v1` `changedFields: ['archivedAt']` |
+| Service | `CatalogAdminService.archiveProduct(id)` — the deprecated method is reimplemented, no longer calls `updateProduct` | `restoreProduct(id)` |
+
+Neither reads or writes a status column at any scope, neither fires the completeness gate. `changedFields`
+names the property that moved, as `status` and `sku` do (R10), and is the same key the audit projection and
+the bulk revert record carry.
+
+**Decision — bulk.** `fields.archived: boolean` on the existing `POST /api/v1/admin/catalog/products/bulk-update`
+(`true` = Archive, `false` = Restore), refused with `400 VALIDATION_FAILED` when combined with **any** other
+field (one meaning per action, as R20 does for `scopedStatus` and `status`). Per product it runs the single
+Command above — not `updateProduct` — so each product gets one `product.archive` / `product.restore` audit
+entry. Outcome per product: `succeeded` with `changedFields: ['archivedAt']`; a product already in the
+requested state is `succeeded` with `changedFields: []`, no audit entry and no event (O-6); no new reason
+code. Inline and queued paths, the `product_bulk_update` kind, the per-run summary audit and the undo are
+unchanged in shape: `revertibleFieldKeys` maps `archived` → `archivedAt`, and **drops** its
+`status` → `archivedAt` addition (`bulk-operation.service.ts:675-676`), so a bulk status undo restores status
+only. The collection selection (`POST …/products/resolve-ids`) gains the list's `archived` mode (R30.4) so
+"select every archived product → Restore" works from the Archived filter.
+
+**Decision — undo emits.** `product.bulk_update.undo` restores columns with `em.assign` and emits nothing
+today, for every field (a status or visibility undo leaves search, feeds and webhooks stale until the next
+write). Undoing a bulk Archive is a restore and FR-082 requires that to be announced, so the undo emits, after
+commit, `product.updated.v1` per reverted product with `changedFields` = the restored keys, and
+`product.archived.v1` where it moves `archivedAt` from null to set. The emission is for every reverted
+field, which also closes the pre-existing gap.
+
+**Alternatives rejected.** *`PATCH /products/:id { archived: true }`* — puts archiving back on the general
+update path FR-019 separates it from, and gives `product.update` two meanings (with and without
+`product.archived.v1`), the shape that produced the problem. *`DELETE /products/:id`* — taken by the soft
+delete. *Action names `product.archived` / `product.unarchive`* — the tree's actions are imperative verbs
+(`product.update`, `product.duplicate`, `product.delete`). *New `BULK_OPERATION_TYPES` kinds with their own
+endpoints* — the queued consumer, the revert capture (`revertibleFieldKeys`, `#snapshotProductFields`,
+`touchedFieldsOf`) and the undo are all keyed on `payload.fields`; a new kind needs its own copy of each for
+one column. data-model §10's "kinds of their own" is met by the field's exclusivity and the per-product
+Command names.
+
+### R30.4 — Admin list and selection (FR-112, FR-113)
+
+**Decision.** `GET /api/v1/admin/catalog/products`:
+
+- `status` ∈ `active` | `inactive`; any other value — `draft`, `archived` included — answers
+  `400 VALIDATION_FAILED` with `details.field = 'status'` (today an unknown value is silently ignored and
+  `archived` maps to `inactive`, `routes.admin.ts:560-566`).
+- A new `archived` query parameter, `exclude` (default) | `include` | `only`, filters on `archived_at`,
+  independently of `status`. The legacy `includeArchived=1|true` stays as the existing way to include them
+  and means `include`; when both are sent, `archived` wins.
+- `counts` becomes `{ all, active, inactive, archived }`: `all`, `active`, `inactive` over non-archived,
+  non-deleted rows; `archived` over archived, non-deleted rows. The `draft` key goes.
+- `POST …/products/resolve-ids` takes the same `archived` mode beside `includeArchived` (its default stays
+  `include`, as today).
+
+The admin page sends `includeArchived=1` on every request today (`ProductsList.tsx:141`), so archived rows
+show under "All". After the change the page offers *All · Active · Inactive · Archived*, the first three
+non-archived, which is what FR-113's "hidden by default" requires of the screen as well as of the API. A
+saved view holding `status: 'draft'` falls back to "All" on the client (`isStatusFilter`) and is never sent;
+saved views are not migrated.
+
+**Alternative rejected.** *An "Archived" pseudo-status in the status filter* — the very conflation O-2 removed.
+
+### R30.5 — Inventory: what still assumes `draft` or "inactive archives"
+
+| Area | Site (S1 tip `829ce2995`) | Change | Task |
+| --- | --- | --- | --- |
+| contracts | `catalog.ts:38` `productStatusSchema`; `:49-58` `coerceProductStatusWrite`, `productStatusWriteSchema`; `:664`, `:793` writes; `:821` scoped bulk value; `:3602` `product.archived.v1` doc | two values; alias and write schema removed; `fields.archived`; doc "archived by the Archive action" | T156a, T156e |
+| contracts | `product-scopes.ts:227` `statusOnAt` treats `archivedAt` as off, and its docstring `:196-208` | status only (FR-060) | T156a, T156e |
+| contracts | `prompt-actions.ts:257`, `quick-order.ts:193` | drop `draft` | T156e |
+| catalog | `product.entity.ts:57` type + default | `active` / `inactive`, default `inactive` | T156f |
+| catalog | `catalog-admin.service.ts:347`, `:891` (+ doc `:837`) | create / duplicate → `inactive` | T156g |
+| catalog | `catalog-admin.service.ts:629-636` and the `archived` outcome plumbing `:445-530` | status write never touches `archivedAt`; `product.archived.v1` only from Archive | T156g |
+| catalog | `catalog-admin.service.ts:1186-1191` deprecated `archiveProduct()` | reimplemented as the Archive Command | T156g |
+| catalog | `catalog-admin.service.ts:1369-1525` list / counts / resolve; `routes.admin.ts:560-566` | R30.4 | T156h |
+| catalog | `bulk-operation.service.ts:675-676`; `catalog-bulk-update.service.ts` | R30.3 bulk | T156m |
+| catalog | `catalog-query.service.ts:1816` 410 on `archivedAt \|\| status === 'inactive'`, message "Product is inactive." | `archivedAt` only | T156t |
+| catalog | `prompt-tools.ts:332`, `admin-search-provider.ts:28` (+ bundle key), `catalog-admin-search.service.ts:14` | drop `draft` | T156o |
+| catalog | `i18n/{en,pl}.json` `errors.PRODUCT_ARCHIVED` = "Product is inactive." | "Product is archived." / "Produkt jest zarchiwizowany." | T156i |
+| consumers | `quick_order/…/import-pipeline.ts:143`, `shopping_lists/…/shopping-list-service.ts:512`, `orders/…/order-reorder-service.ts:93` | "archived" read from `archivedAt`, never from `status` | T156n |
+| import | `import_export/…/adapters/products.adapter.ts:3`, `:80` | `productStatusSchema`; `draft` / `archived` refused per record (FR-092) | T156e, T156l |
+| storefront | `lib/api/quick-order.ts:88` | drop `draft` | T156o |
+| admin UI | catalog `ProductEditor.tsx` (`:60`, `:67`, `:130`, `:201`, `:413`, `:915`, `:2015`), `ProductsList.tsx` (`:41`, `:48`, `:79`, `:82`, `:107`, `:141`, `:429-432`, `:823`), `ProductsBulkEditDialog.tsx:30`, `:380`, `lib/resolve-product-selection.ts:4` | two values; Archive / Restore; Archived filter | T156w |
+| admin UI | admin-kit `product-browser/{types.ts,ProductBrowserDialog.tsx:84-145,product-browser-api.ts:7,:21}`, `product-picker/ProductPicker.tsx:114`; `page-builder-admin/src/chrome/CatalogPickers.tsx:155`, `:236`; `blog/…/RelatedProductsPicker.tsx:10`; `orders/…/OrderCreatePage.tsx:71`; `product_feeds/…/FeedCriteriaPanel.tsx:178-180` | drop `draft`; archived via `archivedAt` | T156x |
+| connectors | none in this repository maps or emits `draft`: `erp_connector` and `pim_connector` write no product status, and the PIM sync packages live outside it (plan D5). External writers reach the status through the API-key upsert `PUT /api/v1/catalog/products/by-sku/:sku` (`routes.api-key.ts`) and the import | release note only: `draft` / `archived` → 400; `inactive` no longer archives; a create without status is `inactive` | T156q |
+| data | `product_feeds` criteria rules holding `status = draft` (`product_feeds`' rows) | not rewritten — a `catalog` migration may not write another module's table (R2); such a rule matches nothing after the migration, as it effectively did before (the feed floor already required `active`, consumers row 11) | — |
+| docs | `catalog/docs/catalog.md:32`, `:36`, `:223-254`, `:527`; `catalog/per-channel-per-language-overrides.md`; `quick_order/docs/quick_order.md:28`; Polish mirrors | spec *Compatibility and release* § Documentation | T156p |
+
+Tests asserting the old model are listed under T156j (backend) and T156z (admin).
+
+### R30.6 — Release: breaking, recorded as `minor` (D-225)
+
+**Decision.** Every changeset of this change is written as **breaking** — the body headed so, naming each
+removed symbol with the old call and the new one — at bump level **`minor`**: `productStatusSchema`
+narrowed; `coerceProductStatusWrite` and `productStatusWriteSchema` removed (use `productStatusSchema`);
+`status: 'draft'` → `'inactive'`; archiving by `status: 'inactive'` or `'archived'` → `POST
+…/products/:id/archive` or bulk `fields.archived: true`; list `counts.draft` → `counts.archived`;
+`status=archived` list filter → `archived=only`; `product.archived.v1` now means "archived by the Archive
+action". Packages: `@endora-commerce/contracts`, `@endora-commerce/mod-catalog`,
+`@endora-commerce/admin-kit` (Phase 15a), plus `patch` notes for the import, quick-order, shopping-list and orders
+behaviour fixes.
+
+**Rationale.** `specs/conventions/release-intent.md` (D-225): `major` is **refused** while a package is in
+`0.x` — `@endora-commerce/contracts` is `0.107.0` — and `check:release-intent`'s
+`major-bump-in-a-zero-series` has no override, so a `major` changeset reds the final gate (T153). In a `0.x`
+series `minor` already takes every caret dependent out of range, which is the whole consumer-facing meaning
+of a break.
+
+**Alternative rejected.** *`major`, as spec *Compatibility and release* words it* — mechanically refused.
+The spec's sentence needs the owner's re-wording ("breaking, at the bump level D-225 allows"); until then
+this plan follows D-225 (flagged in the plan's Compatibility note).
+
+### R30.7 — Sequencing against the streams in flight
+
+- `catalog-query.service.ts:1816` sits in `getProductByIdOrSlug`, which S2's Phase 17 (T110) is editing now
+  and Phase 18 (T118) edits again. The one-condition fix is therefore its own Phase 9c, run on S1 after
+  P17–P18 are applied — or, if the coordinator prefers, handed to S2 as a line of P17. Until it lands, a
+  non-archived `inactive` member that would be available with global `active` answers 410 instead of 404;
+  no test asserts either answer in between (Phase 9a removes the `draft` case from T031's matrix, 9c adds the
+  new one).
+- `import_export/…/products.adapter.ts` is edited by Phase 9a (its import of the removed
+  `productStatusWriteSchema`) and by S2's Phase 19 (T123, scoped columns); 9a goes first and S2 rebases onto
+  it.
+- The contracts narrowing of Phase 9a stops `pnpm --filter @endora-commerce/admin-kit run typecheck` where
+  a `Record<ProductStatus, …>` names `draft` (`ProductBrowserDialog.tsx:84-98`); 9a removes the `draft`
+  literals a type-check refuses — also in S3-owned catalog admin files, as one compile-only commit (T156e) —
+  and the screens change in S3's Phase 15a.
+- S2's uncommitted handover touches `packages/contracts/src/catalog.ts` (the PDP `paths` field); 9a rewrites
+  the status region of the same file. Different regions, but the coordinator applies S2's handover on S1
+  before 9a's contracts commit, or 9a rebases over it.
+- If S1 has already started Phase 10 after ticking Phase 9, it stops and takes 9a–9b first: T073–T076 build
+  on the narrowed enum and on `revertibleFieldKeys` without the `status` → `archivedAt` coupling.
+- `prompt_actions`' `catalog.set_product_status` was, in effect, the assistant's way to archive (`inactive`).
+  After 9a it only switches products off and no assistant tool archives; adding `catalog.archive_products`
+  is not planned (YAGNI) and is the owner's call.
