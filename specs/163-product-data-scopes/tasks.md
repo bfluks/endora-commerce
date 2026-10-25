@@ -430,6 +430,7 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
 - [x] T069 [US4] [S1] `ScopeOverviewService` over scope rows, `product_value_overrides` and URL keys (P16 is merged before Block C — see the chain); leaves `cells[].missing` absent — T080a fills it once `checkCompleteness` exists (Phase 11); media/attachment fields join in T134a–T134b / T139a–T139b and SEO in T118a / T118c (all Phase 21–22, S1) — `services/scope-overview.service.ts`
 - [x] T070 [US4] [S1] Route `GET …/products/:id/scope-overview` — `routes.admin.ts`
 - [x] T071 [S1] Preview route `GET …/attributes/:idOrKey/scope-change-preview` — `routes.admin.ts`, `attribute-set.service.ts` or a new `attribute-scope-preview.ts`
+- [x] T071a [US4] [S1] FR-015 (coordinator, after Phase 9 review): `ProductOverridesService.applyBulk` lets a **delete** skip `channel_not_assigned_to_product`, `language_not_in_channel`, `attribute_not_channel_scoped` and `attribute_unknown`, so every orphan the overview lists can be removed (as `assertScopeValid` lets `null` through); upserts keep every check; the delete stays inside the audited `product.overrides_apply` Command. RED unit test `services/product-overrides.service.test.ts`; [PG] case in `backend/test/contract/catalog/scope-overview.test.ts` deletes one orphan of each kind and asserts the overview no longer lists it. Orphaned C×L URL-key deletes are S2's (`url-key.service.ts`) — `services/product-overrides.service.ts`
 - *T072 moved to Phase 18 as T118b — a port must be declared in the phase that provides it, or `check:port-dependencies` reports a port resolved and registered by nobody.*
 
 **Verification**:
@@ -458,6 +459,10 @@ review checkpoint C:
   not, by scope flag only (rows also orphaned by membership are counted); soft-deleted products'
   rows are not. A system or unknown attribute answers `404 NOT_FOUND`; an absent flag keeps the
   current one.
+- *ci-pg on 829ce2995* (3 reds, fixed): MikroORM hydrates a NULL `product_url_keys.sales_channel_id`
+  as `undefined`, which the overview read as a channel key and listed as an orphan with no
+  channel; it now tests `== null` (unit case added). The preview file now seeds the stub
+  sessions' admins through the shared `backend/test/helpers/product-scopes-admins.ts`.
 
 ### Phase 10: [backend] Bulk scoped status (US5, FR-050–FR-052)
 
