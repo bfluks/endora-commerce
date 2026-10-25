@@ -70,7 +70,10 @@ describe('163 — scoped availability on the Meilisearch path [integration]', ()
     on.push(await create('D-ON'), await create('E-ON'));
     legacy = await create('F-LEGACY');
     await setChannelStatus(em, off.id, [channel.id], 'draft');
-    await setGlobalWindow(em, ended.id, { from: null, until: new Date(Date.now() + 60 * 60 * 1000) });
+    // A window that has already ended. The indexer keys a document on the
+    // live languages, never on the window, so the document is written with its
+    // `publishUntilMs` in the past: only the query-time filter can drop it.
+    await setGlobalWindow(em, ended.id, { from: null, until: new Date(Date.now() - 1000) });
     await em
       .getConnection()
       .execute(
@@ -86,8 +89,6 @@ describe('163 — scoped availability on the Meilisearch path [integration]', ()
       ...searchIndexerNeighbourPorts(h),
     });
     await indexer.reindexChannel(em, channel);
-    // The window ends after indexing: only the query-time filter can see it.
-    await setGlobalWindow(em, ended.id, { from: null, until: new Date(Date.now() - 1000) });
     // A document as the indexer wrote it before the deploy — none of the fields.
     const index = client.index(indexUidFor(channel));
     const task = await index.addDocuments(
@@ -133,6 +134,9 @@ describe('163 — scoped availability on the Meilisearch path [integration]', ()
     expect(res.statusCode, res.body).toBe(200);
     expect(res.headers['x-search-backend']).toBe('meilisearch');
     const ids = (res.json() as { data: Array<{ id: string }> }).data.map((p) => p.id);
+    // The ended product is in the index; the filter the page was cut from left it out.
+    const endedDoc = (await client.index(indexUidFor(channel)).getDocument(ended.id)) as Record<string, unknown>;
+    expect(endedDoc['publishUntilMs']).toBeLessThan(Date.now());
     expect(ids).toHaveLength(2);
     expect(ids).not.toContain(off.id);
     expect(ids).not.toContain(ended.id);
