@@ -181,7 +181,8 @@ describe('shopping_lists — conversion partitions by the port, and writes throu
       ids
         .filter((id) => id !== 'prod-gone')
         .map((id) =>
-          id === 'prod-archived' ? productRecord(id, { status: 'inactive' }) : productRecord(id),
+          // Spec 163 — archived is `archivedAt`, whatever the status says.
+          id === 'prod-archived' ? productRecord(id, { status: 'active', archivedAt: new Date() }) : productRecord(id),
         ),
   } as unknown as CatalogProductReadPort;
 
@@ -218,6 +219,34 @@ describe('shopping_lists — conversion partitions by the port, and writes throu
       { itemId: 'item-2', productId: 'prod-archived', reason: 'product_archived' },
       { itemId: 'item-3', productId: 'prod-gone', reason: 'product_not_found' },
     ]);
+  });
+
+  it('a product switched off but not archived is not product_archived (spec 163, FR-010)', async () => {
+    const offItems = [{ id: 'item-off', productId: 'prod-off', quantity: 1, variantId: null, note: null }];
+    const offCatalog = {
+      findByIds: async (ids: readonly string[]) =>
+        ids.map((id) => productRecord(id, { status: 'inactive', archivedAt: null })),
+    } as unknown as CatalogProductReadPort;
+    const added: string[] = [];
+    const carts = {
+      addItems: async (_actor: unknown, lines: ReadonlyArray<{ productId: string }>) => {
+        added.push(...lines.map((line) => line.productId));
+        return { cart: {}, items: [], outcomes: lines.map((_line, index) => ({ index, status: 'added' })) };
+      },
+    } as unknown as CartWritePort;
+    const service = new ShoppingListService(
+      fakeEm({ ShoppingList: LIST, ShoppingListItem: offItems }),
+      carts,
+      refusingRfq,
+      offCatalog,
+      refusingChannelMembership,
+    );
+
+    const result = await service.convertToCart(CTX, 'list-1', undefined, 'channel-b');
+
+    // Outside a request channel nothing here judges availability; the cart does.
+    expect(result.skipped.map((s) => s.reason)).not.toContain('product_archived');
+    expect(added).toEqual(['prod-off']);
   });
 
   it('re-raises a batch refusal other than the unknown-id answer with its code, message and details', async () => {
