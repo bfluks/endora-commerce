@@ -462,6 +462,45 @@ describe('planUrlKeyWrite — scope validity (FR-014, FR-015)', () => {
     expect(plan.keyRows).toEqual([{ languageCode: 'en-GB', channelId: GONE, next: null }]);
   });
 
+  // T105a (coordinator, 2026-10-25) — the scope overview lists orphaned channel ×
+  // language keys and offers to delete them: a delete skips the membership and the
+  // language-offered checks, a write keeps both, and the deleted key stays a
+  // redirect in its language (Q3b — redirects are kept until deleted).
+  it('T105a: deletes a key whose channel the product left, keeping it as a redirect', () => {
+    const plan = planUrlKeyWrite(
+      state({ ownKeys: [key(P, 'pl-PL', 'wiertarka-b2x', GONE)] }),
+      put({ channelKeys: [{ channelId: GONE, languageCode: 'pl-PL', key: null }] }),
+    );
+    expect(plan.keyRows).toEqual([{ languageCode: 'pl-PL', channelId: GONE, next: null }]);
+    expect(inserted(plan)).toEqual(['pl-PL:wiertarka-b2x']);
+  });
+
+  it('T105a: deletes a key whose language its channel dropped, keeping it as a redirect', () => {
+    const plan = planUrlKeyWrite(
+      state({ ownKeys: [key(P, 'en-GB', 'drill-b2b', B2B)] }),
+      put({ channelKeys: [{ channelId: B2B, languageCode: 'en-GB', key: null }] }),
+    );
+    expect(plan.keyRows).toEqual([{ languageCode: 'en-GB', channelId: B2B, next: null }]);
+    expect(inserted(plan)).toEqual(['en-GB:drill-b2b']);
+  });
+
+  it('T105a: still refuses writing a value to either orphaned scope', () => {
+    const left = refusal(() =>
+      planUrlKeyWrite(
+        state({ ownKeys: [key(P, 'pl-PL', 'wiertarka-b2x', GONE)] }),
+        put({ channelKeys: [{ channelId: GONE, languageCode: 'pl-PL', key: 'wiertarka-2' }] }),
+      ),
+    );
+    expect(left.details).toEqual({ channelId: GONE, reason: 'not_a_member' });
+    const dropped = refusal(() =>
+      planUrlKeyWrite(
+        state({ ownKeys: [key(P, 'en-GB', 'drill-b2b', B2B)] }),
+        put({ channelKeys: [{ channelId: B2B, languageCode: 'en-GB', key: 'drill-2' }] }),
+      ),
+    );
+    expect(dropped.details).toEqual({ channelId: B2B, languageCode: 'en-GB', reason: 'language_not_offered' });
+  });
+
   it('refuses a language key for a language no channel offers', () => {
     const err = refusal(() => planUrlKeyWrite(state(), put({ languageKeys: [{ languageCode: 'fr-FR', key: 'x' }] })));
     expect(err.statusCode).toBe(422);
