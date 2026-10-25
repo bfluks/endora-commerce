@@ -68,7 +68,7 @@ interface ItemRow {
 const ORDER_PRODUCT_RULES: ProductBrowserRules = {
   initialStatus: 'active',
   blockedTypes: ['grouped', 'bundle'],
-  blockedStatuses: ['draft', 'inactive'],
+  blockedStatuses: ['inactive'],
 };
 
 // Members of `ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE`, named rather than taken by

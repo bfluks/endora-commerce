@@ -90,12 +90,10 @@ const TAB_LABEL_KEY: Record<ProductBrowserStatusFilter, string> = {
   inactive: 'productBrowser.tab.inactive',
 };
 const STATUS_LABEL_KEY: Record<ProductBrowserStatus, string> = {
-  draft: 'productBrowser.status.draft',
   active: 'productBrowser.status.active',
   inactive: 'productBrowser.status.inactive',
 };
 const STATUS_BADGE_VARIANT: Record<ProductBrowserStatus, BadgeProps['variant']> = {
-  draft: 'secondary',
   active: 'success',
   inactive: 'outline',
 };
