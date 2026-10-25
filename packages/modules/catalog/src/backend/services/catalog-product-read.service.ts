@@ -19,6 +19,7 @@ import { ProductLink } from '../entities/product-link.entity.js';
 import { ProductPackagingUnit } from '../entities/product-packaging-unit.entity.js';
 import { ProductValueOverride } from '../entities/product-value-override.entity.js';
 import { ProductVariant } from '../entities/product-variant.entity.js';
+import { uuidArrayLiteral } from './sql-id-arrays.js';
 
 /**
  * The row-level read model `catalog` publishes (feature 075, Phase P).
@@ -369,15 +370,6 @@ function productFilter(
   if (options?.activeOnly) return { deletedAt: null, status: 'active' };
   if (options?.liveOnly) return { deletedAt: null };
   return {};
-}
-
-/**
- * A Postgres array literal of ids for one bound parameter. `em.execute` formats
- * a JavaScript array as a list of values, not one array, so the literal is
- * built here: every element double-quoted, `\` and `"` escaped.
- */
-function uuidArrayLiteral(ids: readonly string[]): string {
-  return `{${ids.map((id) => `"${id.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`).join(',')}}`;
 }
 
 function toPricingRef(row: { id: string; attribute_values: Record<string, unknown> | null }): CatalogProductPricingRef {

@@ -1029,6 +1029,14 @@ export interface CreateForCustomerOptions {
    * own fallback chain.
    */
   language?: string;
+  /**
+   * Feature 163 — the sales channel the buyer's route resolved, named explicitly so
+   * a buyer's lines are always asked about at a channel (`catalogProductAvailabilityPort`)
+   * and never by audience alone. Absent only for a caller outside a request (a worker, a
+   * fixture), which reads the request scope and, finding none, falls back to the audience
+   * rule. In-process only, like `minimums`.
+   */
+  salesChannelId?: string;
 }
 
 export interface RfqCustomerPort {

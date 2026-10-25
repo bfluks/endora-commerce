@@ -206,11 +206,15 @@ function rig(
             p !== undefined &&
             p.status === 'active' &&
             isProductVisibleTo(p, scope.audience) &&
-            (options.channels?.[scope.channelId] ?? []).includes(id)
+            // The basket's own channel publishes every fixture product unless a
+            // case says otherwise.
+            (options.channels?.[scope.channelId] ?? (scope.channelId === CUSTOMER.salesChannelId ? [...products.keys()] : [])).includes(id)
           );
         }),
       ),
     ),
+    // No override in this rig: the caller's baseline pick names the product.
+    effectiveNames: vi.fn(async () => new Map<string, string>()),
   } as unknown as CatalogProductAvailabilityPort;
   // Asked only when no price list holds the product (issue #236).
   const displayModes: ProductDisplayModePort = { resolveDisplayMode: async () => 'gross_only' };
@@ -316,6 +320,27 @@ describe('addItems — resolution first (F1, FR-035)', () => {
     );
     expect(scopes.every((scope) => scope.channelId === 'ch-x' && scope.languageCode === null)).toBe(true);
     expect(r.items.map((i) => i.productId)).toEqual([B]);
+  });
+
+  it('security review (checkpoint B) — a buyer add with no request scope is asked at the basket’s channel, never by audience alone', async () => {
+    const r = rig({ carts: [existingCart()], channels: { [CUSTOMER.salesChannelId]: [B] } });
+    const result = await r.service.addItems(
+      ACTOR,
+      [
+        { productId: D, quantity: 1 },
+        { productId: B, quantity: 1 },
+      ],
+      { onLineError: 'report' },
+    );
+    expect(result.outcomes).toEqual([
+      { index: 0, status: 'failed', error: NOT_FOUND },
+      { index: 1, status: 'added' },
+    ]);
+    const scopes = (r.availability.filterAvailable as unknown as { mock: { calls: [string[], ProductAvailabilityScope][] } }).mock.calls.map(
+      ([, scope]) => scope,
+    );
+    expect(scopes.length).toBeGreaterThan(0);
+    expect(scopes.every((scope) => scope.channelId === CUSTOMER.salesChannelId)).toBe(true);
   });
 
   it('an unknown packaging unit is the unit 404 and its line counts toward no total', async () => {

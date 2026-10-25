@@ -48,10 +48,8 @@ export interface AvailabilitySqlScope {
  * than a substring of the serialised bag. An allow-list that is not an array
  * reads as "no allow-list".
  *
- * The one statement of the audience rule in this module's listing reads; the
- * global rule is this with the product's own two columns
- * ({@link audienceCondition}), the channel-effective one is
- * {@link availabilityCondition}'s.
+ * The one statement of the audience rule in this module's listing reads, over
+ * the channel-effective columns {@link availabilityCondition} hands it.
  */
 export function audienceCaseSql(
   visibilityExpr: string,
@@ -69,15 +67,6 @@ export function audienceCaseSql(
       `when ${visibilityExpr} = 'logged_in_only' then ${audience.authenticated ? 'true' : 'false'} ` +
       `else true end)`,
     params: onAllowList ? [JSON.stringify([audience.organizationId])] : [],
-  };
-}
-
-/** The global audience rule over the product row's own columns. */
-export function audienceCondition(audience: ProductAudience): ListingCondition {
-  return {
-    sql: (alias) =>
-      audienceCaseSql(`${alias}.visibility`, `${alias}.allowed_organization_ids`, audience).sql,
-    params: audienceCaseSql('v', 'a', audience).params,
   };
 }
 

@@ -154,7 +154,11 @@ export async function registerQuoteRequestsCustomerRoutes(
       const ctx = await resolveCustomerContext(request);
       await guardCanTransact(ctx.organizationId);
       const body = createQuoteRequestSchema.parse(request.body);
-      const rfq = await rfqService.createForCustomer(ctx, body, { language: await request.responseLanguage() });
+      // Feature 163 — the channel this request resolved, named explicitly.
+      const rfq = await rfqService.createForCustomer(ctx, body, {
+        language: await request.responseLanguage(),
+        salesChannelId: getResolvedChannel(request).id,
+      });
       setEtag(reply, rfq.version);
       reply.code(201);
       return { data: rfq };
@@ -180,6 +184,7 @@ export async function registerQuoteRequestsCustomerRoutes(
       const expectedVersion = parseIfMatch(request);
       const rfq = await rfqService.patchDraft(request.params.id, ctx, body, expectedVersion, {
         language: await request.responseLanguage(),
+        salesChannelId: getResolvedChannel(request).id,
       });
       setEtag(reply, rfq.version);
       return { data: rfq };
@@ -248,6 +253,7 @@ export async function registerQuoteRequestsCustomerRoutes(
       const body = resubmitQuoteRequestSchema.parse(request.body ?? {});
       const rfq = await rfqService.resubmit(request.params.id, ctx, body, {
         language: await request.responseLanguage(),
+        salesChannelId: getResolvedChannel(request).id,
       });
       setEtag(reply, rfq.version);
       reply.code(201);
