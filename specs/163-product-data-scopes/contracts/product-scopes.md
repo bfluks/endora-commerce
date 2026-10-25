@@ -5,8 +5,13 @@ All shapes land in `packages/contracts/src/product-scopes.ts` (new file, exporte
 
 ## 1. Constants and types
 
+Since the owner's Q1 decision (spec Session 2026-10-25) the value set is `active` | `inactive` at every
+scope, and `productStatusSchema` (`packages/contracts/src/catalog.ts`) narrows to the same set — a breaking
+change shipped with a major changeset (spec *Compatibility and release*). `inactive` is plain off everywhere;
+`archivedAt` is set only by the Archive Command (FR-019) and is independent of `status`.
+
 ```ts
-export const PRODUCT_SCOPE_STATUSES = ['draft', 'active', 'inactive'] as const; // R3 — the only list of values
+export const PRODUCT_SCOPE_STATUSES = ['active', 'inactive'] as const; // R3 — the only list of values; `draft` removed (spec Session 2026-10-25, FR-112)
 export type ProductScopeStatus = (typeof PRODUCT_SCOPE_STATUSES)[number];
 export const productScopeStatusSchema = z.enum(PRODUCT_SCOPE_STATUSES);
 
