@@ -12,7 +12,7 @@ import {
   minimumFixtureRun,
   type MinimumProductFixture,
 } from '../../helpers/order-minimum-fixture.js';
-import { clearProductScopes, setChannelStatus } from '../../helpers/product-scope-fixture.js';
+import { clearProductScopes, errorBodyOf, setChannelStatus } from '../../helpers/product-scope-fixture.js';
 
 /**
  * Feature 163, Phase 6 (T041) — comparisons ask `catalogProductAvailabilityPort`
@@ -60,7 +60,7 @@ describe('163 — comparisons honour scoped availability [integration]', () => {
     const refused = await add(off.id);
     expect(refused.statusCode).toBe(404);
     expect((refused.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
-    expect(refused.json()).toEqual(absent.json());
+    expect(errorBodyOf(refused)).toEqual(errorBodyOf(absent));
   });
 
   it('accepts an available product and marks it unavailable once it is switched off', async () => {

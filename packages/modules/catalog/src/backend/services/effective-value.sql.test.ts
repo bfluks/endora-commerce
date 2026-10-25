@@ -50,3 +50,13 @@ describe('effectiveAttributeSql', () => {
     expect(e.params).toEqual(['color']);
   });
 });
+
+describe('the emptiness test of a jsonb value', () => {
+  it('never reads a missing key (SQL NULL) as non-empty', () => {
+    // A simple `case jsonb_typeof(x)` over a NULL `x` matches no `when`; an
+    // `else true` there made every absent override slot answer the walk.
+    const sql = effectiveTextSql('name', { channelId: CHANNEL, languages: ['pl-PL', 'en-US'] }).sql('p0');
+    expect(sql).not.toMatch(/else true end, false\)/);
+    expect(sql).toContain("when 'number' then true when 'boolean' then true else false end, false)");
+  });
+});

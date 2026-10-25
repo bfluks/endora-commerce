@@ -12,7 +12,7 @@ import {
   minimumFixtureRun,
   type MinimumProductFixture,
 } from '../../helpers/order-minimum-fixture.js';
-import { clearProductScopes, setChannelStatus } from '../../helpers/product-scope-fixture.js';
+import { clearProductScopes, errorBodyOf, setChannelStatus } from '../../helpers/product-scope-fixture.js';
 
 /**
  * Feature 163, Phase 6 (T041) — shopping lists ask `catalogProductAvailabilityPort`
@@ -63,7 +63,7 @@ describe('163 — shopping lists honour scoped availability [integration]', () =
     const refused = await save(off.id);
     expect(refused.statusCode).toBe(404);
     expect((refused.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
-    expect(refused.json()).toEqual(absent.json());
+    expect(errorBodyOf(refused)).toEqual(errorBodyOf(absent));
   });
 
   it('skips a saved line whose product went off, as product_not_found, and converts the rest', async () => {
