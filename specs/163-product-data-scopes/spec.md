@@ -202,7 +202,9 @@ It replaces the 2026-10-21 Q1 answer and extends N1.
   outright: `productStatusSchema` becomes `active | inactive`; the admin API, bulk status, import / export
   and the admin product-list filter reject `draft` with a validation error; there is no alias period. This
   is a breaking change and ships with a major-bump changeset note (FR-092, FR-112, *Compatibility and
-  release*).
+  release*). *(Recorded at bump level `minor` with a body marked BREAKING: `specs/conventions/release-intent.md`
+  (D-225) refuses `major` while a package is in `0.x`, and `@endora-commerce/contracts` is `0.107.0` —
+  coordinator, 2026-10-25; research R30.6.)*
 - Q: (Q1-f) Where is the work done? → A: Inside this feature, as a block before acceptance.
 - D-1 (whether a never-published `draft` product stays reachable by direct link as a preview) is **moot**:
   no status marks a product as "never published" any more. A product that is not live is `inactive`, which
@@ -682,7 +684,8 @@ the minimum and the return eligibility.
 - **Global archive vs per-scope enable**: an archived (or deleted) product is unavailable everywhere,
   whatever its status at any scope. Archive and Restore change no status value, and no status write
   archives or restores (FR-010, FR-019): setting `active` on an archived product leaves it archived until it
-  is restored, and restoring an `inactive` product leaves it off.
+  is restored, and restoring an `inactive` product leaves it off. Setting `active` on an archived product is
+  still a status write and fires the completeness gate (FR-060); Restore never does.
 - **Variants and grouped / bundle children**: a variant is a `product_variants` row of its `configurable`
   parent, not a product; it has no status, page or listing of its own and follows the parent. A grouped or
   bundle child is a real product governed by its own status, channel membership and audience, as today: a
@@ -930,7 +933,10 @@ the minimum and the return eligibility.
   missing German name would pass as the Polish one (US6, scenario 1). The gate MUST NOT fire when a product
   becomes live at (C, L) by any other change — joining a channel, a channel gaining a language, a
   publication window opening, an audience change, or a Restore (FR-019); missing values in those cases MUST be visible in the
-  scope overview (FR-041) (clarify 2026-10-22, M3, option A; US6 #6).
+  scope overview (FR-041) (clarify 2026-10-22, M3, option A; US6 #6). The gate reads **status only**, never
+  the archive: a status write that changes the effective status at (C, L) to `active` on an **archived**
+  product fires the gate (and, in *refuse* mode, is refused as above) although the product stays archived
+  and does not become available (FR-019) (coordinator, 2026-10-25).
 - **FR-061**: The gate MUST apply equally to single status edits, bulk status edits and changes of the
   global switch that turn on scopes without overrides, MUST NOT apply to the non-status changes listed in
   FR-060, and MUST NOT apply to imports and PIM synchronisation (A-6, confirmed in clarify 2026-10-21). In *refuse* mode a bulk edit MUST change the products that pass and skip and report
@@ -1103,15 +1109,23 @@ Added in Session 2026-10-25 (Q1-e). Everything else in this feature is additive;
 
 - **Breaking**: `productStatusSchema` and the scope status value set narrow from
   `draft | active | inactive` to `active | inactive` (FR-010, FR-112). `@endora-commerce/contracts` MUST
-  ship a **major** changeset whose note says: `draft` is removed with no alias; the legacy `archived` write
+  ship a changeset marked **BREAKING**, at bump level **`minor`** — `specs/conventions/release-intent.md`
+  (D-225) refuses `major` while a package is in `0.x` (`contracts` is `0.107.0`), and in a `0.x` series
+  `minor` already takes every caret dependent out of range (coordinator, 2026-10-25; research R30.6) —
+  whose note says: `draft` is removed with no alias; the legacy `archived` write
   alias is removed too and `archived` is refused like `draft` (FR-112, O-1); existing `draft` data is
   migrated to `inactive` (FR-110); every product `inactive` today stays archived, products without an
   `archivedAt` getting their last-update time (FR-110, O-4); a status of `inactive` no longer archives — archiving is the Archive /
   Restore action (FR-019); new and duplicated products default to `inactive`; `product.archived.v1` now
   means "archived by the Archive action", not "status moved to `inactive`" (FR-082). The catalogue module's
-  changeset MUST carry the same note at the bump its exported surface requires (an admin API that now
-  refuses a previously valid value is a breaking change for its callers). The bump level of any other
+  changeset MUST carry the same note, marked BREAKING at the bump level D-225 allows (`minor` in `0.x`): an
+  admin API that now refuses a previously valid value is a breaking change for its callers. Any other
   published package that types the status (the admin kit's product browser types) follows the same rule.
+- **Stored criteria not migrated**: product-feed criteria rules stored with `status = draft` (rows owned by
+  `product_feeds`) are not rewritten — a `catalog` migration does not write another module's table — and
+  match nothing after the migration, as they effectively matched nothing before (the feed floor already
+  required `active`); SC-009 counts product and scope rows only, so it needs no exception for them
+  (coordinator, 2026-10-25; research R30.5).
 - **Behaviour changes an operator sees**: a product set `inactive` is off but not archived (no "gone"
   answer, still listed in the admin by default, FR-113); archiving is an explicit action; "Archived" is a
   list filter of its own; former `draft` products appear as `inactive`. **Setting a product `active` never
