@@ -152,6 +152,8 @@ export async function registerCatalogExternalRoutes(
         const data = await decorator.resolveBulkPrices(parsed.data.lines, {
           organizationId: binding.organizationId,
           salesChannel: { id: channel.id, defaultCurrency: channel.defaultCurrency },
+          // Feature 163 (W5) — the bound key's audience, off the resolved actor.
+          audience: productAudienceOf(request),
         });
         return { data };
       },
