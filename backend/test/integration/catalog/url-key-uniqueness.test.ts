@@ -537,4 +537,32 @@ describe('URL-key uniqueness and redirects (spec 163, T100)', () => {
       expect(await keysOf(p)).toEqual([]);
     });
   });
+  // T105a — the scope overview offers to delete orphaned channel × language keys.
+  it('T105a: deletes an orphaned channel × language key (channel left, language dropped), keeping it as a redirect', async () => {
+    const own = await insertChannel(['pl-PL', 'de-DE']);
+    const p = await insertProduct('Orphan keys', k('orphan-keys'), [own]);
+    await putOk(p, {
+      channelKeys: [
+        { channelId: own, languageCode: 'pl-PL', key: k('orphan-pl') },
+        { channelId: own, languageCode: 'de-DE', key: k('orphan-de') },
+      ],
+    });
+    // The channel drops de-DE: the (own, de-DE) key is orphaned.
+    await h.em().getConnection().execute(`update sales_channels set languages = '["pl-PL"]'::jsonb where id = ?`, [own]);
+    const write = await put(p, { channelKeys: [{ channelId: own, languageCode: 'de-DE', key: k('orphan-de-2') }] });
+    expect(write.statusCode).toBe(422);
+    expect((write.json() as ErrorBody).error).toMatchObject({ code: ERROR_CODES.SCOPE_INVALID, details: { reason: 'language_not_offered' } });
+    await putOk(p, { channelKeys: [{ channelId: own, languageCode: 'de-DE', key: null }] });
+
+    // The product leaves the channel: the (own, pl-PL) key is orphaned.
+    await h.em().getConnection().execute(`delete from sales_channel_products where sales_channel_id = ? and product_id = ?`, [own, p]);
+    const write2 = await put(p, { channelKeys: [{ channelId: own, languageCode: 'pl-PL', key: k('orphan-pl-2') }] });
+    expect(write2.statusCode).toBe(422);
+    expect((write2.json() as ErrorBody).error).toMatchObject({ code: ERROR_CODES.SCOPE_INVALID, details: { reason: 'not_a_member' } });
+    await putOk(p, { channelKeys: [{ channelId: own, languageCode: 'pl-PL', key: null }] });
+
+    expect(await keysOf(p)).toEqual([]);
+    // Q3b — a removed key stays a redirect in its language until an operator deletes it.
+    expect(tag(await redirectsOf(p))).toEqual([`de-DE:${k('orphan-de')}`, `pl-PL:${k('orphan-pl')}`]);
+  });
 });
