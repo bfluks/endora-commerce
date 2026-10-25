@@ -265,7 +265,13 @@ line of the product in the cart (the Catalog module's page defines both).
   (`{ kind, minimum, packagingUnitName? }` when the line is below a minimum and
   not exempt, else `null`); the storefront flags such a line and blocks
   checkout. A line whose product record is gone is reported
-  `unavailable: true` with `unavailableReason: 'not_purchasable'`. **If the
+  `unavailable: true` with `unavailableReason: 'not_purchasable'`. So is a line
+  whose product is no longer available at the basket's sales channel and
+  language (switched off there, outside its publication window or outside the
+  channel's audience); such a line keeps its `productName` and `productSku`, so
+  the buyer can tell which line it is, and has `productSlug: null` — the
+  storefront shows it without a link, because its product page answers
+  `404` there. Placing the order still refuses it. **If the
   catalogue cannot be read the view fails with a `5xx`** instead of answering
   a cart without these flags. The mini view (`?view=mini`) is unchanged.
 - **Batch adds** — quote request → cart, shopping list → cart, quick order and

@@ -258,7 +258,11 @@ definiuje strona modułu Catalog).
   packagingUnitName? }`, gdy pozycja jest poniżej minimum i nie jest z niego zwolniona, w
   przeciwnym razie `null`); storefront oznacza taką pozycję i blokuje checkout. Pozycja, której
   rekord produktu zniknął, jest zgłaszana jako `unavailable: true` z
-  `unavailableReason: 'not_purchasable'`. **Jeśli katalogu nie da się odczytać, widok kończy się
+  `unavailableReason: 'not_purchasable'`. Tak samo zgłaszana jest pozycja, której produkt nie jest już
+  dostępny w kanale sprzedaży i języku koszyka (wyłączony tam, poza oknem publikacji albo poza
+  odbiorcami kanału); taka pozycja zachowuje `productName` i `productSku`, by kupujący wiedział,
+  o którą pozycję chodzi, i ma `productSlug: null` — storefront pokazuje ją bez odnośnika, bo strona
+  produktu odpowiada tam `404`. Złożenie zamówienia nadal ją odrzuca. **Jeśli katalogu nie da się odczytać, widok kończy się
   błędem `5xx`**, zamiast zwrócić koszyk bez tych oznaczeń. Widok skrócony (`?view=mini`) się nie
   zmienia.
 - **Dodawanie partiami** — zapytanie ofertowe → koszyk, lista zakupów → koszyk, szybkie zamówienie
