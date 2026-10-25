@@ -4,6 +4,7 @@ import type {
   FilterDefinition,
   Pagination,
   ProductDetail,
+  ProductKeyResolution,
   ProductListCapabilities,
   ProductListSort,
   ProductSummary,
@@ -119,6 +120,29 @@ export async function getProductBySlug(
     withQuery(`/api/v1/catalog/products/${encodeURIComponent(slug)}`, params),
     ctx,
     { revalidate: 60, tags: ['catalog:product', `catalog:product:${slug}`] },
+  );
+  return res.data;
+}
+
+/**
+ * Feature 163 (`specs/163-product-data-scopes/contracts/url-keys-and-redirects.md`
+ * §4) — which product the key a product page was opened by names at the
+ * request's channel and language, or the path it redirects to.
+ *
+ * Asked as the viewer: the answer depends on who may see the product (an
+ * unavailable one is not found, for a redirect too), so a signed-in buyer's
+ * answer never enters the shared Data Cache — `apiGetForViewer`'s rule, as for
+ * the product read it precedes. A redirect is answered `200` with
+ * `kind: 'redirect'`; the page turns it into a permanent redirect.
+ */
+export async function resolveProductKey(
+  key: string,
+  ctx: RequestContext,
+): Promise<ProductKeyResolution> {
+  const res = await apiGetForViewer<{ data: ProductKeyResolution }>(
+    `/api/v1/catalog/products/resolve/${encodeURIComponent(key)}`,
+    ctx,
+    { revalidate: 60, tags: ['catalog:product', `catalog:product:${key}`] },
   );
   return res.data;
 }
