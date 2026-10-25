@@ -289,6 +289,6 @@ never a copy — `.agents/skills/ux-laws/SKILL.md` is one. Update it in place.
 See "Repo map" above.
 
 ## Recent Changes
+- feat/163-product-data-scopes
 - 164-admin-user-preferences
 - 163-projects-and-tasks
-- 163-page-builder-marketing-pages
