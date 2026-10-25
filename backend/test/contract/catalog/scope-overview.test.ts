@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { scopeOverviewResponseSchema, type ScopeOverviewResponse } from '@endora-commerce/contracts';
 import {
   setupBackendServer,
@@ -74,6 +75,9 @@ describe('Scope overview — GET /admin/catalog/products/:id/scope-overview (spe
     expect(res.statusCode).toBe(201);
     const id = (res.json() as { data: { id: string } }).data.id;
     products.push(id);
+    // Creation binds a product to the default channel when it has none; the
+    // member set here is exactly the one each test names.
+    await sql(`delete from sales_channel_products where product_id = ?`, [id]);
     for (const channelId of memberOf) {
       await sql(`insert into sales_channel_products (sales_channel_id, product_id) values (?, ?)`, [channelId, id]);
     }
@@ -133,33 +137,51 @@ describe('Scope overview — GET /admin/catalog/products/:id/scope-overview (spe
     return found;
   }
 
+  /**
+   * `product-scopes-api.test.ts` sets up the same role and admins for the same stub
+   * sessions, and contract files may run in parallel: a lost insert race is retried
+   * once against the row the other file wrote (same code, same permissions).
+   */
+  async function once<T>(write: () => Promise<T>): Promise<T> {
+    try {
+      return await write();
+    } catch (err) {
+      if (!(err instanceof UniqueConstraintViolationException)) throw err;
+      return write();
+    }
+  }
+
   async function ensureRole(code: string, permissions: string[]): Promise<string> {
-    const em = h.em();
-    let role = await em.findOne(AdminRole, { code });
-    if (!role) role = em.create(AdminRole, { code, name: code, permissions });
-    else role.permissions = permissions;
-    await em.persistAndFlush(role);
-    return role.id;
+    return once(async () => {
+      const em = h.em().fork();
+      let role = await em.findOne(AdminRole, { code });
+      if (!role) role = em.create(AdminRole, { code, name: code, permissions });
+      else role.permissions = permissions;
+      await em.persistAndFlush(role);
+      return role.id;
+    });
   }
 
   async function ensureAdmin(id: string, email: string, roleId: string): Promise<void> {
-    const em = h.em();
-    const existing = await em.findOne(AdminUser, { id });
-    if (existing) {
-      existing.adminRoleId = roleId;
-      existing.status = 'active';
-    } else {
-      em.create(AdminUser, {
-        id,
-        email,
-        passwordHash: 'x'.repeat(60),
-        firstName: 'Product',
-        lastName: 'Scopes',
-        adminRoleId: roleId,
-        status: 'active',
-      });
-    }
-    await em.flush();
+    await once(async () => {
+      const em = h.em().fork();
+      const existing = await em.findOne(AdminUser, { id });
+      if (existing) {
+        existing.adminRoleId = roleId;
+        existing.status = 'active';
+      } else {
+        em.create(AdminUser, {
+          id,
+          email,
+          passwordHash: 'x'.repeat(60),
+          firstName: 'Product',
+          lastName: 'Scopes',
+          adminRoleId: roleId,
+          status: 'active',
+        });
+      }
+      await em.flush();
+    });
   }
 
   beforeAll(async () => {
