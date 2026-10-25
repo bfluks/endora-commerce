@@ -45,6 +45,29 @@ export const AVAILABILITY_FILTERABLE_ATTRIBUTES = [
   'allowedOrganizationIds',
 ] as const;
 
+/**
+ * The settings a channel index still needs for this release's queries (code
+ * review W1): the filterable set when any availability field is missing from
+ * it — every query names them, and a refused filter sends the whole listing to
+ * Postgres — and the searchable set when `localizedNames` is not searched.
+ * `{}` when the index is up to date, so a boot leaves it alone: a settings
+ * update re-indexes the corpus it lands on. Meilisearch's default searchable
+ * list `['*']` searches every field.
+ */
+export function pendingAvailabilitySettings(
+  current: { filterable: readonly string[]; searchable: readonly string[] },
+  wanted: { filterable: string[]; searchable: string[] },
+): { filterable?: string[]; searchable?: string[] } {
+  const out: { filterable?: string[]; searchable?: string[] } = {};
+  if (AVAILABILITY_FILTERABLE_ATTRIBUTES.some((field) => !current.filterable.includes(field))) {
+    out.filterable = wanted.filterable;
+  }
+  if (!current.searchable.includes('*') && !current.searchable.includes('localizedNames')) {
+    out.searchable = wanted.searchable;
+  }
+  return out;
+}
+
 export function documentAvailabilityFields(availability: ChannelAvailability): DocumentAvailabilityFields {
   return {
     liveLanguages: [...availability.liveLanguages],

@@ -252,6 +252,46 @@ export function resolveScopeLanguage(channel: ScopeChannel, requestedTag: string
   return sameBase ?? channel.defaultLanguage;
 }
 
+/**
+ * A channel record as the scope rule reads it. The default language is always
+ * one of the languages: a channel whose list is empty, or omits its own
+ * default, still offers that default — the language every request on it falls
+ * back to. The one home of that normalisation (catalog's availability service
+ * and every consumer seam read it from here).
+ */
+export function toScopeChannel(channel: {
+  id: string;
+  languages?: readonly string[] | undefined;
+  defaultLanguage: string;
+}): ScopeChannel {
+  const languages = [...(channel.languages ?? [])];
+  if (!languages.includes(channel.defaultLanguage)) languages.unshift(channel.defaultLanguage);
+  return { id: channel.id, languages, defaultLanguage: channel.defaultLanguage };
+}
+
+/**
+ * {@link resolveScopeLanguage} over a channel record as a resolver holds it —
+ * the scope language L of a buyer request on `channel` that asked in
+ * `requestedTag` (the first `Accept-Language` tag, see {@link firstLanguageTag}).
+ */
+export function scopeLanguageOf(
+  channel: { id: string; languages?: readonly string[] | undefined; defaultLanguage: string },
+  requestedTag: string | null | undefined,
+): string {
+  return resolveScopeLanguage(toScopeChannel(channel), requestedTag);
+}
+
+/**
+ * The first tag of an `Accept-Language` header, without its quality parameter,
+ * or `undefined` when the header is absent or empty.
+ */
+export function firstLanguageTag(header: string | readonly string[] | undefined): string | undefined {
+  const value = Array.isArray(header) ? header[0] : header;
+  if (typeof value !== 'string') return undefined;
+  const first = value.split(',')[0]?.split(';')[0]?.trim();
+  return first ? first : undefined;
+}
+
 function baseLanguage(tag: string): string {
   const dash = tag.indexOf('-');
   return dash === -1 ? tag : tag.slice(0, dash);

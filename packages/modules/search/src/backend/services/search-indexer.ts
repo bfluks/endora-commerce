@@ -15,7 +15,11 @@ import {
   type OverrideRow,
   type ResolverContext,
 } from '@endora-commerce/contracts';
-import { AVAILABILITY_FILTERABLE_ATTRIBUTES, documentAvailabilityFields } from './search-availability.js';
+import {
+  AVAILABILITY_FILTERABLE_ATTRIBUTES,
+  documentAvailabilityFields,
+  pendingAvailabilitySettings,
+} from './search-availability.js';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { DEFAULT_INDEX_TASK_TIMEOUT_SECONDS, SEARCH_SETTING_CODES } from '../../manifest.js';
@@ -654,6 +658,53 @@ export class SearchIndexer {
       await this.awaitTask(filterableTask, `filterable attributes for ${indexUid}`);
       await this.awaitTask(sortableTask, `sortable attributes for ${indexUid}`);
       touched.push(channel.code);
+    }
+    return touched;
+  }
+
+  /**
+   * Feature 163 (code review W1) — bring every **existing** channel index up to
+   * the settings this release's queries need, without a reindex: the
+   * availability fields filterable and `localizedNames` searchable. Run once at
+   * boot. An index already carrying them is only read (one settings read per
+   * channel); one built before the upgrade gets the missing settings once, so
+   * its queries stop falling back to Postgres. Documents indexed before the
+   * upgrade carry none of the fields and are served as before (R8) until the
+   * reindex the release note asks for. A channel with no index yet is left to
+   * its first reindex, which writes every setting.
+   */
+  async ensureQuerySettings(em: EntityManager): Promise<string[]> {
+    const channels = await em.find(SalesChannel, {});
+    const wanted = await this.attributeSettings();
+    const touched: string[] = [];
+    for (const channel of channels) {
+      const indexUid = indexUidFor(channel);
+      let index: Index;
+      try {
+        index = await this.client.getIndex(indexUid);
+      } catch {
+        continue;
+      }
+      const [filterable, searchable] = await Promise.all([
+        index.getFilterableAttributes(),
+        index.getSearchableAttributes(),
+      ]);
+      const pending = pendingAvailabilitySettings(
+        {
+          filterable: (filterable ?? []).flatMap((f) => (typeof f === 'string' ? [f] : f.attributePatterns)),
+          searchable: searchable ?? ['*'],
+        },
+        wanted,
+      );
+      if (pending.filterable) {
+        const task = await index.updateFilterableAttributes(pending.filterable);
+        await this.awaitTask(task, `filterable attributes for ${indexUid}`);
+      }
+      if (pending.searchable) {
+        const task = await index.updateSearchableAttributes(pending.searchable);
+        await this.awaitTask(task, `searchable attributes for ${indexUid}`);
+      }
+      if (pending.filterable || pending.searchable) touched.push(channel.code);
     }
     return touched;
   }

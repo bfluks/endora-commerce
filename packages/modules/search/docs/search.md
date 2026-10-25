@@ -219,7 +219,7 @@ Since product data scopes (feature 163) a product can be switched on or off per 
 - a query adds a filter for the request language (the first `Accept-Language` tag matched to the channel's languages, else its default), the window at the moment of the query, and the caller's audience, so a page is cut from available hits only. The allow-list is a filter input and is never retrieved into a response;
 - hydration asks `catalog` again (`filterAvailable`) for every hit, so a stale document cannot show a product that is no longer available.
 
-A document indexed before this change has none of the new fields and is served as before. **After upgrading, run one reindex per sales channel** (the `search_reindex` bulk operation or the reindex CLI below) so the window and per-language filters become exact.
+On the first start after the upgrade, the worker process brings every existing channel index's settings up to date without a reindex: the five availability fields become filterable and `localizedNames` searchable, so queries keep being answered by the index instead of falling back to PostgreSQL. It reads the settings of each index on every start and changes them only where one is missing. A document indexed before this change still has none of the new fields and is served as before. **After upgrading, run one reindex per sales channel** (the `search_reindex` bulk operation or the reindex CLI below) so the window and per-language filters become exact.
 
 ### When the index does not answer
 

@@ -146,6 +146,8 @@ export class CartConversionService {
         // per base piece, the basis every quote price is compared on (T12).
         lineReferencePrices: items.map((it) => ({ amount: it.unitPrice, currency: it.currency })),
         ...(options.language ? { language: options.language } : {}),
+        // Feature 163 — the lines are asked about at the basket's channel.
+        ...(cart.salesChannelId ? { salesChannelId: cart.salesChannelId } : {}),
       },
     );
 
