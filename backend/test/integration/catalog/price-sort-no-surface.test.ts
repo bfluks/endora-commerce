@@ -211,10 +211,22 @@ describe('a price-sorted listing with no price surface pages to the end', () => 
     };
     // The same page twice over, so caches on either path are as warm as each other.
     const cursorOf = (c: string | null) => `&cursor=${encodeURIComponent(c!)}`;
-    await statementsOf(`&sort=price${cursorOf(priceCursor)}`);
-    await statementsOf(cursorOf(defaultCursor));
-    const viaPrice = await statementsOf(`&sort=price${cursorOf(priceCursor)}`);
-    const viaDefault = await statementsOf(cursorOf(defaultCursor));
+    // Feature 163 — the availability condition inlines the read's one `now`
+    // (MikroORM renders bound values into the statement text), so two pages a
+    // few milliseconds apart differ in that literal alone. The clock stands
+    // still for the four reads; every statement, and every other value in it,
+    // is still compared.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date() });
+    let viaPrice: string[];
+    let viaDefault: string[];
+    try {
+      await statementsOf(`&sort=price${cursorOf(priceCursor)}`);
+      await statementsOf(cursorOf(defaultCursor));
+      viaPrice = await statementsOf(`&sort=price${cursorOf(priceCursor)}`);
+      viaDefault = await statementsOf(cursorOf(defaultCursor));
+    } finally {
+      vi.useRealTimers();
+    }
     expect(viaPrice.join('\n')).toEqual(viaDefault.join('\n'));
   });
 });
