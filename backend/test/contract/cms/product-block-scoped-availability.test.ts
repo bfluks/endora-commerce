@@ -40,7 +40,7 @@ describe('163 — a CMS product block shows only available products [contract]',
     channels = await buyerChannelIds(em);
     off = await createMinimumProduct(em, { sku: `S163-CMS-OFF-${RUN}`, nameEn: 'Off', namePl: 'Wył', channelIds: channels });
     on = await createMinimumProduct(em, { sku: `S163-CMS-ON-${RUN}`, nameEn: 'On', namePl: 'Wł', channelIds: channels });
-    await setChannelStatus(em, off.id, channels, 'draft');
+    await setChannelStatus(em, off.id, channels, 'inactive');
     const created = await h.app.inject({
       method: 'POST',
       url: '/api/v1/admin/catalog/categories',

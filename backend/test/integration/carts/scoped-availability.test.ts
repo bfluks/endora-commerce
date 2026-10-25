@@ -97,7 +97,7 @@ describe('163 — basket acquisition seams honour scoped availability [integrati
     off = await createMinimumProduct(em, { sku: `S163-OFF-${RUN}`, nameEn: 'Off', namePl: 'Wył', channelIds: channels });
     on = await createMinimumProduct(em, { sku: `S163-ON-${RUN}`, nameEn: 'On', namePl: 'Wł', channelIds: channels });
     later = await createMinimumProduct(em, { sku: `S163-LATER-${RUN}`, nameEn: 'Later', namePl: 'Później', channelIds: channels });
-    await setChannelStatus(em, off.id, channels, 'draft');
+    await setChannelStatus(em, off.id, channels, 'inactive');
   });
 
   beforeEach(async () => {

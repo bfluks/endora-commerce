@@ -69,7 +69,7 @@ describe('163 — scoped availability on the Meilisearch path [integration]', ()
     restricted = await create('C-RESTRICTED');
     on.push(await create('D-ON'), await create('E-ON'));
     legacy = await create('F-LEGACY');
-    await setChannelStatus(em, off.id, [channel.id], 'draft');
+    await setChannelStatus(em, off.id, [channel.id], 'inactive');
     // A window that has already ended. The indexer keys a document on the
     // live languages, never on the window, so the document is written with its
     // `publishUntilMs` in the past: only the query-time filter can drop it.
