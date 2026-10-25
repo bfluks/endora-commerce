@@ -6,6 +6,7 @@ import type {
   OrgLinePricePort,
   OrganizationDetailsPort,
   OrganizationRecord,
+  ProductAudience,
   ProductAvailability,
   ProductDetail,
   ProductPriceTier,
@@ -163,7 +164,15 @@ export class CatalogOrgPriceDecorator {
    */
   async resolveBulkPrices(
     lines: Array<{ sku: string; quantity: number }>,
-    context: { organizationId: string; salesChannel: ExternalPricingChannel },
+    context: {
+      organizationId: string;
+      salesChannel: ExternalPricingChannel;
+      /**
+       * Feature 163 (W5) — who is asking, from the request's resolved actor
+       * (`productAudienceOf`): the availability question is asked for it.
+       */
+      audience: ProductAudience;
+    },
   ): Promise<CatalogBulkPriceLine[]> {
     const em = this.deps.emFactory();
     const organization = await this.deps.organizations.findById(context.organizationId);
@@ -176,10 +185,10 @@ export class CatalogOrgPriceDecorator {
       deletedAt: null,
     });
     const productBySku = new Map(products.map((p) => [p.sku, p]));
-    const assortment = await this.#availableToOrganization(
+    const assortment = await this.#availableTo(
       products.map((p) => p.id),
       context.salesChannel.id,
-      context.organizationId,
+      context.audience,
     );
 
     // D-287 P0 — every in-assortment line in one batched resolution, each at
@@ -297,7 +306,7 @@ export class CatalogOrgPriceDecorator {
   }
 
   /**
-   * Feature 163 (W5 = A) — the products available to `organizationId` at the
+   * Feature 163 (W5 = A) — the products available to the caller at the
    * channel now: published there, effectively on in the channel's default
    * language (an API call carries no storefront language), inside the window,
    * admitted by the channel's audience rule. An id left out is answered as an
@@ -305,16 +314,16 @@ export class CatalogOrgPriceDecorator {
    * membership-only check (issue #185), which the port asks through the same
    * accessor.
    */
-  async #availableToOrganization(
+  async #availableTo(
     productIds: string[],
     salesChannelId: string,
-    organizationId: string,
+    audience: ProductAudience,
   ): Promise<ReadonlySet<string>> {
     if (productIds.length === 0) return new Set();
     return this.deps.availability.filterAvailable(productIds, {
       channelId: salesChannelId,
       languageCode: null,
-      audience: { organizationId, authenticated: true },
+      audience,
     });
   }
 }
