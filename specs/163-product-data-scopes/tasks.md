@@ -5,8 +5,8 @@
 `contracts/{product-scopes,admin-scopes-api,url-keys-and-redirects,consumers,seo-media-attachments,error-codes}.md`,
 `quickstart.md`. Measured on `origin/master` `aa6891d63`; Block B onwards runs on `6f66ea18e` (#384 merged).
 
-**Organisation**: 25 phases plus Block Q's 9a, 9b, 9c and 15a (owner Q1, 2026-10-25), each ≤ 10 tasks and sized for part of one builder spawn, grouped into **7
-blocks of ≤ 4 phases** (one builder spawn each), with a **review checkpoint after every backend block and
+**Organisation**: 25 phases plus Block Q's 9a, 9b, 9c and 15a (owner Q1, 2026-10-25), each ≤ 10 tasks and sized for part of one builder spawn, grouped into **8
+blocks of ≤ 4 phases** (Block Q included) (one builder spawn each), with a **review checkpoint after every backend block and
 every UI block**. Tests are mandatory (Principle III): inside every phase each `RED` task precedes the task
 that makes it pass — run it and see it fail first. Task ids are stable: a task added later takes a letter
 suffix (`T056a`), never a renumbering.
@@ -69,7 +69,7 @@ phase boundaries by the coordinator.
 | Stream | Branch | Phases | Owns (may edit freely) |
 | --- | --- | --- | --- |
 | **S1** backend availability | `feat/163-product-data-scopes` (primary checkout) | 1–12, 21, 22, 24, 25 | `packages/contracts/src/product-scopes.ts`; catalog scope entities/services/migrations (`product-channel-*`, `product-availability*`, `effective-value.sql.ts`, `scope-*`, `publication-window-sweep.ts`, media/attachment/packaging changes); consumer seams in `search`, `carts`, `orders`, `quote_requests`, `comparisons`, `shopping_lists`, `quick_order`, `product_feeds`, `import_export`; `backend/test/**` files it creates |
-| **S2** URL keys + SEO | `feat/163-product-data-scopes-urlkeys` | 16–19 | `packages/contracts/src/product-url-keys.ts`; `packages/contracts/src/seo.ts` from P18 on (S1 adds `SeoProductMetaPort` there in P2, T010, then hands it over); catalog `url-key*.ts`, `product-url-*.entity.ts`, the `product_url_keys` migration, `routes.admin.url-keys.ts`, `routes.public.url-keys.ts`; everything under `packages/modules/seo/`; `storefront/app/(catalog)/p/[slug]/**`, `storefront/lib/api/catalog.ts` |
+| **S2** URL keys + SEO | `feat/163-product-data-scopes-urlkeys` | 16–19, and 9c inside P17 | `packages/contracts/src/product-url-keys.ts`; `packages/contracts/src/seo.ts` from P18 on (S1 adds `SeoProductMetaPort` there in P2, T010, then hands it over); catalog `url-key*.ts`, `product-url-*.entity.ts`, the `product_url_keys` migration, `routes.admin.url-keys.ts`, `routes.public.url-keys.ts`; everything under `packages/modules/seo/`; `storefront/app/(catalog)/p/[slug]/**`, `storefront/lib/api/catalog.ts` |
 | **S3** admin UI | `feat/163-product-data-scopes-admin` | 13–15, 20, 23 | `packages/modules/catalog/src/admin/**`, `packages/modules/seo/src/admin/**` (Phase 20 only, after S2 hands `seo` back), `admin/test/modules/catalog/**` |
 
 **Single-owner shared files — S1 only.** `packages/contracts/src/index.ts`, `errors.ts`, `catalog.ts`;
@@ -93,12 +93,12 @@ cherry-picked — S1 regenerates them on its tip and commits the result.
 | — | **Review checkpoint B** | | | |
 | Q | 9a–9b | S1 | backend | after P9 (done 2026-10-25); **P10 and P11 wait for it** (T073–T080 build on the two-value set, the rewritten global status path and `revertibleFieldKeys`) |
 | — | **Review checkpoint Q** (code review + security review, parallel) | | | |
-| C | 9–12, 9c | S1 | backend | Block B, **and P16 applied on S1** (T069 reads `product_url_keys`); P10–P11 after **Block Q (9a–9b)**; 9c and P12 after P18 is applied (`catalog-query.service.ts` sequence; 9c first) |
+| C | 9–12 | S1 | backend | Block B, **and P16 applied on S1** (T069 reads `product_url_keys`); P10–P11 after **Block Q (9a–9b)**; P12 after P17 (with its 9c) and P18 are applied (`catalog-query.service.ts` sequence) |
 | — | **Review checkpoint C** | | | |
 | D | 13–15, 15a | S3 | admin UI | P13 after Block A; P14 after P9 (T093 needs T070, T095a–b need T071); **15a after Block Q (9a–9b) is applied on S3's base**; P15 after P10–P11 **and 15a** (both edit `ProductsBulkEditDialog.tsx`) |
 | — | **Review checkpoint D** (code review + designer UX audit; covers 15a as checkpoint Q-UI) | | | |
-| E | 16–19 | S2 | backend + storefront | P16 after Block A; P17–P19 after **Block B complete** (⛔384; P8 and P17 both edit `catalog-query.service.ts`, P7 and P17 both edit `sitemap-generator.service.ts`) |
-| — | **Review checkpoint E** | | | |
+| E | 16–19, 9c | S2 | backend + storefront | P16 after Block A; P17–P19 after **Block B complete** (⛔384; P8 and P17 both edit `catalog-query.service.ts`, P7 and P17 both edit `sitemap-generator.service.ts`); **9c (T156s–T156t) is part of P17** (coordinator, 2026-10-25) and runs once **9a is on S2's base** (T156i's message, T156j's edit of the same matrix file) |
+| — | **Review checkpoint E** (covers 9c's 410 condition) | | | |
 | F | 20–23 | S3 (20, 23), S1 (21, 22) | mixed | P21–P22 after Block B **and P18 applied on S1** (P21 hosts the SEO overview tasks T118a/T118c, and `catalog-query.service.ts` runs in sequence); P20 after P17–P18; P23 after P21–P22 |
 | — | **Review checkpoint F** (backend: 21–22; UI: 20, 23 with designer) | | | |
 | G | 24–25 | S1 | cross-cutting | every block merged |
@@ -116,7 +116,7 @@ P8, P16 ─► P9 (overview, FR-090) ─► P14 (overview UI)                   
 P9 ─► P9a (status values, migration, Archive/Restore, list) ─► P9b (bulk archive, consumers, docs, release)   [Block Q]
 P9b ─► P15a (status + archive UI)                                                                [S3]
 P9b ─► P10 (bulk) ─► P11 (gate; T080a fills the overview's `missing`) ─► P15 (bulk + gate UI; after P15a)   [S3]
-P17, P18 ─► P9c (410 for archived only) ─► P12
+P17's T110, P9a ─► P9c (410 for archived only; S2, inside P17) ─► P18 ─► P12
 P8 ─► P12 (order rules per channel)
 P8 ─► P21 (media) ─► P22 (attachments, packaging) ─► P23 (media UI)                             [S3]
 P17, P18 ─► P20 (URL-key + SEO UI)
@@ -125,8 +125,9 @@ P9 ─► P14 (attribute scope-flag preview UI: T095a/T095b)
 all ─► P24 (off-state, parity, docs, changesets) ─► P25 (final gate)
 ```
 
-`catalog-query.service.ts` is edited by P5, P8, P9c, P12, P17, P18, P21, P22: those phases run **in sequence**
-(Block Q keeps its one edit of that file — the 410 condition — in 9c for this reason; 9a–9b do not touch it).
+`catalog-query.service.ts` is edited by P5, P8, P17 (with 9c), P18, P12, P21, P22: those phases run **in
+sequence**, in that order (Block Q keeps its one edit of that file — the 410 condition — in 9c, which S2 does
+inside P17 beside T110's edit of the same method; 9a–9b do not touch it).
 S2 starts P17 only after Block B is merged and rebases onto S1's tip first; while P17–P18 run, S1's P12,
 P21 and P22 wait (S1 works on P9–P11 meanwhile, which do not touch that file).
 
@@ -173,7 +174,7 @@ consumer still compiles.
   - One commit; composer/manifests generators moved no artefact (no module-reference change). `check:error-translations` violations=0.
 - [x] T012 [S1] Changeset: `@endora-commerce/contracts` `minor` (new exports `product-scopes`, `product-url-keys`, `SeoProductMetaPort`) — `.changeset/163-product-scopes-contracts.md`
   - Plus `.changeset/163-catalog-product-scopes.md` (`mod-catalog` minor) because the catalog manifest and bundles changed; extended by later phases. `check:release-intent --since origin/master` violations=0.
-  - *Q1 (2026-10-25)*: narrowing `productStatusSchema` and removing `coerceProductStatusWrite` / `productStatusWriteSchema` is **breaking**. That changeset is T156q, written as breaking at bump level `minor` — D-225 refuses `major` while a package is in `0.x`, so the spec's "major" cannot be recorded literally (research R30.6). This file's own `minor` is unchanged.
+  - *Q1 (2026-10-25)*: narrowing `productStatusSchema` and removing `coerceProductStatusWrite` / `productStatusWriteSchema` is **breaking**. That changeset is T156q, written as breaking at bump level `minor` — D-225 refuses `major` while a package is in `0.x`, so the owner's "major" is recorded as BREAKING at `minor`, as the spec now states (coordinator, 2026-10-25; research R30.6). This file's own `minor` is unchanged.
 - [x] T013 [S1] Build contracts; type-check consumers by name
   - contracts build + typecheck + lint clean; `mod-catalog` typecheck (backend + UI tsconfig) clean.
 
@@ -438,8 +439,9 @@ Spec Session 2026-10-25 answers T156: `draft` is removed, status is `active` | `
 `inactive` anywhere is plain off, and archiving is a separate global Archive / Restore action (FR-010,
 FR-019, FR-053, FR-110, FR-112, FR-113, SC-009). Decisions and the full inventory: `research.md` R30; data:
 `data-model.md` §13–§14. **Placement**: this block sits here in the file to keep the merge with S1's Phase 9
-ticks clean; it **runs after Phase 9 (done 2026-10-25) and before Phase 10**. Phase 9c runs later, after
-P17–P18 are applied on S1 (R30.7); Phase 15a is S3's and runs before Phase 15.
+ticks clean; it **runs after Phase 9 (done 2026-10-25) and before Phase 10**. Phase 9c is S2's and is done
+inside Phase 17, once 9a is on S2's base (coordinator, 2026-10-25; R30.7); Phase 15a is S3's and runs before
+Phase 15.
 
 ### Phase 9a: [backend] Status values, the migration, Archive / Restore for one product, the admin list (FR-010, FR-019, FR-110, FR-112, FR-113, SC-009)
 
@@ -479,8 +481,8 @@ Archive / Restore are their own audited Commands and routes; the admin list filt
 "archived"; nothing outside the admin screens types `draft`; the operator documentation and the breaking
 release notes exist.
 
-- [ ] T156k [P] [PG] [S1] RED bulk (FR-053, R30.3): `fields.archived: true` archives every selected product through one `product.archive` audit entry each and `product.updated.v1` + `product.archived.v1` per transition; already-archived products → `succeeded` with `changedFields: []`, no entry, no event; `false` restores; `archived` beside any other field → 400; the queued path above `BULK_ASYNC_THRESHOLD`; undo restores `archivedAt` as a whole with the per-product conflict report and **emits** `product.updated.v1` per reverted product (and `product.archived.v1` where it re-archives); a bulk **status** change leaves `archivedAt` alone and its undo restores status only — `backend/test/contract/catalog/products-bulk-archive.test.ts`; update `integration/commands/bulk-undo.test.ts` and `contract/catalog/products-bulk-update-db-invariants.test.ts`
-- [ ] T156l [P] [S1] RED consumers: quick-order import rejects `product_archived` for an archived product whatever its status, and not for a non-archived `inactive` one (that one is the port's not-found, P6); shopping-list conversion likewise; reorder drops archived products and keeps a non-archived `inactive` one for placement to refuse (consumers row 20); the import adapter refuses `draft` and `archived` per record with `invalid status` (FR-092) — the module-local tests beside `quick_order/…/import-pipeline.ts`, `shopping_lists/…/shopping-list-service.ts`, `orders/…/order-reorder-service.ts`, `import_export/…/adapters/products.adapter.ts` (create where none exists)
+- [ ] T156k [P] [PG] [S1] RED bulk (FR-053, R30.3): `fields.archived: true` archives every selected product through one `product.archive` audit entry each and `product.updated.v1` + `product.archived.v1` per transition; already-archived products → `succeeded` with `changedFields: []`, no entry, no event; `false` restores; `archived` beside any other field → 400; the queued path above `BULK_ASYNC_THRESHOLD`; undo restores `archivedAt` as a whole with the per-product conflict report and **emits** `product.updated.v1` per reverted product (and `product.archived.v1` where it re-archives); a bulk **status** change leaves `archivedAt` alone and its undo restores status only **and emits `product.updated.v1` `['status']` per reverted product** — the undo emits for every reverted field, not only `archivedAt` (R30.3, accepted 2026-10-25) — `backend/test/contract/catalog/products-bulk-archive.test.ts`; update `integration/commands/bulk-undo.test.ts` and `contract/catalog/products-bulk-update-db-invariants.test.ts`
+- [ ] T156l [P] [S1] RED consumers: quick-order import rejects `product_archived` for an archived product whatever its status, and not for a non-archived `inactive` one (that one is the port's not-found, P6); shopping-list conversion likewise; reorder drops archived products and keeps a non-archived `inactive` one for placement to refuse (consumers row 20); the import adapter refuses `draft` and `archived` per record with `invalid status` (FR-092) — **this adapter case is written and seen red in Phase 9a, before T156e switches the adapter to `productStatusSchema`** (T156e makes it pass; Principle III) — the module-local tests beside `quick_order/…/import-pipeline.ts`, `shopping_lists/…/shopping-list-service.ts`, `orders/…/order-reorder-service.ts`, `import_export/…/adapters/products.adapter.ts` (create where none exists)
 - [ ] T156m [S1] Bulk: `catalog-bulk-update.service.ts` applies `fields.archived` through `archiveProduct` / `restoreProduct` (never `updateProduct`); `bulk-operation.service.ts` `revertibleFieldKeys` maps `archived` → `archivedAt` and drops `status` → `archivedAt` (`:675-676`); the undo Command emits per R30.3 after commit
 - [ ] T156n [S1] Consumers read "archived" from `archivedAt`: `quick_order/src/backend/services/import-pipeline.ts:143`, `shopping_lists/src/backend/services/shopping-list-service.ts:512`, `orders/src/backend/services/order-reorder-service.ts:93` (comments too)
 - [ ] T156o [S1] Remaining typed consumers outside the admin screens: `catalog/src/backend/prompt-tools.ts:332` description; `catalog-admin-search.service.ts:14` and `admin-search-provider.ts:89` comments; `storefront/lib/api/quick-order.ts:88` (what a type-check refused was already fixed in T156e; the screens are Phase 15a)
@@ -502,13 +504,18 @@ release notes exist.
 > write reaches `archivedAt`; Archive / Restore gated `catalog:write` before any read; the migration's order
 > and its `down`; undo emissions; no consumer reading `status` as "archived").
 
-### Phase 9c: [backend] The product page's "gone" answer (FR-005) — after P17–P18 are applied on S1
+### Phase 9c: [backend] The product page's "gone" answer (FR-005) — S2, inside Phase 17
 
-**Goal**: 410 for an archived product only (R30.7). `catalog-query.service.ts` runs in sequence: this phase
-follows S2's P17–P18 on S1 and precedes P12. The coordinator may instead hand T156t to S2 as one line of P17.
+**Goal**: 410 for an archived product only, and only where O-3 allows (R30.7). **Assigned to S2 as part of
+P17** (coordinator, 2026-10-25): `catalog-query.service.ts` runs in sequence and T110 already edits
+`getProductByIdOrSlug`, so the condition changes in the same phase, after T110. T156s–T156t start once 9a is
+on S2's base (T156i changes the `PRODUCT_ARCHIVED` message and T156j removes the `draft` case from the same
+matrix file); P17's other tasks need not wait for it. **Stream-ownership exception, recorded here**: T156s
+extends S1's `scoped-availability-matrix.test.ts` (T031); S2 edits it in its own commit and S1's T146
+(Phase 24) rebases over it. Reviewed in checkpoint E.
 
-- [ ] T156s [PG] [S1] RED: extend `backend/test/contract/catalog/scoped-availability-matrix.test.ts` — a non-archived member with global `inactive` answers the absent product's 404 at every (C, L), even where a C or C×L override is `active` (FR-005, FR-010); an archived product with global `inactive` and no overrides answers 410 at every (C, L) of its channels (O-3, O-4: today's archived products keep their "gone"); archived with a C×L `inactive` override → 404 there and 410 elsewhere; archived outside its window or audience → 404; the 410 body names `PRODUCT_ARCHIVED` with the new message
-- [ ] T156t [S1] `getProductByIdOrSlug`: the 410 branch tests `product.archivedAt` only (`:1816`), its comment rewritten (no `draft`, no "global `inactive`"), message "Product is archived."; S2's `storefront/test/catalog/pdp-redirect.test.ts:94` string follows — `catalog-query.service.ts`
+- [ ] T156s [PG] [S2] RED: extend `backend/test/contract/catalog/scoped-availability-matrix.test.ts` — a non-archived member with global `inactive` answers the absent product's 404 at every (C, L), even where a C or C×L override is `active` (FR-005, FR-010); an archived product with global `inactive` and no overrides answers 410 at every (C, L) of its channels (O-3, O-4: today's archived products keep their "gone"); archived with a C×L `inactive` override → 404 there and 410 elsewhere; archived outside its window or audience → 404; the 410 body names `PRODUCT_ARCHIVED` with the new message
+- [ ] T156t [S2] `getProductByIdOrSlug`: the 410 branch tests `product.archivedAt` only (`:1816`) — never `status` — and answers 410 **only** where the product would be effectively available at (C, L) to this buyer with `archivedAt` taken away and the **global** status read as `active`, every C and C×L status override, membership, the channel's languages, the window and the audience still applying (FR-005, O-3); everywhere else 404 like any unavailable product. Today's check (T036's deviation) covers membership and audience only, so this widens it; the comment is rewritten (no `draft`, no "global `inactive`"), message "Product is archived."; `storefront/test/catalog/pdp-redirect.test.ts:94` string follows — `catalog-query.service.ts`
 
 **Verification**:
 - `[PG] backend/test/contract/catalog/scoped-availability-matrix.test.ts`
@@ -722,7 +729,7 @@ review checkpoint C:
 
 ### Phase 17: [backend + storefront] ⛔384 Key resolution, redirects, alternates (US7, FR-071–FR-074, FR-111) — after Block B
 
-- [ ] T107 [P] [US7] [PG] [S2] RED resolution at (C, L): current key serves; other current key of the product in L → redirect to effective key; redirect key → redirect at every (C, L) of its language (US7 #3); key of another language → 404 (K1, US7 #1); unavailable target → 404; archived → 410; **H1**: a `NULL`-language redirect resolves at every (C, L) — including an L in which its product **gained its first L key after** the redirect was written (seed: slug s0 → s1 writes `(NULL, s0)`, then the first L key; `s0` at (C, L) → 301 to the L key) — and a product's own current L key wins over its own `NULL` redirect with the same key; `GET /api/v1/catalog/products/:idOrSlug` by **global slug** still answers after the product gains an L key (CMS blocks, R28), and never answers a redirect; the resolve answer's target equals `productPath()` — `backend/test/integration/catalog/url-key-resolution.test.ts`
+- [ ] T107 [P] [US7] [PG] [S2] RED resolution at (C, L): current key serves; other current key of the product in L → redirect to effective key; redirect key → redirect at every (C, L) of its language (US7 #3); key of another language → 404 (K1, US7 #1); unavailable target → 404; archived → 410 where it would be available with the archive taken away, else 404 (FR-005, O-3; asserted in full by T156s); **H1**: a `NULL`-language redirect resolves at every (C, L) — including an L in which its product **gained its first L key after** the redirect was written (seed: slug s0 → s1 writes `(NULL, s0)`, then the first L key; `s0` at (C, L) → 301 to the L key) — and a product's own current L key wins over its own `NULL` redirect with the same key; `GET /api/v1/catalog/products/:idOrSlug` by **global slug** still answers after the product gains an L key (CMS blocks, R28), and never answers a redirect; the resolve answer's target equals `productPath()` — `backend/test/integration/catalog/url-key-resolution.test.ts`
 - [ ] T108 [P] [US7] [PG] [S2] RED `seo` off: redirects answer 404, rows persist, writes still enforce the invariant (a takeover still requires confirmation naming the loser), `GET …/url-keys` omits `redirects` (Q-C); `seo` on again → served and listed (FR-111) — `backend/test/integration/catalog/url-redirects-seo-off.test.ts`
 - [ ] T109 [P] [US7] [S2] RED storefront: PDP calls `resolve`, `permanentRedirect` on `kind: 'redirect'` to `productPath()`; canonical + `alternates.languages` use effective keys through `productPath()` (FR-074); no URL is composed outside `productPath()` — the PDP redirects to the resolve answer's `path` and takes canonical/alternates from the PDP response's `paths` verbatim; no product URL is composed in `storefront/app/(catalog)/p/[slug]/{page,seo}.ts*` (asserted by a source grep in the test) — `storefront/test/catalog/pdp-redirect.test.ts`
 - [ ] T110 [US7] [S2] `UrlKeyResolutionService` + `GET /api/v1/catalog/products/resolve/:key` in `routes.public.url-keys.ts` (resolution order of data-model §5, H1); `getProductByIdOrSlug` accepts an id, a current key at (C, L), else a global slug (R28) — never a redirect; `GET …/url-keys` omits `redirects` unless `effectiveState.isPresent('seo')`; admin `effective[].url`, the resolve answer's `path` and the PDP response's `paths` (canonical + alternates where available to the anonymous audience) all via `productPath()` (contract §4, §6); the additive `paths` field on the PDP shape in `packages/contracts/src/catalog.ts` goes in the phase's handover commit (S1 owns that file) — `services/url-key-resolution.service.ts`, `catalog-query.service.ts` (PDP method only)
@@ -914,6 +921,9 @@ review checkpoint C:
 | FR-010 (Q1), FR-019, FR-082 (archive) | T156a, T156c | FR-053 | T156k, T156u |
 | FR-110 (Q1), SC-009 | T156b, T144 | FR-112 | T156a, T156c, T156d, T156l |
 | FR-113 | T156d, T156u | FR-005 (archived 410) | T156s |
+| FR-043 (Archive / Restore labels) | T156u, T156y | FR-092 (Q1) | T156l |
+| FR-084 (Archive / Restore) | T156c, T156h (permission inventory) | FR-060 (archived, status only) | T156a, T078 (g) |
+| SC-002 | T087; manual timing in `quickstart.md` §1 (T155) | SC-003 | T067, T093; manual check in `quickstart.md` §4 (T155) |
 
 ## Parallel execution examples
 
