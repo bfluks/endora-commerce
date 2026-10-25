@@ -143,6 +143,7 @@ const modules = [
       'modules/catalog/attachments',
       'modules/catalog/gallery-and-labels',
       'modules/catalog/product-links',
+      'modules/catalog/url-keys-and-redirects',
       'module-reference/catalog',
     ],
   },

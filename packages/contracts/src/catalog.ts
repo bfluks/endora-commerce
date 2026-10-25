@@ -2645,6 +2645,44 @@ export interface ProductImportRow {
   /** Per-locale, merged into the stored JSONB rather than replacing it. */
   name?: Record<string, string>;
   description?: Record<string, string>;
+  /**
+   * Feature 163 (FR-092) — the status at a sales channel (`languageCode: null`) or
+   * a sales channel × language scope, one entry per `status@…` column the file
+   * carries. `status: null` = use inherited. A scope the file has no column for is
+   * untouched.
+   */
+  scopedStatus?: ScopedStatusCell[];
+}
+
+/** One `status@<channel code>[/<language>]` cell of a products file (feature 163, FR-092). */
+export interface ScopedStatusCell {
+  channelCode: string;
+  /** `null` = the channel scope. */
+  languageCode: string | null;
+  /** `null` = use inherited (an empty cell). */
+  status: ProductStatus | null;
+}
+
+/** The scoped-status columns a products export carries, and each product's overrides in them. */
+export interface ScopedStatusExport {
+  /** Every channel scope, then its channel × language scopes, in a stable order. */
+  columns: Array<{ channelCode: string; languageCode: string | null }>;
+  /** Product id → column name ({@link scopedStatusColumn}) → the override there. An inherited scope is absent. */
+  values: Record<string, Record<string, ProductStatus>>;
+}
+
+const SCOPED_STATUS_COLUMN = /^status@([^/]+)(?:\/(.+))?$/;
+
+/** The products-file column of a scope: `status@<channel code>` or `status@<channel code>/<language>`. */
+export function scopedStatusColumn(channelCode: string, languageCode: string | null): string {
+  return languageCode === null ? `status@${channelCode}` : `status@${channelCode}/${languageCode}`;
+}
+
+/** The scope a products-file column names, or `null` when it is not a scoped-status column. */
+export function parseScopedStatusColumn(column: string): { channelCode: string; languageCode: string | null } | null {
+  const match = SCOPED_STATUS_COLUMN.exec(column.trim());
+  if (!match) return null;
+  return { channelCode: match[1]!, languageCode: match[2] ?? null };
 }
 
 /**
@@ -2663,6 +2701,8 @@ export interface ProductImportRow {
 export interface CatalogBulkImportPort {
   importCategories(rows: readonly CategoryImportRow[]): Promise<BulkImportReport>;
   importProducts(rows: readonly ProductImportRow[]): Promise<BulkImportReport>;
+  /** Feature 163 (FR-092) — the scoped-status columns of a products export, and their values. */
+  exportScopedStatuses(): Promise<ScopedStatusExport>;
 }
 
 // --- the attribute read model ------------------------------------------------
