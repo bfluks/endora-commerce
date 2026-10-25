@@ -72,6 +72,15 @@
   O-1…O-6 and W5 answered. The release is breaking (*Compatibility and release*); the plan records it at
   the bump level D-225 allows in a `0.x` series (`minor`, research R30.6). No open marker remains and no
   item is deferred.
+- Analyze after the Block Q plan (2026-10-25, product owner): coordinator decisions recorded — the break is
+  a changeset marked BREAKING at `minor` (spec *Compatibility and release*, contracts, plan, R30.6);
+  `products_status_check` accepted (data-model §13, whose `down` now matches R30.1); Phase 9c is S2's, inside
+  P17 (tasks Blocks table, chain, sequence line, Phase 9c); bulk undo emits for every field (T156k, data-model
+  §14); the completeness gate fires when an archived product's status is set `active` (FR-060, edge case);
+  feed criteria stored as `status = draft` are not migrated (*Compatibility and release*). Also fixed: the
+  410 rule of FR-005 / O-3 stated in full in T156t, T107 and `contracts/url-keys-and-redirects.md` §4;
+  T156l's import-adapter RED moved ahead of T156e; SC-002, SC-003, FR-043, FR-084 and FR-092 (Q1) added to
+  the coverage table.
 - "No implementation details": the *Current state* section cites code paths deliberately (house style of
   specs 156/157) to anchor the baseline; requirements themselves are stated as behaviour. FR-016 and FR-052
   name a performance property and the existing bulk path, not a technology.

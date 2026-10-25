@@ -228,8 +228,9 @@ scope language (N2) and are never re-resolved.
 `BulkUpdateProductsRequest.fields.scopedStatus?: { channelId: uuid; languageCode: string | null; value:
 'active' | 'inactive' | 'inherit' }`; result reasons gain `scope_invalid`, `completeness_gate`. A `draft`
 or `archived` value in `fields.status` or `fields.scopedStatus` is refused by the schema (FR-112, O-1). Bulk Archive / Restore
-(FR-053) are bulk-operation kinds of their own on the same path; their payload shape is the architect's (§14) —
-decided 2026-10-25: `fields.archived: boolean` (`true` Archive, `false` Restore), alone in its request (research R30.3).
+(FR-053) run on the same path; their payload shape was the architect's (§14) —
+decided 2026-10-25: `fields.archived: boolean` (`true` Archive, `false` Restore), alone in its request, on the
+existing `product_bulk_update` kind rather than a kind of its own (research R30.3).
 Revert records store the per-product before-state of the one scope row touched.
 
 ## 11. Search document (search) — R8
@@ -245,7 +246,7 @@ searchable attributes.
 | Transition | Effect |
 | --- | --- |
 | global `status` → `inactive` | plain off: `archived_at` **untouched**, no `product.archived.v1`; `product.updated.v1` `['status']` (FR-010) |
-| global `status` → `active` on an archived product | status changes; product **stays archived** (FR-019) |
+| global `status` → `active` on an archived product | status changes; product **stays archived** (FR-019); a status write, so the completeness gate runs on the pairs whose effective status turns `active` (FR-060) |
 | Archive (not archived → archived) | `archived_at = now()`, `product.updated.v1` and `product.archived.v1` once; status unchanged at every scope; one audit entry (FR-019) |
 | Archive on an archived product | no change, no event |
 | Restore (archived → not archived) | `archived_at = null`, `product.updated.v1`; status unchanged; one audit entry; no completeness gate (FR-019, FR-060) |
@@ -268,13 +269,16 @@ searchable attributes.
 | `products.status` rows already `inactive` | status unchanged and the row stays archived (Q1-c): a set `archived_at` is kept; where `archived_at` is null it is set to the row's `updated_at` (owner O-4, 2026-10-25) — `update products set archived_at = updated_at where status = 'inactive' and archived_at is null`, run **before** the `draft` conversion so converted rows are never caught |
 | `products.status` default | `inactive` (entity default and column default); a duplicate is always `inactive` with `archived_at` cleared (Q1-d) |
 | `CHECK` on both scope tables | `status in ('active','inactive')` (`product_channel_scopes` admits `NULL` as inherit) |
-| `CHECK` on `products.status` | if the column carries one, rewritten to `('active','inactive')`; else the value set is enforced by `productStatusSchema` alone (architect to confirm) — **confirmed 2026-10-25: none exists; `products_status_check (status in ('active','inactive'))` is added after the conversion** (research R30.2) |
+| `CHECK` on `products.status` | if the column carries one, rewritten to `('active','inactive')`; else the value set is enforced by `productStatusSchema` alone (architect to confirm) — **confirmed 2026-10-25: none exists; `products_status_check (status in ('active','inactive'))` is added after the conversion** (research R30.2; accepted by the coordinator 2026-10-25 — a pre-163 process writing `draft` during a rolling deploy is refused rather than stored, so SC-009 holds after deployment, not only at its instant) |
 
 Order inside the migration: backfill `archived_at` on today's `inactive` rows, then convert `draft`, then
-replace the `CHECK`s, so no converted row is archived and no row violates the new constraint. The `down` direction cannot tell a converted `draft` from an original `inactive`; it restores
-the three-value `CHECK`s only and leaves the data as `inactive`.
+replace the scope `CHECK`s and add `products_status_check`, then set the default to `inactive`, so no
+converted row is archived and no row violates the new constraints. The `down` direction cannot tell a
+converted `draft` from an original `inactive` or a backfilled `archived_at` from an original one; it
+restores the three-value scope `CHECK`s, drops `products_status_check`, sets the default back to `draft`,
+and leaves the data as it is (research R30.1).
 
-**Architect decision (not decided here):** the scope tables' `CHECK`s were created by
+**Architect decision (open when this section was written; decided below):** the scope tables' `CHECK`s were created by
 `packages/modules/catalog/src/migrations/20261022T035133_catalog_product_scopes.ts` (lines 43 and 71), which
 is part of this unreleased feature branch. The architect decides whether to amend that migration in place
 (narrowing its `CHECK`s; only the data conversion of `products.status` then needs a new migration) or to
@@ -292,7 +296,7 @@ No new column: the action reads and writes the existing `products.archived_at`.
 | --- | --- | --- | --- |
 | Archive one product | not archived → `archived_at = now()`; emit `product.updated.v1` and `product.archived.v1` once; already archived → no-op, no event | `catalog:write` | one entry, before / after `archived_at` |
 | Restore one product | archived → `archived_at = null`; emit `product.updated.v1`; not archived → no-op | `catalog:write` | one entry, before / after `archived_at` |
-| Bulk Archive / Restore | the single Commands per product on the durable bulk-operation path; revert records hold each product's before `archived_at`; undo as a whole | `catalog:write` | one entry per product |
+| Bulk Archive / Restore | the single Commands per product on the durable bulk-operation path; revert records hold each product's before `archived_at`; undo as a whole, emitting `product.updated.v1` per reverted product (and `product.archived.v1` where it re-archives) after commit — the undo emits for every reverted field, not only `archivedAt` (R30.3, accepted 2026-10-25) | `catalog:write` | one entry per product |
 
 Neither Command reads or writes any status column, and neither fires the completeness gate. Route shape,
 Command names and the `changedFields` value of `product.updated.v1` are the architect's — **decided

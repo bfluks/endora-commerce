@@ -156,17 +156,20 @@ deploy-parity exceptions: no product's storefront answer changes at deployment b
   scope, `draft` removed with no alias, `inactive` plain off everywhere, archiving a separate global
   Archive / Restore action, today's `inactive` products stay archived (`archived_at` backfilled from
   `updated_at`), new and duplicated products `inactive`. Designed in R30; built as Block Q of `tasks.md`.
-  Four consequences for the owner to confirm or correct at acceptance (none blocks Block Q):
-  - **"major" changeset** — the spec requires one; D-225 refuses it in `0.x`. The plan records the break at
-    `minor` with a breaking body (*Compatibility and release*, R30.6); the spec sentence should be re-worded.
-  - **`products_status_check`** — the spec left the global column's enforcement to the schema; the plan adds
-    a database `CHECK` so SC-009 holds after a rolling deploy too (R30.2).
+  Four consequences of the design; three were settled by the coordinator on 2026-10-25 during analyze, and
+  none blocks Block Q:
+  - **Changeset level — settled.** D-225 refuses `major` in `0.x`; the break is recorded at `minor` with a
+    body marked BREAKING (R30.6). The spec's *Compatibility and release* was reworded to say so.
+  - **`products_status_check` — accepted.** The plan adds a database `CHECK` so SC-009 holds after a rolling
+    deploy too (R30.2, data-model §13).
   - **The admin product list today shows archived rows under "All"** (the page always sends
-    `includeArchived=1`); FR-113's "hidden by default" therefore changes what operators see on that screen,
-    not only in the API (R30.4).
-  - **Bulk undo emits domain events** — today it emits none for any field, which leaves search, feeds and
-    webhooks stale after an undo; undoing a bulk Archive must be announced (FR-082), so the undo emits
-    `product.updated.v1` per reverted product for every field (R30.3).
+    `includeArchived=1`); FR-113's "hidden by default" (owner O-2) therefore changes what operators see on
+    that screen, not only in the API (R30.4). This follows from O-2 as answered; it is listed for the owner
+    to notice at acceptance, not as an open question.
+  - **Bulk undo emits domain events — accepted as part of Phase 9b.** Today it emits none for any field,
+    which leaves search, feeds and webhooks stale after an undo; undoing a bulk Archive must be announced
+    (FR-082), so the undo emits `product.updated.v1` per reverted product for every field (R30.3, T156k,
+    T156m).
 - **Q-A — decided 2026-10-21: serve** existing per-language SEO overrides (D1; *Intended behaviour
   changes* 4).
 - **Q-B — decided 2026-10-21: option C, as a separate issue.** A language prefix in the storefront path
@@ -302,8 +305,8 @@ commit artefacts together.
 - **Review checkpoints** after every backend block and every UI block.
 - **Block Q (owner Q1, 2026-10-25).** Phases 9a–9b run on S1 after Phase 9 and before Phase 10 (P10–P11
   build on the two-value set and the rewritten global status path); Phase 9c — the PDP's 410 condition, the
-  block's only edit of `catalog-query.service.ts` — runs after S2's P17–P18 are applied, before P12; S3's
-  Phase 15a runs after 9b and before Phase 15.
+  block's only edit of `catalog-query.service.ts` — is **S2's, done inside Phase 17** (coordinator,
+  2026-10-25), beside T110's edit of the same method; S3's Phase 15a runs after 9b and before Phase 15.
 
 ## Risks
 
@@ -336,14 +339,14 @@ commit artefacts together.
 ## Compatibility and release (owner Q1, 2026-10-25)
 
 The status change is the feature's one breaking change (spec *Compatibility and release*, research R30.6).
-The spec asks for a **major** changeset for `@endora-commerce/contracts`; `specs/conventions/release-intent.md`
+The owner's Q1-e answer spoke of a **major** changeset for `@endora-commerce/contracts`; `specs/conventions/release-intent.md`
 (owner ruling D-225) **refuses `major` while a package is in `0.x`** — `contracts` is `0.107.0` — and
 `check:release-intent`'s `major-bump-in-a-zero-series` has no override, so a literal `major` would red the
-final gate (T153). The plan therefore records the break at **`minor`** — which in a `0.x` series already
-takes every caret dependent out of range — with a body headed as breaking that names each removed symbol and
+final gate (T153). The break is therefore recorded at **`minor`** — which in a `0.x` series already
+takes every caret dependent out of range — with a body marked BREAKING that names each removed symbol and
 gives the old and the new call (T156q for `contracts` and `mod-catalog`, T156y for `admin-kit` and
-`page-builder-admin`). **Owner action**: the spec's sentence should read "breaking, recorded at the bump
-level D-225 allows". Lockstep releases every package at the highest pending bump anyway.
+`page-builder-admin`). The spec's *Compatibility and release* was reworded accordingly by the coordinator's
+decision of 2026-10-25. Lockstep releases every package at the highest pending bump anyway.
 
 ## Complexity Tracking
 
