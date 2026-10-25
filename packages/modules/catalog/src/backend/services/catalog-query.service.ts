@@ -1829,9 +1829,12 @@ export class CatalogQueryService {
       throw notFound();
     }
 
-    // FR-005 — 410 iff archived (the global `inactive`, which sets
-    // `archived_at`); otherwise 404 unless effectively available at (C, L):
-    // a `draft` member is no longer reachable by its URL.
+    // FR-005 — 410 iff archived (`archived_at` set); otherwise 404 unless
+    // effectively available at (C, L): a `draft` member, and an `inactive` one
+    // that is not archived, are not reachable by their URL. Owner decision Q1
+    // (2026-10-25, T156s/T156t) makes archiving its own action, so `archived_at`
+    // alone says "gone"; today writing `inactive` still sets it, so for rows the
+    // app wrote this is behaviour-neutral.
     //
     // The 410 says "this was here and is gone", so it is answered only where
     // the product would be available with the archive taken away — global
@@ -1840,7 +1843,7 @@ export class CatalogQueryService {
     // product that is also switched off in this channel or language, or
     // outside its window, answers the absent product's 404: its existence
     // here is not this caller's to learn.
-    if (product.archivedAt || product.status === 'inactive') {
+    if (product.archivedAt) {
       const asIfLive: ScopedProduct = {
         id: product.id,
         status: 'active',
