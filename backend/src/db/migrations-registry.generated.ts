@@ -103,6 +103,8 @@ import { Migration20261008T080839CatalogProductAttributeIsPriceRule } from '@end
 import { Migration20261008T092714CatalogCategoryContent } from '@endora-commerce/mod-catalog/migrations';
 import { Migration20261014T170531CatalogProductListSavedViews } from '@endora-commerce/mod-catalog/migrations';
 import { Migration20261016T082008CatalogOrderRules } from '@endora-commerce/mod-catalog/migrations';
+import { Migration20261022T035133CatalogProductScopes } from '@endora-commerce/mod-catalog/migrations';
+import { Migration20261022T054223CatalogProductUrlKeys } from '@endora-commerce/mod-catalog/migrations';
 import { Migration20261022T111811CatalogPriceFieldsRemoved } from '@endora-commerce/mod-catalog/migrations';
 import { Migration20261022T182523CatalogAdminNameKeys } from '@endora-commerce/mod-catalog/migrations';
 
@@ -454,6 +456,8 @@ export const MIGRATION_REGISTRY: readonly MigrationRegistryEntry[] = [
   migration('catalog', Migration20261008T092714CatalogCategoryContent),
   migration('catalog', Migration20261014T170531CatalogProductListSavedViews),
   migration('catalog', Migration20261016T082008CatalogOrderRules),
+  migration('catalog', Migration20261022T035133CatalogProductScopes),
+  migration('catalog', Migration20261022T054223CatalogProductUrlKeys),
   migration('catalog', Migration20261022T111811CatalogPriceFieldsRemoved),
   migration('catalog', Migration20261022T182523CatalogAdminNameKeys),
 
