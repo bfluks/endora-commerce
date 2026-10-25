@@ -213,9 +213,13 @@ describe('POST /products/bulk-update — fields.archived (spec 163, T156k)', () 
       for (const id of ids) expect(archivedRows.get(id)?.archivedAt).not.toBeNull();
       expect(await h.em().fork().count(AuditLogEntry, { action: 'product.archive', objectId: { $in: ids } })).toBe(60);
 
-      // A later Restore of one product is a conflict, never clobbered.
+      // A later Restore and re-Archive of one product gives it an archived time that
+      // is neither the operation's before-state nor its after-state: a conflict,
+      // never clobbered. (Put back to its before-state it would count as reverted.)
       const changed = ids[0]!;
       expect((await bulk([changed], { archived: false })).statusCode).toBe(200);
+      expect((await bulk([changed], { archived: true })).statusCode).toBe(200);
+      const rearchivedAt = (await rows([changed])).get(changed)?.archivedAt;
 
       const seen = capture(events, ids);
       const undo = await run(() => bulkOps.undo(opId));
@@ -226,7 +230,8 @@ describe('POST /products/bulk-update — fields.archived (spec 163, T156k)', () 
         expect(undo.reverted).toHaveLength(59);
       }
       const after = await rows(ids);
-      for (const id of ids) expect(after.get(id)?.archivedAt).toBeNull();
+      for (const id of ids.slice(1)) expect(after.get(id)?.archivedAt).toBeNull();
+      expect(after.get(changed)?.archivedAt?.getTime()).toBe(rearchivedAt?.getTime());
       for (const id of ids.slice(1)) {
         expect(seen.seen.filter((e) => e.productId === id)).toEqual([
           { name: 'product.updated.v1', productId: id, changedFields: ['archivedAt'] },

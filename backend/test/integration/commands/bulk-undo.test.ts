@@ -104,24 +104,37 @@ describe('bulk-edit undo (feature 054, US2) [real DB]', () => {
   });
 
   it('refuses records changed since the operation (SC-002) — partial undo with a conflict report', async () => {
-    const opId = await runBulk([SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID], { status: 'inactive' });
-    expect(await status(SEED_PRODUCT_101_ID)).toBe('inactive');
+    // A three-valued column: a later edit has to land on a value that is neither the
+    // operation's before-state nor its after-state — a product put back to its
+    // before-state counts as already reverted. Spec 163 left the status two values.
+    const visibility = async (id: string): Promise<string> =>
+      (await orm.em.fork().findOneOrFail(Product, { id })).visibility;
+    const original101 = await visibility(SEED_PRODUCT_101_ID);
+    const original102 = await visibility(SEED_PRODUCT_102_ID);
+    expect(original101).not.toBe('logged_in_only');
+    const opId = await runBulk([SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID], { visibility: 'logged_in_only' });
+    expect(await visibility(SEED_PRODUCT_101_ID)).toBe('logged_in_only');
 
     // Simulate a later edit to 101 that no longer matches the operation's
-    // after-state (its status flipped back).
-    await orm.em.fork().nativeUpdate(Product, { id: SEED_PRODUCT_101_ID }, { status: 'active' });
+    // after-state, nor its before-state.
+    await orm.em.fork().nativeUpdate(Product, { id: SEED_PRODUCT_101_ID }, { visibility: 'organization_restricted' });
 
-    const res = await bulkOps.undo(opId);
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.reverted).toEqual([SEED_PRODUCT_102_ID]);
-      expect(res.conflicts).toEqual([
-        { recordId: SEED_PRODUCT_101_ID, reason: 'changed_since_operation' },
-      ]);
-      expect(res.undoStatus).toBe('partially_reverted');
+    try {
+      const res = await bulkOps.undo(opId);
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.reverted).toEqual([SEED_PRODUCT_102_ID]);
+        expect(res.conflicts).toEqual([
+          { recordId: SEED_PRODUCT_101_ID, reason: 'changed_since_operation' },
+        ]);
+        expect(res.undoStatus).toBe('partially_reverted');
+      }
+      // 102 restored; 101 left exactly as the later edit set it (never clobbered).
+      expect(await visibility(SEED_PRODUCT_102_ID)).toBe(original102);
+      expect(await visibility(SEED_PRODUCT_101_ID)).toBe('organization_restricted');
+    } finally {
+      await orm.em.fork().nativeUpdate(Product, { id: SEED_PRODUCT_101_ID }, { visibility: original101 as never });
     }
-    // 102 restored; 101 left exactly as the later edit set it (never clobbered).
-    expect(await status(SEED_PRODUCT_102_ID)).toBe('active');
   });
 
   it('does not offer undo for a non-reversible edit (category bridge touched)', async () => {
