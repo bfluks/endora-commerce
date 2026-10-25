@@ -814,15 +814,16 @@ behaviour fixes.
 series `minor` already takes every caret dependent out of range, which is the whole consumer-facing meaning
 of a break.
 
-**Alternative rejected.** *`major`, as spec *Compatibility and release* words it* — mechanically refused.
-The spec's sentence needs the owner's re-wording ("breaking, at the bump level D-225 allows"); until then
-this plan follows D-225 (flagged in the plan's Compatibility note).
+**Alternative rejected.** *`major`, as spec *Compatibility and release* first worded it* — mechanically
+refused. Settled by the coordinator on 2026-10-25: the spec now requires a changeset marked BREAKING at the
+bump level D-225 allows (`minor` in `0.x`).
 
 ### R30.7 — Sequencing against the streams in flight
 
 - `catalog-query.service.ts:1816` sits in `getProductByIdOrSlug`, which S2's Phase 17 (T110) is editing now
   and Phase 18 (T118) edits again. The one-condition fix is therefore its own Phase 9c, run on S1 after
-  P17–P18 are applied — or, if the coordinator prefers, handed to S2 as a line of P17. Until it lands, a
+  P17–P18 are applied — or, if the coordinator prefers, handed to S2 as a line of P17. **Decided 2026-10-25
+  (coordinator): S2 does it inside P17** (T156s–T156t), beside T110's edit of the same method. Until it lands, a
   non-archived `inactive` member that would be available with global `active` answers 410 instead of 404;
   no test asserts either answer in between (Phase 9a removes the `draft` case from T031's matrix, 9c adds the
   new one).
