@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest';
  * T040 — pure unit tests over Product-type domain invariants from
  * feature 002 (data-model.md §1.1). Three rules:
  *
- *  1. type='configurable' MUST have ≥ 1 Variant before status can move
- *     beyond `draft`. (Enforced by service; tested as the boolean
+ *  1. type='configurable' MUST have ≥ 1 Variant before status can become
+ *     `active`. (Enforced by service; tested as the boolean
  *     predicate that the service uses.)
  *  2. type='virtual' MUST have exactly one of `downloadAssetId` /
  *     `downloadUrl`. Both NULL or both set ⇒ INVALID.

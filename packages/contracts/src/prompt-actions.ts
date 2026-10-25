@@ -254,8 +254,10 @@ export const SetProductStatusParamsSchema = z.object({
     .min(1)
     .describe('IDs of the products to update, resolved via catalog.search_products.'),
   status: z
-    .enum(['draft', 'active', 'inactive'])
-    .describe('New product status to apply to every listed product.'),
+    .enum(['active', 'inactive'])
+    .describe(
+      'New product status to apply to every listed product: active switches it on, inactive switches it off. It never archives or restores.',
+    ),
 });
 export type SetProductStatusParams = z.infer<typeof SetProductStatusParamsSchema>;
 
