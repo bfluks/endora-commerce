@@ -48,6 +48,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | `prompt_actions` | no | contributes-to `promptActionToolRegistry` |
 | `search` | no | degrades-without `searchQueryPort` — the storefront product listing is served from PostgreSQL instead of the search index |
 | `search` | no | degrades-without `searchReindexPort` — an attribute’s `searchable` flip rebuilds no search index |
+| `seo` | no | degrades-without `seoProductMetaPort` — product pages show metadata derived from the name and description, and old URL keys answer not-found |
 | `webhooks` | no | contributes-to `webhookEventRegistry` |
 
 ## Permissions

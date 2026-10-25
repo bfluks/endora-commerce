@@ -292,6 +292,24 @@ export const manifest = defineModuleManifest({
         'of the port\'s return type.',
     },
     {
+      // Feature 163 (`specs/163-product-data-scopes/` research R12, R13). The
+      // product page's metadata per sales channel × language, and — through the
+      // same presence probe — whether old URL keys are served as redirects.
+      moduleId: 'seo',
+      name: 'seoProductMetaPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'product pages show metadata derived from the name and description, and old URL keys answer not-found',
+      reason:
+        'Feature 163. The redirect rows and the URL-key invariant are this module’s (a takeover ' +
+        'deletes another product’s redirect in the transaction that saves the key), so key writes ' +
+        'never depend on `seo`; what `seo` owns is whether metadata overrides and redirects are ' +
+        'served. Both reads probe `effectiveState.isPresent(\'seo\')` in front of the call, so an ' +
+        'operator switching `seo` off gets derived metadata and not-found for old keys, and every ' +
+        'row comes back when it is switched on. Not `dependencies`: `seo` declares this module, so ' +
+        'the edge back would close a cycle, and this module is non-deactivatable.',
+    },
+    {
       moduleId: 'admin_search',
       name: 'adminSearchProviderRegistry',
       kind: 'contributes-to',
