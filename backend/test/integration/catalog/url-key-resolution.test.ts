@@ -131,23 +131,28 @@ describe('URL-key resolution at (C, L) (spec 163, T107)', () => {
     });
   }
 
-  /** A key nobody holds: the body every refused resolution must equal. */
-  let absentBody: unknown;
+  /**
+   * The body a key nobody holds answers at this channel, in this language, for this
+   * caller — the message is localised to the request language, so the reference
+   * is fetched with exactly the probe's request.
+   */
+  async function absentBody(channel: { code: string }, language: string, who: object = {}): Promise<unknown> {
+    const absent = await resolveRaw(k('nobody-holds-this'), channel, language, who);
+    expect(absent.statusCode).toBe(404);
+    expect((absent.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
+    return errorBodyOf(absent);
+  }
 
   async function expectAbsent(key: string, channel: { code: string }, language: string, who: object = {}): Promise<void> {
     const res = await resolveRaw(key, channel, language, who);
     expect(res.statusCode, `${key} at ${channel.code}/${language}: ${res.body}`).toBe(404);
-    expect(errorBodyOf(res)).toEqual(absentBody);
+    expect(errorBodyOf(res)).toEqual(await absentBody(channel, language, who));
   }
 
   beforeAll(async () => {
     h = await setupBackendServer();
     c1 = await insertChannel('c1');
     c2 = await insertChannel('c2');
-    const absent = await resolveRaw(k('nobody-holds-this'), c1, 'en-US');
-    expect(absent.statusCode).toBe(404);
-    expect((absent.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
-    absentBody = errorBodyOf(absent);
   });
 
   afterAll(async () => {
@@ -272,7 +277,15 @@ describe('URL-key resolution at (C, L) (spec 163, T107)', () => {
       headers: { 'x-sales-channel': c1.code, 'accept-language': 'en-US' },
     });
     expect(byId.statusCode, byId.body).toBe(404);
-    expect(errorBodyOf(byId)).toEqual(absentBody);
+    // The PDP read of an absent product answers the same body as the resolution's.
+    const absentById = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/catalog/products/${randomUUID()}`,
+      headers: { 'x-sales-channel': c1.code, 'accept-language': 'en-US' },
+    });
+    expect(absentById.statusCode).toBe(404);
+    expect(errorBodyOf(byId)).toEqual(errorBodyOf(absentById));
+    expect(errorBodyOf(byId)).toEqual(await absentBody(c1, 'en-US'));
   });
 
   it('H1: a language-less redirect resolves in every language, also after its product gains its first L key', async () => {
