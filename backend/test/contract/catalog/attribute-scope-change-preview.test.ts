@@ -9,6 +9,7 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { seedProductScopesAdmins } from '../../helpers/product-scopes-admins.js';
 
 /**
  * Feature 163, Phase 9 (T068) — the FR-090 preview,
@@ -126,6 +127,8 @@ describe('Attribute scope-change preview (spec 163, FR-090)', () => {
 
   beforeAll(async () => {
     h = await setupBackendServer();
+    // The no-catalog stub session answers 403 only once its admin row exists.
+    await seedProductScopesAdmins(h);
     c1 = await insertChannel();
     c2 = await insertChannel();
   }, 60_000);
