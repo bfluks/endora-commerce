@@ -29,6 +29,8 @@ describe('products adapter — status column (FR-092)', () => {
     const { importRows, importProducts } = adapterWith();
     await importRows([{ sku: 'A', status }]);
     expect(importProducts).toHaveBeenCalledWith([{ sku: 'A', status }]);
+  });
+});
 
 /**
  * Feature 163 (T121, T123, FR-092) — the products file's `status@<channel code>` and
