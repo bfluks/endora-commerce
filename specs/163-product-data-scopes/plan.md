@@ -1,7 +1,7 @@
 # Implementation Plan: product data scopes per sales channel and language
 
 **Branch**: `feat/163-product-data-scopes` (from `origin/master`) | **Date**: 2026-10-21 | **Spec**:
-`specs/163-product-data-scopes/spec.md` (clarify rounds 1–4)
+`specs/163-product-data-scopes/spec.md` (clarify rounds 1–4, Session 2026-10-25)
 **Input**: Feature specification from `specs/163-product-data-scopes/spec.md`; issue #385; depends on #384
 (`fork/fix/storefront-channel-value-overrides`, `f855ffc8a`, not yet on `master`).
 **Measured on**: `origin/master` `aa6891d63`.
@@ -18,7 +18,7 @@ returnable settable per scope (global / language / channel / channel × language
 inheritance along the existing chain, and make **every** storefront and buyer-facing consumer read the
 effective (channel, language) value.
 
-Technical approach (research R1–R29):
+Technical approach (research R1–R30):
 
 - **Typed scope tables owned by `catalog`** — `product_channel_scopes` (one row per product × channel:
   status, window pair, audience pair, MOQ, returnable; `NULL` = inherit) and
@@ -40,7 +40,13 @@ Technical approach (research R1–R29):
 - **Media, attachments, packaging units** — additive per-channel tables and per-language JSONB columns.
 - **Effective names** (FR-017) — #384's walk restated as SQL for listing search/filter/count/sort, and a
   port method for snapshots.
-- **No backfill, no new dependency, no new permission code, no new cache.**
+- **Status model (owner Q1, 2026-10-25; R3, R30)** — `active` | `inactive` at every scope, `draft` removed
+  with no alias; `inactive` is plain off everywhere and never archives; archiving is a separate global
+  Archive / Restore pair of Commands (`product.archive` / `product.restore`, `POST …/products/:id/archive` /
+  `…/restore`, bulk `fields.archived`) on the existing `archived_at`; one catalog migration converts the
+  data (`archived_at` backfill on today's `inactive`, then `draft` → `inactive`) and narrows the `CHECK`s.
+- **No backfill of the new tables, no new dependency, no new permission code, no new cache.** The one data
+  conversion is the status value set above.
 
 ## Technical Context
 
@@ -51,7 +57,8 @@ runtime dependency**
 **Storage**: PostgreSQL — catalog: seven new tables (`product_channel_scopes`,
 `product_channel_language_scopes`, `product_url_keys`, `product_url_redirects`,
 `gallery_item_channel_labels`, `gallery_item_channel_hidden`, `product_attachment_channel_hidden`), columns on `products`, `gallery_items`, `product_attachments`,
-`product_packaging_units`; seo: one column + nullable `locale` on `seo_meta_overrides`; Redis — one BullMQ
+`product_packaging_units`, and the status value set narrowed in `products` and both scope tables by one data
+migration (R30.1, R30.2); seo: one column + nullable `locale` on `seo_meta_overrides`; Redis — one BullMQ
 Job Scheduler and one watermark key; Meilisearch — five document fields
 **Testing**: Vitest — pure rules co-located in `packages/contracts/src/*.test.ts`; module unit tests in
 `packages/modules/<id>/src/backend/**`; `[PG]` contract/integration tests in
@@ -72,12 +79,13 @@ changes* (R21)
 
 ## Constitution Check
 
-*GATE: passed before Phase 0; re-checked after Phase 1 design — unchanged.*
+*GATE: passed before Phase 0; re-checked after Phase 1 design — unchanged; re-checked after the owner's Q1
+(2026-10-25, Block Q) — unchanged, the one break being owner-decided and versioned (II).*
 
 | Principle | How the design satisfies it |
 | --- | --- |
 | I. Modular (NN) | Scope data and URL keys owned by `catalog`; SEO overrides stay `seo`'s. Other modules use ports (`catalogProductAvailabilityPort`, `catalogProductUrlKeyReadPort`, `catalogProductScopeWritePort`, `seoProductMetaPort`) declared as edges; no raw reach into another module's table (`check:module-boundary`) |
-| II. API-first | Every shape is a Zod schema in `packages/contracts` (`product-scopes.ts`, `product-url-keys.ts`, `seo.ts`) before code; all changes additive; breaking nothing |
+| II. API-first | Every shape is a Zod schema in `packages/contracts` (`product-scopes.ts`, `product-url-keys.ts`, `seo.ts`) before code. Additive **except one owner-decided break** (Q1, 2026-10-25): `productStatusSchema` narrows to `active` / `inactive`, the `archived` write alias and `productStatusWriteSchema` go, the admin list's `counts.draft` becomes `counts.archived` — shipped as breaking changesets (see *Compatibility and release*) |
 | III. TDD (NN) | Each phase's RED tests precede implementation; requirement → test map below |
 | IV. YAGNI / deps | No new dependency; no projection table, no cache, no new event type, no new permission code |
 | V / VI / VIII | TypeScript; names follow the conventions (`check:naming`); English everywhere except the Polish bundles/docs |
@@ -86,7 +94,7 @@ changes* (R21)
 | X. Queues | The window sweep is a BullMQ Job Scheduler through `ctx.worker` (`price-list-status-worker.ts` shape); bulk scoped status rides `BulkOperationService` |
 | XI. Tenancy (NN) | New tables platform-global like `products`; audience evaluated at read time against the buyer's organization; no no-organization path introduced |
 | XII. Channel scoping (NN) | Membership read only through the kernel accessor (subquery / filter); unresolved channel matches nothing (FR-007); cross-channel tests for every FR-004 consumer |
-| XIII. Command Bus (NN) | Every scoped write, URL-key write, redirect delete, takeover, SEO override upsert/delete (converted from today's hand audit, R13) and bulk run is a Command, one audit entry per product with a complete before/after projection (FR-080); bulk runs undo through the existing bulk-operation undo, single writes have no undo and restore from the audit before-state (R29; owner Q-D → A) |
+| XIII. Command Bus (NN) | Every scoped write, URL-key write, redirect delete, takeover, SEO override upsert/delete (converted from today's hand audit, R13), Archive / Restore single and bulk (`product.archive` / `product.restore`, R30.3) and bulk run is a Command, one audit entry per product with a complete before/after projection (FR-080); bulk runs undo through the existing bulk-operation undo, single writes have no undo and restore from the audit before-state (R29; owner Q-D → A) |
 | XIV. Extensibility | Typed columns are justified (filterability, R1) — these are core commerce fields, not "add a field" requests |
 | XV. Untouched core | Core feature; no overlay |
 | XVI. Palette | Overview and scope controls are part of the product editor, reached by the existing `open-products` action (keywords extended); `targetRoute` cannot carry a product id (R23) |
@@ -124,17 +132,41 @@ changes* (R21)
 
 ## Intended behaviour changes (listed beside SC-001; the deploy-parity test T144 asserts exactly these)
 
-1. **A `draft` product can no longer be added to a basket** (D2, R0 F1) — basket add checks no status today.
-2. **A `draft` product is no longer reachable by URL** (FR-005) — its slug answers not-found (T038).
+1. **A product that is off and not archived can no longer be added to a basket** (D2, R0 F1) — basket add
+   checks no status today. After the Q1 migration this is today's `draft` products, now `inactive`.
+2. **A product that is off and not archived is no longer reachable by URL** (FR-005) — its slug answers
+   not-found (T038, T156s); today a `draft` member is reachable.
 3. **Listing "name sort" sorts by the effective name** at (C, L), not by slug (D6), wherever slug and name
    disagree.
 4. **Existing per-language SEO overrides start being served** on product pages (D1, Q-A): those products'
    title, description and Open Graph tags change to the values operators entered.
 
+Operator-visible changes of the Q1 status model (spec *Compatibility and release*). They are not
+deploy-parity exceptions: no product's storefront answer changes at deployment because of them (SC-009).
+
+5. **Setting `inactive` switches a product off without archiving it**, and setting `active` never restores an
+   archived one: every product archived before this feature — every product `inactive` today — needs an
+   explicit Restore (O-5).
+6. **New and duplicated products start `inactive`**, and the admin list hides archived products by default
+   behind an *Archived* filter of its own (FR-010, FR-113).
+
 ## Questions for the owner (not decided here)
 
-- **Q1 (from clarify, re-asked before acceptance)** — status values A (`draft`/`active`/`inactive`) vs B
-  (enabled/disabled per scope + global archive). The design keeps B a data migration + enum change (R3).
+- **Q1 — decided 2026-10-25** (spec Session 2026-10-25, with O-1…O-6): `active` / `inactive` at every
+  scope, `draft` removed with no alias, `inactive` plain off everywhere, archiving a separate global
+  Archive / Restore action, today's `inactive` products stay archived (`archived_at` backfilled from
+  `updated_at`), new and duplicated products `inactive`. Designed in R30; built as Block Q of `tasks.md`.
+  Four consequences for the owner to confirm or correct at acceptance (none blocks Block Q):
+  - **"major" changeset** — the spec requires one; D-225 refuses it in `0.x`. The plan records the break at
+    `minor` with a breaking body (*Compatibility and release*, R30.6); the spec sentence should be re-worded.
+  - **`products_status_check`** — the spec left the global column's enforcement to the schema; the plan adds
+    a database `CHECK` so SC-009 holds after a rolling deploy too (R30.2).
+  - **The admin product list today shows archived rows under "All"** (the page always sends
+    `includeArchived=1`); FR-113's "hidden by default" therefore changes what operators see on that screen,
+    not only in the API (R30.4).
+  - **Bulk undo emits domain events** — today it emits none for any field, which leaves search, feeds and
+    webhooks stale after an undo; undoing a bulk Archive must be announced (FR-082), so the undo emits
+    `product.updated.v1` per reverted product for every field (R30.3).
 - **Q-A — decided 2026-10-21: serve** existing per-language SEO overrides (D1; *Intended behaviour
   changes* 4).
 - **Q-B — decided 2026-10-21: option C, as a separate issue.** A language prefix in the storefront path
@@ -179,6 +211,10 @@ changes* (R21)
 | FR-110, SC-001 | `backend/test/integration/catalog/deploy-parity.test.ts` [PG] |
 | FR-111 | `backend/test/integration/catalog/url-redirects-seo-off.test.ts` [PG] |
 | SC-004 | `backend/test/perf/catalog/listing-scoped-availability.bench.ts` against `backend/test/perf/catalog-list.bench.ts` |
+| FR-010, FR-019, FR-082 (Archive / Restore), FR-112 | `packages/contracts/src/catalog-product-status.test.ts`; `backend/test/contract/catalog/product-archive-restore.test.ts` [PG] |
+| FR-053 | `backend/test/contract/catalog/products-bulk-archive.test.ts` [PG]; `admin/test/modules/catalog/product-archive-restore.test.tsx` |
+| FR-110 (Q1), SC-009 | `backend/test/integration/catalog/product-status-drop-draft-migration.test.ts` [PG]; `deploy-parity.test.ts` |
+| FR-113 | `backend/test/contract/catalog/products-admin-list-archived.test.ts` [PG]; `admin/test/modules/catalog/products-list-archived.test.tsx` |
 
 ## Project Structure
 
@@ -188,7 +224,7 @@ changes* (R21)
 specs/163-product-data-scopes/
 ├── spec.md, checklists/requirements.md
 ├── plan.md            # this file
-├── research.md        # R0–R29
+├── research.md        # R0–R30
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
@@ -212,7 +248,7 @@ packages/contracts/src/
   errors.ts, index.ts
 packages/modules/catalog/
   src/manifest.ts                          # settings block, errorCodes, nonBindingDependencies (seo), action keywords
-  src/migrations/<stamp>_catalog_{product_scopes,product_url_keys,product_media_scopes,attachment_packaging_translations}.ts
+  src/migrations/<stamp>_catalog_{product_scopes,product_url_keys,product_media_scopes,attachment_packaging_translations,product_status_drop_draft}.ts
   src/backend/entities/{product-channel-scope,product-channel-language-scope,product-url-key,product-url-redirect,
                         gallery-item-channel-label,gallery-item-channel-hidden,product-attachment-channel-hidden}.entity.ts
   src/backend/services/{product-scopes.service,product-availability.service,product-availability.sql,
@@ -246,6 +282,10 @@ invariant it belongs to (R12).
 3. `seo` `meta_override_channel_scope` — column, nullable locale, uniques (Phase 18). `seo` already
    depends on what its FK needs, or the drift test names it.
 4. `catalog` `product_media_scopes` (Phase 21) and `attachment_packaging_translations` (Phase 22).
+5. `catalog` `product_status_drop_draft` (Phase 9a, R30.1–R30.2) — `archived_at` backfill, `draft` →
+   `inactive` in `products` and both scope tables, the scope `CHECK`s replaced, `products_status_check`
+   added, default `inactive`. A **new** migration: `…_catalog_product_scopes` is not amended, because a
+   database that already ran it would never re-run an edited body.
 
 Each: scaffold → entity → `composer:generate` → `manifests:generate` → `pnpm install --lockfile-only` →
 commit artefacts together.
@@ -260,6 +300,10 @@ commit artefacts together.
   `routes.admin.ts`, catalog i18n bundles, manifest, generated registries, lockfile, AGENTS.md appendix) are
   S1's; S2/S3 hand over their lines at phase boundaries.
 - **Review checkpoints** after every backend block and every UI block.
+- **Block Q (owner Q1, 2026-10-25).** Phases 9a–9b run on S1 after Phase 9 and before Phase 10 (P10–P11
+  build on the two-value set and the rewritten global status path); Phase 9c — the PDP's 410 condition, the
+  block's only edit of `catalog-query.service.ts` — runs after S2's P17–P18 are applied, before P12; S3's
+  Phase 15a runs after 9b and before Phase 15.
 
 ## Risks
 
@@ -278,17 +322,32 @@ commit artefacts together.
 5. **Name sort order change (D6).**
 6. **Concurrency of key writes** — advisory locks per key; covered by a two-connection test.
 7. **External connectors** must adopt the new write port to honour FR-091/FR-093 (D5).
-8. **The status value set (Q1)** may change at acceptance — cheap by construction (R3), but it touches the
-   admin control, contracts and a data migration late in the feature.
+8. **The status value set (Q1)** — decided 2026-10-25 and planned as Block Q. Residual risks: a process
+   still running pre-163 code during a rolling deploy writes `draft` after the conversion — refused by the
+   new `products_status_check` rather than stored (R30.2); external integrations that archived through
+   `status: 'inactive'` or `'archived'` (API-key upsert, CSV) silently switch products off instead, until
+   they call Archive — release note (T156q).
 9. *(Retired — Q-D decided A on 2026-10-22: no single-write undo, no platform phase.)*
 10. **CMS blocks by slug.** Blocks store global slugs; the JSON lookup keeps answering them (R28). If a
    product's global slug is later taken over in L by another product's L key, a block naming that slug at L
    shows the other product — an edge the operator caused by confirming a takeover; blocks moving to product
    ids is a follow-up.
 
+## Compatibility and release (owner Q1, 2026-10-25)
+
+The status change is the feature's one breaking change (spec *Compatibility and release*, research R30.6).
+The spec asks for a **major** changeset for `@endora-commerce/contracts`; `specs/conventions/release-intent.md`
+(owner ruling D-225) **refuses `major` while a package is in `0.x`** — `contracts` is `0.107.0` — and
+`check:release-intent`'s `major-bump-in-a-zero-series` has no override, so a literal `major` would red the
+final gate (T153). The plan therefore records the break at **`minor`** — which in a `0.x` series already
+takes every caret dependent out of range — with a body headed as breaking that names each removed symbol and
+gives the old and the new call (T156q for `contracts` and `mod-catalog`, T156y for `admin-kit` and
+`page-builder-admin`). **Owner action**: the spec's sentence should read "breaking, recorded at the bump
+level D-225 allows". Lockstep releases every package at the highest pending bump anyway.
+
 ## Complexity Tracking
 
-No violations. **No new runtime, dev or workspace dependency** (R25).
+No violations. **No new runtime, dev or workspace dependency** (R25). Block Q adds none either.
 
 ## Handoff summary (for `endora-commerce-dev`)
 
@@ -300,6 +359,10 @@ every buyer seam keeps one not-found answer; do not start a #384-gated phase bef
 Owner decisions since planning: Q-A serve, Q-B interim `?lang` only (prefix is a separate issue; every
 emitted URL through `productPath()`), Q-C hide redirects with `seo` off, M3 → A (the gate fires on status
 writes only; the overview shows each cell's missing values), Q-D → A (no single-write undo; restore from the
-audit before-state). Open: Q1 only (re-asked at acceptance). The old global slug becomes a `NULL`-language
+audit before-state), **Q1 (2026-10-25): `draft` removed, `inactive` plain off at every scope, Archive /
+Restore separate global Commands — Block Q, research R30**. No question is open. Non-negotiables added by
+Q1: no status write at any scope touches `archivedAt`; no code reads `status` as "archived"; the gate reads
+status, never the archive; do not edit `20261022T035133_catalog_product_scopes.ts`; changesets at `minor`
+(D-225). The old global slug becomes a `NULL`-language
 redirect only where it is free in every language (data-model §5, HIGH-2). Phase 18 converts `seo`'s hand-audited override writes to
 Commands **before** adding the channel dimension — do not extend the hand audit.
