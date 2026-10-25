@@ -112,6 +112,12 @@ export class ImportExportService {
 
   async exportToCsv(entity: string): Promise<string> {
     const adapter = this.adapterFor(entity);
+    // An adapter whose columns depend on the data (feature 163 — one scoped-status
+    // column per sales channel and language) answers the whole table.
+    if (adapter.exportTable) {
+      const table = await adapter.exportTable();
+      return serializeCsv([table.header, ...table.rows]);
+    }
     const rows = await adapter.exportRows();
     return serializeCsv([Array.from(adapter.exportHeader), ...rows]);
   }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ERROR_CODES, putProductUrlKeysRequestSchema, type PutProductUrlKeysRequest } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import {
+  admitImportKeys,
   otherProductSlugs,
   planUrlKeyWrite,
   urlKeysToLock,
@@ -601,5 +602,43 @@ describe('UrlKeyService — a non-UUID id', () => {
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).statusCode).toBe(404);
     expect((err as HttpError).code).toBe(code);
+  });
+});
+
+describe('admitImportKeys — import mode (163 T120, FR-093, US7 #9)', () => {
+  it("leaves out another product's current key and redirect key, naming the holder, and admits the rest", () => {
+    const loserRedirect = redirect(R, 'pl-PL', 'mlotek-old');
+    const { accepted, outcomes } = admitImportKeys(
+      state({
+        ownKeys: [key(P, 'pl-PL', 'wlasny')],
+        otherKeys: [key(Q, 'pl-PL', 'wiertarka')],
+        otherRedirects: [loserRedirect],
+      }),
+      [
+        { languageCode: 'pl-PL', channelId: null, key: 'wiertarka' },
+        { languageCode: 'pl-PL', channelId: B2B, key: 'mlotek-old' },
+        { languageCode: 'en-GB', channelId: null, key: 'english' },
+      ],
+    );
+    expect(outcomes).toEqual([
+      { written: false, issue: { languageCode: 'pl-PL', channelId: null, key: 'wiertarka', heldByProductId: Q, kind: 'current' } },
+      { written: false, issue: { languageCode: 'pl-PL', channelId: B2B, key: 'mlotek-old', heldByProductId: R, kind: 'redirect' } },
+      { written: true },
+    ]);
+    expect(accepted).toEqual([{ languageCode: 'en-GB', channelId: null, key: 'english' }]);
+  });
+
+  it('refuses the call for a refusal that is not a taken key', () => {
+    expect(() =>
+      admitImportKeys(state(), [{ languageCode: 'pl-PL', channelId: GONE, key: 'x' }]),
+    ).toThrow(expect.objectContaining({ code: ERROR_CODES.SCOPE_INVALID }));
+  });
+
+  it("admits one key at two of the product's own scopes in one call", () => {
+    const { outcomes } = admitImportKeys(state(), [
+      { languageCode: 'pl-PL', channelId: null, key: 'same' },
+      { languageCode: 'pl-PL', channelId: B2B, key: 'same' },
+    ]);
+    expect(outcomes).toEqual([{ written: true }, { written: true }]);
   });
 });

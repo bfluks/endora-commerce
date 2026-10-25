@@ -3,12 +3,15 @@ import { randomUUID } from 'crypto';
 import {
   ERROR_CODES,
   productPath,
+  putProductUrlKeysRequestSchema,
+  type ProductUrlKeyWrite,
   type ProductUrlKeysResponse,
   type PutProductUrlKeysRequest,
+  type UrlKeyWriteOutcome,
   type UrlKeyRedirectTakeoverRequiredDetails,
   type UrlKeyTakenDetails,
 } from '@endora-commerce/contracts';
-import type { Command, CommandBus } from '@endora-commerce/platform/commands';
+import type { Command, CommandBus, CommandEvent } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { SalesChannel, effectiveState } from '@endora-commerce/platform/kernel';
@@ -527,6 +530,88 @@ function toRedirectRow(row: ProductUrlRedirect): UrlRedirectRow {
   return { id: row.id, productId: row.productId, languageCode: row.languageCode ?? null, key: row.key };
 }
 
+function urlKeysUpdatedEvent(
+  productId: string,
+): CommandEvent<{ eventId: string; occurredAt: string; productId: string; changedFields: string[] }> {
+  return {
+    eventName: 'product.updated.v1',
+    payload: { eventId: randomUUID(), occurredAt: new Date().toISOString(), productId, changedFields: ['urlKeys'] },
+  };
+}
+
+/**
+ * The import-mode issue for a "taken" refusal of `write` (FR-093), or `null` when
+ * the refusal is of another kind and refuses the whole call.
+ */
+function takenIssue(
+  err: unknown,
+  write: ProductUrlKeyWrite,
+): Extract<UrlKeyWriteOutcome, { written: false }>['issue'] | null {
+  if (!(err instanceof HttpError)) return null;
+  const details = (err.details ?? {}) as Partial<UrlKeyTakenDetails & UrlKeyRedirectTakeoverRequiredDetails>;
+  if (err.code === ERROR_CODES.URL_KEY_TAKEN && details.conflicts?.[0]) {
+    const conflict = details.conflicts[0];
+    return {
+      languageCode: write.languageCode,
+      channelId: write.channelId,
+      key: conflict.key,
+      heldByProductId: conflict.heldByProductId,
+      kind: 'current',
+    };
+  }
+  if (err.code === ERROR_CODES.URL_KEY_REDIRECT_TAKEOVER_REQUIRED && details.takeovers?.[0]) {
+    const takeover = details.takeovers[0];
+    return {
+      languageCode: write.languageCode,
+      channelId: write.channelId,
+      key: takeover.key,
+      heldByProductId: takeover.losingProductId,
+      kind: 'redirect',
+    };
+  }
+  return null;
+}
+
+/** An integration's keys as the PUT body the planner reads. */
+export function importRequest(entries: readonly ProductUrlKeyWrite[]): PutProductUrlKeysRequest {
+  const languageKeys = entries
+    .filter((entry) => entry.channelId === null)
+    .map((entry) => ({ languageCode: entry.languageCode, key: entry.key }));
+  const channelKeys = entries
+    .filter((entry): entry is ProductUrlKeyWrite & { channelId: string } => entry.channelId !== null)
+    .map((entry) => ({ channelId: entry.channelId, languageCode: entry.languageCode, key: entry.key }));
+  return putProductUrlKeysRequestSchema.parse({
+    ...(languageKeys.length > 0 ? { languageKeys } : {}),
+    ...(channelKeys.length > 0 ? { channelKeys } : {}),
+  });
+}
+
+/**
+ * Import mode (FR-093), pure: each key is admitted only if the keys admitted before
+ * it plus this one plan without a "taken" refusal; a refused key is reported with
+ * its holder and left out, so the product keeps its previous key there. Any other
+ * refusal is thrown — it refuses the whole call. Never passes `confirmTakeover`.
+ */
+export function admitImportKeys(
+  state: UrlKeyWriteState,
+  writes: readonly ProductUrlKeyWrite[],
+): { accepted: ProductUrlKeyWrite[]; outcomes: UrlKeyWriteOutcome[] } {
+  const accepted: ProductUrlKeyWrite[] = [];
+  const outcomes: UrlKeyWriteOutcome[] = [];
+  for (const write of writes) {
+    try {
+      planUrlKeyWrite(state, importRequest([...accepted, write]));
+      accepted.push(write);
+      outcomes.push({ written: true });
+    } catch (err) {
+      const issue = takenIssue(err, write);
+      if (issue === null) throw err;
+      outcomes.push({ written: false, issue });
+    }
+  }
+  return { accepted, outcomes };
+}
+
 export class UrlKeyService {
   constructor(
     private readonly emFactory: () => EntityManager,
@@ -637,103 +722,168 @@ export class UrlKeyService {
     });
   }
 
+  /**
+   * Inside a Command's transaction: lock the product row (one writer per product),
+   * take every touched key's advisory lock in sorted order, then read the state the
+   * planner decides on. `keys` must cover every key any request planned against it
+   * can touch.
+   */
+  async #lockAndLoad(
+    em: EntityManager,
+    productId: string,
+    keysFor: (slug: string, ownKeys: readonly UrlKeyRow[]) => string[],
+  ): Promise<{ product: Product; ownKeyEntities: ProductUrlKey[]; state: UrlKeyWriteState }> {
+    const locked = (await em.execute(
+      `select "id" from "products" where "id" = ? and "deleted_at" is null for update`,
+      [productId],
+    )) as unknown[];
+    if (locked.length === 0) throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    const product = await em.findOneOrFail(Product, { id: productId });
+    const ownKeyEntities = await em.find(ProductUrlKey, { productId });
+    const ownKeys = ownKeyEntities.map(toKeyRow);
+    const keys = keysFor(product.slug, ownKeys);
+    await lockUrlKeys(em, keys);
+
+    const [ownRedirects, otherKeys, otherRedirects, otherSlugProducts, channels, members] = await Promise.all([
+      em.find(ProductUrlRedirect, { productId }),
+      em.find(ProductUrlKey, { key: { $in: keys }, productId: { $ne: productId } }),
+      em.find(ProductUrlRedirect, { key: { $in: keys }, productId: { $ne: productId } }),
+      // Deleted products included: `products.slug` is unique across them (`otherProductSlugs`).
+      em.find(Product, { slug: { $in: keys }, id: { $ne: productId } }),
+      em.find(SalesChannel, {}),
+      this.membership.listChannelsForEntity('product', productId),
+    ]);
+    const holderIds = [...new Set([...otherKeys.map((row) => row.productId), ...otherRedirects.map((row) => row.productId)])];
+    const holders = holderIds.length === 0 ? [] : await em.find(Product, { id: { $in: holderIds } });
+    const liveHolders = new Set(holders.filter((p) => p.deletedAt == null).map((p) => p.id));
+    const liveSlugProductIds = otherSlugProducts.filter((p) => p.deletedAt == null).map((p) => p.id);
+    const slugLanguageKeys =
+      liveSlugProductIds.length === 0
+        ? []
+        : await em.find(ProductUrlKey, { productId: { $in: liveSlugProductIds }, salesChannelId: null });
+    const channelLanguages = new Map<string, string>();
+    for (const channel of channels) {
+      for (const code of channel.languages) if (!channelLanguages.has(lower(code))) channelLanguages.set(lower(code), code);
+    }
+    return {
+      product,
+      ownKeyEntities,
+      state: {
+        productId,
+        slug: product.slug,
+        ownKeys,
+        ownRedirects: ownRedirects.map(toRedirectRow),
+        otherKeys: otherKeys.filter((row) => liveHolders.has(row.productId)).map(toKeyRow),
+        otherSlugs: otherProductSlugs(otherSlugProducts, slugLanguageKeys.map(toKeyRow)),
+        otherRedirects: otherRedirects.map(toRedirectRow),
+        productNames: new Map([...holders, ...otherSlugProducts].map((p) => [p.id, displayName(p)])),
+        channelLanguages: [...channelLanguages.values()],
+        memberChannels: new Map(members.map((channel) => [channel.id, [...channel.languages]])),
+      },
+    };
+  }
+
+  /** Writes a plan the planner answered; answers the redirect rows it inserted. */
+  async #applyPlan(
+    em: EntityManager,
+    productId: string,
+    product: Product,
+    ownKeyEntities: readonly ProductUrlKey[],
+    plan: UrlKeyWritePlan,
+  ): Promise<UrlRedirectAuditRow[]> {
+    if (plan.deleteRedirects.length > 0) {
+      await em.nativeDelete(ProductUrlRedirect, { id: { $in: plan.deleteRedirects.map((row) => row.id) } });
+    }
+    for (const { languageCode, channelId, next } of plan.keyRows) {
+      const row = ownKeyEntities.find(
+        (entity) => (entity.salesChannelId ?? null) === channelId && sameLanguage(entity.languageCode, languageCode),
+      );
+      if (next === null) {
+        if (row) em.remove(row);
+      } else if (row) {
+        row.key = next;
+      } else {
+        em.persist(
+          em.create(ProductUrlKey, { id: randomUUID(), productId, languageCode, salesChannelId: channelId, key: next }),
+        );
+      }
+    }
+    if (plan.slug !== null) product.slug = plan.slug;
+    const inserted = plan.insertRedirects.map((row) => ({ id: randomUUID(), productId, ...row }));
+    for (const row of inserted) em.persist(em.create(ProductUrlRedirect, row));
+    await em.flush();
+    return inserted;
+  }
+
   #updateCommand(productId: string, request: PutProductUrlKeysRequest): Command<{ changed: boolean }> {
     return {
       action: 'product.url_keys.update',
       objectType: 'product',
       objectId: productId,
       run: async ({ em }) => {
-        // The product row first (one writer per product), then the keys in sorted order.
-        const locked = (await em.execute(
-          `select "id" from "products" where "id" = ? and "deleted_at" is null for update`,
-          [productId],
-        )) as unknown[];
-        if (locked.length === 0) throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
-        const product = await em.findOneOrFail(Product, { id: productId });
-        const ownKeyEntities = await em.find(ProductUrlKey, { productId });
-        const ownKeys = ownKeyEntities.map(toKeyRow);
-        const keys = urlKeysToLock(product.slug, ownKeys, request);
-        await lockUrlKeys(em, keys);
-
-        const [ownRedirects, otherKeys, otherRedirects, otherSlugProducts, channels, members] = await Promise.all([
-          em.find(ProductUrlRedirect, { productId }),
-          em.find(ProductUrlKey, { key: { $in: keys }, productId: { $ne: productId } }),
-          em.find(ProductUrlRedirect, { key: { $in: keys }, productId: { $ne: productId } }),
-          // Deleted products included: `products.slug` is unique across them (`otherProductSlugs`).
-          em.find(Product, { slug: { $in: keys }, id: { $ne: productId } }),
-          em.find(SalesChannel, {}),
-          this.membership.listChannelsForEntity('product', productId),
-        ]);
-        const holderIds = [...new Set([...otherKeys.map((row) => row.productId), ...otherRedirects.map((row) => row.productId)])];
-        const holders = holderIds.length === 0 ? [] : await em.find(Product, { id: { $in: holderIds } });
-        const liveHolders = new Set(holders.filter((p) => p.deletedAt == null).map((p) => p.id));
-        const liveSlugProductIds = otherSlugProducts.filter((p) => p.deletedAt == null).map((p) => p.id);
-        const slugLanguageKeys =
-          liveSlugProductIds.length === 0
-            ? []
-            : await em.find(ProductUrlKey, { productId: { $in: liveSlugProductIds }, salesChannelId: null });
-        const channelLanguages = new Map<string, string>();
-        for (const channel of channels) {
-          for (const code of channel.languages) if (!channelLanguages.has(lower(code))) channelLanguages.set(lower(code), code);
-        }
-
-        const plan = planUrlKeyWrite(
-          {
-            productId,
-            slug: product.slug,
-            ownKeys,
-            ownRedirects: ownRedirects.map(toRedirectRow),
-            otherKeys: otherKeys.filter((row) => liveHolders.has(row.productId)).map(toKeyRow),
-            otherSlugs: otherProductSlugs(otherSlugProducts, slugLanguageKeys.map(toKeyRow)),
-            otherRedirects: otherRedirects.map(toRedirectRow),
-            productNames: new Map([...holders, ...otherSlugProducts].map((p) => [p.id, displayName(p)])),
-            channelLanguages: [...channelLanguages.values()],
-            memberChannels: new Map(members.map((channel) => [channel.id, [...channel.languages]])),
-          },
-          request,
+        const { product, ownKeyEntities, state } = await this.#lockAndLoad(em, productId, (slug, ownKeys) =>
+          urlKeysToLock(slug, ownKeys, request),
         );
+        const plan = planUrlKeyWrite(state, request);
         if (!plan.changed) return { result: { changed: false }, skipAudit: true };
-
-        if (plan.deleteRedirects.length > 0) {
-          await em.nativeDelete(ProductUrlRedirect, { id: { $in: plan.deleteRedirects.map((row) => row.id) } });
-        }
-        for (const { languageCode, channelId, next } of plan.keyRows) {
-          const row = ownKeyEntities.find(
-            (entity) => (entity.salesChannelId ?? null) === channelId && sameLanguage(entity.languageCode, languageCode),
-          );
-          if (next === null) {
-            if (row) em.remove(row);
-          } else if (row) {
-            row.key = next;
-          } else {
-            em.persist(
-              em.create(ProductUrlKey, { id: randomUUID(), productId, languageCode, salesChannelId: channelId, key: next }),
-            );
-          }
-        }
-        if (plan.slug !== null) product.slug = plan.slug;
-        const inserted = plan.insertRedirects.map((row) => ({ id: randomUUID(), productId, ...row }));
-        for (const row of inserted) em.persist(em.create(ProductUrlRedirect, row));
-        await em.flush();
-
+        const inserted = await this.#applyPlan(em, productId, product, ownKeyEntities, plan);
         return {
           result: { changed: true },
           before: plan.before,
           after: { ...plan.after, redirects: inserted, changedFields: ['urlKeys'] },
         };
       },
-      event: ({ changed }) =>
-        changed
-          ? {
-              eventName: 'product.updated.v1',
-              payload: {
-                eventId: randomUUID(),
-                occurredAt: new Date().toISOString(),
-                productId,
-                changedFields: ['urlKeys'],
-              },
-            }
-          : undefined,
+      event: ({ changed }) => (changed ? urlKeysUpdatedEvent(productId) : undefined),
+    };
+  }
+
+  /**
+   * `catalogProductScopeWritePort.applyScopes(…).urlKeys` (contract §5, FR-093) —
+   * an integration's keys, in import mode: each key the operator's write would
+   * refuse as **taken** (another product's current key, or another product's
+   * redirect) is not written and comes back as an issue naming the holder, and the
+   * product keeps its previous key at that scope. A redirect is never taken over
+   * and nothing asks for confirmation — that is an operator's act (FR-072). Every
+   * other refusal (a channel the product is not in, a language no channel offers)
+   * refuses the call, as the admin write does.
+   *
+   * One Command for the call: the accepted keys are written together, one audit
+   * entry, `product.updated.v1` with `['urlKeys']` when anything changed.
+   */
+  async importKeys(productId: string, writes: readonly ProductUrlKeyWrite[], source: string): Promise<UrlKeyWriteOutcome[]> {
+    assertProductIdShape(productId);
+    if (writes.length === 0) return [];
+    return this.#run(this.#importCommand(productId, writes, source));
+  }
+
+  #importCommand(
+    productId: string,
+    writes: readonly ProductUrlKeyWrite[],
+    source: string,
+  ): Command<UrlKeyWriteOutcome[]> {
+    let changed = false;
+    return {
+      action: 'product.url_keys.update',
+      objectType: 'product',
+      objectId: productId,
+      run: async ({ em }) => {
+        const full = importRequest(writes);
+        const { product, ownKeyEntities, state } = await this.#lockAndLoad(em, productId, (slug, ownKeys) =>
+          urlKeysToLock(slug, ownKeys, full),
+        );
+        const { accepted, outcomes } = admitImportKeys(state, writes);
+        if (accepted.length === 0) return { result: outcomes, skipAudit: true };
+        const plan = planUrlKeyWrite(state, importRequest(accepted));
+        if (!plan.changed) return { result: outcomes, skipAudit: true };
+        const inserted = await this.#applyPlan(em, productId, product, ownKeyEntities, plan);
+        changed = true;
+        return {
+          result: outcomes,
+          before: plan.before,
+          after: { ...plan.after, redirects: inserted, changedFields: ['urlKeys'], source },
+        };
+      },
+      event: () => (changed ? urlKeysUpdatedEvent(productId) : undefined),
     };
   }
 
