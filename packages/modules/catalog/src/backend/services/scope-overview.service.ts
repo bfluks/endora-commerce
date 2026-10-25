@@ -152,7 +152,7 @@ function languageFields(
       if (isNonEmpty(values[languageCode])) fields.push(field);
     }
   }
-  if (input.urlKeys.some((key) => key.salesChannelId === null && key.languageCode === languageCode)) {
+  if (input.urlKeys.some((key) => key.salesChannelId == null && key.languageCode === languageCode)) {
     fields.push('urlKey');
   }
   return fields.sort(byFieldOrder);
@@ -226,7 +226,8 @@ export function buildScopeOverview(input: ScopeOverviewInput): ScopeOverview {
   // --- URL keys -------------------------------------------------------------------
   const channelKeys = new Set<string>();
   for (const key of input.urlKeys) {
-    if (key.salesChannelId === null) continue;
+    // `== null`: the ORM hydrates a NULL `sales_channel_id` as `undefined`.
+    if (key.salesChannelId == null) continue;
     const base = { field: 'urlKey', channelId: key.salesChannelId, languageCode: key.languageCode };
     if (!isMember(key.salesChannelId)) orphans.push({ ...base, reason: 'not_a_member' });
     else if (!offers(key.salesChannelId, key.languageCode)) orphans.push({ ...base, reason: 'language_not_offered' });
@@ -349,7 +350,7 @@ export class ScopeOverviewService {
           ...channelRows.map((row) => row.salesChannelId),
           ...languageRows.map((row) => row.salesChannelId),
           ...overrides.map((row) => row.channelId),
-          ...urlKeys.flatMap((row) => (row.salesChannelId === null ? [] : [row.salesChannelId])),
+          ...urlKeys.flatMap((row) => (row.salesChannelId == null ? [] : [row.salesChannelId])),
         ].filter((id) => !memberIds.has(id)),
       ),
     ];
@@ -381,7 +382,7 @@ export class ScopeOverviewService {
         languageCode: row.languageCode ?? null,
         value: row.value,
       })),
-      urlKeys: urlKeys.map((row) => ({ languageCode: row.languageCode, salesChannelId: row.salesChannelId })),
+      urlKeys: urlKeys.map((row) => ({ languageCode: row.languageCode, salesChannelId: row.salesChannelId ?? null })),
       attributeScopes: new Map(
         attributes.map((attribute) => [
           attribute.key,
