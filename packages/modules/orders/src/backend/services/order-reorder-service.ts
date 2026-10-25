@@ -85,12 +85,14 @@ export class OrderReorderService {
     // Feature 159 — the lines in the order's display order.
     const items = (await loadArrangedOrderLines(em, orderId)).lines;
     const productIds = [...new Set(items.map((it) => it.productId))];
-    // `liveOnly` is the soft-delete half of the old predicate; the status half
-    // stays here because it is `!== 'inactive'` rather than `=== 'active'`, and
-    // `activeOnly` would quietly drop a draft product a past order contains.
+    // `liveOnly` is the soft-delete half of the predicate; the other half is
+    // archiving (feature 163, FR-019): an archived product is `discontinued`
+    // whatever its status. A product merely switched off (`inactive`) is seeded
+    // like any line and left to the cart and to placement to refuse — `activeOnly`
+    // would report it discontinued, which it is not.
     const products = await this.catalogProductRead.findByIds(productIds, { liveOnly: true });
     const available = new Map(
-      products.filter((p) => p.status !== 'inactive').map((p) => [p.id, p]),
+      products.filter((p) => !p.archivedAt).map((p) => [p.id, p]),
     );
 
     /**

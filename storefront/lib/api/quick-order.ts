@@ -85,7 +85,7 @@ export interface QuickOrderSearchResult {
   sku: string;
   name: string;
   slug: string;
-  status: 'draft' | 'active' | 'inactive';
+  status: 'active' | 'inactive';
   matchedOn?: Array<'sku' | 'name' | 'attribute'>;
 }
 
