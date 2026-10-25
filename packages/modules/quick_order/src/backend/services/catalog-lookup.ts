@@ -96,6 +96,8 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
         sku: p.sku,
         status: p.status,
         deletedAt: p.deletedAt,
+        // Feature 163 — what `product_archived` reads.
+        archivedAt: p.archivedAt,
         // Feature 155 (R12.1) — what the preview's minimum evaluation reads.
         type: p.type,
         minOrderQuantity: p.minOrderQuantity,

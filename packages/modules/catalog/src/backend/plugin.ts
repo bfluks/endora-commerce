@@ -363,6 +363,8 @@ export function catalogModule(options: CatalogModuleOptions) {
       ? createBulkOperationQueue(options.redis)
       : undefined;
     const bulkOperationService = new BulkOperationService(options.emFactory, bulkUpdateService, {
+      // Feature 163 (R30.3) — an undo announces what it reverted.
+      events: options.eventBus as CatalogEventBus,
       ...(options.adminNotificationService
         ? { notificationService: options.adminNotificationService }
         : {}),
