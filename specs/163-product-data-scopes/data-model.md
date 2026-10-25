@@ -14,11 +14,13 @@ another module's table (`check:module-boundary` R2).
 | `catalog`, `product_url_keys` | catalog | US7 | `product_url_keys`, `product_url_redirects` |
 | `seo`, `meta_override_channel_scope` | seo | US8 | `seo_meta_overrides.sales_channel_id`, `locale` nullable, uniques |
 | `catalog`, `product_media_scopes` | catalog | US9 | `gallery_item_channel_labels`, `gallery_item_channel_hidden`, `gallery_items.alt_text` |
+| `catalog`, `product_status_drop_draft` (suggested; §13 — the architect may fold the scope-table half into `product_scopes`) | catalog | Q1 block | `products.status` data + default; `CHECK`s of `product_channel_scopes`, `product_channel_language_scopes` |
 | `catalog`, `attachment_packaging_translations` | catalog | US9 | `product_attachments.name_translations`, `.description_translations`, `product_attachment_channel_hidden`, `product_packaging_units.name_translations` |
 
 Foreign keys to `sales_channels` (a kernel table) need no manifest edge beyond the `sales_channels`
 dependency catalog already declares (`packages/modules/catalog/src/manifest.ts`); `seo`'s manifest is
-checked by `test/unit/db/fk-dependency-drift.test.ts` in its phase. **No backfill anywhere** (R21).
+checked by `test/unit/db/fk-dependency-drift.test.ts` in its phase. **No backfill anywhere** (R21) —
+**except** the `draft` → `inactive` data conversion of §13 (Session 2026-10-25, Q1-b).
 
 ---
 
@@ -30,7 +32,7 @@ One row per (product, channel) holding the channel overrides of the channel-scop
 | --- | --- | --- | --- |
 | `product_id` | uuid | no | PK part; FK `products(id)` on delete cascade |
 | `sales_channel_id` | uuid | no | PK part; FK `sales_channels(id)` on delete cascade |
-| `status` | varchar(16) | yes | `NULL` = inherit global; else `draft`/`active`/`inactive` (`CHECK`) |
+| `status` | varchar(16) | yes | `NULL` = inherit global; else `active`/`inactive` (`CHECK (status in ('active','inactive'))`, §13) |
 | `window_overridden` | boolean | no, default false | the window pair below replaces the global pair |
 | `publish_from` | timestamptz | yes | inclusive; meaningful only when `window_overridden` |
 | `publish_until` | timestamptz | yes | inclusive; meaningful only when `window_overridden` |
@@ -53,7 +55,7 @@ deleted (FR-012).
 | `product_id` | uuid | no | PK part; FK `products` cascade |
 | `sales_channel_id` | uuid | no | PK part; FK `sales_channels` cascade |
 | `language_code` | varchar(16) | no | PK part; a code of `sales_channels.languages` at write time (FR-014) |
-| `status` | varchar(16) | no | `draft`/`active`/`inactive` (`CHECK`) |
+| `status` | varchar(16) | no | `active`/`inactive` (`CHECK (status in ('active','inactive'))`, §13) |
 | `created_at`, `updated_at` | timestamptz | no | |
 
 "Use inherited" deletes the row. Rows for a language later removed from the channel are retained and
@@ -72,7 +74,9 @@ index had no reader and was dropped before the migration merged (163 Block A rev
 | `publish_until` | timestamptz | yes | global window end, inclusive; `CHECK (from < until)` |
 
 `status`, `visibility`, `allowed_organization_ids`, `min_order_quantity`, `returnable`, `slug` keep their
-meaning as the **global** values. `archived_at` stays set only by the global `inactive` transition.
+meaning as the **global** values. `products.status` holds `active`/`inactive` only, default `inactive`
+(§13). `archived_at` is set and cleared **only** by the Archive / Restore Commands (§14, FR-019) — no status
+write at any scope touches it.
 
 ## 4. Effective values (the rule, `packages/contracts/src/product-scopes.ts`) — R5
 
@@ -221,7 +225,9 @@ scope language (N2) and are never re-resolved.
 ## 10. Bulk operation payload — R20
 
 `BulkUpdateProductsRequest.fields.scopedStatus?: { channelId: uuid; languageCode: string | null; value:
-'draft' | 'active' | 'inactive' | 'inherit' }`; result reasons gain `scope_invalid`, `completeness_gate`.
+'active' | 'inactive' | 'inherit' }`; result reasons gain `scope_invalid`, `completeness_gate`. A `draft`
+value in `fields.status` or `fields.scopedStatus` is refused by the schema (FR-112). Bulk Archive / Restore
+(FR-053) are bulk-operation kinds of their own on the same path; their payload shape is the architect's (§14).
 Revert records store the per-product before-state of the one scope row touched.
 
 ## 11. Search document (search) — R8
@@ -236,10 +242,53 @@ searchable attributes.
 
 | Transition | Effect |
 | --- | --- |
-| global `status` → `inactive` | unchanged: `archived_at` set, `product.archived.v1` once (FR-010) |
+| global `status` → `inactive` | plain off: `archived_at` **untouched**, no `product.archived.v1`; `product.updated.v1` `['status']` (FR-010) |
+| global `status` → `active` on an archived product | status changes; product **stays archived** (FR-019) |
+| Archive (not archived → archived) | `archived_at = now()`, `product.updated.v1` and `product.archived.v1` once; status unchanged at every scope; one audit entry (FR-019) |
+| Archive on an archived product | no change, no event |
+| Restore (archived → not archived) | `archived_at = null`, `product.updated.v1`; status unchanged; one audit entry; no completeness gate (FR-019, FR-060) |
 | scope `status` set/changed/removed | row upsert/delete; `product.updated.v1` `changedFields: ['scopedStatus']`; one audit entry per product per command |
 | window bound crossed (no write) | sweep emits `product.updated.v1` `['publicationWindow']` (R9) |
 | product leaves channel / channel drops a language | rows retained, ignored, listed as orphaned (FR-015); C×L URL keys keep reserving (FR-070) |
 | channel deleted | rows removed by cascade |
 | product soft-deleted | redirects removed in the delete Command (FR-072); scope rows retained with the product row |
 | product gets its first language key for L | redirect `(L, slug)` inserted; any `NULL`-language redirect of P keeps resolving in L (H1) |
+
+## 13. Status value set migration (catalog) — Session 2026-10-25, Q1-b / Q1-c / Q1-d
+
+`draft` is removed; status is `active` | `inactive` at every scope (FR-010, FR-110, FR-112).
+
+| Target | Rule |
+| --- | --- |
+| `products.status` | `update products set status = 'inactive' where status = 'draft'` — `archived_at` **not** written |
+| `product_channel_scopes.status` | `draft` → `inactive`; `NULL` (inherit) untouched |
+| `product_channel_language_scopes.status` | `draft` → `inactive` |
+| `products.status` rows already `inactive` | unchanged, `archived_at` unchanged (Q1-c) — they stay archived where `archived_at` is set (open question O-4 in `spec.md` for rows without it) |
+| `products.status` default | `inactive` (entity default and column default); a duplicate is always `inactive` with `archived_at` cleared (Q1-d) |
+| `CHECK` on both scope tables | `status in ('active','inactive')` (`product_channel_scopes` admits `NULL` as inherit) |
+| `CHECK` on `products.status` | if the column carries one, rewritten to `('active','inactive')`; else the value set is enforced by `productStatusSchema` alone (architect to confirm) |
+
+Order inside the migration: convert the data first, then replace the `CHECK`s, so no row violates the new
+constraint. The `down` direction cannot tell a converted `draft` from an original `inactive`; it restores
+the three-value `CHECK`s only and leaves the data as `inactive`.
+
+**Architect decision (not decided here):** the scope tables' `CHECK`s were created by
+`packages/modules/catalog/src/migrations/20261022T035133_catalog_product_scopes.ts` (lines 43 and 71), which
+is part of this unreleased feature branch. The architect decides whether to amend that migration in place
+(narrowing its `CHECK`s; only the data conversion of `products.status` then needs a new migration) or to
+add one new migration that converts the data and replaces the `CHECK`s on all three tables. Either way the
+`products.status` conversion is a new, scaffolded `catalog` migration (suggested `--name`
+`product_status_drop_draft`), since `products` predates this feature.
+
+## 14. Archive / Restore (catalog) — FR-019, FR-053
+
+No new column: the action reads and writes the existing `products.archived_at`.
+
+| Command | Effect | Gate | Audit |
+| --- | --- | --- | --- |
+| Archive one product | not archived → `archived_at = now()`; emit `product.updated.v1` and `product.archived.v1` once; already archived → no-op, no event | `catalog:write` | one entry, before / after `archived_at` |
+| Restore one product | archived → `archived_at = null`; emit `product.updated.v1`; not archived → no-op | `catalog:write` | one entry, before / after `archived_at` |
+| Bulk Archive / Restore | the single Commands per product on the durable bulk-operation path; revert records hold each product's before `archived_at`; undo as a whole | `catalog:write` | one entry per product |
+
+Neither Command reads or writes any status column, and neither fires the completeness gate. Route shape,
+Command names and the `changedFields` value of `product.updated.v1` are the architect's.
