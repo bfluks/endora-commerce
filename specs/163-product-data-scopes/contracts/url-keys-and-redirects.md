@@ -74,7 +74,10 @@ productKeyResolutionSchema = z.discriminatedUnion('kind', [
 - `404 PRODUCT_NOT_FOUND` — no product holds the key in L (incl. a key of another language, K1), the
   product it resolves to is not effectively available at (C, L, buyer, now), or the key is a redirect and
   `seo` is not effectively present (FR-111).
-- `410 PRODUCT_ARCHIVED` — the key (current or redirect) resolves to an archived product (edge case).
+- `410 PRODUCT_ARCHIVED` — the key (current or redirect) resolves to an archived product **and** that
+  product would be effectively available at (C, L) to this buyer with the archive taken away and its global
+  status read as `active` (FR-005, owner O-3); an archived product failing that test answers
+  `404 PRODUCT_NOT_FOUND` like any unavailable one (edge case).
 - The existing `GET /api/v1/catalog/products/:idOrSlug` answers, in order, an id, a **current** key at
   (C, L), else a product's **global key** (`products.slug`) — an API handle CMS product blocks store
   (R28) — and never answers a redirect; the storefront PDP switches to `resolve` then reads by id.
