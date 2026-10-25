@@ -57,14 +57,14 @@ const PRODUCT_TYPES = [
   'virtual',
 ] as const;
 const VISIBILITIES = ['public', 'logged_in_only', 'organization_restricted'] as const;
-const STATUSES = ['draft', 'active', 'inactive'] as const;
+const STATUSES = ['active', 'inactive'] as const;
 
 interface AdminProduct {
   id: string;
   sku: string;
   slug: string;
   type: 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
-  status: 'draft' | 'active' | 'inactive';
+  status: 'active' | 'inactive';
   name: Record<string, string>;
   description: Record<string, string>;
   visibility: 'public' | 'logged_in_only' | 'organization_restricted';
@@ -127,7 +127,7 @@ export function ProductEditor(): ReactNode {
   const [categories, setCategories] = useState<AdminCategory[]>([]);
   const [sku, setSku] = useState('');
   const [type, setType] = useState<'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual'>('simple');
-  const [status, setStatus] = useState<'draft' | 'active' | 'inactive'>('draft');
+  const [status, setStatus] = useState<'active' | 'inactive'>('inactive');
   const [visibility, setVisibility] = useState<AdminProduct['visibility']>('public');
   const [name, setName] = useState<Record<Locale, string>>({ 'en-US': '', 'pl-PL': '' });
   const [description, setDescription] = useState<Record<Locale, string>>({
@@ -198,7 +198,7 @@ export function ProductEditor(): ReactNode {
         initialSnapshotRef.current = stableSnapshot({
           sku: '',
           type: 'simple',
-          status: 'draft',
+          status: 'inactive',
           visibility: 'public',
           name: { 'en-US': '', 'pl-PL': '' },
           description: { 'en-US': '', 'pl-PL': '' },
