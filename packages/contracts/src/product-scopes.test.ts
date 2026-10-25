@@ -63,7 +63,7 @@ function channelRow(over: Partial<ProductChannelScopeRecord> = {}): ProductChann
 }
 
 function clRow(over: Partial<ProductChannelLanguageScopeRecord> = {}): ProductChannelLanguageScopeRecord {
-  return { productId: P, channelId: B2B, languageCode: 'de-DE', status: 'draft', ...over };
+  return { productId: P, channelId: B2B, languageCode: 'de-DE', status: 'inactive', ...over };
 }
 
 const SIGNED_IN_A: ProductAudience = { organizationId: ORG_A, authenticated: true };
@@ -84,8 +84,8 @@ function available(
 }
 
 describe('PRODUCT_SCOPE_STATUSES', () => {
-  it('is the value set draft / active / inactive (FR-010, R3)', () => {
-    expect([...PRODUCT_SCOPE_STATUSES]).toEqual(['draft', 'active', 'inactive']);
+  it('is the value set active / inactive (FR-010, FR-112, R3)', () => {
+    expect([...PRODUCT_SCOPE_STATUSES]).toEqual(['active', 'inactive']);
   });
 
   it('isOn is true for active alone', () => {
@@ -95,7 +95,7 @@ describe('PRODUCT_SCOPE_STATUSES', () => {
 
 describe('effectiveStatus — cl ?? c ?? global', () => {
   it('falls back to the global value with no override', () => {
-    expect(effectiveStatus(global({ status: 'draft' }), undefined, undefined)).toBe('draft');
+    expect(effectiveStatus(global({ status: 'inactive' }), undefined, undefined)).toBe('inactive');
   });
 
   it('a channel row with status null inherits the global value', () => {
@@ -103,12 +103,12 @@ describe('effectiveStatus — cl ?? c ?? global', () => {
   });
 
   it('a channel status beats the global one', () => {
-    expect(effectiveStatus(global({ status: 'active' }), channelRow({ status: 'draft' }), undefined)).toBe('draft');
+    expect(effectiveStatus(global({ status: 'active' }), channelRow({ status: 'inactive' }), undefined)).toBe('inactive');
   });
 
   it('a channel × language status beats the channel and the global one', () => {
     expect(
-      effectiveStatus(global({ status: 'draft' }), channelRow({ status: 'draft' }), clRow({ status: 'active' })),
+      effectiveStatus(global({ status: 'inactive' }), channelRow({ status: 'inactive' }), clRow({ status: 'active' })),
     ).toBe('active');
   });
 });
@@ -144,11 +144,11 @@ describe('isProductEffectivelyAvailable — data-model §4', () => {
     ).toBe(false);
   });
 
-  it.each(['draft', 'inactive'] as const)('global %s with no override → unavailable', (status) => {
+  it.each(['inactive'] as const)('global %s with no override → unavailable', (status) => {
     expect(available({ global: global({ status }) })).toBe(false);
   });
 
-  it.each(['draft', 'inactive'] as const)(
+  it.each(['inactive'] as const)(
     'channel %s is plain off in that channel and never "gone" (FR-010)',
     (status) => {
       const g = global();
@@ -158,16 +158,16 @@ describe('isProductEffectivelyAvailable — data-model §4', () => {
     },
   );
 
-  it.each(['draft', 'inactive'] as const)('C×L %s is off at that language only', (status) => {
+  it.each(['inactive'] as const)('C×L %s is off at that language only', (status) => {
     const row = clRow({ languageCode: 'de-DE', status });
     expect(available({ languageCode: 'de-DE', clRow: row })).toBe(false);
     expect(available({ languageCode: 'pl-PL', clRow: undefined })).toBe(true);
   });
 
-  it('a C×L active override turns a globally draft product on at that pair', () => {
+  it('a C×L active override turns a globally inactive product on at that pair', () => {
     expect(
       available({
-        global: global({ status: 'draft' }),
+        global: global({ status: 'inactive' }),
         languageCode: 'de-DE',
         clRow: clRow({ status: 'active' }),
       }),
@@ -177,8 +177,8 @@ describe('isProductEffectivelyAvailable — data-model §4', () => {
   it('rows of another channel or another language are ignored', () => {
     expect(
       available({
-        channelRow: channelRow({ channelId: B2C, status: 'draft' }),
-        clRow: clRow({ languageCode: 'de-DE', status: 'draft' }),
+        channelRow: channelRow({ channelId: B2C, status: 'inactive' }),
+        clRow: clRow({ languageCode: 'de-DE', status: 'inactive' }),
         languageCode: 'pl-PL',
       }),
     ).toBe(true);
@@ -282,12 +282,12 @@ describe('effectiveOrderRules — c ?? global (FR-100)', () => {
 
 describe('pairsTurningOn — the completeness gate pairs (R18, N3, M3 → A)', () => {
   function snap(over: Partial<ScopeSnapshot> = {}): ScopeSnapshot {
-    return { global: global({ status: 'draft' }), channelRows: [], languageRows: [], ...over };
+    return { global: global({ status: 'inactive' }), channelRows: [], languageRows: [], ...over };
   }
   const sortPairs = (pairs: Array<{ channelId: string; languageCode: string }>) =>
     [...pairs].sort((a, b) => `${a.channelId}/${a.languageCode}`.localeCompare(`${b.channelId}/${b.languageCode}`));
 
-  it('a global switch draft → active turns every member channel language on', () => {
+  it('a global switch inactive → active turns every member channel language on', () => {
     const pairs = pairsTurningOn(snap(), snap({ global: global({ status: 'active' }) }), [b2b, b2c]);
     expect(sortPairs(pairs)).toEqual(
       sortPairs([
@@ -300,7 +300,7 @@ describe('pairsTurningOn — the completeness gate pairs (R18, N3, M3 → A)', (
   });
 
   it('a global switch skips the pairs an override keeps off', () => {
-    const rows = { channelRows: [channelRow({ channelId: B2C, status: 'draft' })] };
+    const rows = { channelRows: [channelRow({ channelId: B2C, status: 'inactive' })] };
     const pairs = pairsTurningOn(snap(rows), snap({ ...rows, global: global({ status: 'active' }) }), [b2b, b2c]);
     expect(sortPairs(pairs)).toEqual(
       sortPairs([
@@ -345,16 +345,22 @@ describe('pairsTurningOn — the completeness gate pairs (R18, N3, M3 → A)', (
     expect(pairsTurningOn(snap(), after, [b2b])).toEqual([]);
   });
 
-  it('un-archiving counts as turning on where an override was already active', () => {
-    const rows = { channelRows: [channelRow({ status: 'active' })] };
-    const before = snap({ ...rows, global: global({ status: 'inactive', archivedAt: NOW }) });
-    const after = snap({ ...rows, global: global({ status: 'draft' }) });
+  it('status only: an archived product whose global status goes inactive → active returns its pairs (FR-060)', () => {
+    const before = snap({ global: global({ status: 'inactive', archivedAt: NOW }) });
+    const after = snap({ global: global({ status: 'active', archivedAt: NOW }) });
     expect(sortPairs(pairsTurningOn(before, after, [b2b]))).toEqual(
       sortPairs([
         { channelId: B2B, languageCode: 'pl-PL' },
         { channelId: B2B, languageCode: 'de-DE' },
       ]),
     );
+  });
+
+  it('status only: a Restore (only archivedAt differs) turns nothing on (FR-019, FR-060)', () => {
+    const rows = { channelRows: [channelRow({ status: 'active' })] };
+    const before = snap({ ...rows, global: global({ status: 'active', archivedAt: NOW }) });
+    const after = snap({ ...rows, global: global({ status: 'active', archivedAt: null }) });
+    expect(pairsTurningOn(before, after, [b2b])).toEqual([]);
   });
 
   it('a deleted product never turns on, whatever its overrides say', () => {
