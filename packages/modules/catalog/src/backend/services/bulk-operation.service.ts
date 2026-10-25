@@ -12,6 +12,7 @@ import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import { applyUndo, type RevertRecord } from '@endora-commerce/platform/commands';
 import { Product } from '../entities/product.entity.js';
+import type { CatalogEventBus } from './catalog-admin.service.js';
 import {
   BulkOperation,
   type BulkOperationLogEntry,
@@ -185,6 +186,13 @@ export class BulkOperationService {
        * message rather than silently no-op'ing.
        */
       reindexRunner?: SearchReindexRunner;
+      /**
+       * Feature 163 (FR-082, research R30.3) — where an undo announces what it
+       * reverted: `product.updated.v1` per product with the restored keys, and
+       * `product.archived.v1` where it re-archives. Without it an undo restores
+       * silently, as it did before.
+       */
+      events?: CatalogEventBus;
     } = {},
     /**
      * Feature 054 — when injected, product bulk edits capture per-product revert
@@ -197,7 +205,8 @@ export class BulkOperationService {
   async create(input: CreateBulkOperationInput): Promise<SerializedBulkOperation> {
     // command-coverage-ignore: catalog_bulk_operations row bookkeeping (queue
     // status / progress counters); the actual product mutations are audited by
-    // updateProduct. The operation record itself is not a domain-audit target.
+    // updateProduct, or by the Archive / Restore Commands for `fields.archived`.
+    // The operation record itself is not a domain-audit target.
     const em = this.emFactory();
     const op = new BulkOperation();
     op.type = input.type ?? 'product_bulk_update';
@@ -235,7 +244,8 @@ export class BulkOperationService {
   async processById(operationId: string): Promise<void> {
     // command-coverage-ignore: catalog_bulk_operations row bookkeeping (queue
     // status / progress counters); the actual product mutations are audited by
-    // updateProduct. The operation record itself is not a domain-audit target.
+    // updateProduct, or by the Archive / Restore Commands for `fields.archived`.
+    // The operation record itself is not a domain-audit target.
     const em = this.emFactory();
     const affected = await em.nativeUpdate(
       BulkOperation,
@@ -309,7 +319,8 @@ export class BulkOperationService {
   private async claimNextPending(): Promise<string | null> {
     // command-coverage-ignore: catalog_bulk_operations row bookkeeping (queue
     // status / progress counters); the actual product mutations are audited by
-    // updateProduct. The operation record itself is not a domain-audit target.
+    // updateProduct, or by the Archive / Restore Commands for `fields.archived`.
+    // The operation record itself is not a domain-audit target.
     const em = this.emFactory();
     const candidate = await em.findOne(
       BulkOperation,
@@ -332,7 +343,8 @@ export class BulkOperationService {
   private async processOne(id: string): Promise<void> {
     // command-coverage-ignore: catalog_bulk_operations row bookkeeping (queue
     // status / progress counters); the actual product mutations are audited by
-    // updateProduct. The operation record itself is not a domain-audit target.
+    // updateProduct, or by the Archive / Restore Commands for `fields.archived`.
+    // The operation record itself is not a domain-audit target.
     const em = this.emFactory();
     const op = await em.findOne(BulkOperation, { id });
     if (!op) return;
@@ -451,7 +463,8 @@ export class BulkOperationService {
   ): Promise<void> {
     // command-coverage-ignore: catalog_bulk_operations row bookkeeping (queue
     // status / progress counters); the actual product mutations are audited by
-    // updateProduct. The operation record itself is not a domain-audit target.
+    // updateProduct, or by the Archive / Restore Commands for `fields.archived`.
+    // The operation record itself is not a domain-audit target.
     const em = this.emFactory();
     if (!this.deps.reindexRunner) {
       const message = 'Search reindex handler is not configured.';
@@ -600,10 +613,41 @@ export class BulkOperationService {
       before: r.before,
       after: r.after,
     }));
-    return this.commandBus.run(this.#undoCommand(operationId, records));
+    const restored: RestoredProduct[] = [];
+    const outcome = await this.commandBus.run(this.#undoCommand(operationId, records, restored));
+    // After commit only: `commandBus.run` has resolved, so the restores are saved.
+    // The undo emits for every reverted field — a status or visibility undo used to
+    // leave search, feeds and webhooks stale until the next write — and in one
+    // event scope, dispatched in order and waited for (R30.3).
+    const events = this.deps.events;
+    if (events && restored.length > 0) {
+      await events.run(async () => {
+        for (const product of restored) {
+          events.emit('product.updated.v1', {
+            eventId: randomUUID(),
+            occurredAt: new Date().toISOString(),
+            productId: product.productId,
+            changedFields: product.changedFields,
+          });
+          if (product.rearchived) {
+            events.emit('product.archived.v1', {
+              eventId: randomUUID(),
+              occurredAt: new Date().toISOString(),
+              productId: product.productId,
+            });
+          }
+        }
+      });
+    }
+    return outcome;
   }
 
-  #undoCommand(operationId: string, records: readonly RevertRecord[]): Command<UndoOutcome> {
+  #undoCommand(
+    operationId: string,
+    records: readonly RevertRecord[],
+    /** Written by `restore`: every product the undo wrote, for the after-commit announcements. */
+    restored: RestoredProduct[],
+  ): Command<UndoOutcome> {
     return {
       action: 'product.bulk_update.undo',
       objectType: 'bulk_operation',
@@ -624,8 +668,14 @@ export class BulkOperationService {
           restore: async (tem, rec) => {
             const p = await tem.findOne(Product, { id: rec.recordId });
             if (!p) return;
+            const wasArchived = (p.archivedAt ?? null) !== null;
             tem.assign(p, rec.before);
             tem.persist(p);
+            restored.push({
+              productId: p.id,
+              changedFields: Object.keys(rec.before),
+              rearchived: 'archivedAt' in rec.before && !wasArchived && rec.before['archivedAt'] != null,
+            });
           },
         });
         op.undoStatus = res.undoStatus === 'reverted' ? 'reverted' : 'partially_reverted';
@@ -656,6 +706,14 @@ export class BulkOperationService {
   }
 }
 
+/** A product an undo restored: what it announces once the undo has committed. */
+interface RestoredProduct {
+  productId: string;
+  changedFields: string[];
+  /** Whether the undo moved `archivedAt` from null to set (it re-archived the product). */
+  rearchived: boolean;
+}
+
 /** Undo result surfaced to the route (mapped to 200/404/409). */
 export type UndoOutcome =
   | { ok: true; reverted: string[]; conflicts: { recordId: string; reason: string }[]; undoStatus: 'reverted' | 'partially_reverted' | 'none' }
@@ -665,16 +723,18 @@ export type UndoOutcome =
  * Field keys of a bulk edit that can be undone by restoring direct product
  * columns. Returns `[]` (⇒ not reversible) when the edit is empty or touches a
  * non-revertible field (the category bridge) — all-or-nothing, never partial.
+ *
+ * Feature 163 (R30.3) — `archived` (bulk Archive / Restore) is the `archivedAt`
+ * column; a `status` edit is the status alone, since a status write no longer
+ * touches `archivedAt` (FR-010).
  */
 const NON_REVERTIBLE_BULK_FIELDS = new Set(['categoryIds']);
+const BULK_FIELD_COLUMN: Readonly<Record<string, string>> = { archived: 'archivedAt' };
 function revertibleFieldKeys(fields: Record<string, unknown>): string[] {
   const keys = Object.keys(fields);
   if (keys.length === 0) return [];
   if (keys.some((k) => NON_REVERTIBLE_BULK_FIELDS.has(k))) return [];
-  const set = new Set(keys);
-  // `status` changes also flip `archivedAt` in updateProduct — restore both.
-  if (set.has('status')) set.add('archivedAt');
-  return [...set];
+  return [...new Set(keys.map((k) => BULK_FIELD_COLUMN[k] ?? k))];
 }
 
 /** Pick a plain, JSON-cloned snapshot of a product's `keys` for revert state. */
