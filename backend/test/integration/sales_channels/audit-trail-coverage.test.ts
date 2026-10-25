@@ -176,7 +176,7 @@ describe('audit trail coverage (T048)', () => {
         sku: 'T048-AUDIT',
         slug: 't048-audit',
         type: 'simple',
-        status: 'draft',
+        status: 'inactive',
         name: { en: 'T048' },
         description: { en: 'fixture' },
         visibility: 'public',

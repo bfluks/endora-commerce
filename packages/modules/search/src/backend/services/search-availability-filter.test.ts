@@ -112,7 +112,7 @@ describe('availabilityFilter × documentAvailabilityFields ≡ the rule', () => 
             for (const audience of BUYERS) {
               const want = isProductEffectivelyAvailable({
                 global: {
-                  status: liveLanguages.includes('pl-PL') ? 'active' : 'draft',
+                  status: liveLanguages.includes('pl-PL') ? 'active' : 'inactive',
                   deletedAt: null,
                   archivedAt: null,
                   window,

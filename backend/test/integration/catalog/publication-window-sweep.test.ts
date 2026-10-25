@@ -96,7 +96,7 @@ describe('163 — publication-window sweep [integration]', () => {
     // A channel row that does not override the window carries no bounds (CHECK) —
     // and a status row alone never counts as a crossing.
     await em.execute(
-      `insert into product_channel_scopes (product_id, sales_channel_id, status, created_at, updated_at) values (?, ?, 'draft', now(), now())`,
+      `insert into product_channel_scopes (product_id, sales_channel_id, status, created_at, updated_at) values (?, ?, 'inactive', now(), now())`,
       [inheriting, channelId],
     );
 

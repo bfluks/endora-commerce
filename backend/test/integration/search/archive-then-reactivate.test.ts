@@ -16,11 +16,12 @@ const meilisearchHost = process.env['MEILISEARCH_URL'] ?? 'http://localhost:7700
 const meilisearchKey = process.env['MEILISEARCH_API_KEY'] ?? 'devMasterKeyChangeMe';
 
 /**
- * A product that is archived and at once reactivated is in the search index at
- * the end.
+ * A product that is archived and at once restored is in the search index at the
+ * end.
  *
- * `catalog` emits `product.archived.v1` when a product's status moves to
- * `inactive`, and `search` removes the product from every channel index on it.
+ * `catalog` emits `product.archived.v1` when the Archive action archives a product
+ * (spec 163, FR-019 — a status write never does), and `search` removes the product
+ * from every channel index on it. Restore is its reactivation.
  * Emitted outside an event scope the bus does not wait for that removal, so the
  * write returned while it was still on its way — and a reactivation that
  * followed re-indexed the product *before* the removal landed, which then took
@@ -30,7 +31,7 @@ const meilisearchKey = process.env['MEILISEARCH_API_KEY'] ?? 'devMasterKeyChange
  * that the order is the test's rather than the machine's: what is asserted is
  * that the archiving write does not return before its removal has finished.
  */
-describe('search — archiving then reactivating a product leaves it indexed', () => {
+describe('search — archiving then restoring a product leaves it indexed', () => {
   let h: BackendServerHandle;
   let client: Meilisearch;
   let indexUid: string;
@@ -113,43 +114,39 @@ describe('search — archiving then reactivating a product leaves it indexed', (
     await teardownBackendServer(h);
   });
 
-  const patch = async (id: string, status: 'active' | 'inactive'): Promise<void> => {
+  const post = async (id: string, action: 'archive' | 'restore'): Promise<void> => {
     const response = await h.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/admin/catalog/products/${id}`,
+      method: 'POST',
+      url: `/api/v1/admin/catalog/products/${id}/${action}`,
       cookies: ADMIN,
-      payload: { status },
     });
     expect(response.statusCode, response.body).toBe(200);
   };
 
-  it('through the admin API: archive, reactivate at once — the product is indexed', async () => {
+  it('through the admin API: archive, restore at once — the product is indexed', async () => {
     const id = await createActiveProduct();
     removals.length = 0;
 
-    await patch(id, 'inactive');
-    await patch(id, 'active');
+    await post(id, 'archive');
+    await post(id, 'restore');
     await Promise.all(removals);
 
-    expect(removals, 'the archiving write announced product.archived.v1 to search').toHaveLength(1);
+    expect(removals, 'the Archive action announced product.archived.v1 to search').toHaveLength(1);
     expect(await inIndex(id)).toBe(true);
   }, 60_000);
 
-  it('through the unaudited update path: archive, reactivate at once — the product is indexed', async () => {
+  it('through the service, outside a request: archive, restore at once — the product is indexed', async () => {
     const id = await createActiveProduct();
     removals.length = 0;
     const service = h.container.resolve<CatalogAdminService>('catalogAdminService');
-    const update = (status: 'active' | 'inactive') =>
-      withSystemScope('search archive test — worker-style update', () => service.updateProduct(id, { status }));
+    const run = (action: 'archive' | 'restore') =>
+      withSystemScope('search archive test — worker-style archive', () =>
+        action === 'archive' ? service.archiveProduct(id) : service.restoreProduct(id),
+      );
 
-    await update('inactive');
-    await update('active');
+    await run('archive');
+    await run('restore');
     await Promise.all(removals);
-    // The reactivation's own re-index is not awaited by this path; give it time.
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline && !(await inIndex(id))) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
 
     expect(removals).toHaveLength(1);
     expect(await inIndex(id)).toBe(true);
@@ -160,7 +157,21 @@ describe('search — archiving then reactivating a product leaves it indexed', (
 
   it('an archived product that stays archived is not indexed', async () => {
     const id = await createActiveProduct();
-    await patch(id, 'inactive');
+    await post(id, 'archive');
+    expect(await inIndex(id)).toBe(false);
+  }, 60_000);
+
+  it('a global inactive leaves the index through product.updated.v1 alone (spec 163, FR-010)', async () => {
+    const id = await createActiveProduct();
+    removals.length = 0;
+    const response = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/catalog/products/${id}`,
+      cookies: ADMIN,
+      payload: { status: 'inactive' },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(removals, 'switching off is not archiving').toHaveLength(0);
     expect(await inIndex(id)).toBe(false);
   }, 60_000);
 });
