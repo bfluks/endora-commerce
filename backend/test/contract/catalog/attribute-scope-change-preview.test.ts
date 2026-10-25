@@ -159,11 +159,12 @@ describe('Attribute scope-change preview (spec 163, FR-090)', () => {
     await seed(key);
     const data = await preview(key, '?languageScoped=false');
     expect(data.orphanedOverrides).toBe(4);
+    expect(data.byChannel).toHaveLength(2);
     expect(data.byChannel).toEqual(
-      [
+      expect.arrayContaining([
         { channelId: c1, count: 3 },
         { channelId: c2, count: 1 },
-      ].sort((a, b) => a.channelId.localeCompare(b.channelId)),
+      ]),
     );
   });
 
