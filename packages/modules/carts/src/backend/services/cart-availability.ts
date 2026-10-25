@@ -1,5 +1,6 @@
 import {
-  resolveScopeLanguage,
+  firstLanguageTag,
+  scopeLanguageOf,
   type CatalogProductAvailabilityPort,
   type ProductAudience,
 } from '@endora-commerce/contracts';
@@ -24,10 +25,7 @@ import { currentSalesChannel } from '@endora-commerce/platform/kernel';
 export function basketScopeLanguage(channelId: string, languageTag: string | undefined): string | null {
   const channel = currentSalesChannel();
   if (!channel || channel.id !== channelId) return null;
-  const languages = channel.languages.includes(channel.defaultLanguage)
-    ? channel.languages
-    : [channel.defaultLanguage, ...channel.languages];
-  return resolveScopeLanguage({ id: channel.id, languages, defaultLanguage: channel.defaultLanguage }, languageTag);
+  return scopeLanguageOf(channel, languageTag);
 }
 
 /**
@@ -53,10 +51,5 @@ export async function availableRecords<T extends { id: string }>(
   return records.filter((r) => available.has(r.id));
 }
 
-/** The first `Accept-Language` tag without its quality parameter, or `undefined`. */
-export function firstLanguageTag(header: string | string[] | undefined): string | undefined {
-  const value = Array.isArray(header) ? header[0] : header;
-  if (typeof value !== 'string') return undefined;
-  const first = value.split(',')[0]?.split(';')[0]?.trim();
-  return first === '' ? undefined : first;
-}
+/** The first `Accept-Language` tag without its quality parameter — the one home is `@endora-commerce/contracts`. */
+export { firstLanguageTag };
