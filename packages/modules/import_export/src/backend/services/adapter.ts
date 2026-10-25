@@ -63,6 +63,13 @@ export interface ImportExportAdapter {
   exportHeader: readonly string[];
   /** The entity table as CSV-ready rows, read through the owners' ports. */
   exportRows(): Promise<string[][]>;
+  /**
+   * The whole table, header included, for an entity whose columns depend on the
+   * data — the products file's `status@<channel>` columns (feature 163, FR-092).
+   * When present the export uses it instead of {@link exportHeader} and
+   * {@link exportRows}; `exportHeader` stays the fixed part the screen lists.
+   */
+  exportTable?(): Promise<{ header: string[]; rows: string[][] }>;
   /** Header columns the import expects. Undefined when import is unsupported. */
   importHeader?: readonly string[];
   /**
