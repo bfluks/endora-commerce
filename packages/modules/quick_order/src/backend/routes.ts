@@ -62,6 +62,9 @@ export async function registerQuickOrderRoutes(
       const result = await pipeline.run(parse, {
         maxRows,
         audience: productAudienceOf(request),
+        // Feature 163 — the channel this request resolved, named explicitly:
+        // a buyer paste is never answered by audience alone.
+        salesChannelId: getResolvedChannel(request).id,
       });
       return { data: result };
     },

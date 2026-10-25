@@ -711,12 +711,11 @@ export function registerModule(ctx: ModuleContext): void {
         ({ emFactory }: CatalogCradle) =>
           new CatalogProductFilterService(
             emFactory,
-            // Feature 163 — a feed's scoped floor is effective availability.
-            new ProductAvailabilityService(
-              emFactory,
-              lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
-              lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
-            ),
+            // Feature 163 — a feed's scoped floor is effective availability:
+            // the registered `catalogProductAvailabilityPort` instance (typed as
+            // the service for its `scopeChannel`, as `catalogAttributeReadPort`
+            // is below), never a second one (code review N4).
+            lazyPort<ProductAvailabilityService>(ctx, 'catalogProductAvailabilityPort'),
           ),
       )
       .singleton(),

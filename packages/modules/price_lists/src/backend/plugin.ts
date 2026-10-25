@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
+  CatalogProductAvailabilityPort,
   CustomerAccountReadPort,
   DisplayMode,
   SalesRepAssignmentPort,
@@ -125,6 +126,12 @@ export interface PriceListsModuleOptions {
    * always had, and the manifest declares all of them.
    */
   targetReads: PriceListTargetReads;
+  /**
+   * Feature 163 — `catalogProductAvailabilityPort`, owned by `catalog` (a
+   * declared dependency). The two storefront probes answer only about a product
+   * available at the request's (channel, language) to the caller.
+   */
+  catalogAvailability: CatalogProductAvailabilityPort;
   /**
    * Feature 076 (D-79) — the admin resolved-price probe's customer read. It is
    * not a rule target, so it is its own option rather than a fifth member of
@@ -318,6 +325,7 @@ export function priceListsModule(options: PriceListsModuleOptions): {
         emFactory: options.emFactory,
         catalogProductRead: options.targetReads.catalogProductRead,
         organizationDetails: options.targetReads.organizationDetails,
+        catalogAvailability: options.catalogAvailability,
       });
 
       if (options.enableStatusSweeper !== false) {

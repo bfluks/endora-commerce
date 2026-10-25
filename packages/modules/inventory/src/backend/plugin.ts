@@ -12,13 +12,13 @@ import { ThresholdAdminService } from './services/threshold-admin-service.js';
 import { LowStockAlertService, type InventoryTemplateEmailPort } from './services/low-stock-alert-service.js';
 import { registerInventoryRoutes } from './routes.js';
 import { registerInventoryAdminRoutes } from './routes.admin.js';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import type { SalesChannelResolutionPort } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type {
   CatalogCategoryReadPort,
   CatalogCategoryWritePort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   DictionaryValidator,
@@ -55,12 +55,14 @@ export interface InventoryModuleOptions {
   catalogCategoryWrites: CatalogCategoryWritePort;
   customerAccounts: CustomerAccountReadPort;
   /**
-   * `salesChannelMembershipPort` — the sanctioned bridge accessor
-   * (Constitution XII) the notify-when-available seam narrows against, through
-   * `outOfRequestChannel`. Required for the same reason the four ports above
-   * are: an optional channel gate is a composition that answers without one.
+   * `catalogProductAvailabilityPort`, owned by `catalog` (feature 163) — the
+   * notify-when-available seam and the storefront stock figure answer only
+   * about a product available at the request's (channel, language) to the
+   * caller; membership of the request channel (Constitution XII) is part of
+   * that answer. Required for the same reason the four ports above are: an
+   * optional gate is a composition that answers without one.
    */
-  salesChannelMembership: SalesChannelMembershipPort;
+  catalogAvailability: CatalogProductAvailabilityPort;
   requireCustomer: (req: FastifyRequest, reply: unknown) => Promise<void>;
   resolveCustomerContext: (req: FastifyRequest) => {
     customerAccountId: string;
@@ -171,7 +173,7 @@ export function inventoryModule(options: InventoryModuleOptions): InventoryModul
       options.emFactory,
       options.catalogProducts,
       options.customerAccounts,
-      options.salesChannelMembership,
+      options.catalogAvailability,
       mailer,
       options.templateEmail,
     );
@@ -198,6 +200,7 @@ export function inventoryModule(options: InventoryModuleOptions): InventoryModul
       catalogProducts: options.catalogProducts,
       catalogCategories: options.catalogCategories,
       customerAccounts: options.customerAccounts,
+      catalogAvailability: options.catalogAvailability,
       availabilityService,
       requireCustomer: options.requireCustomer,
       resolveCustomerContext: options.resolveCustomerContext,

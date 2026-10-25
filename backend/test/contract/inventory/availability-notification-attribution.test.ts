@@ -4,8 +4,8 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import type { CatalogProductReadPort, CustomerAccountReadPort } from '@endora-commerce/contracts';
-import { SalesChannel, type SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
+import type { CatalogProductAvailabilityPort, CatalogProductReadPort, CustomerAccountReadPort } from '@endora-commerce/contracts';
+import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { AvailabilityNotification, Product } from '../../helpers/package-entities.js';
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { AvailabilityNotificationService } from '../../../../packages/modules/inventory/src/backend/services/availability-notification-service.js';
@@ -140,13 +140,13 @@ describe('an availability notification carries the organisation of the account t
     const cradle = h.container.cradle as never as {
       catalogProductReadPort: CatalogProductReadPort;
       customerAccountReadPort: CustomerAccountReadPort;
-      salesChannelMembershipPort: SalesChannelMembershipPort;
+      catalogProductAvailabilityPort: CatalogProductAvailabilityPort;
     };
     const service = new AvailabilityNotificationService(
       h.em,
       cradle.catalogProductReadPort,
       cradle.customerAccountReadPort,
-      cradle.salesChannelMembershipPort,
+      cradle.catalogProductAvailabilityPort,
     );
 
     const row = await service.subscribe({
