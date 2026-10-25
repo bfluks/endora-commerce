@@ -408,7 +408,12 @@ export async function registerCatalogPublicRoutes(
   });
 }
 
-function readContext(request: FastifyRequest): {
+/**
+ * The catalogue's request context: the resolved channel, the request language and
+ * the audience from the session. Exported for the URL-key resolve route (feature
+ * 163), which must read a request exactly as the product page does.
+ */
+export function readContext(request: FastifyRequest): {
   resolvedChannel: {
     id: string;
     code: string;
