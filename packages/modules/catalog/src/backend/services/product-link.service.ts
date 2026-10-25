@@ -18,6 +18,7 @@ import { ProductLink, type ProductLinkKind } from '../entities/product-link.enti
 import { resolvePrimaryAssetUrls } from './primary-asset-url.js';
 import { viewerOrganizationFor } from './viewer-organization.js';
 import { availableAmong, toScopeChannel } from './product-availability.service.js';
+import { loadEffectiveKeys } from './url-key-resolution.service.js';
 import {
   effectiveSystemText,
   loadChannelOverridesByProduct,
@@ -384,9 +385,10 @@ export class ProductLinkService {
       );
     }
     const scopeChannel = toScopeChannel({ id: channel.id, languages: channel.languages, defaultLanguage });
+    const scopeLanguage = resolveScopeLanguage(scopeChannel, ctx.preferredLanguage);
     const visibleIds = await availableAmong(em, this.#requireChannelMembership(), targets, {
       channel: scopeChannel,
-      languageCode: resolveScopeLanguage(scopeChannel, ctx.preferredLanguage),
+      languageCode: scopeLanguage,
       audience: ctx.audience,
       now: new Date(),
     });
@@ -434,6 +436,8 @@ export class ProductLinkService {
       visibleTargets.map((t) => t.id),
       channel.id,
     );
+    // Feature 163 (R28) — a tile links to the target's effective key at (C, L).
+    const effectiveKeys = await loadEffectiveKeys(em, visibleTargets, { id: channel.id, languages: [scopeLanguage] });
     const overrideCtx = {
       channelId: channel.id,
       // The tile's own `pickLang` has no channel-default leg, so neither has
@@ -462,7 +466,7 @@ export class ProductLinkService {
         product: {
           id: target.id,
           sku: target.sku,
-          slug: target.slug,
+          slug: effectiveKeys.get(target.id)?.get(scopeLanguage) ?? target.slug,
           name,
           primaryAssetUrl: assetUrlByProductId.get(target.id) ?? null,
           price,

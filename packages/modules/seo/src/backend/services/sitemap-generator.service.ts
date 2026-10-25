@@ -5,6 +5,7 @@ import {
   isProductVisibleTo,
   productPath,
   type CatalogProductAvailabilityPort,
+  type CatalogProductUrlKeyReadPort,
   type CatalogCategoryReadPort,
   type CatalogProductReadPort,
   type ChannelMemberEntityType,
@@ -92,6 +93,12 @@ export class SitemapGeneratorService {
      * audience. A sitemap lists what an anonymous crawler may open, now.
      */
     private readonly availability: Pick<CatalogProductAvailabilityPort, 'describeChannelAvailability'>,
+    /**
+     * Feature 163 (R28, FR-074) — `catalog`'s effective URL key per channel
+     * language: a product's URL in a language is its key there, not its global
+     * key (a key is valid only in its own language, K1).
+     */
+    private readonly urlKeys: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>,
     options: SitemapGeneratorOptions = {},
   ) {
     this.staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
@@ -162,6 +169,11 @@ export class SitemapGeneratorService {
       .filter((page) => page.status === 'published' && page.active)
       .sort((a, b) => a.slug.localeCompare(b.slug));
 
+    const keys = products.length === 0 ? new Map<string, Map<string, string>>() : await this.urlKeys.effectiveKeys(
+      products.map((p) => p.id),
+      channel.id,
+    );
+
     const urls: SitemapUrl[] = [];
     for (const c of categories) {
       urls.push({
@@ -180,11 +192,13 @@ export class SitemapGeneratorService {
       });
     }
     for (const p of products) {
-      // The key stays the slug until URL keys per language land (Phase 17);
-      // `productPath` is the one place a product URL is composed.
+      // One URL per live language (FR-074), each on the product's effective key
+      // in that language; `productPath` is the one place a product URL is composed.
+      const productKeys = keys.get(p.id);
       for (const languageCode of availability.get(p.id)?.liveLanguages ?? []) {
+        const key = productKeys?.get(languageCode) ?? p.slug;
         urls.push({
-          loc: `${baseUrl}${productPath({ key: p.slug, languageCode, channelDefaultLanguage: channel.defaultLanguage })}`,
+          loc: `${baseUrl}${productPath({ key, languageCode, channelDefaultLanguage: channel.defaultLanguage })}`,
           lastmod: p.updatedAt,
           changefreq: 'daily',
           priority: 0.8,
@@ -211,6 +225,21 @@ export class SitemapGeneratorService {
     }
     await em.flush();
     return { payload, generatedAt: now };
+  }
+
+  /**
+   * Feature 163 (security review, carry 4) — a product's availability changed in
+   * a way a sitemap lists: its scoped status, its publication window (the window
+   * sweep announces each bound it crosses), its audience or its URL keys. Every
+   * channel's cached document is marked stale, so the next serve regenerates it
+   * instead of advertising — for up to the staleness window — a URL that no
+   * longer opens, or omitting one that just started to. Which channels the
+   * product is in is not asked: the regeneration is lazy and per channel.
+   */
+  async markAllStale(): Promise<void> {
+    // command-coverage-ignore: a derived cache's staleness stamp — no operator
+    // write, nothing to audit; the document is rebuilt from catalog's answer.
+    await this.emFactory().nativeUpdate(SitemapCache, {}, { generatedAt: new Date(0) });
   }
 
   async getStatusForChannel(salesChannelCode: string): Promise<SitemapStatus> {

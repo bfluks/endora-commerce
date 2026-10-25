@@ -337,6 +337,8 @@ describe('seo — the sitemap reads memberships through the sanctioned bridge ac
             ]),
           ),
       },
+      // Feature 163 (T112) — no URL-key rows: every key is the product's global key.
+      { effectiveKeys: async () => new Map() },
       { baseUrl: 'https://shop.test', staleAfterMs: 0 },
     );
 
@@ -375,11 +377,58 @@ describe('seo — the sitemap reads memberships through the sanctioned bridge ac
       { findByIds: async () => [] } as unknown as CatalogCategoryReadPort,
       { findByIds: async () => [] } as unknown as CmsPageReadPort,
       { describeChannelAvailability: async () => new Map() },
+      { effectiveKeys: async () => new Map() },
       { baseUrl: 'https://shop.test', staleAfterMs: 0 },
     );
 
     await service.regenerateForChannel('web');
 
     expect(received).toBe(1200);
+  });
+
+  it('emits one URL per live language with the effective key there, `?lang` off the default (163 T112, FR-074)', async () => {
+    const membership = membershipStub({ product: ['p-1'] }, []);
+    const askedFor: Array<{ ids: readonly string[]; channelId: string }> = [];
+    const service = new SitemapGeneratorService(
+      fakeEm({ SalesChannel: CHANNEL, SitemapCache: null }),
+      new StorefrontAddressService(null, { fallbackUrl: 'https://shop.test' }),
+      membership,
+      {
+        findByIds: async (ids: readonly string[]) => ids.map((id) => productRecord(id, { slug: 'drill' })),
+      } as unknown as CatalogProductReadPort,
+      { findByIds: async () => [] } as unknown as CatalogCategoryReadPort,
+      { findByIds: async () => [] } as unknown as CmsPageReadPort,
+      {
+        describeChannelAvailability: async (ids: readonly string[]) =>
+          new Map(
+            ids.map((id) => [
+              id,
+              {
+                // Live in en-US and pl-PL; de-DE is off, so it gets no URL even with a key.
+                liveLanguages: ['en-US', 'pl-PL'],
+                window: { from: null, until: null },
+                audience: { visibility: 'public' as const, allowedOrganizationIds: [] },
+              },
+            ]),
+          ),
+      },
+      {
+        effectiveKeys: async (ids: readonly string[], channelId: string) => {
+          askedFor.push({ ids, channelId });
+          return new Map([
+            ['p-1', new Map([['en-US', 'drill'], ['pl-PL', 'wiertarka'], ['de-DE', 'bohrer']])],
+          ]);
+        },
+      },
+      { baseUrl: 'https://shop.test', staleAfterMs: 0 },
+    );
+
+    const { payload } = await service.regenerateForChannel('web');
+
+    expect(askedFor).toEqual([{ ids: ['p-1'], channelId: 'chan-1' }]);
+    expect(payload).toContain('<loc>https://shop.test/p/drill</loc>');
+    expect(payload).toContain('<loc>https://shop.test/p/wiertarka?lang=pl-PL</loc>');
+    expect(payload).not.toContain('bohrer');
+    expect(payload).not.toContain('/p/drill?lang=pl-PL');
   });
 });
