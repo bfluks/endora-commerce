@@ -198,13 +198,14 @@ export function isProductEffectivelyAvailable(input: ProductAvailabilityInput): 
  * The (channel, language) pairs an edit turns on — the completeness gate's subject
  * (R18, N3).
  *
- * **Status only (owner decision M3 → A, 2026-10-22).** A pair is returned when the
- * product's effective status there goes from off to on; the window and the audience
- * are not compared. `channels` is the product's member channels with their languages
- * *after* the write and serves both snapshots, so neither a membership change nor a
- * channel gaining a language produces a pair on its own. Archiving is the global
- * `inactive` and switches the product off everywhere, so un-archiving counts as
- * turning on wherever an override was already active.
+ * **Status only (owner decision M3 → A, 2026-10-22; FR-060).** A pair is returned
+ * when the product's effective status there goes from off to on; the window, the
+ * audience and archiving are not compared. `channels` is the product's member
+ * channels with their languages *after* the write and serves both snapshots, so
+ * neither a membership change nor a channel gaining a language produces a pair on
+ * its own. Archiving is not a status (spec Session 2026-10-25): setting an archived
+ * product `active` turns its pairs on, and a Restore — `archivedAt` alone moving —
+ * turns nothing on.
  */
 export function pairsTurningOn(
   before: ScopeSnapshot,
@@ -224,7 +225,7 @@ export function pairsTurningOn(
 
 function statusOnAt(snapshot: ScopeSnapshot, channelId: string, languageCode: string): boolean {
   const { global } = snapshot;
-  if (global.deletedAt !== null || global.archivedAt !== null) return false;
+  if (global.deletedAt !== null) return false;
   const channelRow = snapshot.channelRows.find((row) => row.channelId === channelId);
   const clRow = snapshot.languageRows.find(
     (row) => row.channelId === channelId && row.languageCode === languageCode,
