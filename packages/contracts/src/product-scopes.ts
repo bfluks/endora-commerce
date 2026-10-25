@@ -371,9 +371,7 @@ export interface ProductScopeWriteResult {
 }
 
 /**
- * Owner: `catalog` (R17). Not registered yet: feature 163 publishes it as
- * `catalogProductScopeWritePort` with its implementation (T122), and the
- * container-name marker arrives with that registration.
+ * Container name: `catalogProductScopeWritePort`. Owner: `catalog` (R17).
  *
  * Scoped writes for imports and connectors. Writes only the scopes named, so writing
  * global values removes no operator override (FR-091); never runs the completeness

@@ -41,6 +41,7 @@ import type {
   CatalogQuickSearchPort,
   CatalogProductAvailabilityPort,
   CatalogProductUrlKeyReadPort,
+  CatalogProductScopeWritePort,
   SeoProductMetaPort,
   InventoryProductThresholdWritePort,
   SearchQueryPort,
@@ -94,6 +95,8 @@ import { CatalogAdminService } from './services/catalog-admin.service.js';
 import { CatalogBulkImportService } from './services/catalog-bulk-import.service.js';
 import { ProductAvailabilityService } from './services/product-availability.service.js';
 import { ProductUrlKeyReadService } from './services/url-key-resolution.service.js';
+import { ProductScopesService } from './services/product-scopes.service.js';
+import { UrlKeyService } from './services/url-key.service.js';
 import {
   PublicationWindowSweep,
   startPublicationWindowSweep,
@@ -117,6 +120,7 @@ import { AttributeValueKeyService } from './services/attribute-value-key.service
 import type { CatalogAttributeValueKeyApi } from '../ports/index.js';
 import {
   createCatalogCategoryWritePort,
+  createCatalogProductScopeWritePort,
   createCatalogProductWritePort,
   createCatalogPromoAttributePort,
 } from './services/catalog-write-ports.js';
@@ -811,10 +815,12 @@ export function registerModule(ctx: ModuleContext): void {
     'catalogBulkImportPort',
     ctx
       .asFunction(
-        ({ commandBus }: CatalogCradle) =>
+        ({ commandBus, emFactory, eventBus }: CatalogCradle) =>
           new CatalogBulkImportService(
             commandBus,
             lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+            // Feature 163 (FR-092) — the scoped-status columns of the products file.
+            { emFactory, eventBus },
           ),
       )
       .singleton(),
@@ -884,6 +890,27 @@ export function registerModule(ctx: ModuleContext): void {
             lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
           ),
       )
+      .singleton(),
+  );
+
+  /**
+   * Feature 163 (R17) — the scoped write of connectors and importers: only the
+   * scopes named are written (FR-091); a URL key another product holds is
+   * reported, never taken over (FR-093). Through the operator's own services and
+   * Commands, so validation, audit and events are theirs.
+   */
+  ctx.di.providePort<CatalogProductScopeWritePort>(
+    'catalogProductScopeWritePort',
+    ctx
+      .asFunction(({ emFactory, commandBus }: CatalogCradle) => {
+        const membership = lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort');
+        const scopes = new ProductScopesService(emFactory, membership, commandBus);
+        const urlKeys = new UrlKeyService(emFactory, membership, commandBus);
+        return createCatalogProductScopeWritePort(
+          () => scopes,
+          () => urlKeys,
+        );
+      })
       .singleton(),
   );
 
