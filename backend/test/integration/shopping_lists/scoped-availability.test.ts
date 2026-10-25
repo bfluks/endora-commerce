@@ -49,7 +49,7 @@ describe('163 — shopping lists honour scoped availability [integration]', () =
     off = await createMinimumProduct(em, { sku: `S163-SL-OFF-${RUN}`, nameEn: 'Off', namePl: 'Wył', channelIds: channels });
     on = await createMinimumProduct(em, { sku: `S163-SL-ON-${RUN}`, nameEn: 'On', namePl: 'Wł', channelIds: channels });
     goesOff = await createMinimumProduct(em, { sku: `S163-SL-GO-${RUN}`, nameEn: 'Goes', namePl: 'Idzie', channelIds: channels });
-    await setChannelStatus(em, off.id, channels, 'draft');
+    await setChannelStatus(em, off.id, channels, 'inactive');
   }, 60_000);
 
   afterAll(async () => {

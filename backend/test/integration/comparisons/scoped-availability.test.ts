@@ -46,7 +46,7 @@ describe('163 — comparisons honour scoped availability [integration]', () => {
     channels = await buyerChannelIds(em);
     off = await createMinimumProduct(em, { sku: `S163-CMP-OFF-${RUN}`, nameEn: 'Off', namePl: 'Wył', channelIds: channels });
     on = await createMinimumProduct(em, { sku: `S163-CMP-ON-${RUN}`, nameEn: 'On', namePl: 'Wł', channelIds: channels });
-    await setChannelStatus(em, off.id, channels, 'draft');
+    await setChannelStatus(em, off.id, channels, 'inactive');
   }, 60_000);
 
   afterAll(async () => {

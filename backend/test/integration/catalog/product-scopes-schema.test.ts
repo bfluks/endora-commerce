@@ -60,7 +60,7 @@ async function insertChannel(em: EntityManager): Promise<string> {
 async function insertChannelRow(em: EntityManager, productId: string, channelId: string): Promise<void> {
   await em.execute(
     `insert into "product_channel_scopes" ("product_id", "sales_channel_id", "status", "created_at", "updated_at")
-     values (?, ?, 'draft', now(), now())`,
+     values (?, ?, 'inactive', now(), now())`,
     [productId, channelId],
   );
 }
@@ -101,7 +101,7 @@ describe('163 — product scope tables [integration]', () => {
       [productId, channelId],
     );
     expect(rows[0]).toEqual({
-      status: 'draft',
+      status: 'inactive',
       window_overridden: false,
       publish_from: null,
       publish_until: null,
@@ -206,7 +206,7 @@ describe('163 — product scope tables [integration]', () => {
     await expectRefused(
       em,
       `insert into "product_channel_language_scopes" ("product_id", "sales_channel_id", "language_code", "status", "created_at", "updated_at")
-       values (?, ?, 'de-DE', 'draft', now(), now())`,
+       values (?, ?, 'de-DE', 'inactive', now(), now())`,
       [productId, channelId],
       'product_channel_language_scopes_pkey',
     );
