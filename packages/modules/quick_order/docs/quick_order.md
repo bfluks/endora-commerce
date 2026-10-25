@@ -27,6 +27,10 @@ normalized to the same row model and validated against the catalog:
   per-row reason: `sku_missing`, `quantity_invalid`, `product_not_found`,
   `product_archived`, `malformed_row`, `variant_not_resolved`,
   `variant_ambiguous`, `row_limit_exceeded`, `below_minimum`) plus a `summary`.
+  `product_archived` means the product is archived (the catalogue's Archive
+  action), whatever its status; a product that is merely switched off for the
+  buyer's channel answers `product_not_found`, like any product the buyer cannot
+  order there.
 - Duplicate SKUs are merged (quantities summed); rows beyond
   `quick_order.import_max_rows` are rejected. The setting is clamped to
   **1–10 000** whatever its stored value.
