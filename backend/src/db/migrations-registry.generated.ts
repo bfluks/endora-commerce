@@ -367,6 +367,7 @@ import { Migration20260501T123145SearchPhraseRecordsInit } from '@endora-commerc
 
 // ── seo ─────────────────────────────────────────────────────────────────────
 import { Migration20260425T154404SeoInit } from '@endora-commerce/mod-seo/migrations';
+import { Migration20261025T215911SeoMetaOverrideChannelScope } from '@endora-commerce/mod-seo/migrations';
 
 // ── shipments ───────────────────────────────────────────────────────────────
 import { Migration20260817T194652ShipmentsOrderFk } from '@endora-commerce/mod-shipments/migrations';
@@ -735,6 +736,7 @@ export const MIGRATION_REGISTRY: readonly MigrationRegistryEntry[] = [
 
   // ── seo ─────────────────────────────────────────────────────────────────────
   migration('seo', Migration20260425T154404SeoInit),
+  migration('seo', Migration20261025T215911SeoMetaOverrideChannelScope),
 
   // ── shipments ───────────────────────────────────────────────────────────────
   migration('shipments', Migration20260817T194652ShipmentsOrderFk),
