@@ -17,7 +17,6 @@ import {
   convertCartToQrSchema,
   ERROR_CODES,
   OrganizationCannotTransactError,
-  pickLocalized,
   type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
@@ -30,6 +29,7 @@ import type { CartCouponService } from './services/cart-coupon-service.js';
 import type { CartConversionService } from './services/cart-conversion-service.js';
 import type { CartPricingRecompute, RecomputeRefusal } from './services/cart-pricing-recompute.js';
 import { agreementOf } from './services/cart-line-pricing.js';
+import { productMetaOf, type ProductMeta } from './services/cart-line-meta.js';
 import { derivePrimaryCta } from './services/cart-state-machine.js';
 import {
   evaluateCartViewMinimums,
@@ -288,7 +288,14 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
         languageCode: basketScopeLanguage(actor.salesChannelId, actor.languageTag),
       },
     );
-    const productMeta = productMetaOf(records, preferredLanguage, effectiveNames);
+    // Feature 163 (S1 = A) — an unavailable line keeps its name and SKU and
+    // loses its slug: its product page answers 404 here.
+    const productMeta = productMetaOf(
+      records,
+      preferredLanguage,
+      new Set(products.map((p) => p.id)),
+      effectiveNames,
+    );
     const minimumViews = await evaluateCartViewMinimums(
       deps.catalogProducts,
       { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
@@ -802,11 +809,6 @@ function serializeCartMini(cart: Cart, items: CartItem[]) {
  * unavailable at their stored price; the mutation answers pass neither and
  * return the stored `unitPrice`.
  */
-interface ProductMeta {
-  name: string;
-  slug: string;
-  sku: string | null;
-}
 
 function serializeCart(
   cart: Cart,
@@ -936,29 +938,6 @@ async function loadCartProducts(
 ): Promise<CatalogProductRecord[]> {
   if (productIds.length === 0) return [];
   return catalogProducts.findByIds(Array.from(new Set(productIds)));
-}
-
-/**
- * Per-product display metadata, the name resolved from the record's per-locale
- * `name` in the response's language, through the `pickLocalized` fallback chain.
- * A product without a record has no entry (the serializer treats it as an
- * unknown name and the storefront falls back to the productId).
- */
-function productMetaOf(
-  products: readonly CatalogProductRecord[],
-  preferredLanguage: string | undefined,
-  /** Feature 163 — the effective names at the basket's (channel, language), where known. */
-  effectiveNames: ReadonlyMap<string, string> = new Map(),
-): Map<string, ProductMeta> {
-  const meta = new Map<string, ProductMeta>();
-  for (const p of products) {
-    meta.set(p.id, {
-      name: effectiveNames.get(p.id) || pickLocalized(p.name, preferredLanguage),
-      slug: p.slug,
-      sku: p.sku,
-    });
-  }
-  return meta;
 }
 
 declare const crypto: { randomUUID: () => string };
