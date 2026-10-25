@@ -126,7 +126,7 @@ all ─► P24 (off-state, parity, docs, changesets) ─► P25 (final gate)
 ```
 
 `catalog-query.service.ts` is edited by P5, P8, P17 (with 9c), P18, P12, P21, P22: those phases run **in
-sequence**, in that order (Block Q keeps its one edit of that file — the 410 condition — in 9c, which S2 does
+sequence** (Block Q keeps its one edit of that file — the 410 condition — in 9c, which S2 does
 inside P17 beside T110's edit of the same method; 9a–9b do not touch it).
 S2 starts P17 only after Block B is merged and rebases onto S1's tip first; while P17–P18 run, S1's P12,
 P21 and P22 wait (S1 works on P9–P11 meanwhile, which do not touch that file).
@@ -736,10 +736,12 @@ review checkpoint C:
 - [ ] T111 [US7] [S2] `ProductSummary.slug` = effective key at (C, L) on listing and PDP (R28); `catalogProductUrlKeyReadPort` provided
 - [ ] T112 [US7] [S2] Sitemap: one `<loc>` per live language with effective key, composed by `productPath()` — `seo/src/backend/services/sitemap-generator.service.ts`
 - [ ] T113 [US7] [S2] Storefront PDP + metadata using the backend's ready `path` / `paths` (the storefront does not know the channel default language, so it never calls `productPath()` itself) — `storefront/app/(catalog)/p/[slug]/page.tsx`, `storefront/lib/api/catalog.ts`. *(Q-B is decided as option C, a separate issue: no cross-language rendering task belongs here; the path prefix later replaces `productPath()`.)*
+- **Phase 9c belongs to this phase** (coordinator, 2026-10-25): T156s (RED) then T156t, after T110 and once 9a is on S2's base — see *Phase 9c* under Block Q for the tasks and the ownership exception.
 
 **Verification** (one invocation per line):
 - `[PG] backend/test/integration/catalog/url-key-resolution.test.ts`
 - `[PG] backend/test/integration/catalog/url-redirects-seo-off.test.ts`
+- `[PG] backend/test/contract/catalog/scoped-availability-matrix.test.ts` (Phase 9c, T156s)
 - `[PG] backend/test/contract/seo/sitemap.test.ts`
 - `pnpm --filter storefront exec vitest run test/catalog/pdp-redirect.test.ts`
 - `pnpm --filter storefront run typecheck`
@@ -790,7 +792,8 @@ review checkpoint C:
 
 > **Review checkpoint E** — code review + security review on Phases 16–19 (focus: advisory-lock ordering,
 > takeover authorisation (operator only), redirect open-redirect safety — targets are always the
-> platform's own `/p/<key>`, never stored URLs — and SEO-off behaviour).
+> platform's own `/p/<key>`, never stored URLs — SEO-off behaviour, and Phase 9c's 410 condition: `archivedAt`
+> only, and 410 only where FR-005 / O-3 allows, 404 elsewhere).
 
 ---
 
