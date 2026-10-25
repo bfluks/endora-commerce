@@ -262,6 +262,19 @@ describe('URL-key resolution at (C, L) (spec 163, T107)', () => {
     }
   });
 
+  it('T156s/T156t: an `inactive` product that is not archived answers the absent 404, by key and by id', async () => {
+    const p = await insertProduct(k('inactive-only'));
+    await sql(`update products set status = 'inactive', archived_at = null where id = ?`, [p]);
+    await expectAbsent(k('inactive-only'), c1, 'en-US');
+    const byId = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/catalog/products/${p}`,
+      headers: { 'x-sales-channel': c1.code, 'accept-language': 'en-US' },
+    });
+    expect(byId.statusCode, byId.body).toBe(404);
+    expect(errorBodyOf(byId)).toEqual(absentBody);
+  });
+
   it('H1: a language-less redirect resolves in every language, also after its product gains its first L key', async () => {
     const q = await insertProduct(k('s0'));
     // s0 → s1 writes `(NULL, s0)`; only then does Q get its first pl-PL key.
