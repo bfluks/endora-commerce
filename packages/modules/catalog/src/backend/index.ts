@@ -40,6 +40,7 @@ import type {
   CatalogPromoAttributePort,
   CatalogQuickSearchPort,
   CatalogProductAvailabilityPort,
+  CatalogProductUrlKeyReadPort,
   InventoryProductThresholdWritePort,
   SearchQueryPort,
   SearchReindexPort,
@@ -91,6 +92,7 @@ import type { CustomFieldDefinitionApplyApi } from './commands/attribute-command
 import { CatalogAdminService } from './services/catalog-admin.service.js';
 import { CatalogBulkImportService } from './services/catalog-bulk-import.service.js';
 import { ProductAvailabilityService } from './services/product-availability.service.js';
+import { ProductUrlKeyReadService } from './services/url-key-resolution.service.js';
 import {
   PublicationWindowSweep,
   startPublicationWindowSweep,
@@ -847,6 +849,24 @@ export function registerModule(ctx: ModuleContext): void {
             emFactory,
             lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
             lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
+          ),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Feature 163 (R28) — the effective URL key per channel language of each
+   * product a channel carries, for whole-channel readers (`seo`'s sitemap). Every
+   * product URL those readers emit is then `productPath()` over this key.
+   */
+  ctx.di.providePort<CatalogProductUrlKeyReadPort>(
+    'catalogProductUrlKeyReadPort',
+    ctx
+      .asFunction(
+        ({ emFactory }: CatalogCradle) =>
+          new ProductUrlKeyReadService(
+            emFactory,
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
           ),
       )
       .singleton(),
