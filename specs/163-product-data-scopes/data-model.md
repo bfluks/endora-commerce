@@ -20,7 +20,8 @@ another module's table (`check:module-boundary` R2).
 Foreign keys to `sales_channels` (a kernel table) need no manifest edge beyond the `sales_channels`
 dependency catalog already declares (`packages/modules/catalog/src/manifest.ts`); `seo`'s manifest is
 checked by `test/unit/db/fk-dependency-drift.test.ts` in its phase. **No backfill anywhere** (R21) —
-**except** the `draft` → `inactive` data conversion of §13 (Session 2026-10-25, Q1-b).
+**except** the `draft` → `inactive` conversion and the `archived_at` backfill of today's `inactive` rows,
+§13 (Session 2026-10-25, Q1-b, O-4).
 
 ---
 
@@ -226,7 +227,7 @@ scope language (N2) and are never re-resolved.
 
 `BulkUpdateProductsRequest.fields.scopedStatus?: { channelId: uuid; languageCode: string | null; value:
 'active' | 'inactive' | 'inherit' }`; result reasons gain `scope_invalid`, `completeness_gate`. A `draft`
-value in `fields.status` or `fields.scopedStatus` is refused by the schema (FR-112). Bulk Archive / Restore
+or `archived` value in `fields.status` or `fields.scopedStatus` is refused by the schema (FR-112, O-1). Bulk Archive / Restore
 (FR-053) are bulk-operation kinds of their own on the same path; their payload shape is the architect's (§14).
 Revert records store the per-product before-state of the one scope row touched.
 
@@ -260,16 +261,16 @@ searchable attributes.
 
 | Target | Rule |
 | --- | --- |
-| `products.status` | `update products set status = 'inactive' where status = 'draft'` — `archived_at` **not** written |
+| `products.status` | `update products set status = 'inactive' where status = 'draft'` — `archived_at` **not** written (no `draft` product becomes archived) |
 | `product_channel_scopes.status` | `draft` → `inactive`; `NULL` (inherit) untouched |
 | `product_channel_language_scopes.status` | `draft` → `inactive` |
-| `products.status` rows already `inactive` | unchanged, `archived_at` unchanged (Q1-c) — they stay archived where `archived_at` is set (open question O-4 in `spec.md` for rows without it) |
+| `products.status` rows already `inactive` | status unchanged and the row stays archived (Q1-c): a set `archived_at` is kept; where `archived_at` is null it is set to the row's `updated_at` (owner O-4, 2026-10-25) — `update products set archived_at = updated_at where status = 'inactive' and archived_at is null`, run **before** the `draft` conversion so converted rows are never caught |
 | `products.status` default | `inactive` (entity default and column default); a duplicate is always `inactive` with `archived_at` cleared (Q1-d) |
 | `CHECK` on both scope tables | `status in ('active','inactive')` (`product_channel_scopes` admits `NULL` as inherit) |
 | `CHECK` on `products.status` | if the column carries one, rewritten to `('active','inactive')`; else the value set is enforced by `productStatusSchema` alone (architect to confirm) |
 
-Order inside the migration: convert the data first, then replace the `CHECK`s, so no row violates the new
-constraint. The `down` direction cannot tell a converted `draft` from an original `inactive`; it restores
+Order inside the migration: backfill `archived_at` on today's `inactive` rows, then convert `draft`, then
+replace the `CHECK`s, so no converted row is archived and no row violates the new constraint. The `down` direction cannot tell a converted `draft` from an original `inactive`; it restores
 the three-value `CHECK`s only and leaves the data as `inactive`.
 
 **Architect decision (not decided here):** the scope tables' `CHECK`s were created by
