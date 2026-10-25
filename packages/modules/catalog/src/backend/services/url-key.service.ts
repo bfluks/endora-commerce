@@ -11,7 +11,7 @@ import {
 import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
-import { SalesChannel } from '@endora-commerce/platform/kernel';
+import { SalesChannel, effectiveState } from '@endora-commerce/platform/kernel';
 import { Product } from '../entities/product.entity.js';
 import { ProductUrlKey } from '../entities/product-url-key.entity.js';
 import { ProductUrlRedirect } from '../entities/product-url-redirect.entity.js';
@@ -532,6 +532,11 @@ export class UrlKeyService {
     private readonly emFactory: () => EntityManager,
     private readonly membership: SalesChannelMembershipPort,
     private readonly commandBus?: CommandBus,
+    /**
+     * Whether `seo` is effectively present: it decides whether redirects are part
+     * of the answer (Q-C, Constitution XVII). Writes never ask it.
+     */
+    private readonly seoPresent: () => boolean = () => effectiveState.isPresent('seo'),
   ) {}
 
   /** `GET /admin/catalog/products/:id/url-keys` (§1). */
@@ -575,6 +580,9 @@ export class UrlKeyService {
       }
     }
 
+    // Q-C: the redirect list is `seo`'s surface — omitted while it is off. The rows
+    // stay, keep reserving their keys, and come back with it (FR-111).
+    const listRedirects = this.seoPresent();
     return {
       globalKey: product.slug,
       languageKeys: languageKeys.map((row) => ({ languageCode: row.languageCode, key: row.key })),
@@ -588,16 +596,18 @@ export class UrlKeyService {
         };
       }),
       effective,
-      // Q-C: hidden while `seo` is off — the presence probe lands with the declared
-      // `seoProductMetaPort` edge (T110, T118b); until then the list is always present.
-      redirects: redirects
-        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.key.localeCompare(b.key))
-        .map((row) => ({
-          id: row.id,
-          languageCode: row.languageCode ?? null,
-          key: row.key,
-          createdAt: row.createdAt.toISOString(),
-        })),
+      ...(listRedirects
+        ? {
+            redirects: redirects
+              .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.key.localeCompare(b.key))
+              .map((row) => ({
+                id: row.id,
+                languageCode: row.languageCode ?? null,
+                key: row.key,
+                createdAt: row.createdAt.toISOString(),
+              })),
+          }
+        : {}),
     };
   }
 
