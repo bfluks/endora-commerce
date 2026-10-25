@@ -25,7 +25,6 @@ export const CATEGORY_ADMIN_SEARCH_FIELDS: readonly AdminSearchFieldDescriptor[]
 ];
 
 export const PRODUCT_ADMIN_SEARCH_STATUS_KEYS: Readonly<Record<string, string>> = {
-  draft: 'adminSearch.product.status.draft',
   active: 'adminSearch.product.status.active',
   inactive: 'adminSearch.product.status.inactive',
 };
@@ -86,7 +85,7 @@ function forward(query: AdminSearchProviderQuery): CatalogAdminSearchQuery {
 
 /**
  * The Product provider. Visibility is the product list's: `catalog:read`, and
- * every product that is not deleted — drafts and inactive ones included, with
+ * every product that is not deleted — inactive and archived ones included, with
  * their status (FR-016).
  */
 export function createProductAdminSearchProvider(deps: ProductAdminSearchProviderDeps): AdminSearchProvider {
