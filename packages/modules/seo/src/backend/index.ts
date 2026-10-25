@@ -3,6 +3,7 @@ import type {
   CatalogCategoryReadPort,
   CatalogProductAvailabilityPort,
   CatalogProductReadPort,
+  CatalogProductUrlKeyReadPort,
   CmsPageReadPort,
   SeoMetaWritePort,
   SettingWriteValidatorRegistryPort,
@@ -56,6 +57,14 @@ import { SitemapCache } from './entities/sitemap-cache.entity.js';
  * `auditLog` stops being optional: SEO overrides are admin writes, and an
  * optional audit sink defaults to not recording.
  */
+
+/** The `product.updated.v1` fields that change what a sitemap lists (feature 163, R10). */
+const SITEMAP_PRODUCT_FIELDS: ReadonlySet<string> = new Set([
+  'scopedStatus',
+  'publicationWindow',
+  'audience',
+  'urlKeys',
+]);
 
 export interface SeoCradle {
   readonly emFactory: () => EntityManager;
@@ -132,6 +141,8 @@ export function registerModule(ctx: ModuleContext): void {
             lazyPort<CmsPageReadPort>(ctx, 'cmsPageReadPort'),
             // Feature 163 — what is available to a crawler, per channel language.
             lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
+            // Feature 163 — each product's URL key per channel language.
+            lazyPort<CatalogProductUrlKeyReadPort>(ctx, 'catalogProductUrlKeyReadPort'),
             sitemapOptions,
           ),
       )
@@ -154,6 +165,19 @@ export function registerModule(ctx: ModuleContext): void {
       }))
       .singleton(),
   );
+
+  /**
+   * Feature 163 (security review, carry 4) — a sitemap lists what an anonymous
+   * crawler may open now, so a change to that answer marks the cached documents
+   * stale: the scoped status, the publication window (the catalogue's window
+   * sweep emits `publicationWindow` for every bound it crosses), the audience and
+   * the URL keys. `ctx.subscribe` gates the handler on this module's presence.
+   */
+  ctx.subscribe('product.updated.v1', async (payload) => {
+    const { changedFields } = payload as { changedFields?: readonly string[] };
+    if (!changedFields?.some((field) => SITEMAP_PRODUCT_FIELDS.has(field))) return;
+    await ctx.cradle<SeoCradle>().seoSitemapService.markAllStale();
+  });
 
   ctx.routes(async (app) => {
     const { seoMetaResolver, seoSitemapService, seoCrawlerFilePreview, requireAdmin } =

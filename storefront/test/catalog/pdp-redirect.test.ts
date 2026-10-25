@@ -43,7 +43,7 @@ const catalogApi = vi.hoisted(() => ({
 }));
 vi.mock('../../lib/api/catalog', () => catalogApi);
 
-const { productIdForKey, metadataAlternates } = await import('../../app/(catalog)/p/[slug]/resolution');
+const { productIdForKey, alternateLanguages, requestedLanguage } = await import('../../app/(catalog)/p/[slug]/resolution');
 
 const ctx = { salesChannelCode: 'b2b', locale: 'pl-PL' };
 
@@ -99,24 +99,31 @@ describe('productIdForKey', () => {
   });
 });
 
-describe('metadataAlternates', () => {
-  it('takes the canonical and the language alternates from the response paths', () => {
+describe('alternateLanguages', () => {
+  it('maps each alternate the backend sent to its language, verbatim', () => {
     expect(
-      metadataAlternates({
+      alternateLanguages({
         canonical: '/p/wiertarka?lang=pl-PL',
         alternates: [
           { languageCode: 'en-US', path: '/p/drill' },
           { languageCode: 'pl-PL', path: '/p/wiertarka?lang=pl-PL' },
         ],
       }),
-    ).toEqual({
-      canonical: '/p/wiertarka?lang=pl-PL',
-      languages: { 'en-US': '/p/drill', 'pl-PL': '/p/wiertarka?lang=pl-PL' },
-    });
+    ).toEqual({ 'en-US': '/p/drill', 'pl-PL': '/p/wiertarka?lang=pl-PL' });
   });
 
   it('lists no alternates when the product has none for the anonymous audience', () => {
-    expect(metadataAlternates({ canonical: '/p/drill', alternates: [] })).toEqual({ canonical: '/p/drill' });
+    expect(alternateLanguages({ canonical: '/p/drill', alternates: [] })).toBeUndefined();
+  });
+});
+
+describe('requestedLanguage', () => {
+  it('passes a well-formed `?lang` on and drops anything else', () => {
+    expect(requestedLanguage('pl-PL')).toBe('pl-PL');
+    expect(requestedLanguage('de')).toBe('de');
+    expect(requestedLanguage(undefined)).toBeNull();
+    expect(requestedLanguage(['pl-PL', 'en-US'])).toBeNull();
+    expect(requestedLanguage('pl-PL\r\nx: y')).toBeNull();
   });
 });
 
@@ -126,7 +133,9 @@ describe('the product page composes no product URL of its own', () => {
   const seo = readFileSync(resolve(dir, 'seo.ts'), 'utf8');
 
   it('resolves the key before reading, in the page and in its metadata', () => {
-    expect(page.match(/productIdForKey\(/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(page).toMatch(/productIdForKey\(slug, ctx\)/);
+    expect(page).toMatch(/resolveProductKey\(slug, anonymous\)/);
+    expect(page).toMatch(/getProductBySlug\(productId, ctx\)/);
     expect(page).toMatch(/canonical: product\.paths\.canonical/);
   });
 
