@@ -256,6 +256,17 @@ describe('buildScopeOverview (spec 163, T069)', () => {
     expect(overview.languages).toEqual(['de-DE', 'pl-PL']);
   });
 
+  it('a language URL key whose channel id the ORM hydrates as undefined is a language key, never an orphan', () => {
+    // MikroORM answers a NULL `sales_channel_id` as `undefined` on `ProductUrlKey`
+    // (163 ci-pg, 829ce2995): an orphan with no channel id broke the §3 schema.
+    const overview = buildScopeOverview(
+      input({ urlKeys: [{ languageCode: 'de-DE', salesChannelId: undefined as unknown as null }] }),
+    );
+    expect(overview.orphans).toEqual([]);
+    expect(overview.languageColumns.find((c) => c.languageCode === 'de-DE')?.overriddenFields).toEqual(['urlKey']);
+    expect(() => scopeOverviewResponseSchema.parse({ data: overview })).not.toThrow();
+  });
+
   it('a product in no channel offers the global and language scopes only (US4 #4)', () => {
     const overview = buildScopeOverview(
       input({
