@@ -89,7 +89,7 @@ Behaviour:
   what they leave missing is shown by the overview (§3, `cells[].missing`).
 - The global **status** keeps its existing write path (`PATCH /api/v1/admin/catalog/products/:id`); that
   path now runs the gate too (US6 #3) and never warns about overrides (FR-013). Since spec Session
-  2026-10-25 it accepts `active` | `inactive` only (`draft` → `400 VALIDATION_FAILED`, FR-112), and a
+  2026-10-25 it accepts `active` | `inactive` only (`draft` or the legacy `archived` → `400 VALIDATION_FAILED`, FR-112, O-1), and a
   write of `inactive` no longer archives: it neither sets nor clears `archivedAt` (FR-010).
 - **Archive / Restore** (FR-019, FR-053) are separate `catalog:write` Commands for one product and bulk-operation
   kinds for a selection; they touch `archivedAt` only. Route and payload shapes are left to the architect.

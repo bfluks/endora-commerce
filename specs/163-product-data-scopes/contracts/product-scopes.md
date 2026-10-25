@@ -7,7 +7,9 @@ All shapes land in `packages/contracts/src/product-scopes.ts` (new file, exporte
 
 Since the owner's Q1 decision (spec Session 2026-10-25) the value set is `active` | `inactive` at every
 scope, and `productStatusSchema` (`packages/contracts/src/catalog.ts`) narrows to the same set — a breaking
-change shipped with a major changeset (spec *Compatibility and release*). `inactive` is plain off everywhere;
+change shipped with a major changeset (spec *Compatibility and release*). The legacy `archived` write alias
+(`coerceProductStatusWrite`, `productStatusWriteSchema`'s preprocess) is removed too: `archived` is refused
+like `draft` (owner O-1, 2026-10-25). `inactive` is plain off everywhere;
 `archivedAt` is set only by the Archive Command (FR-019) and is independent of `status`.
 
 ```ts
