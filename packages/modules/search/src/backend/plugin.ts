@@ -33,7 +33,7 @@ import { registerSearchAdminRoutes } from './routes.admin.js';
 import { SettingNotRegistered, SettingOutOfScopeForChannel } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { effectiveState } from '@endora-commerce/platform/kernel';
-import { enterSystemScope } from '@endora-commerce/platform/kernel';
+import { enterSystemScope, rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import {
   DEFAULT_INDEX_TASK_TIMEOUT_SECONDS,
   DEFAULT_REINDEX_INTERVAL_MINUTES,
@@ -381,6 +381,18 @@ export function searchModule(options: SearchModuleOptions): SearchModuleResult {
         const DISABLED_POLL_MS = 60_000;
         let timer: ReturnType<typeof setTimeout> | undefined;
         let stopped = false;
+        // Feature 163 (code review W1) — once per process, on the first tick
+        // the module is present: bring every existing channel index up to the
+        // settings this release's queries name (the availability fields
+        // filterable, `localizedNames` searchable). Without it an index built
+        // before the upgrade refuses every query's availability filter and the
+        // listing falls back to Postgres until an operator reindexes. Bounded:
+        // one settings read per channel index, an update only where a setting is
+        // missing. Here rather than in a boot hook, so it runs where the sweep
+        // runs (the process that runs this module's workers), behind the same
+        // presence decision and inside the same system scope, and a slow or
+        // absent engine delays nothing at boot.
+        let querySettingsChecked = false;
 
         const scheduleNext = (delayMs: number): void => {
           if (stopped) return;
@@ -417,6 +429,20 @@ export function searchModule(options: SearchModuleOptions): SearchModuleResult {
           void enterSystemScope(
             'search: periodic reindex sweep',
             async (): Promise<number> => {
+              if (!querySettingsChecked) {
+                querySettingsChecked = true;
+                try {
+                  const channels = await indexer.ensureQuerySettings(options.emFactory());
+                  if (channels.length > 0) {
+                    app.log.info({ channels }, 'search: brought pre-upgrade channel indexes up to the query settings');
+                  }
+                } catch (err) {
+                  rethrowIfModuleDisabled(err);
+                  // The listing already degrades to Postgres for an index that
+                  // refuses; the next process start tries again.
+                  app.log.warn({ err }, 'search: could not check the channel index settings');
+                }
+              }
               let minutes = 0;
               try {
                 minutes = await resolveReindexIntervalMinutes();
