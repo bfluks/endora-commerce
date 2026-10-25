@@ -149,13 +149,17 @@ describe('QuickOrderBuildService — target quote_request', () => {
     );
   });
 
-  it('passes no minimums option for the buyer, only the language a refusal names a product in', async () => {
+  it('passes no minimums option for the buyer, only the language a refusal names a product in and the build’s channel (163)', async () => {
     const { service, createForCustomer } = doubles();
-    const result = await service.build(BUYER, { target: 'quote_request', items: ITEMS }, { language: 'en' });
+    const result = await service.build(
+      { ...BUYER, salesChannelId: 'channel-1' },
+      { target: 'quote_request', items: ITEMS },
+      { language: 'en' },
+    );
     expect(createForCustomer).toHaveBeenCalledTimes(1);
     const call = createForCustomer.mock.calls[0] as unknown[];
     expect(call).toHaveLength(3);
-    expect(call[2]).toEqual({ language: 'en' });
+    expect(call[2]).toEqual({ language: 'en', salesChannelId: 'channel-1' });
     expect(result).toEqual({ target: 'quote_request', quoteRequestId: 'rfq-1', quoteRequestBusinessId: 'RFQ-1' });
     expect(result).not.toHaveProperty('rejected');
   });

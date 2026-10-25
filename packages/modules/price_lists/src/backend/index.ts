@@ -5,6 +5,7 @@ import type {
   BuyerLinePricePort,
   CatalogAttributeReadPort,
   CatalogCategoryReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   CustomerGroupReadPort,
@@ -208,6 +209,10 @@ export function registerModule(ctx: ModuleContext): void {
                 'catalogAttributeReadPort',
               ),
             },
+            // Feature 163 — the storefront price probes answer only about a
+            // product available at the request's (channel, language); the
+            // owner, `catalog`, is a declared dependency.
+            catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
             // Feature 076 (D-79) — the admin resolved-price probe's customer
             // read, which was the one entry in this module's ledger shard. It
             // fails closed, deliberately: refusing the probe is better than

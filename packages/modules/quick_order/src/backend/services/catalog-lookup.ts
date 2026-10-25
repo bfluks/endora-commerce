@@ -56,17 +56,20 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
   async #publishedHere(
     audience: QuickOrderImportAudience,
     productIds: string[],
+    salesChannelId: string | undefined,
   ): Promise<ReadonlySet<string> | null> {
     if (audience === 'unrestricted') return null;
-    // Outside a request there is no channel to ask about (FR-007); the audience
-    // filter the callers apply first is the whole answer there, as before.
-    const channel = currentSalesChannel();
-    if (channel === null) return null;
+    // Feature 163 — the buyer's route names the channel it resolved, so its
+    // paste is always asked at a channel. Outside a request, with no channel
+    // named, there is none to ask about (FR-007); the audience filter the
+    // callers apply first is the whole answer there, as before.
+    const channelId = salesChannelId ?? currentSalesChannel()?.id ?? null;
+    if (channelId === null) return null;
     if (productIds.length === 0) return new Set();
-    // Feature 163 — the request channel's default language: a pasted list
-    // carries no language of its own.
+    // Feature 163 — the channel's default language: a pasted list carries no
+    // language of its own.
     return this.availability.filterAvailable(productIds, {
-      channelId: channel.id,
+      channelId,
       languageCode: null,
       audience,
     });
@@ -75,6 +78,7 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
   async findProductsBySku(
     skus: string[],
     audience: QuickOrderImportAudience,
+    salesChannelId?: string,
   ): Promise<ProductLike[]> {
     if (skus.length === 0) return [];
     const products = (await this.catalogProducts.findBySkus(skus)).filter(
@@ -83,6 +87,7 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
     const publishedHere = await this.#publishedHere(
       audience,
       products.map((p) => p.id),
+      salesChannelId,
     );
     return products
       .filter((p) => publishedHere === null || publishedHere.has(p.id))
@@ -100,6 +105,7 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
   async findVariantsBySku(
     skus: string[],
     audience: QuickOrderImportAudience,
+    salesChannelId?: string,
   ): Promise<VariantBySku[]> {
     if (skus.length === 0) return [];
     const variants = await this.catalogProducts.findVariantsBySkus(skus);
@@ -135,6 +141,7 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
     const publishedHere = await this.#publishedHere(
       audience,
       visibleParents.map((p) => p.id),
+      salesChannelId,
     );
     const acquirableParents = new Set(
       visibleParents

@@ -225,12 +225,18 @@ export class RfqService {
     productIds: readonly string[],
     ctx: CustomerContext,
     /** The request's language (feature 163): L is it resolved against the channel. */
-    languageTag?: string,
+    languageTag: string | undefined,
+    /**
+     * Feature 163 — the channel the buyer's route resolved, named explicitly
+     * so a buyer's lines are always asked about at a channel.
+     */
+    salesChannelId: string | undefined,
   ): Promise<Map<string, CatalogProductRecord>> {
     const records = await this.deps.catalogProducts.findByIds(productIds);
-    const channelId = raisedOnChannelId();
-    // Outside a request there is no channel to ask about (FR-007): the
-    // audience filter alone, as before.
+    const channelId = salesChannelId ?? raisedOnChannelId();
+    // Outside a request, with no channel named, there is no channel to ask
+    // about (FR-007): the audience filter alone, as before. A buyer route
+    // never reaches this branch — it names the channel it resolved.
     if (channelId === null) {
       return new Map(records.filter((p) => isProductVisibleTo(p, rfqAudience(ctx))).map((p) => [p.id, p]));
     }
@@ -238,7 +244,7 @@ export class RfqService {
     // every reason a line is not acquirable.
     const available = await this.deps.catalogAvailability.filterAvailable(
       records.map((p) => p.id),
-      { channelId, languageCode: raisedInScopeLanguage(languageTag), audience: rfqAudience(ctx) },
+      { channelId, languageCode: raisedInScopeLanguage(languageTag, channelId), audience: rfqAudience(ctx) },
     );
     return new Map(records.filter((p) => available.has(p.id)).map((p) => [p.id, p]));
   }
@@ -258,7 +264,7 @@ export class RfqService {
     if (channelId === null || products.length === 0) return new Map();
     return this.deps.catalogAvailability.effectiveNames(
       products.map((p) => p.id),
-      { channelId, languageCode: language === null ? null : raisedInScopeLanguage(language) },
+      { channelId, languageCode: language === null ? null : raisedInScopeLanguage(language, channelId) },
     );
   }
 
@@ -437,6 +443,7 @@ export class RfqService {
       input.items.map((it) => it.productId),
       ctx,
       options.language,
+      options.salesChannelId,
     );
     if (productById.size !== new Set(input.items.map((it) => it.productId)).size) {
       // Issues #227 and #259 — a line the buyer may not see, and a line the
@@ -571,8 +578,11 @@ export class RfqService {
     ctx: CustomerContext,
     body: PatchQuoteRequest,
     expectedVersion: number | null,
-    /** The language a refusal names a product in (feature 155, D3/D4). */
-    options: { language?: string | undefined } = {},
+    /**
+     * The language a refusal names a product in (feature 155, D3/D4); the
+     * channel the buyer's route resolved (feature 163).
+     */
+    options: { language?: string | undefined; salesChannelId?: string | undefined } = {},
   ): Promise<RfqDto> {
     const em = this.deps.emFactory();
     const rfq = await this.findVisibleForCustomer(em, rfqId, ctx);
@@ -605,6 +615,7 @@ export class RfqService {
         body.items.map((it) => it.productId),
         ctx,
         options.language,
+        options.salesChannelId,
       );
       if (productById.size !== new Set(body.items.map((it) => it.productId)).size) {
         // Issues #227 and #259 — see `createForCustomer`. A revision may not
@@ -777,8 +788,11 @@ export class RfqService {
     rfqId: string,
     ctx: CustomerContext,
     body: ResubmitQuoteRequest,
-    /** The language a refusal names a product in (feature 155, D3/D4). */
-    options: { language?: string | undefined } = {},
+    /**
+     * The language a refusal names a product in (feature 155, D3/D4); the
+     * channel the buyer's route resolved (feature 163).
+     */
+    options: { language?: string | undefined; salesChannelId?: string | undefined } = {},
   ): Promise<RfqDto> {
     const em = this.deps.emFactory();
     const sourceRfq = await this.findVisibleForCustomer(em, rfqId, ctx);
@@ -804,6 +818,7 @@ export class RfqService {
       Array.from(new Set(sourceItems.map((it) => it.productId))),
       ctx,
       options.language,
+      options.salesChannelId,
     );
     if (sourceItems.some((it) => !acquirable.has(it.productId))) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');

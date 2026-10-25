@@ -96,6 +96,13 @@ export interface QuickOrderCatalogLookup {
   findProductsBySku(
     skus: string[],
     audience: QuickOrderImportAudience,
+    /**
+     * Feature 163 — the channel the buyer's route resolved, asked explicitly so
+     * a buyer paste is never answered by audience alone. Absent only for a
+     * caller outside a request (a worker, a fixture), which reads the request
+     * scope and, finding none, falls back to the audience filter.
+     */
+    salesChannelId?: string,
   ): Promise<ProductLike[]>;
   /**
    * Variants whose own SKU matches one of `skus` (row referenced a variant
@@ -105,6 +112,8 @@ export interface QuickOrderCatalogLookup {
   findVariantsBySku(
     skus: string[],
     audience: QuickOrderImportAudience,
+    /** As {@link findProductsBySku}. */
+    salesChannelId?: string,
   ): Promise<VariantBySku[]>;
   /** All variants under the given parent products (for attribute-column resolution). */
   findVariantsByParent(productIds: string[]): Promise<Array<VariantLike & { parentProductId: string }>>;
@@ -147,7 +156,12 @@ export class QuickOrderImportPipeline {
 
   async run(
     parse: ParseOutcome,
-    opts: { maxRows?: number; audience: QuickOrderImportAudience },
+    opts: {
+      maxRows?: number;
+      audience: QuickOrderImportAudience;
+      /** Feature 163 — the channel the buyer's route resolved (see `findProductsBySku`). */
+      salesChannelId?: string;
+    },
   ): Promise<QuickOrderImportResponse> {
     const rejected: RejectedQuickOrderItem[] = [];
     // Feature 155 — the operator's summary always carries `warningCount`.
@@ -178,8 +192,8 @@ export class QuickOrderImportPipeline {
 
     const skus = Array.from(new Set(candidates.map((c) => c.sku)));
     const [products, variantsBySku] = await Promise.all([
-      this.lookup.findProductsBySku(skus, opts.audience),
-      this.lookup.findVariantsBySku(skus, opts.audience),
+      this.lookup.findProductsBySku(skus, opts.audience, opts.salesChannelId),
+      this.lookup.findVariantsBySku(skus, opts.audience, opts.salesChannelId),
     ]);
     const productBySku = new Map(products.map((p) => [p.sku, p]));
     const variantBySku = new Map(variantsBySku.map((v) => [v.sku, v]));
