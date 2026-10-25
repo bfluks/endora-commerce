@@ -2,14 +2,15 @@
 
 **Feature Branch**: `feat/163-product-data-scopes`
 **Created**: 2026-10-20
-**Status**: Draft — clarify rounds 1–4 recorded 2026-10-21 and the owner's answers to the plan and analyze
-questions (Q-A, Q-B, Q-C, Q-D, M3) recorded 2026-10-22; no open clarification marker remains. D-1 (draft
-preview by direct link) stays deferred by owner choice with an interim reading (not-found); the status value
-set (FR-010) is re-asked by the coordinator before acceptance
+**Status**: Draft — clarify rounds 1–4 recorded 2026-10-21, the owner's answers to the plan and analyze
+questions (Q-A, Q-B, Q-C, Q-D, M3) recorded 2026-10-22, and the owner's final status decision (Q1, re-asked
+before acceptance) recorded 2026-10-25: the status value set is `active` / `inactive` at every scope and
+archiving is its own global action (FR-010, FR-019). D-1 is moot as a result. The open questions left by
+that decision are listed under *Open after Session 2026-10-25*
 **Issues**: #385 (source), depends on #384; adjacent to #377 and #241
 **Input**: Issue #385 — *Catalog: Magento-style scopes for product data — status, visibility, URL, SEO,
 media per sales channel and language.* An operator cannot set a product's status or visibility per sales
-channel or per language: a product cannot be active in the B2B channel and a draft in B2C, nor published
+channel or per language: a product cannot be active in the B2B channel and off in B2C, nor published
 in Polish but held back in German until it is translated. Everything on a product other than name,
 description and flagged user attributes is global. The issue is explicitly a **starting proposal**; this
 spec records the owner's binding decisions so far and leaves the rest open for clarify.
@@ -40,6 +41,8 @@ spec records the owner's binding decisions so far and leaves the rest open for c
   `active` / `inactive` for now (option A). The owner may switch to enabled / disabled per scope plus a
   separate global archive action (option B); the coordinator re-asks this at the end of the feature, before
   acceptance. What `inactive` means when set below the global scope was decided in round 2, N1 (FR-010).
+  *(Superseded on 2026-10-25, Session 2026-10-25 Q1: option B — `draft` is removed, status is `active` /
+  `inactive` at every scope, and archiving is a separate global action.)*
 - Q: How does the completeness gate behave — warn and save, refuse the save, or a setting choosing between
   them? → A: A platform-level setting choosing *warn* or *refuse*, default *warn* (option C). Assumption A-6
   is confirmed: the gate does not apply to imports or PIM synchronisation (FR-060, FR-061).
@@ -82,7 +85,9 @@ spec records the owner's binding decisions so far and leaves the rest open for c
   status or every scoped field? → A: Every scoped field (option A; FR-013, A-9).
 - Q: (round 2, N1) What does `inactive` mean when set as an override at channel or channel × language? → A:
   Plain "off" in that scope — identical in effect to `draft` there (not-found); archiving (`archivedAt`,
-  `product.archived.v1`, "gone") stays global-only (option a; FR-010).
+  `product.archived.v1`, "gone") stays global-only (option a; FR-010). *(Extended on 2026-10-25, Session
+  2026-10-25 Q1-a: `inactive` is plain "off" at **every** scope, global included; archiving is the separate
+  global Archive action of FR-019.)*
 - Q: (round 2, N2) In which language are product names snapshotted into basket and quote-request lines? →
   A: The request language at snapshot time, falling back to the channel's default language; documents
   created by an operator in the admin use the channel's default language (option a; FR-017).
@@ -162,7 +167,9 @@ Owner answers to the questions raised by `plan.md` and `/speckit.analyze`. Q-A, 
   language): a global or scoped status change, including bulk status. The gate does **not** fire when a
   product becomes live at (C, L) by joining a channel, by a channel gaining a language, by a publication
   window opening, or by an audience change; missing values in those cases are visible in the scope overview
-  (FR-060, FR-061, FR-041, US6).
+  (FR-060, FR-061, FR-041, US6). *(Restated after Session 2026-10-25: "turns the product on" means a status
+  write that changes the effective status at (C, L) to `active`; Archive and Restore (FR-019) are not
+  status writes and never fire the gate.)*
 - Q: (Q-D) Must a single scoped write have a one-click undo, or is restoring it from its audit before-state
   enough? → A: **Option A — no single-write undo.** Bulk scoped writes are reversible as a whole with the
   existing bulk-operation undo (`bulk-operation.service.ts`,
@@ -170,6 +177,37 @@ Owner answers to the questions raised by `plan.md` and `/speckit.analyze`. Q-A, 
   audit entry holds the complete before-state, so re-applying it restores the previous value — the
   repository's convention (e.g. the `delivery_methods` commands). A generic single-Command undo is out of
   scope (a possible future issue) (FR-081, US1 #8, SC-006).
+
+### Session 2026-10-25
+
+The owner's final answer to Q1, re-asked before acceptance as the 2026-10-21 answer required (task T156).
+It replaces the 2026-10-21 Q1 answer and extends N1.
+
+- Q: (Q1, final) Which value set does the status hold at each scope? → A: **`active` | `inactive` at every
+  scope**; `draft` is removed (option B) (FR-010, Terms).
+- Q: (Q1-a) What becomes of archiving, which today is the global `inactive`? → A: A **separate, global,
+  product-wide action, "Archive" / "Restore"**, that keeps today's effects: Archive sets `archivedAt` and
+  emits `product.archived.v1` once per transition; the product page answers "gone" (410) under the rules
+  already in this spec (only to a caller who could otherwise see it, else not-found); Restore clears
+  `archivedAt`. `inactive` at **any** scope, global included, means plain "off" (not-found) and never
+  archives. Archived state is independent of status (FR-010, FR-019, FR-005).
+- Q: (Q1-b) What happens to existing `draft` values? → A: A migration converts every `draft` to
+  `inactive`, without archiving — in `products.status` and in every scoped override row
+  (`product_channel_scopes`, `product_channel_language_scopes`) (FR-110, `data-model.md`).
+- Q: (Q1-c) What happens to products that are `inactive` today? → A: They were archived by that status.
+  They stay `inactive` and keep their `archivedAt`, so they remain archived and keep answering "gone" where
+  they did (FR-110, SC-001).
+- Q: (Q1-d) What status does a new or duplicated product get? → A: `inactive` (FR-010).
+- Q: (Q1-e) Is `draft` kept as an accepted alias for a while? → A: No. `draft` is removed from the API
+  outright: `productStatusSchema` becomes `active | inactive`; the admin API, bulk status, import / export
+  and the admin product-list filter reject `draft` with a validation error; there is no alias period. This
+  is a breaking change and ships with a major-bump changeset note (FR-092, FR-112, *Compatibility and
+  release*).
+- Q: (Q1-f) Where is the work done? → A: Inside this feature, as a block before acceptance.
+- D-1 (whether a never-published `draft` product stays reachable by direct link as a preview) is **moot**:
+  no status marks a product as "never published" any more. A product that is not live is `inactive`, which
+  is plain "off" and answers not-found by FR-005, whether it was never published or switched off later. A
+  preview link for unpublished products, if wanted, would be a separate feature; it is not deferred here.
 
 ## Current state (origin/master cde5563ea)
 
@@ -254,8 +292,11 @@ runtime, unless stated.
 - **Inheritance** — the effective value at a scope is the nearest override along the existing fallback
   chain (C×L → C → L → Global), restricted to the scopes the field supports.
 - **Use inherited** — removes the override at that scope; it does not store an empty value.
-- **Status** — `draft` / `active` / `inactive` at a scope (FR-010); the product is switched **on** at a
-  scope when its effective status there is `active`, and **off** otherwise.
+- **Status** — `active` / `inactive` at a scope (FR-010); the product is switched **on** at a scope when
+  its effective status there is `active`, and **off** when it is `inactive`. Status never archives.
+- **Archived** — a global, product-wide state set by the Archive action and cleared by Restore (FR-019),
+  recorded as `archivedAt`; independent of status at every scope. An archived product is unavailable
+  everywhere (FR-001) and its page answers "gone" under FR-005.
 - **Audience visibility** — who may see a product: public / logged-in only / organization-restricted with an
   organization list. It is the only visibility concept in this spec (clarify round 2 dropped a separate
   display visibility).
@@ -306,6 +347,26 @@ compare against the expected matrix; then remove one override and repeat.
 9. **Given** a product whose effective status is off at (C, L), **When** a buyer raises a quote request at
    (C, L) containing it, **Then** that line is refused; **when** an operator creates a quote request at
    (C, L) containing it in the admin, **Then** the line is accepted with a warning (FR-018).
+10. **Given** a live product that is not archived, **When** the operator sets its **global** status to
+    `inactive`, **Then** it is off at every (C, L) without an `active` override, its page answers as for a
+    product that does not exist (not "gone"), `archivedAt` stays empty and no `product.archived.v1` is
+    emitted (FR-010; Session 2026-10-25, Q1-a).
+11. **Given** a product live at (A, pl) and off at (B, pl), **When** the operator archives it, **Then**
+    `archivedAt` is set, `product.archived.v1` is emitted once, one audit entry records the action, no
+    status value changes, and its page answers "gone" at (A, pl) and not-found at (B, pl); archiving it
+    again changes nothing and emits nothing (FR-019, FR-005).
+12. **Given** an archived product, **When** the operator sets its global status to `active`, **Then** it
+    stays archived; **when** the operator then restores it, **Then** `archivedAt` is cleared, it is live
+    wherever FR-001 says so, and the restore is audited (FR-019).
+13. **Given** a request — admin product create or update, bulk status, import file or admin list filter —
+    that carries the status `draft`, **Then** it is refused with a validation error and nothing is saved;
+    **given** a create request naming no status, or a duplicate, **Then** the new product is `inactive`
+    (FR-010, FR-112).
+14. **Given** a product base containing `draft` products, `draft` scope overrides and `inactive` products
+    archived by today's status, **When** this feature is deployed, **Then** every `draft` value is
+    `inactive`, no `draft` product became archived, every formerly `inactive` product keeps its `archivedAt`
+    and its "gone" answer, and every product is live in exactly the same (channel, language) pairs as
+    before (FR-110, SC-009).
 
 ---
 
@@ -409,6 +470,12 @@ at that scope and no other, the audit entries, and undo.
    operation can be undone as a whole with a per-product conflict report (Constitution XIII).
 3. **Given** a selected product that is not a member of the chosen channel, **Then** it is skipped and
    reported, not silently added to the channel.
+4. **Given** a selection, **When** the operator runs bulk Archive, **Then** each selected product is
+   archived as by FR-019 (one audit entry per product, `product.archived.v1` once per product that was not
+   yet archived, no status changed), and the operation can be undone as a whole; bulk Restore clears
+   `archivedAt` the same way (FR-053).
+5. **Given** a selection, **When** the operator sets the global status to `inactive` in bulk, **Then** the
+   products are switched off and **none** is archived (FR-053).
 
 ---
 
@@ -577,7 +644,9 @@ the minimum and the return eligibility.
   them. (Membership removal is not deletion.)
 - **Channel deleted**: its scoped values are removed with it.
 - **Global archive vs per-scope enable**: an archived (or deleted) product is unavailable everywhere,
-  whatever its per-scope status.
+  whatever its status at any scope. Archive and Restore change no status value, and no status write
+  archives or restores (FR-010, FR-019): setting `active` on an archived product leaves it archived until it
+  is restored, and restoring an `inactive` product leaves it off.
 - **Variants and grouped / bundle children**: a variant is a `product_variants` row of its `configurable`
   parent, not a product; it has no status, page or listing of its own and follows the parent. A grouped or
   bundle child is a real product governed by its own status, channel membership and audience, as today: a
@@ -609,8 +678,10 @@ the minimum and the return eligibility.
   (FR-030).
 - **Publication window across a daylight-saving change**: the bounds are absolute instants, so a window
   entered before a clock change takes effect at the same instant after it (FR-023).
-- **`inactive` set below the global scope**: plain "off" there, not-found like `draft`; it never archives
-  (FR-010).
+- **`inactive` at any scope, global included**: plain "off" there, not-found; it never archives (FR-010).
+  Archiving is the separate Archive action (FR-019).
+- **A request still carrying `draft`** (admin API, bulk status, import file, admin list filter): refused
+  with a validation error; there is no alias (FR-112).
 - **Concurrent edits** at the same scope by two operators: last write wins, each audited.
 
 ## Requirements *(mandatory)*
@@ -634,10 +705,16 @@ the minimum and the return eligibility.
   and quote-request line names, MUST read scoped field values at their effective (C, L) value (FR-017).
 - **FR-005**: A product page request at (C, L) for a product not effectively available there MUST answer
   exactly as for a product that does not exist (no status-specific response that reveals existence),
-  except for the archived case, which MUST keep its current "gone" answer. Interim reading: this also stops
-  a `draft` product being reachable by its URL (the gap noted in *Current state*); whether a not-yet-published
-  product should instead stay reachable by direct link as a preview is open — *Deferred to clarify* D-1.
-  Note: product handles stored by CMS product blocks (global slugs) MUST keep resolving — the product lookup
+  except for the archived case (FR-019), which MUST keep its "gone" answer — but only to a caller who could
+  otherwise see the product: an archived product answers "gone" at (C, L) only where it would be
+  effectively available to that buyer if it were not archived; everywhere else it answers as a product that
+  does not exist (Session 2026-10-25, Q1-a). In that test the archive is taken away and the **global**
+  status is read as `active`, while every channel and channel × language status override, membership, the
+  channel's languages, the publication window and the audience still apply — so products archived by
+  today's global `inactive` (Q1-c) keep answering "gone" where they did. *(Reading of the global status in
+  this test: see Open question O-3.)* An `inactive` product that is not archived answers not-found at every
+  scope; this also closes the gap noted in *Current state*, where a `draft` member product is reachable by
+  its URL (D-1 is moot, Session 2026-10-25). Note: product handles stored by CMS product blocks (global slugs) MUST keep resolving — the product lookup
   `GET :idOrSlug` answers an id, then a current key at (C, L), then the global slug, and never a redirect.
   It is an API handle, not a storefront URL, so FR-071 does not govern it (`research.md` R28).
 - **FR-006**: A basket line whose product is no longer effectively available at the basket's (C, L) MUST be
@@ -649,6 +726,27 @@ the minimum and the return eligibility.
   and language, with an answer that does not reveal the product's existence beyond what FR-005 allows. A
   quote request created by an **operator** in the admin MUST accept such a line and show a warning naming
   it.
+- **FR-019** *(numbered after FR-018; added in Session 2026-10-25, Q1-a)*: Archiving MUST be a separate,
+  **global, product-wide** action, offered as **Archive** and **Restore**, and never a status value or a
+  per-scope state.
+  - **Archive** MUST set `archivedAt` and emit `product.archived.v1` exactly once per transition from
+    not-archived to archived; archiving an already-archived product MUST change nothing and emit nothing.
+    From then on the product is unavailable everywhere (FR-001) and its page answers "gone" under FR-005.
+  - **Restore** MUST clear `archivedAt`; restoring a product that is not archived MUST change nothing. After
+    Restore the product is available wherever FR-001 says so for its current status values.
+  - Archive and Restore MUST NOT change the status at any scope, and no status write at any scope MUST set
+    or clear `archivedAt`: setting `active` on an archived product leaves it archived, and restoring an
+    `inactive` product leaves it off (edge case *Global archive vs per-scope enable*).
+  - Each MUST run as an audited Command through `CommandBus.run` (Constitution XIII) with one audit entry
+    per product carrying the before / after `archivedAt` (FR-080), and MUST be gated by the existing catalog
+    write permission `catalog:write` (FR-084); no new permission code is introduced.
+  - Archive and Restore MUST be offered for a single product in the product editor and, because a bulk
+    status action exists (FR-050), as a bulk action on the product list on the existing durable
+    bulk-operation path, audited per product and reversible as a whole with the bulk-operation undo
+    (FR-052, FR-081). This replaces today's way of bulk-archiving — a bulk global status change to
+    `inactive` — which after this feature only switches products off.
+  - Archive and Restore MUST NOT fire the completeness gate (FR-060): they are not status writes.
+  - New operator-facing labels and messages MUST exist in Polish and English (FR-043).
 
 #### Scope model and inheritance
 
@@ -676,15 +774,15 @@ the minimum and the return eligibility.
   Clarify round 2 removed the display-visibility and price-display-mode rows. SKU, type, attribute set,
   stock flags, fulfilment strategy, product links, bundle / grouped / variant structure, prices, price
   display mode, promotions and warehouses MUST remain as they are.
-- **FR-010**: Status MUST hold one of `draft` / `active` / `inactive` at every scope it supports (FR-009);
-  the product is "on" at (C, L) exactly when its effective status there is `active`. The **global** value
-  keeps today's semantics in full: setting it to `inactive` archives the product (sets `archivedAt`, emits
-  `product.archived.v1` once per transition, product page answers "gone"), and moving away clears
-  `archivedAt`. Archiving MUST remain a global, product-wide state (FR-001), not a per-scope one.
-  `inactive` set as an override at C or C×L MUST mean plain "off" in that scope — identical in effect to
-  `draft` there (not-found, FR-005) — and MUST NOT set `archivedAt`, emit `product.archived.v1` or answer
-  "gone" (clarify 2026-10-21 round 2, N1). This value set is provisional: the owner may replace it with enabled / disabled per scope plus a separate
-  global archive action, and the coordinator re-asks before acceptance (Clarifications 2026-10-21).
+- **FR-010**: Status MUST hold exactly one of `active` / `inactive` at every scope it supports (FR-009),
+  global included; `draft` is not a status value (Session 2026-10-25, Q1). The product is "on" at (C, L)
+  exactly when its effective status there is `active`. `inactive` at **any** scope — global, C or C×L —
+  MUST mean plain "off" there (not-found, FR-005) and MUST NOT set or clear `archivedAt`, emit
+  `product.archived.v1` or answer "gone" (clarify round 2, N1, extended to the global scope by Q1-a).
+  Archiving is the separate global Archive / Restore action of FR-019 and MUST stay a global, product-wide
+  state (FR-001), independent of status. A newly created product MUST get the global status `inactive` when
+  the request names none, and a duplicated product MUST always get the global status `inactive` with
+  `archivedAt` cleared, as it gets `draft` today (Q1-d).
 - **FR-011**: Every scoped field MUST have a global value; an override MUST exist only at a scope where an
   operator (or an integration) set one.
 - **FR-012**: "Use inherited" MUST remove the override at that scope; the effective value MUST then be the
@@ -764,11 +862,17 @@ the minimum and the return eligibility.
 - **FR-051**: Products not valid for the chosen scope MUST be skipped and reported per product.
 - **FR-052**: The bulk action MUST run on the existing durable bulk-operation path and be audited per product
   and reversible as a whole (FR-080, FR-081).
+- **FR-053** *(added in Session 2026-10-25, Q1-a)*: The product list MUST also offer bulk **Archive** and
+  bulk **Restore** (FR-019) for the selected products, on the same durable bulk-operation path, audited per
+  product and reversible as a whole. A bulk status value — global or scoped — MUST be `active`, `inactive`
+  or, for a scope, "inherit"; a bulk status change MUST NOT archive or restore, and a bulk request carrying
+  `draft` MUST be refused with a validation error (FR-112).
 
 #### Completeness gate
 
 - **FR-060**: When an operator's **status write** — the global status, a channel or channel × language
-  status override, or a bulk status change — turns a product on at (C, L), the system MUST check that name, URL key and every required language-scoped attribute resolve to a non-empty value at
+  status override, or a bulk status change — turns a product on at (C, L), that is, changes its effective
+  status there to `active` (clarify 2026-10-22, M3, restated in Session 2026-10-25), the system MUST check that name, URL key and every required language-scoped attribute resolve to a non-empty value at
   (C, L), and MUST name every missing field. What follows is decided by one **platform-level setting**
   (one value for the whole platform, not per channel) with two values: *warn* — the change is saved and the
   missing fields are shown — and *refuse* — the change is not saved. The default MUST be *warn*. The setting
@@ -784,7 +888,7 @@ the minimum and the return eligibility.
   language's value MUST NOT satisfy the gate, otherwise a
   missing German name would pass as the Polish one (US6, scenario 1). The gate MUST NOT fire when a product
   becomes live at (C, L) by any other change — joining a channel, a channel gaining a language, a
-  publication window opening, or an audience change; missing values in those cases MUST be visible in the
+  publication window opening, an audience change, or a Restore (FR-019); missing values in those cases MUST be visible in the
   scope overview (FR-041) (clarify 2026-10-22, M3, option A; US6 #6).
 - **FR-061**: The gate MUST apply equally to single status edits, bulk status edits and changes of the
   global switch that turn on scopes without overrides, MUST NOT apply to the non-status changes listed in
@@ -868,18 +972,25 @@ the minimum and the return eligibility.
 - **FR-080**: Every write of a scoped value (set, change, use inherited) MUST run as an audited Command
   carrying the product, the field, the scope and the before / after value (Constitution XIII), with exactly
   one audit entry per product per command. Deleting a URL redirect and taking over another product's
-  redirecting key (FR-072) are admin writes and MUST run the same way.
+  redirecting key (FR-072) are admin writes and MUST run the same way, and so MUST Archive and Restore
+  (FR-019), single and bulk.
 - **FR-081**: Bulk scoped writes MUST be reversible as a whole with the bulk-operation undo (all-or-nothing
   per product, conflict report). A single scoped write's audit entry MUST hold the complete before-state, so
   that re-applying it restores the previous value. A generic one-click undo of a single Command is out of
   scope (clarify 2026-10-22, Q-D, option A).
 - **FR-082**: Status, window, audience and URL-key changes MUST emit domain events so
-  that search, sitemap, feeds and webhooks update; an archive MUST still emit the existing archive event.
+  that search, sitemap, feeds and webhooks update. Archive and Restore (FR-019) MUST emit
+  `product.updated.v1` as a status change to or from `inactive` does today, and Archive MUST additionally
+  emit the existing `product.archived.v1`, once per transition. A status change to `inactive` MUST NOT emit
+  `product.archived.v1` any more; the event's meaning changes from "status moved to `inactive`" to "the
+  product was archived" (*Compatibility and release*).
 - **FR-083**: The new scoped data is catalogue data and MUST be classified as platform-global, as product
   value overrides are today (Constitution XI); audience evaluation stays at read time against the buyer's
   organization.
 - **FR-084**: Admin permission codes for these writes MUST reuse the existing product-edit permission unless
   the plan justifies a new one; any new code MUST appear on `/admin-roles` with Polish and English labels.
+  Archive and Restore (FR-019, FR-053) reuse `catalog:write`, as setting the global status to `inactive`
+  does today.
 - **FR-090**: Changing a user attribute's scope flags after values exist MUST follow a defined, previewable
   migration: narrowing (e.g. channel-scoped → global) MUST tell the operator how many overrides become
   orphaned and retain them (FR-015); widening MUST create no values. The admin attribute editor MUST
@@ -887,7 +998,9 @@ the minimum and the return eligibility.
 - **FR-091**: PIM connectors (Ergonode, Akeneo, Pimcore, UnoPim) and catalogue import / export MUST each
   state which scope they read and write for every field of FR-009; a connector that writes only global
   values MUST NOT remove overrides set by operators.
-- **FR-092**: Import / export MUST be able to round-trip status per scope.
+- **FR-092**: Import / export MUST be able to round-trip status per scope, with the values `active` and
+  `inactive` only; an imported status of `draft`, at any scope, MUST be refused with a validation error and
+  reported by the run's existing per-record rules (FR-112). Status import never archives or restores.
 - **FR-093** *(added in clarify round 4, K2)*: When a catalogue import or a PIM connector writes a URL key
   that FR-070 or FR-072 forbids — another product's current key or redirecting key in that language — that
   key MUST NOT be written, the product MUST keep its previous key at that scope, and the record MUST be
@@ -905,18 +1018,65 @@ the minimum and the return eligibility.
 
 - **FR-110**: Deployment migration MUST make every existing product's effective availability and listing
   identical to before deployment: existing status becomes the global status, no windows, existing audience
-  rule becomes the global audience rule.
+  rule becomes the global audience rule. In addition (Session 2026-10-25, Q1-b, Q1-c):
+  - every `draft` MUST become `inactive` — in `products.status` and in every channel and channel × language
+    status override row — **without** archiving: `archivedAt` is not set by the migration;
+  - every product that is `inactive` before the migration MUST stay `inactive` and keep its `archivedAt`
+    unchanged, so a product archived by today's global `inactive` stays archived and keeps answering "gone"
+    where it did (FR-005);
+  - `archivedAt` MUST NOT be written by the migration for any row;
+  - after the migration no stored status, at any scope, holds a value other than `active` or `inactive`,
+    and the stored default for a new product is `inactive` (FR-010).
+  Because a `draft` product was never live (only `active` was listed, searched, indexed or fed) and an
+  `inactive` one is off, this conversion changes no product's listing; the URL and basket changes are the
+  exceptions SC-001 lists.
+- **FR-112** *(added in Session 2026-10-25, Q1-e)*: `draft` MUST be removed from the API outright, with no
+  alias period: the shared status schema (`productStatusSchema`, and the scope status constant derived from
+  the same value set) MUST be `active | inactive`; the admin product API (create, update, duplicate), bulk
+  status (global and scoped), catalogue import / export and the admin product-list status filter MUST refuse
+  `draft` with a validation error naming the field. Every typed consumer of the status (including
+  `storefront/lib/api/quick-order.ts` and `packages/admin-kit/src/components/product-browser/types.ts`)
+  MUST drop `draft`. This is a breaking change (*Compatibility and release*).
+- **FR-113** *(added in Session 2026-10-25)*: The admin product list MUST filter and count by status
+  `active` / `inactive` and, separately, by archived state (`archivedAt`), not by treating `inactive` as
+  archived: a product that is `inactive` and not archived MUST be listed like any other product, and the
+  list MUST keep hiding archived products by default with the existing way to include them. *(Reading
+  derived from Q1-a; see Open question O-2.)*
 - **FR-111**: When `seo` is off, redirects and SEO overrides MUST NOT be served and their data MUST persist;
   scoped catalogue data MUST persist across any
   module being turned off and on (Constitution XVII). While `seo` is off the product editor MUST show no
   redirect list. Redirect data persists in the catalogue and keeps reserving keys, and the takeover
   confirmation still appears and names the product losing the redirect (clarify 2026-10-22, Q-C; US7 #10).
+  Archive and Restore (FR-019) belong to `catalog`, which is not deactivatable, so they have no off state of
+  their own; a consumer module that is off ignores the archive event as it ignores every other.
+
+### Compatibility and release
+
+Added in Session 2026-10-25 (Q1-e). Everything else in this feature is additive; the status change is not.
+
+- **Breaking**: `productStatusSchema` and the scope status value set narrow from
+  `draft | active | inactive` to `active | inactive` (FR-010, FR-112). `@endora-commerce/contracts` MUST
+  ship a **major** changeset whose note says: `draft` is removed with no alias; existing `draft` data is
+  migrated to `inactive` (FR-110); a status of `inactive` no longer archives — archiving is the Archive /
+  Restore action (FR-019); new and duplicated products default to `inactive`; `product.archived.v1` now
+  means "archived by the Archive action", not "status moved to `inactive`" (FR-082). The catalogue module's
+  changeset MUST carry the same note at the bump its exported surface requires (an admin API that now
+  refuses a previously valid value is a breaking change for its callers). The bump level of any other
+  published package that types the status (the admin kit's product browser types) follows the same rule.
+- **Behaviour changes an operator sees**: a product set `inactive` is off but not archived (no "gone"
+  answer, still listed in the admin by default, FR-113); archiving is an explicit action; former `draft`
+  products appear as `inactive`.
+- **Documentation**: the catalogue's module documentation page and its Polish mirror MUST describe the two
+  status values, what "off" means at each scope, the Archive / Restore action (single and bulk), its
+  permission (`catalog:write`) and the 410 rule of FR-005, and MUST drop every mention of `draft` as a
+  product status.
 
 ### Key Entities
 
 - **Product (scoped values)** — the product's global values plus the set of overrides per scope for status,
   publication window, audience, URL key, SEO, media roles / hidden flags, translated labels, minimum order
-  quantity and returnable.
+  quantity and returnable. Status is `active` / `inactive` at every scope; the archived state
+  (`archivedAt`) is a separate, global field set and cleared only by Archive / Restore (FR-019).
 - **Scope** — Global, Language, Channel, or Channel × language; valid only for the product's channels and
   their languages.
 - **Override** — a value of one field at one scope; absent means inherit.
@@ -933,9 +1093,9 @@ the minimum and the return eligibility.
 
 - **SC-001**: After deployment, for every channel and language, the set of products listed, searchable,
   reachable by URL (all existing URLs) and in the sitemap and feeds is identical to the set before
-  deployment, except: products that are not "on" (today: `draft`) are no longer reachable by URL
-  (FR-005; FR-010 is decided, the final wording follows the D-1 decision on preview reachability); they are
-  no longer addable to a basket — basket add honours FR-001 (FR-004), where today it checks no status at all
+  deployment, except: products that are off and not archived — today's `draft` products, `inactive` after
+  the migration (FR-110) — are no longer reachable by URL and answer not-found (FR-005, FR-010; D-1 moot,
+  Session 2026-10-25); they are no longer addable to a basket — basket add honours FR-001 (FR-004), where today it checks no status at all
   (`research.md` R0 F1); the listing's name sort follows the effective name rather than the slug (FR-017);
   and existing per-language SEO overrides are served (FR-075, US8 #2).
 - **SC-002**: An operator can take a product live in one market and offline in another in under one minute
@@ -954,6 +1114,10 @@ the minimum and the return eligibility.
   therefore zero (channel, language) pairs in which two products resolve to the same key, after any sequence
   of key edits, channel-membership changes and channel-language changes (FR-070, FR-072), measured by
   automated tests that exercise each of those changes.
+- **SC-009** *(added in Session 2026-10-25)*: After deployment, zero stored status values — global or at
+  any scope — other than `active` / `inactive`; zero products whose archived state differs from before
+  deployment (FR-110); zero status writes that set or clear `archivedAt`; and 100% of Archive / Restore
+  actions, single and bulk, appear in the audit log — each measured by automated tests.
 
 ## Assumptions
 
@@ -986,13 +1150,41 @@ the minimum and the return eligibility.
 
 ### Deferred to `/speckit.clarify` (not decided; interim reading only)
 
-This item carries an interim reading used above so the spec is complete, but it is **open**. D-2, D-4 and D-6
-were decided on 2026-10-21 in round 1, D-3 became moot and D-5 was removed from the feature in round 2 (see
-*Clarifications*); they are no longer listed. Only D-1 remains, without a marker: the owner deferred it.
+No deferred item remains. D-2, D-4 and D-6 were decided on 2026-10-21 in round 1, D-3 became moot and D-5
+was removed from the feature in round 2 (see *Clarifications*). **D-1** (whether a never-published `draft`
+product stays reachable by direct link as a preview) became **moot** on 2026-10-25: `draft` no longer
+exists, so no status distinguishes a never-published product from one switched off later; both are
+`inactive` and answer not-found (FR-005, FR-010; Session 2026-10-25).
 
-- **D-1**: Whether a never-published (`draft`) product stays reachable by direct link (e.g. as a preview) or
-  answers not-found like any unavailable product (FR-005; interim: not-found). That `draft` survives as a
-  status value was decided on 2026-10-21 (FR-010).
+### Open after Session 2026-10-25 (interim reading used above; to confirm with the owner)
+
+The owner's Q1 decision leaves these consequences undecided. Each carries the interim reading the
+requirements above use, so the spec stays complete; none is a guess at new behaviour beyond that reading.
+
+- **O-1**: The legacy `archived` status write alias (feature 032: a write of `status: 'archived'` is
+  coerced to `inactive`, `packages/contracts/src/catalog.ts` `coerceProductStatusWrite`; the admin list
+  filter maps `status=archived` to `inactive`, `packages/modules/catalog/src/backend/routes.admin.ts`).
+  After Q1 that write would silently switch the product off instead of archiving it. Options: remove the
+  alias and refuse `archived` as FR-112 refuses `draft`; or map it to the Archive action (FR-019).
+  **Interim: none — must be decided before the Q1 block is implemented.**
+- **O-2**: The admin product list today hides `inactive` products by default and counts them as archived
+  (`catalog-admin.service.ts` list and counts). Interim (FR-113): key "archived" on `archivedAt`, list
+  non-archived `inactive` products by default, keep hiding archived ones by default.
+- **O-3**: The "gone" test of FR-005 (could the caller otherwise see it?). Interim: the archive is taken
+  away and the global status is read as `active`, scoped overrides still apply — needed so that products
+  archived by today's global `inactive` (Q1-c) keep answering "gone" where they did. Consequence: a product
+  archived while globally `inactive` answers "gone", not not-found, where no scoped override switches it
+  off. The alternative (read the stored global status) would turn every Q1-c product's "gone" into
+  not-found.
+- **O-4**: Products that are `inactive` today **without** an `archivedAt` (a product created with status
+  `inactive` does not set it today, `catalog-admin.service.ts` `createProduct`). Today their page answers
+  "gone" because the page checks the status. Interim, per Q1-c literally: `archivedAt` is untouched, so they
+  become plain "off" and answer not-found. The alternative is for the migration to set `archivedAt` on them
+  so that they too stay archived. SC-001's parity claim depends on this answer: under the interim, their
+  410 → 404 change is a further exception to SC-001 that the deploy-parity test must allow for.
+- **O-5**: Setting `active` on an archived product no longer restores it (today, moving away from
+  `inactive` clears `archivedAt`). Derived from "archived state is independent of status" (Q1-a) and
+  written into FR-019; every Q1-c product needs an explicit Restore to come back.
 
 ## Out of Scope
 
@@ -1024,7 +1216,8 @@ were decided on 2026-10-21 in round 1, D-3 became moot and D-5 was removed from 
   from not-found.
 - **XII** — every scoped read resolves a concrete channel and fails closed; membership via the sanctioned
   service only; cross-channel tests for every FR-004 consumer.
-- **XIII** — every scoped write and bulk write is a Command, audited per scope; bulk writes are reversible
+- **XIII** — every scoped write and bulk write is a Command, audited per scope, and so are Archive and
+  Restore (FR-019), single and bulk; bulk writes are reversible
   with the bulk-operation undo, single writes are restorable from the audit before-state (FR-081).
 - **VII** — localised URLs, permanent redirects, correct alternate-language links.
 - **XVI** — the scope overview and bulk action are reachable from the command palette with the product
