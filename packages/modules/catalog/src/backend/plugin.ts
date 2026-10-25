@@ -70,6 +70,7 @@ import { ProductValueResolverService } from './services/product-value-resolver.s
 import { readContext as readCatalogContext, registerCatalogPublicRoutes } from './routes.public.js';
 import { registerCatalogUrlKeyPublicRoutes } from './routes.public.url-keys.js';
 import { UrlKeyResolutionService } from './services/url-key-resolution.service.js';
+import type { ResolveSeoProductMeta } from './services/catalog-query.service.js';
 import { registerCatalogAdminRoutes } from './routes.admin.js';
 import { registerCatalogApiKeyRoutes } from './routes.api-key.js';
 import { registerCatalogExternalRoutes } from './routes.external.js';
@@ -136,6 +137,12 @@ export interface CatalogModuleOptions {
    * `availability` indication. Optional: when omitted the field is omitted.
    */
   resolveExternalAvailability?: ResolveAvailabilityPort;
+  /**
+   * Feature 163 (R13) — `seo`'s product metadata per sales channel × language for
+   * the product page; answers `null` while `seo` is not effectively present.
+   * Optional: without it the page serves its derived metadata.
+   */
+  resolveSeoProductMeta?: ResolveSeoProductMeta;
   /**
    * Feature 075 — `organizations`' read port. The external namespace's price
    * decoration resolves the calling organisation through it, where it used to
@@ -329,6 +336,9 @@ export function catalogModule(options: CatalogModuleOptions) {
       options.organizations,
       // Feature 086 — the ordering slice of the same `pricingService`.
       options.pricingService,
+      undefined,
+      // Feature 163 — the page's metadata through `seo`, presence-probed by the caller.
+      options.resolveSeoProductMeta,
     );
     const adminService = new CatalogAdminService(
       options.emFactory,
