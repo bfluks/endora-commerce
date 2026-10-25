@@ -13,7 +13,7 @@ import {
   minimumFixtureRun,
   type MinimumProductFixture,
 } from '../../helpers/order-minimum-fixture.js';
-import { clearProductScopes, setChannelStatus } from '../../helpers/product-scope-fixture.js';
+import { clearProductScopes, errorBodyOf, setChannelStatus } from '../../helpers/product-scope-fixture.js';
 
 /**
  * Feature 163, Phase 6 (T040) — quote-request lines and scoped availability
@@ -64,7 +64,7 @@ describe('163 — quote request lines honour scoped availability [integration]',
     expect(absent.statusCode).toBe(404);
     const refused = await create(off.id);
     expect(refused.statusCode, refused.body).toBe(404);
-    expect(refused.json()).toEqual(absent.json());
+    expect(errorBodyOf(refused)).toEqual(errorBodyOf(absent));
     expect((refused.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
   });
 

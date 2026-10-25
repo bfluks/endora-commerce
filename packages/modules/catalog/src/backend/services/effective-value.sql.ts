@@ -50,15 +50,23 @@ class Writer {
   }
 }
 
-/** `isNonEmpty` for a `jsonb` value: a missing or JSON `null` value is empty, as is `""`, `[]`, `{}`. */
+/**
+ * `isNonEmpty` for a `jsonb` value: a missing or JSON `null` value is empty, as is `""`, `[]`, `{}`.
+ *
+ * The two scalar kinds that are always non-empty are named rather than left to
+ * an `else`: a missing key is SQL `NULL`, `jsonb_typeof(NULL)` is `NULL`, and a
+ * simple `case` over a `NULL` matches no `when` — an `else true` would read every
+ * absent override slot as present and stop the walk at its first leg.
+ */
 function nonEmpty(x: () => string): string {
   return (
     `coalesce(case jsonb_typeof(${x()}) ` +
     `when 'string' then (${x()} #>> '{}') <> '' ` +
     `when 'array' then jsonb_array_length(${x()}) > 0 ` +
     `when 'object' then ${x()} <> '{}'::jsonb ` +
-    `when 'null' then false ` +
-    `else true end, false)`
+    `when 'number' then true ` +
+    `when 'boolean' then true ` +
+    `else false end, false)`
   );
 }
 
