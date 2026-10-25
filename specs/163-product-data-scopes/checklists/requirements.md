@@ -39,9 +39,10 @@
   (FR-101, D-5); the no-warning rule covers every scoped field (FR-013, A-9); `inactive` below global is
   plain "off" (FR-010). It also added FR-018 (quote requests honour availability) and extended FR-017
   (snapshot language), FR-060/FR-061 (refuse-mode granularity), FR-070/FR-015 (URL-key clashes on
-  membership and language changes — superseded in round 3), and SC-008. No open clarification marker remains. D-1 (draft preview
-  reachability) stays deferred with an interim reading, by owner choice; the FR-010 value set is provisional
-  and is re-asked before acceptance.
+  membership and language changes — superseded in round 3), and SC-008. No open clarification marker remains. D-1 (preview
+  reachability of an unpublished product) stayed deferred with an interim reading, by owner choice, and the
+  FR-010 value set was provisional and to be re-asked before acceptance — both settled in Session
+  2026-10-25 (below).
 - Clarify round 3 (2026-10-21): URL keys are unique per language across all channels (option B,
   superseding the per-(channel, language) answer, N4 and C2; C1 moot). FR-070, FR-072, FR-015, FR-041,
   SC-008, US4, US7 and the edge cases were rewritten; the membership- and language-change clash handling
@@ -62,8 +63,15 @@
   fires on status writes only, missing values shown in the overview (FR-060, FR-061, FR-041, US6 #6); Q-D
   no single-write undo, bulk undo plus audit before-state (FR-081, US1 #8). Redirect semantics aligned with
   the language-less (former global) redirect of the design (Key Entities, FR-071, FR-072, US7 #11); FR-005
-  notes the CMS slug handle; FR-090 requires the admin scope-flag control. No open marker remains; D-1 stays
-  deferred by owner choice.
+  notes the CMS slug handle; FR-090 requires the admin scope-flag control. No open marker remains; D-1 stayed
+  deferred by owner choice (moot since Session 2026-10-25).
+- Session 2026-10-25: the owner's final Q1 — status is `active` / `inactive` at every scope, `inactive`
+  is plain "off" everywhere, archiving is a separate global Archive / Restore action (FR-010, FR-019,
+  FR-053), existing data migrated with today's `inactive` products kept archived (FR-110, SC-009), the old
+  values refused by the API with no alias (FR-112), "Archived" a list filter of its own (FR-113); D-1 moot;
+  O-1…O-6 and W5 answered. The release is breaking (*Compatibility and release*); the plan records it at
+  the bump level D-225 allows in a `0.x` series (`minor`, research R30.6). No open marker remains and no
+  item is deferred.
 - "No implementation details": the *Current state* section cites code paths deliberately (house style of
   specs 156/157) to anchor the baseline; requirements themselves are stated as behaviour. FR-016 and FR-052
   name a performance property and the existing bulk path, not a technology.

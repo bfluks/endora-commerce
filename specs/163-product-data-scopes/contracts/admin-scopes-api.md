@@ -92,7 +92,11 @@ Behaviour:
   2026-10-25 it accepts `active` | `inactive` only (`draft` or the legacy `archived` → `400 VALIDATION_FAILED`, FR-112, O-1), and a
   write of `inactive` no longer archives: it neither sets nor clears `archivedAt` (FR-010).
 - **Archive / Restore** (FR-019, FR-053) are separate `catalog:write` Commands for one product and bulk-operation
-  kinds for a selection; they touch `archivedAt` only. Route and payload shapes are left to the architect.
+  kinds for a selection; they touch `archivedAt` only. Shapes (research R30.3, decided 2026-10-25):
+  `POST /api/v1/admin/catalog/products/:id/archive` and `…/restore` — no body, `catalog:write`, `200 { data:
+  AdminProduct }` also on a no-op, Commands `product.archive` / `product.restore`, `changedFields: ['archivedAt']`;
+  bulk `fields.archived: boolean` on `POST …/products/bulk-update`, alone in its request. The admin list's
+  `archived=exclude|include|only` and `counts` `{ all, active, inactive, archived }`: R30.4.
 
 ## 3. Scope overview — `GET /api/v1/admin/catalog/products/:id/scope-overview` (`catalog:read`)
 

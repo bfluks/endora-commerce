@@ -17,8 +17,9 @@ both, with a Polish and an English name and **no German name**. Run one `search_
 
 ## 1. US1 — status per channel and per channel × language
 
-1. Product editor → *Scopes* → B2C: status **draft**. Storefront B2C (any language): P is absent from the
-   listing, search and `/p/wiertarka` answers not-found. B2B still lists it.
+1. Product editor → *Scopes* → B2C: status **inactive**. Storefront B2C (any language): P is absent from
+   the listing, search and `/p/wiertarka` answers not-found (not "gone" — `inactive` never archives). B2B
+   still lists it. The status selectors offer `active` and `inactive` only.
 2. B2C × `pl-PL`: status **active**. B2C in Polish lists P; B2C in German does not.
 3. B2C: *Use inherited* on the channel row. B2C follows the global status again; the C×L row still wins
    in Polish.
@@ -47,8 +48,24 @@ inherited* per field. A `catalog:read`-only admin sees it read-only.
 
 ## 5. US5 — bulk
 
-Product list → select products (incl. one not in B2C) → *Set status in scope* → B2C × `de-DE` → draft.
+Product list → select products (incl. one not in B2C) → *Set status in scope* → B2C × `de-DE` → inactive.
 Result: the non-member is skipped and reported; Bulk actions page shows the operation; *Undo* reverts it.
+
+## 5a. Archive / Restore (FR-019, FR-053, FR-113)
+
+- Editor → **Archive** P → confirm. Storefront: `/p/wiertarka` answers 410 in B2B and B2C wherever P was
+  available; the editor still shows P's status as `active` at every scope. P has left the product list's
+  default view and appears under *Archived*. Audit log: one `product.archive` entry with `archivedAt`
+  before / after.
+- Set P's global status to `inactive` and back to `active` → P stays archived (setting `active` never
+  restores). **Restore** → P is back wherever its status allows, without any gate message even with the gate
+  on **refuse** (§6).
+- Archive again, then switch P off in B2C (C override `inactive`): B2C answers not-found, B2B "gone".
+- Bulk: select several products → **Archive** → per-product result; *Undo* on the Bulk actions page brings
+  them back; a product already archived is reported as unchanged.
+- An API call with `status: 'draft'` or `status: 'archived'` (admin `PATCH …/products/:id`, the API-key
+  upsert, a CSV import row) is refused with a validation error; a new or duplicated product starts
+  `inactive`.
 
 ## 6. US6 — completeness gate
 
@@ -82,5 +99,9 @@ Give P the Polish key `wiertarka-udarowa` and English `impact-drill`; B2B × Eng
 ## 9. Deploy parity (SC-001)
 
 On a copy of a production-like database: before/after deploy, the listed, searchable, sitemap and feed
-sets per channel × language are identical, except products that are not `active` (no longer reachable by
-URL, no longer addable to a basket).
+sets per channel × language are identical, except products that are off and not archived — `inactive`
+after the migration, formerly not `active` and not archived — which are no longer reachable by URL and no
+longer addable to a basket. After the migration no product or scope row holds a status other than `active`
+/ `inactive`; every product that was `inactive` before has an `archivedAt` and still answers 410 where it
+did (SC-009, FR-110). Release note for operators: a product archived before this feature returns only
+through **Restore**.
