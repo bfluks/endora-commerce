@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PromptActionTool, ToolContext } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { ModuleDisabledError } from '@endora-commerce/platform/kernel';
+import { HttpError } from '@endora-commerce/platform/http';
 import { catalogPromptMutationTools, type CatalogPromptToolsDeps } from './prompt-tools.js';
 
 /**
@@ -39,7 +40,8 @@ function harness(initial: Row[], options: { bus?: boolean } = {}) {
   const actions: Array<{ action: string; objectId: string | undefined; audited: boolean }> = [];
   const em = {
     find: vi.fn(async (_entity: unknown, where: { id: { $in: string[] } }) =>
-      where.id.$in.flatMap((id) => (rows.has(id) ? [rows.get(id)!] : [])),
+      // One row per matching id, as `id in (…)` answers: a repeated id is one row.
+      [...new Set(where.id.$in)].flatMap((id) => (rows.has(id) ? [rows.get(id)!] : [])),
     ),
     findOne: vi.fn(async (_entity: unknown, where: { id: string }) => rows.get(where.id) ?? null),
     persist: vi.fn(),
@@ -167,5 +169,60 @@ describe('163 P-1 — assistant tools to archive and restore products', () => {
     expect(ids).not.toContain('catalog.archive_product');
     expect(ids).not.toContain('catalog.restore_product');
     expect(ids).toContain('catalog.set_product_status');
+  });
+
+  it('S-2: a per-item failure names an HttpError\'s message, never another error\'s', async () => {
+    const h = harness([product(A), product(B)]);
+    vi.mocked(h.commandBus.run)
+      .mockRejectedValueOnce(new Error('connection to db-internal:5432 refused for user catalog_rw'))
+      .mockRejectedValueOnce(new HttpError(409, 'CONFLICT', 'Product is locked.'));
+    const result = (await h.tool('catalog.archive_product').execute({ productIds: [A, B] }, toolCtx)) as {
+      summary: { failures: Array<{ id: string; reason: string }> };
+    };
+    expect(result.summary.failures).toEqual([
+      { id: A, reason: 'failed' },
+      { id: B, reason: 'Product is locked.' },
+    ]);
+  });
+});
+
+describe('163 checkpoint F (S-1) — product id lists the assistant sends are bounded and deduplicated', () => {
+  const PRODUCT_ID_TOOLS = [
+    'catalog.assign_products_to_category',
+    'catalog.remove_products_from_category',
+    'catalog.set_product_status',
+    'catalog.set_products_visibility',
+    'catalog.archive_product',
+    'catalog.restore_product',
+  ];
+
+  it('every product mutation tool refuses more ids than the bulk route accepts (10 000)', () => {
+    const { tool } = harness([]);
+    const ids = (n: number) =>
+      Array.from({ length: n }, (_, i) => `00000000-0000-4000-8000-${i.toString(16).padStart(12, '0')}`);
+    const extra = { categoryId: A, status: 'active', visibility: 'public' };
+    for (const id of PRODUCT_ID_TOOLS) {
+      const schema = tool(id).paramsSchema;
+      expect(schema.safeParse({ ...extra, productIds: ids(10_000) }).success, id).toBe(true);
+      expect(schema.safeParse({ ...extra, productIds: ids(10_001) }).success, id).toBe(false);
+    }
+  });
+
+  it('a repeated id counts once in the preview instead of answering 404', async () => {
+    const h = harness([product(A), product(B)]);
+    const preview = await h.tool('catalog.archive_product').preview!({ productIds: [A, B, A] }, toolCtx);
+    expect(preview).toMatchObject({ affectedCount: 2 });
+    expect((preview as { headline: string }).headline).toMatch(/Archive 2 product\(s\)/);
+    const status = await h.tool('catalog.set_product_status').preview!({ productIds: [A, A], status: 'inactive' }, toolCtx);
+    expect(status).toMatchObject({ affectedCount: 1 });
+  });
+
+  it('a repeated id is written once', async () => {
+    const h = harness([product(A), product(B)]);
+    const result = (await h.tool('catalog.archive_product').execute({ productIds: [A, A, B] }, toolCtx)) as {
+      summary: { total: number; succeeded: number };
+    };
+    expect(h.actions.map((a) => a.objectId)).toEqual([A, B]);
+    expect(result.summary).toMatchObject({ total: 2, succeeded: 2 });
   });
 });
