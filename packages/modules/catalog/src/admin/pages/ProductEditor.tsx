@@ -221,10 +221,17 @@ export function ProductEditor(): ReactNode {
     publishFrom,
     publishUntil,
   });
+  // Review D4 — the gallery's staged edits are unsaved changes too. The gallery stays
+  // mounted once its tab is opened (hidden on the other tabs), so its staging survives a
+  // tab switch and the page Save still writes it.
+  const [galleryDirty, setGalleryDirty] = useState(false);
+  const [galleryOpened, setGalleryOpened] = useState(false);
+  useEffect(() => {
+    if (activeTab === 'media') setGalleryOpened(true);
+  }, [activeTab]);
   const dirty =
     !loading &&
-    initialSnapshotRef.current !== '' &&
-    currentSnapshot !== initialSnapshotRef.current;
+    ((initialSnapshotRef.current !== '' && currentSnapshot !== initialSnapshotRef.current) || galleryDirty);
   useUnsavedChangesPrompt(dirty);
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -1073,13 +1080,15 @@ export function ProductEditor(): ReactNode {
           ) : null}
 
           {activeTab === 'media' && id ? (
-            <>
-              <AdminZone
-                name="product.editor.field.after"
-                props={{ productId: id, fieldPath: 'gallery', languageCodes: null }}
-              />
-              <GallerySection ref={galleryRef} productId={id} />
-            </>
+            <AdminZone
+              name="product.editor.field.after"
+              props={{ productId: id, fieldPath: 'gallery', languageCodes: null }}
+            />
+          ) : null}
+          {(activeTab === 'media' || galleryOpened) && id ? (
+            <div hidden={activeTab !== 'media'}>
+              <GallerySection ref={galleryRef} productId={id} onDirtyChange={setGalleryDirty} />
+            </div>
           ) : null}
 
           {activeTab === 'inventory' && id ? (
