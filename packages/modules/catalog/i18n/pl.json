@@ -1090,5 +1090,7 @@
   "productEditor.error.nameRequired": "Podaj nazwę w co najmniej jednym języku.",
   "productEditor.error.save": "Nie udało się zapisać.",
   "productEditor.error.delete": "Nie udało się usunąć.",
-  "productEditor.error.duplicate": "Nie udało się zduplikować."
+  "productEditor.error.duplicate": "Nie udało się zduplikować.",
+  "productsList.bulkEdit.scopedStatus.valuePlaceholder": "Wybierz status…",
+  "productsList.bulkEdit.scopedStatus.valueRequired": "Wybierz status do ustawienia w kanale."
 }
