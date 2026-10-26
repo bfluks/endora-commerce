@@ -35,7 +35,7 @@ export function DiscardChangesPrompt({
   t: Translate;
 }): ReactNode {
   return (
-    <Alert variant="warning" role="alertdialog" aria-live="assertive">
+    <Alert variant="warning">
       <AlertDescription>
         <p>{t('productEditor.scopeDialog.discard.body')}</p>
         <div className="mt-2 flex flex-wrap gap-2">
