@@ -523,6 +523,36 @@ describe('Attachments per language and per channel (US9, FR-078)', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
+  it('shows the inherited global name and description as visible text (D9)', async () => {
+    serve();
+    await renderAttachments();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Translations and channels: Manual' }));
+    const dialog = await screen.findByRole('dialog');
+    const name = within(dialog).getByRole('textbox', { name: 'Name (EN)' });
+    expect(document.getElementById(name.getAttribute('aria-describedby') ?? '')).toHaveTextContent('Inherited: Manual');
+    const description = within(dialog).getByRole('textbox', { name: 'Description (EN)' });
+    expect(document.getElementById(description.getAttribute('aria-describedby') ?? '')).toHaveTextContent(
+      'Inherited: How to use it',
+    );
+  });
+
+  it('a failure that is not a refusal says nothing was saved; Escape with changes asks first (D16)', async () => {
+    serve();
+    patchSpy.mockRejectedValueOnce(new Error('network'));
+    await renderAttachments();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Translations and channels: Manual' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByRole('textbox', { name: 'Name (EN)' }), 'User manual');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Nothing was saved. Try again.');
+    await user.keyboard('{Escape}');
+    expect(within(dialog).getByText(/changes that are not saved/i)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
   it('is read-only for catalog:read — the dialog’s fields and Save are disabled', async () => {
     serve();
     await renderAttachments(['catalog:read']);
