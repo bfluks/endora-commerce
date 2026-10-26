@@ -725,6 +725,75 @@ no admin surface offers or labels `draft`.
 > where Archive / Restore sit in the editor and the bulk bar, the Archived tab), plus product-owner check of
 > FR-019 / FR-053 / FR-113 in the UI. May run together with checkpoint D.
 
+### Phase 9d: [backend] Owner decisions P-1, P-3 and PAL-1 (2026-10-26) — S2-decisions builder
+
+Three owner answers to questions Block Q left open: the assistant can archive (P-1 = A), quote requests refuse
+an archived product while price lists stay as they are (P-3 = A), and "Archived products" is a palette action
+of its own on a dedicated route (PAL-1 = B).
+
+- [x] T156p1a [P] [S2] RED assistant Archive / Restore: `catalog.archive_product` / `catalog.restore_product` are
+  `catalog:write` mutations with a preview; each product runs `product.archive` / `product.restore` through the
+  Command Bus; an already-restored product is a succeeded no-op; an unknown id is a per-item failure; no bus → no
+  tools; `set_product_status`' description points at them — `packages/modules/catalog/src/backend/prompt-tools.test.ts`;
+  `[PG]` end to end through `/confirm` (actor = the admin, status untouched, search reports `archived`) —
+  `backend/test/integration/prompt_actions/archive-restore-flow.test.ts`
+- [x] T156p1b [S2] The tools — `packages/modules/catalog/src/backend/prompt-tools.ts` (a bus-backed
+  `CatalogAdminService`; ≤ 50 inline, larger = the FR-053 bulk Archive / Restore on the queue),
+  `ArchiveProductsParamsSchema` / `RestoreProductsParamsSchema` in `packages/contracts/src/prompt-actions.ts`,
+  `commandBus` passed from catalog's boot hook (`index.ts`); `catalog.search_products` now includes archived
+  products and returns `archived`
+- [x] T156p1c [S2] Docs line — `packages/modules/prompt_actions/PROMPT_TOOLS.md`; changeset
+  `.changeset/163-assistant-archive-restore.md`
+- [x] T156p3a [P] [S2] RED quote requests refuse an archived product: operator create → 404 before anything is
+  written; buyer create outside a request scope → 404 — `packages/modules/quote_requests/src/backend/services/archived-product-lines.test.ts`;
+  `[PG]` buyer create / draft edit / resubmit / quick order build / cart conversion (404, byte-equal to an absent
+  id where the path is the buyer's create), convert of an approved quote (409), operator create and edit (404) —
+  `backend/test/integration/quote_requests/archived-product.test.ts`
+- [x] T156p3b [S2] `isNotArchived` applied in `#acquirableProductsById` (before the channel question),
+  `seedBasketFromApproved` (convert, `prepare-customer-basket`), `RfqAdminService.createOnBehalf` and `modify`
+- [x] T156p3c [S2] `contracts/consumers.md` row 25 (and row 20's archived exception); changeset
+  `.changeset/163-quote-requests-refuse-archived.md`
+- [x] T156-pal-a [S2] Backend half: manifest action `open-archived-products` → `/catalog/products/archived`,
+  `catalog:read`, icon `Archive`, weight 210, English keywords plus single Polish words; bundle keys
+  `actions.openArchivedProducts.{label,description}` en + pl; generated catalog reference page and its Polish
+  cache entry; `batch-fifteen-palette-off-state` (`[PG]`) and `seeded-manifests.unit.test.ts` list it
+- [ ] T156-pal-b [S3] Admin half: declare `/catalog/products/archived` on `catalog:read` in
+  `packages/modules/catalog/src/admin/index.ts` **before** `/catalog/products/:id` (the D-221 move), rendering the
+  product list on its Archived tab. Until then the action opens the editor with the id `archived`.
+
+**Phase 9d note** (2026-10-26):
+- *P-1, the bus boundary.* The two new tools run through a dedicated `CatalogAdminService` built with
+  `cradle().commandBus`; the four older mutations keep their own audited path (`buildBulkServices`, no bus,
+  no undo), as the Phase 9b note left them. A queued (> 50) Archive / Restore is audited with the requester
+  (S-W2's `withSystemScopeActingFor`). The plan / confirm step is the confirmation; the preview headline says
+  "only Restore brings them back". No bundle strings: tool descriptions and headlines are English by the
+  prompt-tool contract (`PROMPT_TOOLS.md`), as for every existing tool.
+- *P-1, search.* `catalog.search_products` listed with the admin list's default (`archived: exclude`), so no
+  archived product could ever be resolved for `catalog.restore_product`. It now includes them and reports
+  `archived`; the other mutations accept an archived product as before (status, visibility and categories do
+  not touch `archivedAt`).
+- *P-3, the answer.* The refusal is the path's existing unknown-product answer — buyer and operator `404
+  PRODUCT_NOT_FOUND`, convert `409 PRODUCT_NOT_FOUND` — not a new code. The operator's
+  `PRODUCT_UNAVAILABLE_IN_SCOPE` warning stays for every other reason (FR-018). **Owner question:** should the
+  operator surface name `PRODUCT_ARCHIVED` (catalog's code) instead, since disclosure is not a concern there?
+- *P-3, convert (deviation from row 20's "unchanged").* The comment at the convert step already promised a 409
+  for "archived between approve and convert", and `findByIds` never saw `archivedAt`; the 2026-08-21 exemption
+  is about the channel, and placement would refuse the seeded line anyway. **Owner question:** confirm that a
+  convert refuses (409) rather than seeding a basket the checkout then refuses.
+- *P-3, outside a request.* `#acquirableProductsById` without a channel applied the audience rule only; the
+  archived filter now runs before the branch, so a worker or in-process caller with no request is covered too.
+- *PAL-1.* Nothing in the backend checks the SPA route exists: `check:action-route-permissions` reconstructs the
+  API path (module-level match on catalog's `catalog:read` product routes), and the off-state file's pairing
+  matches `/catalog/products/:id` until S3 declares the static route. T156-pal-b is the real gate.
+
+**Verification** (one invocation per line):
+- `pnpm --filter @endora-commerce/mod-catalog exec vitest run src/backend/prompt-tools.test.ts`
+- `pnpm --filter @endora-commerce/mod-quote-requests exec vitest run src/backend/services/archived-product-lines.test.ts`
+- `pnpm --filter backend exec vitest run test/unit/admin_actions/seeded-manifests.unit.test.ts`
+- `[PG] backend/test/integration/prompt_actions/archive-restore-flow.test.ts`
+- `[PG] backend/test/integration/quote_requests/archived-product.test.ts`
+- `[PG] backend/test/integration/_admin_surfaces/batch-fifteen-palette-off-state.test.ts`
+
 ---
 
 ## Block C — S1 backend: overview, bulk, gate, order rules
@@ -1285,7 +1354,7 @@ T139 regen + changesets, T139a/b overview fields `attachments:hidden`, `attachme
 `attachments:description`, `packagingUnits:name` through `scopedFields`.
 
 **Carry-over notes (2026-10-26).**
-- **T156-pal — blocked, owner question.** A separate "Archived products" palette action with `targetRoute:
+- **T156-pal — answered 2026-10-26: PAL-1 = B** (see Phase 9d, T156-pal-a / T156-pal-b). Was: blocked, owner question. A separate "Archived products" palette action with `targetRoute:
   /catalog/products?status=archived` cannot be declared: `ModuleActionSchema.targetRoute` is
   `/^\/[A-Za-z0-9/_-]*$/` and `admin-contributions.ts` states "No query string" as a design rule. Options:
   (A) allow a query string in `targetRoute` (contracts change; strip it in the `action-route-permissions` rule and in
