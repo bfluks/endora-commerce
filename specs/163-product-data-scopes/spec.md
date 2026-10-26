@@ -245,6 +245,22 @@ It replaces the 2026-10-21 Q1 answer and extends N1.
   `404 PRODUCT_NOT_FOUND`, exactly as a product hidden from the bound organization does (FR-004;
   `contracts/consumers.md`).
 
+### Session 2026-10-26
+
+- Q: (L-1) On the storefront product page, which wins — the visitor's `lang` cookie or the link's
+  `?lang=<L>`? Until now the cookie did, so a visitor with cookie `pl` opening `/p/schuh?lang=de` got the
+  Polish page, where the German key `schuh` does not resolve, and the link answered not-found. → A:
+  **L-1 = A (owner, 2026-10-26)** — on the product page an explicit `?lang=` that names an active language
+  beats the cookie; a `?lang=` that is not an active language is ignored and the usual order decides
+  (cookie, then `Accept-Language`, then the channel default). Product page only, as the interim until the
+  language path prefix (#396). Opening such a link does not rewrite the cookie: a GET does not change the
+  visitor's stored preference; only the header language switcher does (FR-071).
+- Q: (OV-1) Does the scope overview offer "reset to inherited" for a product's own per-language text
+  (name, description, a language-scoped attribute at the language level)? → A: **OV-1 = A (owner,
+  2026-10-26)** — no. The overview offers "reset to inherited" only for sales channel and sales channel ×
+  language overrides; a product's own text in a language is edited in the product editor and has no reset
+  in the overview (FR-041, US4 #2).
+
 ## Current state (origin/master cde5563ea)
 
 Paths are relative to the repository root. Behaviour below is read from the code, not observed at
