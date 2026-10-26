@@ -351,7 +351,7 @@ describe('Attachments per language and per channel (US9, FR-078)', () => {
     serve();
     await renderAttachments();
     expect(screen.getByText('Datasheet')).toBeInTheDocument();
-    expect(screen.getAllByText('Technical sheet')).toHaveLength(2);
+    expect(screen.getAllByRole('cell', { name: 'Technical sheet' })).toHaveLength(2);
     expect(screen.getByText('Manual')).toBeInTheDocument();
     expect(screen.getByText('Hidden in: B2C shop')).toBeInTheDocument();
   });
