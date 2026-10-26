@@ -132,7 +132,7 @@ export function serveBook(api: MockApi, served: ServedBook): void {
       return {
         data: items.slice(page * pageSize, (page + 1) * pageSize),
         pagination: { page, pageSize, total: items.length },
-        counts: { all: items.length, active: items.length, draft: 0, inactive: 0 },
+        counts: { all: items.length, active: items.length, inactive: 0, archived: 0 },
       };
     }
     const variantRead = /^\/api\/v1\/admin\/catalog\/products\/([^/]+)\/variants$/.exec(path!);

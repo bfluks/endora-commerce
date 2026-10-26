@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/TranslationProvider';
 import coreEn from '../../../../packages/modules/_i18n/i18n/en.json';
 import corePl from '../../../../packages/modules/_i18n/i18n/pl.json';
@@ -48,7 +49,10 @@ function renderDialog(language: 'en' | 'pl' = 'en'): void {
   render(
     <StrictMode>
       <TranslationProvider language={language} initialBundle={bundle}>
-        <ProductsBulkEditDialog productIds={IDS} onClose={vi.fn()} />
+        {/* The result links to its bulk operation, so the dialog needs a router. */}
+        <MemoryRouter>
+          <ProductsBulkEditDialog productIds={IDS} onClose={vi.fn()} />
+        </MemoryRouter>
       </TranslationProvider>
     </StrictMode>,
   );

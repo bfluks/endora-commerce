@@ -109,7 +109,6 @@ const BUNDLE = passthroughBundle('catalog', [
   'productsList.search.placeholder',
   'productsList.tab.all',
   'productsList.tab.active',
-  'productsList.tab.draft',
   'productsList.tab.inactive',
   'productsList.error.load',
 ]);
@@ -129,13 +128,13 @@ const ONE_ROW = {
     },
   ],
   pagination: { page: 0, pageSize: 25, total: 1 },
-  counts: { all: 1, active: 1, draft: 0, inactive: 0 },
+  counts: { all: 1, active: 1, inactive: 0, archived: 0 },
 };
 
 const NO_ROWS = {
   data: [],
   pagination: { page: 0, pageSize: 25, total: 0 },
-  counts: { all: 0, active: 0, draft: 0, inactive: 0 },
+  counts: { all: 0, active: 0, inactive: 0, archived: 0 },
 };
 
 function mount(permissions: readonly string[]): void {
