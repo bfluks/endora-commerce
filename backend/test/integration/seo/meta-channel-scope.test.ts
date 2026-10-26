@@ -101,6 +101,15 @@ describe('SEO meta overrides per channel × language (spec 163, T114)', () => {
       title: 'C title',
       description: 'C description',
     });
+    // The admin editor shows, per field, the scope each value came from (T126).
+    const answer = await h.app.inject({ method: 'GET', url: url(`?channelId=${member}&locale=pl-PL`), ...admin });
+    expect((answer.json() as { data: { sources: Record<string, string> } }).data.sources).toEqual({
+      title: 'channel_language',
+      description: 'channel',
+      ogTitle: 'derived',
+      ogDescription: 'derived',
+      ogImageUrl: 'derived',
+    });
     // Language only: the L row, then derived.
     expect(await resolved('?locale=pl-PL')).toMatchObject({ title: 'Legacy PL title', description: 'Derived description' });
     expect(await resolved('?locale=en-US')).toMatchObject({ title: 'Derived name', source: 'rule' });
