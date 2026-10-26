@@ -158,8 +158,8 @@ describe('155 — packaging-unit minOrderUnits [contract]', () => {
       cookies: adminCookie,
     });
 
-    // The Command's row (`objectType: 'packaging_unit'`); the route also writes a
-    // bare `product_packaging_unit` row with no state, which is not this test's subject.
+    // The Command's row (`objectType: 'packaging_unit'`) — since feature 163 (FR-080) the
+    // only one: the route no longer writes a bare `product_packaging_unit` row beside it.
     const createRows = await h
       .em()
       .find(AuditLogEntry, { action: 'packaging_unit.create', objectType: 'packaging_unit', objectId: unitId });

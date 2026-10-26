@@ -1204,10 +1204,10 @@ already in. Bulk results carry no `pairs`, so a bulk gate message can name the s
 - *Sitemap stale set.* Not extended: the sitemap emits no image entries, so `media` changes no sitemap content.
 - *Not covered (owner question).* `GalleryService.listForProducts` (product feeds) and `baseImageUrls`
   (comparisons) take no channel, so a hidden image can still reach a feed or a comparison column. T133 names
-  PDP / card / OG only. Option: both port methods gain `channelId`. Not built.
+  PDP / card / OG only. Option: both port methods gain `channelId`. Not built. *(Owner decision MED-1 = A, 2026-10-26: built in Phase 22's block — see the Phase 22 notes.)*
 - `gallery-batch-read.test.ts`: `list` now costs four round-trips per product (the hidden set), 2000 for 500.
 
-**Stopped here (2026-10-26, owner pause).** Phase 21 is complete except docs (EN/PL page text is T147 / T148).
+**Stopped here (2026-10-26, owner pause).** Phase 21 is complete except docs (EN/PL page text is T147 / T148). *(Resumed 2026-10-26: Phase 22 built and the gallery page written — see the Phase 22 notes; the RFQ half of T138 is open.)*
 Phase 22 (T135–T139b) is **not started**. Next: T135 RED tests, T136 migration
 `attachment_packaging_translations`, T137 services/routes (drop the route-level `auditEmit` beside the Commands
 for the touched attachment and packaging routes, FR-080), T138 snapshots via `effectivePackagingUnitName` at
@@ -1229,13 +1229,13 @@ T139 regen + changesets, T139a/b overview fields `attachments:hidden`, `attachme
 
 ### Phase 22: [backend + storefront] Attachments and packaging units (US9 b, FR-078, FR-079)
 
-- [ ] T135 [P] [US9] [PG] [S1] RED: attachment hidden in B2C neither listed nor referenced from the B2C PDP (US9 #4); names/descriptions per language with global fallback; packaging-unit names per language on PDP, basket and order line; placed line keeps its name after a rename (US9 #5) — `backend/test/contract/catalog/attachment-packaging-translations.test.ts`, `backend/test/integration/carts/packaging-unit-name-snapshot.test.ts`
-- [ ] T136 [S1] Migration `--module catalog --name attachment_packaging_translations`; entities — data-model §8
-- [ ] T137 [US9] [S1] Attachment + packaging services/routes accept translations and `hiddenInChannels` (admin packaging schemas stay `.strict()` with the key added). Writes ride the **existing** Commands — `product_attachment.update` (`objectType: 'product_attachment'`) and `packaging_unit.update` (`objectType: 'packaging_unit'`) — one audit entry per request, i.e. one per product (FR-080); their `before`/`after` projections gain `productId`, the translations and `hiddenInChannels`; events `changedFields: ['attachments']` / `['packagingUnits']` — `services/{attachment,packaging-unit}.service.ts`, `packages/contracts/src/catalog.ts`
-- [ ] T138 [US9] [S1] PDP DTO and basket/RFQ snapshot take the effective name at the scope language — `catalog-query.service.ts`, `cart-service.ts`, `rfq-service.ts`
-- [ ] T139 [S1] Regenerate artefacts; changesets
-- [ ] T139a [P] [US4] [PG] [S1] RED: extend `backend/test/contract/catalog/scope-overview.test.ts` — attachment translations / hidden per channel and packaging-unit name translations
-- [ ] T139b [US4] [S1] `ScopeOverviewService` lists them — `services/scope-overview.service.ts`
+- [x] T135 [P] [US9] [PG] [S1] RED: attachment hidden in B2C neither listed nor referenced from the B2C PDP (US9 #4); names/descriptions per language with global fallback; packaging-unit names per language on PDP, basket and order line; placed line keeps its name after a rename (US9 #5) — `backend/test/contract/catalog/attachment-packaging-translations.test.ts`, `backend/test/integration/carts/packaging-unit-name-snapshot.test.ts`
+- [x] T136 [S1] Migration `--module catalog --name attachment_packaging_translations`; entities — data-model §8
+- [x] T137 [US9] [S1] Attachment + packaging services/routes accept translations and `hiddenInChannels` (admin packaging schemas stay `.strict()` with the key added). Writes ride the **existing** Commands — `product_attachment.update` (`objectType: 'product_attachment'`) and `packaging_unit.update` (`objectType: 'packaging_unit'`) — one audit entry per request, i.e. one per product (FR-080); their `before`/`after` projections gain `productId`, the translations and `hiddenInChannels`; events `changedFields: ['attachments']` / `['packagingUnits']` — `services/{attachment,packaging-unit}.service.ts`, `packages/contracts/src/catalog.ts`
+- [ ] T138 [US9] [S1] PDP DTO and basket/RFQ snapshot take the effective name at the scope language — `catalog-query.service.ts`, `cart-service.ts`, `rfq-service.ts` *(PDP and basket done 2026-10-26; the RFQ half is open — see the Phase 22 notes)*
+- [x] T139 [S1] Regenerate artefacts; changesets
+- [x] T139a [P] [US4] [PG] [S1] RED: extend `backend/test/contract/catalog/scope-overview.test.ts` — attachment translations / hidden per channel and packaging-unit name translations
+- [x] T139b [US4] [S1] `ScopeOverviewService` lists them — `services/scope-overview.service.ts`
 
 **Verification** (one invocation per line):
 - `[PG] backend/test/contract/catalog/attachment-packaging-translations.test.ts` (asserts the audit projections of T137)
@@ -1246,6 +1246,68 @@ T139 regen + changesets, T139a/b overview fields `attachments:hidden`, `attachme
 - `pnpm --filter @endora-commerce/mod-catalog run typecheck`
 - `pnpm --filter @endora-commerce/mod-carts run typecheck`
 - `pnpm --filter @endora-commerce/mod-quote-requests run typecheck`
+
+**Phase 22 notes** (S1, 2026-10-26):
+- *Verification run.* No Postgres on the builder: the `[PG]` files above were written, not run —
+  `attachment-packaging-translations.test.ts` (new), `packaging-unit-name-snapshot.test.ts` (new), the T139a case in
+  `scope-overview.test.ts`, and `packaging-unit-minimum.test.ts` (comment only: the route-level row is gone). The
+  no-PG halves ran green: `attachment-packaging-scopes.test.ts`, `scope-overview.service.test.ts`,
+  `cart-batch-add.test.ts` (three snapshot cases, the request channel mocked), `catalog-attachment-packaging-shapes.test.ts`.
+- *Write path.* Translations are columns of the rows themselves (`name_translations`, `description_translations`); the
+  one bridge row is `product_attachment_channel_hidden`, with its single writer `writeAttachmentHiddenChannels`
+  (`services/attachment-packaging-scopes.ts`), run only on the Command's `em`. The existing Commands carry the writes:
+  `product_attachment.create|update` (`objectType: 'product_attachment'`, the attachment row locked on update) and
+  `packaging_unit.create|update` (`objectType: 'packaging_unit'`). Projections: attachment — `productId`,
+  `attachmentTypeId`, `name`, `description`, `position`, both maps, `hiddenInChannels`; unit — `productId`, `name`,
+  `nameTranslations`, `baseQuantity`, `isDefault`, `minOrderUnits`. Both maps name every language either side names
+  (`''` where absent), so `before` minus `productId`, re-sent, restores the row (FR-081). A no-op is `skipAudit` and
+  emits nothing. Events `product.updated.v1` `['attachments']` / `['packagingUnits']` on create and update (delete
+  and reorder untouched). The route-level `auditEmit` rows on attachment create/update and packaging create/update
+  are dropped (FR-080). EN/PL labels `auditLog.product_attachment.create|update`,
+  `auditLog.packaging_unit.create|update` added (the Command rows had none).
+- *Membership guard.* `assertProductChannelMembers` (same file) is the FR-014 check for a **newly** hidden channel;
+  `GalleryService#assertMembers` now delegates to it. `AttachmentService` takes the membership port (wired in
+  `index.ts` and `plugin.ts`).
+- *Reads.* PDP: an attachment hidden in the request's channel is dropped before its asset is read; name/description
+  `translationAt(…, L) ?? global`; `packagingUnits[].name` = `effectivePackagingUnitName(unit, L)`. Only an available
+  product reaches this code (row 3 of `consumers.md`), so nothing here widens availability.
+- *T138 — basket done, RFQ not.* `CartService#resolveLine` computes L once (`basketScopeLanguage`, `null` for an
+  operator naming the channel) and the line stores `effectivePackagingUnitName(unit, L)`; the order line copies the
+  basket's snapshot (`order-service.ts`), so it keeps the name. The operator path (`input.salesChannelId`) has no
+  request language here and stores the **global** name, not the channel default N2 names — recorded, not changed.
+  **The RFQ half is not built**: `packages/modules/quote_requests/**` belongs to another builder in this block.
+  Recipe for whoever owns it next: `PackagingUnitCandidate` gains `nameTranslations?`; `fromUnit` stores
+  `effectivePackagingUnitName(unit, raisedInScopeLanguage(language, channelId))` (operator: `null` → global, as the
+  basket); the **name match** in `resolveLinePackaging` stays on `unit.name` (owner decision 2026-10-26).
+  `CatalogPackagingUnitRecord.nameTranslations` is already populated by `listPackagingUnitsByProductIds`.
+- *Overview (T139b).* `loadAttachmentPackagingScopedFields` (one statement) feeds `attachments:hidden` (channel),
+  `attachments:name`, `attachments:description`, `packagingUnits:name` (language). **S3: the Phase 14 field-label map
+  needs these four names.**
+- *Owner decision MED-1 = A (built).* `CatalogGalleryPort.listForProducts(ids, channelId)` drops items hidden in the
+  feed's channel; `baseImageUrls(ids, channelId)` answers the channel holder of `base_image`, else the global one,
+  `null` when that holder is hidden there — one statement each, as before. Callers: `feed-generation.service.ts`
+  (the feed's channel), `comparison-service.ts` (`viewerSalesChannelId`). `consumers.md` row 25. `[PG]` channel
+  case added to `backend/test/integration/catalog/gallery-batch-read.test.ts`.
+- *Also in this block.* `serializeAdminAttribute` returns `channelScoped` / `languageScoped` and
+  `adminAttributeResponseSchema` declares them (S3's T095b gap) — `[PG]`
+  `backend/test/contract/catalog/attribute-scope-flags-response.test.ts`. The `withOrgScope` doc comment moved off
+  `withSystemScopeActingFor` in `escape-hatch.ts`.
+- *Docs.* P21's gallery page (EN + PL, cache re-pinned) is written under T147/T148; the attachments and
+  packaging-unit pages for P22 are still open under T147/T148.
+- *Shapes for S3 (Phase 23).* Attachment admin DTO: `nameTranslations`, `descriptionTranslations`
+  (`Record<lang, string>`), `hiddenInChannels: uuid[]` (sorted). `POST|PATCH …/attachments[/:id]` accept the same three
+  (maps are patches: `''` removes a language, unnamed untouched; name ≤ 160, description ≤ 4000; `hiddenInChannels`
+  replaces the set; `422 SCOPE_INVALID not_a_member` for a newly hidden non-member channel). Packaging-unit admin DTO:
+  `nameTranslations`; `POST|PATCH …/packaging-units[/:id]` accept `nameTranslations` (strict schemas, ≤ 160).
+
+**Stopped here (2026-10-26, session end).** Phase 22 built and committed (T135–T137, T139–T139b; T138 PDP and
+basket half), MED-1 = A built, attribute scope flags in the admin response, `withOrgScope` comment moved, the P21
+gallery page EN/PL written. Verified: contracts, platform, catalog, carts typecheck + lint; product_feeds typecheck;
+catalog/carts/product_feeds/comparisons/platform unit suites; check:naming (Docker), check:language,
+default-language-prose, platform-surface, docs-translations, module-docs, i18n:hardcoded. **Not yet run:**
+product_feeds lint, comparisons/backend/storefront/admin typecheck + lint, the `[PG]` files. Next: run those, push,
+then the RFQ half of T138 (recipe in the Phase 22 notes, owner of `quote_requests`) and the P22 docs (T147/T148).
+`contracts` `crm-rich-text.test.ts` "reads quickly" failed at 747 ms / 500 ms under host load 828 — untouched file.
 
 ### Phase 23: [admin UI] Media, attachments, packaging per scope (US9) — after Phases 21–22
 
