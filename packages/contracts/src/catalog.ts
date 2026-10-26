@@ -1752,7 +1752,7 @@ export type UpdateAttachmentTypeRequest = z.infer<typeof updateAttachmentTypeReq
 export const ATTACHMENT_DESCRIPTION_TRANSLATION_MAX = 4000;
 
 /** Feature 163 (FR-078) — an attachment name per language, as long as the global one. */
-const ATTACHMENT_NAME_MAX = 160;
+export const ATTACHMENT_NAME_MAX = 160;
 
 export const productAttachmentSchema = z.object({
   id: uuidSchema,
@@ -1815,6 +1815,9 @@ export type UpdateAttachmentRequest = z.infer<typeof updateAttachmentRequestSche
 
 // --- Packaging Units (Feature 043) ------------------------------------------
 
+/** The longest packaging-unit name, global or (feature 163, FR-079) per language. */
+export const PACKAGING_UNIT_NAME_MAX = 160;
+
 /**
  * A named ordering unit attached to a product (e.g. "Paleta" = 480 pieces).
  * Managed in the Inventory section of the admin product card; surfaced on the
@@ -1855,7 +1858,7 @@ export const createPackagingUnitRequestSchema = z
      * Feature 163 (FR-079) — the name per language: the named languages are set, an
      * empty string removes one, an unnamed one is left as it is.
      */
-    nameTranslations: translationMapPatchSchema(160).optional(),
+    nameTranslations: translationMapPatchSchema(PACKAGING_UNIT_NAME_MAX).optional(),
   })
   .strict();
 export type CreatePackagingUnitRequest = z.infer<typeof createPackagingUnitRequestSchema>;
@@ -1872,7 +1875,7 @@ export const updatePackagingUnitRequestSchema = z
      * Feature 163 (FR-079) — the name per language: the named languages are set, an
      * empty string removes one, an unnamed one is left as it is.
      */
-    nameTranslations: translationMapPatchSchema(160).optional(),
+    nameTranslations: translationMapPatchSchema(PACKAGING_UNIT_NAME_MAX).optional(),
   })
   .strict();
 export type UpdatePackagingUnitRequest = z.infer<typeof updatePackagingUnitRequestSchema>;
