@@ -4,6 +4,7 @@ import {
   ERROR_CODES,
   type BulkUpdateProductsRequest,
   type PatchProductScopesRequest,
+  type ScopeCompletenessGateMode,
   type ScopeWarning,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -170,6 +171,12 @@ export class CatalogBulkUpdateService {
 
     const bulkOperationId = randomUUID();
     const results: BulkUpdateOutcome[] = [];
+    // Feature 163 (FR-061) — a status edit, global or scoped, runs the completeness
+    // gate in the platform's mode, read once for the whole run.
+    const completeness =
+      req.fields.status !== undefined || req.fields.scopedStatus !== undefined
+        ? await this.catalogAdmin.completenessMode()
+        : undefined;
 
     const total = req.productIds.length;
     let processed = 0;
@@ -177,7 +184,7 @@ export class CatalogBulkUpdateService {
     let skipped = 0;
     let failed = 0;
     for (const productId of req.productIds) {
-      const outcome = await this.applyToOneProduct(productId, req, auditCtx);
+      const outcome = await this.applyToOneProduct(productId, req, auditCtx, completeness);
       results.push(outcome);
       processed += 1;
       if (outcome.status === 'succeeded') succeeded += 1;
@@ -228,7 +235,8 @@ export class CatalogBulkUpdateService {
   private async applyToOneProduct(
     productId: string,
     req: BulkUpdateProductsRequest,
-    auditCtx?: AdminAuditContext,
+    auditCtx: AdminAuditContext | undefined,
+    completeness: ScopeCompletenessGateMode | undefined,
   ): Promise<BulkUpdateOutcome> {
     const em = this.emFactory();
     const product = await em.findOne(Product, { id: productId });
@@ -338,12 +346,14 @@ export class CatalogBulkUpdateService {
 
     // Apply updateProduct (status / visibility / returnable / categories / attributeValues).
     let changedFields: string[] = [];
+    const warnings: ScopeWarning[] = [];
     if (touchedAny) {
       try {
         await this.catalogAdmin.updateProduct(
           productId,
           partial as unknown as Parameters<CatalogAdminService['updateProduct']>[1],
           auditCtx,
+          { completeness, warnings },
         );
         // The service tracks changedFields internally; from the caller's
         // perspective we report the set of fields we *attempted* to write
@@ -375,7 +385,7 @@ export class CatalogBulkUpdateService {
     // memberships so a run that also adds the channel writes into it. A scope the
     // product cannot hold skips the product (never adds it to the channel).
     if (fields.scopedStatus) {
-      const scoped = await this.applyScopedStatus(productId, fields.scopedStatus);
+      const scoped = await this.applyScopedStatus(productId, fields.scopedStatus, completeness, warnings);
       if (scoped.status !== 'succeeded') return scoped;
       changedFields = Array.from(new Set([...changedFields, ...(scoped.changedFields ?? [])]));
     }
@@ -398,10 +408,18 @@ export class CatalogBulkUpdateService {
       ...(attributeSkipReason
         ? { details: { ...attributeSkipReason, message: 'attribute_not_in_set' } }
         : {}),
+      // Feature 163 (FR-060, `warn`) — saved, with the gate's warning on the result
+      // (`admin-scopes-api.md` §4).
+      ...(warnings.length > 0 ? { details: { code: ERROR_CODES.SCOPE_INCOMPLETE } } : {}),
     };
   }
 
-  private async applyScopedStatus(productId: string, field: BulkScopedStatus): Promise<BulkUpdateOutcome> {
+  private async applyScopedStatus(
+    productId: string,
+    field: BulkScopedStatus,
+    completeness: ScopeCompletenessGateMode | undefined,
+    warnings: ScopeWarning[],
+  ): Promise<BulkUpdateOutcome> {
     if (!this.scopes) {
       return {
         productId,
@@ -411,8 +429,13 @@ export class CatalogBulkUpdateService {
       };
     }
     try {
-      const { changedFields } = await this.scopes.writeStatus(productId, scopedStatusPatch(field));
-      return { productId, status: 'succeeded', changedFields };
+      const written = await this.scopes.writeStatus(
+        productId,
+        scopedStatusPatch(field),
+        completeness ? { completeness } : {},
+      );
+      warnings.push(...written.warnings);
+      return { productId, status: 'succeeded', changedFields: written.changedFields };
     } catch (err) {
       rethrowIfModuleDisabled(err);
       if (err instanceof HttpError && err.code === ERROR_CODES.SCOPE_INVALID) {
@@ -441,6 +464,16 @@ export class CatalogBulkUpdateService {
     if (err instanceof HttpError) {
       if (err.code === ERROR_CODES.PRODUCT_NOT_FOUND) {
         return { productId, status: 'skipped', reason: 'product_not_found' };
+      }
+      // Feature 163 (FR-061, US6 #4) — `refuse` mode: the product is skipped and
+      // reported, the others still change.
+      if (err.code === ERROR_CODES.SCOPE_INCOMPLETE) {
+        return {
+          productId,
+          status: 'skipped',
+          reason: 'completeness_gate',
+          details: { code: err.code, message: err.message },
+        };
       }
       return {
         productId,

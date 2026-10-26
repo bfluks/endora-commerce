@@ -642,6 +642,9 @@ export function registerModule(ctx: ModuleContext): void {
             // `listActive` and `getDefault`, which is what `languageReadPort`
             // publishes.
             languageService: lazyPort<LanguageReadPort>(ctx, 'languageReadPort'),
+            // Feature 163 (FR-060) — the completeness gate's mode, a platform-wide
+            // setting; the platform's own registration, so no module edge.
+            settingsReadPort: lazyPort<SettingsReadPort>(ctx, 'settingsReadPort'),
             // Absent from the harness before T142, so the bulk-operation
             // completion notice and its e-mail ran in no test.
             //

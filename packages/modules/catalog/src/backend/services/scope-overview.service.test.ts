@@ -14,7 +14,8 @@ import { buildScopeOverview, ScopeOverviewService, type ScopeOverviewInput } fro
  * `buildScopeOverview` takes the rows the service read and answers the matrix:
  * channels × languages, each cell's effective status and its source, the fields
  * overridden at the cell, the channel row and the language column, and every orphaned
- * override with the reason it is ignored. `cells[].missing` is left absent (T080a).
+ * override with the reason it is ignored. Phase 11 (T080a, FR-041): every evaluable
+ * cell carries `missing`, the completeness check the gate uses.
  */
 
 const P = '00000000-0000-4000-8000-0000000000a1';
@@ -49,7 +50,9 @@ function input(over: Partial<ScopeOverviewInput> = {}): ScopeOverviewInput {
       name: { 'pl-PL': 'Wiertarka' },
       description: { 'pl-PL': 'Opis' },
       attributeValues: {},
+      slug: 'wiertarka',
     },
+    requiredLanguageAttributes: [],
     channels: [
       { id: B2B, name: { 'en-US': 'B2B' }, languages: ['pl-PL', 'de-DE'], isMember: true },
       { id: B2C, name: { 'en-US': 'B2C' }, languages: ['pl-PL', 'en-GB'], isMember: true },
@@ -73,13 +76,14 @@ function cell(overview: ReturnType<typeof buildScopeOverview>, channelId: string
 }
 
 describe('buildScopeOverview (spec 163, T069)', () => {
-  it('answers the §3 shape: every channel × the union of its languages, missing left absent', () => {
+  it('answers the §3 shape: every channel × the union of its languages, missing on evaluable cells only', () => {
     const overview = buildScopeOverview(input());
     expect(() => scopeOverviewResponseSchema.parse({ data: overview })).not.toThrow();
     expect(overview.languages).toEqual(['de-DE', 'en-GB', 'pl-PL']);
     expect(overview.channels.map((c) => c.channelId)).toEqual([B2B, B2C]);
     expect(overview.cells).toHaveLength(6);
-    for (const c of overview.cells) expect(c).not.toHaveProperty('missing');
+    expect(cell(overview, B2B, 'en-GB')).not.toHaveProperty('missing');
+    expect(cell(overview, B2C, 'de-DE')).not.toHaveProperty('missing');
     expect(cell(overview, B2B, 'pl-PL')).toMatchObject({
       available: true,
       effectiveStatus: 'active',
@@ -87,6 +91,33 @@ describe('buildScopeOverview (spec 163, T069)', () => {
       overriddenFields: [],
     });
     expect(overview.orphans).toEqual([]);
+  });
+
+  it('T080a: missing is what the gate would report, whatever the status (FR-041)', () => {
+    const overview = buildScopeOverview(
+      input({
+        languageRows: [languageRow({ channelId: B2B, languageCode: 'de-DE', status: 'inactive' })],
+        requiredLanguageAttributes: ['material'],
+        attributeScopes: new Map([['material', { channelScoped: true, languageScoped: true }]]),
+        product: { ...input().product, attributeValues: { material: { 'pl-PL': 'stal' } } },
+      }),
+    );
+    // Off at (B2B, de-DE), and still evaluated: name and material are missing there.
+    expect(cell(overview, B2B, 'de-DE').missing).toEqual(['name', 'attribute:material']);
+    expect(cell(overview, B2B, 'pl-PL').missing).toEqual([]);
+    expect(cell(overview, B2C, 'en-GB').missing).toEqual(['name', 'attribute:material']);
+  });
+
+  it('T080a: a non-member channel’s cells carry no missing', () => {
+    const overview = buildScopeOverview(
+      input({
+        channels: [
+          ...input().channels,
+          { id: GONE, name: { 'en-US': 'Gone' }, languages: ['pl-PL'], isMember: false },
+        ],
+      }),
+    );
+    expect(cell(overview, GONE, 'pl-PL')).not.toHaveProperty('missing');
   });
 
   it('a cell whose language the channel does not offer is never available and carries no overrides', () => {
