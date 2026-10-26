@@ -6,6 +6,7 @@ import {
   toScopeChannel,
   type CatalogProductUrlKeyReadPort,
   type ProductKeyResolution,
+  sameLanguage,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
@@ -32,10 +33,6 @@ import { inIdChunks } from './sql-id-arrays.js';
  * (research R12, Q-C): with `seo` not effectively present a redirect key answers
  * exactly what a key of no product answers. Current keys keep serving.
  */
-
-function sameLanguage(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase();
-}
 
 /**
  * The effective key per channel language of each product: its channel × language
