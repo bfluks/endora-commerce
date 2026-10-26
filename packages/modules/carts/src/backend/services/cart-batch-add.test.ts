@@ -133,6 +133,8 @@ function rig(
     channels?: Record<string, string[]>;
     /** Feature 163 (FR-100) — channel id → product id → that channel's minimum. */
     channelMinimums?: Record<string, Record<string, number | null>>;
+    /** Feature 163 (N2) — channel id → its default language, as the channel accessor answers. */
+    channelDefaultLanguages?: Record<string, string>;
   } = {},
 ): Rig {
   const carts: Row[] = options.carts ?? [];
@@ -254,6 +256,12 @@ function rig(
   const displayModes: ProductDisplayModePort = { resolveDisplayMode: async () => 'gross_only' };
   const audits: unknown[] = [];
   const auditService = { record: async (entry: unknown) => void audits.push(entry) };
+  const channelReads = {
+    getById: vi.fn(async (id: string) => {
+      const defaultLanguage = options.channelDefaultLanguages?.[id];
+      return defaultLanguage === undefined ? null : { id, defaultLanguage };
+    }),
+  };
 
   const service = new CartService(
     () => em,
@@ -264,8 +272,10 @@ function rig(
     availability,
     undefined,
     auditService as never,
+    undefined,
+    channelReads as never,
   );
-  return { service, carts, items, writes, catalog, audits, availability };
+  return { service, carts, items, writes, catalog, audits, availability, channelReads };
 }
 
 function existingCart(overrides: Partial<Row> = {}): Row {
@@ -971,5 +981,34 @@ describe('CartService — the packaging-unit name snapshot in the basket languag
     const r = rig({ carts: [existingCart()] });
     await r.service.addItems({ ...ACTOR, languageTag: 'pl' }, pallets, { onLineError: 'report' });
     expect(r.items.map((i) => i['packagingUnitName'])).toEqual(['Pallet']);
+  });
+});
+
+/**
+ * Feature 163, owner decision N2 = B (2026-10-26) — an operator naming the channel (the
+ * order-on-behalf and quote-seeded basket paths) has no request language: the unit name
+ * is snapshotted at that channel's default language, as the product name beside it is.
+ * The channel is read only when a packaging unit is named.
+ */
+describe('CartService — the packaging-unit name when an operator names the channel (N2)', () => {
+  const onBehalf = (channel: string) => [{ productId: C, quantity: 2, packagingUnitId: PALLET, salesChannelId: channel }];
+
+  it("takes the translation at the named channel's default language", async () => {
+    const r = rig({ carts: [existingCart()], channels: { 'ch-pl': [C] }, channelDefaultLanguages: { 'ch-pl': 'pl-PL' } });
+    const result = await r.service.addItems(ACTOR, onBehalf('ch-pl'), { onLineError: 'report' });
+    expect(result.outcomes.map((o) => o.status)).toEqual(['added']);
+    expect(r.items.map((i) => i['packagingUnitName'])).toEqual(['Paleta']);
+  });
+
+  it('takes the global name when the default language has no translation', async () => {
+    const r = rig({ carts: [existingCart()], channels: { 'ch-en': [C] }, channelDefaultLanguages: { 'ch-en': 'en-US' } });
+    await r.service.addItems(ACTOR, onBehalf('ch-en'), { onLineError: 'report' });
+    expect(r.items.map((i) => i['packagingUnitName'])).toEqual(['Pallet']);
+  });
+
+  it('does not read the channel for a line with no packaging unit', async () => {
+    const r = rig({ carts: [existingCart()], channels: { 'ch-pl': [A] }, channelDefaultLanguages: { 'ch-pl': 'pl-PL' } });
+    await r.service.addItems(ACTOR, [{ productId: A, quantity: 1, salesChannelId: 'ch-pl' }], { onLineError: 'report' });
+    expect(r.channelReads.getById).not.toHaveBeenCalled();
   });
 });

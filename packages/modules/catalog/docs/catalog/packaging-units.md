@@ -67,8 +67,9 @@ Where a buyer sees the unit, its name is the translation in the request's langua
 else the global name:
 
 - the product page's `packagingUnits[].name`;
-- the name a basket line snapshots — in the basket's language on its channel. An
-  administrator who names the channel on a customer's behalf gets the global name;
+- the name a basket line snapshots — in the basket's language on its channel. When
+  an administrator names the channel on a customer's behalf, the name is taken in
+  that channel's default language, like the product name beside it;
 - the name a buyer's quote-request line snapshots — in the request's language on the
   channel it is raised on.
 
