@@ -667,10 +667,26 @@ review checkpoint C:
 
 ### Phase 10: [backend] Bulk scoped status (US5, FR-050–FR-052)
 
-- [ ] T073 [P] [US5] [PG] [S1] RED: selection + scope → only that scope's row changes per product; non-member skipped `scope_invalid` (US5 #3); per-product audit with scope (SC-006); undo as a whole with per-product conflict report (US5 #2); queued path above the threshold; 1 000 products undone in one action — `backend/test/contract/catalog/products-bulk-scoped-status.test.ts` *(Q1, 2026-10-25: the value is `active` / `inactive` / `inherit`; `draft` and `archived` are refused by the schema (FR-053, FR-112); the undo restores the scope row only and never `archivedAt`; bulk Archive / Restore is T156k, not this file.)*
-- [ ] T074 [US5] [S1] `CatalogBulkUpdateService` applies `scopedStatus` through `ProductScopesService` inside the per-product Command; revert records hold the scope row before-state — `services/catalog-bulk-update.service.ts`, `services/bulk-operation.service.ts` *(Q1: revert records never carry `archivedAt` for a status edit — T156m removed that coupling.)*
-- [ ] T075 [US5] [S1] Route validation: `scopedStatus` with `status` → 400; reasons wired — `routes.admin.ts`
-- [ ] T076 [S1] `bulk-operation-undo.contract.test.ts` and `products-bulk-update*.test.ts` stay green (no behaviour change for existing fields **except** Q1's: a bulk global status change no longer sets or clears `archivedAt`, and its undo restores status only — those expectations were updated in T156j / T156k)
+- [x] T073 [P] [US5] [PG] [S1] RED: selection + scope → only that scope's row changes per product; non-member skipped `scope_invalid` (US5 #3); per-product audit with scope (SC-006); undo as a whole with per-product conflict report (US5 #2); queued path above the threshold; 1 000 products undone in one action — `backend/test/contract/catalog/products-bulk-scoped-status.test.ts` *(Q1, 2026-10-25: the value is `active` / `inactive` / `inherit`; `draft` and `archived` are refused by the schema (FR-053, FR-112); the undo restores the scope row only and never `archivedAt`; bulk Archive / Restore is T156k, not this file.)*
+- [x] T074 [US5] [S1] `CatalogBulkUpdateService` applies `scopedStatus` through `ProductScopesService` inside the per-product Command; revert records hold the scope row before-state — `services/catalog-bulk-update.service.ts`, `services/bulk-operation.service.ts` *(Q1: revert records never carry `archivedAt` for a status edit — T156m removed that coupling.)*
+- [x] T075 [US5] [S1] Route validation: `scopedStatus` with `status` → 400; reasons wired — `routes.admin.ts`
+- [x] T076 [S1] `bulk-operation-undo.contract.test.ts` and `products-bulk-update*.test.ts` stay green (no behaviour change for existing fields **except** Q1's: a bulk global status change no longer sets or clears `archivedAt`, and its undo restores status only — those expectations were updated in T156j / T156k)
+
+**Phase 10 note** (S1, 2026-10-26): the pure halves are unit-tested beside their subject
+(`services/catalog-bulk-update.service.test.ts`: the request a scope edit becomes, and the outcome each answer
+maps to); the [PG] file is written and type-checks, unrun locally. Decisions to confirm at checkpoint C:
+- *The write* is `ProductScopesService.writeStatus` — the operator's Command `product.scopes.update` without the
+  read-back `apply` does (a full scopes read per product would be wasted on 1 000 products). It inherits the
+  `FOR UPDATE` row lock and the `409 VERSION_CONFLICT` on a residual race (binding rule 1); a 409 is reported per
+  product as `failed` / `concurrent_modification`. `product.updated.v1` `['scopedStatus']` follows each commit.
+- *Order*: the scope is written after `salesChannels`, so a run that also adds the channel writes into it.
+- *Undo* (queued path only, as for every bulk field since feature 054 — the inline path ≤ 50 records no revert
+  state): the revert record's `scopedStatus` key is the stored status at the edit's one scope (`null` = inherit),
+  read from the scope rows (`readScopedStatuses`, fresh) and put back by `restoreScopedStatus` inside the undo
+  Command; a channel row left inheriting everything is deleted, a language row takes the channel's spelling.
+  `scopedStatus` beside a product-column field (visibility, returnable, …) is supported: the record carries both.
+- *T075*: the combination with `status` is refused by the schema's refine on the `scopedStatus` path; the
+  envelope is the Zod one (`details: [{ path: ['fields','scopedStatus'], … }]`), as in Phase 9a's note.
 
 **Verification**:
 - `[PG] backend/test/contract/catalog/products-bulk-scoped-status.test.ts`

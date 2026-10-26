@@ -12,6 +12,7 @@ import {
   type ProductScopes,
   type ProductScopeStatus,
   type PublicationWindow,
+  type ScopeCompletenessGateMode,
   type ScopeWarning,
 } from '@endora-commerce/contracts';
 import type { Command, CommandBus } from '@endora-commerce/platform/commands';
@@ -390,7 +391,101 @@ function writeChannelRow(row: ProductChannelScope, record: ProductChannelScopeRe
   row.returnable = record.returnable;
 }
 
+// --- One scope's status, for the bulk edit's undo (FR-052) --------------------------
+
+/** The one scope a bulk scoped-status edit writes: a channel row, or one channel × language. */
+export interface StatusScope {
+  channelId: string;
+  /** `null` = the channel row; matched case-insensitively, as the write does. */
+  languageCode: string | null;
+}
+
+/**
+ * The stored status at `scope` per product — `null` where the scope inherits. Read
+ * fresh (`refresh`), since the caller's em may already hold these rows from before a
+ * write (MikroORM's merge never lets a fresh `null` replace a loaded value).
+ */
+export async function readScopedStatuses(
+  em: EntityManager,
+  productIds: readonly string[],
+  scope: StatusScope,
+): Promise<Map<string, ProductScopeStatus | null>> {
+  const out = new Map<string, ProductScopeStatus | null>(productIds.map((id) => [id, null]));
+  if (productIds.length === 0) return out;
+  if (scope.languageCode === null) {
+    const rows = await em.find(
+      ProductChannelScope,
+      { productId: { $in: [...productIds] }, salesChannelId: scope.channelId },
+      { refresh: true },
+    );
+    for (const row of rows) out.set(row.productId, row.status ?? null);
+    return out;
+  }
+  const wanted = scope.languageCode.toLowerCase();
+  const rows = await em.find(
+    ProductChannelLanguageScope,
+    { productId: { $in: [...productIds] }, salesChannelId: scope.channelId },
+    { refresh: true },
+  );
+  for (const row of rows) {
+    if (row.languageCode.toLowerCase() === wanted) out.set(row.productId, row.status);
+  }
+  return out;
+}
+
+/**
+ * Put the status at `scope` back to `status` (`null` = inherit) on `em` — the undo of
+ * a bulk scoped-status edit, inside its audited `product.bulk_update.undo` Command. A
+ * channel row whose every field inherits afterwards is deleted, as the scopes write
+ * does (FR-012); a new language row takes the channel's own spelling of the language.
+ */
+export async function restoreScopedStatus(
+  em: EntityManager,
+  productId: string,
+  scope: StatusScope,
+  status: ProductScopeStatus | null,
+): Promise<void> {
+  if (scope.languageCode === null) {
+    const row = await em.findOne(ProductChannelScope, { productId, salesChannelId: scope.channelId });
+    const current = row ? toChannelRecord(row) : emptyRow(productId, scope.channelId);
+    const next: ProductChannelScopeRecord = { ...current, status };
+    if (inheritsEverything(next)) {
+      if (row) em.remove(row);
+      return;
+    }
+    const target = row ?? em.create(ProductChannelScope, { productId, salesChannelId: scope.channelId });
+    writeChannelRow(target, next);
+    em.persist(target);
+    return;
+  }
+  const wanted = scope.languageCode.toLowerCase();
+  const rows = await em.find(ProductChannelLanguageScope, { productId, salesChannelId: scope.channelId });
+  const row = rows.find((r) => r.languageCode.toLowerCase() === wanted);
+  if (status === null) {
+    if (row) em.remove(row);
+    return;
+  }
+  if (row) {
+    row.status = status;
+    em.persist(row);
+    return;
+  }
+  const channel = await em.findOne(SalesChannel, { id: scope.channelId });
+  const languageCode = channel?.languages.find((code) => code.toLowerCase() === wanted) ?? scope.languageCode;
+  em.persist(em.create(ProductChannelLanguageScope, { productId, salesChannelId: scope.channelId, languageCode, status }));
+}
+
 // --- The service ---------------------------------------------------------------------
+
+/** How a scope write is run (feature 163). */
+export interface ScopeWriteOptions {
+  /**
+   * The completeness gate's mode for this write (FR-060), read by the caller once per
+   * request. Absent = the gate does not run: imports, connectors and every other
+   * integration path (A-6, FR-061).
+   */
+  completeness?: ScopeCompletenessGateMode;
+}
 
 export interface ProductScopesApplyResult {
   data: ProductScopes;
@@ -500,16 +595,35 @@ export class ProductScopesService {
     return data;
   }
 
-  /** `PATCH /admin/catalog/products/:id/scopes`. */
-  async apply(productId: string, request: PatchProductScopesRequest): Promise<ProductScopesApplyResult> {
+  /**
+   * The scope write alone — the Command `product.scopes.update`, without reading the
+   * product's scopes back. The bulk scoped-status edit runs it per product (FR-050),
+   * where a full read per product would be wasted work.
+   */
+  async writeStatus(
+    productId: string,
+    request: PatchProductScopesRequest,
+    _options?: ScopeWriteOptions,
+  ): Promise<{ changedFields: ScopeChangedField[]; warnings: ScopeWarning[] }> {
     const command = this.#command(productId, request);
+    let result: { changedFields: ScopeChangedField[] };
     if (this.commandBus) {
-      await this.commandBus.run(command);
+      result = await this.commandBus.run(command);
     } else {
-      await this.emFactory().transactional(async (em) => {
-        await command.run({ em, actor: { actorAdminUserId: null, impersonatedCustomerAccountId: null, kind: 'system' } });
+      result = await this.emFactory().transactional(async (em) => {
+        const outcome = await command.run({
+          em,
+          actor: { actorAdminUserId: null, impersonatedCustomerAccountId: null, kind: 'system' },
+        });
+        return outcome.result;
       });
     }
+    return { changedFields: result.changedFields, warnings: [] };
+  }
+
+  /** `PATCH /admin/catalog/products/:id/scopes`. */
+  async apply(productId: string, request: PatchProductScopesRequest): Promise<ProductScopesApplyResult> {
+    await this.writeStatus(productId, request);
     const data = await this.read(productId);
     const warnings: ScopeWarning[] = [];
     for (const entry of request.channels) {

@@ -1,6 +1,11 @@
 import { randomUUID } from 'crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES, type BulkUpdateProductsRequest } from '@endora-commerce/contracts';
+import {
+  ERROR_CODES,
+  type BulkUpdateProductsRequest,
+  type PatchProductScopesRequest,
+  type ScopeWarning,
+} from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
@@ -8,6 +13,7 @@ import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kerne
 import type { CatalogAdminService} from './catalog-admin.service.js';
 import { type AdminAuditContext } from './catalog-admin.service.js';
 import { Product } from '../entities/product.entity.js';
+import type { ScopeWriteOptions } from './product-scopes.service.js';
 
 /**
  * Feature 022 — Products Bulk Edit.
@@ -30,7 +36,9 @@ export interface BulkUpdateOutcome {
     | 'validation_failed'
     | 'permission_denied'
     | 'concurrent_modification'
-    | 'product_not_found';
+    | 'product_not_found'
+    | 'scope_invalid'
+    | 'completeness_gate';
   details?: { code?: string; message?: string; attribute?: string };
   changedFields?: string[];
 }
@@ -44,6 +52,39 @@ export interface BulkUpdateResult {
     total: number;
   };
   results: BulkUpdateOutcome[];
+}
+
+/** `fields.scopedStatus` of a bulk request (FR-050). */
+type BulkScopedStatus = NonNullable<BulkUpdateProductsRequest['fields']['scopedStatus']>;
+
+/**
+ * Feature 163 (FR-050) — the one scope a bulk scoped-status edit writes, as the
+ * scopes PATCH body: the channel row's `status` when `languageCode` is `null`, else
+ * one language status; `inherit` removes the override (FR-012).
+ */
+export function scopedStatusPatch(field: BulkScopedStatus): PatchProductScopesRequest {
+  const status = field.value === 'inherit' ? null : field.value;
+  return {
+    channels: [
+      field.languageCode === null
+        ? { channelId: field.channelId, status }
+        : { channelId: field.channelId, languageStatuses: [{ languageCode: field.languageCode, status }] },
+    ],
+  };
+}
+
+/**
+ * Feature 163 (FR-050–FR-052) — the scope write a bulk scoped-status edit runs per
+ * product: `ProductScopesService.writeStatus`, the operator's audited Command
+ * `product.scopes.update` (row lock, `409 VERSION_CONFLICT` on a residual race,
+ * `product.updated.v1` `['scopedStatus']` after commit).
+ */
+export interface BulkScopedStatusWriter {
+  writeStatus(
+    productId: string,
+    request: PatchProductScopesRequest,
+    options?: ScopeWriteOptions,
+  ): Promise<{ changedFields: string[]; warnings: ScopeWarning[] }>;
 }
 
 const MAX_BATCH_SIZE = 200;
@@ -79,6 +120,8 @@ export class CatalogBulkUpdateService {
     private readonly catalogAdmin: CatalogAdminService,
     private readonly salesChannelMembership?: SalesChannelMembershipPort,
     private readonly auditLog?: AuditPort,
+    /** Feature 163 (FR-050) — absent, a `scopedStatus` edit fails per product. */
+    private readonly scopes?: BulkScopedStatusWriter,
   ) {}
 
   /**
@@ -283,7 +326,8 @@ export class CatalogBulkUpdateService {
         fields.returnable === undefined &&
         fields.categories === undefined &&
         fields.salesChannels === undefined &&
-        fields.attributeSetId === undefined
+        fields.attributeSetId === undefined &&
+        fields.scopedStatus === undefined
       ) {
         // Nothing else to do for this product and at least one attribute
         // was skipped — report skip with the first dropped key for
@@ -327,6 +371,15 @@ export class CatalogBulkUpdateService {
       }
     }
 
+    // Feature 163 (FR-050, FR-051) — the status at one scope, after the channel
+    // memberships so a run that also adds the channel writes into it. A scope the
+    // product cannot hold skips the product (never adds it to the channel).
+    if (fields.scopedStatus) {
+      const scoped = await this.applyScopedStatus(productId, fields.scopedStatus);
+      if (scoped.status !== 'succeeded') return scoped;
+      changedFields = Array.from(new Set([...changedFields, ...(scoped.changedFields ?? [])]));
+    }
+
     if (changedFields.length === 0 && attributeSkipReason) {
       return {
         productId,
@@ -346,6 +399,35 @@ export class CatalogBulkUpdateService {
         ? { details: { ...attributeSkipReason, message: 'attribute_not_in_set' } }
         : {}),
     };
+  }
+
+  private async applyScopedStatus(productId: string, field: BulkScopedStatus): Promise<BulkUpdateOutcome> {
+    if (!this.scopes) {
+      return {
+        productId,
+        status: 'failed',
+        reason: 'validation_failed',
+        details: { message: 'Scoped status is not available in this composition.' },
+      };
+    }
+    try {
+      const { changedFields } = await this.scopes.writeStatus(productId, scopedStatusPatch(field));
+      return { productId, status: 'succeeded', changedFields };
+    } catch (err) {
+      rethrowIfModuleDisabled(err);
+      if (err instanceof HttpError && err.code === ERROR_CODES.SCOPE_INVALID) {
+        return { productId, status: 'skipped', reason: 'scope_invalid', details: { code: err.code, message: err.message } };
+      }
+      if (err instanceof HttpError && err.code === ERROR_CODES.VERSION_CONFLICT) {
+        return {
+          productId,
+          status: 'failed',
+          reason: 'concurrent_modification',
+          details: { code: err.code, message: err.message },
+        };
+      }
+      return this.classifyPerProductError(productId, err);
+    }
   }
 
   private classifyPerProductError(productId: string, err: unknown): BulkUpdateOutcome {
