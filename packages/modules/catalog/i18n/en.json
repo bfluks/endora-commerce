@@ -1406,7 +1406,6 @@
   "productEditor.attachments.scopes.hide": "Hide in {channel}",
   "productEditor.attachments.scopes.save": "Save",
   "productEditor.attachments.scopes.cancel": "Cancel",
-  "productEditor.attachments.scopes.error": "Save failed.",
   "productEditor.attachments.scopes.saved": "Attachment updated.",
   "packagingUnits.translations.open": "Names per language",
   "packagingUnits.translations.title": "Names per language: {name}",
@@ -1415,7 +1414,6 @@
   "packagingUnits.translations.name": "Name ({language})",
   "packagingUnits.translations.save": "Save",
   "packagingUnits.translations.cancel": "Cancel",
-  "packagingUnits.translations.error": "Save failed.",
   "productEditor.scopeOverview.field.mediaRoles": "Gallery image roles",
   "productEditor.scopeOverview.field.mediaHidden": "Hidden gallery images",
   "productEditor.scopeOverview.field.mediaAltText": "Gallery alt text",
@@ -1449,5 +1447,12 @@
   "productEditor.scopeOverview.tableRegion": "Scope overview table",
   "productEditor.urlKeys.inheritedHint": "Inherited: {key}",
   "productEditor.urlKeys.unsaved": "Not saved yet — Save URL keys to apply.",
-  "productEditor.urlKeys.noChanges": "No changes to save."
+  "productEditor.urlKeys.noChanges": "No changes to save.",
+  "productEditor.scopeDialog.inherited": "Inherited: {value}",
+  "productEditor.scopeDialog.error": "Nothing was saved. Try again.",
+  "productEditor.scopeDialog.saving": "Saving…",
+  "productEditor.scopeDialog.discard.body": "You have changes that are not saved. Close and discard them?",
+  "productEditor.scopeDialog.discard.confirm": "Discard changes",
+  "productEditor.scopeDialog.discard.keep": "Keep editing",
+  "packagingUnits.readOnly": "Read-only: you can see the packaging units but not change them."
 }
