@@ -559,6 +559,12 @@ overrides were stored but not shown on the page before this; they are shown now.
 switched off the page shows the derived metadata, and every override comes back when the module
 is switched on.
 
+**In the admin.** The SEO screen's meta-tag editor loads a scope as soon as it is chosen — a
+product's own sales channels, then one of that channel's languages or the whole channel (**Load**
+reads it again). Leaving a scope with unsaved changes asks first, and **Use inherited** asks before
+it removes the override at exactly the scope shown. The product editor's SEO tab links to this
+screen with the product already selected (`/seo?entityType=product&entityId=<id>`).
+
 **Every change is audited.** Saving an override is one `seo_meta_override.upsert` entry in the
 audit log, removing one a `seo_meta_override.delete` entry, each with the whole override before
 and after. To put back an earlier version, save the values from the entry's *before* state.

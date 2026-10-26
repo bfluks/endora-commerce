@@ -231,7 +231,7 @@ The product edit page's **Details** tab gains a
    source badge per field — `channel + language override` / `channel
    override` / `global baseline (language)` / `global baseline
    (fallback)` / `no value`.
-4. Offers "Add override" / "Edit override" / "Reset to Global"
+4. Offers "Add override" / "Edit override" / "Use inherited"
    affordances per field. Edits go through `PATCH /value-overrides`
    with optimistic refresh.
 5. Persists the editor's `(channel, language)` selection back via
@@ -369,9 +369,14 @@ tab shows it. Each cell carries:
 
 Overrides that no longer apply are listed under `orphans` with a reason:
 `not_a_member`, `language_not_offered` or `attribute_scope_changed`. On the
-Scopes tab a scope value, a value override or a URL key can be reset to
-inherited where it is set, and an orphan deleted; the tab calls the endpoint
-that owns the value (`…/scopes`, `…/value-overrides` or `…/url-keys`). A product in no sales channel answers no channels and
+Scopes tab a scope value, a value override or a URL key is returned to the
+inherited value with **Use inherited** where it is set — a channel's own values
+in its "Whole channel" column, a language's own values in the "Every channel"
+row — and an orphan (listed under **No longer applies**) is deleted; the tab
+calls the endpoint that owns the value (`…/scopes`, `…/value-overrides` or
+`…/url-keys`). Resetting a text value (a name, a description, a URL key, an SEO
+field) and deleting an orphan ask first, naming the field and the scope; other
+values reset in one click. A product in no sales channel answers no channels and
 every active platform language.
 
 Before an attribute's `channelScoped` or `languageScoped` flag is turned off,
