@@ -50,8 +50,10 @@ describe('completeness gate (spec 163, T078)', () => {
     const id = randomUUID();
     const code = `scg-${RUN}-${label}`;
     await conn().execute(
-      `insert into sales_channels (id, code, name, default_language, languages, default_currency, created_at, updated_at)
-       values (?, ?, ?::jsonb, ?, ?::jsonb, 'PLN', now(), now())`,
+      // `currencies` carries the default currency, so the channel's own PATCH (a channel
+      // gaining a language) passes the update's defaultCurrency ∈ currencies check.
+      `insert into sales_channels (id, code, name, default_language, languages, default_currency, currencies, created_at, updated_at)
+       values (?, ?, ?::jsonb, ?, ?::jsonb, 'PLN', '["PLN"]'::jsonb, now(), now())`,
       [id, code, JSON.stringify({ 'en-US': `gate ${label}` }), languages[0], JSON.stringify(languages)],
     );
     channels.push(id);
