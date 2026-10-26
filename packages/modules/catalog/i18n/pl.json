@@ -1084,5 +1084,11 @@
   "productEditor.scopeDialog.discard.body": "Masz zmiany, które nie są zapisane. Zamknąć i je odrzucić?",
   "productEditor.scopeDialog.discard.confirm": "Odrzuć zmiany",
   "productEditor.scopeDialog.discard.keep": "Wróć do edycji",
-  "packagingUnits.readOnly": "Tylko do odczytu: widzisz jednostki opakowań, ale nie możesz ich zmieniać."
+  "packagingUnits.readOnly": "Tylko do odczytu: widzisz jednostki opakowań, ale nie możesz ich zmieniać.",
+  "productEditor.saved": "Zapisano.",
+  "productEditor.error.load": "Nie udało się wczytać produktu.",
+  "productEditor.error.nameRequired": "Podaj nazwę w co najmniej jednym języku.",
+  "productEditor.error.save": "Nie udało się zapisać.",
+  "productEditor.error.delete": "Nie udało się usunąć.",
+  "productEditor.error.duplicate": "Nie udało się zduplikować."
 }
