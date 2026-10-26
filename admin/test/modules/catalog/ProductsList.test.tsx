@@ -78,6 +78,7 @@ const BUNDLE = passthroughBundle('catalog', [
   'productsList.bulk.selected',
   'productsList.bulk.edit',
   'productsList.bulk.editPrice',
+  'productsList.bulk.editPriceUnavailable',
   'productsList.bulk.restore',
   'productsList.bulk.delete',
   'productsList.bulk.deleteConfirm',
@@ -165,7 +166,13 @@ describe('ProductsList — streamlined selection toolbar (T041)', () => {
     await waitFor(() =>
       expect(screen.getByText('productsList.bulk.edit')).toBeInTheDocument(),
     );
-    expect(screen.getByText('productsList.bulk.editPrice')).toBeInTheDocument();
+    // D17 — Edit price has no flow behind it (prices live in price books): it is
+    // disabled and says why, rather than a button that does nothing.
+    const editPrice = screen.getByRole('button', { name: /productsList\.bulk\.editPrice/ });
+    expect(editPrice).toBeDisabled();
+    expect(document.getElementById(editPrice.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
+      'productsList.bulk.editPriceUnavailable',
+    );
     expect(screen.getByText('productsList.bulk.delete')).toBeInTheDocument();
 
     // The removed actions must not be present.

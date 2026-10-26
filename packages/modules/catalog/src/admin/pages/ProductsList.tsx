@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useState,
   type CSSProperties,
@@ -164,6 +165,7 @@ export function ProductsList(): ReactNode {
   const [bulkInitialStep, setBulkInitialStep] = useState<'form' | 'confirmArchive'>('form');
   const [deleting, setDeleting] = useState(false);
   const [bulkEditProductIds, setBulkEditProductIds] = useState<string[]>([]);
+  const editPriceReasonId = useId();
   // D3 — the names and SKUs of the selected rows on this page, so the dialog's result
   // names them without a lookup; a "select all N" selection's other rows are looked up there.
   const bulkEditLabels = useMemo(() => {
@@ -665,18 +667,22 @@ export function ProductsList(): ReactNode {
                   : t('productsList.bulk.edit')}
               </button>
               {statusFilter !== 'archived' ? (
-                <button
-                  type="button"
-                  className="b2b-btn"
-                  disabled={resolvingSelection}
-                  onClick={(): void => {
-                    void runWithResolvedIds(async () => {
-                      /* Edit price — placeholder until dedicated flow ships */
-                    });
-                  }}
-                >
-                  <CircleDollarSign size={13} /> {t('productsList.bulk.editPrice')}
-                </button>
+                // D17 — no bulk price flow exists (prices are set in price books), so the
+                // button is disabled and says why instead of doing nothing on click.
+                <>
+                  <button
+                    type="button"
+                    className="b2b-btn"
+                    disabled
+                    aria-describedby={editPriceReasonId}
+                    title={t('productsList.bulk.editPriceUnavailable')}
+                  >
+                    <CircleDollarSign size={13} aria-hidden="true" /> {t('productsList.bulk.editPrice')}
+                  </button>
+                  <span id={editPriceReasonId} className="sr-only">
+                    {t('productsList.bulk.editPriceUnavailable')}
+                  </span>
+                </>
               ) : null}
               <button
                 type="button"

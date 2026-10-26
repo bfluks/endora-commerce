@@ -96,6 +96,10 @@ one that is not archived, answers `200` and changes nothing — no audit entry, 
 - **The admin list.** Archived products are hidden by default, whatever their status;
   `archived=only` lists them and `archived=include` lists them beside the rest. The
   `inactive` count and filter cover products that are off but not archived.
+  On the product list the **Archived** tab has its own address,
+  `/catalog/products/archived`, so the browser's Back button and a reload return to it.
+  With a selection, its bar offers Restore, Bulk edit and Delete; **Edit price** is shown
+  on the other tabs but disabled, because prices are set in price books.
 
 ### Status per channel and language, in bulk
 
