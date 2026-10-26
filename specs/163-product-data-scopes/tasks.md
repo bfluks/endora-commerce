@@ -1651,3 +1651,41 @@ green, and P-3a / P-3b are recorded — see the Phase 9d note. T156-pal-b landed
   note) and **CMP-1 = A** (non-owner reader → `(removed product)` column for an unavailable product;
   `consumers.md` row 12). [PG] `test/integration/carts/packaging-unit-name-snapshot.test.ts` (new case),
   `test/contract/comparisons/share-unavailable-columns.test.ts` (new).
+
+**Checkpoint D+F fix round (UI, S3, 2026-10-26).** Review findings of `0404a3b6a` (`review-163-DF/ui-fixes.md`);
+owner decisions **UX-1 = A, UX-2 = A, UX-3 = A, UX-4 = A** (owner, 2026-10-26). CI reds of PR #11 first:
+`check:class-vocabulary` (the attachment dialog's `b2b-alert` → kit `Alert`) and `check:admin-zones` (catalog's SEO
+link gated on `{ module: 'seo' }` → new zone `product.editor.seo.after`, contributed by `seo`; `seo` gains
+`react-router-dom` as an optional peer through `manifests:generate`). Every behaviour change was seen red first.
+- *C-1 fixed* — the product PATCH runs alone first; the override and gallery flushes run only once it is accepted.
+- *C-2 / D5 fixed* — SEO meta editor: load sequence drops stale answers, selectors disabled in flight, load on
+  selection (a typed locale on Enter / blur / Load), status cleared on scope change, discard-draft and Use inherited
+  dialogs, waits for the channel list. *C-8* — scope-context types come from contracts (SEO editor, scope editor).
+- *UX-4 fixed* — the SEO screen reads `?entityType=product&entityId=`; the zone link passes the product.
+- *D3 / D7 / C-6c fixed* — bulk result rows name products by name + SKU (list labels, `batch-by-id` for the rest;
+  `lib/product-labels.ts`) and a scoped row links to `?tab=scopes`, which the editor now opens; error banner
+  `role="alert"`, theme tokens instead of hex.
+- *D4 / UX-2 / C-9 / D13 / D14 fixed* — the gallery stays mounted once opened and reports staged edits to the
+  unsaved-changes prompt; Add / Remove wait for Save while edits are staged ("Save your changes first."); removal and
+  preview are kit `ModalDialog`s; "Use inherited (Image N, hidden here)"; role options "Image N · file" (file = the
+  asset URL's last segment — the gallery read has no filename); hidden channel role holder flagged; alt-text hint per
+  language; label radios assign on change; read-only note.
+- *UX-1 / D11 / D11b / C-7 fixed* — overview: text resets and orphan deletes confirm in a dialog; channel values in a
+  "Whole channel" column, language values in an "Every channel" row (no reset in a `<th>`); focusable named scroll
+  region, sticky row headers, loading live region, 24px targets; focus returns to the heading; no channel-level URL
+  key reset.
+- *UX-3 fixed* — "Use inherited" / "Użyj dziedziczonego" and "No longer applies" / "Nie obowiązuje już" across the
+  overview, URL keys, scope editor and bulk; PL `notOffered` "Język nieoferowany w kanale".
+- *C-3 / C-4 / C-6b / D9 / D10 fixed* — URL keys panel: works without scope-context; a repeated takeover re-asks;
+  grammar refusals mark their field; inherited key as visible text; "Not saved yet" / "No changes to save"; h4
+  section headings.
+- *C-5 / D9 / D15 / D16 fixed* — contracts export `ATTACHMENT_NAME_MAX`, `PACKAGING_UNIT_NAME_MAX`; packaging units
+  gated on `canWrite`; both dialogs share refusal / "Nothing was saved. Try again." wording, "Saving…", a discard
+  prompt on Escape / Cancel and inherited-value hints (`ScopedDialogParts.tsx`); two undefined-class ledger entries
+  drained.
+- *C-10 / D17 / D18 / D19 / D21 fixed* — editor messages from the bundles; Edit price disabled with its reason and
+  the Archived tab's address documented (EN + PL); attribute Save `aria-busy` (it was already disabled, so no double
+  preview); bulk scoped status has no default value; narrowing confirmation uses plural forms.
+- *Left* — D17's roving tabindex / `aria-controls` on the list tabs (needs a tabpanel and arrow-key handling across
+  the list page; not contained). B-5 (channel-roles warning) stays labelled in the UI only.
+- *Not run on this host* (Intel macOS false reds): `check:naming`, `check:language`, `test:unit:fast`.
