@@ -904,11 +904,48 @@ minimum, quick order's channel minimum). Decisions to confirm at checkpoint C:
 
 ### Phase 14: [admin UI] Scope overview (US4) and attribute scope-flag preview (FR-090) — after Phase 9
 
-- [ ] T093 [P] [US4] [S3] RED: matrix renders cells/rows/columns per the response; source per cell; a cell's `missing` values listed with their localized names (name, URL key, attribute label) and an accessible "incomplete" marker, nothing rendered when `missing` is absent or `[]` (FR-041; the field is in the P2 schema, so the fixture carries it — the backend fills it in T080a); orphans with a warning and delete; "reset to inherited" calls the owning endpoint with `null` for one field only (US4 #2); read-only for `catalog:read` (US4 #3); no channels → global + language only (US4 #4); keyboard navigation and accessible names (WCAG 2.2 AA, `ux-laws`) — `admin/test/modules/catalog/product-scope-overview.test.tsx`
-- [ ] T094 [US4] [S3] `ProductScopeOverview.tsx` as a product-editor tab — `src/admin/components/ProductScopeOverview.tsx`, `ProductEditor.tsx`
-- [ ] T095a [P] [S3] RED (FR-090, analyze H2): the attribute edit form shows `channelScoped` / `languageScoped` for user-defined attributes (system attributes read-only, `getAttributeScope`); saving a **narrowing** first calls `GET …/attributes/:key/scope-change-preview` and shows a confirmation with the orphaned-override count, total and per channel, before the PATCH is sent; cancel sends nothing; a widening saves without the preview; a 0-count narrowing still confirms ("no overrides affected"); read-only without `catalog:write`; accessible dialog (focus trap, labelled) — `admin/test/modules/catalog/AttributesManager.scope-flags.test.tsx`
-- [ ] T095b [S3] Scope flags + narrowing preview confirmation in the attribute edit form (admin-kit dialog primitives, IX) — `packages/modules/catalog/src/admin/pages/AttributesManager.tsx`
-- [ ] T095 [S3] i18n keys for T094 and T095b (handover)
+- [x] T093 [P] [US4] [S3] RED: matrix renders cells/rows/columns per the response; source per cell; a cell's `missing` values listed with their localized names (name, URL key, attribute label) and an accessible "incomplete" marker, nothing rendered when `missing` is absent or `[]` (FR-041; the field is in the P2 schema, so the fixture carries it — the backend fills it in T080a); orphans with a warning and delete; "reset to inherited" calls the owning endpoint with `null` for one field only (US4 #2); read-only for `catalog:read` (US4 #3); no channels → global + language only (US4 #4); keyboard navigation and accessible names (WCAG 2.2 AA, `ux-laws`) — `admin/test/modules/catalog/product-scope-overview.test.tsx`
+- [x] T094 [US4] [S3] `ProductScopeOverview.tsx` as a product-editor tab — `src/admin/components/ProductScopeOverview.tsx`, `ProductEditor.tsx`
+- [x] T095a [P] [S3] RED (FR-090, analyze H2): the attribute edit form shows `channelScoped` / `languageScoped` for user-defined attributes (system attributes read-only, `getAttributeScope`); saving a **narrowing** first calls `GET …/attributes/:key/scope-change-preview` and shows a confirmation with the orphaned-override count, total and per channel, before the PATCH is sent; cancel sends nothing; a widening saves without the preview; a 0-count narrowing still confirms ("no overrides affected"); read-only without `catalog:write`; accessible dialog (focus trap, labelled) — `admin/test/modules/catalog/AttributesManager.scope-flags.test.tsx`
+- [x] T095b [S3] Scope flags + narrowing preview confirmation in the attribute edit form (admin-kit dialog primitives, IX) — `packages/modules/catalog/src/admin/pages/AttributesManager.tsx`
+- [x] T095 [S3] i18n keys for T094 and T095b (handover)
+
+**Phase 14 note** (S3, 2026-10-26). Decisions for checkpoint D:
+- *Where.* A new **Scopes** tab (`productEditor.tab.scopes`) mounts `ProductScopeOverview.tsx`: one table, channel rows ×
+  language columns (`th scope=row/col`, a caption naming it). Each override is shown and reset **where it lives** — a
+  channel value in the channel's row header, a language value in the column header, a C × L value in its cell; a cell
+  also names the channel/language values that win there, without a second reset (one control per override). The
+  reset dispatch is the pure `resetRequestFor` / `orphanDeleteRequest` (`lib/scope-overview.ts`): channel fields →
+  `PATCH …/scopes` with `null`; `name`/`description`/`attribute:<key>` → `PATCH …/value-overrides` `deletes`; `urlKey` →
+  `PUT …/url-keys` (`channelKeys` or `languageKeys` `key: null`; `409 URL_KEY_TAKEN` names the holder). Resets are not
+  confirmed (one value, audited, the inherited value is shown beside it); the table reloads and a mounted
+  `role="status"` says "Reset to inherited."
+- *No reset for a language baseline.* `name`/`description`/attribute at level `language` is the product's own text in
+  that language (edited on Details/Attributes), not an override — owner question below.
+- *Missing (FR-041).* Rendered only for a non-empty `missing`: icon + "Incomplete — missing: Name, Material" (attribute
+  labels from `GET …/attributes`, key as fallback). Absent and `[]` render nothing.
+- *Orphans.* A region below the table with a standing note (role `note`), each with its reason and **Delete**.
+- *No channel (US4 #4).* A note and a per-language table only. Read-only (US4 #3): no buttons and a read-only line.
+- *Not built:* "jump from a cell to the field" (US4's story text; not in T093).
+- *Attribute flags (T095a/b).* A **Scope** fieldset in `AttributesManager`'s form; narrowing → preview → `ModalDialog`
+  with the total and per channel (channel names best effort from `/admin/sales-channels`, short id otherwise; 0 → "No
+  values … are affected"); cancel sends nothing; widening saves at once; built-in attributes fixed and read-only;
+  read-only without `catalog:write`. The form is now keyed by attribute: it used to keep the previous form's state.
+- **Backend gap (blocks T095b against a real server):** `serializeAdminAttribute` (`routes.admin.ts`) and
+  `adminAttributeResponseSchema` (`contracts/catalog.ts`) do not emit `channelScoped` / `languageScoped`. The UI renders
+  the section only when both are present, so today it does not appear on edit (it does on create). Two additive lines
+  for S1.
+
+**Paused here (S3, 2026-10-26, owner pause).** P14 done and pushed. **P15:** T096's RED test
+`admin/test/modules/catalog/products-bulk-scoped-status.test.tsx` is written and failing (7 red, as intended) and lives
+on `feat/163-product-data-scopes-s3` only — not on the integration branch, so its suite stays green.
+`scope-completeness-messages.test.tsx` (T096's second file), T097, T098 and T099 not started. Next: make T096 green in
+`ProductsBulkEditDialog.tsx` (a "Status in one channel" field group — channel, optional language fetched per channel
+code, Active / Inactive / Use inherited — mutually exclusive with Status; result rows for `scope_invalid`,
+`completeness_gate` and warn-mode `details.code = 'SCOPE_INCOMPLETE'`), then T098 in `ProductEditor` (keep the
+`PATCH /products/:id` `warnings`; route only `SCOPE_INCOMPLETE` through `scopeSaveErrorMessage`; channel names from
+`scope-context`). **P20** not started; `lib/product-url-keys-api.ts` (GET/PUT/DELETE and the refusal messages) is
+already in. Bulk results carry no `pairs`, so a bulk gate message can name the scope but not the missing fields.
 
 **Verification** (one invocation per line):
 - `pnpm --filter admin exec vitest run test/modules/catalog/product-scope-overview.test.tsx`
