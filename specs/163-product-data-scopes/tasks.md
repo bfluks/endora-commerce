@@ -853,6 +853,32 @@ minimum, quick order's channel minimum). Decisions to confirm at checkpoint C:
 - `pnpm --filter @endora-commerce/mod-quick-order run typecheck`
 - `pnpm --filter @endora-commerce/mod-catalog run typecheck`
 
+**Checkpoint C/E/Q fix round** (S1, 2026-10-26; no BLOCK finding):
+- *S-W1* `seo` marks the sitemaps stale on `status`, `archivedAt`, `visibility`, `allowedOrganizationIds` too
+  (`services/sitemap-staleness.ts`, one case per field) and on `product.archived.v1`. No global-key write emits
+  `slug`/`sku` (the global key changes through `url-key.service.ts`, `['urlKeys']`). **Feeds:** `product_feeds`
+  regenerates on its per-feed Job Scheduler and subscribes to no product event, so a published feed keeps a product
+  that went off until the next scheduled run — reported, not redesigned.
+- *S-W2* new platform `withSystemScopeActingFor(adminUserId, reason, fn)` (`@endora-commerce/platform/tenancy`): the
+  bulk worker runs `bulkUpdate` acting for `requestedByAdminUserId`, so queued Archive / Restore and scoped-status
+  entries name the requester (supersedes the Phase 9b note on a null actor). [PG] assertions in
+  `products-bulk-archive` and `products-bulk-scoped-status`.
+- *S-W3* the API-key upsert of an existing product runs `updateProductAudited` (the `product.update` Command) with
+  `apiKeyId` in the after-state and no completeness mode; [PG] cases in `product-archive-restore` and
+  `scope-completeness-gate` (refuse mode, never gated).
+- *I3* a redirect path must be `/p/<segment>[?query]`, else not-found; the 308 is rendered dynamically (cookies) and
+  not shared-cacheable. *I4* `productCacheTags` drops the per-key tag over 256 characters. *I5* `ogImageUrlSchema`
+  (http(s) or single-`/` relative) on the write; the read shape accepts any stored string. *I7*
+  `composeCompletenessGate` warns once when a collaborator is missing. *I8* `effectiveOrderRules` /
+  `effectiveKeys` documented as applying no availability (contracts and `contracts/product-scopes.md`).
+- *C-W1* Archive / Restore read the product `FOR UPDATE` ([PG] concurrent-Archive case). *C-W2* stale changeset
+  sentence removed. *C-W3* `writeChannelScopeRow` / `writeLanguageScopeRow` / `writeScopedStatus` are the one write
+  path for the scopes Command, the bulk undo and the CSV import (single transaction and audit row kept). *N1* the PDP
+  passes its scope rows and keys to the card and paths reads. *N2* the integration port uses `writeStatus`; `index.ts`
+  already holds one `ProductScopesService` and one `UrlKeyService` (the port's), `plugin.ts` the operator's pair with
+  the gate. *N3* `sameLanguage` in contracts, used by `scope-completeness`, `url-key-resolution`, `url-key`,
+  `product-scopes` and `catalog-bulk-import`. *N4* warn-mode bulk `details` are merged.
+
 > **Review checkpoint C** — code review + security review on Phases 9–12.
 
 ---

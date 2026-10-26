@@ -54,7 +54,7 @@ otherwise; every price names its currency either way. A malformed code is refuse
 | `DELETE /api/v1/admin/catalog/categories/:id` | admin | Soft-delete; rejects with 409 if any active child still references the row |
 | `GET /api/v1/admin/catalog/categories/:id/content` | admin | The category's page content — one Page Builder document per language ([Category page content](./catalog/category-content.md)) |
 | `PUT /api/v1/admin/catalog/categories/:id/content` | admin | Replace the category's page content; `null` clears it |
-| `PUT /api/v1/catalog/products/by-sku/:sku` | API key | Idempotent upsert (PIM sync) |
+| `PUT /api/v1/catalog/products/by-sku/:sku` | API key | Idempotent upsert (PIM sync); an update is audited as `product.update` naming the key (`apiKeyId`) and is never checked for completeness |
 
 ## Product status and archiving
 
@@ -77,7 +77,9 @@ one that is not archived, answers `200` and changes nothing — no audit entry, 
   `fields: { archived: true }` archives every selected product, `false` restores them,
   each through the same action and audit entry. `archived` must be the only field of
   its request. Large selections run as a background bulk operation, and the
-  operation's undo puts every product back as it was.
+  operation's undo puts every product back as it was. A background operation audits
+  each product with the admin who requested it, as a direct one does. Archive and
+  Restore lock the product, so two concurrent Archives of one product archive it once.
 - **Setting `active` never restores.** An archived product stays archived whatever its
   status; only Restore brings it back. Restoring an `inactive` product leaves it off.
 - **Products archived before this change.** Until this release a product was archived by
