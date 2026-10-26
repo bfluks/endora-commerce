@@ -97,6 +97,47 @@ niczego nie zmienia — bez wpisu audytu i bez zdarzenia.
   `archived=only` pokazuje tylko je, a `archived=include` pokazuje je obok pozostałych. Licznik
   i filtr `inactive` obejmują produkty wyłączone, ale niezarchiwizowane.
 
+### Status dla kanału i języka, zbiorczo
+
+`POST /api/v1/admin/catalog/products/bulk-update` z
+`fields: { scopedStatus: { channelId, languageCode, value } }` ustawia status każdego
+zaznaczonego produktu w jednym zakresie — kanale sprzedaży (`languageCode: null`) albo
+jednej parze kanał × język — na `active` lub `inactive`, albo usuwa tam nadpisanie
+wartością `inherit`. W każdym produkcie zmienia się tylko ten zakres; pozostałe zakresy
+i status globalny zostają bez zmian. Produkt, który nie należy do kanału, albo język,
+którego kanał nie oferuje, jest pomijany i raportowany jako `scope_invalid` — produkt
+nigdy nie zostaje dodany do kanału. `scopedStatus` nie może wystąpić razem ze `status`
+w jednym żądaniu. Zmiana każdego produktu to jeden wpis audytu z nazwą zakresu; duże
+zaznaczenia wykonują się jako operacja zbiorcza w tle, której cofnięcie przywraca każdy
+zakres i raportuje produkty zmienione w międzyczasie.
+
+### Kontrola kompletności przy włączaniu produktu
+
+Gdy **zmiana statusu** dokonana przez operatora włącza produkt w kanale sprzedaży i
+języku — status globalny, status kanału albo pary kanał × język, pojedynczo lub
+zbiorczo — produkt musi mieć w tym języku: **nazwę** (własną nazwę w tym języku albo
+nazwę nadpisaną dla tego kanału; nazwa w innym języku się nie liczy), **klucz URL**
+(liczy się klucz globalny) oraz każdy **wymagany** atrybut zależny od języka ze swojego
+zestawu atrybutów. Ustawienie **Completeness check when switching a product on**
+(`catalog.scope_completeness_gate`, jedna wartość dla całej platformy) decyduje, co się
+dzieje, gdy czegoś brakuje:
+
+- **`warn`** (domyślnie) — zmiana zostaje zapisana, a odpowiedź wymienia braki dla
+  każdego kanału i języka (`warnings`, rodzaj `completeness`).
+- **`refuse`** — zmiana nie zostaje zapisana: `422 SCOPE_INCOMPLETE` wymienia każdy
+  kanał i język wraz z brakami. Zmiana, która włączyłaby produkt w kilku miejscach, jest
+  odrzucana w całości, jeśli którekolwiek z nich nie spełnia warunków. W edycji
+  zbiorczej produkty spełniające warunki zostają zmienione, a pozostałe są pomijane jako
+  `completeness_gate`.
+
+Sprawdzana jest wyłącznie zmiana statusu. Produkt, który staje się dostępny, bo
+dołącza do kanału, kanał zyskuje język, otwiera się jego okno publikacji, zmienia się
+jego grupa odbiorców albo zostaje przywrócony z archiwum, nie jest sprawdzany — braki w
+każdym kanale i języku pokazuje wtedy **przegląd zakresów** w edytorze produktu.
+Ustawienie `active` dla zarchiwizowanego produktu jest sprawdzane jak każda zmiana
+statusu, choć produkt pozostaje zarchiwizowany. Importy, synchronizacja z PIM i upsert
+przez klucz API nigdy nie są sprawdzane.
+
 ## Ceny
 
 **Produkt nie ma własnej ceny.** Każda cena jest wierszem cennika modułu `price_lists`: cena bazowa

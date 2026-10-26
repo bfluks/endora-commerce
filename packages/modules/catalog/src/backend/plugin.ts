@@ -29,7 +29,7 @@ import {
   BULK_OPERATION_JOB_NAME,
 } from './services/bulk-operation-queue.js';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
+import type { SalesChannelMembershipPort, SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { CatalogQueryService } from './services/catalog-query.service.js';
 import {
   CatalogAdminService,
@@ -64,6 +64,7 @@ import { ProductOverridesService } from './services/product-overrides.service.js
 import { ProductScopesService } from './services/product-scopes.service.js';
 import { UrlKeyService } from './services/url-key.service.js';
 import { ScopeOverviewService } from './services/scope-overview.service.js';
+import { ScopeCompletenessGate } from './services/scope-completeness.js';
 import { AttributeScopePreviewService } from './services/attribute-scope-preview.js';
 import { ProductScopeContextService } from './services/product-scope-context.service.js';
 import { ProductValueResolverService } from './services/product-value-resolver.service.js';
@@ -191,6 +192,12 @@ export interface CatalogModuleOptions {
    * the new admin endpoints are NOT registered.
    */
   languageService?: LanguageReadPort;
+  /**
+   * Feature 163 (FR-060) — the platform's settings read, for the completeness
+   * gate's mode (`catalog.scope_completeness_gate`). Optional: when omitted no
+   * operator write is gated.
+   */
+  settingsReadPort?: Pick<SettingsReadPort, 'get'>;
   /**
    * In-app (bell) notifications — used by the queued bulk-edit path to
    * tell the requester their background operation finished. Optional;
@@ -340,6 +347,13 @@ export function catalogModule(options: CatalogModuleOptions) {
       // Feature 163 — the page's metadata through `seo`, presence-probed by the caller.
       options.resolveSeoProductMeta,
     );
+    // Feature 163 (FR-060, FR-061) — the completeness gate, composed into the
+    // operator's admin services only (this file); the integration ports registered in
+    // `index.ts` are built without it, so imports and connectors are never gated (A-6).
+    const completenessGate =
+      options.salesChannelMembership && attributeReadService && options.settingsReadPort
+        ? new ScopeCompletenessGate(options.salesChannelMembership, attributeReadService, options.settingsReadPort)
+        : undefined;
     const adminService = new CatalogAdminService(
       options.emFactory,
       options.eventBus as CatalogEventBus,
@@ -349,6 +363,7 @@ export function catalogModule(options: CatalogModuleOptions) {
       attributeReadService,
       options.customFieldsPort,
       options.copyWarehouseThresholds,
+      completenessGate,
     );
     // Feature 163 — scoped values per channel and channel × language. Needs the
     // membership accessor for FR-014 and the C4 warning, like the overrides.
@@ -359,6 +374,7 @@ export function catalogModule(options: CatalogModuleOptions) {
           options.salesChannelMembership,
           options.commandBus,
           options.organizations,
+          completenessGate,
         )
       : undefined;
     const bulkUpdateService = new CatalogBulkUpdateService(

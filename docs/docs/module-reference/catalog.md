@@ -68,7 +68,9 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 
 ## Settings
 
-_None._
+| Code | Name | Type |
+| --- | --- | --- |
+| `catalog.scope_completeness_gate` | Completeness check when switching a product on | `string` |
 
 ## Translations
 
