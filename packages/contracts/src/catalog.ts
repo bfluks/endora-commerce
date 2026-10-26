@@ -1258,8 +1258,8 @@ export const adminAttributeResponseSchema = z.object({
   labelDefault: z.string(),
   /** API-form type (feature 002) — emitted alongside the legacy `valueType`. */
   type: apiAttributeTypeSchema,
-  /** Present only when `type === 'slider'`. */
-  numericKind: numericKindSchema.optional(),
+  /** A kind only when `type === 'slider'`; `null` (or absent) otherwise. */
+  numericKind: numericKindSchema.nullable().optional(),
   valueType: attributeValueTypeSchema,
   /** Legacy projection of the option values; `null` when not fetched or absent. */
   enumValues: z.array(z.string()).nullable(),
