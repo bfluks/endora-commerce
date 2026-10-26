@@ -128,7 +128,7 @@ export type { ProductBrowserDialogProps } from './product-browser/ProductBrowser
 export { ProductBrowserTrigger } from './product-browser/ProductBrowserTrigger.js';
 export type { ProductBrowserTriggerProps } from './product-browser/ProductBrowserTrigger.js';
 export { parsePositiveInt, productDisplayName } from './product-browser/product-line.js';
-export { productSelectability, productSelectabilityReasonKey } from './product-browser/selectability.js';
+export { isProductArchived, productSelectability, productSelectabilityReasonKey } from './product-browser/selectability.js';
 export type { ProductBrowserRules, ProductSelectability, ProductSelectabilityContext, ProductSelectabilityReason } from './product-browser/selectability.js';
 export type { ProductBrowserItem, ProductBrowserStatus, ProductBrowserType } from './product-browser/types.js';
 export { ProductPicker } from './product-picker/ProductPicker.js';
