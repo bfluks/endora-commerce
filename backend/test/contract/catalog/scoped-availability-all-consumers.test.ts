@@ -82,6 +82,8 @@ describe('163 SC-007 — every consumer of availability refuses an off product [
   let off: MinimumProductFixture;
   let archived: MinimumProductFixture;
   let goes: MinimumProductFixture;
+/** The warehouse `seedUs2Commerce` stocks (`backend/test/helpers/seed-commerce.ts`). */
+const SEED_WAREHOUSE_ID = '00000000-0000-4000-8000-00000000d017';
   let source: MinimumProductFixture;
   let facetKey: string | null = null;
   const facetValue = `sweep-${RUN}`;
@@ -132,6 +134,13 @@ describe('163 SC-007 — every consumer of availability refuses an off product [
     source = await create('SRC', `Sweep source ${RUN}`);
     await setChannelStatus(em, off.id, channels, 'inactive');
     await sql(`update "products" set "archived_at" = now() where "id" = ?`, [archived.id]);
+    // Row 20 places an order for GOES before switching it off: it needs stock in the
+    // seeded warehouse, or placement answers STOCK_UNAVAILABLE instead.
+    await sql(
+      `insert into stock_levels (id, product_id, warehouse_id, on_hand, reserved, created_at, updated_at)
+       values (?, ?, ?, 1000, 0, now(), now())`,
+      [randomUUID(), goes.id, SEED_WAREHOUSE_ID],
+    );
 
     // Row 2 — a filterable option-style attribute carrying a per-run value.
     const filters = await h.app.inject({ method: 'GET', url: '/api/v1/catalog/filters', headers: CHANNEL });
@@ -167,6 +176,7 @@ describe('163 SC-007 — every consumer of availability refuses an off product [
     await completeActiveBaskets();
     await clearComparisons();
     await sql(`delete from product_links where source_product_id = ?`, [source.id]);
+    await sql(`delete from stock_levels where product_id = ?`, [goes.id]);
     await sql(`update "products" set "archived_at" = null where "id" = ?`, [archived.id]);
     await clearProductScopes(h.em(), [on.id, off.id, goes.id]);
     await teardownBackendServer(h);
