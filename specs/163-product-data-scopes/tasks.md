@@ -1453,7 +1453,7 @@ T139 regen + changesets, T139a/b overview fields `attachments:hidden`, `attachme
   `backend/test/contract/catalog/attribute-scope-flags-response.test.ts`. The `withOrgScope` doc comment moved off
   `withSystemScopeActingFor` in `escape-hatch.ts`.
 - *Docs.* P21's gallery page (EN + PL, cache re-pinned) is written under T147/T148; the attachments and
-  packaging-unit pages for P22 are still open under T147/T148.
+  packaging-unit pages for P22 were written in the second pass (EN + PL, re-pinned), with the rest of T147/T148.
 - *T138 — RFQ half (S1, second pass).* `resolveLinePackaging(lines, units, scopeLanguage?)` stores
   `effectivePackagingUnitName(unit, scopeLanguage)`; `PackagingUnitCandidate.nameTranslations?` (the catalogue record
   already carries it). `RfqService#resolvePackaging` takes the channel `lineNames` is asked at — `raisedOnChannelId()`
@@ -1482,7 +1482,7 @@ basket half), MED-1 = A built, attribute scope flags in the admin response, `wit
 gallery page EN/PL written. Verified: contracts, platform, catalog, carts typecheck + lint; product_feeds typecheck;
 catalog/carts/product_feeds/comparisons/platform unit suites; check:naming (Docker), check:language,
 default-language-prose, platform-surface, docs-translations, module-docs, i18n:hardcoded. Typecheck + lint
-also green for product_feeds, comparisons, backend, storefront, admin. **Not run:** the `[PG]` files. Next: the RFQ half of T138 (recipe in the Phase 22 notes, owner of `quote_requests`) and the P22 docs (T147/T148).
+also green for product_feeds, comparisons, backend, storefront, admin. **Not run:** the `[PG]` files. Next: the RFQ half of T138 (recipe in the Phase 22 notes, owner of `quote_requests`) and the P22 docs (T147/T148). *(Second pass 2026-10-26: both done — T138 RFQ half, T147/T148 ticked; N2 for the basket unit name left open for the owner, see the Phase 22 notes.)*
 `contracts` `crm-rich-text.test.ts` "reads quickly" failed at 747 ms / 500 ms under host load 828 — untouched file.
 
 ### Phase 23: [admin UI] Media, attachments, packaging per scope (US9) — after Phases 21–22
@@ -1511,10 +1511,25 @@ also green for product_feeds, comparisons, backend, storefront, admin. **Not run
 - [ ] T145 [P] [PG] [S1] SC-007 sweep: every FR-004 consumer (every row of `contracts/consumers.md`, CMS product blocks included) refuses a product off at (C, L) — one table-driven test reusing each seam's fixture — `backend/test/contract/catalog/scoped-availability-all-consumers.test.ts`
 - [ ] T146 [P] [PG] [S1] Test: `search` off → the Postgres listing applies the same predicate — add the search-backend-off case to `backend/test/contract/catalog/scoped-availability-matrix.test.ts` (`seo` off is already covered by T108/T115). Run it before T146a
 - [ ] T146a [S1] Make T146 pass if it is red (the degrade path's narrowing goes in the statement, issue #151); if green, record "no change" here
-- [ ] T147 [S1] Docs (EN): extend `packages/modules/catalog/docs/catalog/per-channel-per-language-overrides.md` (scopes, inheritance, status semantics, window, audience, overview, bulk, gate, order rules); new `url-keys-and-redirects.md`; `seo` and `search` pages updated *(Q1: status semantics = two values, `inactive` is plain off at every scope, archiving is the Archive / Restore action documented in `catalog.md` by T156p — link to it, do not restate)*
-- [ ] T148 [S1] Docs (PL): translation cache entries and materialised pages for every page above; `pnpm --filter backend run check:docs-translations`; `pnpm --filter backend run check:module-docs`
+- [x] T147 [S1] Docs (EN): extend `packages/modules/catalog/docs/catalog/per-channel-per-language-overrides.md` (scopes, inheritance, status semantics, window, audience, overview, bulk, gate, order rules); new `url-keys-and-redirects.md`; `seo` and `search` pages updated *(Q1: status semantics = two values, `inactive` is plain off at every scope, archiving is the Archive / Restore action documented in `catalog.md` by T156p — link to it, do not restate)*
+- [x] T148 [S1] Docs (PL): translation cache entries and materialised pages for every page above; `pnpm --filter backend run check:docs-translations`; `pnpm --filter backend run check:module-docs`
 - [ ] T149 [S1] Changesets: one per meaning for every published package touched (`contracts` minor; modules patch/minor as their exports changed; the Q1 status change is breaking and is written at `minor` with a breaking body — T156q, T156y, D-225 refuses `major` in `0.x`); `pnpm changeset:status`
 - [ ] T150 [S1] AGENTS.md traps: grep `backend/test/**` for every file path renamed or deleted in this feature; re-derive anything derived from moved files (e.g. `module-removal.test.ts` ledger); re-record a read size **only** if the band refuses it, after reading `specs/conventions/check-estate.md`
+
+- S1 (2026-10-26, T147/T148): written from the `.changeset/163-*` bodies, not from memory. Overrides page: new
+  *Availability per sales channel and language* (the availability rule, scopes and inheritance table, window,
+  audience, the scopes route and its Command, scope overview and the scope-change preview, storage); status
+  semantics, bulk, gate and order rules **link** to `catalog.md` (T156p's sections) instead of restating them; the
+  stale "listing filters and name sorting read the baseline" claims are corrected (Postgres path follows the
+  effective values; the search index sorts by the channel-default name). `url-keys-and-redirects.md`: *Managing
+  keys*, *On the storefront*, *Errors* added before T124's *Integrations*. `seo.md`: the sitemap's anonymous-only
+  list now states effective availability per channel and language (the meta scopes and per-key sitemap URLs were
+  already documented). `search.md`: already carried *Availability per channel and language* — no change. Attachments
+  and packaging units: see the Phase 22 notes. PL: cache entries re-pinned and materialised pages for all five
+  pages; Polish anchors (`#status-produktu-i-archiwizacja`, `#integracje`, …) in the PL links. Checks:
+  `check:docs-translations` 0 findings, `check:module-docs` 0 findings, `check:default-language-prose` 0
+  violations, `pnpm --filter docs run build` green for `en` and `pl` (run after the overrides page; the later
+  url-keys and seo edits add no links).
 
 **Verification** (one invocation per line): `[PG] backend/test/integration/catalog/deploy-parity.test.ts`; `[PG] backend/test/contract/catalog/scoped-availability-all-consumers.test.ts`; `[PG] backend/test/contract/catalog/scoped-availability-matrix.test.ts`; `pnpm --filter backend run check:docs-translations`; `pnpm --filter backend run check:module-docs`; `pnpm changeset:status`; `pnpm run check:naming && pnpm run check:language` (in Docker Ubuntu on the macOS host — the BSD-tool gap)
 
