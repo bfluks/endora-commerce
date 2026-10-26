@@ -43,8 +43,9 @@ an absent row answers `204` with no audit entry (`skipAudit`).
   `altText: Record<lang, string>` (per-language product alt; empty string removes a language),
   `hiddenInChannels: uuid[]` (replace set).
 - `PUT /api/v1/admin/catalog/products/:productId/gallery/channel-roles` (`catalog:write`):
-  `{ channelId, roles: { base_image?: itemId | null, small_image?: itemId | null, thumbnail?: itemId | null } }`
-  — `null` = use inherited for that role. Role uniqueness per channel by PK (FR-076).
+  `{ channelId, roles: { baseImage?: itemId | null, smallImage?: itemId | null, thumbnail?: itemId | null } }`
+  — `null` = use inherited for that role. The keys are the camelCase names of the `base_image`, `small_image`
+  and `thumbnail` labels (Principle VI); the label spelling stays a value. Role uniqueness per channel by PK (FR-076).
 - Product detail (`ProductDetail`), listing card image and OG image read the effective gallery in C and
   alt at L. Command `product.media.update`, `changedFields: ['media']`.
 

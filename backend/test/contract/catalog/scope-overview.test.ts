@@ -418,7 +418,7 @@ describe('Scope overview — GET /admin/catalog/products/:id/scope-overview (spe
         method: 'PUT',
         url: `/api/v1/admin/catalog/products/${productId}/gallery/channel-roles`,
         ...admin,
-        payload: { channelId: b2b, roles: { base_image: itemId } },
+        payload: { channelId: b2b, roles: { baseImage: itemId } },
       });
       expect(roles.statusCode, roles.body).toBe(200);
       const patched = await h.app.inject({

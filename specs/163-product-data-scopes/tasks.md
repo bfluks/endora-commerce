@@ -1176,8 +1176,10 @@ already in. Bulk results carry no `pairs`, so a bulk gate message can name the s
   (`services/gallery-scopes.ts`) — run only on the Command's `em` inside `product.media.update`
   (`objectType: 'product'`, product row locked, `skipAudit` on a no-op, event `product.updated.v1` `['media']`).
 - *Routes / shapes (for S3, Phase 23).* `GET|PUT …/products/:productId/gallery/channel-roles` — read
-  `{ data: Array<{ channelId, roles: { base_image, small_image, thumbnail: itemId | null } }> }` (only channels with an
+  `{ data: Array<{ channelId, roles: { baseImage, smallImage, thumbnail: itemId | null } }> }` (only channels with an
   override); write `{ channelId, roles: { <role>?: itemId | null } }` (`null` = use inherited, absent = untouched).
+  The role keys are camelCase (`baseImage` = the `base_image` label, `smallImage` = `small_image`) since the CI fix
+  round on ec1efd0a3 (`check:naming`); the gallery item's `labels` keep the stored spelling.
   `PATCH …/gallery/:itemId` takes `altText` (language → text, `''` removes, unnamed languages untouched) and
   `hiddenInChannels` (replaces the set); a body with either runs as `product.media.update`, otherwise the old
   `gallery_item.update`. The admin `GalleryItem` DTO carries `altText` and `hiddenInChannels`. `422 SCOPE_INVALID
