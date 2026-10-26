@@ -14,7 +14,8 @@ import { adminSession, modulePresence, withSession } from '../../helpers/render-
  * no longer carries the "Page title (preview)" input that saved nothing. Below the URL
  * keys it links to the SEO screen, where the meta tags are edited per channel and
  * language — only while `seo` is present and the admin holds the code that screen's
- * routes enforce (`catalog:write`, the `open-seo` action's own gate).
+ * routes enforce (`catalog:write`, the `open-seo` action's own gate). The link opens the
+ * SEO screen with this product selected (owner decision UX-4 = A).
  *
  * The link is `seo`'s contribution to `product.editor.seo.after`, so `catalog` never
  * names `seo` (`check:admin-zones`' `foreign-module-id`): the zone renderer's presence
@@ -58,11 +59,11 @@ describe('seo contributes the product editor SEO link (owner decision SEO stub =
     expect(zone!.requiredPermission).toBe('catalog:write');
   });
 
-  it('links to the SEO screen and says the product is picked there', async () => {
+  it('links to the SEO screen with this product selected (UX-4 = A)', async () => {
     render(wrap());
     const link = await screen.findByRole('link', { name: 'Edit SEO meta per channel →' });
-    expect(link).toHaveAttribute('href', '/seo');
-    expect(screen.getByText(/pick this product/i)).toBeInTheDocument();
+    expect(link).toHaveAttribute('href', `/seo?entityType=product&entityId=${PRODUCT_ID}`);
+    expect(screen.queryByText(/pick this product/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Page title (preview)')).not.toBeInTheDocument();
   });
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { SeoEntityType, SitemapChannelStatus } from '@endora-commerce/contracts';
 import { ApiError, apiBaseUrl, apiClient, formatDateTime } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, PageHeader, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
@@ -250,10 +251,25 @@ function SitemapCard(): ReactNode {
   );
 }
 
+function isEntityType(value: string | null): value is SeoEntityType {
+  return value !== null && (ENTITY_TYPES as readonly string[]).includes(value);
+}
+
 function MetaEditorCard(): ReactNode {
   const t = useTranslation('core');
   const [entityType, setEntityType] = useState<SeoEntityType>('product');
   const [entityId, setEntityId] = useState('');
+  // Feature 163 (owner decision UX-4 = A) — `?entityType=product&entityId=<id>` opens the
+  // screen on that entity; the product editor's SEO link points here. Read on mount and
+  // on every navigation that changes them; an unknown type is ignored.
+  const [searchParams] = useSearchParams();
+  const linkedType = searchParams.get('entityType');
+  const linkedId = searchParams.get('entityId');
+  useEffect(() => {
+    if (!isEntityType(linkedType) || !linkedId) return;
+    setEntityType(linkedType);
+    setEntityId(linkedId);
+  }, [linkedType, linkedId]);
 
   return (
     <Card>
