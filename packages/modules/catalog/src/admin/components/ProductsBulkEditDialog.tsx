@@ -8,9 +8,9 @@ import {
   type ReactNode,
 } from 'react';
 import { Link } from 'react-router-dom';
-import { X } from 'lucide-react';
+import { Archive, ArchiveRestore, X } from 'lucide-react';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
-import { CategoryTreePicker } from '@endora-commerce/admin-kit/components';
+import { CategoryTreePicker, ModalDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 
 /**
@@ -25,9 +25,17 @@ import { useTranslation } from '@endora-commerce/admin-kit/i18n';
  * Feature 155 (US5; FR-003, FR-004, FR-034) — a "Returnable" group sets the flag on every
  * selected product. Products are not returnable until marked, existing ones included, so
  * the group carries a standing hint saying so: this is where an operator fixes that.
+ *
+ * Feature 163 (FR-053, research R30.3) — bulk **Archive** / **Restore**. The request
+ * carries `fields.archived` and nothing else (the route refuses it beside any other
+ * field), so it is not one of the "touched" field groups that Apply combines: it is
+ * its own action below them, behind its own confirmation, offered only while no
+ * field is touched. The host passes the one that changes something for the
+ * selection (`archiveAction`), or `null` for an operator without `catalog:write`.
  */
 
-type BulkStatus = 'draft' | 'active' | 'inactive';
+type BulkStatus = 'active' | 'inactive';
+export type BulkArchiveAction = 'archive' | 'restore';
 type BulkVisibility = 'public' | 'logged_in_only' | 'organization_restricted';
 type BulkMode = 'add' | 'replace';
 
@@ -94,6 +102,8 @@ export interface ProductsBulkEditDialogProps {
   onClose: () => void;
   /** Invoked after a successful apply so the parent can refresh the list. */
   onApplied?: () => void;
+  /** Feature 163 — the archive action offered for this selection; `null`/absent offers none. */
+  archiveAction?: BulkArchiveAction | null;
 }
 
 const OVERLAY_STYLE: CSSProperties = {
@@ -119,10 +129,12 @@ const PANEL_STYLE: CSSProperties = {
 
 export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): ReactNode {
   const t = useTranslation('catalog');
-  const { productIds, selectionScope, onClose, onApplied } = props;
+  const { productIds, selectionScope, onClose, onApplied, archiveAction = null } = props;
   const formId = useId();
   const returnableRadioName = `${formId}-returnable`;
   const returnableHintId = `${formId}-returnable-hint`;
+  const archiveHintId = `${formId}-archive-hint`;
+  const archiveConfirmBodyId = `${formId}-archive-confirm`;
 
   // Touched flags — a field is sent to the backend only when its touched
   // flag is true. Default values are placeholders that are NOT sent.
@@ -161,6 +173,10 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BulkUpdateSyncData | null>(null);
   const [queued, setQueued] = useState<BulkUpdateQueuedData | null>(null);
+  const [confirmingArchive, setConfirmingArchive] = useState(false);
+  // What the result on screen came from — the archive summary also names the
+  // products that were already in the requested state.
+  const [sentArchive, setSentArchive] = useState<BulkArchiveAction | null>(null);
 
   // Load mass-editable attributes + channel / category metadata on mount.
   useEffect(() => {
@@ -221,72 +237,91 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
     ],
   );
 
+  const send = useCallback(
+    async (fields: Record<string, unknown>): Promise<boolean> => {
+      setSubmitting(true);
+      setError(null);
+      try {
+        const res = await apiClient.post<BulkUpdateResponse>(
+          '/api/v1/admin/catalog/products/bulk-update',
+          { productIds, fields },
+        );
+        if (isQueued(res.data)) {
+          setQueued(res.data);
+        } else {
+          setResult(res.data);
+        }
+        onApplied?.();
+        return true;
+      } catch (e) {
+        if (e instanceof ApiError) {
+          const code = e.envelope.error.code;
+          if (code === 'ATTRIBUTE_NOT_MASS_EDITABLE') {
+            const details = e.envelope.error.details as { attribute?: string } | undefined;
+            setError(
+              t('productsList.bulkEdit.error.attribute_not_mass_editable', {
+                attribute: details?.attribute ?? '?',
+              }),
+            );
+          } else if (code === 'BULK_TOO_LARGE') {
+            const details = e.envelope.error.details as
+              | { maxBatchSize?: number }
+              | undefined;
+            setError(
+              t('productsList.bulkEdit.error.bulk_too_large', {
+                total: productIds.length,
+                maxBatchSize: details?.maxBatchSize ?? 200,
+              }),
+            );
+          } else {
+            setError(e.envelope.error.message);
+          }
+        } else {
+          setError(String(e));
+        }
+        return false;
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [productIds, onApplied, t],
+  );
+
+  const submitArchive = useCallback(async (): Promise<void> => {
+    if (archiveAction === null) return;
+    // `archived` travels alone (R30.3): never combined with a touched field.
+    // A failure keeps the confirmation open with its message and a second try.
+    if (await send({ archived: archiveAction === 'archive' })) {
+      setSentArchive(archiveAction);
+      setConfirmingArchive(false);
+    }
+  }, [archiveAction, send]);
+
   const submit = useCallback(async (): Promise<void> => {
     if (!anyTouched) {
       setError(t('productsList.bulkEdit.empty'));
       return;
     }
-    setSubmitting(true);
-    setError(null);
-    try {
-      const fields: Record<string, unknown> = {};
-      if (touchStatus) fields.status = status;
-      if (touchVisibility) fields.visibility = visibility;
-      if (touchChannels) {
-        fields.salesChannels = { mode: channelsMode, channelIds };
-      }
-      if (touchCategories) {
-        fields.categories = { mode: categoriesMode, categoryIds };
-      }
-      if (touchReturnable) fields.returnable = returnable;
-      if (touchAttributeSet) {
-        // '' clears the set (null); a uuid assigns it.
-        fields.attributeSetId = attributeSetId === '' ? null : attributeSetId;
-      }
-      if (touchedAttrs.size > 0) {
-        const av: Record<string, unknown> = {};
-        for (const k of touchedAttrs) av[k] = attributeValues[k];
-        fields.attributeValues = av;
-      }
-      const res = await apiClient.post<BulkUpdateResponse>(
-        '/api/v1/admin/catalog/products/bulk-update',
-        { productIds, fields },
-      );
-      if (isQueued(res.data)) {
-        setQueued(res.data);
-      } else {
-        setResult(res.data);
-      }
-      onApplied?.();
-    } catch (e) {
-      if (e instanceof ApiError) {
-        const code = e.envelope.error.code;
-        if (code === 'ATTRIBUTE_NOT_MASS_EDITABLE') {
-          const details = e.envelope.error.details as { attribute?: string } | undefined;
-          setError(
-            t('productsList.bulkEdit.error.attribute_not_mass_editable', {
-              attribute: details?.attribute ?? '?',
-            }),
-          );
-        } else if (code === 'BULK_TOO_LARGE') {
-          const details = e.envelope.error.details as
-            | { maxBatchSize?: number }
-            | undefined;
-          setError(
-            t('productsList.bulkEdit.error.bulk_too_large', {
-              total: productIds.length,
-              maxBatchSize: details?.maxBatchSize ?? 200,
-            }),
-          );
-        } else {
-          setError(e.envelope.error.message);
-        }
-      } else {
-        setError(String(e));
-      }
-    } finally {
-      setSubmitting(false);
+    const fields: Record<string, unknown> = {};
+    if (touchStatus) fields.status = status;
+    if (touchVisibility) fields.visibility = visibility;
+    if (touchChannels) {
+      fields.salesChannels = { mode: channelsMode, channelIds };
     }
+    if (touchCategories) {
+      fields.categories = { mode: categoriesMode, categoryIds };
+    }
+    if (touchReturnable) fields.returnable = returnable;
+    if (touchAttributeSet) {
+      // '' clears the set (null); a uuid assigns it.
+      fields.attributeSetId = attributeSetId === '' ? null : attributeSetId;
+    }
+    if (touchedAttrs.size > 0) {
+      const av: Record<string, unknown> = {};
+      for (const k of touchedAttrs) av[k] = attributeValues[k];
+      fields.attributeValues = av;
+    }
+    await send(fields);
   }, [
     anyTouched,
     touchStatus,
@@ -305,8 +340,7 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
     attributeSetId,
     touchedAttrs,
     attributeValues,
-    productIds,
-    onApplied,
+    send,
     t,
   ]);
 
@@ -362,7 +396,7 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
         {queued ? (
           <BulkEditQueuedAck queued={queued} onClose={onClose} t={t} />
         ) : result ? (
-          <BulkEditSummary result={result} onClose={onClose} t={t} />
+          <BulkEditSummary result={result} archiveAction={sentArchive} onClose={onClose} t={t} />
         ) : (
           <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 18 }}>
             <FieldGroup
@@ -377,9 +411,8 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
                 value={status}
                 onChange={(e): void => setStatus(e.target.value as BulkStatus)}
               >
-                <option value="draft">draft</option>
-                <option value="active">active</option>
-                <option value="inactive">inactive</option>
+                <option value="active">{t('productsList.status.active')}</option>
+                <option value="inactive">{t('productsList.status.inactive')}</option>
               </select>
             </FieldGroup>
 
@@ -566,8 +599,79 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
                 </div>
               </div>
             ) : null}
+
+            {archiveAction !== null ? (
+              <section
+                aria-labelledby={`${formId}-archive-title`}
+                style={{ borderTop: '1px solid var(--border, #e5e7eb)', paddingTop: 14 }}
+              >
+                <div id={`${formId}-archive-title`} style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+                  {t(`productsList.bulkEdit.${archiveAction}.title`)}
+                </div>
+                <p id={archiveHintId} className="b2b-help" style={{ marginBottom: 8 }}>
+                  {anyTouched
+                    ? t('productsList.bulkEdit.archiveAlone')
+                    : t(`productsList.bulkEdit.${archiveAction}.hint`)}
+                </p>
+                <button
+                  type="button"
+                  className="b2b-btn"
+                  aria-describedby={archiveHintId}
+                  disabled={anyTouched || submitting}
+                  onClick={(): void => setConfirmingArchive(true)}
+                >
+                  {archiveAction === 'archive' ? (
+                    <Archive size={13} aria-hidden="true" />
+                  ) : (
+                    <ArchiveRestore size={13} aria-hidden="true" />
+                  )}{' '}
+                  {t(`productsList.bulkEdit.${archiveAction}.action`, { count: productIds.length })}
+                </button>
+              </section>
+            ) : null}
           </div>
         )}
+
+        {confirmingArchive && archiveAction !== null ? (
+          <ModalDialog
+            title={t(`productsList.bulkEdit.${archiveAction}.confirmTitle`, { count: productIds.length })}
+            onClose={(): void => setConfirmingArchive(false)}
+            busy={submitting}
+            aria-describedby={archiveConfirmBodyId}
+            footer={
+              <>
+                <button
+                  type="button"
+                  className="b2b-btn"
+                  disabled={submitting}
+                  onClick={(): void => setConfirmingArchive(false)}
+                >
+                  {t('productsList.bulkEdit.action.cancel')}
+                </button>
+                <button
+                  type="button"
+                  className="b2b-btn b2b-btn--primary"
+                  disabled={submitting}
+                  aria-busy={submitting || undefined}
+                  onClick={(): void => {
+                    void submitArchive();
+                  }}
+                >
+                  {t(`productsList.bulkEdit.${archiveAction}.confirm`, { count: productIds.length })}
+                </button>
+              </>
+            }
+          >
+            <p id={archiveConfirmBodyId} style={{ fontSize: 14, lineHeight: 1.5 }}>
+              {t(`productsList.bulkEdit.${archiveAction}.confirmBody`)}
+            </p>
+            {error ? (
+              <p role="alert" style={{ marginTop: 8, fontSize: 13, color: 'var(--danger-soft-fg, #991b1b)' }}>
+                {error}
+              </p>
+            ) : null}
+          </ModalDialog>
+        ) : null}
 
         {!result && !queued ? (
           <div
@@ -755,14 +859,40 @@ function BulkEditQueuedAck(props: BulkEditQueuedAckProps): ReactNode {
 
 interface BulkEditSummaryProps {
   result: BulkUpdateSyncData;
+  /** Feature 163 — set when the result is a bulk Archive / Restore. */
+  archiveAction?: BulkArchiveAction | null;
   onClose: () => void;
   t: ReturnType<typeof useTranslation>;
 }
 
+/**
+ * Feature 163 (FR-053, O-6) — products already in the requested state succeed with
+ * nothing changed; the archive summary says how many, so "Succeeded" is not read
+ * as "all of them moved".
+ */
+export function unchangedArchiveCount(results: readonly BulkUpdateResultRow[]): number {
+  return results.filter((r) => r.status === 'succeeded' && (r.changedFields?.length ?? 0) === 0).length;
+}
+
 function BulkEditSummary(props: BulkEditSummaryProps): ReactNode {
-  const { summary, results } = props.result;
+  const { summary, results, bulkOperationId } = props.result;
+  const unchanged = props.archiveAction ? unchangedArchiveCount(results) : 0;
   return (
     <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {props.archiveAction ? (
+        <div role="status">
+          <p style={{ fontSize: 14, fontWeight: 600 }}>
+            {props.t(`productsList.bulkEdit.${props.archiveAction}.done`, {
+              count: summary.succeeded - unchanged,
+            })}
+          </p>
+          {unchanged > 0 ? (
+            <p className="b2b-help">
+              {props.t(`productsList.bulkEdit.${props.archiveAction}.unchanged`, { count: unchanged })}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <div style={{ display: 'flex', gap: 12 }}>
         <SummaryBadge
           label={props.t('productsList.bulkEdit.summary.succeeded')}
@@ -830,13 +960,22 @@ function BulkEditSummary(props: BulkEditSummaryProps): ReactNode {
         </div>
       ) : null}
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+        {/* The operation's page holds its per-product record and its Undo. */}
+        <Link
+          to={`/catalog/bulk-operations/${bulkOperationId}`}
+          className="b2b-btn"
+          onClick={props.onClose}
+          style={{ textDecoration: 'none' }}
+        >
+          {props.t('productsList.bulkEdit.viewOperation')}
+        </Link>
         <button
           type="button"
           className="b2b-btn b2b-btn--primary"
           onClick={props.onClose}
         >
-          {props.t('productsList.bulkEdit.action.cancel')}
+          {props.t('productsList.bulkEdit.action.close')}
         </button>
       </div>
     </div>
