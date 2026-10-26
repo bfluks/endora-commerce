@@ -200,6 +200,71 @@ describe('bulk status in one channel (US5)', () => {
     expect(rows[2]?.textContent).toMatch(/saved with values missing/i);
   });
 
+  it('names each reported product by name and SKU and links it to its scopes tab (D3)', async () => {
+    const user = userEvent.setup();
+    postSpy.mockImplementation((path: string, body: { ids?: string[] }) => {
+      if (path === '/api/v1/admin/catalog/products/batch-by-id') {
+        // Only what the selection did not already name is looked up.
+        expect(body.ids).toEqual([P2]);
+        return Promise.resolve({ data: [{ id: P2, sku: 'SKU-2', name: { 'en-US': 'Hammer' } }] });
+      }
+      return Promise.resolve({
+        data: {
+          bulkOperationId: 'op-5',
+          summary: { succeeded: 0, skipped: 2, failed: 0, total: 2 },
+          results: [
+            { productId: P1, status: 'skipped', reason: 'scope_invalid', details: { code: 'SCOPE_INVALID' } },
+            { productId: P2, status: 'skipped', reason: 'completeness_gate', details: { code: 'SCOPE_INCOMPLETE' } },
+          ],
+        },
+      });
+    });
+    render(
+      wrap(
+        <ProductsBulkEditDialog
+          productIds={[P1, P2]}
+          productLabels={{ [P1]: { name: 'Drill', sku: 'SKU-1' } }}
+          onClose={(): void => undefined}
+        />,
+      ),
+    );
+    await chooseScope(user, 'active');
+    await user.click(screen.getByRole('button', { name: /^apply$/i }));
+    const table = await screen.findByRole('table');
+    const drill = await within(table).findByRole('link', { name: /Drill/ });
+    expect(drill.closest('tr')?.textContent).toContain('SKU-1');
+    expect(drill).toHaveAttribute('href', `/catalog/products/${P1}?tab=scopes`);
+    const hammer = await within(table).findByRole('link', { name: /Hammer/ });
+    expect(hammer.closest('tr')?.textContent).toContain('SKU-2');
+    expect(hammer).toHaveAttribute('href', `/catalog/products/${P2}?tab=scopes`);
+    expect(table.textContent).not.toContain(`${P1.slice(0, 8)}…`);
+  });
+
+  it('switching the channel offers the new channel’s languages and clears the chosen one (C-6c)', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(await screen.findByRole('checkbox', { name: /status in one channel/i }));
+    const group = await scopedGroup();
+    await user.selectOptions(within(group).getByRole('combobox', { name: /sales channel/i }), B2C);
+    const languageSelect = within(group).getByRole('combobox', { name: /language/i });
+    await waitFor(() => expect(within(languageSelect).getByRole('option', { name: 'DE' })).toBeTruthy());
+    await user.selectOptions(languageSelect, 'de');
+    await user.selectOptions(within(group).getByRole('combobox', { name: /sales channel/i }), B2B);
+    const next = within(group).getByRole('combobox', { name: /language/i }) as HTMLSelectElement;
+    await waitFor(() => expect(within(next).getByRole('option', { name: 'EN' })).toBeTruthy());
+    expect(within(next).queryByRole('option', { name: 'DE' })).toBeNull();
+    expect(next.value).toBe('');
+  });
+
+  it('an error is announced as an alert (D7)', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(await screen.findByRole('checkbox', { name: /^status/i }));
+    postSpy.mockRejectedValue(new Error('Network down'));
+    await user.click(screen.getByRole('button', { name: /^apply$/i }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Network down');
+  });
+
   it('a channel whose languages cannot be loaded still takes the whole-channel status, and the result names the scope', async () => {
     const user = userEvent.setup();
     const base = getSpy.getMockImplementation()!;
