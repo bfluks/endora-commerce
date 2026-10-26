@@ -77,6 +77,17 @@
   "metaScope.removed": "Nadpisanie usunięte. Ten zakres znowu dziedziczy wartości.",
   "metaScope.error.remove": "Nie udało się usunąć nadpisania. Spróbuj ponownie.",
   "productLink.title": "Meta tagi SEO",
-  "productLink.hint": "Tytuły i opisy ustawia się dla kanału sprzedaży i języka na ekranie SEO — wybierz tam ten produkt.",
-  "productLink.link": "Edytuj meta SEO w kanałach →"
+  "productLink.hint": "Tytuły i opisy ustawia się dla kanału sprzedaży i języka na ekranie SEO.",
+  "productLink.link": "Edytuj meta SEO w kanałach →",
+  "metaScope.loadingChannels": "Wczytywanie kanałów sprzedaży produktu…",
+  "metaScope.scope.channelLanguage": "{channel} · {language}",
+  "metaScope.scope.channel": "{channel} (cały kanał)",
+  "metaScope.scope.language": "{language} (każdy kanał)",
+  "metaScope.discard.title": "Odrzucić niezapisane zmiany?",
+  "metaScope.discard.body": "Nadpisanie dla zakresu {scope} ma niezapisane zmiany. Przejście do innego zakresu je odrzuci.",
+  "metaScope.discard.confirm": "Odrzuć i przełącz",
+  "metaScope.discard.cancel": "Wróć do edycji",
+  "metaScope.inherit.title": "Użyć dziedziczonego dla zakresu {scope}?",
+  "metaScope.inherit.body": "Nadpisanie dla zakresu {scope} zostanie usunięte — {fields}. Każde z tych pól pokaże wtedy wartość dziedziczoną.",
+  "metaScope.inherit.cancel": "Anuluj"
 }
