@@ -1289,6 +1289,13 @@ export const adminAttributeResponseSchema = z.object({
   quickSearchable: z.boolean(),
   /** Feature 061 (additive) — id of the backing product-host Custom Field definition. */
   customFieldDefinitionId: uuidSchema,
+  /**
+   * Feature 023 / 163 (T095b) — whether the attribute's value is set per sales channel
+   * and per language. Optional so other builders of the DTO keep compiling; `catalog`
+   * always emits both.
+   */
+  channelScoped: z.boolean().optional(),
+  languageScoped: z.boolean().optional(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
 });
@@ -1741,6 +1748,12 @@ export const updateAttachmentTypeRequestSchema = z
   .strict();
 export type UpdateAttachmentTypeRequest = z.infer<typeof updateAttachmentTypeRequestSchema>;
 
+/** Feature 163 (FR-078) — the longest attachment description one language may carry. */
+export const ATTACHMENT_DESCRIPTION_TRANSLATION_MAX = 4000;
+
+/** Feature 163 (FR-078) — an attachment name per language, as long as the global one. */
+const ATTACHMENT_NAME_MAX = 160;
+
 export const productAttachmentSchema = z.object({
   id: uuidSchema,
   productId: uuidSchema,
@@ -1749,6 +1762,15 @@ export const productAttachmentSchema = z.object({
   name: z.string().min(1).max(160),
   description: z.string().nullable(),
   position: z.number().int().nonnegative(),
+  /**
+   * Feature 163 (FR-078, R16) — the name and description per language; a language
+   * absent here shows the global `name` / `description`. Optional so other builders of
+   * the DTO keep compiling; `catalog` always emits them.
+   */
+  nameTranslations: z.record(z.string(), z.string()).optional(),
+  descriptionTranslations: z.record(z.string(), z.string()).optional(),
+  /** Feature 163 (FR-078) — the channels the attachment is hidden in, sorted. Always emitted by `catalog`. */
+  hiddenInChannels: z.array(uuidSchema).optional(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
 });
@@ -1761,6 +1783,14 @@ export const createAttachmentRequestSchema = z
     name: z.string().min(1).max(160),
     description: z.string().nullable().optional(),
     position: z.number().int().nonnegative().optional(),
+    /**
+     * Feature 163 (FR-078) — the name and description per language: the named
+     * languages are set, an empty string removes one, an unnamed one is left as it is.
+     */
+    nameTranslations: translationMapPatchSchema(ATTACHMENT_NAME_MAX).optional(),
+    descriptionTranslations: translationMapPatchSchema(ATTACHMENT_DESCRIPTION_TRANSLATION_MAX).optional(),
+    /** Feature 163 (FR-078) — the channels the attachment is hidden in; replaces the set. */
+    hiddenInChannels: z.array(uuidSchema).max(SCOPED_CHANNELS_MAX).optional(),
   })
   .strict();
 export type CreateAttachmentRequest = z.infer<typeof createAttachmentRequestSchema>;
@@ -1771,6 +1801,14 @@ export const updateAttachmentRequestSchema = z
     name: z.string().min(1).max(160).optional(),
     description: z.string().nullable().optional(),
     position: z.number().int().nonnegative().optional(),
+    /**
+     * Feature 163 (FR-078) — the name and description per language: the named
+     * languages are set, an empty string removes one, an unnamed one is left as it is.
+     */
+    nameTranslations: translationMapPatchSchema(ATTACHMENT_NAME_MAX).optional(),
+    descriptionTranslations: translationMapPatchSchema(ATTACHMENT_DESCRIPTION_TRANSLATION_MAX).optional(),
+    /** Feature 163 (FR-078) — the channels the attachment is hidden in; replaces the set. */
+    hiddenInChannels: z.array(uuidSchema).max(SCOPED_CHANNELS_MAX).optional(),
   })
   .strict();
 export type UpdateAttachmentRequest = z.infer<typeof updateAttachmentRequestSchema>;
@@ -1786,6 +1824,12 @@ export const packagingUnitSchema = z.object({
   id: uuidSchema,
   productId: uuidSchema,
   name: z.string().min(1).max(160),
+  /**
+   * Feature 163 (FR-079, R16) — the name per language; a language absent here shows
+   * `name`. Optional so other builders of the DTO keep compiling; `catalog` always
+   * emits it.
+   */
+  nameTranslations: z.record(z.string(), z.string()).optional(),
   baseQuantity: z.number().int().positive(),
   position: z.number().int().nonnegative(),
   isDefault: z.boolean(),
@@ -1807,6 +1851,11 @@ export const createPackagingUnitRequestSchema = z
     position: z.number().int().nonnegative().optional(),
     /** Feature 155 — minimum number of this unit per order of the product; `null` clears. */
     minOrderUnits: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
+    /**
+     * Feature 163 (FR-079) — the name per language: the named languages are set, an
+     * empty string removes one, an unnamed one is left as it is.
+     */
+    nameTranslations: translationMapPatchSchema(160).optional(),
   })
   .strict();
 export type CreatePackagingUnitRequest = z.infer<typeof createPackagingUnitRequestSchema>;
@@ -1819,6 +1868,11 @@ export const updatePackagingUnitRequestSchema = z
     position: z.number().int().nonnegative().optional(),
     /** Feature 155 — minimum number of this unit per order of the product; `null` clears. */
     minOrderUnits: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
+    /**
+     * Feature 163 (FR-079) — the name per language: the named languages are set, an
+     * empty string removes one, an unnamed one is left as it is.
+     */
+    nameTranslations: translationMapPatchSchema(160).optional(),
   })
   .strict();
 export type UpdatePackagingUnitRequest = z.infer<typeof updatePackagingUnitRequestSchema>;
@@ -2333,6 +2387,12 @@ export interface CatalogPackagingUnitRecord {
   updatedAt: Date;
   /** Feature 155 — minimum units of this packaging unit per order of the product; `null` = none. */
   minOrderUnits: number | null;
+  /**
+   * Feature 163 (FR-079) — the name per language; the snapshot of a basket or quote
+   * line takes `effectivePackagingUnitName(record, L)`. Optional so other builders of
+   * the record keep compiling; `catalog` always sets it.
+   */
+  nameTranslations?: Record<string, string>;
 }
 
 /** A directed product↔product relation (cross-sell, up-sell, related). */
@@ -3316,8 +3376,12 @@ export interface CatalogGalleryPort {
    * because both consumers render them identically (no image) and telling them
    * apart would need exactly the product-existence probe that makes `list`
    * unusable for a batch.
+   *
+   * Feature 163 (FR-076, owner decision MED-1 = A) — `channelId` is the channel the
+   * caller serves (a feed's channel): an item hidden there is left out. `null` names no
+   * channel and answers the global gallery.
    */
-  listForProducts(productIds: readonly string[]): Promise<CatalogGalleryBatchItem[]>;
+  listForProducts(productIds: readonly string[], channelId: string | null): Promise<CatalogGalleryBatchItem[]>;
   /**
    * The `base_image` url of each of a batch of products — `base_image` only,
    * with no fallback to `thumbnail` or to the first item by position.
@@ -3333,8 +3397,13 @@ export interface CatalogGalleryPort {
    * `gallery_items` plus the asset read port it already holds, so a consumer
    * gets the url without joining `assets_library`'s table itself — which is the
    * third of the three reaches this method retires (feature 075 / D-87).
+   *
+   * Feature 163 (FR-076, owner decision MED-1 = A) — the base image **in `channelId`**
+   * (the request's resolved channel): the channel's own holder of the role when it has
+   * one, else the global holder; `null` when that holder is hidden there. `null` names
+   * no channel and answers the global holder.
    */
-  baseImageUrls(productIds: readonly string[]): Promise<Map<string, string | null>>;
+  baseImageUrls(productIds: readonly string[], channelId: string | null): Promise<Map<string, string | null>>;
   create(
     productId: string,
     req: CreateGalleryItemRequest,

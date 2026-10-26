@@ -498,6 +498,7 @@ export function catalogModule(options: CatalogModuleOptions) {
       options.emFactory,
       options.commandBus,
       options.assets,
+      options.salesChannelMembership,
     );
     const packagingUnitService = new PackagingUnitService(options.emFactory, options.commandBus);
     const productLinkService = new ProductLinkService(

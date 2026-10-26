@@ -3,6 +3,7 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ANONYMOUS_PRODUCT_AUDIENCE,
   ERROR_CODES,
+  effectivePackagingUnitName,
   isOrderMinimumEligibleType,
   minimumRefusal,
   pickLocalized,
@@ -122,6 +123,11 @@ export interface CartLineInput {
 interface ResolvedCartLine {
   product: CatalogProductRecord;
   packagingUnit: CatalogPackagingUnitRecord | null;
+  /**
+   * Feature 163 (FR-079, T138) — the unit's name the line snapshots: its name in the
+   * basket's scope language, else its global name. `null` without a unit.
+   */
+  packagingUnitName: string | null;
   /** Base pieces. */
   effectiveQuantity: number;
 }
@@ -717,7 +723,7 @@ export class CartService {
     // command-coverage-ignore: the ephemeral cart's own line write; its typed
     // `line_added` audit row is recorded by the public caller (`addItem`,
     // `addItems`) through `#recordLineAdded` once the write has succeeded.
-    const { product, packagingUnit, effectiveQuantity } = resolved;
+    const { product, packagingUnit, packagingUnitName, effectiveQuantity } = resolved;
     // If the same product+variant+packaging-unit is already in the cart, bump
     // quantity. A packaging-unit line and a single-piece line of the same
     // product stay distinct (different `packagingUnitId`).
@@ -780,7 +786,7 @@ export class CartService {
       ...(packagingUnit
         ? {
             packagingUnitId: packagingUnit.id,
-            packagingUnitName: packagingUnit.name,
+            packagingUnitName: packagingUnitName ?? packagingUnit.name,
             packagingUnitBaseQuantity: packagingUnit.baseQuantity,
           }
         : {}),
@@ -867,9 +873,10 @@ export class CartService {
     // routes never pass `salesChannelId`), and is answered in that channel's
     // default language (N2).
     const channelId = input.salesChannelId ?? this.#basketChannelOf(actor);
+    const scopeLanguage = input.salesChannelId ? null : basketScopeLanguage(channelId, actor.languageTag);
     const available = await this.availability.filterAvailable([product.id], {
       channelId,
-      languageCode: input.salesChannelId ? null : basketScopeLanguage(channelId, actor.languageTag),
+      languageCode: scopeLanguage,
       audience: cartAudience(actor),
     });
     if (!available.has(product.id)) throw notFound();
@@ -898,7 +905,12 @@ export class CartService {
     const effectiveQuantity = packagingUnit
       ? packagingUnit.baseQuantity * input.quantity
       : input.quantity;
-    return { product, packagingUnit, effectiveQuantity };
+    // Feature 163 (FR-079, T138; owner decision 2026-10-26) — the snapshot takes the
+    // unit's name in the basket's language; a placed line keeps it, never re-resolved.
+    // An operator naming the channel has no request language here (`null`): the global
+    // name, as before.
+    const packagingUnitName = packagingUnit ? effectivePackagingUnitName(packagingUnit, scopeLanguage) : null;
+    return { product, packagingUnit, packagingUnitName, effectiveQuantity };
   }
 
   /**

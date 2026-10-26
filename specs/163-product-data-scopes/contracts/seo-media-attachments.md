@@ -48,18 +48,37 @@ an absent row answers `204` with no audit entry (`skipAudit`).
   and `thumbnail` labels (Principle VI); the label spelling stays a value. Role uniqueness per channel by PK (FR-076).
 - Product detail (`ProductDetail`), listing card image and OG image read the effective gallery in C and
   alt at L. Command `product.media.update`, `changedFields: ['media']`.
+- `catalogGalleryPort.listForProducts(productIds, channelId)` (product feeds) and
+  `catalogGalleryPort.baseImageUrls(productIds, channelId)` (comparisons) answer in the caller's channel: a
+  hidden item is left out, the channel's own `base_image` holder wins, a hidden holder answers `null`
+  (owner decision MED-1 = A, 2026-10-26; `consumers.md` row 25). `null` = the global gallery.
 
 ## 3. Attachments (catalog)
 
 - Attachment create/update (existing routes) accept `nameTranslations`, `descriptionTranslations`
-  (`Record<lang, string>`) and `hiddenInChannels: uuid[]`.
+  (`Record<lang, string>`; named languages set, `''` removes one, unnamed ones untouched; name ≤ 160, description
+  ≤ `ATTACHMENT_DESCRIPTION_TRANSLATION_MAX` = 4000 characters) and `hiddenInChannels: uuid[]` (replaces the set;
+  a newly hidden channel must be a member one, `422 SCOPE_INVALID not_a_member`; clearing is always allowed). The
+  admin DTO carries all three.
+- Writes run the existing Commands `product_attachment.create` / `product_attachment.update`
+  (`objectType: 'product_attachment'`), one audit entry per request — the route-level `attachment.create` /
+  `attachment.update` rows are gone (FR-080). The projections carry `productId`, `attachmentTypeId`, `name`,
+  `description`, `position`, both translation maps (each side naming every language the other names, `''` where
+  absent) and `hiddenInChannels`; re-sending `before` minus `productId` restores the attachment (FR-081). Event
+  `product.updated.v1` `['attachments']`; a no-op writes and announces nothing.
 - PDP: attachments hidden in C are omitted; name/description at L with fallback to the global value.
 
 ## 4. Packaging units (catalog)
 
 - Packaging unit create/update accept `nameTranslations` (`.strict()` admin schemas stay strict — the key
-  is added to them).
-- Storefront DTO `packagingUnits[].name` is the effective name at L; basket/RFQ snapshots take it (N2).
+  is added to them). The admin DTO and `CatalogPackagingUnitRecord` carry it.
+- Writes run the existing Commands `packaging_unit.create` / `packaging_unit.update` (`objectType:
+  'packaging_unit'`), one audit entry per request (the route-level `product_packaging_unit` rows are gone). The
+  projections carry `productId`, `name`, `nameTranslations`, `baseQuantity`, `isDefault`, `minOrderUnits`;
+  re-sending `before` minus `productId` restores the unit. Event `product.updated.v1` `['packagingUnits']`.
+- Storefront DTO `packagingUnits[].name` is the effective name at L; basket/RFQ snapshots take it (N2) through
+  `effectivePackagingUnitName(unit, L)`. Matching a quote line's unit **by name** (`resolveLinePackaging`) stays on
+  the global `name` (owner decision 2026-10-26).
 
 ## 5. Order rules per channel (catalog, US10)
 

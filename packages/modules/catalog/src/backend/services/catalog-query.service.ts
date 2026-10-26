@@ -20,6 +20,7 @@ import { BundleSlot } from '../entities/bundle-slot.entity.js';
 import { BundleSlotOption } from '../entities/bundle-slot-option.entity.js';
 import { resolvePrimaryAssetUrls } from './primary-asset-url.js';
 import { effectiveGallery, loadGalleryChannelOverrides } from './gallery-scopes.js';
+import { loadAttachmentsHiddenInChannel } from './attachment-packaging-scopes.js';
 import { viewerOrganizationFor } from './viewer-organization.js';
 import {
   effectiveAttributeValues,
@@ -67,6 +68,7 @@ import {
   resolveScopeLanguage,
   listingPriceMoney,
   translationAt,
+  effectivePackagingUnitName,
   type AssetReadPort,
   type AssetRecord,
   type CategoryNode,
@@ -2165,11 +2167,18 @@ export class CatalogQueryService {
       (asset.altText ? this.pickLang(asset.altText, ctx.preferredLanguage, channel) : null);
 
     // Attachments + their types, eager-loaded in two queries.
-    const attachmentRows = await em.find(
+    // Feature 163 (FR-078, R16) — an attachment hidden in the request's channel is
+    // neither listed nor named here (its asset is not even read).
+    const storedAttachmentRows = await em.find(
       ProductAttachment,
       { productId: product.id },
       { orderBy: { position: 'asc', id: 'asc' } },
     );
+    const hiddenAttachments =
+      storedAttachmentRows.length > 0
+        ? await loadAttachmentsHiddenInChannel(em, product.id, channel.id)
+        : new Set<string>();
+    const attachmentRows = storedAttachmentRows.filter((row) => !hiddenAttachments.has(row.id));
     const attachmentTypeIds = [...new Set(attachmentRows.map((a) => a.attachmentTypeId))];
     const attachmentTypesById = new Map<string, AttachmentType>();
     if (attachmentTypeIds.length > 0) {
@@ -2334,8 +2343,9 @@ export class CatalogQueryService {
           {
             id: row.id,
             position: row.position,
-            name: row.name,
-            description: row.description ?? null,
+            // Feature 163 (FR-078) — the text at the scope language, else the global one.
+            name: translationAt(row.nameTranslations, scopeLanguage) ?? row.name,
+            description: translationAt(row.descriptionTranslations, scopeLanguage) ?? row.description ?? null,
             type: { id: t.id, code: t.code, name: t.name },
             asset: {
               id: a.id,
@@ -2459,7 +2469,8 @@ export class CatalogQueryService {
       if (packagingUnits.length > 0) {
         detail.packagingUnits = packagingUnits.map((u) => ({
           id: u.id,
-          name: u.name,
+          // Feature 163 (FR-079) — the name at the scope language, else the global name.
+          name: effectivePackagingUnitName(u, scopeLanguage),
           baseQuantity: u.baseQuantity,
           position: u.position,
           isDefault: u.isDefault,
