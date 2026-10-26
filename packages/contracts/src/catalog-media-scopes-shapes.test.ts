@@ -28,12 +28,16 @@ describe('updateGalleryItemRequestSchema', () => {
 describe('putGalleryChannelRolesRequestSchema', () => {
   it('accepts an item per role, null for "use inherited", and absent roles', () => {
     expect(
-      putGalleryChannelRolesRequestSchema.safeParse({ channelId: C, roles: { base_image: I, thumbnail: null } }).success,
+      putGalleryChannelRolesRequestSchema.safeParse({ channelId: C, roles: { baseImage: I, thumbnail: null } }).success,
     ).toBe(true);
   });
 
   it('refuses an unknown role and a missing channel', () => {
     expect(putGalleryChannelRolesRequestSchema.safeParse({ channelId: C, roles: { hero: I } }).success).toBe(false);
+    // The stored label spelling is a value, never a key of the API shape (Principle VI).
+    expect(putGalleryChannelRolesRequestSchema.safeParse({ channelId: C, roles: { base_image: I } }).success).toBe(
+      false,
+    );
     expect(putGalleryChannelRolesRequestSchema.safeParse({ roles: {} }).success).toBe(false);
   });
 });

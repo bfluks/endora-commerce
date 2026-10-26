@@ -199,12 +199,12 @@ describe('Gallery per channel, alt text per language (spec 163, T130)', () => {
 
   it('a B2B base image and thumbnail are what B2B serves; B2C keeps the global ones (US9 #1)', async () => {
     const updates = captureUpdates();
-    const res = await putRoles({ channelId: b2b.id, roles: { base_image: items.life, thumbnail: items.life } });
+    const res = await putRoles({ channelId: b2b.id, roles: { baseImage: items.life, thumbnail: items.life } });
     updates.stop();
     expect(res.statusCode, res.body).toBe(200);
     expect((res.json() as { data: unknown }).data).toEqual({
       channelId: b2b.id,
-      roles: { base_image: items.life, small_image: null, thumbnail: items.life },
+      roles: { baseImage: items.life, smallImage: null, thumbnail: items.life },
     });
     expect(updates.fields()).toEqual([['media']]);
 
@@ -221,7 +221,7 @@ describe('Gallery per channel, alt text per language (spec 163, T130)', () => {
   });
 
   it('holds one image per role per channel, and lists the channel roles (FR-076)', async () => {
-    expect((await putRoles({ channelId: b2b.id, roles: { base_image: items.side } })).statusCode).toBe(200);
+    expect((await putRoles({ channelId: b2b.id, roles: { baseImage: items.side } })).statusCode).toBe(200);
     const page = await pdp(b2b, 'en-US');
     expect(page.gallery.filter((g) => g.labels.includes('base_image')).map((g) => g.id)).toEqual([items.side]);
     const list = await h.app.inject({
@@ -231,10 +231,10 @@ describe('Gallery per channel, alt text per language (spec 163, T130)', () => {
     });
     expect(list.statusCode).toBe(200);
     expect((list.json() as { data: unknown }).data).toEqual([
-      { channelId: b2b.id, roles: { base_image: items.side, small_image: null, thumbnail: items.life } },
+      { channelId: b2b.id, roles: { baseImage: items.side, smallImage: null, thumbnail: items.life } },
     ]);
     // Back to the life image for the cases below.
-    expect((await putRoles({ channelId: b2b.id, roles: { base_image: items.life } })).statusCode).toBe(200);
+    expect((await putRoles({ channelId: b2b.id, roles: { baseImage: items.life } })).statusCode).toBe(200);
   });
 
   it('an image hidden in B2B is never served there and still is in B2C (US9 #2)', async () => {
@@ -317,7 +317,7 @@ describe('Gallery per channel, alt text per language (spec 163, T130)', () => {
     const updates = captureUpdates();
     const count = (await mediaAuditRows()).length;
     expect((await patchItem(items.hero, { altText: { 'pl-PL': 'Regał, przód' } })).statusCode).toBe(200);
-    expect((await putRoles({ channelId: b2b.id, roles: { base_image: items.life } })).statusCode).toBe(200);
+    expect((await putRoles({ channelId: b2b.id, roles: { baseImage: items.life } })).statusCode).toBe(200);
     updates.stop();
     expect(await mediaAuditRows()).toHaveLength(count);
     expect(updates.fields()).toEqual([]);
@@ -328,7 +328,7 @@ describe('Gallery per channel, alt text per language (spec 163, T130)', () => {
     expect(hide.statusCode).toBe(422);
     expect(hide.json()).toMatchObject({ error: { code: 'SCOPE_INVALID', details: { channelId: outside.id, reason: 'not_a_member' } } });
 
-    const roles = await putRoles({ channelId: outside.id, roles: { base_image: items.hero } });
+    const roles = await putRoles({ channelId: outside.id, roles: { baseImage: items.hero } });
     expect(roles.statusCode).toBe(422);
     expect(roles.json()).toMatchObject({ error: { code: 'SCOPE_INVALID' } });
 
@@ -343,7 +343,7 @@ describe('Gallery per channel, alt text per language (spec 163, T130)', () => {
   });
 
   it('refuses an item of another product and an unknown role, and gates on catalog:write', async () => {
-    const foreign = await putRoles({ channelId: b2b.id, roles: { base_image: randomUUID() } });
+    const foreign = await putRoles({ channelId: b2b.id, roles: { baseImage: randomUUID() } });
     expect(foreign.statusCode).toBe(404);
     expect(foreign.json()).toMatchObject({ error: { code: 'GALLERY_ITEM_NOT_FOUND' } });
     expect((await putRoles({ channelId: b2b.id, roles: { hero: items.hero } })).statusCode).toBe(400);
