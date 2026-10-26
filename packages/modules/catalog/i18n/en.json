@@ -1076,5 +1076,8 @@
   "productEditor.scopeOverview.confirmDelete.title": "Delete {field} in {scope}?",
   "productEditor.scopeOverview.confirmDelete.body": "The stored {field} for {scope} is deleted for good. It does not apply now, so nothing the customer sees changes.",
   "productEditor.scopeOverview.confirm.cancel": "Cancel",
-  "productEditor.scopeOverview.tableRegion": "Scope overview table"
+  "productEditor.scopeOverview.tableRegion": "Scope overview table",
+  "productEditor.urlKeys.inheritedHint": "Inherited: {key}",
+  "productEditor.urlKeys.unsaved": "Not saved yet — Save URL keys to apply.",
+  "productEditor.urlKeys.noChanges": "No changes to save."
 }
