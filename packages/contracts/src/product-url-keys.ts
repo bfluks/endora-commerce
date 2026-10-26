@@ -216,6 +216,11 @@ export interface CatalogProductUrlKeyReadPort {
    * The effective key per channel language for each product: the product's
    * channel × language key, else its language key, else its global key. Products the
    * channel does not carry are absent.
+   *
+   * **Applies no availability beyond membership** (checkpoint C security review, I8):
+   * a member product switched off, outside its window or outside its audience still
+   * has keys here. A buyer-facing caller narrows the ids with
+   * `catalogProductAvailabilityPort.filterAvailable` first and links only what is left.
    */
   effectiveKeys(productIds: readonly string[], channelId: string): Promise<Map<string, Map<string, string>>>;
 }
