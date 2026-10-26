@@ -1533,3 +1533,11 @@ also green for product_feeds, comparisons, backend, storefront, admin. **Not run
 MVP = Blocks A + B (US1 end to end on every consumer) + Phase 13 (operator can set it). Each later story
 ships on top independently: US2 rides P7 + P13, US3 P4/P5 + P13, US4 P9 + P14, US5 P10 + P15, US6 P11 +
 P15, US7 P16–P17 + P20, US8 P18 + P20, US9 P21–P23, US10 P12 + P13.
+
+**Stopped here (2026-10-26, Phase 9d, coordinator pause).** P-3, P-1 and PAL-1 committed on `feat/163-decisions`
+(not on the main branch). Green: typecheck (contracts, catalog, quote_requests, backend), lint, the three fast
+test files, and 12 of the checks. **Red: `check:port-catches`** — `prompt-tools.ts:433`, the per-item
+`try/catch` around `adminService.archiveProduct`/`restoreProduct` in `archiveRestoreTools`. Next: make that
+catch rethrow what is not an `HttpError` (or follow the check's ledger rule), rerun the rest of the check set
+(admin-surface onward, release-intent, `i18n:hardcoded`), then rebase onto the main branch and fast-forward it.
+S3 still owes T156-pal-b.
