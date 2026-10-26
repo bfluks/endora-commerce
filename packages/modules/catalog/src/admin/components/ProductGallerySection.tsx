@@ -421,6 +421,7 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
                 <Label htmlFor={scopeSelectId}>{t('productEditor.gallery.scope.label')}</Label>
                 <Select
                   id={scopeSelectId}
+                  aria-describedby={`${scopeSelectId}-hint`}
                   value={channel ? channel.id : ''}
                   disabled={disabled}
                   onChange={(e): void => setChannelId(e.target.value)}
@@ -432,7 +433,7 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
                     </option>
                   ))}
                 </Select>
-                <p className="text-xs text-muted-foreground">
+                <p id={`${scopeSelectId}-hint`} className="text-xs text-muted-foreground">
                   {channels.length === 0
                     ? t('productEditor.gallery.scope.noChannels')
                     : t('productEditor.gallery.scope.hint')}
@@ -443,6 +444,7 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
                   <Label htmlFor={languageSelectId}>{t('productEditor.gallery.alt.language')}</Label>
                   <Select
                     id={languageSelectId}
+                    aria-describedby={`${languageSelectId}-hint`}
                     value={language}
                     disabled={disabled}
                     onChange={(e): void => setAltLanguage(e.target.value)}
@@ -453,7 +455,9 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
                       </option>
                     ))}
                   </Select>
-                  <p className="text-xs text-muted-foreground">{t('productEditor.gallery.alt.hint')}</p>
+                  <p id={`${languageSelectId}-hint`} className="text-xs text-muted-foreground">
+                    {t('productEditor.gallery.alt.hint')}
+                  </p>
                 </div>
               ) : null}
             </div>
