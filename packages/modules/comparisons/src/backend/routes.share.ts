@@ -48,14 +48,17 @@ export async function registerComparisonsShareRoutes(
       const comparison = await comparisonService.findByShareToken(token);
       if (!comparison) throw notFound();
       const channel = getResolvedChannel(request);
+      const viewerIsOwner = comparisonService.isOwnedBy(
+        comparison,
+        viewerIdentity(request),
+      );
+      // Owner decision CMP-1 = A — a column unavailable to this reader is the
+      // owner's history: a recipient gets the `(removed product)` column for it.
       const view = await comparisonService.buildOwnerView(
         comparison,
         channel.id,
         buyerViewerOf(request),
-      );
-      const viewerIsOwner = comparisonService.isOwnedBy(
-        comparison,
-        viewerIdentity(request),
+        viewerIsOwner ? 'owner' : 'recipient',
       );
       reply.header('cache-control', 'no-store');
       // Strip `maxProducts` from the wire shape — the cap is irrelevant
