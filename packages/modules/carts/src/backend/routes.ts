@@ -22,7 +22,7 @@ import {
   type CatalogProductRecord,
   type PromotionApplication,
 } from '@endora-commerce/contracts';
-import { availableRecords, basketScopeLanguage, firstLanguageTag } from './services/cart-availability.js';
+import { availableRecords, basketScopeLanguage, firstLanguageTag, withBasketOrderRules } from './services/cart-availability.js';
 import { cartAudience, type CartActor, type CartService } from './services/cart-service.js';
 import type { CartUpsellService } from './services/cart-upsell-service.js';
 import type { CartCouponService } from './services/cart-coupon-service.js';
@@ -146,7 +146,7 @@ export interface CartsDeps {
    * (channel, language), outside its window or outside its audience reads as
    * a product with no record.
    */
-  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveNames'>;
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveNames' | 'effectiveOrderRules'>;
   /**
    * Optional gate — when provided, signed-in customers whose Organization
    * is not `active` (pending_verification / blocked / rejected) cannot add
@@ -296,11 +296,12 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
       new Set(products.map((p) => p.id)),
       effectiveNames,
     );
+    // Feature 163 (FR-100) — the minimums of the basket's channel, flagged and reported.
     const minimumViews = await evaluateCartViewMinimums(
       deps.catalogProducts,
       { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
       items.map(toCartMinimumItem),
-      products,
+      await withBasketOrderRules(deps.catalogAvailability, products, actor.salesChannelId),
     );
 
     // Feature 027 §R5 — re-pricing on read (FR-008), through the chain
