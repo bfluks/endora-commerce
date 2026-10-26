@@ -45,7 +45,7 @@ the same path (`catalog:write`) writes it:
 A list or key left out is unchanged; `key: null` removes the key at that scope, so the inherited
 key applies there again. A key is lower-case kebab case, at most 160 characters. A key for a sales
 channel the product is not in, or a language the channel does not offer, is refused with
-`422 SCOPE_INVALID`; a key left behind by a channel the product has left is shown as no longer used
+`422 SCOPE_INVALID`; a key left behind by a channel the product has left is shown as **No longer applies**
 and can be removed.
 
 - **A key another product holds** in that language is refused with `409 URL_KEY_TAKEN`, naming the

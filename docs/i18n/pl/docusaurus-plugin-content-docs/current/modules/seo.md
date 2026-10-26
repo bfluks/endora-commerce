@@ -577,6 +577,13 @@ były zapisywane, ale strona ich nie pokazywała; teraz pokazuje. Gdy moduł `se
 strona pokazuje metadane wyprowadzone z produktu, a po ponownym włączeniu modułu wszystkie
 nadpisania wracają.
 
+**W panelu.** Edytor meta tagów na ekranie SEO wczytuje zakres od razu po jego wybraniu — kanały
+sprzedaży produktu, potem jeden z języków kanału albo cały kanał (**Załaduj** odczytuje go
+ponownie). Opuszczenie zakresu z niezapisanymi zmianami wymaga potwierdzenia, a **Użyj
+dziedziczonego** pyta przed usunięciem nadpisania dokładnie w pokazanym zakresie. Karta SEO w
+edytorze produktu prowadzi do tego ekranu z już wybranym produktem
+(`/seo?entityType=product&entityId=<id>`).
+
 **Każda zmiana trafia do dziennika zdarzeń.** Zapis nadpisania to jeden wpis
 `seo_meta_override.upsert`, usunięcie — jeden wpis `seo_meta_override.delete`, każdy z pełnym
 nadpisaniem przed zmianą i po niej. Aby przywrócić wcześniejszą wersję, zapisz wartości ze stanu
