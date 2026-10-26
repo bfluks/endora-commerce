@@ -58,12 +58,13 @@ describe('Archive / Restore one product (spec 163, T156c)', () => {
     };
   }
 
-  async function createProduct(status: 'active' | 'inactive' | undefined = 'active'): Promise<string> {
+  /** `'omit'` sends no status at all — a default parameter would turn `undefined` into `'active'`. */
+  async function createProduct(status: 'active' | 'inactive' | 'omit' = 'active'): Promise<string> {
     const res = await h.app.inject({
       method: 'POST',
       url: '/api/v1/admin/catalog/products',
       ...admin,
-      payload: body(`ARCH-${run}-${randomUUID().slice(0, 6)}`, status ? { status } : {}),
+      payload: body(`ARCH-${run}-${randomUUID().slice(0, 6)}`, status === 'omit' ? {} : { status }),
     });
     expect(res.statusCode).toBe(201);
     return (res.json() as ProductBody).data.id;
@@ -73,12 +74,13 @@ describe('Archive / Restore one product (spec 163, T156c)', () => {
     const [r] = await h
       .em()
       .getConnection()
-      .execute<Array<{ status: string; archived_at: Date | null }>>(
+      .execute<Array<{ status: string; archived_at: Date | string | null }>>(
         `select status, archived_at from products where id = ?`,
         [id],
       );
     if (!r) throw new Error('product row missing');
-    return r;
+    // The raw driver read may hand `timestamptz` back as a string; normalise it.
+    return { status: r.status, archived_at: r.archived_at === null ? null : new Date(r.archived_at) };
   }
 
   async function auditRows(
@@ -365,7 +367,7 @@ describe('Archive / Restore one product (spec 163, T156c)', () => {
 
   describe('defaults (Q1-d)', () => {
     it('a create without status is inactive and not archived', async () => {
-      const id = await createProduct(undefined);
+      const id = await createProduct('omit');
       expect(await row(id)).toEqual({ status: 'inactive', archived_at: null });
     });
 

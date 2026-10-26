@@ -9,10 +9,12 @@ import { setupPricingFixture, type PricingFixture } from '../../helpers/pricing-
  *
  * The price-book grid expands a product line to every variant the catalogue
  * holds (FR-009). The storefront's product read, which the catalogue's own
- * editor borrowed for its variants list, is the **buyer's** view: it answers
- * an archived product `410`, and a product outside the request's sales
- * channel `404`. Both are asserted below, so the finding that ruled it out
- * stays on record; the admin read answers every variant of both.
+ * editor borrowed for its variants list, is the **buyer's** view: a product
+ * outside the request's sales channel answers `404`, archived or not — since
+ * spec 163 (FR-005, O-3) the archived product's `410` is answered only where
+ * the product would otherwise be available, and both fixtures are bound to no
+ * channel. Both are asserted below, so the finding that ruled it out stays on
+ * record; the admin read answers every variant of both.
  */
 describe('admin product variants read (161)', () => {
   let h: BackendServerHandle;
@@ -76,7 +78,8 @@ describe('admin product variants read (161)', () => {
 
   it('the storefront read is the buyer’s view: it hides both products', async () => {
     expect((await publicRead(unpublished)).statusCode).toBe(404);
-    expect((await publicRead(inactive)).statusCode).toBe(410);
+    // Archived, but outside CH1: the absent product's 404, never the 410 (spec 163, O-3).
+    expect((await publicRead(inactive)).statusCode).toBe(404);
   });
 
   it('answers every variant of a product outside the channel and of an inactive one', async () => {
