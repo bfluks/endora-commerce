@@ -212,7 +212,7 @@ describe('ProductsList — the Archived filter (FR-113)', () => {
     function GoTo(props: { to: string; label: string }): ReactElement {
       const navigate = useNavigate();
       return (
-        <button type="button" onClick={(): void => navigate(props.to)}>
+        <button type="button" onClick={(): void => { void navigate(props.to); }}>
           {props.label}
         </button>
       );
