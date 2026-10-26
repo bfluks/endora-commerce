@@ -263,6 +263,17 @@ export const AdminZoneNameSchema = z.enum([
    */
   'product.editor.channels',
   /**
+   * The end of the product editor's SEO tab, below `catalog`'s own URL keys.
+   *
+   * Mounted **once** per editor. Props: {@link ProductEditorZoneProps}.
+   *
+   * Feature 163 (owner decision "SEO stub = A"): `seo` contributes the link to its
+   * meta editor here, so `catalog` never names `seo` — gating its own link on
+   * `{ module: 'seo' }` was the `foreign-module-id` coupling this place retires.
+   * The product id travels so a contribution can address the product itself.
+   */
+  'product.editor.seo.after',
+  /**
    * Below the sales-channel editor's identity form.
    *
    * Mounted **once** per channel, and only for a channel that already exists —
@@ -796,6 +807,7 @@ export interface AdminZonePropsMap extends Record<AdminZoneName, object> {
   // places in one editor that both carry a product id carry the same shape.
   'product.editor.pricing.after': ProductEditorZoneProps;
   'product.editor.channels': ProductEditorZoneProps;
+  'product.editor.seo.after': ProductEditorZoneProps;
   'sales_channel.editor.after': SalesChannelEditorZoneProps;
   'organization.detail.after': OrganizationDetailZoneProps;
   'customer.detail.after': CustomerDetailZoneProps;
