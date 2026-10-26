@@ -59,5 +59,21 @@
   "crawlerPreview.llms.notice.previewFailed": "The preview could not be loaded. You can still save your content.",
   "crawlerPreview.llms.notice.notServedNoindex": "No llms.txt is served for this sales channel while its \"Default robots\" asks search engines not to index it. Your content is kept, and is served once indexing is allowed again.",
   "crawlerPreview.llms.notice.notServed": "The storefront serves no llms.txt for this sales channel at the moment. If \"Default robots\" was changed a moment ago, check again in a minute or two.",
-  "errors.SEO_CRAWLER_TEXT_TOO_LARGE": "The text is {actualBytes} bytes long. At most {maxBytes} bytes (64 KiB) can be saved."
+  "errors.SEO_CRAWLER_TEXT_TOO_LARGE": "The text is {actualBytes} bytes long. At most {maxBytes} bytes (64 KiB) can be saved.",
+  "metaScope.channel": "Sales channel",
+  "metaScope.everyChannel": "Every channel (language row)",
+  "metaScope.language": "Language",
+  "metaScope.wholeChannel": "Whole channel",
+  "metaScope.channelsUnavailable": "The product's sales channels could not be read, so only the language rows can be edited here.",
+  "metaScope.effectiveHeading": "Effective values",
+  "metaScope.column.field": "Field",
+  "metaScope.column.value": "Value",
+  "metaScope.column.source": "Comes from",
+  "metaScope.source.channelLanguage": "Channel and language",
+  "metaScope.source.channel": "Whole channel",
+  "metaScope.source.language": "Language",
+  "metaScope.source.derived": "From the product",
+  "metaScope.useInherited": "Use inherited",
+  "metaScope.removed": "Override removed. This scope inherits its values again.",
+  "metaScope.error.remove": "The override could not be removed. Try again."
 }
