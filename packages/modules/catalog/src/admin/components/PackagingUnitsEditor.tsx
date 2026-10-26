@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useId, useState, type ReactNode } from 'react';
 import { ORDER_MINIMUM_MAX, type PackagingUnitDto } from '@endora-commerce/contracts';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
+import { Button, Input, Label } from '@endora-commerce/admin-kit/ui';
+import { ModalDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { parseOrderMinimumInput } from './ProductOrderRulesCard.js';
+import type { ScopeContext } from './ProductScopeEditor.js';
+import { getProductScopeContext } from '../lib/product-scopes-api.js';
+import { languagesToOffer, translationPatch, type TranslationMap } from '../lib/media-scopes.js';
 
 /**
  * Feature 043 — Packaging units editor, rendered inside the product card's
@@ -13,6 +18,10 @@ import { parseOrderMinimumInput } from './ProductOrderRulesCard.js';
  *
  * Feature 155 (US2, FR-002) — each unit also carries an optional minimum number of that
  * unit per order (`minOrderUnits`), edited in its own column; empty clears it.
+ *
+ * Feature 163 (T142, US9 #5, FR-079) — each unit's name per language, edited in a
+ * dialog over the member channels' languages plus any language the unit already
+ * names; Save sends the changed languages only (`''` = use the global name).
  */
 export function PackagingUnitsEditor({ productId }: { productId: string }): ReactNode {
   const t = useTranslation('catalog');
@@ -28,6 +37,8 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
   /** The unit id (or `'new'`) whose minimum input holds the value the error refers to. */
   const [invalidMinimum, setInvalidMinimum] = useState<string | null>(null);
   const errorId = `${useId()}-error`;
+  const [context, setContext] = useState<ScopeContext | null>(null);
+  const [translating, setTranslating] = useState<PackagingUnitDto | null>(null);
   const minimumMessage = (): string =>
     t('packagingUnits.error.invalidMinimum', { max: String(ORDER_MINIMUM_MAX) });
 
@@ -47,6 +58,21 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
   useEffect(() => {
     void load();
   }, [load]);
+
+  // The languages to translate into; without this read the unit's own languages remain.
+  useEffect(() => {
+    let cancelled = false;
+    getProductScopeContext(productId)
+      .then((scope) => {
+        if (!cancelled) setContext(scope);
+      })
+      .catch(() => {
+        if (!cancelled) setContext(null);
+      });
+    return (): void => {
+      cancelled = true;
+    };
+  }, [productId]);
 
   const run = useCallback(
     async (fn: () => Promise<void>) => {
@@ -244,7 +270,16 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
                       ↓
                     </button>
                   </td>
-                  <td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <button
+                      type="button"
+                      className="b2b-btn b2b-btn--ghost b2b-btn--sm"
+                      disabled={busy}
+                      aria-label={t('packagingUnits.translations.title', { name: u.name })}
+                      onClick={() => setTranslating(u)}
+                    >
+                      {t('packagingUnits.translations.open')}
+                    </button>
                     <button
                       type="button"
                       className="b2b-btn b2b-btn--ghost b2b-btn--sm"
@@ -307,6 +342,106 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
           </button>
         </div>
       </div>
+      {translating ? (
+        <PackagingUnitTranslationsDialog
+          unit={translating}
+          context={context}
+          onClose={() => setTranslating(null)}
+          onSave={async (nameTranslations) => {
+            await apiClient.patch(`${base}/${translating.id}`, { nameTranslations });
+            await load();
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+const UNIT_NAME_MAX = 160;
+
+function PackagingUnitTranslationsDialog({
+  unit,
+  context,
+  onClose,
+  onSave,
+}: {
+  unit: PackagingUnitDto;
+  context: ScopeContext | null;
+  onClose: () => void;
+  onSave: (nameTranslations: TranslationMap) => Promise<void>;
+}): ReactNode {
+  const t = useTranslation('catalog');
+  const fieldId = useId();
+  const errorId = `${fieldId}-error`;
+  const saved = unit.nameTranslations ?? {};
+  const [names, setNames] = useState<TranslationMap>({ ...saved });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const languages = languagesToOffer(context, saved);
+
+  const save = async (): Promise<void> => {
+    const patch = translationPatch(saved, names);
+    if (!patch) {
+      onClose();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave(patch);
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t('packagingUnits.translations.error'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalDialog
+      title={t('packagingUnits.translations.title', { name: unit.name })}
+      onClose={onClose}
+      busy={busy}
+      dismissOnScrim={false}
+      {...(error ? { 'aria-describedby': errorId } : {})}
+      footer={
+        <>
+          <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
+            {t('packagingUnits.translations.cancel')}
+          </Button>
+          <Button type="button" disabled={busy} onClick={() => void save()}>
+            {t('packagingUnits.translations.save')}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        {error ? (
+          <div id={errorId} role="alert" className="b2b-alert b2b-alert--error">
+            {error}
+          </div>
+        ) : null}
+        <p className="text-xs text-muted-foreground">
+          {languages.length === 0
+            ? t('packagingUnits.translations.noLanguages')
+            : t('packagingUnits.translations.hint')}
+        </p>
+        {languages.map((language) => (
+          <div key={language} className="space-y-1">
+            <Label htmlFor={`${fieldId}-${language}`}>
+              {t('packagingUnits.translations.name', { language: language.toUpperCase() })}
+            </Label>
+            <Input
+              id={`${fieldId}-${language}`}
+              value={names[language] ?? ''}
+              placeholder={unit.name}
+              maxLength={UNIT_NAME_MAX}
+              disabled={busy}
+              onChange={(e): void => setNames((prev) => ({ ...prev, [language]: e.target.value }))}
+            />
+          </div>
+        ))}
+      </div>
+    </ModalDialog>
   );
 }
