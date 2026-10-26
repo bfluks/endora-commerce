@@ -14,6 +14,7 @@ import {
   type ScopeMissingValue,
   type ScopeSnapshot,
   type ScopeWarning,
+  sameLanguage,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { SalesChannelMembershipPort, SettingsReadPort } from '@endora-commerce/platform/kernel';
@@ -70,8 +71,6 @@ function hasValue(value: unknown): boolean {
   if (typeof value === 'string') return value.trim().length > 0;
   return isNonEmpty(value);
 }
-
-const sameLanguage = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
 
 /** The value of a per-language baseline in `languageCode` itself — no fallback. */
 function inLanguage(baseline: unknown, languageCode: string): unknown {

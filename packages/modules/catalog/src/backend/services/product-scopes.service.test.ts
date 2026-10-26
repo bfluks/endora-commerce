@@ -5,6 +5,7 @@ import { HttpError } from '@endora-commerce/platform/http';
 import { Product } from '../entities/product.entity.js';
 import { ProductChannelScope } from '../entities/product-channel-scope.entity.js';
 import {
+  writeScopedStatus,
   nonMemberOrganizationIds,
   planProductScopeWrite,
   ProductScopesService,
@@ -545,5 +546,52 @@ describe('ProductScopesService.read — organization names (U1)', () => {
     });
     expect((await failing.read(P)).organizations).toEqual([]);
     expect((await rig().read(P)).organizations).toEqual([]);
+  });
+});
+
+describe('writeScopedStatus — the one write of a scope row (checkpoint C code review, C-W3)', () => {
+  const P = 'p-1';
+  const C = 'c-1';
+  function fakeEm() {
+    const removed: unknown[] = [];
+    const persisted: unknown[] = [];
+    const em = {
+      create: (_entity: unknown, data: Record<string, unknown>) => ({ ...data }),
+      persist: (row: unknown) => void persisted.push(row),
+      remove: (row: unknown) => void removed.push(row),
+    };
+    return { em: em as never, removed, persisted };
+  }
+  const channelRow = (over: Partial<Record<string, unknown>> = {}) =>
+    ({ productId: P, salesChannelId: C, status: null, windowOverridden: false, publishFrom: null, publishUntil: null, visibility: null, allowedOrganizationIds: null, minOrderQuantity: null, returnable: null, ...over }) as never;
+
+  it('creates a channel row for a status and answers that it changed', () => {
+    const { em, persisted } = fakeEm();
+    const rows = { channelRows: [], languageRows: [] };
+    expect(writeScopedStatus(em, rows, P, { channelId: C, languageCode: null }, 'inactive')).toBe(true);
+    expect(rows.channelRows).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({ productId: P, salesChannelId: C, status: 'inactive' });
+  });
+
+  it('deletes a channel row left inheriting everything, keeps one with another override', () => {
+    const lone = fakeEm();
+    const loneRows = { channelRows: [channelRow({ status: 'inactive' })], languageRows: [] };
+    writeScopedStatus(lone.em, loneRows, P, { channelId: C, languageCode: null }, null);
+    expect(lone.removed).toHaveLength(1);
+    expect(loneRows.channelRows).toHaveLength(0);
+
+    const kept = fakeEm();
+    const keptRows = { channelRows: [channelRow({ status: 'inactive', minOrderQuantity: 5 })], languageRows: [] };
+    writeScopedStatus(kept.em, keptRows, P, { channelId: C, languageCode: null }, null);
+    expect(kept.removed).toHaveLength(0);
+    expect(keptRows.channelRows[0]).toMatchObject({ status: null, minOrderQuantity: 5 });
+  });
+
+  it('matches a language row case-insensitively, and answers false when nothing changes', () => {
+    const { em, removed } = fakeEm();
+    const rows = { channelRows: [], languageRows: [{ productId: P, salesChannelId: C, languageCode: 'de-DE', status: 'active' }] as never[] };
+    expect(writeScopedStatus(em, rows, P, { channelId: C, languageCode: 'de-de' }, 'active')).toBe(false);
+    expect(writeScopedStatus(em, rows, P, { channelId: C, languageCode: 'de-de' }, null)).toBe(true);
+    expect(removed).toHaveLength(1);
   });
 });

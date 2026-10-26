@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { toScopesPatch } from './catalog-write-ports.js';
+import { createCatalogProductScopeWritePort, toScopesPatch } from './catalog-write-ports.js';
+import type { ProductScopesService } from './product-scopes.service.js';
+import type { UrlKeyService } from './url-key.service.js';
 
 /**
  * Feature 163 (T122, FR-091) — a connector's scoped write becomes the scopes PATCH
@@ -48,5 +50,23 @@ describe('toScopesPatch', () => {
 
   it('is an empty write for an empty input', () => {
     expect(toScopesPatch({})).toEqual({ channels: [] });
+  });
+});
+
+describe('createCatalogProductScopeWritePort (checkpoint C code review, N2; A-6)', () => {
+  it('runs the write alone, with no completeness mode, and reads nothing back', async () => {
+    const calls: unknown[][] = [];
+    const scopes = {
+      writeStatus: async (...args: unknown[]) => {
+        calls.push(args);
+        return { changedFields: ['scopedStatus'], warnings: [] };
+      },
+      apply: async () => {
+        throw new Error('the port must not read the scopes back');
+      },
+    } as unknown as ProductScopesService;
+    const port = createCatalogProductScopeWritePort(() => scopes, () => ({}) as UrlKeyService);
+    await port.applyScopes('p-1', { status: [{ channelId: B2B, languageCode: null, value: 'active' }] }, { source: 'pim' });
+    expect(calls).toEqual([['p-1', { channels: [{ channelId: B2B, status: 'active' }] }]]);
   });
 });

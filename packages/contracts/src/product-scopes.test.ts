@@ -12,6 +12,7 @@ import {
   withChannelOrderRules,
   PRODUCT_SCOPE_STATUSES,
   resolveScopeLanguage,
+  sameLanguage,
   type ProductChannelLanguageScopeRecord,
   type ProductChannelScopeRecord,
   type ProductGlobalScopeFields,
@@ -450,5 +451,17 @@ describe('withChannelOrderRules — the channel-effective records a seam judges 
     const out = withChannelOrderRules(records, new Map([['a', { minOrderQuantity: 10, returnable: true }]]));
     expect(out[1]).toBe(records[1]);
     expect(records[0]!.minOrderQuantity).toBeNull();
+  });
+});
+
+describe('sameLanguage — one comparison of two language tags (checkpoint C code review, N3)', () => {
+  it('compares case-insensitively', () => {
+    expect(sameLanguage('de-DE', 'de-de')).toBe(true);
+    expect(sameLanguage('de-DE', 'de')).toBe(false);
+  });
+  it('treats null (no language) as equal only to null', () => {
+    expect(sameLanguage(null, null)).toBe(true);
+    expect(sameLanguage(null, 'pl-PL')).toBe(false);
+    expect(sameLanguage('pl-PL', undefined)).toBe(false);
   });
 });

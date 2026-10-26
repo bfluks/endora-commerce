@@ -399,18 +399,19 @@ export class CatalogBulkUpdateService {
       };
     }
 
+    // Surface the skipped attribute when other fields *did* succeed — not strictly
+    // required by the contract but useful to the admin — and, feature 163 (FR-060,
+    // `warn`), the gate's warning (`admin-scopes-api.md` §4); merged, so neither hides
+    // the other (checkpoint C code review, N4).
+    const details = {
+      ...(attributeSkipReason ? { ...attributeSkipReason, message: 'attribute_not_in_set' } : {}),
+      ...(warnings.length > 0 ? { code: ERROR_CODES.SCOPE_INCOMPLETE } : {}),
+    };
     return {
       productId,
       status: 'succeeded',
       changedFields,
-      // Surface the skipped attribute when other fields *did* succeed —
-      // not strictly required by the contract but useful to the admin.
-      ...(attributeSkipReason
-        ? { details: { ...attributeSkipReason, message: 'attribute_not_in_set' } }
-        : {}),
-      // Feature 163 (FR-060, `warn`) — saved, with the gate's warning on the result
-      // (`admin-scopes-api.md` §4).
-      ...(warnings.length > 0 ? { details: { code: ERROR_CODES.SCOPE_INCOMPLETE } } : {}),
+      ...(Object.keys(details).length > 0 ? { details } : {}),
     };
   }
 
