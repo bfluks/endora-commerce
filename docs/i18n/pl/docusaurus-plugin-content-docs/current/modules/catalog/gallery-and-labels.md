@@ -77,6 +77,14 @@ sprzed zmiany tą samą ścieżką przywraca go. Zapis ogłasza zdarzenie
 `product.updated.v1` z `changedFields: ["media"]`. Żądanie, które niczego nie zmienia,
 niczego nie zapisuje i niczego nie ogłasza.
 
+To samo dotyczy oznaczeń elementu i kolejności galerii. `PATCH`, który zmienia oznaczenia,
+zapisuje je (`labels`) w stanie elementu; oznaczenia są zastępowane w tej samej transakcji co
+reszta elementu, więc odrzucone oznaczenie pozostawia element bez zmian. Z `?replace=true` wpis
+przywraca tylko ten element: oznaczenie zabrane innemu elementowi nie wraca do niego po ponownym
+wysłaniu stanu sprzed zmiany. `PUT …/gallery/order` zapisuje `orderedGalleryItemIds` przed zmianą
+i po niej i działa w jednej transakcji. Usunięcie elementu trafia do dziennika raz, jako
+`gallery_item.delete`.
+
 Bez tych ustawień każdy kanał pokazuje galerię globalną, tak jak dotąd.
 
 ## Błędy
