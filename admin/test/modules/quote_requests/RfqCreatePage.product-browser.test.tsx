@@ -365,14 +365,28 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     expect(lineNames()).toEqual(['Paused widget', 'Old widget']);
   });
 
-  it('offers the Archived tab: a quote request does not refuse archived products (feature 163)', async () => {
+  // Owner decision P-3 → A (2026-10-26): a quote request refuses archived products, as an
+  // order does. This case asserted the opposite until then.
+  it('offers no Archived tab, and All leaves archived products out (feature 163, P-3)', async () => {
     const user = userEvent.setup();
     renderPage();
     const dialog = await openPicker(user);
-    await user.click(within(dialog).getByRole('tab', { name: /^Archived/ }));
-    await waitFor(() => expect(within(dialog).getByText('Retired widget')).toBeInTheDocument());
-    expect(getSpy.mock.calls.map(([p]) => String(p))).toContain(`${LIST_PATH}?archived=only&page=0&pageSize=20`);
-    expect(rowCheckbox(dialog, 'Retired widget').disabled).toBe(false);
+    expect(within(dialog).queryByRole('tab', { name: /^Archived/ })).toBeNull();
+    await user.click(within(dialog).getByRole('tab', { name: /^All/ }));
+    await waitFor(() => expect(within(dialog).getByText('Paused widget')).toBeInTheDocument());
+    expect(within(dialog).queryByText('Retired widget')).toBeNull();
+    expect(getSpy.mock.calls.some(([p]) => /archived=only|includeArchived/.test(String(p)))).toBe(false);
+  });
+
+  it('the quick search does not look among archived products (feature 163, P-3)', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await waitForCustomer('Jan Kowalski');
+    const quick = screen.getByRole('combobox', { name: tr('rfqCreate.items.quickSearch') });
+    await user.type(quick, 'widget');
+    await screen.findByRole('option', { name: /Paused widget/ });
+    expect(screen.queryByRole('option', { name: /Retired widget/ })).toBeNull();
+    expect(getSpy.mock.calls.some(([p]) => String(p).includes('includeArchived'))).toBe(false);
   });
 
   it('adds 10 lines with quantity 1 and prefills the prices that resolve, leaving the rest empty (sc. 2, FR-031)', async () => {
