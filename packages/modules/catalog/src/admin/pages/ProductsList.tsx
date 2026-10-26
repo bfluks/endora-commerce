@@ -23,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import { ProductsBulkEditDialog } from '../components/ProductsBulkEditDialog.js';
+import { ArchivedPill, ProductStatusPill } from '../components/ProductStatusPills.js';
 import {
   BULK_EDIT_HARD_MAX,
   isProductListTab,
@@ -42,7 +43,7 @@ interface AdminProduct {
   slug: string;
   type: string;
   status: 'active' | 'inactive';
-  /** Feature 163 (FR-019) — archived is its own fact, independent of `status`. */
+  /** Archived is its own fact, independent of `status`. */
   archivedAt?: string | null;
   name: Record<string, string>;
   visibility: string;
@@ -84,7 +85,7 @@ interface ProductsResponse {
   counts: ProductListCounts;
 }
 
-/** Feature 163 (R30.4) — `all` / `active` / `inactive` count non-archived products. */
+/** `all` / `active` / `inactive` count non-archived products. */
 interface ProductListCounts {
   all: number;
   active: number;
@@ -163,7 +164,7 @@ export function ProductsList(): ReactNode {
     setError(null);
     try {
       const params = new URLSearchParams();
-      // Feature 163 (FR-113) — archived products are hidden by the list's default
+      // Archived products are hidden by the list's default
       // (`archived=exclude`); only the Archived tab asks for them.
       const tabQuery = productListTabQuery(statusFilter);
       if (tabQuery.archived === 'only') params.set('archived', 'only');
@@ -253,6 +254,15 @@ export function ProductsList(): ReactNode {
     if (stockFilter !== 'all') return [];
     return rows;
   }, [rows, stockFilter]);
+
+  // The Archived tab's own empty copy is true only when nothing narrows it; a
+  // filtered Archived tab gets the usual "try clearing filters".
+  const filtersAtDefault = query.trim() === '' && typeFilter === 'all' && stockFilter === 'all';
+  const archivedEmpty = statusFilter === 'archived' && filtersAtDefault;
+  // A search that finds nothing among live products may be looking for an archived
+  // one, which every other tab hides; one step takes the query there.
+  const searchArchivedHint =
+    statusFilter !== 'archived' && debouncedQuery.trim() !== '' && stockFilter === 'all' && rows.length === 0;
 
   const selectedCount =
     selection.mode === 'collection' ? selection.collectionTotal : selection.pageIds.size;
@@ -619,7 +629,7 @@ export function ProductsList(): ReactNode {
           <ProductsBulkEditDialog
             productIds={bulkEditProductIds}
             selectionScope={selection.mode === 'collection' ? 'collection' : 'page'}
-            // Feature 163 (FR-053) — one archive action, the one that changes
+            // One archive action, the one that changes
             // something: the Archived tab holds only archived products, every
             // other tab only products that are not.
             archiveAction={canWrite ? (statusFilter === 'archived' ? 'restore' : 'archive') : null}
@@ -648,7 +658,7 @@ export function ProductsList(): ReactNode {
                 <Package size={20} />
               </div>
               <div className="b2b-empty__title">
-                {statusFilter === 'archived' ? t('productsList.empty.archivedTitle') : t('productsList.empty.title')}
+                {archivedEmpty ? t('productsList.empty.archivedTitle') : t('productsList.empty.title')}
               </div>
               {/*
                 The empty state's sentence is *"Try clearing filters, or use
@@ -659,7 +669,7 @@ export function ProductsList(): ReactNode {
                 *"Try clearing filters, or use  to create one."*
               */}
               <div className="b2b-empty__sub">
-                {statusFilter === 'archived' ? (
+                {archivedEmpty ? (
                   t('productsList.empty.archivedSub')
                 ) : canWrite ? (
                   <>
@@ -678,6 +688,16 @@ export function ProductsList(): ReactNode {
                   t('productsList.empty.readOnly')
                 )}
               </div>
+              {searchArchivedHint ? (
+                <button
+                  type="button"
+                  className="b2b-btn b2b-btn--ghost"
+                  style={{ marginTop: 8, color: 'var(--primary-color)' }}
+                  onClick={(): void => setStatusFilter('archived')}
+                >
+                  {t('productsList.empty.searchArchived')}
+                </button>
+              ) : null}
             </div>
           ) : (
             <div className="b2b-table-scroll">
@@ -766,8 +786,9 @@ export function ProductsList(): ReactNode {
                     </td>
                     <td>
                       <span className="b2b-row" style={{ gap: 4, flexWrap: 'wrap' }}>
-                        <StatusPill status={r.status} />
-                        {r.archivedAt ? <ArchivedPill /> : null}
+                        <ProductStatusPill status={r.status} archived={Boolean(r.archivedAt)} />
+                        {/* On the Archived tab every row is archived; the tab already says so. */}
+                        {r.archivedAt && statusFilter !== 'archived' ? <ArchivedPill /> : null}
                       </span>
                     </td>
                     <td>
@@ -854,21 +875,6 @@ function Chip(props: {
       ) : null}
     </button>
   );
-}
-
-function StatusPill({ status }: { status: AdminProduct['status'] }): ReactNode {
-  const t = useTranslation('catalog');
-  const cls = status === 'active' ? 'b2b-badge--success' : '';
-  return <span className={cn('b2b-badge', 'b2b-badge--dot', cls)}>{t(`productsList.status.${status}`)}</span>;
-}
-
-/**
- * Feature 163 (FR-019) — shown beside the status, never instead of it: an archived
- * product keeps its status, and the word, not a colour, carries the fact.
- */
-function ArchivedPill(): ReactNode {
-  const t = useTranslation('catalog');
-  return <span className="b2b-badge b2b-badge--warn">{t('productsList.status.archived')}</span>;
 }
 
 function pickName(name: Record<string, string>): string {
