@@ -340,7 +340,8 @@ export async function registerSeoRoutes(
   // §1) — a row is addressed by (entity, `channelId?`, `locale?`): the query for
   // GET and DELETE, the body for PUT. Naming neither is the `en-US` language row,
   // as before. `resolved` is the walk at the named scope (channel × language →
-  // channel → language → the rule); `override` is the row at exactly the address.
+  // channel → language → the rule), `sources` says which scope each field came
+  // from; `override` is the row at exactly the address.
 
   app.get<{
     Params: { entityType: string; entityId: string };
@@ -351,11 +352,13 @@ export async function registerSeoRoutes(
       const entityType = seoEntityTypeSchema.parse(request.params.entityType);
       const scope = seoMetaScopeQuerySchema.parse(request.query ?? {});
       const target = { entityType, entityId: request.params.entityId, ...scope };
-      const resolved = await metaResolver.resolve(target);
+      const { resolved, sources } = await metaResolver.resolveWithSources(target);
       const override = await metaResolver.getOverride(target);
       return {
         data: {
           resolved,
+          // Feature 163 (T126): per field, the scope its value comes from.
+          sources,
           override: override
             ? {
                 title: override.title ?? null,
