@@ -30,6 +30,7 @@ import { adminSession, withSession } from '../../helpers/render-with-session';
 const getSpy = vi.fn();
 const putSpy = vi.fn();
 const patchSpy = vi.fn();
+const deleteSpy = vi.fn();
 
 vi.mock('@endora-commerce/admin-kit/lib', async () => {
   const actual = await vi.importActual<typeof import('@endora-commerce/admin-kit/lib')>(
@@ -42,7 +43,7 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
       post: vi.fn(),
       put: (...args: unknown[]) => putSpy(...args),
       patch: (...args: unknown[]) => patchSpy(...args),
-      delete: vi.fn(),
+      delete: (...args: unknown[]) => deleteSpy(...args),
     },
   };
 });
@@ -83,11 +84,11 @@ const scopeContext = {
 
 const stamp = { createdAt: '2026-10-01T10:00:00.000Z', updatedAt: '2026-10-01T10:00:00.000Z' };
 
-function galleryItems(): unknown[] {
+function galleryItems(options: { thirdLabels?: string[] } = {}): unknown[] {
   return [
     { id: I1, productId: PRODUCT_ID, assetId: `${I1.slice(0, -2)}a1`, position: 0, labels: ['base_image'], altText: { pl: 'Wiertarka' }, hiddenInChannels: [], ...stamp },
     { id: I2, productId: PRODUCT_ID, assetId: `${I2.slice(0, -2)}a2`, position: 1, labels: [], altText: {}, hiddenInChannels: [LEFT], ...stamp },
-    { id: I3, productId: PRODUCT_ID, assetId: `${I3.slice(0, -2)}a3`, position: 2, labels: [], altText: {}, hiddenInChannels: [B2B], ...stamp },
+    { id: I3, productId: PRODUCT_ID, assetId: `${I3.slice(0, -2)}a3`, position: 2, labels: options.thirdLabels ?? [], altText: {}, hiddenInChannels: [B2B], ...stamp },
   ];
 }
 
@@ -142,10 +143,10 @@ function attachments(): unknown[] {
 }
 
 function serve(
-  options: { channelRoles?: unknown[] } = {},
+  options: { channelRoles?: unknown[]; thirdLabels?: string[] } = {},
 ): void {
   getSpy.mockImplementation((path: string) => {
-    if (path === `${ADMIN}/gallery`) return Promise.resolve({ data: galleryItems() });
+    if (path === `${ADMIN}/gallery`) return Promise.resolve({ data: galleryItems(options) });
     if (path === `${ADMIN}/gallery/channel-roles`) {
       return Promise.resolve({
         data: options.channelRoles ?? [
@@ -185,10 +186,19 @@ function wrap(
 }
 
 async function renderGallery(
-  options: { permissions?: readonly string[]; language?: 'en' | 'pl' } = {},
+  options: { permissions?: readonly string[]; language?: 'en' | 'pl'; onDirtyChange?: (dirty: boolean) => void } = {},
 ): Promise<React.RefObject<GallerySectionHandle | null>> {
   const ref = createRef<GallerySectionHandle>();
-  render(wrap(<GallerySection ref={ref} productId={PRODUCT_ID} />, options));
+  render(
+    wrap(
+      <GallerySection
+        ref={ref}
+        productId={PRODUCT_ID}
+        {...(options.onDirtyChange ? { onDirtyChange: options.onDirtyChange } : {})}
+      />,
+      options,
+    ),
+  );
   await screen.findByRole('combobox', { name: options.language === 'pl' ? /^kanał$/i : /^channel$/i });
   return ref;
 }
@@ -205,6 +215,7 @@ beforeEach(() => {
     Promise.resolve({ data: { channelId: body.channelId, roles: { baseImage: null, smallImage: null, thumbnail: null } } }),
   );
   patchSpy.mockReset().mockResolvedValue({ data: {} });
+  deleteSpy.mockReset().mockResolvedValue(undefined);
   vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
 
@@ -231,7 +242,9 @@ describe('Gallery per channel and alt text per language (US9, FR-076, FR-077)', 
     const base = screen.getByRole('combobox', { name: 'Base image in B2B shop' });
     expect(base).toHaveValue(I2);
     const options = within(base).getAllByRole('option').map((o) => o.textContent);
-    expect(options).toEqual(['Use inherited (Image 1)', 'Image 1', 'Image 2']);
+    // D13 — a role option names the image by its place and its file, since the place
+    // shifts while the gallery is reordered.
+    expect(options).toEqual(['Use inherited (Image 1 · one.jpg)', 'Image 1 · one.jpg', 'Image 2 · two.jpg']);
     expect(screen.getByRole('combobox', { name: 'Small image in B2B shop' })).toHaveValue('');
   });
 
@@ -338,6 +351,94 @@ describe('Gallery per channel and alt text per language (US9, FR-076, FR-077)', 
     serve();
     await renderGallery({ language: 'pl' });
     expect(screen.getByRole('combobox', { name: /^kanał$/i })).toBeInTheDocument();
+  });
+});
+
+describe('Gallery — review round D+F (D4, UX-2, C-9, D13, D14)', () => {
+  it('reports whether it holds staged edits (D4)', async () => {
+    serve();
+    const dirty = vi.fn();
+    await renderGallery({ onDirtyChange: dirty });
+    await waitFor(() => expect(dirty).toHaveBeenLastCalledWith(false));
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Alt text language' }), 'en');
+    await user.type(screen.getByRole('textbox', { name: 'Alt text of Image 1 (EN)' }), 'x');
+    await waitFor(() => expect(dirty).toHaveBeenLastCalledWith(true));
+    await user.clear(screen.getByRole('textbox', { name: 'Alt text of Image 1 (EN)' }));
+    await waitFor(() => expect(dirty).toHaveBeenLastCalledWith(false));
+  });
+
+  it('while edits are staged, Add and Remove wait for Save and say so (UX-2 = A)', async () => {
+    serve();
+    await renderGallery();
+    const user = userEvent.setup();
+    const removeButtons = (): HTMLElement[] => screen.getAllByRole('button', { name: /^remove$/i });
+    expect(removeButtons()[0]).not.toBeDisabled();
+    await user.selectOptions(screen.getByRole('combobox', { name: /^channel$/i }), B2C);
+    await user.click(screen.getByRole('checkbox', { name: 'Hide Image 2 in B2C shop' }));
+    const reason = screen.getByText('Save your changes first.');
+    for (const button of removeButtons()) {
+      expect(button).toBeDisabled();
+      expect(button.getAttribute('aria-describedby')).toContain(reason.id);
+    }
+    const add = screen.getByRole('button', { name: /add to gallery/i });
+    expect(add).toBeDisabled();
+    expect(add.getAttribute('aria-describedby')).toContain(reason.id);
+  });
+
+  it('removing an image asks in a dialog, not the browser’s confirm (D4)', async () => {
+    serve();
+    await renderGallery();
+    const user = userEvent.setup();
+    await user.click(screen.getAllByRole('button', { name: /^remove$/i })[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /remove image 1/i });
+    expect(window.confirm).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
+    expect(deleteSpy).not.toHaveBeenCalled();
+    await user.click(screen.getAllByRole('button', { name: /^remove$/i })[0]!);
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /^remove image$/i }));
+    await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith(`${ADMIN}/gallery/${I1}`));
+  });
+
+  it('the preview is a dialog that Escape closes (D4)', async () => {
+    serve();
+    await renderGallery();
+    const user = userEvent.setup();
+    await user.click(screen.getAllByRole('button', { name: /open full-size preview/i })[0]!);
+    expect(await screen.findByRole('dialog', { name: /preview/i })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('"use inherited" says when the inherited image is hidden in the channel (C-9)', async () => {
+    serve({ thirdLabels: ['small_image'] });
+    await renderGallery();
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByRole('combobox', { name: /^channel$/i }), B2B);
+    const small = screen.getByRole('combobox', { name: 'Small image in B2B shop' });
+    expect(within(small).getAllByRole('option')[0]?.textContent).toBe('Use inherited (Image 3, hidden here)');
+  });
+
+  it('warns when the channel’s own role holder is hidden there (D13)', async () => {
+    serve({ channelRoles: [{ channelId: B2B, roles: { baseImage: I3, smallImage: null, thumbnail: null } }] });
+    await renderGallery();
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByRole('combobox', { name: /^channel$/i }), B2B);
+    expect(screen.getByText(/Image 3 is the base image in B2B shop but is hidden there/i)).toBeInTheDocument();
+  });
+
+  it('says alt text is per language, not per channel, while a channel is selected (D13)', async () => {
+    serve();
+    await renderGallery();
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByRole('combobox', { name: /^channel$/i }), B2B);
+    expect(screen.getByText(/alt text is per language and applies in every channel/i)).toBeInTheDocument();
+  });
+
+  it('says why its controls are read-only without catalog:write (D14)', async () => {
+    serve();
+    await renderGallery({ permissions: ['catalog:read'] });
+    expect(screen.getByText(/read-only: you can see the gallery but not change it/i)).toBeInTheDocument();
   });
 });
 
