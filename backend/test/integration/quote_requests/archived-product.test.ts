@@ -18,7 +18,7 @@ import { errorBodyOf } from '../../helpers/product-scope-fixture.js';
 /**
  * Feature 163, owner decision P-3 = A (2026-10-26) — a quote request refuses an
  * archived product on every path that names one (`contracts/consumers.md` row
- * 25). Each refusal is the answer the path already gave an unknown product:
+ * 26). Each refusal is the answer the path already gave an unknown product:
  *
  *  - the buyer's create, draft edit and resubmit, cart conversion and the quick
  *    order build: the single `404 PRODUCT_NOT_FOUND`, byte-equal to an absent

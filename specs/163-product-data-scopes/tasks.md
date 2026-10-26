@@ -753,15 +753,15 @@ of its own on a dedicated route (PAL-1 = B).
 - [x] T156p3b [S2] `isNotArchived` applied in `#acquirableProductsById` (before the channel question),
   `seedBasketFromApproved` (convert, `prepare-customer-basket`); `RfqAdminService.createOnBehalf` and `modify`
   through `operatorLineProducts` (404 for an absent id, then 409 `PRODUCT_ARCHIVED`)
-- [x] T156p3c [S2] `contracts/consumers.md` row 25 (and row 20's archived exception); changeset
+- [x] T156p3c [S2] `contracts/consumers.md` row 26 (numbered 25 before the rebase onto MED-1's row 25; and row 20's archived exception); changeset
   `.changeset/163-quote-requests-refuse-archived.md`
 - [x] T156-pal-a [S2] Backend half: manifest action `open-archived-products` → `/catalog/products/archived`,
   `catalog:read`, icon `Archive`, weight 210, English keywords plus single Polish words; bundle keys
   `actions.openArchivedProducts.{label,description}` en + pl; generated catalog reference page and its Polish
   cache entry; `batch-fifteen-palette-off-state` (`[PG]`) and `seeded-manifests.unit.test.ts` list it
-- [ ] T156-pal-b [S3] Admin half: declare `/catalog/products/archived` on `catalog:read` in
+- [x] T156-pal-b [S3] Admin half: declare `/catalog/products/archived` on `catalog:read` in
   `packages/modules/catalog/src/admin/index.ts` **before** `/catalog/products/:id` (the D-221 move), rendering the
-  product list on its Archived tab. Until then the action opens the editor with the id `archived`.
+  product list on its Archived tab. Done by S3 (`7bd3bf9b8`, see the PAL-1 → B note).
 
 **Phase 9d note** (2026-10-26):
 - *P-1, the bus boundary.* The two new tools run through a dedicated `CatalogAdminService` built with
@@ -790,7 +790,7 @@ of its own on a dedicated route (PAL-1 = B).
   archived filter now runs before the branch, so a worker or in-process caller with no request is covered too.
 - *PAL-1.* Nothing in the backend checks the SPA route exists: `check:action-route-permissions` reconstructs the
   API path (module-level match on catalog's `catalog:read` product routes), and the off-state file's pairing
-  matches `/catalog/products/:id` until S3 declares the static route. T156-pal-b is the real gate.
+  matched `/catalog/products/:id` until S3 declared the static route (T156-pal-b, done).
 - *Checks (2026-10-26, after the stop).* `check:port-catches` was red at `prompt-tools.ts:433`: the per-item
   `catch` now opens with `rethrowIfModuleDisabled(err)` (composition checklist item 7), and a unit case pins that
   a `ModuleDisabledError` fails the whole run. The full sweep then reported two more reds in this phase's
@@ -1550,4 +1550,4 @@ ships on top independently: US2 rides P7 + P13, US3 P4/P5 + P13, US4 P9 + P14, U
 P15, US7 P16–P17 + P20, US8 P18 + P20, US9 P21–P23, US10 P12 + P13.
 
 **Phase 9d resumed and closed (2026-10-26).** The `check:port-catches` red is fixed, the full check sweep is
-green, and P-3a / P-3b are recorded — see the Phase 9d note. S3 still owes T156-pal-b.
+green, and P-3a / P-3b are recorded — see the Phase 9d note. T156-pal-b landed with S3.
