@@ -729,6 +729,8 @@
   "nav.bulkOperations.label": "Akcje masowe",
   "actions.openProducts.label": "Produkty",
   "actions.openProducts.description": "Wpisy katalogu",
+  "actions.openArchivedProducts.label": "Zarchiwizowane produkty",
+  "actions.openArchivedProducts.description": "Produkty wycofane ze wszystkich kanałów sprzedaży, do przywrócenia",
   "actions.openCategories.label": "Kategorie",
   "actions.openCategories.description": "Drzewo kategorii katalogu",
   "actions.openAttributes.label": "Atrybuty",
