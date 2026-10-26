@@ -24,6 +24,7 @@ import {
   Image as ImageIcon,
   CircleDollarSign,
   Layers,
+  LayoutGrid,
   Link as LinkIcon,
   Paperclip,
   Save,
@@ -41,6 +42,7 @@ import { ProductInventoryTab } from '../components/ProductInventoryTab.js';
 import { PackagingUnitsEditor } from '../components/PackagingUnitsEditor.js';
 import { ProductOrderRulesCard } from '../components/ProductOrderRulesCard.js';
 import { ProductAttributesTab } from '../components/ProductAttributesTab.js';
+import { ProductScopeOverview } from '../components/ProductScopeOverview.js';
 import { ArchivedPill, ProductStatusPill } from '../components/ProductStatusPills.js';
 import {
   ProductScopeEditor,
@@ -515,6 +517,8 @@ export function ProductEditor(): ReactNode {
       icon: <StoreIcon size={14} />,
       show: !isNew && channelContributions.length > 0,
     },
+    // Feature 163 (US4) — channels × languages for this product, beside the channels it is in.
+    { id: 'scopes', label: t('productEditor.tab.scopes'), icon: <LayoutGrid size={14} />, show: !isNew },
     { id: 'seo', label: 'SEO', icon: <Globe size={14} />, show: !isNew },
   ];
   const visibleTabs = tabs.filter((t) => t.show);
@@ -1038,6 +1042,8 @@ export function ProductEditor(): ReactNode {
           {activeTab === 'channels' && id ? (
             <AdminZone name="product.editor.channels" props={{ productId: id }} />
           ) : null}
+
+          {activeTab === 'scopes' && id ? <ProductScopeOverview productId={id} /> : null}
 
           {activeTab === 'seo' ? <SeoStub name={name} /> : null}
         </div>
