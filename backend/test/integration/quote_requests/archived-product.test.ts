@@ -23,8 +23,10 @@ import { errorBodyOf } from '../../helpers/product-scope-fixture.js';
  *  - the buyer's create, draft edit and resubmit, cart conversion and the quick
  *    order build: the single `404 PRODUCT_NOT_FOUND`, byte-equal to an absent
  *    id's (FR-018 — nothing about the product is disclosed);
- *  - the operator's create on a customer's behalf and edit: the same 404, where
- *    every other unavailability stays a warning (FR-018's operator exemption);
+ *  - the operator's create on a customer's behalf and edit: `409
+ *    PRODUCT_ARCHIVED`, catalog's code and sentence (owner decision P-3b = A —
+ *    the operator is told why), where every other unavailability stays a
+ *    warning (FR-018's operator exemption) and an absent id stays a 404;
  *  - the buyer's convert of an approved quote: the existing `409
  *    PRODUCT_NOT_FOUND` its edge case named ("archived between approve and
  *    convert"), before the basket is touched.
@@ -196,7 +198,7 @@ describe('163 P-3 — quote requests refuse an archived product [integration]', 
   });
 
   describe('the operator', () => {
-    it('create on a customer’s behalf answers 404 PRODUCT_NOT_FOUND and creates nothing', async () => {
+    it('create on a customer’s behalf answers 409 PRODUCT_ARCHIVED and creates nothing', async () => {
       const count = async () => {
         const [row] = await h
           .em()
@@ -222,12 +224,29 @@ describe('163 P-3 — quote requests refuse an archived product [integration]', 
           ],
         },
       });
-      expect(res.statusCode, res.body).toBe(404);
-      expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
+      expect(res.statusCode, res.body).toBe(409);
+      const error = (res.json() as { error: { code: string; message: string } }).error;
+      expect(error.code).toBe(ERROR_CODES.PRODUCT_ARCHIVED);
+      expect(error.message).toBe('Product is archived.');
       expect(await count()).toBe(before);
     });
 
-    it('edit answers the same 404', async () => {
+    it('create still answers 404 PRODUCT_NOT_FOUND for an id that does not exist', async () => {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/quote-requests',
+        cookies: ADMIN,
+        payload: {
+          organizationId: TEST_ORGANIZATION_ID,
+          customerAccountId: TEST_CUSTOMER_ID,
+          items: [{ productId: randomUUID(), quantity: 1, agreedUnitPrice: 10 }],
+        },
+      });
+      expect(res.statusCode, res.body).toBe(404);
+      expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
+    });
+
+    it('edit answers the same 409 PRODUCT_ARCHIVED', async () => {
       const created = await buyerCreate([live.id]);
       expect(created.statusCode, created.body).toBe(201);
       const rfq = (created.json() as { data: { id: string; version: number } }).data;
@@ -238,8 +257,8 @@ describe('163 P-3 — quote requests refuse an archived product [integration]', 
         headers: { 'if-match': `"${rfq.version}"` },
         payload: { items: [{ productId: archived.id, quantity: 1, agreedUnitPrice: 9 }] },
       });
-      expect(res.statusCode, res.body).toBe(404);
-      expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
+      expect(res.statusCode, res.body).toBe(409);
+      expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_ARCHIVED);
     });
 
     it('create still accepts the live product (the positive control)', async () => {
