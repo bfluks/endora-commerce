@@ -225,9 +225,11 @@ describe('163 P-3 — quote requests refuse an archived product [integration]', 
         },
       });
       expect(res.statusCode, res.body).toBe(409);
-      const error = (res.json() as { error: { code: string; message: string } }).error;
+      const error = (res.json() as { error: { code: string; message: string; details?: unknown } }).error;
       expect(error.code).toBe(ERROR_CODES.PRODUCT_ARCHIVED);
       expect(error.message).toBe('Product is archived.');
+      // Checkpoint F (B-3): the refusal names the archived product.
+      expect(error.details).toEqual({ productIds: [archived.id] });
       expect(await count()).toBe(before);
     });
 
@@ -258,7 +260,9 @@ describe('163 P-3 — quote requests refuse an archived product [integration]', 
         payload: { items: [{ productId: archived.id, quantity: 1, agreedUnitPrice: 9 }] },
       });
       expect(res.statusCode, res.body).toBe(409);
-      expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_ARCHIVED);
+      const error = (res.json() as { error: { code: string; details?: unknown } }).error;
+      expect(error.code).toBe(ERROR_CODES.PRODUCT_ARCHIVED);
+      expect(error.details).toEqual({ productIds: [archived.id] });
     });
 
     it('create still accepts the live product (the positive control)', async () => {
