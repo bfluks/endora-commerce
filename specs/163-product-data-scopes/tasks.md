@@ -608,7 +608,10 @@ no admin surface offers or labels `draft`.
 - [x] T156y [S3] Handover commit: catalog i18n keys en+pl for Archive / Restore, confirmations, the Archived tab and badge, bulk actions; `open-products` palette keywords gain "archive", "archived", "archiwum", "zarchiwizowane" (R23); changesets for `@endora-commerce/admin-kit` and `@endora-commerce/page-builder-admin`, breaking at `minor` (the product browser's status type and counts narrowed, R30.6)
 - [x] T156z [S3] Existing admin tests that assert `draft`: `admin/test/modules/catalog/{product-scope-controls,ProductEditor.attribute-set-swap,ProductEditor.category-tree,ProductEditor.channels-tab,ProductEditor.no-own-price,ProductEditor.publish-window,ProductEditor.sku-status,ProductsList.saved-views}.test.tsx`, `admin/test/modules/webhooks/contributed-event-types.test.tsx` (event label wording only if it changed)
 
-- [ ] T156z-sv [S3] **Open — owner decision pending (coordinator, 2026-10-26).** Whether a saved view holding
+- [x] T156z-sv [S3] **Closed — owner decision P-2 → A (2026-10-26): such a view opens on *All*, as built.** The list
+  says so once when the view is applied ("This view used the removed Draft status and now shows all products…",
+  `productsList.savedView.draftRemoved`, a `role="status"` note cleared by a tab choice, a navigation or Dismiss),
+  pinned in `ProductsList.saved-views.test.tsx`. Original question: Whether a saved view holding
   `status: 'draft'` should open on *Inactive* instead of *All*. Not built: such a view opens as *All* (the planned
   R30.4 fallback, asserted in `ProductsList.saved-views.test.tsx` and `products-list-archived.test.tsx`), and no
   client-side `draft` → `inactive` mapping exists. If the owner chooses the mapping it is one line in
@@ -687,6 +690,25 @@ no admin surface offers or labels `draft`.
   mount, so the action would also need the tab to follow the URL.
 - *Copy.* PL `productsList.bulkEdit.archive.hint` ends "…a po przywróceniu wracają do sprzedaży."
 - Not this round (owner): bar-level Restore on the Archived tab (designer W1), saved-view `draft` mapping, RFQ.
+
+**Owner decisions applied** (S3, 2026-10-26, after Phase 15):
+- *P-4 → B.* On the Archived tab the bulk bar is **Restore** (primary) / Bulk edit / Delete — still three; Edit price
+  (a placeholder) is not offered there. Restore opens the bulk dialog on its existing confirmation step
+  (`initialStep="confirmArchive"`; that step's Back reads **Cancel** and closes, Escape closes — there is no form
+  behind it) and ends on the existing summary. Bulk edit on that tab opens the form without the Restore section (one
+  place for it, Hick). Other tabs unchanged; Archive stays in the dialog. Feature 022's bar test gains an Archived-tab
+  case with the reason; the 15a case "offers Restore on the Archived tab" now goes through the bar.
+- *PAL-1 → B.* Route `/catalog/products/archived` (`catalog:read`, `ProductsList`) in `src/admin/index.ts`. The tab is
+  `productListTabFromUrl(pathname, search)`, read at mount **and on every navigation** (`location.key`), so the palette
+  action reaching the list while it is open — even at the address it is already on — switches to Archived. A tab click
+  does not write the URL (one direction, no loop): after clicking All at `/catalog/products/archived` a reload opens
+  Archived again. The palette action itself is the decisions builder's manifest change.
+- *P-3 → A.* `RfqCreatePage`: `RFQ_PRODUCT_RULES.blockArchived = true` (no Archived tab, All leaves archived out) and the
+  quick search no longer passes `includeArchived`, so it does not find archived products at all. Orders' quick search
+  keeps `includeArchived` and shows an archived product refused with its reason; the brief asked RFQ to drop the
+  prop, so the two screens differ there (owner question in the report). Inactive products stay selectable for RFQ.
+- *P-2 → A.* See T156z-sv.
+- *I1 → B.* Restore shows no gate message (none is built for it).
 
 **Verification** (one invocation per line):
 - `pnpm --filter admin exec vitest run test/modules/catalog/product-archive-restore.test.tsx test/modules/catalog/products-list-archived.test.tsx`
