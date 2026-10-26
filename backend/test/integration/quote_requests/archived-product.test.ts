@@ -197,16 +197,17 @@ describe('163 P-3 — quote requests refuse an archived product [integration]', 
 
   describe('the operator', () => {
     it('create on a customer’s behalf answers 404 PRODUCT_NOT_FOUND and creates nothing', async () => {
-      const count = async () =>
-        (
-          await h
-            .em()
-            .getConnection()
-            .execute<Array<{ n: number }>>(
-              'select count(*)::int as n from "quote_request_items" where "product_id" = ?',
-              [archived.id],
-            )
-        )[0]?.n ?? 0;
+      const count = async () => {
+        const [row] = await h
+          .em()
+          .getConnection()
+          .execute<Array<{ n: number }>>(
+            'select count(*)::int as n from "quote_request_items" where "product_id" = ?',
+            [archived.id],
+          );
+        if (!row) throw new Error('count(*) returned no row');
+        return row.n;
+      };
       const before = await count();
       const res = await h.app.inject({
         method: 'POST',
