@@ -78,6 +78,14 @@ after. Sending the recorded before-state back through the same route restores it
 The write announces `product.updated.v1` with `changedFields: ["media"]`. A request
 that changes nothing writes nothing and announces nothing.
 
+The same holds for an item's labels and for the gallery's order. A `PATCH` that
+changes labels records them (`labels`) in the item's state; the labels are
+replaced in the same transaction as the rest of the item, so a refused label leaves
+the item untouched. With `?replace=true` the entry restores this item only: a label
+taken from another item is not handed back by re-sending it. `PUT …/gallery/order`
+records `orderedGalleryItemIds` before and after, and runs in one transaction.
+Deleting an item is recorded once, as `gallery_item.delete`.
+
 With no override, every channel shows the global gallery, as before.
 
 ## Errors
