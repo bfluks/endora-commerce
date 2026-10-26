@@ -256,10 +256,31 @@ export const SetProductStatusParamsSchema = z.object({
   status: z
     .enum(['active', 'inactive'])
     .describe(
-      'New product status to apply to every listed product: active switches it on, inactive switches it off. It never archives or restores.',
+      'New product status to apply to every listed product: active switches it on, inactive switches it off. It never archives or restores — use catalog.archive_product / catalog.restore_product for that.',
     ),
 });
 export type SetProductStatusParams = z.infer<typeof SetProductStatusParamsSchema>;
+
+/**
+ * Feature 163, owner decision P-1 = A — the assistant's Archive / Restore
+ * (`catalog.archive_product`, `catalog.restore_product`). One shape for both:
+ * the action is the tool, not a parameter, so the plan card names it.
+ */
+export const ArchiveProductsParamsSchema = z.object({
+  productIds: z
+    .array(z.uuid())
+    .min(1)
+    .describe('IDs of the products to archive, resolved via catalog.search_products.'),
+});
+export type ArchiveProductsParams = z.infer<typeof ArchiveProductsParamsSchema>;
+
+export const RestoreProductsParamsSchema = z.object({
+  productIds: z
+    .array(z.uuid())
+    .min(1)
+    .describe('IDs of the archived products to restore, resolved via catalog.search_products.'),
+});
+export type RestoreProductsParams = z.infer<typeof RestoreProductsParamsSchema>;
 
 export const SetProductsVisibilityParamsSchema = z.object({
   productIds: z
