@@ -286,13 +286,24 @@ export class RfqService {
     lines: readonly CreateQuoteRequestLine[],
     productById: ReadonlyMap<string, CatalogProductRecord>,
     language: string | undefined,
+    /**
+     * Feature 163 (FR-079, T138) — the channel the line names are asked at
+     * (`lineNames`'s), so the unit name is snapshotted in the same scope
+     * language as the product name it is appended to.
+     */
+    channelId: string | null,
   ): Promise<{ packaging: ResolvedPackaging[]; units: CatalogPackagingUnitRecord[] }> {
     const vettedIds = Array.from(
       new Set(lines.filter(carriesPackagingReference).map((line) => line.productId)),
     ).filter((id) => productById.has(id));
     const units =
       vettedIds.length > 0 ? await this.deps.catalogProducts.listPackagingUnitsByProductIds(vettedIds) : [];
-    const { lines: packaging, mismatches } = resolveLinePackaging(lines, units);
+    const { lines: packaging, mismatches } = resolveLinePackaging(
+      lines,
+      units,
+      // No channel: no scope language, the global name (as `lineNames` asks nothing then).
+      channelId === null ? null : raisedInScopeLanguage(language, channelId),
+    );
     if (mismatches.length > 0) {
       const causes = mismatches.filter((m) => m.cause !== undefined);
       if (causes.length > 0) {
@@ -476,7 +487,15 @@ export class RfqService {
 
     // Feature 155 (FR-026, FR-012, FR-029) — packaging, then minimums, after
     // the 404 above and before anything is priced, numbered or written.
-    const { packaging, units } = await this.#resolvePackaging(input.items, productById, options.language);
+    // The channel this request is raised on: the reference prices, the stored
+    // row and the snapshot names (product and unit) all speak about it.
+    const salesChannelId = raisedOnChannelId();
+    const { packaging, units } = await this.#resolvePackaging(
+      input.items,
+      productById,
+      options.language,
+      salesChannelId,
+    );
     const resolvedLines = input.items.map((line, index) => withResolvedPackaging(line, packaging[index]!));
     await this.#assertMinimums(
       quoteMinimumLines(resolvedLines),
@@ -491,7 +510,6 @@ export class RfqService {
     // channel it is raised on; a cart conversion supplies its own snapshot.
     // Resolved before any write: a pricing failure leaves no reference and
     // never blocks the request (research R2).
-    const salesChannelId = raisedOnChannelId();
     const references = await resolveReferencePrices(this.deps.buyerLinePrices, {
       owner: { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId },
       salesChannelId,
@@ -651,7 +669,12 @@ export class RfqService {
       // Feature 155 (FR-026) — packaging resolved against the catalogue
       // before the pairing, which reads the **resolved** name: a line naming
       // its unit by id alone pairs with the stored row of that unit.
-      const { packaging, units } = await this.#resolvePackaging(body.items, productById, options.language);
+      const { packaging, units } = await this.#resolvePackaging(
+        body.items,
+        productById,
+        options.language,
+        rfq.salesChannelId ?? null,
+      );
       const resolvedLines = body.items.map((line, index) => withResolvedPackaging(line, packaging[index]!));
 
       // Research R5.3 — pair by product, variant, packaging name, position.
