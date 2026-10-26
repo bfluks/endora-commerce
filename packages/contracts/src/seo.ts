@@ -38,7 +38,8 @@ export const seoMetaOverrideSchema = z.object({
   description: z.string().nullable(),
   ogTitle: z.string().nullable(),
   ogDescription: z.string().nullable(),
-  ogImageUrl: z.string().url().nullable(),
+  /** As written: an http(s) URL or a site-relative path ({@link ogImageUrlSchema}). */
+  ogImageUrl: z.string().nullable(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
 });
@@ -56,6 +57,19 @@ export const seoMetaScopeQuerySchema = z.object({
 });
 export type SeoMetaScopeQuery = z.infer<typeof seoMetaScopeQuerySchema>;
 
+/**
+ * Feature 163 (checkpoint E security review, I5) — an Open Graph image URL: an
+ * absolute `http(s)` URL or a site-relative path (`/…`, never `//…` or `/\…`). It is
+ * written into every page's `og:image`, so no other scheme is accepted.
+ */
+export const ogImageUrlSchema = z
+  .string()
+  .max(2048)
+  .refine(
+    (value) => /^https?:\/\/[^\s/?#\\]+[^\s\\]*$/i.test(value) || /^\/(?![/\\])[^\s\\]*$/.test(value),
+    { message: 'an http(s) URL or a path starting with a single /' },
+  );
+
 export const upsertSeoMetaOverrideRequestSchema = z.object({
   /** Optional since feature 163 — see {@link seoMetaScopeQuerySchema} for the addressing rule. */
   locale: z.string().min(2).max(10).optional(),
@@ -65,7 +79,7 @@ export const upsertSeoMetaOverrideRequestSchema = z.object({
   description: z.string().min(1).max(400).nullable().optional(),
   ogTitle: z.string().min(1).max(160).nullable().optional(),
   ogDescription: z.string().min(1).max(400).nullable().optional(),
-  ogImageUrl: z.string().url().nullable().optional(),
+  ogImageUrl: ogImageUrlSchema.nullable().optional(),
 });
 export type UpsertSeoMetaOverrideRequest = z.infer<typeof upsertSeoMetaOverrideRequestSchema>;
 
