@@ -1299,6 +1299,13 @@ S3 note under T129.
   names the scope each field comes from`, plus a `[PG]` assertion in
   `backend/test/integration/seo/meta-channel-scope.test.ts` (unrun here). Catalog strings are in
   `chore(163): s3 handover P20`; seo strings (`metaScope.*`) in the seo bundle.
+- **SEO stub = A (owner, 2026-10-26).** The editor's "Page title (preview)" stub (an input that saved nothing) is
+  replaced by `components/ProductSeoLink.tsx`: below the URL-keys panel, "Edit SEO meta per channel →" links to `/seo`,
+  shown only while `seo` is present and the admin holds `catalog:write` (the SEO routes' and `open-seo`'s gate). The SEO
+  screen has no per-product address (`SeoPage` keeps the picked product in component state), so the link opens the
+  screen and its hint says to pick the product there. A deep link (`/seo?productId=…` read by `SeoPage`) is possible
+  but not built. Built by S3 in Phase 23's block; test `admin/test/modules/catalog/product-seo-link.test.tsx`; strings
+  in `chore(163): s3 handover P23 (SEO link)` (the stub's two strings removed).
 
 **Verification** (one invocation per line):
 - `pnpm --filter admin exec vitest run test/modules/catalog/product-url-keys-panel.test.tsx`
