@@ -1304,9 +1304,8 @@ T139 regen + changesets, T139a/b overview fields `attachments:hidden`, `attachme
 basket half), MED-1 = A built, attribute scope flags in the admin response, `withOrgScope` comment moved, the P21
 gallery page EN/PL written. Verified: contracts, platform, catalog, carts typecheck + lint; product_feeds typecheck;
 catalog/carts/product_feeds/comparisons/platform unit suites; check:naming (Docker), check:language,
-default-language-prose, platform-surface, docs-translations, module-docs, i18n:hardcoded. **Not yet run:**
-product_feeds lint, comparisons/backend/storefront/admin typecheck + lint, the `[PG]` files. Next: run those, push,
-then the RFQ half of T138 (recipe in the Phase 22 notes, owner of `quote_requests`) and the P22 docs (T147/T148).
+default-language-prose, platform-surface, docs-translations, module-docs, i18n:hardcoded. Typecheck + lint
+also green for product_feeds, comparisons, backend, storefront, admin. **Not run:** the `[PG]` files. Next: the RFQ half of T138 (recipe in the Phase 22 notes, owner of `quote_requests`) and the P22 docs (T147/T148).
 `contracts` `crm-rich-text.test.ts` "reads quickly" failed at 747 ms / 500 ms under host load 828 — untouched file.
 
 ### Phase 23: [admin UI] Media, attachments, packaging per scope (US9) — after Phases 21–22
