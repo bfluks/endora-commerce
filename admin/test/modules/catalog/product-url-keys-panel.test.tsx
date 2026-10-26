@@ -202,8 +202,8 @@ describe('ProductUrlKeysPanel', () => {
     expect(en).toHaveValue('');
     expect(en).toHaveAttribute('placeholder', 'drill');
     expect(within(panel).getByRole('textbox', { name: /^url key in b2b shop · en$/i })).toHaveValue('drill-pro');
-    // An orphan is shown as not used, and can be removed.
-    expect(within(panel).getByText(/no longer used/i)).toBeInTheDocument();
+    // An orphan is shown as no longer applying, and can be removed.
+    expect(within(panel).getByText(/no longer applies/i)).toBeInTheDocument();
   });
 
   it('shows each effective URL exactly as the response carries it, with its channel and source', async () => {
@@ -227,7 +227,7 @@ describe('ProductUrlKeysPanel', () => {
     await user.selectOptions(within(panel).getByRole('combobox', { name: /add a channel key/i }), `${B2C}|pl`);
     await user.click(within(panel).getByRole('button', { name: /^add key$/i }));
     await user.type(within(panel).getByRole('textbox', { name: /^url key in b2c shop · pl$/i }), 'wiertarka');
-    await user.click(within(panel).getByRole('button', { name: /remove the unused key wiertarka-outlet/i }));
+    await user.click(within(panel).getByRole('button', { name: /remove the key wiertarka-outlet, which no longer applies/i }));
     await user.click(within(panel).getByRole('button', { name: /^save url keys$/i }));
 
     await waitFor(() => expect(putSpy).toHaveBeenCalledTimes(1));
