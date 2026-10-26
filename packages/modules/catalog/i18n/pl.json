@@ -469,7 +469,6 @@
   "productEditor.gallery.success.add": "Dodano element galerii.",
   "productEditor.gallery.success.update": "Etykiety zaktualizowane.",
   "productEditor.gallery.success.remove": "Usunięto element galerii.",
-  "productEditor.gallery.removeConfirm": "Usunąć ten element galerii?",
   "productEditor.gallery.column.preview": "Podgląd",
   "productEditor.gallery.column.labels": "Etykiety",
   "productEditor.gallery.column.position": "Pozycja",
@@ -1428,5 +1427,15 @@
   "productEditor.scopeOverview.field.seoDescription": "Opis SEO",
   "productEditor.scopeOverview.field.seoOgTitle": "Tytuł w mediach społecznościowych",
   "productEditor.scopeOverview.field.seoOgDescription": "Opis w mediach społecznościowych",
-  "productEditor.scopeOverview.field.seoOgImageUrl": "Obraz w mediach społecznościowych"
+  "productEditor.scopeOverview.field.seoOgImageUrl": "Obraz w mediach społecznościowych",
+  "productEditor.gallery.itemOption": "{item} · {file}",
+  "productEditor.gallery.channelRole.hiddenHere": "{item}, ukryte tutaj",
+  "productEditor.gallery.channelRole.hiddenHolder": "{item} pełni rolę „{role}” w kanale {channel}, ale jest tam ukryte, więc sklep go nie pokazuje.",
+  "productEditor.gallery.alt.hintChannel": "Tekst alternatywny ustawia się dla języka i obowiązuje w każdym kanale.",
+  "productEditor.gallery.readOnly": "Tylko do odczytu: widzisz galerię, ale nie możesz jej zmieniać.",
+  "productEditor.gallery.stagedBlocksAddRemove": "Najpierw zapisz zmiany.",
+  "productEditor.gallery.remove.title": "Usunąć {item}?",
+  "productEditor.gallery.remove.body": "{item} zostanie od razu usunięte z galerii, bez czekania na Zapisz. Plik pozostaje w bibliotece.",
+  "productEditor.gallery.remove.confirm": "Usuń obraz",
+  "productEditor.gallery.remove.cancel": "Anuluj"
 }
