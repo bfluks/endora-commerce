@@ -28,7 +28,11 @@ describe('Admin attribute response — scope flags (spec 163, T095b)', () => {
   });
 
   function flagsOf(body: unknown): { channelScoped: boolean | undefined; languageScoped: boolean | undefined } {
-    const data = adminAttributeResponseSchema.parse((body as { data: unknown }).data);
+    // Only the two flags: the route answers `numericKind: null` for a non-numeric attribute,
+    // which the full response schema (optional, not nullable) refuses — an older drift, not 163's.
+    const data = adminAttributeResponseSchema
+      .pick({ channelScoped: true, languageScoped: true })
+      .parse((body as { data: unknown }).data);
     return { channelScoped: data.channelScoped, languageScoped: data.languageScoped };
   }
 
