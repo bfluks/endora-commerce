@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
   CatalogCategoryReadPort,
   CatalogProductAvailabilityPort,
+  CatalogProductUrlKeyReadPort,
   CatalogProductReadPort,
   ListingPriceDetailPort,
   OrganizationDetailsPort,
@@ -112,6 +113,8 @@ export function registerModule(ctx: ModuleContext): void {
             ctx,
             'catalogProductAvailabilityPort',
           ),
+          // Feature 163 (T113a, R28) — a result card links to the effective key.
+          catalogUrlKeys: lazyPort<CatalogProductUrlKeyReadPort>(ctx, 'catalogProductUrlKeyReadPort'),
           salesChannelMembership: lazyPort<SalesChannelMembershipPort>(
             ctx,
             'salesChannelMembershipPort',
