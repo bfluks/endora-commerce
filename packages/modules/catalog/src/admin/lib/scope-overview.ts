@@ -1,6 +1,7 @@
 import type {
   PatchProductScopesRequest,
   ProductValueOverrideDelete,
+  PutGalleryChannelRolesRequest,
   PutProductUrlKeysRequest,
   ScopeMissingValue,
   ScopeOverviewResponse,
@@ -14,7 +15,11 @@ import { apiClient } from '@endora-commerce/admin-kit/lib';
  *
  * Field names are the overview's own (the owning write's spellings): `status`, `window`,
  * `audience`, `minOrderQuantity`, `returnable` (the scopes PATCH), `name`, `description`,
- * `attribute:<key>` (the value overrides) and `urlKey` (the URL keys).
+ * `attribute:<key>` (the value overrides) and `urlKey` (the URL keys). Phases 21–22 added
+ * the media fields (`media:roles`, `media:hidden`, `media:altText`), the attachment and
+ * packaging-unit fields and `seo:<field>`: a channel's gallery roles reset through the
+ * channel-roles PUT; the item-level ones are edited on the Media, Attachments and
+ * Inventory tabs (the overview names no item), so they have no reset here.
  */
 
 export type ScopeOverview = ScopeOverviewResponse['data'];
@@ -40,7 +45,13 @@ function overrideAttributeKey(field: string): string | null {
 export type ScopeFieldRequest =
   | { kind: 'scopes'; body: PatchProductScopesRequest }
   | { kind: 'valueOverrides'; body: { upserts: []; deletes: ProductValueOverrideDelete[] } }
-  | { kind: 'urlKeys'; body: PutProductUrlKeysRequest };
+  | { kind: 'urlKeys'; body: PutProductUrlKeysRequest }
+  | { kind: 'galleryRoles'; body: PutGalleryChannelRolesRequest };
+
+/** Every role of one channel back to the global holder. */
+function clearGalleryRoles(channelId: string): ScopeFieldRequest {
+  return { kind: 'galleryRoles', body: { channelId, roles: { baseImage: null, smallImage: null, thumbnail: null } } };
+}
 
 /**
  * "Reset to inherited" for one field at one level (US4 #2): the owning endpoint with
@@ -78,6 +89,7 @@ export function resetRequestFor(input: {
       },
     };
   }
+  if (field === 'media:roles') return level === 'channel' ? clearGalleryRoles(channelId) : null;
   if (field === 'urlKey') {
     if (level === 'channel_language') {
       return { kind: 'urlKeys', body: { channelKeys: [{ channelId, languageCode, key: null }] } };
@@ -108,6 +120,7 @@ export function orphanDeleteRequest(orphan: ScopeOverviewOrphan): ScopeFieldRequ
     if (channelId === null) return null;
     return { kind: 'valueOverrides', body: { upserts: [], deletes: [{ attributeKey, channelId, languageCode }] } };
   }
+  if (field === 'media:roles' && channelId !== null) return clearGalleryRoles(channelId);
   if (field === 'urlKey' && languageCode !== null) {
     if (channelId === null) return { kind: 'urlKeys', body: { languageKeys: [{ languageCode, key: null }] } };
     return { kind: 'urlKeys', body: { channelKeys: [{ channelId, languageCode, key: null }] } };
@@ -120,6 +133,7 @@ export async function sendScopeFieldRequest(productId: string, request: ScopeFie
   const base = `/api/v1/admin/catalog/products/${encodeURIComponent(productId)}`;
   if (request.kind === 'scopes') await apiClient.patch(`${base}/scopes`, request.body);
   else if (request.kind === 'valueOverrides') await apiClient.patch(`${base}/value-overrides`, request.body);
+  else if (request.kind === 'galleryRoles') await apiClient.put(`${base}/gallery/channel-roles`, request.body);
   else await apiClient.put(`${base}/url-keys`, request.body);
 }
 
@@ -150,6 +164,22 @@ export function pickLocalized(name: Record<string, string> | null | undefined, l
 
 type Translate = (key: string, params?: Record<string, string>) => string;
 
+/** The bundle key suffix of each media, attachment, packaging-unit and SEO field (Phases 21–22). */
+const SCOPED_FIELD_KEYS: Readonly<Record<string, string>> = {
+  'media:roles': 'mediaRoles',
+  'media:hidden': 'mediaHidden',
+  'media:altText': 'mediaAltText',
+  'attachments:hidden': 'attachmentsHidden',
+  'attachments:name': 'attachmentsName',
+  'attachments:description': 'attachmentsDescription',
+  'packagingUnits:name': 'packagingUnitsName',
+  'seo:title': 'seoTitle',
+  'seo:description': 'seoDescription',
+  'seo:ogTitle': 'seoOgTitle',
+  'seo:ogDescription': 'seoOgDescription',
+  'seo:ogImageUrl': 'seoOgImageUrl',
+};
+
 /** A field of the overview in the operator's words; an attribute by its label when known. */
 export function describeOverviewField(
   field: string,
@@ -163,6 +193,8 @@ export function describeOverviewField(
   if (isChannelField(field) || field === 'name' || field === 'description' || field === 'urlKey') {
     return t(`productEditor.scopeOverview.field.${field}`);
   }
+  const scoped = SCOPED_FIELD_KEYS[field];
+  if (scoped) return t(`productEditor.scopeOverview.field.${scoped}`);
   return field;
 }
 
