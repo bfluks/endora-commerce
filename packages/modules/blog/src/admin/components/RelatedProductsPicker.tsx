@@ -8,7 +8,7 @@ interface AdminProduct {
   sku: string;
   slug: string;
   status: 'active' | 'inactive';
-  /** Feature 163 (FR-019) — archived is its own fact, independent of `status`. */
+  /** Archived is its own fact, independent of `status`. */
   archivedAt?: string | null;
   name: Record<string, string>;
 }
@@ -102,7 +102,7 @@ export function RelatedProductsPicker({
           <div className="mt-2 flex flex-col gap-2">
             {value.map((id, idx) => {
               const product = productsById.get(id);
-              // Feature 163 — `inactive` no longer means archived: each is named
+              // `inactive` no longer means archived: each is named
               // for what it is, and either one dims the row.
               const archived = product?.archivedAt != null;
               const inactive = product?.status === 'inactive';
