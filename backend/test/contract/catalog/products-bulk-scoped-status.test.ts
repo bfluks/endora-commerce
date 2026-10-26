@@ -295,7 +295,7 @@ describe('POST /products/bulk-update — fields.scopedStatus (spec 163, T073)', 
       // S-W2 — each product's entry names the admin who queued the operation, not a null actor.
       const actorRows = await conn().execute<Array<{ actor_admin_user_id: string | null }>>(
         `select distinct actor_admin_user_id from audit_log_entries
-          where action = 'product.scopes.update' and object_id = any(?::uuid[])`,
+          where action = 'product.scopes.update' and object_id = any(?::text[])`,
         [`{${ids.join(',')}}`],
       );
       expect(actorRows.map((row) => row.actor_admin_user_id)).toEqual([op?.requestedByAdminUserId]);

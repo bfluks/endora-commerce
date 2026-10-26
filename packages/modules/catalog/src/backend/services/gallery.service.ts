@@ -132,9 +132,10 @@ export class GalleryService {
    */
   async putChannelRoles(productId: string, req: PutGalleryChannelRolesRequest): Promise<GalleryChannelRoles> {
     const channelId = req.channelId;
-    const requested = (Object.entries(req.roles) as Array<[GalleryLabel, string | null | undefined]>).filter(
-      (entry): entry is [GalleryLabel, string | null] => entry[1] !== undefined,
-    );
+    const requested = ROLE_KEYS.flatMap(([key, label]): Array<[GalleryLabel, string | null]> => {
+      const itemId = req.roles[key];
+      return itemId === undefined ? [] : [[label, itemId]];
+    });
     await this.#runMediaCommand(productId, async (em) => {
       const current = (await loadChannelRoles(em, productId)).get(channelId) ?? new Map<GalleryLabel, string>();
       const before = channelRolesDto(channelId, current);
@@ -645,21 +646,26 @@ export class GalleryService {
   }
 }
 
-const ROLES: readonly GalleryLabel[] = ['base_image', 'small_image', 'thumbnail'];
+/** The API key of each gallery role, beside the stored label it names (Principle VI: camelCase keys). */
+const ROLE_KEYS: ReadonlyArray<readonly [keyof GalleryChannelRoles['roles'], GalleryLabel]> = [
+  ['baseImage', 'base_image'],
+  ['smallImage', 'small_image'],
+  ['thumbnail', 'thumbnail'],
+];
 
 function channelRolesDto(channelId: string, roles: ReadonlyMap<GalleryLabel, string>): GalleryChannelRoles {
   return {
     channelId,
     roles: {
-      base_image: roles.get('base_image') ?? null,
-      small_image: roles.get('small_image') ?? null,
+      baseImage: roles.get('base_image') ?? null,
+      smallImage: roles.get('small_image') ?? null,
       thumbnail: roles.get('thumbnail') ?? null,
     },
   };
 }
 
 function sameRoles(a: GalleryChannelRoles['roles'], b: GalleryChannelRoles['roles']): boolean {
-  return ROLES.every((role) => a[role] === b[role]);
+  return ROLE_KEYS.every(([key]) => a[key] === b[key]);
 }
 
 /** The audit projection of one item's scoped media write (FR-080): enough to restore it by re-sending. */
