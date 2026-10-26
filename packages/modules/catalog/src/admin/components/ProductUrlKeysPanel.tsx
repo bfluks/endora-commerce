@@ -72,8 +72,12 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
   const redirectsHeadingId = useId();
   const addSelectId = useId();
   const globalInputId = useId();
+  const errorId = useId();
+  const saveHintId = useId();
+  const hintId = useId();
 
   const [saved, setSaved] = useState<ProductUrlKeys | null>(null);
+  /** `null` when the product's channels could not be read: the keys still show (C-3). */
   const [context, setContext] = useState<ScopeContext | null>(null);
   const [draft, setDraft] = useState<UrlKeysDraft | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -84,11 +88,15 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
   const [error, setError] = useState<string | null>(null);
   const [takeovers, setTakeovers] = useState<Takeover[] | null>(null);
   const [redirectToDelete, setRedirectToDelete] = useState<{ id: string; label: string } | null>(null);
+  /** The keys the last save attempt refused by grammar, as normalised — their fields are marked (D10). */
+  const [invalidShown, setInvalidShown] = useState<readonly string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     setLoadFailed(false);
-    Promise.all([getProductUrlKeys(productId), getProductScopeContext(productId)])
+    // The channel context only names channels and offers new scopes; without it the keys
+    // still show, channels are named generically and no scope can be added (C-3).
+    Promise.all([getProductUrlKeys(productId), getProductScopeContext(productId).catch(() => null)])
       .then(([keys, scope]) => {
         if (cancelled) return;
         setSaved(keys);
@@ -115,8 +123,8 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
   );
 
   const languages = useMemo(() => {
-    if (!saved || !context) return [];
-    return [...new Set([...context.languagesUnion, ...saved.languageKeys.map((k) => k.languageCode)])].sort();
+    if (!saved) return [];
+    return [...new Set([...(context?.languagesUnion ?? []), ...saved.languageKeys.map((k) => k.languageCode)])].sort();
   }, [saved, context]);
 
   const orphaned = useMemo(
@@ -144,9 +152,11 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
       if (!body) return;
       const invalid = invalidKeys(body);
       if (invalid.length > 0) {
+        setInvalidShown(invalid);
         setError(t('productEditor.urlKeys.error.invalidKey', { keys: invalid.join(', ') }));
         return;
       }
+      setInvalidShown([]);
       setBusy(true);
       setError(null);
       setStatus('');
@@ -163,7 +173,9 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
         setStatus(t('productEditor.urlKeys.saved'));
       } catch (err) {
         const takeover = takeoverDetails(err);
-        if (takeover && !confirmTakeover) {
+        // A confirmed retry can be refused again (another redirect appeared meanwhile):
+        // ask again with the new list rather than failing generically (C-4).
+        if (takeover) {
           setTakeovers(takeover.takeovers);
         } else {
           setTakeovers(null);
@@ -219,7 +231,7 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
     );
   }
 
-  if (!saved || !draft || !context) {
+  if (!saved || !draft) {
     return (
       <section aria-labelledby={headingId} aria-busy="true" className="b2b-col" style={{ gap: 12 }}>
         <h3 id={headingId} className="b2b-label">
@@ -252,6 +264,14 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
     );
   const inheritedForLanguage = (languageCode: string): string =>
     normalizeUrlKey(draft.languageKeys[languageCode] ?? '') || normalizeUrlKey(draft.globalKey) || saved.globalKey;
+  /** A field whose key the last save attempt refused: marked and tied to the message (D10). */
+  const invalidProps = (value: string): { 'aria-invalid'?: true; 'aria-describedby'?: string } =>
+    invalidShown.includes(normalizeUrlKey(value)) && value.trim() !== ''
+      ? { 'aria-invalid': true, 'aria-describedby': errorId }
+      : {};
+  /** The inherited key as visible text beside an override field (D9), plus any error. */
+  const describedBy = (id: string, value: string): string =>
+    [id, invalidProps(value)['aria-describedby']].filter(Boolean).join(' ');
 
   return (
     <section aria-labelledby={headingId} className="b2b-col" style={{ gap: 16 }}>
@@ -269,7 +289,7 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
         {status}
       </div>
       {error ? (
-        <Alert variant="destructive">
+        <Alert id={errorId} variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
@@ -280,27 +300,36 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
           id={globalInputId}
           value={draft.globalKey}
           readOnly={!canWrite}
+          {...invalidProps(draft.globalKey)}
           onChange={(e): void => setDraft((d) => (d ? { ...d, globalKey: e.target.value } : d))}
         />
       </div>
 
       <div className="space-y-2">
-        <div className="text-sm font-medium">{t('productEditor.urlKeys.languagesHeading')}</div>
+        <h4 className="text-sm font-medium">{t('productEditor.urlKeys.languagesHeading')}</h4>
         {languages.map((languageCode) => {
           const value = draft.languageKeys[languageCode] ?? '';
           const language = languageCode.toUpperCase();
+          const inherited = normalizeUrlKey(draft.globalKey) || saved.globalKey;
+          const inheritedId = `${hintId}-lang-${languageCode}`;
           return (
-            <div key={languageCode} className="flex items-center gap-2">
+            <div key={languageCode} className="flex flex-wrap items-center gap-2">
               <span className="w-10 font-mono text-xs text-muted-foreground" aria-hidden="true">
                 {language}
               </span>
               <Input
+                className="max-w-xs"
                 aria-label={t('productEditor.urlKeys.languageKey', { language })}
                 value={value}
-                placeholder={normalizeUrlKey(draft.globalKey) || saved.globalKey}
+                placeholder={inherited}
                 readOnly={!canWrite}
+                {...invalidProps(value)}
+                aria-describedby={describedBy(inheritedId, value)}
                 onChange={(e): void => setLanguageKey(languageCode, e.target.value)}
               />
+              <span id={inheritedId} className="text-xs text-muted-foreground">
+                {t('productEditor.urlKeys.inheritedHint', { key: inherited })}
+              </span>
               {canWrite && value !== '' ? (
                 <Button
                   type="button"
@@ -319,7 +348,7 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
       </div>
 
       <div className="space-y-2">
-        <div className="text-sm font-medium">{t('productEditor.urlKeys.channelsHeading')}</div>
+        <h4 className="text-sm font-medium">{t('productEditor.urlKeys.channelsHeading')}</h4>
         {draft.channelKeys.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('productEditor.urlKeys.channelsEmpty')}</p>
         ) : null}
@@ -354,8 +383,13 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
                     value={row.key}
                     placeholder={inheritedForLanguage(row.languageCode)}
                     readOnly={!canWrite}
+                    {...invalidProps(row.key)}
+                    aria-describedby={describedBy(`${hintId}-ch-${row.channelId}-${row.languageCode}`, row.key)}
                     onChange={(e): void => setChannelKey(row.channelId, row.languageCode, e.target.value)}
                   />
+                  <span id={`${hintId}-ch-${row.channelId}-${row.languageCode}`} className="text-xs text-muted-foreground">
+                    {t('productEditor.urlKeys.inheritedHint', { key: inheritedForLanguage(row.languageCode) })}
+                  </span>
                   {canWrite ? (
                     <Button
                       type="button"
@@ -373,7 +407,7 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
             </div>
           );
         })}
-        {canWrite && context.channels.length === 0 ? (
+        {canWrite && context !== null && context.channels.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('productEditor.urlKeys.noChannels')}</p>
         ) : null}
         {canWrite && addOptions.length > 0 ? (
@@ -407,17 +441,28 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
       </div>
 
       {canWrite ? (
-        <div>
-          <Button type="button" disabled={busy || changes === null} aria-busy={busy} onClick={(): void => void save()}>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            disabled={busy || changes === null}
+            aria-busy={busy}
+            aria-describedby={saveHintId}
+            onClick={(): void => void save()}
+          >
             {busy ? t('productEditor.urlKeys.saving') : t('productEditor.urlKeys.save')}
           </Button>
+          {/* D10 — a draft change (a typed key, Use inherited, a removed key) is not saved
+              until this button; with none, why the button is disabled. */}
+          <span id={saveHintId} className="text-sm text-muted-foreground">
+            {changes === null ? t('productEditor.urlKeys.noChanges') : t('productEditor.urlKeys.unsaved')}
+          </span>
         </div>
       ) : null}
 
       <div className="space-y-2">
-        <div id={effectiveHeadingId} className="text-sm font-medium">
+        <h4 id={effectiveHeadingId} className="text-sm font-medium">
           {t('productEditor.urlKeys.effectiveHeading')}
-        </div>
+        </h4>
         {saved.effective.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('productEditor.urlKeys.effectiveEmpty')}</p>
         ) : (
@@ -446,9 +491,9 @@ export function ProductUrlKeysPanel({ productId }: ProductUrlKeysPanelProps): Re
 
       {redirects ? (
         <div className="space-y-2">
-          <div id={redirectsHeadingId} className="text-sm font-medium">
+          <h4 id={redirectsHeadingId} className="text-sm font-medium">
             {t('productEditor.urlKeys.redirectsHeading')}
-          </div>
+          </h4>
           {redirects.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('productEditor.urlKeys.redirectsEmpty')}</p>
           ) : (
