@@ -439,7 +439,6 @@
   "productEditor.restore.failed": "Could not restore the product. Try again.",
   "productEditor.field.localizedName": "Name [{locale}]",
   "productEditor.field.localizedDescription": "Description [{locale}]",
-  "productEditor.seo.title": "SEO meta tags",
   "productEditor.variants.title": "Variants",
   "productEditor.variants.empty": "No variants yet. A configurable Product MUST have at least one Variant before it can be activated.",
   "productEditor.variants.error.load": "Load failed.",
@@ -1055,7 +1054,5 @@
   "productEditor.scopeOverview.field.seoDescription": "SEO description",
   "productEditor.scopeOverview.field.seoOgTitle": "Social title",
   "productEditor.scopeOverview.field.seoOgDescription": "Social description",
-  "productEditor.scopeOverview.field.seoOgImageUrl": "Social image",
-  "productEditor.seo.link": "Edit SEO meta per channel →",
-  "productEditor.seo.linkHint": "Titles and descriptions are set per sales channel and language on the SEO screen — pick this product there."
+  "productEditor.scopeOverview.field.seoOgImageUrl": "Social image"
 }
