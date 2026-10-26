@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import { adminSession, withSession } from '../../helpers/render-with-session';
 
 /**
  * Feature 022 / T027 — interaction test for the Mass-editable toggle
@@ -105,7 +106,10 @@ describe('AttributesManager — Mass-editable toggle (T027)', () => {
     getSpy.mockResolvedValue({ data: [seedAttribute(false)] });
     patchSpy.mockResolvedValue({ data: seedAttribute(true) });
 
-    renderWithI18n(<AttributesManager />, BUNDLE);
+    renderWithI18n(
+      withSession(<AttributesManager />, { session: adminSession({ permissions: ['catalog:read', 'catalog:write'] }) }),
+      BUNDLE,
+    );
 
     // The column header renders the passthrough key.
     await screen.findByText('attributes.column.massEditable');
@@ -137,7 +141,10 @@ describe('AttributesManager — Mass-editable toggle (T027)', () => {
   it('renders the checkbox as checked when the attribute is already flagged', async () => {
     getSpy.mockResolvedValue({ data: [seedAttribute(true)] });
 
-    renderWithI18n(<AttributesManager />, BUNDLE);
+    renderWithI18n(
+      withSession(<AttributesManager />, { session: adminSession({ permissions: ['catalog:read', 'catalog:write'] }) }),
+      BUNDLE,
+    );
 
     const keyCell = await screen.findByText('brand');
     const row = keyCell.closest('tr')!;
@@ -165,7 +172,10 @@ describe('AttributesManager — Price-rule flag', () => {
   it('renders the column and reflects the persisted flag', async () => {
     getSpy.mockResolvedValue({ data: [seedAttribute(false, true)] });
 
-    renderWithI18n(<AttributesManager />, BUNDLE);
+    renderWithI18n(
+      withSession(<AttributesManager />, { session: adminSession({ permissions: ['catalog:read', 'catalog:write'] }) }),
+      BUNDLE,
+    );
 
     await screen.findByText('attributes.column.priceRule');
     const row = (await screen.findByText('brand')).closest('tr')!;
@@ -177,7 +187,10 @@ describe('AttributesManager — Price-rule flag', () => {
     getSpy.mockResolvedValue({ data: [seedAttribute(false)] });
     patchSpy.mockResolvedValue({ data: seedAttribute(false, true) });
 
-    renderWithI18n(<AttributesManager />, BUNDLE);
+    renderWithI18n(
+      withSession(<AttributesManager />, { session: adminSession({ permissions: ['catalog:read', 'catalog:write'] }) }),
+      BUNDLE,
+    );
 
     const row = (await screen.findByText('brand')).closest('tr')!;
     const checkbox = within(row).getByLabelText('brand-isPriceRule') as HTMLInputElement;
@@ -196,7 +209,10 @@ describe('AttributesManager — Price-rule flag', () => {
     getSpy.mockResolvedValue({ data: [] });
     postSpy.mockResolvedValue({ data: seedAttribute(false, true) });
 
-    renderWithI18n(<AttributesManager />, BUNDLE);
+    renderWithI18n(
+      withSession(<AttributesManager />, { session: adminSession({ permissions: ['catalog:read', 'catalog:write'] }) }),
+      BUNDLE,
+    );
 
     const user = userEvent.setup();
     const flag = await screen.findByLabelText('attributes.flag.priceRule');
