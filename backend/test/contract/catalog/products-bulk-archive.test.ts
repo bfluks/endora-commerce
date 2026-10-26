@@ -212,6 +212,14 @@ describe('POST /products/bulk-update — fields.archived (spec 163, T156k)', () 
       const archivedRows = await rows(ids);
       for (const id of ids) expect(archivedRows.get(id)?.archivedAt).not.toBeNull();
       expect(await h.em().fork().count(AuditLogEntry, { action: 'product.archive', objectId: { $in: ids } })).toBe(60);
+      // S-W2 — the worker acts for the admin who queued the operation: every entry names them.
+      const actors = new Set(
+        (await h.em().fork().find(AuditLogEntry, { action: 'product.archive', objectId: { $in: ids } })).map(
+          (row) => row.actorAdminUserId,
+        ),
+      );
+      expect(op?.requestedByAdminUserId).toBeTruthy();
+      expect([...actors]).toEqual([op?.requestedByAdminUserId]);
 
       // A later Restore and re-Archive of one product gives it an archived time that
       // is neither the operation's before-state nor its after-state: a conflict,
