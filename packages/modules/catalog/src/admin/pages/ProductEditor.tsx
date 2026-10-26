@@ -49,7 +49,14 @@ import {
   type ProductScopeEditorHandle,
 } from '../components/ProductScopeEditor.js';
 import { checkWindowInputs, isoToLocalInput } from '../lib/product-scope-drafts.js';
-import { getProductScopes } from '../lib/product-scopes-api.js';
+import {
+  describeIncompletePair,
+  getProductScopes,
+  isScopeIncomplete,
+  loadChannelNamer,
+  scopeSaveErrorMessage,
+} from '../lib/product-scopes-api.js';
+import type { ScopeWarning } from '@endora-commerce/contracts';
 
 const LOCALES = ['en-US', 'pl-PL'] as const;
 type Locale = (typeof LOCALES)[number];
@@ -139,6 +146,8 @@ export function ProductEditor(): ReactNode {
   const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  // Feature 163 (US6, G-2) — what the completeness check reported on the last Save.
+  const [gateWarning, setGateWarning] = useState<string | null>(null);
   // The product's archived state, read with the product and
   // moved only by the Archive / Restore actions below, never by Save.
   const [archivedAt, setArchivedAt] = useState<string | null>(null);
@@ -300,6 +309,7 @@ export function ProductEditor(): ReactNode {
       e.preventDefault();
       setError(null);
       setInfo(null);
+      setGateWarning(null);
       const trimmedName: Record<string, string> = {};
       const trimmedDescription: Record<string, string> = {};
       for (const l of LOCALES) {
@@ -351,8 +361,8 @@ export function ProductEditor(): ReactNode {
           // PATCH) AND any pending channel-scoped override drafts held in
           // the ProductScopeEditor panel. Run them in parallel; if the
           // override flush rejects, the page PATCH still committed.
-          await Promise.all([
-            apiClient.patch<{ data: AdminProduct }>(
+          const [saved] = await Promise.all([
+            apiClient.patch<{ data: AdminProduct; warnings?: ScopeWarning[] }>(
               `/api/v1/admin/catalog/products/${id}`,
               {
                 sku: sku.trim(),
@@ -369,10 +379,39 @@ export function ProductEditor(): ReactNode {
             scopeEditorRef.current?.flushOverrides() ?? Promise.resolve(),
             galleryRef.current?.flushGallery() ?? Promise.resolve(),
           ]);
-          setInfo('Saved.');
+          // The status change was saved; where it switched the product on with values
+          // missing (`warn` mode) the page says what, by channel and language — instead
+          // of "Saved.", which would read as "nothing left to do".
+          const completeness = (saved.warnings ?? []).filter(
+            (w): w is Extract<ScopeWarning, { kind: 'completeness' }> => w.kind === 'completeness',
+          );
+          if (completeness.length > 0) {
+            const channelName = await loadChannelNamer(id);
+            setGateWarning(
+              t('productEditor.scopeControls.warning.incomplete', {
+                details: completeness.map((w) => describeIncompletePair(w, channelName, t)).join('; '),
+              }),
+            );
+          } else {
+            setInfo('Saved.');
+          }
           await refresh();
         }
       } catch (err) {
+        if (id && isScopeIncomplete(err)) {
+          // `refuse` mode: nothing in this request was saved; the edits stay in the form.
+          const channelName = await loadChannelNamer(id);
+          setError(
+            scopeSaveErrorMessage(
+              err,
+              channelName,
+              t,
+              'productEditor.scopeControls.error.generic',
+              'productEditor.statusGate.refused',
+            ),
+          );
+          return;
+        }
         const windowRefused =
           err instanceof ApiError &&
           (err.envelope.error as { details?: { field?: unknown } }).details?.field === 'window';
@@ -604,6 +643,14 @@ export function ProductEditor(): ReactNode {
           <AlertDescription>{info}</AlertDescription>
         </Alert>
       ) : null}
+      {/* Mounted before it has text, so the gate's warning is announced when it arrives. */}
+      <div role="status">
+        {gateWarning ? (
+          <Alert variant="warning" role="none" className="mb-4" data-testid="product-gate-warning">
+            <AlertDescription>{gateWarning}</AlertDescription>
+          </Alert>
+        ) : null}
+      </div>
       {/* Said where the operator looks first: archived
           means unavailable everywhere, whatever the status, and only Restore
           brings the product back. A standing state, so `status`, not `alert`. */}
