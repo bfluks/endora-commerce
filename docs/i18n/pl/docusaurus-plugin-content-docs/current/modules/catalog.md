@@ -99,6 +99,10 @@ niczego nie zmienia — bez wpisu audytu i bez zdarzenia.
 - **Lista w panelu.** Zarchiwizowane produkty są domyślnie ukryte niezależnie od statusu;
   `archived=only` pokazuje tylko je, a `archived=include` pokazuje je obok pozostałych. Licznik
   i filtr `inactive` obejmują produkty wyłączone, ale niezarchiwizowane.
+  Na liście produktów karta **Zarchiwizowane** ma własny adres, `/catalog/products/archived`,
+  więc przycisk Wstecz przeglądarki i odświeżenie strony do niej wracają. Przy zaznaczeniu jej
+  pasek oferuje Przywróć, Edycję zbiorczą i Usuń; **Edytuj cenę** jest widoczne na pozostałych
+  kartach, ale nieaktywne, bo ceny ustawia się w cennikach.
 
 ### Status dla kanału i języka, zbiorczo
 
