@@ -189,9 +189,13 @@ describe('ProductEditor — Archive (FR-019)', () => {
     expect(screen.getByText(tr('productEditor.archive.done'))).toBeInTheDocument();
     expect(screen.getByRole('button', { name: tr('productEditor.action.restore') })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: tr('productEditor.action.archive') })).toBeNull();
-    // The status is kept and still shown beside the archived badge.
+    // The status is kept, drawn as a neutral outline beside the one coloured
+    // Archived pill.
     expect((await statusSelect()).value).toBe('active');
-    expect(screen.getAllByText(tr('productEditor.archived.badge')).length).toBeGreaterThan(0);
+    const head = document.querySelector('.b2b-page-head__title')!;
+    expect(head.querySelector('.b2b-badge--dot')).toHaveClass('b2b-badge--outline');
+    expect(head.querySelector('.b2b-badge--dot')).not.toHaveClass('b2b-badge--success');
+    expect(within(head as HTMLElement).getByText(tr('productsList.status.archived'))).toHaveClass('b2b-badge--warn');
   });
 
   it('Cancel and Escape close the confirmation and send nothing', async () => {
@@ -228,12 +232,17 @@ describe('ProductEditor — an archived product and Restore (FR-019, O-5)', () =
     current = product({ status: 'active', archivedAt: '2026-10-20T00:00:00.000Z' });
   });
 
-  it('says it is archived, and that setting Active does not bring it back', async () => {
+  it('says it is archived once, with Restore inside the notice, and the O-5 note at the selector', async () => {
     renderEditor();
     const notice = await screen.findByTestId('product-archived-notice');
-    expect(notice).toHaveTextContent(tr('productEditor.archived.body'));
-    expect(tr('productEditor.archived.body')).toMatch(/Setting Active does not change that/);
-    // The selector itself carries the same warning for a screen-reader user.
+    expect(notice).toHaveTextContent(`${tr('productEditor.archived.title')} ${tr('productEditor.archived.body')}`);
+    expect(within(notice).getByRole('button', { name: tr('productEditor.action.restore') })).toBeInTheDocument();
+    // Restore is offered once, in the notice; the header offers no Archive.
+    expect(screen.getAllByRole('button', { name: tr('productEditor.action.restore') })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: tr('productEditor.action.archive') })).toBeNull();
+    // "Setting Active does not restore" is said once, at the selector.
+    const said = document.body.textContent!.split(tr('productEditor.field.status.archivedNote')).length - 1;
+    expect(said).toBe(1);
     const select = await statusSelect();
     expect(select).toHaveAccessibleDescription(
       `${tr('productEditor.field.status.help')} ${tr('productEditor.field.status.archivedNote')}`,
@@ -362,12 +371,48 @@ describe('ProductsBulkEditDialog — Set status and bulk Archive / Restore (FR-0
       }),
     );
     expect(onApplied).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText(tr('productsList.bulkEdit.archive.done', { count: 2 }))).toBeInTheDocument();
+    const heading = await screen.findByRole('heading', { name: tr('productsList.bulkEdit.archive.done', { count: 2 }) });
+    // The confirm button unmounted with its step; focus moves to the outcome.
+    await waitFor(() => expect(document.activeElement).toBe(heading));
     expect(screen.getByText(tr('productsList.bulkEdit.archive.unchanged', { count: 1 }))).toBeInTheDocument();
+    // An inline run is not persisted as an operation: no link to a page that 404s.
+    expect(screen.queryByRole('link', { name: tr('productsList.bulkEdit.viewOperation') })).toBeNull();
+    // One modal root throughout.
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+  });
+
+  it('a queued Archive says it is archiving, and links to its operation', async () => {
+    postSpy.mockResolvedValue({ data: { queued: true, bulkOperationId: OPERATION_ID, total: 3 } });
+    const user = userEvent.setup();
+    renderDialog('archive');
+    await user.click(await screen.findByRole('button', { name: tr('productsList.bulkEdit.archive.action', { count: 3 }) }));
+    await user.click(screen.getByRole('button', { name: tr('productsList.bulkEdit.archive.confirm', { count: 3 }) }));
+    const heading = await screen.findByRole('heading', { name: tr('productsList.bulkEdit.archive.queued.title') });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(screen.getByText(tr('productsList.bulkEdit.archive.queued.body', { total: 3 }))).toBeInTheDocument();
     expect(screen.getByRole('link', { name: tr('productsList.bulkEdit.viewOperation') })).toHaveAttribute(
       'href',
       `/catalog/bulk-operations/${OPERATION_ID}`,
     );
+  });
+
+  it('Escape on the confirmation step goes back to the form, not out of the dialog', async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderWithSession(
+      <MemoryRouter>
+        <ProductsBulkEditDialog productIds={IDS} archiveAction="archive" onClose={onClose} />
+      </MemoryRouter>,
+      { session: adminSession({ permissions: ['*'] }), bundle: BUNDLE },
+    );
+    await user.click(await screen.findByRole('button', { name: tr('productsList.bulkEdit.archive.action', { count: 3 }) }));
+    expect(screen.getByRole('dialog', { name: tr('productsList.bulkEdit.archive.confirmTitle', { count: 3 }) })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog', { name: tr('productsList.bulkEdit.title', { count: 3 }) })).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(postSpy).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('restores with archived: false', async () => {
@@ -384,7 +429,7 @@ describe('ProductsBulkEditDialog — Set status and bulk Archive / Restore (FR-0
         fields: { archived: false },
       }),
     );
-    expect(await screen.findByText(tr('productsList.bulkEdit.queued.title'))).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: tr('productsList.bulkEdit.restore.queued.title') })).toBeInTheDocument();
   });
 
   it('is not offered while a field is touched — it never travels with other fields', async () => {
@@ -405,6 +450,8 @@ describe('ProductsBulkEditDialog — Set status and bulk Archive / Restore (FR-0
     const dialog = screen.getByRole('dialog', { name: tr('productsList.bulkEdit.archive.confirmTitle', { count: 3 }) });
     await user.click(within(dialog).getByRole('button', { name: tr('productsList.bulkEdit.archive.confirm', { count: 3 }) }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('Refused.');
+    // Said once: the step's own alert, not a second copy above it.
+    expect(screen.getAllByText('Refused.')).toHaveLength(1);
   });
 
   it('offers neither when the host passes none (no catalog:write)', async () => {
