@@ -1041,10 +1041,11 @@ minimum, quick order's channel minimum). Decisions to confirm at checkpoint C:
   with the total and per channel (channel names best effort from `/admin/sales-channels`, short id otherwise; 0 → "No
   values … are affected"); cancel sends nothing; widening saves at once; built-in attributes fixed and read-only;
   read-only without `catalog:write`. The form is now keyed by attribute: it used to keep the previous form's state.
-- **Backend gap (blocks T095b against a real server):** `serializeAdminAttribute` (`routes.admin.ts`) and
-  `adminAttributeResponseSchema` (`contracts/catalog.ts`) do not emit `channelScoped` / `languageScoped`. The UI renders
-  the section only when both are present, so today it does not appear on edit (it does on create). Two additive lines
-  for S1.
+- ~~**Backend gap (blocks T095b against a real server):** `serializeAdminAttribute` (`routes.admin.ts`) and
+  `adminAttributeResponseSchema` (`contracts/catalog.ts`) do not emit `channelScoped` / `languageScoped`.~~ **Closed**
+  (checkpoint F): `serializeAdminAttribute` emits both (`packages/modules/catalog/src/backend/routes.admin.ts`,
+  `channelScoped: a.channelScoped`, `languageScoped: a.languageScoped`) and `adminAttributeResponseSchema` declares
+  them, so the Scope section appears on edit as well as on create.
 
 **Paused here (S3, 2026-10-26, owner pause).** P14 done and pushed. **P15:** T096's RED test
 `admin/test/modules/catalog/products-bulk-scoped-status.test.tsx` is written and failing (7 red, as intended) and lives
