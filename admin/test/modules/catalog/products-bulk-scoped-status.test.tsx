@@ -149,7 +149,22 @@ describe('bulk status in one channel (US5)', () => {
     const values = within(within(group).getByRole('combobox', { name: /^status$/i }))
       .getAllByRole('option')
       .map((o) => (o as HTMLOptionElement).value);
-    expect(values).toEqual(['active', 'inactive', 'inherit']);
+    // D19 — nothing is chosen for the operator: the first option asks for a choice.
+    expect(values).toEqual(['', 'active', 'inactive', 'inherit']);
+    expect(within(group).getByRole('combobox', { name: /^status$/i })).toHaveValue('');
+  });
+
+  it('asks for a status before applying (D19)', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(await screen.findByRole('checkbox', { name: /status in one channel/i }));
+    const group = await scopedGroup();
+    await user.selectOptions(within(group).getByRole('combobox', { name: /sales channel/i }), B2C);
+    await user.click(screen.getByRole('button', { name: /^apply$/i }));
+    const value = within(group).getByRole('combobox', { name: /^status$/i });
+    expect(value.getAttribute('aria-invalid')).toBe('true');
+    expect(within(group).getByText(/choose the status to set/i)).toBeTruthy();
+    expect(postSpy).not.toHaveBeenCalled();
   });
 
   it('cannot be combined with the global status: each disables the other and says why', async () => {
@@ -283,6 +298,7 @@ describe('bulk status in one channel (US5)', () => {
     const group = await scopedGroup();
     await user.selectOptions(within(group).getByRole('combobox', { name: /sales channel/i }), B2C);
     expect(await within(group).findByText(/languages could not be loaded/i)).toBeTruthy();
+    await user.selectOptions(within(group).getByRole('combobox', { name: /^status$/i }), 'inactive');
     await user.click(screen.getByRole('button', { name: /^apply$/i }));
     await waitFor(() =>
       expect(postSpy.mock.calls[0]?.[1]).toEqual({
