@@ -1,6 +1,6 @@
 import { StrictMode, type ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AppLanguageContext } from '@endora-commerce/admin-kit/i18n';
 import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/TranslationProvider';
@@ -119,10 +119,27 @@ function wrap(ui: ReactElement, language: 'en' | 'pl' = 'en'): ReactElement {
   );
 }
 
+/** Picks a scope; the editor loads it on selection (D5), so this waits for the load to settle. */
 async function chooseScope(user: ReturnType<typeof userEvent.setup>, channel: string, language: string): Promise<void> {
-  await user.selectOptions(await screen.findByRole('combobox', { name: /^sales channel$/i }), channel);
-  await user.selectOptions(screen.getByRole('combobox', { name: /^language$/i }), language);
-  await user.click(screen.getByRole('button', { name: /^load$/i }));
+  const channelSelect = await screen.findByRole('combobox', { name: /^sales channel$/i });
+  await waitFor(() => expect(channelSelect).not.toBeDisabled());
+  await user.selectOptions(channelSelect, channel);
+  const languageSelect = screen.getByRole('combobox', { name: /^language$/i });
+  await waitFor(() => expect(languageSelect).not.toBeDisabled());
+  await user.selectOptions(languageSelect, language);
+  await waitFor(() => expect(screen.getByRole('combobox', { name: /^language$/i })).not.toBeDisabled());
+}
+
+function metaCalls(query: string): number {
+  return getSpy.mock.calls.filter(([p]) => p === `${META}?${query}`).length;
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
 }
 
 describe('SeoMetaScopeEditor — a product override per sales channel × language', () => {
@@ -176,12 +193,28 @@ describe('SeoMetaScopeEditor — a product override per sales channel × languag
     const user = userEvent.setup();
     render(wrap(<SeoMetaScopeEditor entityType="product" entityId={PRODUCT_ID} />));
     await chooseScope(user, B2B, 'de-DE');
+    await screen.findByRole('table', { name: /effective values/i });
+    const loadsBefore = metaCalls(`channelId=${B2B}&locale=de-DE`);
     await user.click(await screen.findByRole('button', { name: /use inherited/i }));
+    // Asked first (D5): the dialog names the scope and the five fields it clears.
+    const dialog = await screen.findByRole('dialog', { name: /use inherited for B2B shop · DE-DE/i });
+    expect(dialog.textContent).toMatch(/Title, Description, OG title, OG description, OG image URL/);
+    expect(deleteSpy).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: /^use inherited$/i }));
     await waitFor(() => expect(deleteSpy).toHaveBeenCalledTimes(1));
     expect(deleteSpy).toHaveBeenCalledWith(`${META}?channelId=${B2B}&locale=de-DE`);
-    await waitFor(() =>
-      expect(getSpy.mock.calls.filter(([p]) => p === `${META}?channelId=${B2B}&locale=de-DE`).length).toBe(2),
-    );
+    await waitFor(() => expect(metaCalls(`channelId=${B2B}&locale=de-DE`)).toBe(loadsBefore + 1));
+  });
+
+  it('"use inherited" deletes nothing when the dialog is cancelled', async () => {
+    const user = userEvent.setup();
+    render(wrap(<SeoMetaScopeEditor entityType="product" entityId={PRODUCT_ID} />));
+    await chooseScope(user, B2B, 'de-DE');
+    await user.click(await screen.findByRole('button', { name: /use inherited/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(deleteSpy).not.toHaveBeenCalled();
   });
 
   it('offers no "use inherited" where the scope holds no row', async () => {
@@ -191,6 +224,7 @@ describe('SeoMetaScopeEditor — a product override per sales channel × languag
     );
     render(wrap(<SeoMetaScopeEditor entityType="product" entityId={PRODUCT_ID} />));
     await chooseScope(user, B2C, 'pl-PL');
+    await waitFor(() => expect(metaCalls(`channelId=${B2C}&locale=pl-PL`)).toBe(1));
     await screen.findByRole('table', { name: /effective values/i });
     expect(screen.queryByRole('button', { name: /use inherited/i })).toBeNull();
   });
@@ -205,6 +239,116 @@ describe('SeoMetaScopeEditor — a product override per sales channel × languag
     await waitFor(() =>
       expect(getSpy).toHaveBeenCalledWith(`/api/v1/admin/seo/meta/category/${CATEGORY_ID}?locale=en-US`),
     );
+  });
+
+  it('loads a scope as soon as it is selected, without pressing Load (D5)', async () => {
+    const user = userEvent.setup();
+    render(wrap(<SeoMetaScopeEditor entityType="product" entityId={PRODUCT_ID} />));
+    const channel = await screen.findByRole('combobox', { name: /^sales channel$/i });
+    await waitFor(() => expect(channel).not.toBeDisabled());
+    await user.selectOptions(channel, B2C);
+    await waitFor(() => expect(metaCalls(`channelId=${B2C}&locale=pl-PL`)).toBe(1));
+    await user.selectOptions(screen.getByRole('combobox', { name: /^language$/i }), '');
+    await waitFor(() => expect(metaCalls(`channelId=${B2C}`)).toBe(1));
+  });
+
+  it('opens on the language row once the channels are read, and offers no scope before that (D5)', async () => {
+    const context = deferred<{ data: typeof scopeContext }>();
+    getSpy.mockImplementation((path: string) => {
+      if (path === CONTEXT_PATH) return context.promise;
+      return Promise.resolve(metaAnswer(null));
+    });
+    render(wrap(<SeoMetaScopeEditor entityType="product" entityId={PRODUCT_ID} />));
+    expect(await screen.findByText(/reading the product’s sales channels/i)).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /^language$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^load$/i })).toBeNull();
+    expect(getSpy).not.toHaveBeenCalledWith(expect.stringContaining('/api/v1/admin/seo/meta/'));
+    context.resolve({ data: scopeContext });
+    expect(await screen.findByRole('combobox', { name: /^sales channel$/i })).toBeInTheDocument();
+    await waitFor(() => expect(metaCalls('locale=en-US')).toBe(1));
+  });
+
+  it('keeps the scope selectors disabled while a scope is loading (C-2)', async () => {
+    const b2b = deferred<ReturnType<typeof metaAnswer>>();
+    getSpy.mockImplementation((path: string) => {
+      if (path === CONTEXT_PATH) return Promise.resolve({ data: scopeContext });
+      if (path === `${META}?channelId=${B2B}&locale=de-DE`) return b2b.promise;
+      return Promise.resolve(metaAnswer(null));
+    });
+    const user = userEvent.setup();
+    render(wrap(<SeoMetaScopeEditor entityType="product" entityId={PRODUCT_ID} />));
+    const channelSelect = await screen.findByRole('combobox', { name: /^sales channel$/i });
+    await waitFor(() => expect(channelSelect).not.toBeDisabled());
+    // Choosing B2B selects its first language, DE-DE, and loads it.
+    await user.selectOptions(channelSelect, B2B);
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /^sales channel$/i })).toBeDisabled());
+    expect(screen.getByRole('combobox', { name: /^language$/i })).toBeDisabled();
+    b2b.resolve(metaAnswer(null));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /^sales channel$/i })).not.toBeDisabled());
+  });
+
+  it('never lets a late answer for the previous scope fill the draft of the current one (C-2)', async () => {
+    const b2b = deferred<ReturnType<typeof metaAnswer>>();
+    getSpy.mockImplementation((path: string) => {
+      if (path === CONTEXT_PATH) return Promise.resolve({ data: scopeContext });
+      if (path === `${META}?channelId=${B2B}&locale=de-DE`) return b2b.promise;
+      if (path === `${META}?channelId=${B2C}&locale=pl-PL`) {
+        return Promise.resolve(
+          metaAnswer({ title: 'B2C Polish title', description: null, ogTitle: null, ogDescription: null, ogImageUrl: null }),
+        );
+      }
+      return Promise.resolve(metaAnswer(null));
+    });
+    const user = userEvent.setup();
+    render(wrap(<SeoMetaScopeEditor entityType="product" entityId={PRODUCT_ID} />));
+    const channelSelect = await screen.findByRole('combobox', { name: /^sales channel$/i });
+    await waitFor(() => expect(channelSelect).not.toBeDisabled());
+    // Choosing B2B selects its first language, DE-DE, and loads it.
+    await user.selectOptions(channelSelect, B2B);
+    // The selector is disabled while B2B × DE loads; a change that reaches it anyway
+    // (here dispatched directly) must still win over the late B2B answer.
+    fireEvent.change(screen.getByRole('combobox', { name: /^sales channel$/i }), { target: { value: B2C } });
+    expect(await screen.findByDisplayValue('B2C Polish title')).toBeInTheDocument();
+    b2b.resolve(
+      metaAnswer({ title: 'B2B German title', description: null, ogTitle: null, ogDescription: null, ogImageUrl: null }),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByRole('textbox', { name: /^title$/i })).toHaveValue('B2C Polish title');
+    await user.click(screen.getByRole('button', { name: /save override/i }));
+    await waitFor(() => expect(putSpy).toHaveBeenCalledTimes(1));
+    expect(putSpy.mock.calls[0]![1]).toMatchObject({ channelId: B2C, locale: 'pl-PL', title: 'B2C Polish title' });
+  });
+
+  it('clears the outcome line when the scope changes (D5)', async () => {
+    const user = userEvent.setup();
+    render(wrap(<SeoMetaScopeEditor entityType="product" entityId={PRODUCT_ID} />));
+    await chooseScope(user, B2B, 'de-DE');
+    await user.click(await screen.findByRole('button', { name: /save override/i }));
+    expect(await screen.findByText('Override saved.')).toBeInTheDocument();
+    await chooseScope(user, B2C, 'pl-PL');
+    expect(screen.queryByText('Override saved.')).toBeNull();
+  });
+
+  it('asks before an unsaved draft is discarded by a scope change (D5)', async () => {
+    const user = userEvent.setup();
+    render(wrap(<SeoMetaScopeEditor entityType="product" entityId={PRODUCT_ID} />));
+    await chooseScope(user, B2B, 'de-DE');
+    const title = await screen.findByRole('textbox', { name: /^title$/i });
+    await user.clear(title);
+    await user.type(title, 'Unsaved');
+    await user.selectOptions(screen.getByRole('combobox', { name: /^sales channel$/i }), B2C);
+    const dialog = await screen.findByRole('dialog', { name: /discard unsaved changes/i });
+    expect(dialog.textContent).toContain('B2B shop · DE-DE');
+    // Keep editing: the scope and the draft stay.
+    await user.click(within(dialog).getByRole('button', { name: /keep editing/i }));
+    expect(screen.getByRole('combobox', { name: /^sales channel$/i })).toHaveValue(B2B);
+    expect(screen.getByRole('textbox', { name: /^title$/i })).toHaveValue('Unsaved');
+    expect(metaCalls(`channelId=${B2C}&locale=pl-PL`)).toBe(0);
+    // Discard: the switch happens and the new scope loads.
+    await user.selectOptions(screen.getByRole('combobox', { name: /^sales channel$/i }), B2C);
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /discard and switch/i }));
+    await waitFor(() => expect(metaCalls(`channelId=${B2C}&locale=pl-PL`)).toBe(1));
+    expect(screen.getByRole('combobox', { name: /^sales channel$/i })).toHaveValue(B2C);
   });
 
   it('renders in Polish from the Polish bundles', async () => {
