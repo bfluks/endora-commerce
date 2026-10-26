@@ -7,6 +7,7 @@ import {
 } from '../../helpers/test-server.js';
 import { TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { errorBodyOf } from '../../helpers/product-scope-fixture.js';
+import { withModuleOff } from '../../helpers/off-state.js';
 
 /**
  * Feature 163, Phase 5 (T031) — the Independent Test of US1: one product, two
@@ -26,6 +27,9 @@ import { errorBodyOf } from '../../helpers/product-scope-fixture.js';
  * wherever no narrower `active` override turns it on, and never answers 410; the 410
  * is an archived product's only, and only where it would be available to the caller
  * with the archive taken away.
+ *
+ * Phase 24 (T146): with `search` switched off the listing degrades to Postgres and
+ * answers the same sets.
  *
  * Every fixture name carries a per-run token; the channels are this suite's own.
  */
@@ -202,6 +206,48 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
       expect(listed, `Q inherits at ${channel.code}/${language}`).toContain(ids['q']);
       expect(listed, 'a member switched off is never listed').not.toContain(ids['off']);
       expect(listed, 'an archived product is never listed').not.toContain(ids['a']);
+    }
+  });
+
+  // Phase 24 (T146, Constitution XVII) — `search` off. The listing's degrade path is
+  // the Postgres read, and it must narrow by the same availability predicate (rows
+  // 1–2 of `contracts/consumers.md`): the index is not what makes P disappear. The
+  // harness pins the listing to Postgres for every file, so the case asks for the
+  // index explicitly — with `search` present a phrase would go to Meilisearch — and
+  // then switches `search` off on the operator axis.
+  it('T146: with search off, the Postgres listing and the facets apply the same predicate', async () => {
+    const pinned = process.env['CATALOG_SEARCH_BACKEND'];
+    process.env['CATALOG_SEARCH_BACKEND'] = 'meilisearch';
+    try {
+      await withModuleOff('search', 'deactivated', async () => {
+        for (const [channel, language] of pairs()) {
+          const res = await h.app.inject({
+            method: 'GET',
+            url: `/api/v1/catalog/products?q=${encodeURIComponent(`S163-${RUN}`)}&limit=50`,
+            headers: headers(channel, language),
+          });
+          expect(res.statusCode, `listing at ${channel.code}/${language}`).toBe(200);
+          expect(res.headers['x-search-backend'], 'search off degrades to Postgres').toBe('postgres');
+          const listed = (res.json() as { data: Array<{ id: string }> }).data.map((p) => p.id);
+          expect(listed.includes(ids['p']!), `P listed at ${channel.code}/${language}`).toBe(pOn(channel, language));
+          expect(listed, `Q inherits at ${channel.code}/${language}`).toContain(ids['q']);
+          expect(listed).not.toContain(ids['off']);
+          expect(listed).not.toContain(ids['a']);
+
+          if (!facetKey) throw new Error('the seed provides no filterable option-style attribute');
+          const filters = await h.app.inject({ method: 'GET', url: '/api/v1/catalog/filters', headers: headers(channel, language) });
+          expect(filters.statusCode).toBe(200);
+          const def = (
+            filters.json() as { data: Array<{ attributeKey: string; options?: Array<{ value: string; count: number }> }> }
+          ).data.find((d) => d.attributeKey === facetKey);
+          const option = def?.options?.find((o) => o.value === facetValue);
+          if (!option) throw new Error(`no facet option ${facetValue} at ${channel.code}/${language}`);
+          expect(option.count, `facet count at ${channel.code}/${language}`).toBe(3 + (pOn(channel, language) ? 1 : 0));
+        }
+      });
+    } finally {
+      if (pinned === undefined) delete process.env['CATALOG_SEARCH_BACKEND'];
+      else process.env['CATALOG_SEARCH_BACKEND'] = pinned;
     }
   });
 
