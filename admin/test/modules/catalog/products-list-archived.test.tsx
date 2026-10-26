@@ -288,13 +288,52 @@ describe('ProductsList — bulk Archive / Restore from the tab (FR-053)', () => 
     expect(screen.queryByRole('button', { name: t('productsList.bulkEdit.restore.action', { count: 1 }) })).toBeNull();
   });
 
-  it('offers Restore on the Archived tab', async () => {
+  // Owner decision P-4 → B (2026-10-26): on the Archived tab Restore is the bar's primary
+  // action and opens the confirmation directly; the Bulk edit form no longer repeats it.
+  it('offers Restore on the Archived tab from the bar, straight to its confirmation', async () => {
+    primeDialog();
+    const user = renderList();
+    await screen.findByText('Oak chair');
+    await user.click(tab('Archived'));
+    const row = (await screen.findByText('Old stool')).closest('tr')!;
+    await user.click(within(row).getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: new RegExp(`^${t('productsList.bulk.restore')}`) }));
+    const dialog = await screen.findByRole('dialog', { name: t('productsList.bulkEdit.restore.confirmTitle', { count: 1 }) });
+    expect(within(dialog).getByRole('button', { name: t('productsList.bulkEdit.restore.confirm', { count: 1 }) })).toBeInTheDocument();
+    // No form behind it: the way out is Cancel, and it closes the dialog.
+    await user.click(within(dialog).getByRole('button', { name: t('productsList.bulkEdit.action.cancel') }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('restores from the bar with archived: false and shows the summary', async () => {
+    primeDialog();
+    postSpy.mockResolvedValue({
+      data: {
+        bulkOperationId: 'op-r',
+        summary: { succeeded: 1, skipped: 0, failed: 0, total: 1 },
+        results: [{ productId: '00000000-0000-4000-8000-000000000c03', status: 'succeeded', changedFields: ['archivedAt'] }],
+      },
+    });
+    const user = renderList();
+    await screen.findByText('Oak chair');
+    await user.click(tab('Archived'));
+    const row = (await screen.findByText('Old stool')).closest('tr')!;
+    await user.click(within(row).getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: new RegExp(`^${t('productsList.bulk.restore')}`) }));
+    await user.click(await screen.findByRole('button', { name: t('productsList.bulkEdit.restore.confirm', { count: 1 }) }));
+    await waitFor(() => expect(postSpy).toHaveBeenCalledTimes(1));
+    expect((postSpy.mock.calls[0]![1] as { fields: unknown }).fields).toEqual({ archived: false });
+    expect(await screen.findByRole('heading', { name: t('productsList.bulkEdit.restore.done', { count: 1 }) })).toBeInTheDocument();
+  });
+
+  it('the Bulk edit form on the Archived tab does not repeat Restore', async () => {
     primeDialog();
     const user = renderList();
     await screen.findByText('Oak chair');
     await user.click(tab('Archived'));
     await openBulkEdit(user, 'Old stool');
-    expect(await screen.findByRole('button', { name: t('productsList.bulkEdit.restore.action', { count: 1 }) })).toBeInTheDocument();
+    await screen.findByRole('checkbox', { name: new RegExp(`^${t('productsList.bulkEdit.section.status')}`) });
+    expect(screen.queryByRole('button', { name: t('productsList.bulkEdit.restore.action', { count: 1 }) })).toBeNull();
     expect(screen.queryByRole('button', { name: t('productsList.bulkEdit.archive.action', { count: 1 }) })).toBeNull();
   });
 
