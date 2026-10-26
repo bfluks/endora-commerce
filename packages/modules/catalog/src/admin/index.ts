@@ -104,6 +104,15 @@ export const contributions: AdminContributions = {
       requiredPermission: WRITE_PERMISSION,
     },
     {
+      // The roster on its Archived tab (feature 163, owner decision PAL-1 → B): the
+      // address the palette's "Archived products" opens. The same screen as the
+      // index, so the same read code; it reads the tab from the path. A static
+      // segment, so it outranks `:id` below — product ids are UUIDs anyway.
+      path: `${ROUTE_PATH}/archived`,
+      component: () => import('./pages/ProductsList.js'),
+      requiredPermission: READ_PERMISSION,
+    },
+    {
       // The edit form keeps the read code: opening one product is a read, and
       // every control on it that writes gates itself. Nothing about D-221
       // touches this route — the tightening is the create URL's alone, and
