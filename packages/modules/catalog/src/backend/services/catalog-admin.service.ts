@@ -1,6 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { randomUUID } from 'crypto';
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 import {
   ERROR_CODES,
   isOrderMinimumEligibleType,
@@ -180,6 +180,12 @@ export interface ProductUpdateGate {
   completeness?: ScopeCompletenessGateMode | undefined;
   /** Receives the `completeness` warnings in `warn` mode. */
   warnings?: ScopeWarning[];
+  /**
+   * Feature 163 (S-W3) — the API key an integration wrote through, recorded in the
+   * audit entry's after-state (the entry has no API-key column; the Command derives
+   * its actor from the ambient context, whose admin id is `null` for a key).
+   */
+  apiKeyId?: string | null | undefined;
 }
 
 export class CatalogAdminService {
@@ -548,7 +554,7 @@ export class CatalogAdminService {
         return {
           result: r.product,
           before: r.stateBefore,
-          after: { ...r.stateAfter, changedFields },
+          after: { ...r.stateAfter, changedFields, ...(gate?.apiKeyId ? { apiKeyId: gate.apiKeyId } : {}) },
         };
       },
       event: (product) => ({
@@ -1255,7 +1261,10 @@ export class CatalogAdminService {
       objectType: 'product',
       objectId: id,
       run: async ({ em }) => {
-        const product = await em.findOne(Product, { id, deletedAt: null });
+        // Checkpoint C code review (C-W1) — the row lock serialises a single and a bulk
+        // Archive of one product: the second reads the first's `archivedAt` and is the
+        // no-op, so the transition is audited and announced once.
+        const product = await em.findOne(Product, { id, deletedAt: null }, { lockMode: LockMode.PESSIMISTIC_WRITE });
         if (!product) {
           throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
         }

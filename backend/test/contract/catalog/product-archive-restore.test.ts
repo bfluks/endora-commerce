@@ -29,6 +29,7 @@ import { seedProductScopesAdmins } from '../../helpers/product-scopes-admins.js'
 describe('Archive / Restore one product (spec 163, T156c)', () => {
   let h: BackendServerHandle;
   let writeToken: string;
+  let writeKeyId: string;
   const run = randomUUID().slice(0, 8);
   const admin = { cookies: { b2b_session: 'stub-admin-session' } };
   const reader = { cookies: { b2b_session: 'stub-product-scopes-reader-session' } };
@@ -136,6 +137,7 @@ describe('Archive / Restore one product (spec 163, T156c)', () => {
       ...admin,
     });
     writeToken = (key.json() as { data: { bearerToken: string } }).data.bearerToken;
+    writeKeyId = (key.json() as { data: { id: string } }).data.id;
   }, 60_000);
 
   afterAll(async () => {
@@ -226,6 +228,18 @@ describe('Archive / Restore one product (spec 163, T156c)', () => {
         { name: 'product.updated.v1', changedFields: ['archivedAt'] },
         { name: 'product.archived.v1' },
       ]);
+    });
+
+    it('concurrent Archives of one product transition it once: one audit row, one product.archived.v1 (C-W1)', async () => {
+      const id = await createProduct('active');
+      const events = captureEvents(id);
+      const answers = await Promise.all(
+        Array.from({ length: 4 }, () => h.app.inject({ method: 'POST', url: archiveUrl(id), ...admin })),
+      );
+      events.stop();
+      expect(answers.map((res) => res.statusCode)).toEqual([200, 200, 200, 200]);
+      expect(await auditRows('product.archive', id)).toHaveLength(1);
+      expect(events.seen.filter((e) => e.name === 'product.archived.v1')).toHaveLength(1);
     });
 
     it('a second Archive answers 200 with no audit row and no event', async () => {
@@ -362,6 +376,29 @@ describe('Archive / Restore one product (spec 163, T156c)', () => {
       });
       expect(second.statusCode).toBe(200);
       expect(await row(id)).toEqual({ status: 'inactive', archived_at: null });
+    });
+
+    it('the API-key upsert of an existing product is one audited product.update naming the key (S-W3)', async () => {
+      const sku = `ARCH-KEY-${run}-audit`;
+      const first = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/catalog/products/by-sku/${sku}`,
+        payload: body(sku, { status: 'inactive' }),
+        headers: { authorization: `Bearer ${writeToken}` },
+      });
+      expect(first.statusCode).toBe(201);
+      const id = (first.json() as ProductBody).data.id;
+      const second = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/catalog/products/by-sku/${sku}`,
+        payload: body(sku, { status: 'active' }),
+        headers: { authorization: `Bearer ${writeToken}` },
+      });
+      expect(second.statusCode, second.body).toBe(200);
+      const updates = await auditRows('product.update', id);
+      expect(updates).toHaveLength(1);
+      expect(updates[0]!.state_before).toMatchObject({ status: 'inactive' });
+      expect(updates[0]!.state_after).toMatchObject({ status: 'active', apiKeyId: writeKeyId });
     });
   });
 
