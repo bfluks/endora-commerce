@@ -1318,5 +1318,7 @@
   "productsList.bulkEdit.result.status": "Wynik",
   "productsList.bulkEdit.result.reason": "Powód",
   "productEditor.statusGate.refused": "Dane produktu nie zostały zapisane: do jego włączenia brakuje wartości. {details} Zmiany pozostają w formularzu.",
-  "productsList.bulk.restore": "Przywróć…"
+  "productsList.bulk.restore": "Przywróć…",
+  "productsList.savedView.draftRemoved": "Ten widok używał usuniętego statusu Szkic i teraz pokazuje wszystkie produkty. Wybierz zakładkę i użyj „Zapisz widok”, aby zachować widok bez niego.",
+  "productsList.savedView.dismiss": "Zamknij"
 }

@@ -6,7 +6,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ArchiveRestore,
   CircleDollarSign,
@@ -27,7 +27,7 @@ import { ProductsBulkEditDialog } from '../components/ProductsBulkEditDialog.js'
 import { ArchivedPill, ProductStatusPill } from '../components/ProductStatusPills.js';
 import {
   BULK_EDIT_HARD_MAX,
-  isProductListTab,
+  productListTabFromUrl,
   productListTabQuery,
   resolveProductSelection,
   type ListFilterSnapshot,
@@ -98,8 +98,8 @@ interface ProductListCounts {
  * A saved view's filters → the tab it opens on (FR-012). The Archived tab is saved
  * as its own key, `archived: 'only'`, never as a status (R30.4 rejects an
  * "archived" pseudo-status). A `status` the page no longer offers — `draft` among
- * them — opens as *All*; mapping `draft` onto `inactive` is an open owner question
- * and deliberately not done here.
+ * them — opens as *All* (owner decision P-2 → A, 2026-10-26: not mapped onto
+ * `inactive`); the list says so once, when such a view is applied.
  */
 export function savedViewTab(filters: Record<string, unknown>): StatusFilter {
   if (filters['archived'] === 'only') return 'archived';
@@ -130,18 +130,32 @@ export function ProductsList(): ReactNode {
   // `New post` are the same shape.
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('catalog:write');
-  const [searchParams] = useSearchParams();
+  const location = useLocation();
   const [rows, setRows] = useState<AdminProduct[]>([]);
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState<ProductListCounts>({ all: 0, active: 0, inactive: 0, archived: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
-    const fromUrl = searchParams.get('status');
-    return isProductListTab(fromUrl) ? fromUrl : 'all';
-  });
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() =>
+    productListTabFromUrl(location.pathname, location.search),
+  );
+  // The list follows the URL after its first load too: every navigation — the palette's
+  // "Archived products" while the list is already open, a link to `?status=…`, Back —
+  // has a new location key and re-reads the tab. A tab click does not navigate.
+  useEffect(() => {
+    setStatusFilter(productListTabFromUrl(location.pathname, location.search));
+    setLegacyDraftView(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the navigation itself
+  }, [location.key]);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
+  // A saved view that held the removed `draft` status opens on All (owner P-2 → A);
+  // said once, when it is applied, until the operator picks a tab or dismisses it.
+  const [legacyDraftView, setLegacyDraftView] = useState(false);
+  const chooseTab = (tab: StatusFilter): void => {
+    setStatusFilter(tab);
+    setLegacyDraftView(false);
+  };
   const [stockFilter, setStockFilter] = useState<StockFilter>('all');
   const [selection, setSelection] = useState<ProductListSelection>(emptySelection);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
@@ -232,6 +246,7 @@ export function ProductsList(): ReactNode {
     const f = state.filters;
     const q = typeof f['q'] === 'string' ? f['q'] : '';
     setStatusFilter(savedViewTab(f));
+    setLegacyDraftView(f['status'] === 'draft');
     setTypeFilter(isTypeFilter(f['type']) ? f['type'] : 'all');
     setQuery(q);
     setDebouncedQuery(q);
@@ -469,10 +484,10 @@ export function ProductsList(): ReactNode {
         <div style={{ padding: '4px 12px 0', overflow: 'hidden' }}>
           <div className="b2b-tabs-scroll">
           <div className="b2b-tabs" role="tablist">
-            <Tab id="all" label={t('productsList.tab.all')} count={counts.all} active={statusFilter} onChange={setStatusFilter} />
-            <Tab id="active" label={t('productsList.tab.active')} count={counts.active} active={statusFilter} onChange={setStatusFilter} />
-            <Tab id="inactive" label={t('productsList.tab.inactive')} count={counts.inactive} active={statusFilter} onChange={setStatusFilter} />
-            <Tab id="archived" label={t('productsList.tab.archived')} count={counts.archived} active={statusFilter} onChange={setStatusFilter} />
+            <Tab id="all" label={t('productsList.tab.all')} count={counts.all} active={statusFilter} onChange={chooseTab} />
+            <Tab id="active" label={t('productsList.tab.active')} count={counts.active} active={statusFilter} onChange={chooseTab} />
+            <Tab id="inactive" label={t('productsList.tab.inactive')} count={counts.inactive} active={statusFilter} onChange={chooseTab} />
+            <Tab id="archived" label={t('productsList.tab.archived')} count={counts.archived} active={statusFilter} onChange={chooseTab} />
           </div>
           </div>
         </div>
@@ -529,6 +544,32 @@ export function ProductsList(): ReactNode {
               onError={setError}
             />
           </div>
+        </div>
+
+        {/* Mounted before it has text, so the note is announced when a view brings it. */}
+        <div role="status">
+          {legacyDraftView ? (
+            <div
+              className="b2b-help"
+              data-testid="saved-view-draft-note"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '6px 12px',
+                borderBottom: '1px solid var(--border, #e5e7eb)',
+              }}
+            >
+              <span style={{ flex: 1 }}>{t('productsList.savedView.draftRemoved')}</span>
+              <button
+                type="button"
+                className="b2b-btn b2b-btn--ghost b2b-btn--sm"
+                onClick={(): void => setLegacyDraftView(false)}
+              >
+                {t('productsList.savedView.dismiss')}
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {showSelectAllBanner ? (
@@ -726,7 +767,7 @@ export function ProductsList(): ReactNode {
                   type="button"
                   className="b2b-btn b2b-btn--ghost"
                   style={{ marginTop: 8, color: 'var(--primary-color)' }}
-                  onClick={(): void => setStatusFilter('archived')}
+                  onClick={(): void => chooseTab('archived')}
                 >
                   {t('productsList.empty.searchArchived')}
                 </button>
