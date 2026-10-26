@@ -955,10 +955,38 @@ already in. Bulk results carry no `pairs`, so a bulk gate message can name the s
 
 ### Phase 15: [admin UI] Bulk scoped status and the gate (US5, US6) — after Phases 10–11
 
-- [ ] T096 [P] [US5] [S3] RED: bulk dialog offers "Set status in scope" (channel, optional language, value or inherit); result lists skipped products with reason; gate warnings/refusals rendered per pair (US6 #1, #3) — `admin/test/modules/catalog/products-bulk-scoped-status.test.tsx`, `admin/test/modules/catalog/scope-completeness-messages.test.tsx` *(Q1, 2026-10-25: the value choices are `active`, `inactive` and inherit only — no `draft`; Archive / Restore are Phase 15a's, already in the dialog by then.)*
-- [ ] T097 [US5] [S3] `ProductsBulkEditDialog.tsx` scoped-status action — `src/admin/components/ProductsBulkEditDialog.tsx` *(after Phase 15a, which owns the dialog's Archive / Restore and the global status options)*
-- [ ] T098 [US6] [S3] Gate messages in scope controls and the global status save — `ProductScopeEditor.tsx`, `ProductEditor.tsx`
-- [ ] T099 [S3] i18n keys (handover)
+- [x] T096 [P] [US5] [S3] RED: bulk dialog offers "Set status in scope" (channel, optional language, value or inherit); result lists skipped products with reason; gate warnings/refusals rendered per pair (US6 #1, #3) — `admin/test/modules/catalog/products-bulk-scoped-status.test.tsx`, `admin/test/modules/catalog/scope-completeness-messages.test.tsx` *(Q1, 2026-10-25: the value choices are `active`, `inactive` and inherit only — no `draft`; Archive / Restore are Phase 15a's, already in the dialog by then.)*
+- [x] T097 [US5] [S3] `ProductsBulkEditDialog.tsx` scoped-status action — `src/admin/components/ProductsBulkEditDialog.tsx` *(after Phase 15a, which owns the dialog's Archive / Restore and the global status options)*
+- [x] T098 [US6] [S3] Gate messages in scope controls and the global status save — `ProductScopeEditor.tsx`, `ProductEditor.tsx`
+- [x] T099 [S3] i18n keys (handover)
+
+**Phase 15 note** (S3, 2026-10-26). Decisions for checkpoint D:
+- *Bulk (T097).* A field group **Set status in one channel** below Status — named so, not "Status in one channel",
+  so it neither reads as a second Status nor collides with it for a screen reader. A `fieldset` whose legend is
+  the group's checkbox, three labelled native selects in dependency order: sales channel (from the list already
+  loaded), language (fetched by channel code when a channel is chosen; *All languages of the channel* =
+  `languageCode: null`; a failed read leaves the whole-channel choice and says so), and Active / Inactive / Use
+  inherited. A standing help line says what Apply will do to products outside the channel and what switching on
+  checks, so a gate result is not a surprise. Status and the scoped group exclude each other: the untouched one
+  is disabled and described by the reason. Apply without a channel marks the channel `aria-invalid`, announces
+  the reason and focuses it; nothing is sent.
+- *Result.* The heading names the scope set ("Status in B2C shop · DE applied."). The table lists every row
+  not succeeded **and** every succeeded row carrying `details.code = 'SCOPE_INCOMPLETE'` (warn mode), with a count
+  line above it; reasons `scope_invalid` / `completeness_gate` and the warn row are bundle keys; the table's
+  headings and per-row result were English literals and are bundle keys now. Bulk results carry no `pairs`, so a
+  row cannot name the missing values; it points at the product's Scopes tab (the row links to the product).
+- *Editor (T098, G-2 → A).* The page Save keeps `PATCH /products/:id`'s `warnings`. Completeness warnings replace
+  "Saved." with a warning naming each channel · language and value (`describeIncompletePair`), inside a
+  `role="status"` region mounted before it has text. A `422 SCOPE_INCOMPLETE` is the one refusal routed through
+  `scopeSaveErrorMessage` (new optional `incompleteKey`), with editor copy that says the **details** were not saved
+  and the edits are still in the form — the overrides and gallery flushes run beside that PATCH and may have
+  committed. Channel names come from `scope-context`, read only when a gate message needs them (`loadChannelNamer`;
+  short id when the read fails). Restore never fires the gate (I1 → B), so it has no gate message.
+- *Scope controls.* Already rendered completeness warnings and refusals per pair (Phase 13); the second T096
+  file pins the warn and nothing-missing cases there.
+- *Test amended:* `product-archive-restore.test.tsx` finds the Status group by its checkbox: "Status" is now also
+  the scoped group's value label.
+- *Not translated (pre-existing literals, outside this phase):* the editor's own "Save" button and "Saved.".
 
 **Verification** (one invocation per line):
 - `pnpm --filter admin exec vitest run test/modules/catalog/products-bulk-scoped-status.test.tsx`
