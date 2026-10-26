@@ -75,5 +75,8 @@
   "metaScope.source.derived": "Z produktu",
   "metaScope.useInherited": "Użyj dziedziczonego",
   "metaScope.removed": "Nadpisanie usunięte. Ten zakres znowu dziedziczy wartości.",
-  "metaScope.error.remove": "Nie udało się usunąć nadpisania. Spróbuj ponownie."
+  "metaScope.error.remove": "Nie udało się usunąć nadpisania. Spróbuj ponownie.",
+  "productLink.title": "Meta tagi SEO",
+  "productLink.hint": "Tytuły i opisy ustawia się dla kanału sprzedaży i języka na ekranie SEO — wybierz tam ten produkt.",
+  "productLink.link": "Edytuj meta SEO w kanałach →"
 }
