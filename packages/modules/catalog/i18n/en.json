@@ -1454,5 +1454,11 @@
   "productEditor.scopeDialog.discard.body": "You have changes that are not saved. Close and discard them?",
   "productEditor.scopeDialog.discard.confirm": "Discard changes",
   "productEditor.scopeDialog.discard.keep": "Keep editing",
-  "packagingUnits.readOnly": "Read-only: you can see the packaging units but not change them."
+  "packagingUnits.readOnly": "Read-only: you can see the packaging units but not change them.",
+  "productEditor.saved": "Saved.",
+  "productEditor.error.load": "Failed to load.",
+  "productEditor.error.nameRequired": "At least one locale name is required.",
+  "productEditor.error.save": "Save failed.",
+  "productEditor.error.delete": "Delete failed.",
+  "productEditor.error.duplicate": "Duplicate failed."
 }
