@@ -284,6 +284,36 @@ describe('completeness gate (spec 163, T078)', () => {
       expect((await status(global)).status).toBe('active');
     });
 
+    it('the API-key upsert is an integration path and is never gated (A-6, S-W3)', async () => {
+      await setMode('refuse');
+      const id = await product('api-key');
+      const key = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/api-keys',
+        cookies: admin,
+        payload: { name: `163 gate ${RUN}`, scopes: ['catalog:write'] },
+      });
+      expect(key.statusCode, key.body).toBe(201);
+      const token = (key.json() as { data: { bearerToken: string } }).data.bearerToken;
+      const res = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/catalog/products/by-sku/SCG-${RUN}-api-key`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: {
+          sku: `SCG-${RUN}-api-key`,
+          type: 'simple',
+          name: { 'pl-PL': 'Bramka api-key' },
+          description: { 'pl-PL': '' },
+          categoryIds: [],
+          attributeValues: {},
+          visibility: 'public',
+          status: 'active',
+        },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      expect((await status(id)).status).toBe('active');
+    });
+
     it('the gate reads status only: active on an archived product is refused, and it stays archived (FR-060)', async () => {
       await setMode('refuse');
       const id = await product('archived');
