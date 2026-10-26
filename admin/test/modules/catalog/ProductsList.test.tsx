@@ -100,7 +100,6 @@ const BUNDLE = passthroughBundle('catalog', [
   'productsList.empty.action',
   'productsList.tab.all',
   'productsList.tab.active',
-  'productsList.tab.draft',
   'productsList.tab.inactive',
   'productsList.error.load',
 ]);
@@ -134,7 +133,7 @@ describe('ProductsList — streamlined selection toolbar (T041)', () => {
     answerList({
       data: [productRow('00000000-0000-4000-8000-000000000a01', 'ROW-A', 'Row A widget')],
       pagination: { page: 0, pageSize: 25, total: 1 },
-      counts: { all: 1, active: 1, draft: 0, inactive: 0 },
+      counts: { all: 1, active: 1, inactive: 0, archived: 0 },
     });
 
     renderWithI18n(
@@ -178,7 +177,7 @@ describe('ProductsList — streamlined selection toolbar (T041)', () => {
     answerList({
       data: [productRow('00000000-0000-4000-8000-000000000a02', 'ROW-B', 'Row B widget')],
       pagination: { page: 0, pageSize: 25, total: 1 },
-      counts: { all: 1, active: 1, draft: 0, inactive: 0 },
+      counts: { all: 1, active: 1, inactive: 0, archived: 0 },
     });
 
     renderWithI18n(
@@ -214,7 +213,7 @@ describe('ProductsList — streamlined selection toolbar (T041)', () => {
     answerList({
       data: [productRow(id, 'ROW-C', 'Row C widget')],
       pagination: { page: 0, pageSize: 25, total: 1 },
-      counts: { all: 1, active: 1, draft: 0, inactive: 0 },
+      counts: { all: 1, active: 1, inactive: 0, archived: 0 },
     });
 
     renderWithI18n(

@@ -84,7 +84,7 @@ function serveCatalog(url: string): unknown {
   return {
     data: rows,
     pagination: { page: 0, pageSize: 20, total: rows.length },
-    counts: { all: rows.length, active: rows.length, draft: 0, inactive: 0 },
+    counts: { all: rows.length, active: rows.length, inactive: 0, archived: 0 },
   };
 }
 

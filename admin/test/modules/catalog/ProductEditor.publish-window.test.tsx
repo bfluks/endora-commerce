@@ -217,7 +217,7 @@ describe('ProductEditor — global publication window (163)', () => {
     await waitFor(() =>
       expect(scopeEditorSpy).toHaveBeenLastCalledWith(expect.objectContaining({ globalStatus: 'active' })),
     );
-    await user.selectOptions(screen.getByLabelText('productEditor.field.status'), 'draft');
-    expect(scopeEditorSpy).toHaveBeenLastCalledWith(expect.objectContaining({ globalStatus: 'draft' }));
+    await user.selectOptions(screen.getByLabelText('productEditor.field.status'), 'inactive');
+    expect(scopeEditorSpy).toHaveBeenLastCalledWith(expect.objectContaining({ globalStatus: 'inactive' }));
   });
 });
