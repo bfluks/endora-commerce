@@ -49,6 +49,12 @@ export const SERIAL_TEST_FILES: readonly SerialTestEntry[] = [
       'it returns, which another worker indexing at the same moment would change.',
   },
   {
+    pattern: 'test/contract/catalog/scoped-availability-matrix.test.ts',
+    reason:
+      'Its search-off case (spec 163, T146) sets CATALOG_SEARCH_BACKEND=meilisearch and asserts the ' +
+      'listing degrades to Postgres; while the variable is set, the shared search instance is in play.',
+  },
+  {
     pattern: 'test/integration/_lifecycle/non-binding-degradation.integration.test.ts',
     reason:
       'Switches the catalogue listing to Meilisearch (CATALOG_SEARCH_BACKEND=meilisearch) and ' +
