@@ -1030,7 +1030,8 @@ minimum, quick order's channel minimum). Decisions to confirm at checkpoint C:
   confirmed (one value, audited, the inherited value is shown beside it); the table reloads and a mounted
   `role="status"` says "Reset to inherited."
 - *No reset for a language baseline.* `name`/`description`/attribute at level `language` is the product's own text in
-  that language (edited on Details/Attributes), not an override — owner question below.
+  that language (edited on Details/Attributes), not an override — **OV-1 = A (owner, 2026-10-26):** confirmed; the
+  overview resets only channel and channel × language overrides (spec *Clarifications*, Session 2026-10-26).
 - *Missing (FR-041).* Rendered only for a non-empty `missing`: icon + "Incomplete — missing: Name, Material" (attribute
   labels from `GET …/attributes`, key as fallback). Absent and `[]` render nothing.
 - *Orphans.* A region below the table with a standing note (role `note`), each with its reason and **Delete**.
@@ -1171,7 +1172,11 @@ already in. Bulk results carry no `pairs`, so a bulk gate message can name the s
   (`search-query.service.ts` hydrates `slug: product.slug` — S1's module) and every other module's in-page links
   (cart lines, comparisons, shopping lists, quick order) still carry the global key: they redirect while `seo` is on,
   and answer not-found in a language where the product has its own key while `seo` is off. The PDP passes `?lang=` to
-  `getServerContext({ langOverride })`; a `lang` cookie still wins over it (existing rule, left alone). Security
+  `getServerContext({ langOverride })`; ~~a `lang` cookie still wins over it (existing rule, left alone)~~ —
+  **L-1 = A (owner, 2026-10-26):** an explicit `?lang=` naming an active language now beats the `lang` cookie on
+  the PDP (the only `langOverride` caller); an invalid or inactive one is ignored and the cookie, `Accept-Language`
+  and the channel default decide as before; the cookie is not rewritten
+  (`storefront/test/lib/server-context-language.test.ts`). Security
   carry 4: `seo` marks every cached sitemap stale on `product.updated.v1` naming `scopedStatus`,
   `publicationWindow`, `audience` or `urlKeys`. Shared-file lines are in `chore(163): s2 handover P17`.
   **T156s/T156t — done in P17 by S2** (coordinator, 2026-10-25, owner decision Q1): the page's "gone" answer is
