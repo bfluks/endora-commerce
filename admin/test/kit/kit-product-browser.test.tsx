@@ -306,7 +306,8 @@ describe('requests and filters (B1, B2)', () => {
     expect(requestedUrls().at(-1)).toBe(`${PATH}?archived=only&page=0&pageSize=10`);
     const row = screen.getByText('Retired widget').closest('tr')!;
     expect(within(row).getByText('Active')).toBeTruthy();
-    expect(within(row).getByText('Archived')).toBeTruthy();
+    // One Archived look across the browser, the list and the editor.
+    expect(within(row).getByText('Archived')).toHaveClass('b2b-badge', 'b2b-badge--warn');
     // Not blocked by this host, so it can be ticked.
     expect(rowCheckbox('Retired widget').disabled).toBe(false);
   });
