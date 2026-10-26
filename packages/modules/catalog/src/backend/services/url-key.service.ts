@@ -10,6 +10,7 @@ import {
   type UrlKeyWriteOutcome,
   type UrlKeyRedirectTakeoverRequiredDetails,
   type UrlKeyTakenDetails,
+  sameLanguage,
 } from '@endora-commerce/contracts';
 import type { Command, CommandBus, CommandEvent } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -131,10 +132,6 @@ interface ScopeOp {
 }
 
 const lower = (value: string): string => value.toLowerCase();
-
-function sameLanguage(a: string | null, b: string | null): boolean {
-  return a === null || b === null ? a === b : lower(a) === lower(b);
-}
 
 /**
  * Every key a PUT can touch, sorted and once: the keys it writes, the keys it
