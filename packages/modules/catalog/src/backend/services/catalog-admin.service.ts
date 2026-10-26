@@ -17,6 +17,8 @@ import {
   type UpdateProductRequest,
   type ProductArchivedMode,
   type ProductStatus,
+  type ScopeCompletenessGateMode,
+  type ScopeWarning,
   type UpdateVariantRequest,
   uuidSchema,
 } from '@endora-commerce/contracts';
@@ -71,6 +73,11 @@ import { Product } from '../entities/product.entity.js';
 import { ProductUrlRedirect } from '../entities/product-url-redirect.entity.js';
 import { isUrlKeyFree, lockUrlKeys } from './url-key.service.js';
 import { ProductVariant } from '../entities/product-variant.entity.js';
+import { ProductChannelScope } from '../entities/product-channel-scope.entity.js';
+import { ProductChannelLanguageScope } from '../entities/product-channel-language-scope.entity.js';
+import { globalScopeFields } from './product-availability.service.js';
+import { toChannelRecord, toLanguageRecord } from './product-scopes.service.js';
+import type { ScopeCompletenessGate } from './scope-completeness.js';
 import {
   assertVirtualDownloadFields,
   ProductTypeValidationError,
@@ -164,6 +171,17 @@ const SKU_MAX_LENGTH = 255;
  * (T067) and webhook bridge (Phase 2 T037) can react.
  */
 
+/**
+ * Feature 163 (FR-060) — an operator's write asking for the completeness gate: the
+ * mode read once for the request, and where to put the warnings of `warn`. Absent, the
+ * write is not gated (imports, connectors, the API-key upsert — A-6).
+ */
+export interface ProductUpdateGate {
+  completeness?: ScopeCompletenessGateMode | undefined;
+  /** Receives the `completeness` warnings in `warn` mode. */
+  warnings?: ScopeWarning[];
+}
+
 export class CatalogAdminService {
   constructor(
     private readonly emFactory: () => EntityManager,
@@ -202,7 +220,19 @@ export class CatalogAdminService {
      * is the module's declared degrade rather than a failure.
      */
     private readonly copyWarehouseThresholds?: CatalogWarehouseThresholdCopy,
+    /**
+     * Feature 163 (FR-060, FR-061) — the completeness gate for an operator's change of
+     * the global status. Composed into the admin routes' instance only; it runs only
+     * when a call passes a mode ({@link ProductUpdateGate}), so the integration ports
+     * and the API-key upsert, which never do, are never gated (A-6).
+     */
+    private readonly completenessGate?: ScopeCompletenessGate,
   ) {}
+
+  /** The gate's mode for an operator's write, read once per request; `undefined` where no gate is composed. */
+  async completenessMode(): Promise<ScopeCompletenessGateMode | undefined> {
+    return this.completenessGate?.mode();
+  }
 
   #requireAttributeRead(): CatalogAttributeReadService {
     if (!this.attributeRead) {
@@ -427,9 +457,10 @@ export class CatalogAdminService {
     id: string,
     req: UpdateProductRequest,
     auditCtx?: AdminAuditContext,
+    gate?: ProductUpdateGate,
   ): Promise<Product> {
     const em = this.emFactory();
-    const r = await this.#applyProductUpdate(em, id, req);
+    const r = await this.#applyProductUpdate(em, id, req, gate);
     await em.flush();
     if (this.auditLog && auditCtx) {
       await this.auditLog.record({
@@ -458,6 +489,28 @@ export class CatalogAdminService {
     return r.product;
   }
 
+  /** The completeness gate for `product`'s global status going to `status` (FR-060). */
+  async #gateGlobalStatus(
+    em: EntityManager,
+    product: Product,
+    status: ProductStatus,
+    mode: ScopeCompletenessGateMode,
+  ): Promise<ScopeWarning[]> {
+    const gate = this.completenessGate!;
+    const [channelRows, languageRows, channels] = await Promise.all([
+      em.find(ProductChannelScope, { productId: product.id }),
+      em.find(ProductChannelLanguageScope, { productId: product.id }),
+      gate.memberChannels(product.id),
+    ]);
+    const before = {
+      global: globalScopeFields(product),
+      channelRows: channelRows.map(toChannelRecord),
+      languageRows: languageRows.map(toLanguageRecord),
+    };
+    const after = { ...before, global: { ...before.global, status } };
+    return gate.enforce(em, product, before, after, channels, mode);
+  }
+
   /**
    * `product.archived.v1` — the product was archived by the Archive action
    * (feature 163, FR-019). Emitted by {@link archiveProduct} alone, after the
@@ -478,19 +531,19 @@ export class CatalogAdminService {
    * Command Bus (one audit row + the event on commit, none on rollback). Falls
    * back to the legacy `updateProduct` when no bus is injected (bus-less tests).
    */
-  async updateProductAudited(id: string, req: UpdateProductRequest): Promise<Product> {
-    if (!this.commandBus) return this.updateProduct(id, req);
-    return this.commandBus.run(this.#updateProductCommand(id, req));
+  async updateProductAudited(id: string, req: UpdateProductRequest, gate?: ProductUpdateGate): Promise<Product> {
+    if (!this.commandBus) return this.updateProduct(id, req, undefined, gate);
+    return this.commandBus.run(this.#updateProductCommand(id, req, gate));
   }
 
-  #updateProductCommand(id: string, req: UpdateProductRequest): Command<Product> {
+  #updateProductCommand(id: string, req: UpdateProductRequest, gate?: ProductUpdateGate): Command<Product> {
     let changedFields: string[] = [];
     return {
       action: 'product.update',
       objectType: 'product',
       objectId: id,
       run: async ({ em }) => {
-        const r = await this.#applyProductUpdate(em, id, req);
+        const r = await this.#applyProductUpdate(em, id, req, gate);
         changedFields = r.changedFields;
         return {
           result: r.product,
@@ -518,6 +571,7 @@ export class CatalogAdminService {
     em: EntityManager,
     id: string,
     req: UpdateProductRequest,
+    gate?: ProductUpdateGate,
   ): Promise<{
     product: Product;
     stateBefore: Record<string, unknown>;
@@ -596,6 +650,14 @@ export class CatalogAdminService {
     // write never sets or clears `archivedAt` — `inactive` is plain off and
     // `active` does not restore. Archiving is the Archive / Restore action.
     if (req.status !== undefined && req.status !== product.status) {
+      // Feature 163 (FR-060, US6 #3) — a change of the global switch runs the
+      // completeness gate over every pair it turns on, before the row changes: in
+      // `refuse` one failing pair refuses the whole write (N3). It reads status
+      // only, so an archived product set `active` is gated too.
+      if (gate?.completeness && this.completenessGate) {
+        const warnings = await this.#gateGlobalStatus(em, product, req.status, gate.completeness);
+        gate.warnings?.push(...warnings);
+      }
       product.status = req.status;
       changedFields.push('status');
     }
