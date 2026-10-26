@@ -399,6 +399,7 @@ export class ProductLinkService {
       em,
       this.#requireAssets(),
       targetIds,
+      channel.id,
     );
 
     // Who sees a tile's price is the display-mode chain's decision, applied in

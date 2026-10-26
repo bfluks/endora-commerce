@@ -12,6 +12,7 @@ import type { BulkImportReport } from './import-export.js';
 import type { AttributeScope } from './product-value-resolver.js';
 import { ORDER_MINIMUM_MAX } from './order-minimums.js';
 import { productPagePathsSchema } from './product-url-keys.js';
+import { translationMapPatchSchema } from './scoped-translations.js';
 
 /**
  * Catalog module contracts — Source of truth per Principle V.
@@ -403,6 +404,12 @@ export const productDetailSchema = productSummarySchema.extend({
           kind: z.string(),
           url: z.string(),
         }),
+        /**
+         * Feature 163 (FR-077) — the image's alt text at the request's scope language:
+         * the product's own, else the asset's; `null` = none. Optional so other
+         * builders of the DTO keep compiling; `catalog` always emits it.
+         */
+        altText: z.string().nullable().optional(),
       }),
     )
     .optional(),
@@ -1598,12 +1605,25 @@ export type AssignAttributesRequest = z.infer<typeof assignAttributesRequestSche
 export const galleryLabelSchema = z.enum(['base_image', 'small_image', 'thumbnail']);
 export type GalleryLabel = z.infer<typeof galleryLabelSchema>;
 
+/** Feature 163 (FR-077) — the longest alt text of one image in one language. */
+export const GALLERY_ALT_TEXT_MAX = 255;
+/** Feature 163 — the most channels one write names. */
+export const SCOPED_CHANNELS_MAX = 256;
+
 export const galleryItemSchema = z.object({
   id: uuidSchema,
   productId: uuidSchema,
   assetId: uuidSchema,
   position: z.number().int().nonnegative(),
   labels: z.array(galleryLabelSchema),
+  /**
+   * Feature 163 (FR-077, R15) — the product's own alt text of the image per language;
+   * a language absent here shows the asset's alt text. Optional so other builders of
+   * the DTO keep compiling; `catalog` always emits it.
+   */
+  altText: z.record(z.string(), z.string()).optional(),
+  /** Feature 163 (FR-076, R14) — the channels the image is hidden in, sorted. Always emitted by `catalog`. */
+  hiddenInChannels: z.array(uuidSchema).optional(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
 });
@@ -1622,9 +1642,49 @@ export const updateGalleryItemRequestSchema = z
   .object({
     position: z.number().int().nonnegative().optional(),
     labels: z.array(galleryLabelSchema).optional(),
+    /**
+     * Feature 163 (FR-077) — per-language alt text: the named languages are set, an
+     * empty string removes one, an unnamed one is left as it is.
+     */
+    altText: translationMapPatchSchema(GALLERY_ALT_TEXT_MAX).optional(),
+    /** Feature 163 (FR-076) — the channels the image is hidden in; replaces the set. */
+    hiddenInChannels: z.array(uuidSchema).max(SCOPED_CHANNELS_MAX).optional(),
   })
   .strict();
 export type UpdateGalleryItemRequest = z.infer<typeof updateGalleryItemRequestSchema>;
+
+/**
+ * Feature 163 (FR-076, R14) — a channel's own holders of the gallery roles. `null` =
+ * the global holder applies there. Read with `GET …/gallery/channel-roles`.
+ */
+export const galleryChannelRolesSchema = z.object({
+  channelId: uuidSchema,
+  roles: z.object({
+    base_image: uuidSchema.nullable(),
+    small_image: uuidSchema.nullable(),
+    thumbnail: uuidSchema.nullable(),
+  }),
+});
+export type GalleryChannelRoles = z.infer<typeof galleryChannelRolesSchema>;
+
+/**
+ * `PUT …/gallery/channel-roles` — a role named with an item id moves to that item in
+ * the channel, `null` = use inherited (the global holder), an absent role is left as
+ * it is.
+ */
+export const putGalleryChannelRolesRequestSchema = z
+  .object({
+    channelId: uuidSchema,
+    roles: z
+      .object({
+        base_image: uuidSchema.nullable().optional(),
+        small_image: uuidSchema.nullable().optional(),
+        thumbnail: uuidSchema.nullable().optional(),
+      })
+      .strict(),
+  })
+  .strict();
+export type PutGalleryChannelRolesRequest = z.infer<typeof putGalleryChannelRolesRequestSchema>;
 
 export const reorderGalleryRequestSchema = z
   .object({

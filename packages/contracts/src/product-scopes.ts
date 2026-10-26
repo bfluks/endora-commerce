@@ -271,16 +271,15 @@ export function resolveScopeLanguage(channel: ScopeChannel, requestedTag: string
   return sameBase ?? channel.defaultLanguage;
 }
 
-/**
- * Whether two language tags name the same language as a channel spells it — compared
- * case-insensitively (`de-DE` = `de-de`), never by base language. `null` / `undefined`
- * (no language: a channel-only or global row) equals only itself. The one comparison
- * every scope, key and value read uses (checkpoint C code review, N3).
- */
-export function sameLanguage(a: string | null | undefined, b: string | null | undefined): boolean {
-  if (a == null || b == null) return (a ?? null) === (b ?? null);
-  return a.toLowerCase() === b.toLowerCase();
-}
+export {
+  applyTranslationPatch,
+  effectivePackagingUnitName,
+  sameLanguage,
+  translationAt,
+  translationMapPatchSchema,
+  TRANSLATION_MAP_MAX_LANGUAGES,
+  type TranslationMap,
+} from './scoped-translations.js';
 
 /**
  * A channel record as the scope rule reads it. The default language is always
