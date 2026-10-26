@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ProductGlobalScopeFields, ScopeChannel, ScopeSnapshot } from '@endora-commerce/contracts';
 import {
+  ScopeCompletenessGate,
   checkCompleteness,
+  composeCompletenessGate,
   completenessFailures,
   completenessOutcome,
   type CompletenessFacts,
@@ -219,4 +221,28 @@ describe('completenessOutcome — the mode decides (FR-060, N3)', () => {
     expect(completenessOutcome('warn', [])).toEqual([]);
     expect(completenessOutcome('refuse', [])).toEqual([]);
   });
+});
+
+describe('composeCompletenessGate — never silently off (checkpoint C security review, I7)', () => {
+  const deps = {
+    membership: { listChannelsForEntity: async () => [] },
+    attributeRead: { listAll: async () => [] },
+    settings: { get: async () => 'warn' as never },
+  };
+
+  it('composes the gate when every collaborator is wired, and logs nothing', () => {
+    const log = { warn: vi.fn() };
+    expect(composeCompletenessGate(deps, log)).toBeInstanceOf(ScopeCompletenessGate);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it.each(['membership', 'attributeRead', 'settings'] as const)(
+    'without %s it answers undefined and warns once, naming what is missing',
+    (missing) => {
+      const log = { warn: vi.fn() };
+      expect(composeCompletenessGate({ ...deps, [missing]: undefined }, log)).toBeUndefined();
+      expect(log.warn).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(log.warn.mock.calls[0])).toContain(missing);
+    },
+  );
 });
