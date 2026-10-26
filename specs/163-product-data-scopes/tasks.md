@@ -1618,7 +1618,16 @@ also green for product_feeds, comparisons, backend, storefront, admin. **Not run
     and basename over `backend/test`, `admin/test`, `storefront/test`, `backend/scripts`, `scripts`, `packages`:
     no reference left (the remaining `ProductSeoLink` hits are `seo`'s own live zone). No module moved, so no
     `module-removal.test.ts` ledger entry is derived from this feature; the test is green (unit config).
-    Read sizes: see the Phase 24 read-size line below.
+    Read sizes (`unit/scripts/check-read-size.test.ts`, unit config): the one completed run had 7 reds — 6
+    `stale-artefact` on `mod-catalog`, caused by this phase's manifest comment landing mid-run (catalog rebuilt
+    since), and `check-pdfmake-footprint.sh`'s BSD `du -b` (the macOS gap) — and no entry the band refused;
+    the drift inside the band is left alone (`check-estate.md`). Two re-runs on the loaded host hit the
+    `beforeAll` hook timeout; nothing re-recorded. Static checks after the test files landed, all exit 0:
+    `check:harness-teardown`, `check:fixture-substitution`, `check:port-dependencies`, `check:port-catches`,
+    `check:module-boundary`, `check:module-docs`, `check:docs-translations`, `check:off-state-coverage`,
+    `check:env-inputs`, `check:singleton-identity`, `check:platform-surface`, `check:divergence`,
+    `check:diacritic-folds`, `check:release-intent`. Skipped on the Intel macOS host (false reds): `check:naming`,
+    `check:language`, `test:unit:fast`, `moved-module-tree.test.ts`.
   - *Task A (review of S-3)* — `catalog` declaring `admin_roles` is the sanctioned shape and stays:
     `admin_roles` is `activation.nonDeactivatable` with `dependencies: []` (no cycle, no operator control lost,
     no absent state to degrade through — `module-composition.md` exempts a non-deactivatable owner from the
