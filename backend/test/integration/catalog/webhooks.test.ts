@@ -104,6 +104,20 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     expect(response.statusCode, response.body).toBe(200);
   };
 
+  /**
+   * Archive the product (spec 163, FR-019 — archiving is its own action; a status
+   * write never archives) and wait until the bridge has handled `product.archived.v1`.
+   */
+  const archiveProduct = async (id: string) => {
+    const response = await whenEventDelivered(
+      h,
+      PRODUCT_ARCHIVED,
+      (event) => event['productId'] === id,
+      () => h.app.inject({ method: 'POST', url: `/api/v1/admin/catalog/products/${id}/archive`, cookies: ADMIN }),
+    );
+    expect(response.statusCode, response.body).toBe(200);
+  };
+
   beforeAll(async () => {
     h = await setupBackendServer();
     capture = captureWebhookJobs(h);
@@ -387,7 +401,7 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     const platformWide = await storeWebhookSubscription(h, CATALOG_WEBHOOK_EVENT_TYPES);
 
     const product = await createProduct();
-    await patchProduct(product.id, { status: 'inactive' }, PRODUCT_ARCHIVED);
+    await archiveProduct(product.id);
 
     const receivers = jobsFor(product.id).map((job) => job.webhookId);
     expect(receivers).not.toContain(bound);
@@ -448,7 +462,7 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     try {
       const product = await createProduct();
       await patchProduct(product.id, { name: { 'en-US': 'Renamed' }, visibility: 'logged_in_only' });
-      await patchProduct(product.id, { status: 'inactive' }, PRODUCT_ARCHIVED);
+      await archiveProduct(product.id);
     } finally {
       offs.forEach((off) => off());
     }
