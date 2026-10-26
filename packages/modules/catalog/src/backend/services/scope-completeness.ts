@@ -240,3 +240,28 @@ export class ScopeCompletenessGate {
     return completenessOutcome(mode, completenessFailures(before, after, channels, await this.facts(em, product)));
   }
 }
+
+/**
+ * Checkpoint C security review (I7) — the gate composed for the operator's services,
+ * or `undefined` with **one** warning naming what the composition lacks: a deployment
+ * that wires no settings read (or no membership, no attribute read) must not run with
+ * the completeness check silently off.
+ */
+export function composeCompletenessGate(
+  deps: {
+    membership?: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'> | undefined;
+    attributeRead?: Pick<CatalogAttributeReadService, 'listAll'> | undefined;
+    settings?: Pick<SettingsReadPort, 'get'> | undefined;
+  },
+  log: { warn(obj: unknown, msg?: string): void } | undefined,
+): ScopeCompletenessGate | undefined {
+  if (deps.membership && deps.attributeRead && deps.settings) {
+    return new ScopeCompletenessGate(deps.membership, deps.attributeRead, deps.settings);
+  }
+  const missing = (['membership', 'attributeRead', 'settings'] as const).filter((name) => !deps[name]);
+  log?.warn(
+    { missing },
+    '[catalog] the scope completeness gate is not composed: status writes run unchecked in this composition',
+  );
+  return undefined;
+}
