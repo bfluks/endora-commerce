@@ -17,6 +17,12 @@ atrybutu: `channelScoped` i `languageScoped`. Atrybuty systemowe `name` i `descr
 stałe włączone obie (stała backendu `SYSTEM_ATTRIBUTE_SCOPES`). Atrybuty zdefiniowane przez
 użytkownika są domyślnie tylko globalne, a zakresy włącza się w edytorze atrybutów.
 
+Te same zakresy decydują też o tym, **gdzie produkt jest dostępny**: jego status, okres publikacji,
+odbiorcy i zasady zamawiania mogą być różne w poszczególnych kanałach sprzedaży, a status także w
+parze kanał × język. Opisuje to sekcja *Dostępność w kanale sprzedaży i w języku* poniżej. Klucze
+URL produktu w językach i w parach kanał × język mają osobną stronę,
+[Klucze URL i przekierowania](./url-keys-and-redirects.md).
+
 ## Po co
 
 Katalog B2B często potrzebuje dla tego samego produktu zarówno tekstów marketingowych różnych w
@@ -169,8 +175,12 @@ Z funkcji rozstrzygającej korzystają następujące miejsca:
   uwzględnia domyślnego języka kanału, i przez niego przechodzą miejsca nadpisań, więc kafelek może
   pokazać tekst bazowy `en-US` tam, gdzie karta na liście pokazuje nadpisanie domyślnego języka
   kanału. Produkt bez nadpisań wygląda dokładnie tak jak wcześniej.
-  Filtry listy, filtrowanie po atrybutach i sortowanie po nazwie nadal korzystają z wartości
-  bazowych.
+  Gdy listę obsługuje Postgres, `sort=name` porządkuje produkty według nazwy obowiązującej w
+  kanale i języku żądania (przy równych nazwach według identyfikatora), wolny tekst `q` dopasowuje
+  nazwę obowiązującą i obowiązujące wartości atrybutów przeszukiwalnych, a `filter[attr.*]` i
+  liczniki filtrów korzystają z wartości obowiązujących w kanale w języku żądania. Gdy listę
+  obsługuje moduł `search`, sortuje on według nazwy zindeksowanej w domyślnym języku kanału (zob.
+  stronę modułu `search`).
 - **Indeksowanie wyszukiwarki (Meilisearch)** — tworzy jeden dokument dla każdej pary
   `(product, channel)`. Pola `name` i `description` każdego dokumentu przechodzą przez funkcję
   rozstrzygającą z `channel.defaultLanguage` jako aktywnym językiem, więc nadpisania dla kanałów
@@ -204,6 +214,142 @@ Zakładka **Details** strony edycji produktu ma nad istniejącymi polami dla ję
 Edycja jest możliwa dopiero po wybraniu konkretnego kanału. Przy Global (bez kanału) panel jest
 tylko do odczytu, a tekst pomocy wyjaśnia, że nadpisania działają wyłącznie w obrębie kanału.
 
+## Dostępność w kanale sprzedaży i w języku
+
+Produkt jest **dostępny** dla kupującego w kanale sprzedaży C i języku L, gdy spełnione są
+wszystkie warunki:
+
+1. należy do kanału C i nie jest zarchiwizowany;
+2. jego obowiązujący **status** w (C, L) to `active`;
+3. bieżąca chwila mieści się w jego obowiązującym **okresie publikacji** (oba końce włącznie);
+4. jego obowiązujący zakres **odbiorców** obejmuje kupującego.
+
+L to pierwszy znacznik `Accept-Language` żądania dopasowany do języków kanału C, a gdy żaden nie
+pasuje — domyślny język kanału C. Tę jedną regułę stosuje każdy odczyt dla kupującego — lista
+produktów i jej zakres cen, liczniki filtrów i kategorii, strona produktu, powiązane produkty,
+produkty składowe zestawu grupowego i opcje pakietu, szybkie wyszukiwanie, wyszukiwarka, mapa
+witryny, pliki produktowe — oraz każde miejsce, w którym produkt jest nabywany: koszyk, checkout i
+składanie zamówienia, zapytania ofertowe, szybkie zamówienie i zewnętrzne przyjmowanie zamówień.
+Produkt niedostępny odpowiada dokładnie tak jak produkt, który nie istnieje
+(`404 PRODUCT_NOT_FOUND`); nie da się odróżnić, czy produkt istnieje, jest wyłączony, jest poza
+okresem publikacji, czy ma ograniczonych odbiorców. Wyjątkiem jest produkt zarchiwizowany, opisany w
+sekcji *Status produktu i archiwizacja* na stronie
+[Katalog](../catalog.md#status-produktu-i-archiwizacja).
+
+### Zakresy i dziedziczenie
+
+| Pole | Globalnie | Kanał sprzedaży | Kanał × język |
+| --- | --- | --- | --- |
+| Status (`active` / `inactive`) | `products.status` | tak | tak |
+| Okres publikacji | `products.publish_from` / `publish_until` | tak | — |
+| Odbiorcy (widoczność i organizacje) | `products.visibility` / `allowed_organization_ids` | tak | — |
+| Minimalna ilość zamówienia, możliwość zwrotu | `products` | tak | — |
+
+Każde pole przyjmuje wartość z najbardziej szczegółowego zakresu, który ją ustawia: status — z
+pary kanał × język, potem z kanału, potem globalną; pozostałe pola — z kanału, potem globalną.
+Zakres bez ustawienia **dziedziczy** — nie ma „pustej” wartości, która by coś wyłączała. Produkt bez
+nadpisań działa dokładnie tak jak wcześniej.
+
+- **Status.** `inactive` w dowolnym zakresie oznacza po prostu wyłączenie w tym zakresie, a
+  archiwizacja nie jest statusem — zob. sekcję *Status produktu i archiwizacja* na stronie
+  [Katalog](../catalog.md#status-produktu-i-archiwizacja). Produkt wyłączony globalnie i `active` w
+  jednym kanale jest dostępny tylko w tym kanale.
+- **Okres publikacji.** `from` i `until`, oba opcjonalne (brak oznacza okres otwarty z tej strony);
+  oba końce są włączone. Okres kanału zastępuje okres globalny jako para, nawet gdy obie jego strony
+  są otwarte. Okres, który nie zaczyna się przed swoim końcem, jest odrzucany z kodem
+  `422 VALIDATION_FAILED` (`details.field = 'window'`). Okres jest sprawdzany w chwili odpowiedzi na
+  żądanie; przy jego otwarciu ani zamknięciu nic nie jest zapisywane. Zadanie cykliczne
+  (`catalog.publication-window.sweep`, co pięć minut) ogłasza `product.updated.v1` z
+  `changedFields: ["publicationWindow"]` dla każdego produktu, którego granica okresu została
+  przekroczona, aby pamięci podręczne i indeks wyszukiwarki nadążały za zmianą.
+- **Odbiorcy.** Tryb widoczności i lista organizacji stanowią jedną wartość: odbiorcy kanału
+  zastępują regułę globalną w całości i nigdy nie są z nią łączeni. Wskazanie organizacji, które nie
+  należą do kanału, jest dozwolone, a odpowiedź zawiera wtedy ostrzeżenie `audience_non_members`.
+- **Zasady zamawiania.** Zob. sekcję *Dla kanału sprzedaży* w części o zasadach zamawiania na stronie
+  [Katalog](../catalog.md#dla-kanału-sprzedaży).
+
+Nadpisanie jest uwzględniane tylko tam, gdzie może obowiązywać: nadpisanie dla kanału, z którego
+produkt został usunięty, albo dla języka, którego kanał już nie oferuje, pozostaje zapisane, ale
+jest pomijane i widnieje jako osierocone (niżej), dopóki nie zostanie usunięte.
+
+### Zapis zakresów
+
+`GET /api/v1/admin/catalog/products/:id/scopes` (`catalog:read`) zwraca wartości globalne oraz, dla
+każdego kanału, nadpisania, języki kanału i informację, czy produkt nadal do niego należy. `PATCH`
+na tej samej ścieżce (`catalog:write`) je zapisuje:
+
+```json
+{
+  "channels": [
+    {
+      "channelId": "<retail-uuid>",
+      "status": "active",
+      "window": { "from": "2026-11-01T00:00:00Z", "until": null },
+      "audience": null,
+      "languageStatuses": [{ "languageCode": "de-DE", "status": "inactive" }]
+    }
+  ],
+  "global": { "publishUntil": "2026-12-31T23:59:59Z" }
+}
+```
+
+Pominięty klucz pozostaje bez zmian; `null` usuwa nadpisanie (wartość dziedziczona). Wartość dla
+kanału, do którego produkt nie należy, albo dla języka, którego kanał nie oferuje, jest odrzucana z
+kodem `422 SCOPE_INVALID`; usunięcie takiego nadpisania jest zawsze dozwolone. Globalny okres
+publikacji można też zapisać przez `PATCH` produktu (`publishFrom`, `publishUntil`).
+
+Każde żądanie to jedno polecenie zapisywane w dzienniku zdarzeń, `product.scopes.update`; wysłanie
+zapisanego stanu sprzed zmiany tą samą ścieżką przywraca go. Zapis ogłasza `product.updated.v1` z
+`changedFields` spośród `scopedStatus`, `publicationWindow`, `audience` i `orderRules`. Zmiana
+statusu, która włącza produkt, podlega kontroli kompletności — zob. stronę
+[Katalog](../catalog.md#kontrola-kompletności-przy-włączaniu-produktu) — a `warnings` zawiera jego
+wynik. Importy i konektory zapisują te same zakresy przez `catalogProductScopeWritePort`, bez
+sprawdzania; tabela pól jest na stronie
+[Klucze URL i przekierowania](./url-keys-and-redirects.md#integracje). Ustawienie statusu w jednym
+kanale wielu produktom naraz to *Status w kanale i języku* w edycji zbiorczej — zob. stronę
+[Katalog](../catalog.md#status-dla-kanału-i-języka-zbiorczo).
+
+W edytorze produktu są to **ustawienia zakresów** pod przełącznikiem kanału na zakładce Details
+(status w kanale i w języku, okres publikacji, odbiorcy) oraz **Zasady zamawiania w kanałach** na
+zakładce Inventory; bez uprawnienia `catalog:write` wszystkie są tylko do odczytu.
+
+### Przegląd zakresów
+
+`GET /api/v1/admin/catalog/products/:id/scope-overview` (`catalog:read`) przedstawia produkt jako
+tabelę kanałów × języków, a zakładka **Scopes** edytora produktu ją pokazuje. Każda komórka
+zawiera:
+
+- obowiązujący status i jego źródło (`channel_language`, `channel` albo `global`);
+- informację, czy produkt jest tam teraz dostępny — należy do kanału, język jest oferowany, produkt
+  jest włączony, mieści się w okresie publikacji i nie jest zarchiwizowany; odbiorcy są pokazani jako
+  reguła, a nie sprawdzani dla kogokolwiek;
+- każde pole nadpisane w tej komórce i poziom, z którego pochodzi — `status`, `window`,
+  `audience`, `minOrderQuantity`, `returnable`, `name`, `description`, `attribute:<key>`,
+  `urlKey` oraz pola galerii, załączników, jednostek opakowania i SEO ustawione dla kanału lub
+  języka;
+- `missing` — co w tym miejscu zgłosiłaby kontrola kompletności, niezależnie od statusu komórki.
+
+Nadpisania, które już nie obowiązują, są wymienione w `orphans` z powodem: `not_a_member`,
+`language_not_offered` albo `attribute_scope_changed`. Na zakładce Scopes wartość zakresu,
+nadpisanie wartości albo klucz URL można przywrócić do wartości dziedziczonej tam, gdzie są
+ustawione, a osierocone nadpisanie usunąć; zakładka wywołuje endpoint, do którego należy dana
+wartość (`…/scopes`, `…/value-overrides` albo `…/url-keys`). Produkt, który nie należy do żadnego
+kanału sprzedaży, nie ma kanałów i ma wszystkie aktywne języki platformy.
+
+Przed wyłączeniem flagi `channelScoped` lub `languageScoped` atrybutu
+`GET /api/v1/admin/catalog/attributes/:idOrKey/scope-change-preview?channelScoped=&languageScoped=`
+zwraca, ile nadpisań wartości przestanie obowiązywać, łącznie i w każdym kanale. Zmiana zachowuje
+wiersze; stają się one osierocone.
+
+### Przechowywanie
+
+`product_channel_scopes` przechowuje jeden wiersz dla produktu i kanału ze statusem, okresem
+publikacji, odbiorcami, minimalną ilością zamówienia i możliwością zwrotu (`NULL` oznacza
+dziedziczenie); `product_channel_language_scopes` przechowuje status w parze kanał × język. Oba
+wiersze są usuwane razem z produktem i kanałem
+(`20261022T035133_catalog_product_scopes.ts`, wraz z kolumnami globalnego okresu publikacji
+`products.publish_from` i `publish_until`; bez uzupełniania danych).
+
 ## Migracja
 
 Wszystko wprowadza jedna migracja, `20260611T140346_catalog_product_value_overrides_init.ts`:
@@ -223,10 +369,6 @@ usuwa obie tabele i obie kolumny.
   pokazuje dziś tylko systemowe Name i Description. Endpoint PATCH przyjmuje nadpisania atrybutów
   użytkownika, a odczyt je rozstrzyga, ale aplikacja panelu nie ma jeszcze dla nich interfejsu
   zapisu.
-- **Filtry i sortowanie listy z uwzględnieniem nadpisań** — publiczny endpoint katalogu zwraca
-  `name` i `description` jako wartość obowiązującą dla kanału sprzedaży i języka żądania (zob.
-  *Odczyt* powyżej), ale filtry listy, filtrowanie po atrybutach i sortowanie po nazwie nadal
-  korzystają z wartości bazowych. Uwzględnienie w nich nadpisań zostanie zrobione osobno.
 - **Ponowne indeksowanie z uwzględnieniem kanału** — endpoint PATCH nie dodaje jeszcze do kolejki
   zadania ponownego indeksowania w Meilisearch dla każdego zmienionego kanału; zmianę uwzględni
   dopiero następna aktualizacja indeksu produktu (wywołana dowolną zmianą w katalogu). Osobne
