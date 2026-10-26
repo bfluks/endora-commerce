@@ -5,6 +5,7 @@ import {
   assignAttributesRequestSchema,
   batchByIdProductsRequestSchema,
   bulkUpdateProductsRequestSchema,
+  type ScopeWarning,
   resolveProductIdsRequestSchema,
   createAttributeRequestSchema,
   createAttributeSetRequestSchema,
@@ -337,8 +338,13 @@ export async function registerCatalogAdminRoutes(
       const body = updateProductRequestSchema.parse(request.body);
       // Feature 054 — audited co-transactionally via the Command Bus; the actor
       // is derived from the ambient TenantContext (not from the request body).
-      const product = await adminService.updateProductAudited(request.params.id, body);
-      return { data: serializeAdminProduct(product) };
+      // Feature 163 (FR-060, US6 #3) — a change of the global switch runs the
+      // completeness gate in the platform's mode; `warn` saves and answers the
+      // warnings, `refuse` answers 422 SCOPE_INCOMPLETE with nothing saved.
+      const warnings: ScopeWarning[] = [];
+      const completeness = body.status !== undefined ? await adminService.completenessMode() : undefined;
+      const product = await adminService.updateProductAudited(request.params.id, body, { completeness, warnings });
+      return { data: serializeAdminProduct(product), warnings };
     },
   );
 
@@ -826,7 +832,13 @@ export async function registerCatalogAdminRoutes(
       { preHandler: requireAdmin('catalog:write') },
       async (request) => {
         const body = patchProductScopesRequestSchema.parse(request.body);
-        return scopesSvc.apply(request.params.id, body);
+        // Feature 163 (FR-060) — an operator's status write runs the completeness gate
+        // in the platform's mode, read once for the request.
+        const writesStatus = body.channels.some(
+          (entry) => entry.status !== undefined || (entry.languageStatuses?.length ?? 0) > 0,
+        );
+        const completeness = writesStatus ? await scopesSvc.completenessMode() : undefined;
+        return scopesSvc.apply(request.params.id, body, completeness ? { completeness } : {});
       },
     );
   }

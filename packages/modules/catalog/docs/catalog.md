@@ -95,6 +95,45 @@ one that is not archived, answers `200` and changes nothing — no audit entry, 
   `archived=only` lists them and `archived=include` lists them beside the rest. The
   `inactive` count and filter cover products that are off but not archived.
 
+### Status per channel and language, in bulk
+
+`POST /api/v1/admin/catalog/products/bulk-update` with
+`fields: { scopedStatus: { channelId, languageCode, value } }` sets the status of every
+selected product at one scope — the Sales Channel (`languageCode: null`) or one
+channel × language — to `active` or `inactive`, or removes the override there with
+`inherit`. Only that scope changes on each product; every other scope and the global
+status stay as they were. A product that is not in the channel, or a language the
+channel does not offer, is skipped and reported as `scope_invalid` — the product is
+never added to the channel. `scopedStatus` cannot be combined with `status` in one
+request. Each product's change is one audit entry naming the scope; large selections
+run as a background bulk operation whose undo puts every scope back as it was and
+reports any product changed since.
+
+### Completeness check when switching a product on
+
+When an operator's **status change** switches a product on for a sales channel and
+language — the global status, a channel or channel × language status, single or in
+bulk — the product must have, in that language: a **name** (its own name in that
+language, or a name overridden for that channel; a name in another language does not
+count), a **URL key** (the global key counts) and every **required** language-dependent
+attribute of its attribute set. The setting **Completeness check when switching a
+product on** (`catalog.scope_completeness_gate`, one value for the whole platform)
+decides what happens when something is missing:
+
+- **`warn`** (the default) — the change is saved and the answer lists what is missing
+  per channel and language (`warnings`, kind `completeness`).
+- **`refuse`** — the change is not saved: `422 SCOPE_INCOMPLETE` names every channel and
+  language with what it lacks. A change that would switch the product on in several
+  places is refused as a whole if any of them fails. In a bulk edit the products that
+  pass are changed and the others are skipped as `completeness_gate`.
+
+Only a status change is checked. A product that goes live because it joins a channel,
+a channel gains a language, its publication window opens, its audience changes, or it
+is restored is not checked; the **scope overview** of the product editor shows what is
+missing at every channel and language instead. Setting an archived product `active` is
+checked like any status change, although the product stays archived. Imports, PIM
+synchronisation and the API-key upsert are never checked.
+
 ## Prices
 
 **A product carries no price of its own.** Every price is a row of a price book of the

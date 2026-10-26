@@ -377,6 +377,29 @@ export const manifest = defineModuleManifest({
   // reason. Products, variants and categories are what a commerce platform is
   // for: their absence does not reduce it, it makes it something else.
   demo,
+  /**
+   * Feature 163 (FR-060, data-model §9, research R18) — the completeness gate's mode,
+   * one value for the whole platform (read with no channel). `warn` saves a status
+   * change that turns the product on where a name, URL key or required
+   * language-scoped attribute is missing and shows what is missing; `refuse` does not
+   * save it. Imports and connectors are never gated (A-6).
+   */
+  settings: {
+    moduleCode: 'catalog',
+    groups: [{ code: 'catalog', name: 'Catalog' }],
+    settings: [
+      {
+        code: 'catalog.scope_completeness_gate',
+        name: 'Completeness check when switching a product on',
+        description:
+          'What happens when an operator switches a product on for a sales channel and language where its name, URL key or a required language-dependent attribute is missing in that language. "warn" saves the change and lists what is missing; "refuse" does not save it. It applies to the product editor and to bulk edits, never to imports and integrations. One value for the whole platform.',
+        groupCode: 'catalog',
+        valueType: 'string',
+        enumOptions: ['warn', 'refuse'],
+        defaultValue: 'warn',
+      },
+    ],
+  },
   activation: {
     nonDeactivatable: true,
     reason:

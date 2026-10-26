@@ -1169,5 +1169,8 @@
   "orderRules.channels.loadFailed": "Nie udało się wczytać zasad w kanałach. Odśwież stronę, aby spróbować ponownie.",
   "orderRules.channels.save": "Zapisz zasady w kanałach",
   "orderRules.channels.saved": "Zapisano zasady w kanałach.",
-  "orderRules.channels.error.save": "Nie udało się zapisać zasad w kanałach. Twoje zmiany zostały zachowane — spróbuj ponownie."
+  "orderRules.channels.error.save": "Nie udało się zapisać zasad w kanałach. Twoje zmiany zostały zachowane — spróbuj ponownie.",
+  "settingGroups.catalog.name": "Katalog",
+  "settingLabels.catalog.scope_completeness_gate.name": "Kontrola kompletności przy włączaniu produktu",
+  "settingLabels.catalog.scope_completeness_gate.description": "Co się dzieje, gdy operator włącza produkt w kanale sprzedaży i języku, w którym brakuje nazwy, klucza URL albo wymaganego atrybutu zależnego od języka w tym języku. „warn” zapisuje zmianę i pokazuje, czego brakuje; „refuse” jej nie zapisuje. Dotyczy edytora produktu i edycji zbiorczej, nigdy importów i integracji. Jedna wartość dla całej platformy."
 }

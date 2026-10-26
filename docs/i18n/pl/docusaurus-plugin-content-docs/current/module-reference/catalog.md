@@ -68,7 +68,9 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 
 ## Ustawienia
 
-_Brak._
+| Kod | Nazwa | Typ |
+| --- | --- | --- |
+| `catalog.scope_completeness_gate` | Completeness check when switching a product on | `string` |
 
 ## Tłumaczenia
 

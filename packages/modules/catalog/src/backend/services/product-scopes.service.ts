@@ -13,6 +13,8 @@ import {
   type ProductScopeStatus,
   type PublicationWindow,
   type ScopeCompletenessGateMode,
+  type ScopeSnapshot,
+  toScopeChannel,
   type ScopeWarning,
 } from '@endora-commerce/contracts';
 import type { Command, CommandBus } from '@endora-commerce/platform/commands';
@@ -22,6 +24,8 @@ import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Product } from '../entities/product.entity.js';
 import { ProductChannelLanguageScope } from '../entities/product-channel-language-scope.entity.js';
 import { ProductChannelScope } from '../entities/product-channel-scope.entity.js';
+import { globalScopeFields } from './product-availability.service.js';
+import type { ScopeCompletenessGate } from './scope-completeness.js';
 
 /**
  * Feature 163 (`specs/163-product-data-scopes/`) — a product's scoped values per
@@ -445,6 +449,8 @@ export async function restoreScopedStatus(
   scope: StatusScope,
   status: ProductScopeStatus | null,
 ): Promise<void> {
+  // command-coverage-ignore: a helper on the caller's `em`, run only inside the bulk
+  // undo's audited Command `product.bulk_update.undo`, which commits and audits it.
   if (scope.languageCode === null) {
     const row = await em.findOne(ProductChannelScope, { productId, salesChannelId: scope.channelId });
     const current = row ? toChannelRecord(row) : emptyRow(productId, scope.channelId);
@@ -487,6 +493,51 @@ export interface ScopeWriteOptions {
   completeness?: ScopeCompletenessGateMode;
 }
 
+interface ScopeCommandResult {
+  changedFields: ScopeChangedField[];
+  /** The completeness gate's warnings in `warn` mode (FR-060). */
+  warnings: ScopeWarning[];
+}
+
+/** The product's scope state as stored, before a write. */
+function snapshotBefore(
+  product: Product,
+  channelRows: readonly ProductChannelScope[],
+  languageRows: readonly ProductChannelLanguageScope[],
+): ScopeSnapshot {
+  return {
+    global: globalScopeFields(product),
+    channelRows: channelRows.map(toChannelRecord),
+    languageRows: languageRows.map(toLanguageRecord),
+  };
+}
+
+/** The product's scope state as `plan` would leave it. */
+function snapshotAfter(
+  product: Product,
+  channelRows: readonly ProductChannelScope[],
+  languageRows: readonly ProductChannelLanguageScope[],
+  plan: ProductScopeWritePlan,
+): ScopeSnapshot {
+  const before = snapshotBefore(product, channelRows, languageRows);
+  const channels = new Map(before.channelRows.map((row) => [row.channelId, row]));
+  for (const { channelId, next } of plan.channelRows) {
+    if (next === null) channels.delete(channelId);
+    else channels.set(channelId, next);
+  }
+  const languages = new Map(before.languageRows.map((row) => [`${row.channelId}|${row.languageCode}`, row]));
+  for (const { channelId, languageCode, next } of plan.languageRows) {
+    const key = `${channelId}|${languageCode}`;
+    if (next === null) languages.delete(key);
+    else languages.set(key, { productId: product.id, channelId, languageCode, status: next });
+  }
+  return {
+    global: plan.globalWindow ? { ...before.global, window: plan.globalWindow } : before.global,
+    channelRows: [...channels.values()],
+    languageRows: [...languages.values()],
+  };
+}
+
 export interface ProductScopesApplyResult {
   data: ProductScopes;
   warnings: ScopeWarning[];
@@ -503,7 +554,18 @@ export class ProductScopesService {
      * names and the admin shows ids.
      */
     private readonly organizations?: Pick<OrganizationDetailsPort, 'findByIds'>,
+    /**
+     * Feature 163 (FR-060) — the completeness gate. Composed into the operator's
+     * instance only; the integration port's instance has none, so an import or a
+     * connector is never gated (A-6), whatever it passes.
+     */
+    private readonly gate?: ScopeCompletenessGate,
   ) {}
+
+  /** The gate's mode for an operator's write, read once per request; `undefined` where no gate is composed. */
+  async completenessMode(): Promise<ScopeCompletenessGateMode | undefined> {
+    return this.gate?.mode();
+  }
 
   /** The names of these organizations, in this order; an unreadable one is left out. */
   async #organizationNames(ids: readonly string[]): Promise<ProductScopes['organizations']> {
@@ -603,10 +665,10 @@ export class ProductScopesService {
   async writeStatus(
     productId: string,
     request: PatchProductScopesRequest,
-    _options?: ScopeWriteOptions,
+    options: ScopeWriteOptions = {},
   ): Promise<{ changedFields: ScopeChangedField[]; warnings: ScopeWarning[] }> {
-    const command = this.#command(productId, request);
-    let result: { changedFields: ScopeChangedField[] };
+    const command = this.#command(productId, request, options.completeness);
+    let result: ScopeCommandResult;
     if (this.commandBus) {
       result = await this.commandBus.run(command);
     } else {
@@ -618,14 +680,18 @@ export class ProductScopesService {
         return outcome.result;
       });
     }
-    return { changedFields: result.changedFields, warnings: [] };
+    return result;
   }
 
   /** `PATCH /admin/catalog/products/:id/scopes`. */
-  async apply(productId: string, request: PatchProductScopesRequest): Promise<ProductScopesApplyResult> {
-    await this.writeStatus(productId, request);
+  async apply(
+    productId: string,
+    request: PatchProductScopesRequest,
+    options: ScopeWriteOptions = {},
+  ): Promise<ProductScopesApplyResult> {
+    const written = await this.writeStatus(productId, request, options);
     const data = await this.read(productId);
-    const warnings: ScopeWarning[] = [];
+    const warnings: ScopeWarning[] = [...written.warnings];
     for (const entry of request.channels) {
       if (!entry.audience) continue;
       const written = data.channels.find((channel) => channel.channelId === entry.channelId);
@@ -637,7 +703,11 @@ export class ProductScopesService {
     return { data, warnings };
   }
 
-  #command(productId: string, request: PatchProductScopesRequest): Command<{ changedFields: ScopeChangedField[] }> {
+  #command(
+    productId: string,
+    request: PatchProductScopesRequest,
+    completeness: ScopeCompletenessGateMode | undefined,
+  ): Command<ScopeCommandResult> {
     return {
       action: 'product.scopes.update',
       objectType: 'product',
@@ -669,8 +739,23 @@ export class ProductScopesService {
           request,
         );
         if (plan.changedFields.length === 0) {
-          return { result: { changedFields: [] }, skipAudit: true };
+          return { result: { changedFields: [], warnings: [] }, skipAudit: true };
         }
+
+        // FR-060 — the completeness gate, before anything is written: in `refuse` a
+        // failing pair refuses the whole request (N3); in `warn` it is saved and warned.
+        // Only a status change can turn a pair on (`pairsTurningOn`, M3 → A).
+        const warnings =
+          completeness && this.gate && plan.changedFields.includes('scopedStatus')
+            ? await this.gate.enforce(
+                em,
+                product,
+                snapshotBefore(product, channelRows, languageRows),
+                snapshotAfter(product, channelRows, languageRows, plan),
+                members.map((channel) => toScopeChannel(channel)),
+                completeness,
+              )
+            : [];
 
         for (const { channelId, next } of plan.channelRows) {
           const row = channelRows.find((r) => r.salesChannelId === channelId);
@@ -711,7 +796,7 @@ export class ProductScopesService {
           throw err;
         }
         return {
-          result: { changedFields: plan.changedFields },
+          result: { changedFields: plan.changedFields, warnings },
           before: plan.before,
           after: { ...plan.after, changedFields: plan.changedFields },
         };
