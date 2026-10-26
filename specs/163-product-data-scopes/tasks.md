@@ -656,6 +656,38 @@ no admin surface offers or labels `draft`.
   `ProductsBulkEditDialog{,.returnable}` (now under a router: the summary links to its operation) and
   `admin/test/helpers/price-book-grid.ts`.
 
+**Phase 15a fix round** (S3, 2026-10-26; Q-UI: designer ship-with-fixes, code review approve-with-nits):
+- *One modal root (designer W2).* The bulk dialog is now the kit's `ModalDialog` (new optional `widthClassName`
+  and `dismissOnScrim` props — admin-kit changeset); the Archive / Restore confirmation is its second step, not
+  a dialog over it. Escape on that step returns to the form; a press on the scrim no longer discards touched
+  fields. After success focus moves to the outcome's heading (`tabIndex=-1`). A refused request is said once,
+  as the step's `role="alert"`. The ghost close button went with the hand-drawn header (N2 is moot): Cancel,
+  Close and Escape close the dialog.
+- *Operation link (code review W4, W5).* An inline run (≤ the async threshold) persists no operation, so its
+  summary no longer links to `/catalog/bulk-operations/:id`; the queued acknowledgement links to its operation
+  and, for Archive / Restore, says "Archive queued" / "Restore queued". The archive confirmation no longer
+  promises an undo from the operation.
+- *List (W3, W4, W6).* The Archived tab's own empty copy shows only with no search, type or stock filter;
+  otherwise "try clearing filters". An empty search on any other tab offers "No match here. Search archived
+  products", which switches to Archived and keeps the query. An archived row's status pill is a neutral outline
+  and Archived is the one coloured pill; on the Archived tab rows carry no Archived pill.
+- *Editor.* The O-5 sentence is said once, at the status selector. The notice is its title plus "Only Restore
+  brings it back." and carries the Restore button (with `catalog:write`); the header offers Archive only while
+  the product is not archived. The status help adds what an Inactive product's page answers (not found)
+  against an archived one (gone).
+- *One look (N1, N5).* `ProductStatusPill` / `ArchivedPill` (`components/ProductStatusPills.tsx`) are shared by
+  the list and the editor; the admin-kit browser draws Archived with the same `b2b-badge--warn` class (6.2:1 in
+  both themes — the token is not overridden in dark) and the status as an outline while archived. A drift test
+  compares `productListTabQuery` with admin-kit's `buildProductBrowserPath` over the four tabs. Provenance
+  prefixes in the 15a comments are trimmed.
+- *Palette (W5).* The stems go into the one keyword entry: `'archived archiwum zarchiwizowane restore
+  przywróć'`. **Deferred:** a separate "Archived products" action would change the generated catalog reference
+  page and its Polish cache entry and `backend/test/integration/_admin_surfaces/batch-fifteen-palette-off-state`,
+  which lists catalog's actions — backend files outside S3 this round; and the list reads `?status=` only on
+  mount, so the action would also need the tab to follow the URL.
+- *Copy.* PL `productsList.bulkEdit.archive.hint` ends "…a po przywróceniu wracają do sprzedaży."
+- Not this round (owner): bar-level Restore on the Archived tab (designer W1), saved-view `draft` mapping, RFQ.
+
 **Verification** (one invocation per line):
 - `pnpm --filter admin exec vitest run test/modules/catalog/product-archive-restore.test.tsx test/modules/catalog/products-list-archived.test.tsx`
 - `pnpm --filter admin exec vitest run test/kit/kit-product-browser.test.tsx test/kit/kit-pickers.test.tsx test/kit/kit-product-browser-selectability.test.ts test/modules/orders/OrderCreatePage.product-browser.test.tsx`
