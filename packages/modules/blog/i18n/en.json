@@ -36,7 +36,7 @@
   "pagination.previous": "Previous",
   "productStatus.active": "active",
   "productStatus.archived": "archived",
-  "productStatus.draft": "draft",
+  "productStatus.inactive": "inactive",
   "sections.lifecycle": "Lifecycle",
   "sections.metadata": "Metadata",
   "sections.relatedPosts": "Related posts",
