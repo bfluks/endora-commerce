@@ -10,6 +10,7 @@ import {
   type ProductImportRow,
   type ProductStatus,
   type ScopedStatusExport,
+  sameLanguage,
 } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBus } from '@endora-commerce/platform/events';
@@ -19,6 +20,7 @@ import { Category } from '../entities/category.entity.js';
 import { Product } from '../entities/product.entity.js';
 import { ProductChannelScope } from '../entities/product-channel-scope.entity.js';
 import { ProductChannelLanguageScope } from '../entities/product-channel-language-scope.entity.js';
+import { loadScopeRows, writeScopedStatus } from './product-scopes.service.js';
 
 /**
  * Bulk import of catalogue rows (feature 075, D-74).
@@ -285,7 +287,7 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
       const languageCode =
         cell.languageCode === null
           ? null
-          : (channel.languages.find((code) => code.toLowerCase() === cell.languageCode!.toLowerCase()) ?? cell.languageCode);
+          : (channel.languages.find((code) => sameLanguage(code, cell.languageCode)) ?? cell.languageCode);
       if (cell.status !== null) {
         if (!members.get(channel.id)?.has(product.id)) {
           errors.push({ index, reason: `${column}: the product is not in sales channel ${cell.channelCode}` });
@@ -301,51 +303,14 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
     if (errors.length > 0) return null;
 
     return {
+      // C-W3 — the scopes write's own row writers, inside this import's single
+      // transaction and its single audit row.
       apply: async () => {
         const changed = new Set<string>();
-        const channelRows = await em.find(ProductChannelScope, { productId: { $in: productIds } });
-        const languageRows = await em.find(ProductChannelLanguageScope, { productId: { $in: productIds } });
+        const rows = await loadScopeRows(em, productIds);
         for (const write of writes) {
-          if (write.languageCode === null) {
-            const row = channelRows.find((r) => r.productId === write.productId && r.salesChannelId === write.channelId);
-            if ((row?.status ?? null) === write.status) continue;
-            changed.add(write.productId);
-            if (row) {
-              row.status = write.status;
-              if (inheritsEverything(row)) em.remove(row);
-            } else {
-              const created = em.create(ProductChannelScope, {
-                productId: write.productId,
-                salesChannelId: write.channelId,
-                status: write.status,
-              });
-              em.persist(created);
-              channelRows.push(created);
-            }
-          } else {
-            const row = languageRows.find(
-              (r) =>
-                r.productId === write.productId &&
-                r.salesChannelId === write.channelId &&
-                r.languageCode.toLowerCase() === write.languageCode!.toLowerCase(),
-            );
-            if ((row?.status ?? null) === write.status) continue;
-            changed.add(write.productId);
-            if (write.status === null) {
-              if (row) em.remove(row);
-            } else if (row) {
-              row.status = write.status;
-            } else {
-              const created = em.create(ProductChannelLanguageScope, {
-                productId: write.productId,
-                salesChannelId: write.channelId,
-                languageCode: write.languageCode,
-                status: write.status,
-              });
-              em.persist(created);
-              languageRows.push(created);
-            }
-          }
+          const scope = { channelId: write.channelId, languageCode: write.languageCode };
+          if (writeScopedStatus(em, rows, write.productId, scope, write.status)) changed.add(write.productId);
         }
         return [...changed];
       },
@@ -353,13 +318,3 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
   }
 }
 
-/** A channel row holding no override any more is deleted (FR-012), as the scopes write does. */
-function inheritsEverything(row: ProductChannelScope): boolean {
-  return (
-    row.status == null &&
-    !row.windowOverridden &&
-    row.visibility == null &&
-    row.minOrderQuantity == null &&
-    row.returnable == null
-  );
-}
