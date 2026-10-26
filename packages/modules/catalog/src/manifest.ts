@@ -657,20 +657,22 @@ export const manifest = defineModuleManifest({
       keywords: [
         'products',
         'catalog',
-        'items',
         'produkty',
         'katalog',
-        'scope',
         'zakres',
-        'visibility per channel',
+        // An action carries at most ten keywords (`adminActionSchema`) and the
+        // palette matches a substring of the joined keywords, so the English
+        // phrases share entries: "scope", "visibility" and "channel" all find
+        // the first. A Polish keyword is one word per entry — a Polish phrase is
+        // prose in a module's English default (`check:default-language-prose`).
+        'scope visibility per channel',
         'publication window',
-        // The Archived filter and the
-        // Archive / Restore actions live on the product list and editor. One
-        // entry, because an action carries at most ten keywords
-        // (`adminActionSchema`) and this was the tenth; the palette matches a
-        // substring of the joined keywords, so "archive", "archived", "archiwum",
-        // "archiwiz", "restore" and "przywr" all find it.
-        'archived archiwum zarchiwizowane restore przywróć',
+        // The Archived filter and the Archive / Restore actions live on the
+        // product list and editor: "archive", "archived", "restore", "archiwum"
+        // and "przywr" find them.
+        'archived restore',
+        'archiwum',
+        'przywróć',
       ],
       weight: 200,
     },
