@@ -137,7 +137,8 @@ describe('Archive / Restore one product (spec 163, T156c)', () => {
       ...admin,
     });
     writeToken = (key.json() as { data: { bearerToken: string } }).data.bearerToken;
-    writeKeyId = (key.json() as { data: { id: string } }).data.id;
+    // `createApiKeyResponseSchema` — the key itself is `data.apiKey`, beside the token.
+    writeKeyId = (key.json() as { data: { apiKey: { id: string } } }).data.apiKey.id;
   }, 60_000);
 
   afterAll(async () => {
@@ -398,6 +399,8 @@ describe('Archive / Restore one product (spec 163, T156c)', () => {
       const updates = await auditRows('product.update', id);
       expect(updates).toHaveLength(1);
       expect(updates[0]!.state_before).toMatchObject({ status: 'inactive' });
+      // An undefined id would match an absent `apiKeyId` and prove nothing.
+      expect(writeKeyId).toMatch(/^[0-9a-f-]{36}$/);
       expect(updates[0]!.state_after).toMatchObject({ status: 'active', apiKeyId: writeKeyId });
     });
   });
