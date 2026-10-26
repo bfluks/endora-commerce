@@ -19,6 +19,7 @@ import { Combobox, type ComboboxOption } from '../../ui/combobox.js';
 import { productDisplayName } from '../product-browser/product-line.js';
 import {
   NO_PRODUCT_IDS,
+  isProductArchived,
   productSelectability,
   productSelectabilityReasonKey,
   type ProductBrowserRules,
@@ -312,7 +313,9 @@ function ProductPickerBody(
       }
       const statusSuffix =
         product.status === 'active' ? '' : ` · ${t(STATUS_LABEL_KEY[product.status])}`;
-      return { ...opt, description: `${product.sku}${statusSuffix}` };
+      // Feature 163 (FR-019) — archived is its own fact beside the status.
+      const archivedSuffix = isProductArchived(product) ? ` · ${t('productBrowser.status.archived')}` : '';
+      return { ...opt, description: `${product.sku}${statusSuffix}${archivedSuffix}` };
     });
   }, [options, excludeSet, rules, productCache, alreadyAddedSet, t]);
 
