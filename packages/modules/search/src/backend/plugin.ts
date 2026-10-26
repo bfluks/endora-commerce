@@ -5,6 +5,7 @@ import type {
   CatalogAttributeReadPort,
   CatalogCategoryReadPort,
   CatalogProductAvailabilityPort,
+  CatalogProductUrlKeyReadPort,
   CatalogProductReadPort,
   ListingPriceDetailPort,
   OrganizationDetailsPort,
@@ -103,7 +104,12 @@ export interface SearchModuleOptions {
    * (channel, language) now (the query's hydration). Same binding `catalog`
    * dependency as `catalogProducts`.
    */
-  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'describeChannelAvailability' | 'filterAvailable'>;
+  catalogAvailability: Pick<
+    CatalogProductAvailabilityPort,
+    'describeChannelAvailability' | 'filterAvailable' | 'effectiveOrderRules'
+  >;
+  /** Feature 163 (T113a, R28) — the effective URL key per channel language, for the result cards' links. */
+  catalogUrlKeys: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>;
   /**
    * The `sales_channel_products` bridge, through the sanctioned accessor
    * (Constitution XII). Kernel-composed, so it is present for as long as the
@@ -252,6 +258,7 @@ export function searchModule(options: SearchModuleOptions): SearchModuleResult {
     options.listingPrices,
     options.organizations,
     options.catalogAvailability,
+    options.catalogUrlKeys,
   );
 
   // Settings-aware suggest config, with fallback to manifest defaults

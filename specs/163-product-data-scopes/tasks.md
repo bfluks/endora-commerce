@@ -910,6 +910,8 @@ minimum, quick order's channel minimum). Decisions to confirm at checkpoint C:
 - `pnpm --filter @endora-commerce/mod-catalog run typecheck`
 - `pnpm --filter backend run check:storefront-indexability`
 
+- [x] T113a [US7] [S1] *(added 2026-10-26, coordinator; owner S1 — the surfaces are S1's consumer seams)* Storefront links on S1-owned surfaces use the **effective** URL key at the request's (channel, language) instead of the global `slug` — with `seo` off a product with its own key in L answers 404 at the global slug there (R28, FR-071). RED first: module-local `search/…/search-hit-channel-values.test.ts`, `carts/…/cart-line-meta.test.ts`, `backend/test/unit/comparisons/cross-module-ports.test.ts`; [PG] `backend/test/integration/catalog/effective-key-links.test.ts`. Surfaces: the Meilisearch hit (`search-query.service.ts`, `catalogProductUrlKeyReadPort`), the basket line and the up-sell strip (`carts` routes / `cart-upsell-service.ts`, same port, `productSlug: null` kept for an unavailable line — S1 decision), the comparison column (`comparison-service.ts`, same port), the quick-order type-ahead (catalog's own `catalog-quick-search.service.ts`, `loadEffectiveKeys` in-module). Shopping lists need no change: the storefront page links through the product detail's `slug`, already the effective key (R28). The search hit and the comparison column also take the channel's `minOrderQuantity` (FR-100, the listing half of T085).
+
 ### Phase 18: [backend] ⛔384 SEO writes as Commands, then per channel × language (US8, FR-075, FR-080) — after Phase 17
 
 **Goal**: `seo`'s override writes leave the hand audit for the Command Bus (analyze C1, Constitution XIII)

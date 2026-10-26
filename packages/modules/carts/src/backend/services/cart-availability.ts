@@ -2,6 +2,7 @@ import {
   firstLanguageTag,
   scopeLanguageOf,
   type CatalogProductAvailabilityPort,
+  type CatalogProductUrlKeyReadPort,
   type ProductAudience,
   withChannelOrderRules,
 } from '@endora-commerce/contracts';
@@ -74,6 +75,28 @@ export async function withBasketOrderRules<
       channelId,
     ),
   );
+}
+
+/**
+ * Feature 163 (T113a, R28) — product id → its effective URL key at the basket's
+ * (`channelId`, `languageCode`): the channel × language key, else the language key,
+ * else the global key, as `catalog` answers it. A basket with no channel, and a
+ * product the channel does not carry, have no entry; the caller keeps the global key.
+ */
+export async function effectiveKeysAt(
+  urlKeys: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>,
+  productIds: readonly string[],
+  channelId: string | null | undefined,
+  /** `null` — no request language resolved against this channel ({@link basketScopeLanguage}): no entry. */
+  languageCode: string | null,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (productIds.length === 0 || !channelId || languageCode === null) return out;
+  for (const [productId, byLanguage] of await urlKeys.effectiveKeys(productIds, channelId)) {
+    const key = byLanguage.get(languageCode);
+    if (key !== undefined) out.set(productId, key);
+  }
+  return out;
 }
 
 /** The first `Accept-Language` tag without its quality parameter — the one home is `@endora-commerce/contracts`. */
