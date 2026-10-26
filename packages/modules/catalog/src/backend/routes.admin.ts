@@ -1385,8 +1385,8 @@ export async function registerCatalogAdminRoutes(
       async (request) => {
         const body = updateGalleryItemRequestSchema.parse(request.body);
         // One audit entry per request (FR-080): the service's Command writes it — the
-        // `gallery_item.update` one, or `product.media.update` when the body carries
-        // alt text or the hidden channels (feature 163).
+        // `gallery_item.update` one for a position-only body, `product.media.update`
+        // when the body carries alt text, the hidden channels or the labels (feature 163).
         const item = await gallery.update(
           request.params.productId,
           request.params.itemId,
@@ -1420,12 +1420,9 @@ export async function registerCatalogAdminRoutes(
       '/api/v1/admin/catalog/products/:productId/gallery/:itemId',
       { preHandler: requireAdmin('catalog:write') },
       async (request, reply) => {
+        // One audit entry (163 checkpoint F, S-4): the service's `gallery_item.delete`
+        // Command writes it, so the route writes none of its own.
         await gallery.delete(request.params.productId, request.params.itemId);
-        await auditEmit(request, {
-          action: 'gallery.delete',
-          objectType: 'gallery_item',
-          objectId: request.params.itemId,
-        });
         return reply.status(204).send();
       },
     );
@@ -1438,12 +1435,9 @@ export async function registerCatalogAdminRoutes(
       },
       async (request, reply) => {
         const body = reorderGalleryRequestSchema.parse(request.body);
+        // One audit entry (163 checkpoint F, S-4): the service's `product.media.update`
+        // Command writes it, with the order before and after.
         await gallery.reorder(request.params.productId, body.orderedGalleryItemIds);
-        await auditEmit(request, {
-          action: 'gallery.reorder',
-          objectType: 'product',
-          objectId: request.params.productId,
-        });
         return reply.status(204).send();
       },
     );
@@ -1557,15 +1551,12 @@ export async function registerCatalogAdminRoutes(
       '/api/v1/admin/catalog/products/:productId/attachments/:attachmentId',
       { preHandler: requireAdmin('catalog:write') },
       async (request, reply) => {
+        // One audit entry (163 checkpoint F, S-4): the service's
+        // `product_attachment.delete` Command writes it, so the route writes none.
         await att.deleteAttachment(
           request.params.productId,
           request.params.attachmentId,
         );
-        await auditEmit(request, {
-          action: 'attachment.delete',
-          objectType: 'product_attachment',
-          objectId: request.params.attachmentId,
-        });
         return reply.status(204).send();
       },
     );
