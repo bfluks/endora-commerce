@@ -15,6 +15,7 @@ import {
   type AdminUserReadPort,
   type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
+  type CatalogProductRecord,
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
   type CustomFieldFilters,
@@ -721,14 +722,12 @@ export class RfqAdminService {
       }
 
       if (body.items) {
-        // Feature 163, P-3 = A — an archived product is refused like an unknown one.
-        const products = (
-          await this.deps.catalogProducts.findByIds(body.items.map((it) => it.productId))
-        ).filter(isNotArchived);
-        const productById = new Map(products.map((p) => [p.id, p]));
-        if (productById.size !== new Set(body.items.map((it) => it.productId)).size) {
-          throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
-        }
+        // Feature 163, P-3 = A / P-3b = A — an archived product is refused,
+        // and the operator is told why (`409 PRODUCT_ARCHIVED`).
+        const productById = operatorLineProducts(
+          await this.deps.catalogProducts.findByIds(body.items.map((it) => it.productId)),
+          body.items.map((it) => it.productId),
+        );
         // In display order — the order the operator saw, which the pairing's
         // last rule (by order) relies on — with the stored groups.
         const { lines: existing, groups: storedGroups } = await loadArrangedQuoteLines(em, rfq.id);
@@ -962,17 +961,15 @@ export class RfqAdminService {
     // The channel this quote *is* raised on is recorded below and is the
     // honest answer to "where did this come from", not a filter.
     //
-    // **One exception, by owner decision P-3 = A (feature 163, 2026-10-26)**: an
-    // archived product is refused here as it is on the buyer's paths — with the
-    // unknown product's 404, before anything is numbered or written. The
-    // availability warnings below stay warnings for every other reason.
-    const products = (
-      await this.deps.catalogProducts.findByIds(body.items.map((it) => it.productId))
-    ).filter(isNotArchived);
-    const productById = new Map(products.map((p) => [p.id, p]));
-    if (productById.size !== new Set(body.items.map((it) => it.productId)).size) {
-      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
-    }
+    // **One exception, by owner decisions P-3 = A and P-3b = A (feature 163,
+    // 2026-10-26)**: an archived product is refused here as it is on the
+    // buyer's paths, before anything is numbered or written — but with
+    // `409 PRODUCT_ARCHIVED`, so the operator is told why. The availability
+    // warnings below stay warnings for every other reason.
+    const productById = operatorLineProducts(
+      await this.deps.catalogProducts.findByIds(body.items.map((it) => it.productId)),
+      body.items.map((it) => it.productId),
+    );
 
     const businessId = await this.deps.rfqService.generateBusinessId(em);
     const rfq = em.create(QuoteRequest, {
@@ -1201,4 +1198,28 @@ async function writeLineGroups(
   }
   await em.flush();
   return (group) => (group === null ? null : group.kind === 'existing' ? group.id : (createdByKey.get(group.key) ?? null));
+}
+
+/**
+ * The products an operator's quote lines name, by id — or the refusal
+ * (feature 163, owner decisions P-3 = A and P-3b = A). An id that does not
+ * exist answers `404 PRODUCT_NOT_FOUND`, as before. An archived product answers
+ * `409 PRODUCT_ARCHIVED`, catalog's code and sentence: the operator is told why
+ * the line is refused, where a buyer's path gives the absent id's byte-equal
+ * 404 so nothing is disclosed. 409 because the product exists and the request
+ * conflicts with its state — the status this module answers for a state
+ * conflict, and the one convert gives a product archived since approval.
+ */
+function operatorLineProducts<P extends Pick<CatalogProductRecord, 'id' | 'archivedAt'>>(
+  records: readonly P[],
+  productIds: readonly string[],
+): Map<string, P> {
+  const found = new Map(records.map((p) => [p.id, p]));
+  if (found.size !== new Set(productIds).size) {
+    throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
+  }
+  if (records.some((p) => !isNotArchived(p))) {
+    throw new HttpError(409, ERROR_CODES.PRODUCT_ARCHIVED, 'Product is archived.');
+  }
+  return found;
 }
