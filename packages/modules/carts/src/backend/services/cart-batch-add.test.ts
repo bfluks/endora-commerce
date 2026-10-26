@@ -111,6 +111,8 @@ function rig(
     resolveLinePrice?: LinePricePort['resolveLinePrice'];
     /** Products each named channel publishes. */
     channels?: Record<string, string[]>;
+    /** Feature 163 (FR-100) — channel id → product id → that channel's minimum. */
+    channelMinimums?: Record<string, Record<string, number | null>>;
   } = {},
 ): Rig {
   const carts: Row[] = options.carts ?? [];
@@ -215,6 +217,18 @@ function rig(
     ),
     // No override in this rig: the caller's baseline pick names the product.
     effectiveNames: vi.fn(async () => new Map<string, string>()),
+    // Feature 163 (FR-100) — the channel's minimum where a case names one, else the record's.
+    effectiveOrderRules: vi.fn(async (ids: readonly string[], channelId: string) => {
+      const byProduct = options.channelMinimums?.[channelId] ?? {};
+      return new Map(
+        ids.flatMap((id) => {
+          const p = products.get(id);
+          if (!p) return [];
+          const minOrderQuantity = id in byProduct ? (byProduct[id] ?? null) : p.minOrderQuantity;
+          return [[id, { minOrderQuantity, returnable: p.returnable }] as const];
+        }),
+      );
+    }),
   } as unknown as CatalogProductAvailabilityPort;
   // Asked only when no price list holds the product (issue #236).
   const displayModes: ProductDisplayModePort = { resolveDisplayMode: async () => 'gross_only' };
@@ -404,6 +418,21 @@ describe('addItems — resolution first (F1, FR-035)', () => {
 });
 
 // ── 2. two passes with the cart ─────────────────────────────────────────────
+
+describe('addItems — the basket channel’s minimum (spec 163, FR-100)', () => {
+  it('a channel minimum of 1 lifts the global minimum; a channel minimum of 10 applies where the global has none', async () => {
+    const lifted = rig({ carts: [existingCart()], channelMinimums: { [CUSTOMER.salesChannelId]: { [A]: 1 } } });
+    const ok = await lifted.service.addItems(ACTOR, [{ productId: A, variantId: RED, quantity: 3 }], { onLineError: 'report' });
+    expect(ok.outcomes).toEqual([{ index: 0, status: 'added' }]);
+
+    const raised = rig({ carts: [existingCart()], channelMinimums: { [CUSTOMER.salesChannelId]: { [A]: 20 } } });
+    const refused = await raised.service.addItems(ACTOR, [{ productId: A, variantId: RED, quantity: 12 }], {
+      onLineError: 'report',
+    });
+    expect(refused.outcomes[0]).toMatchObject({ index: 0, status: 'below_minimum' });
+    expect(raised.items).toEqual([]);
+  });
+});
 
 describe('addItems — two passes with the cart (D1, FR-006a)', () => {
   it('split variants A-red 5 + A-blue 5 against a minimum of 10 are both added', async () => {

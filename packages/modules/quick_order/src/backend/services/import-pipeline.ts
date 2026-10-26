@@ -122,6 +122,18 @@ export interface QuickOrderCatalogLookup {
   ): Promise<VariantBySku[]>;
   /** All variants under the given parent products (for attribute-column resolution). */
   findVariantsByParent(productIds: string[]): Promise<Array<VariantLike & { parentProductId: string }>>;
+  /**
+   * Feature 163 (FR-100) — the minimum order quantity of each product in the
+   * buyer's channel, where it differs from nothing: the channel's effective
+   * value. Empty for the operator (`'unrestricted'`, no channel at import time)
+   * and outside a request with no channel named, where the global minimum stands.
+   */
+  channelMinimums(
+    productIds: string[],
+    audience: QuickOrderImportAudience,
+    /** As {@link findProductsBySku}. */
+    salesChannelId?: string,
+  ): Promise<ReadonlyMap<string, number | null>>;
 }
 
 interface Candidate {
@@ -289,6 +301,12 @@ export class QuickOrderImportPipeline {
       if (!rules.has(variant.parentProductId) && variant.parent) {
         rules.set(variant.parentProductId, ruleOf(variant.parentProductId, variant.parent));
       }
+    }
+    // Feature 163 (FR-100) — the buyer's channel's minimum replaces the global one.
+    const channelMinimums = await this.lookup.channelMinimums([...rules.keys()], opts.audience, opts.salesChannelId);
+    for (const [productId, minOrderQuantity] of channelMinimums) {
+      const rule = rules.get(productId);
+      if (rule) rules.set(productId, { ...rule, minOrderQuantity });
     }
     const judged = this.judgeMinimums(merged, rules, opts.audience);
     rejected.push(...judged.rejected);

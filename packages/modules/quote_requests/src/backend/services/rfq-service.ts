@@ -25,6 +25,7 @@ import {
   type BuyerLinePricePort,
   type CreateForCustomerOptions,
   type OrderMinimumLine,
+  withChannelOrderRules,
 } from '@endora-commerce/contracts';
 import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -157,7 +158,7 @@ export interface RfqServiceDeps {
    * product here, now" (FR-004, FR-018): membership, effective status at
    * (channel, L), window and effective audience.
    */
-  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveNames'>;
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveNames' | 'effectiveOrderRules'>;
   customerAccounts: CustomerAccountReadPort;
   adminUsers: AdminUserReadPort;
   carts: CartWritePort;
@@ -308,15 +309,32 @@ export class RfqService {
    * anything is written. `'warn'` is set only by an in-process caller acting
    * for a representative (`CreateForCustomerOptions.minimums`).
    */
-  #assertMinimums(
+  async #assertMinimums(
     lines: readonly OrderMinimumLine[],
     products: Iterable<CatalogProductRecord>,
     packagingUnits: readonly CatalogPackagingUnitRecord[],
     mode: 'enforce' | 'warn',
     language: string | undefined,
-  ): void {
-    const records = Array.from(products);
+    /** Feature 163 (FR-100) — the request's channel, whose minimums apply; none = the global ones. */
+    channelId: string | null | undefined,
+  ): Promise<void> {
+    const records = await this.#withChannelOrderRules(Array.from(products), channelId);
     assertQuoteMeetsMinimums(lines, { products: records, packagingUnits }, productNames(records, language), mode);
+  }
+
+  /** Feature 163 (FR-100, research R26) — the records with the request channel's minimum and returnable flag. */
+  async #withChannelOrderRules(
+    records: CatalogProductRecord[],
+    channelId: string | null | undefined,
+  ): Promise<CatalogProductRecord[]> {
+    if (records.length === 0 || !channelId) return records;
+    return withChannelOrderRules(
+      records,
+      await this.deps.catalogAvailability.effectiveOrderRules(
+        records.map((record) => record.id),
+        channelId,
+      ),
+    );
   }
 
   /** Feature 054 — co-transactional RFQ audit on `em` (actor from context). */
@@ -457,12 +475,13 @@ export class RfqService {
     // the 404 above and before anything is priced, numbered or written.
     const { packaging, units } = await this.#resolvePackaging(input.items, productById, options.language);
     const resolvedLines = input.items.map((line, index) => withResolvedPackaging(line, packaging[index]!));
-    this.#assertMinimums(
+    await this.#assertMinimums(
       quoteMinimumLines(resolvedLines),
       productById.values(),
       units,
       options.minimums ?? 'enforce',
       options.language,
+      options.salesChannelId,
     );
 
     // FR-001 / FR-008 — each line's reference, for the request's owner on the
@@ -645,12 +664,13 @@ export class RfqService {
       // minimums: an unchanged line is not refused, and still counts toward its
       // product's total. Judged before pricing (FR-029).
       const keeps = draftEditExemptions(paired, resolvedLines);
-      this.#assertMinimums(
+      await this.#assertMinimums(
         quoteMinimumLines(resolvedLines, keeps),
         productById.values(),
         units,
         'enforce',
         options.language,
+        rfq.salesChannelId,
       );
       const toResolve = resolvedLines.filter((_, index) => !keeps[index]);
       const resolved = await resolveReferencePrices(this.deps.buyerLinePrices, {
@@ -831,7 +851,14 @@ export class RfqService {
     const sourceProducts = await this.deps.catalogProducts.findByIds(
       Array.from(new Set(sourceItems.map((it) => it.productId))),
     );
-    this.#assertMinimums(resubmitMinimumLines(sourceItems), sourceProducts, [], 'enforce', options.language);
+    await this.#assertMinimums(
+      resubmitMinimumLines(sourceItems),
+      sourceProducts,
+      [],
+      'enforce',
+      options.language,
+      options.salesChannelId,
+    );
 
     // The resubmit is its own request, so it is raised on the channel *this*
     // request resolved to — not the one the source RFQ carries. A buyer who
@@ -1303,6 +1330,8 @@ export class RfqService {
    */
   async #minimumWarnings(
     items: readonly QuoteRequestItem[],
+    /** Feature 163 (FR-100) — the request's channel, whose minimums apply. */
+    channelId: string | null | undefined,
   ): Promise<Array<QuoteLineMinimumWarning | null>> {
     if (items.length === 0) return [];
     const productIds = Array.from(new Set(items.map((it) => it.productId)));
@@ -1324,7 +1353,7 @@ export class RfqService {
           packagingUnitBaseQuantity: it.packagingUnitBaseQuantity ?? null,
         })),
       ),
-      { products, packagingUnits },
+      { products: await this.#withChannelOrderRules(products, channelId), packagingUnits },
     );
   }
 
@@ -1349,7 +1378,7 @@ export class RfqService {
       : new Map<string, number | null>();
     // Feature 155 (FR-030) — computed for the admin reply only; the customer
     // path never reads the catalogue for it (threat S7).
-    const minimumWarnings = forAdmin ? await this.#minimumWarnings(items) : [];
+    const minimumWarnings = forAdmin ? await this.#minimumWarnings(items, rfq.salesChannelId) : [];
 
     let comparison: RfqComparisonAgainstLastSeen | null = null;
     if (rfq.awaitingCustomerRevisionAcceptance) {

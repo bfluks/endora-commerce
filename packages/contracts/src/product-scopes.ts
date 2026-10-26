@@ -155,6 +155,24 @@ export function effectiveOrderRules(
   };
 }
 
+/**
+ * FR-100, research R26 — `records` with the channel's effective minimum order quantity
+ * and returnable flag (`rules`, from `catalogProductAvailabilityPort.effectiveOrderRules`)
+ * in place of the global ones, for a seam that judges a basket, an order or a quote
+ * line in that channel: the order-minimum rule and the returnable stamp. A record the
+ * rules do not name is returned as it is; the input is never mutated. The port's own
+ * records keep meaning "global".
+ */
+export function withChannelOrderRules<T extends { id: string; minOrderQuantity: number | null; returnable: boolean }>(
+  records: readonly T[],
+  rules: ReadonlyMap<string, { minOrderQuantity: number | null; returnable: boolean }>,
+): T[] {
+  return records.map((record) => {
+    const rule = rules.get(record.id);
+    return rule === undefined ? record : { ...record, minOrderQuantity: rule.minOrderQuantity, returnable: rule.returnable };
+  });
+}
+
 export interface ProductAvailabilityInput {
   global: ProductGlobalScopeFields;
   channelRow?: ProductChannelScopeRecord | undefined;

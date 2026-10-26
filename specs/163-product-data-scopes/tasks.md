@@ -735,11 +735,32 @@ beside it; the [PG] file is written and type-checks, unrun locally. Decisions to
 
 ### Phase 12: [backend] ⛔384 Order rules per channel (US10, FR-100)
 
-- [ ] T082 [P] [US10] [PG] [S1] RED: MOQ 10 in B2B refuses 5 in B2B basket, accepts 5 in B2C (US10 #1); placement and preview use the order's channel; quote minimums use the RFQ channel; storefront DTO `minOrderQuantity` channel-effective — `backend/test/integration/carts/channel-order-rules.test.ts`
-- [ ] T083 [P] [US10] [PG] [S1] RED: returnable only in B2C → `returnableAtPurchase` stamped per channel; return offered only on B2C orders (US10 #2) — `backend/test/integration/orders/channel-returnable.test.ts`
-- [ ] T084 [US10] [S1] Feed `effectiveOrderRules` into `evaluateOrderMinimums` at cart, placement, preview, quick order, quote seams; stamp `returnable_at_purchase` from it — `packages/modules/{carts,orders,quote_requests,quick_order}/src/backend/services/*minimums*.ts`, `order-service.ts:2234`
-- [ ] T085 [US10] [S1] PDP/listing DTO `minOrderQuantity` channel-effective — `catalog-query.service.ts`
-- [ ] T086 [S1] Changesets (`patch`) for touched packages
+- [x] T082 [P] [US10] [PG] [S1] RED: MOQ 10 in B2B refuses 5 in B2B basket, accepts 5 in B2C (US10 #1); placement and preview use the order's channel; quote minimums use the RFQ channel; storefront DTO `minOrderQuantity` channel-effective — `backend/test/integration/carts/channel-order-rules.test.ts`
+- [x] T083 [P] [US10] [PG] [S1] RED: returnable only in B2C → `returnableAtPurchase` stamped per channel; return offered only on B2C orders (US10 #2) — `backend/test/integration/orders/channel-returnable.test.ts`
+- [x] T084 [US10] [S1] Feed `effectiveOrderRules` into `evaluateOrderMinimums` at cart, placement, preview, quick order, quote seams; stamp `returnable_at_purchase` from it — `packages/modules/{carts,orders,quote_requests,quick_order}/src/backend/services/*minimums*.ts`, `order-service.ts:2234`
+- [x] T085 [US10] [S1] PDP/listing DTO `minOrderQuantity` channel-effective — `catalog-query.service.ts`
+- [x] T086 [S1] Changesets (`patch`) for touched packages
+
+**Phase 12 note** (S1, 2026-10-26): the two [PG] files are written and type-check, unrun locally;
+module-local cases cover the pure halves (`contracts` `withChannelOrderRules`, carts' batch on a channel
+minimum, quick order's channel minimum). Decisions to confirm at checkpoint C:
+- *One overlay, at each seam.* `withChannelOrderRules(records, effectiveOrderRules(ids, channelId))`
+  (`@endora-commerce/contracts`) puts the channel's minimum and returnable flag into the records a seam
+  feeds to the unchanged `evaluateOrderMinimums`; `CatalogProductRecord` keeps meaning "global" (R26).
+- *Seams.* carts: single add and edit (basket channel), batch add (the basket's channel, or the actor's for
+  `replaceExisting`), the basket view, submit-for-approval; orders: `availableOnly` (checkout preview and
+  placement — so `returnable_at_purchase` is stamped from the order channel's flag through the same
+  records) and the admin order preview; quote requests: create and resubmit (the request's channel),
+  draft edit and the operator's per-line warning (the stored request's channel); quick order: the buyer's
+  import (its channel; the operator's import has no channel yet and keeps the global minimum as a
+  warning, the build judges again). The quick-order build reaches the basket batch.
+- *T085.* `ListingCardReads.minOrderQuantityByProduct` — read page-wide with the scope rows — gives the
+  PDP and listing summaries the request channel's minimum.
+- *Returns* needs no change: it reads the stamp. T083 asserts the stamps per channel; the return offer
+  follows from them (`returns`' own tests own that reading).
+- *TDD order.* The [PG] files were written before the seams; the module-local `withChannelOrderRules`
+  and carts batch cases were written alongside the implementation (no workstation run of the [PG] files
+  could show red first).
 
 **Verification** (one invocation per line):
 - `[PG] backend/test/integration/carts/channel-order-rules.test.ts`

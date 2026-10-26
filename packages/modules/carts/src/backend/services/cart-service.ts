@@ -24,7 +24,7 @@ import type {
   OrganizationDetailsPort,
 } from '@endora-commerce/contracts';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
-import { basketScopeLanguage } from './cart-availability.js';
+import { basketScopeLanguage, withBasketOrderRules } from './cart-availability.js';
 import type { CartApprovalService } from './cart-approval-service.js';
 import type { CartAuditService } from './cart-audit-service.js';
 import type { CartRecomputeCache } from './cart-recompute-cache.js';
@@ -308,6 +308,15 @@ export class CartService {
   }
 
   /** The channel of the basket `actor` addresses. */
+  /** Feature 163 (FR-100) — one product record with the basket channel's order rules; `null` stays `null`. */
+  async #withChannelRules(
+    product: CatalogProductRecord | null,
+    channelId: string | null | undefined,
+  ): Promise<CatalogProductRecord | null> {
+    if (product === null) return null;
+    return (await withBasketOrderRules(this.availability, [product], channelId))[0]!;
+  }
+
   #basketChannelOf(actor: CartActor): string {
     const channel = actor.customer?.salesChannelId ?? actor.anonymousSalesChannelId;
     if (!channel) {
@@ -359,7 +368,8 @@ export class CartService {
         quantity: effectiveQuantity,
       },
       productId: product.id,
-      product,
+      // Feature 163 (FR-100) — judged on the basket channel's minimum.
+      product: (await withBasketOrderRules(this.availability, [product], cart.salesChannelId))[0]!,
       language: options.language,
     });
 
@@ -467,7 +477,7 @@ export class CartService {
     let rejections: Map<number, CartBatchRejection>;
     if (options.replaceExisting) {
       // Step 2 — the request alone: the basket it replaces counts toward nothing.
-      rejections = await this.#judgeBatch({ sourceQuoteRequestId: null }, [], resolvedLines);
+      rejections = await this.#judgeBatch({ sourceQuoteRequestId: null }, [], resolvedLines, this.#basketChannelOf(actor));
       await this.#throwIfBelowMinimum(actor, rejections, resolvedLines, options);
       // Round B (item 3) — the write step's own refusals (no price, quote-only)
       // are judged here too, before the basket is cleared, so a request refused
@@ -490,6 +500,7 @@ export class CartService {
         cart,
         (await em.find(CartItem, { cartId: cart.id })).map(toCartMinimumItem),
         resolvedLines,
+        cart.salesChannelId,
       );
       await this.#throwIfBelowMinimum(actor, rejections, resolvedLines, options);
     }
@@ -615,9 +626,14 @@ export class CartService {
     cart: Pick<Cart, 'sourceQuoteRequestId'>,
     basket: readonly CartMinimumItem[],
     resolvedLines: ReadonlyArray<{ index: number; input: CartBatchLineInput; resolved: ResolvedCartLine }>,
+    /** Feature 163 (FR-100) — the basket's channel, whose minimums the batch is judged on. */
+    channelId: string | null | undefined,
   ): Promise<Map<number, CartBatchRejection>> {
     if (resolvedLines.length === 0) return new Map();
-    const products = new Map(resolvedLines.map(({ resolved }) => [resolved.product.id, resolved.product]));
+    const vetted = new Map(resolvedLines.map(({ resolved }) => [resolved.product.id, resolved.product]));
+    const products = new Map(
+      (await withBasketOrderRules(this.availability, [...vetted.values()], channelId)).map((p) => [p.id, p]),
+    );
     const eligibleIds = [...products.values()]
       .filter((product) => isOrderMinimumEligibleType(product.type))
       .map((product) => product.id);
@@ -950,7 +966,8 @@ export class CartService {
         items: (await em.find(CartItem, { cartId: cart.id })).map(toCartMinimumItem),
         change: { kind: 'edit', itemId: item.id, quantity },
         productId: item.productId,
-        product: await this.catalogProducts.findById(item.productId),
+        // Feature 163 (FR-100) — judged on the basket channel's minimum.
+        product: await this.#withChannelRules(await this.catalogProducts.findById(item.productId), cart.salesChannelId),
         language: options.language,
       });
     }
