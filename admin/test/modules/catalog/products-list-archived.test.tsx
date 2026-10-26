@@ -46,6 +46,9 @@ const { productListTabQuery, resolveProductSelectionBody } = await import(
 const { savedViewTab, savedViewTabFilters } = await import(
   '../../../../packages/modules/catalog/src/admin/pages/ProductsList'
 );
+const { buildProductBrowserPath } = await import(
+  '../../../../packages/admin-kit/src/components/product-browser/product-browser-api'
+);
 
 const CATALOG = catalog as Record<string, string>;
 const BUNDLE = { core: core as Record<string, string>, catalog: CATALOG };
@@ -80,7 +83,8 @@ function serve(path: string): unknown {
   const gone = ROWS.filter((r) => r.archivedAt !== null);
   const base = archived === 'only' ? gone : live;
   const status = params.get('status');
-  const rows = base.filter((r) => status === null || r.status === status);
+  const q = (params.get('q') ?? '').toLowerCase();
+  const rows = base.filter((r) => (status === null || r.status === status) && r.name.toLowerCase().includes(q));
   return {
     data: rows.map((r) => ({
       id: r.id,
@@ -177,12 +181,14 @@ describe('ProductsList — the Archived filter (FR-113)', () => {
     expect(last.get('status')).toBeNull();
     expect(screen.queryByText('Oak chair')).toBeNull();
 
+    // Every row here is archived and the tab says so, so rows carry no Archived
+    // pill; the status shows as a neutral outline.
     const stool = screen.getByText('Old stool').closest('tr')!;
-    expect(within(stool).getByText(t('productsList.status.active'))).toBeInTheDocument();
-    expect(within(stool).getByText(t('productsList.status.archived'))).toBeInTheDocument();
+    expect(within(stool).getByText(t('productsList.status.active'))).toHaveClass('b2b-badge--outline');
+    expect(within(stool).queryByText(t('productsList.status.archived'))).toBeNull();
     const bench = screen.getByText('Old bench').closest('tr')!;
-    expect(within(bench).getByText(t('productsList.status.inactive'))).toBeInTheDocument();
-    expect(within(bench).getByText(t('productsList.status.archived'))).toBeInTheDocument();
+    expect(within(bench).getByText(t('productsList.status.inactive'))).toHaveClass('b2b-badge--outline');
+    expect(within(bench).queryByText(t('productsList.status.archived'))).toBeNull();
   });
 
   it('a bookmarked ?status=archived opens the Archived tab and never sends status=archived', async () => {
@@ -211,6 +217,40 @@ describe('ProductsList — the Archived filter (FR-113)', () => {
     await user.click(tab('Archived'));
     expect(await screen.findByText(t('productsList.empty.archivedTitle'))).toBeInTheDocument();
     expect(screen.getByText(t('productsList.empty.archivedSub'))).toBeInTheDocument();
+  });
+
+  it('a filtered, empty Archived tab says "try clearing filters", not "no archived products"', async () => {
+    const user = renderList();
+    await screen.findByText('Oak chair');
+    await user.click(tab('Archived'));
+    await screen.findByText('Old stool');
+    await user.type(screen.getByPlaceholderText(t('productsList.search.placeholder')), 'zzz');
+    expect(await screen.findByText(t('productsList.empty.title'))).toBeInTheDocument();
+    expect(screen.queryByText(t('productsList.empty.archivedTitle'))).toBeNull();
+  });
+
+  it('an empty search elsewhere offers to search archived products, keeping the query', async () => {
+    const user = renderList();
+    await screen.findByText('Oak chair');
+    await user.type(screen.getByPlaceholderText(t('productsList.search.placeholder')), 'stool');
+    const hint = await screen.findByRole('button', { name: t('productsList.empty.searchArchived') });
+    await user.click(hint);
+    expect(tab('Archived')).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByText('Old stool')).toBeInTheDocument();
+    const last = listRequests().at(-1)!;
+    expect(last.get('archived')).toBe('only');
+    expect(last.get('q')).toBe('stool');
+    expect(screen.queryByRole('button', { name: t('productsList.empty.searchArchived') })).toBeNull();
+  });
+
+  it('no hint without a search', async () => {
+    getSpy.mockImplementation(async (path: string) => {
+      const answer = serve(path) as Record<string, unknown>;
+      return path.startsWith(LIST) ? { ...answer, data: [], pagination: { page: 0, pageSize: 20, total: 0 } } : answer;
+    });
+    renderList();
+    expect(await screen.findByText(t('productsList.empty.title'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: t('productsList.empty.searchArchived') })).toBeNull();
   });
 
   it('the tabs are keyboard reachable', async () => {
@@ -273,6 +313,19 @@ describe('the tab → request mapping (pure)', () => {
     expect(productListTabQuery('active')).toEqual({ status: 'active', archived: 'exclude' });
     expect(productListTabQuery('inactive')).toEqual({ status: 'inactive', archived: 'exclude' });
     expect(productListTabQuery('archived')).toEqual({ archived: 'only' });
+  });
+
+  it('the product browser asks the list exactly what the Products list asks, tab for tab (no drift)', () => {
+    for (const tab of ['all', 'active', 'inactive', 'archived'] as const) {
+      const fromList = productListTabQuery(tab);
+      const params = new URLSearchParams(
+        buildProductBrowserPath({ page: 0, pageSize: 10, status: tab, type: null, q: '' }).split('?')[1],
+      );
+      expect(params.get('status')).toBe(fromList.status ?? null);
+      // The browser leaves `exclude` to the list's default; the meaning is the same.
+      expect(params.get('archived') ?? 'exclude').toBe(fromList.archived);
+      expect(params.has('includeArchived')).toBe(false);
+    }
   });
 
   it('resolve-ids always names the archived mode — its own default is include', () => {
