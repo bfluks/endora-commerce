@@ -200,6 +200,35 @@ describe('bulk status in one channel (US5)', () => {
     expect(rows[2]?.textContent).toMatch(/saved with values missing/i);
   });
 
+  it('a channel whose languages cannot be loaded still takes the whole-channel status, and the result names the scope', async () => {
+    const user = userEvent.setup();
+    const base = getSpy.getMockImplementation()!;
+    getSpy.mockImplementation((path: string) =>
+      path === '/api/v1/admin/sales-channels/b2c' ? Promise.reject(new Error('down')) : base(path),
+    );
+    postSpy.mockResolvedValue({
+      data: {
+        bulkOperationId: 'op-4',
+        summary: { succeeded: 3, skipped: 0, failed: 0, total: 3 },
+        results: [P1, P2, P3].map((productId) => ({ productId, status: 'succeeded', changedFields: ['scopedStatus'] })),
+      },
+    });
+    renderDialog();
+    await user.click(await screen.findByRole('checkbox', { name: /status in one channel/i }));
+    const group = await scopedGroup();
+    await user.selectOptions(within(group).getByRole('combobox', { name: /sales channel/i }), B2C);
+    expect(await within(group).findByText(/languages could not be loaded/i)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /^apply$/i }));
+    await waitFor(() =>
+      expect(postSpy.mock.calls[0]?.[1]).toEqual({
+        productIds: [P1, P2, P3],
+        fields: { scopedStatus: { channelId: B2C, languageCode: null, value: 'inactive' } },
+      }),
+    );
+    expect(await screen.findByRole('heading', { name: /status in b2c shop applied/i })).toBeTruthy();
+    expect(screen.queryByRole('table')).toBeNull();
+  });
+
   it('renders in Polish', async () => {
     renderDialog('pl');
     expect(await screen.findByRole('checkbox', { name: /status w jednym kanale/i })).toBeTruthy();
