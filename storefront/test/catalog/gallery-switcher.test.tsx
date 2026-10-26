@@ -19,6 +19,7 @@ type GalleryItem = {
   position: number;
   labels: Array<'base_image' | 'small_image' | 'thumbnail'>;
   asset: { id: string; kind: string; url: string };
+  altText?: string | null;
 };
 
 const item = (
@@ -120,5 +121,19 @@ describe('GallerySwitcher — SSR contract', () => {
       <GallerySwitcher gallery={[item('1', ['base_image'], 0)]} alt="Widget" />,
     );
     expect(html).toContain('Powiększ');
+  });
+
+  it("names each image by its own alt text at the request's language, else the product name (feature 163, FR-077)", () => {
+    const html = renderToString(
+      <GallerySwitcher
+        gallery={[
+          { ...item('1', ['base_image'], 0, '/asset/front.jpg'), altText: 'Paleta z przodu' },
+          { ...item('2', [], 1, '/asset/side.jpg'), altText: null },
+        ]}
+        alt="Widget"
+      />,
+    );
+    expect(html).toContain('alt="Paleta z przodu"');
+    expect(html).toContain('alt="Widget"');
   });
 });

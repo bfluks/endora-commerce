@@ -400,6 +400,7 @@ export class ProductLinkService {
       em,
       this.#requireAssets(),
       targetIds,
+      channel.id,
     );
 
     // Sales-channel public flag controls price visibility (R-18), read off the
