@@ -744,13 +744,15 @@ of its own on a dedicated route (PAL-1 = B).
   products and returns `archived`
 - [x] T156p1c [S2] Docs line — `packages/modules/prompt_actions/PROMPT_TOOLS.md`; changeset
   `.changeset/163-assistant-archive-restore.md`
-- [x] T156p3a [P] [S2] RED quote requests refuse an archived product: operator create → 404 before anything is
-  written; buyer create outside a request scope → 404 — `packages/modules/quote_requests/src/backend/services/archived-product-lines.test.ts`;
+- [x] T156p3a [P] [S2] RED quote requests refuse an archived product: operator create → 409 `PRODUCT_ARCHIVED`
+  before anything is written (P-3b; an absent id stays 404); buyer create outside a request scope → 404 — `packages/modules/quote_requests/src/backend/services/archived-product-lines.test.ts`;
   `[PG]` buyer create / draft edit / resubmit / quick order build / cart conversion (404, byte-equal to an absent
-  id where the path is the buyer's create), convert of an approved quote (409), operator create and edit (404) —
+  id where the path is the buyer's create), convert of an approved quote (409), operator create and edit (409 `PRODUCT_ARCHIVED`), operator create with an
+  absent id (404) —
   `backend/test/integration/quote_requests/archived-product.test.ts`
 - [x] T156p3b [S2] `isNotArchived` applied in `#acquirableProductsById` (before the channel question),
-  `seedBasketFromApproved` (convert, `prepare-customer-basket`), `RfqAdminService.createOnBehalf` and `modify`
+  `seedBasketFromApproved` (convert, `prepare-customer-basket`); `RfqAdminService.createOnBehalf` and `modify`
+  through `operatorLineProducts` (404 for an absent id, then 409 `PRODUCT_ARCHIVED`)
 - [x] T156p3c [S2] `contracts/consumers.md` row 25 (and row 20's archived exception); changeset
   `.changeset/163-quote-requests-refuse-archived.md`
 - [x] T156-pal-a [S2] Backend half: manifest action `open-archived-products` → `/catalog/products/archived`,
@@ -772,19 +774,31 @@ of its own on a dedicated route (PAL-1 = B).
   archived product could ever be resolved for `catalog.restore_product`. It now includes them and reports
   `archived`; the other mutations accept an archived product as before (status, visibility and categories do
   not touch `archivedAt`).
-- *P-3, the answer.* The refusal is the path's existing unknown-product answer — buyer and operator `404
-  PRODUCT_NOT_FOUND`, convert `409 PRODUCT_NOT_FOUND` — not a new code. The operator's
-  `PRODUCT_UNAVAILABLE_IN_SCOPE` warning stays for every other reason (FR-018). **Owner question:** should the
-  operator surface name `PRODUCT_ARCHIVED` (catalog's code) instead, since disclosure is not a concern there?
+- *P-3, the answer.* Buyer paths keep the existing unknown-product answer, `404 PRODUCT_NOT_FOUND`, byte-equal
+  to an absent id (no disclosure). **P-3b = A (owner, 2026-10-26):** the operator's create and edit answer
+  `409 PRODUCT_ARCHIVED` — catalog's code, so the envelope renders catalog's sentence ("Product is archived." /
+  "Produkt jest zarchiwizowany."); no quote_requests bundle entry (`check:error-translations` P2 forbids a
+  second home). 409 rather than 410 (catalog's PDP read) or 422: the product exists and the write conflicts
+  with its state, which is what quote_requests answers 409 for (`RFQ_NOT_DRAFT`, convert's
+  `409 PRODUCT_NOT_FOUND`). An absent id there stays `404 PRODUCT_NOT_FOUND`. The operator's
+  `PRODUCT_UNAVAILABLE_IN_SCOPE` warning stays for every other reason (FR-018).
 - *P-3, convert (deviation from row 20's "unchanged").* The comment at the convert step already promised a 409
   for "archived between approve and convert", and `findByIds` never saw `archivedAt`; the 2026-08-21 exemption
-  is about the channel, and placement would refuse the seeded line anyway. **Owner question:** confirm that a
-  convert refuses (409) rather than seeding a basket the checkout then refuses.
+  is about the channel, and placement would refuse the seeded line anyway. **P-3a = A (owner-confirmed 2026-10-26):** convert refuses with
+  the 409 as built; row 20 keeps its archived exception.
 - *P-3, outside a request.* `#acquirableProductsById` without a channel applied the audience rule only; the
   archived filter now runs before the branch, so a worker or in-process caller with no request is covered too.
 - *PAL-1.* Nothing in the backend checks the SPA route exists: `check:action-route-permissions` reconstructs the
   API path (module-level match on catalog's `catalog:read` product routes), and the off-state file's pairing
   matches `/catalog/products/:id` until S3 declares the static route. T156-pal-b is the real gate.
+- *Checks (2026-10-26, after the stop).* `check:port-catches` was red at `prompt-tools.ts:433`: the per-item
+  `catch` now opens with `rethrowIfModuleDisabled(err)` (composition checklist item 7), and a unit case pins that
+  a `ModuleDisabledError` fails the whole run. The full sweep then reported two more reds in this phase's
+  `[PG]` files, both fixed: `check:fixture-substitution` (`?? 0` after `count(*)` → explicit throw) and
+  `check:shared-table-wipes` (`archive-restore-flow` no longer wipes `prompt_action_requests`; it reads its
+  own requests by id). Green: every backend `check:*` script, `release-intent`, `i18n:hardcoded`,
+  `composer:check`, `manifests:check`; typecheck + lint of catalog, quote_requests, backend. Not run on this
+  Intel host: `check:naming`, `check:language`, `test:unit:fast` (CI).
 
 **Verification** (one invocation per line):
 - `pnpm --filter @endora-commerce/mod-catalog exec vitest run src/backend/prompt-tools.test.ts`
@@ -793,6 +807,7 @@ of its own on a dedicated route (PAL-1 = B).
 - `[PG] backend/test/integration/prompt_actions/archive-restore-flow.test.ts`
 - `[PG] backend/test/integration/quote_requests/archived-product.test.ts`
 - `[PG] backend/test/integration/_admin_surfaces/batch-fifteen-palette-off-state.test.ts`
+- `[PG] backend/test/contract/prompt_actions/tool-permissions.test.ts`
 
 ---
 
