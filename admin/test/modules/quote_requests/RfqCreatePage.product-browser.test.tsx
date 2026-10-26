@@ -67,7 +67,7 @@ const tr = (key: string): string => {
 
 // ---------------------------------------------------------------- fake catalogue
 
-type Status = 'draft' | 'active' | 'inactive';
+type Status = 'active' | 'inactive';
 type Type = 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
 
 interface Row {
@@ -77,33 +77,49 @@ interface Row {
   name: Record<string, string>;
   status: Status;
   type: Type;
+  /** Feature 163 (FR-019) — archived is its own axis, independent of status. */
+  archivedAt: string | null;
 }
 
-function product(id: string, name: string, status: Status = 'active', type: Type = 'simple'): Row {
-  return { id, sku: `SKU-${id.toUpperCase()}`, slug: id, name: { 'en-US': name }, status, type };
+function product(
+  id: string,
+  name: string,
+  status: Status = 'active',
+  type: Type = 'simple',
+  archivedAt: string | null = null,
+): Row {
+  return { id, sku: `SKU-${id.toUpperCase()}`, slug: id, name: { 'en-US': name }, status, type, archivedAt };
 }
 
 const pad = (n: number): string => String(n).padStart(2, '0');
 
-/** g1 (active, grouped), b1 (active, bundle), d1 (draft), i1 (inactive), then a01…a24 — all active simple. */
+/**
+ * g1 (active, grouped), p1 and i1 (inactive), then a01…a24 — all active simple — and
+ * x1, an active product that is archived (feature 163).
+ */
 const CATALOG: Row[] = [
   product('g1', 'Grouped set', 'active', 'grouped'),
   product('b1', 'Starter bundle', 'active', 'bundle'),
-  product('d1', 'Draft widget', 'draft'),
+  product('p1', 'Paused widget', 'inactive'),
   product('i1', 'Old widget', 'inactive'),
   ...Array.from({ length: 24 }, (_, i) => product(`a${pad(i + 1)}`, `Widget ${pad(i + 1)}`)),
+  product('x1', 'Retired widget', 'active', 'simple', '2026-10-20T00:00:00.000Z'),
 ];
 
 const LIST_PATH = '/api/v1/admin/catalog/products';
 
 function serveCatalog(url: string): unknown {
   const params = new URLSearchParams(url.split('?')[1] ?? '');
+  // The list's rules (feature 163, R30.4): archived excluded by default,
+  // `includeArchived=1` includes them, `archived` wins when sent.
+  const archivedMode =
+    params.get('archived') ?? (params.get('includeArchived') === '1' ? 'include' : 'exclude');
   const status = params.get('status');
   const type = params.get('type');
   const q = (params.get('q') ?? '').toLowerCase();
   const page = Number(params.get('page') ?? '0');
   const pageSize = Number(params.get('pageSize') ?? '20');
-  const base = CATALOG.filter(
+  const matches = CATALOG.filter(
     (p) =>
       (type === null || p.type === type) &&
       (q === '' ||
@@ -111,15 +127,18 @@ function serveCatalog(url: string): unknown {
         p.slug.includes(q) ||
         Object.values(p.name).some((n) => n.toLowerCase().includes(q))),
   );
+  const live = matches.filter((p) => p.archivedAt === null);
+  const archived = matches.filter((p) => p.archivedAt !== null);
+  const base = archivedMode === 'only' ? archived : archivedMode === 'include' ? matches : live;
   const filtered = base.filter((p) => status === null || p.status === status);
   return {
     data: filtered.slice(page * pageSize, (page + 1) * pageSize),
     pagination: { page, pageSize, total: filtered.length },
     counts: {
-      all: base.length,
-      active: base.filter((p) => p.status === 'active').length,
-      draft: base.filter((p) => p.status === 'draft').length,
-      inactive: base.filter((p) => p.status === 'inactive').length,
+      all: live.length,
+      active: live.filter((p) => p.status === 'active').length,
+      inactive: live.filter((p) => p.status === 'inactive').length,
+      archived: archived.length,
     },
   };
 }
@@ -304,7 +323,7 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     expect(submitButton()).toBeDisabled();
   });
 
-  it('opens on Active with the quote-request rules: draft and inactive selectable, grouped and bundle not (sc. 1, 7)', async () => {
+  it('opens on Active with the quote-request rules: inactive selectable, grouped and bundle not (sc. 1, 7)', async () => {
     const user = userEvent.setup();
     renderPage();
     const dialog = await openPicker(user);
@@ -321,14 +340,24 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
         tr('productBrowser.reason.groupParent'),
       );
     }
-    expect(rowCheckbox(dialog, 'Draft widget').disabled).toBe(false);
+    expect(rowCheckbox(dialog, 'Paused widget').disabled).toBe(false);
     expect(rowCheckbox(dialog, 'Old widget').disabled).toBe(false);
 
-    await user.click(rowCheckbox(dialog, 'Draft widget'));
+    await user.click(rowCheckbox(dialog, 'Paused widget'));
     await user.click(rowCheckbox(dialog, 'Old widget'));
     await user.click(within(dialog).getByRole('button', { name: 'Add 2' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(lineNames()).toEqual(['Draft widget', 'Old widget']);
+    expect(lineNames()).toEqual(['Paused widget', 'Old widget']);
+  });
+
+  it('offers the Archived tab: a quote request does not refuse archived products (feature 163)', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const dialog = await openPicker(user);
+    await user.click(within(dialog).getByRole('tab', { name: /^Archived/ }));
+    await waitFor(() => expect(within(dialog).getByText('Retired widget')).toBeInTheDocument());
+    expect(getSpy.mock.calls.map(([p]) => String(p))).toContain(`${LIST_PATH}?archived=only&page=0&pageSize=20`);
+    expect(rowCheckbox(dialog, 'Retired widget').disabled).toBe(false);
   });
 
   it('adds 10 lines with quantity 1 and prefills the prices that resolve, leaving the rest empty (sc. 2, FR-031)', async () => {
@@ -570,8 +599,8 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     const quick = screen.getByRole('combobox', { name: tr('rfqCreate.items.quickSearch') });
 
     await user.type(quick, 'widget');
-    const draft = await screen.findByRole('option', { name: /Draft widget/ });
-    expect(draft).not.toHaveAttribute('aria-disabled', 'true');
+    const paused = await screen.findByRole('option', { name: /Paused widget/ });
+    expect(paused).not.toHaveAttribute('aria-disabled', 'true');
     // Feature 159 (N-31) — a product already a line is offered again.
     expect(screen.getByRole('option', { name: /Widget 01/ }).textContent).not.toContain(
       tr('productBrowser.reason.alreadyAdded'),

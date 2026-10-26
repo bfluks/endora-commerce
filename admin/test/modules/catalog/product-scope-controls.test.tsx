@@ -88,7 +88,7 @@ function scopesFixture(): ProductScopes {
         minOrderQuantity: null,
         returnable: null,
         languageStatuses: [
-          { languageCode: 'de', status: 'draft', orphaned: false },
+          { languageCode: 'de', status: 'inactive', orphaned: false },
           { languageCode: 'fr', status: 'inactive', orphaned: true },
         ],
         orphaned: false,
@@ -162,7 +162,7 @@ function wrap(
   );
 }
 
-function controls(activeChannelId: string | null, globalStatus?: 'draft' | 'active' | 'inactive'): ReactElement {
+function controls(activeChannelId: string | null, globalStatus?: 'active' | 'inactive'): ReactElement {
   return (
     <ProductScopeControls
       productId={PRODUCT_ID}
@@ -248,7 +248,7 @@ describe('ProductScopeControls — status per channel and channel × language (U
 
     const de = await screen.findByRole('combobox', { name: 'Status in B2B · DE' });
     const en = screen.getByRole('combobox', { name: 'Status in B2B · EN' });
-    expect(de).toHaveValue('draft');
+    expect(de).toHaveValue('inactive');
     expect(de).toHaveAccessibleDescription('Set for this language');
     expect(en).toHaveValue('');
     // The language row inherits from the channel row, which inherits from global.
@@ -262,13 +262,27 @@ describe('ProductScopeControls — status per channel and channel × language (U
     });
   });
 
+  it('offers Active and Inactive only, plus "use inherited" — no Draft at any scope (FR-010)', async () => {
+    render(wrap(controls(B2B)));
+    const channel = await screen.findByRole('combobox', { name: 'Status in B2B' });
+    const language = screen.getByRole('combobox', { name: 'Status in B2B · DE' });
+    for (const select of [channel, language]) {
+      expect(within(select).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)).toEqual([
+        '',
+        'active',
+        'inactive',
+      ]);
+    }
+    expect(document.body.textContent).not.toMatch(/draft/i);
+  });
+
   it('shows the channel row as the source of an inheriting language once the channel is overridden', async () => {
     render(wrap(controls(B2B)));
     const user = userEvent.setup();
-    await user.selectOptions(await screen.findByRole('combobox', { name: 'Status in B2B' }), 'draft');
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'Status in B2B' }), 'inactive');
     const en = screen.getByRole('combobox', { name: 'Status in B2B · EN' });
-    expect(within(en).getByRole('option', { name: 'Use inherited (Draft)' })).toBeInTheDocument();
-    expect(en).toHaveAccessibleDescription('Inherited from B2B: Draft');
+    expect(within(en).getByRole('option', { name: 'Use inherited (Inactive)' })).toBeInTheDocument();
+    expect(en).toHaveAccessibleDescription('Inherited from B2B: Inactive');
   });
 
   it('marks an orphaned language setting as ignored and removes it with null (FR-015)', async () => {
@@ -292,18 +306,18 @@ describe('ProductScopeControls — status per channel and channel × language (U
     const { rerender } = render(wrap(controls(B2B)));
     const user = userEvent.setup();
 
-    await user.selectOptions(await screen.findByRole('combobox', { name: 'Status in B2B' }), 'draft');
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'Status in B2B' }), 'inactive');
     rerender(wrap(controls(B2C)));
     expect(await screen.findByText('Unsaved changes in: B2B')).toBeInTheDocument();
     await user.selectOptions(screen.getByRole('combobox', { name: 'Status in B2C' }), 'active');
     rerender(wrap(controls(B2B)));
-    expect(screen.getByRole('combobox', { name: 'Status in B2B' })).toHaveValue('draft');
+    expect(screen.getByRole('combobox', { name: 'Status in B2B' })).toHaveValue('inactive');
 
     await user.click(screen.getByRole('button', { name: 'Save availability' }));
     await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
     expect(patchSpy).toHaveBeenCalledWith(SCOPES_PATH, {
       channels: [
-        { channelId: B2B, status: 'draft' },
+        { channelId: B2B, status: 'inactive' },
         { channelId: B2C, status: 'active' },
       ],
     });
@@ -314,7 +328,7 @@ describe('ProductScopeControls — status per channel and channel × language (U
     await screen.findByRole('combobox', { name: 'Status in B2C' });
     const confirmSpy = vi.spyOn(window, 'confirm');
 
-    rerender(wrap(controls(B2C, 'draft')));
+    rerender(wrap(controls(B2C, 'inactive')));
     // The B2C override is untouched and nothing asks about it.
     expect(screen.getByRole('combobox', { name: 'Status in B2C' })).toHaveValue('inactive');
     const pl = screen.getByRole('combobox', { name: 'Status in B2C · PL' });
@@ -462,14 +476,14 @@ describe('ProductScopeControls — refusals and permissions', () => {
     render(wrap(controls(B2B)));
     const user = userEvent.setup();
     const status = await screen.findByRole('combobox', { name: 'Status in B2B' });
-    await user.selectOptions(status, 'draft');
+    await user.selectOptions(status, 'inactive');
     await user.click(screen.getByRole('button', { name: 'Save availability' }));
 
     expect(
       await screen.findByText('The product is no longer in B2B. Reload the page to see its current channels.'),
     ).toBeInTheDocument();
     expect(document.body.textContent).not.toContain('SCOPE_INVALID');
-    expect(status).toHaveValue('draft');
+    expect(status).toHaveValue('inactive');
   });
 
   it('translates a concurrent-write conflict and keeps the edit', async () => {
@@ -481,7 +495,7 @@ describe('ProductScopeControls — refusals and permissions', () => {
     render(wrap(controls(B2B)));
     const user = userEvent.setup();
     const status = await screen.findByRole('combobox', { name: 'Status in B2B' });
-    await user.selectOptions(status, 'draft');
+    await user.selectOptions(status, 'inactive');
     await user.click(screen.getByRole('button', { name: 'Save availability' }));
 
     expect(
@@ -490,7 +504,7 @@ describe('ProductScopeControls — refusals and permissions', () => {
       ),
     ).toBeInTheDocument();
     expect(document.body.textContent).not.toContain('VERSION_CONFLICT');
-    expect(status).toHaveValue('draft');
+    expect(status).toHaveValue('inactive');
   });
 
   it('translates a repeated language refusal with the channel and language', async () => {

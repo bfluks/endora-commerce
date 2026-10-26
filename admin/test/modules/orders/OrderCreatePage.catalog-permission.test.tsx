@@ -69,7 +69,7 @@ beforeEach(() => {
       return Promise.resolve({
         data: ROWS,
         pagination: { page: 0, pageSize: 20, total: ROWS.length },
-        counts: { all: 2, active: 2, draft: 0, inactive: 0 },
+        counts: { all: 2, active: 2, inactive: 0, archived: 0 },
       });
     }
     if (path.startsWith('/api/v1/admin/sales-channels')) {
