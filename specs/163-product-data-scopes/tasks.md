@@ -1186,6 +1186,15 @@ already in. Bulk results carry no `pairs`, so a bulk gate message can name the s
 
 ### Phase 20: [admin UI] URL keys, redirects and per-scope SEO (US7, US8) — after Phases 17–18
 
+**Stopped here (S3, 2026-10-26, session end).** Phase 15 (T096–T099) and owner decisions P-2, P-3, P-4, PAL-1 are
+done. Phase 20 not started in code: the plan is a self-loading `ProductUrlKeysPanel` (url-keys + scope-context) at the
+top of the editor's SEO tab — global key, per-language rows (placeholder = inherited, "Use inherited"), C × L
+overrides added from a channel·language select (orphans removable), the effective-URL table from the response's
+`url`, redirects only when `redirects` is present (delete behind a confirmation), the takeover `ModalDialog` naming
+the losing product ("in every language" for a language-less redirect) retrying with `confirmTakeover`; a pure
+`urlKeysChanges(saved, draft)` diff with trim + lowercase. `lib/product-url-keys-api.ts` and its error keys exist.
+T126/T128 (seo module channel selector) after that.
+
 - [ ] T125 [P] [US7] [S3] RED: URL-keys panel edits global / per-language / C×L keys with "use inherited"; shows effective URL per (C, L); `URL_KEY_TAKEN` names the holder; takeover confirmation dialog names the losing product and retries with `confirmTakeover`; redirect list with delete when the response carries `redirects`; **with `seo` off (`redirects` absent) no redirect list, no note and no redirect affordance is rendered (Q-C), while the takeover confirmation still appears and names the losing product**; a takeover of a language-less (former global) redirect says the product loses it **in every language**; effective URLs shown as the response's `url` (never composed in the admin) — `admin/test/modules/catalog/product-url-keys-panel.test.tsx`
 - [ ] T126 [P] [US8] [S3] RED: SEO panel gains a channel selector beside the language one, shows source per field, and "use inherited" deletes exactly the selected scope's row — `admin/test/modules/seo/seo-meta-scope.test.tsx`
 - [ ] T127 [US7] [S3] `ProductUrlKeysPanel.tsx` in the product editor — `src/admin/components/ProductUrlKeysPanel.tsx`
