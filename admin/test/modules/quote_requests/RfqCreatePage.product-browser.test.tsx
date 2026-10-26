@@ -378,15 +378,18 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     expect(getSpy.mock.calls.some(([p]) => /archived=only|includeArchived/.test(String(p)))).toBe(false);
   });
 
-  it('the quick search does not look among archived products (feature 163, P-3)', async () => {
+  // Owner decision RFQ-c → B (2026-10-26): the quick search behaves as the order's — it
+  // lists archived products, refused with the reason, rather than hiding them.
+  it('the quick search lists an archived product, refused with the reason (feature 163, P-3, RFQ-c)', async () => {
     const user = userEvent.setup();
     renderPage();
     await waitForCustomer('Jan Kowalski');
     const quick = screen.getByRole('combobox', { name: tr('rfqCreate.items.quickSearch') });
-    await user.type(quick, 'widget');
-    await screen.findByRole('option', { name: /Paused widget/ });
-    expect(screen.queryByRole('option', { name: /Retired widget/ })).toBeNull();
-    expect(getSpy.mock.calls.some(([p]) => String(p).includes('includeArchived'))).toBe(false);
+    await user.type(quick, 'retired');
+    const retired = await screen.findByRole('option', { name: /Retired widget/ });
+    expect(retired).toHaveAttribute('aria-disabled', 'true');
+    expect(retired.textContent).toContain(tr('productBrowser.reason.archived'));
+    expect(getSpy.mock.calls.some(([p]) => String(p).includes('includeArchived=1'))).toBe(true);
   });
 
   it('adds 10 lines with quantity 1 and prefills the prices that resolve, leaving the rest empty (sc. 2, FR-031)', async () => {
