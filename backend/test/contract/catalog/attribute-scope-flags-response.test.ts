@@ -27,7 +27,7 @@ describe('Admin attribute response — scope flags (spec 163, T095b)', () => {
     await teardownBackendServer(h);
   });
 
-  function flagsOf(body: unknown): { channelScoped?: boolean; languageScoped?: boolean } {
+  function flagsOf(body: unknown): { channelScoped: boolean | undefined; languageScoped: boolean | undefined } {
     const data = adminAttributeResponseSchema.parse((body as { data: unknown }).data);
     return { channelScoped: data.channelScoped, languageScoped: data.languageScoped };
   }
