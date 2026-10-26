@@ -15,7 +15,7 @@ import type {
 } from '@endora-commerce/contracts';
 import type { CartAuditService } from './cart-audit-service.js';
 import { assertCartMeetsMinimums, toCartMinimumItem } from './cart-minimums.js';
-import { availableRecords, basketScopeLanguage } from './cart-availability.js';
+import { availableRecords, basketScopeLanguage, withBasketOrderRules } from './cart-availability.js';
 import { cartAudience } from './cart-service.js';
 
 /**
@@ -101,7 +101,7 @@ export class CartApprovalService {
      * a product no longer available at its (channel, language) is refused at
      * submit as placement refuses it.
      */
-    private readonly availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
+    private readonly availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>,
     private readonly emailDispatch?: CartEmailDispatch,
   ) {}
 
@@ -163,14 +163,20 @@ export class CartApprovalService {
       cart: { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
       items: items.map(toCartMinimumItem),
       language: options.language,
-      availableOnly: (products) =>
-        availableRecords(this.availability, products, {
-          channelId: cart.salesChannelId,
-          languageCode: cart.salesChannelId ? basketScopeLanguage(cart.salesChannelId, options.language) : null,
-          audience: cartAudience({
-            customer: { ...actor, salesChannelId: cart.salesChannelId ?? '' },
+      // Feature 163 — available at the basket's (channel, L), judged on that
+      // channel's minimums (FR-006, FR-100).
+      availableOnly: async (products) =>
+        withBasketOrderRules(
+          this.availability,
+          await availableRecords(this.availability, products, {
+            channelId: cart.salesChannelId,
+            languageCode: cart.salesChannelId ? basketScopeLanguage(cart.salesChannelId, options.language) : null,
+            audience: cartAudience({
+              customer: { ...actor, salesChannelId: cart.salesChannelId ?? '' },
+            }),
           }),
-        }),
+          cart.salesChannelId,
+        ),
       confirmQuoteSource: (quoteRequestId) =>
         this.quoteSource.quoteSourceHonoursExemptions({
           organizationId: actor.organizationId,

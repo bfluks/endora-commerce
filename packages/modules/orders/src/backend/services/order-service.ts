@@ -307,7 +307,7 @@ export interface OrderServiceNeighbourPorts {
    * (channel, language) to its Organization refuses the placement with the
    * unknown-id 404, as a line whose product is gone does.
    */
-  readonly catalogProductAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
+  readonly catalogProductAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>;
   /** `null` ⇒ `payment_methods` is not effectively present. */
   readonly paymentMethodRead: () => PaymentMethodReadPort | null;
   /** `null` ⇒ `delivery_methods` is not effectively present. */
