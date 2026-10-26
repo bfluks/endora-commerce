@@ -57,6 +57,11 @@ You can hide an attachment only in a channel the product is in; otherwise the
 request answers `422 SCOPE_INVALID`. Removing a channel from the set is always
 allowed, even after the product has left the channel.
 
+Hiding is presentation, not access control. A hidden attachment is not shown in
+the channel, but its file keeps its stable URL, and anyone who has that URL can
+still download it. Do not rely on hiding to keep a document confidential: a file
+that must not be public must not be attached to the product.
+
 Creating or updating an attachment is recorded once in the audit log, as
 `product_attachment.create` or `product_attachment.update`, with the attachment's
 state before and after: its product, type, name, description, position, both
