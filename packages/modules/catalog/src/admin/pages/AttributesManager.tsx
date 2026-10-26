@@ -327,7 +327,11 @@ export function AttributesManager(): ReactNode {
           <p id={narrowingBodyId} className="text-sm">
             {pendingNarrowing.preview.orphanedOverrides === 0
               ? t('attributes.scope.confirmNone')
-              : t('attributes.scope.confirmBody', { count: String(pendingNarrowing.preview.orphanedOverrides) })}
+              : t(
+                  // D21 — the plural form the admin language needs (PL: one / few / many).
+                  `attributes.scope.confirmBody.${new Intl.PluralRules(language).select(pendingNarrowing.preview.orphanedOverrides)}`,
+                  { count: String(pendingNarrowing.preview.orphanedOverrides) },
+                )}
           </p>
           {pendingNarrowing.preview.byChannel.length > 0 ? (
             <ul className="mt-3 space-y-1 text-sm">

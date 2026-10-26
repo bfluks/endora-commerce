@@ -256,6 +256,31 @@ describe('AttributesManager — scope flags (FR-090)', () => {
     expect(screen.queryByRole('group', { name: /scope/i })).toBeNull();
   });
 
+  it.each([
+    [1, '1 wartość ustawiona dla kanału lub języka przestanie obowiązywać.'],
+    [3, '3 wartości ustawione dla kanału lub języka przestaną obowiązywać.'],
+    [7, '7 wartości ustawionych dla kanału lub języka przestanie obowiązywać.'],
+  ])('says the count in Polish with its plural form: %i (D21)', async (count, sentence) => {
+    preview = { orphanedOverrides: count, byChannel: [] };
+    const user = userEvent.setup();
+    render(wrap(<AttributesManager />, undefined, 'pl'));
+    const row = (await screen.findByText('material')).closest('tr') as HTMLElement;
+    await user.click(within(row).getAllByRole('button')[0] as HTMLElement);
+    await user.click(await screen.findByRole('checkbox', { name: /kanału sprzedaży/i }));
+    await user.click(screen.getByRole('button', { name: /^zapisz/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain(sentence);
+  });
+
+  it('says the count in English with its plural form (D21)', async () => {
+    preview = { orphanedOverrides: 1, byChannel: [] };
+    const user = userEvent.setup();
+    const group = await openEdit();
+    await user.click(within(group).getByRole('checkbox', { name: /per sales channel/i }));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    expect((await screen.findByRole('dialog')).textContent).toContain('1 value set per channel or language will stop applying.');
+  });
+
   it('renders in Polish', async () => {
     const user = userEvent.setup();
     render(wrap(<AttributesManager />, undefined, 'pl'));
