@@ -26,6 +26,7 @@
   "productsList.bulk.selected": "{count} selected",
   "productsList.bulk.edit": "Bulk edit",
   "productsList.bulk.editPrice": "Edit price",
+  "productsList.bulk.editPriceUnavailable": "Prices are set in price books, not from the product list.",
   "productsList.bulk.delete": "Delete",
   "productsList.bulk.deleteConfirm": "Permanently delete {count} selected product(s) from the catalog? This cannot be undone in the admin.",
   "productsList.bulk.deleteFailed": "Could not delete one or more products.",
