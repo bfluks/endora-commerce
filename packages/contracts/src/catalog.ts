@@ -1644,12 +1644,16 @@ export type UpdateGalleryItemRequest = z.infer<typeof updateGalleryItemRequestSc
 /**
  * Feature 163 (FR-076, R14) — a channel's own holders of the gallery roles. `null` =
  * the global holder applies there. Read with `GET …/gallery/channel-roles`.
+ *
+ * The keys are the camelCase names of the gallery labels (`baseImage` = the
+ * `base_image` label, `smallImage` = `small_image`, `thumbnail` = `thumbnail`); the
+ * label spelling stays a value (`galleryLabelSchema`), never an API key.
  */
 export const galleryChannelRolesSchema = z.object({
   channelId: uuidSchema,
   roles: z.object({
-    base_image: uuidSchema.nullable(),
-    small_image: uuidSchema.nullable(),
+    baseImage: uuidSchema.nullable(),
+    smallImage: uuidSchema.nullable(),
     thumbnail: uuidSchema.nullable(),
   }),
 });
@@ -1665,8 +1669,8 @@ export const putGalleryChannelRolesRequestSchema = z
     channelId: uuidSchema,
     roles: z
       .object({
-        base_image: uuidSchema.nullable().optional(),
-        small_image: uuidSchema.nullable().optional(),
+        baseImage: uuidSchema.nullable().optional(),
+        smallImage: uuidSchema.nullable().optional(),
         thumbnail: uuidSchema.nullable().optional(),
       })
       .strict(),
