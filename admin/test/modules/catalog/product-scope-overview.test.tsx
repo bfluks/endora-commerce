@@ -46,7 +46,7 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
 const { ProductScopeOverview } = await import(
   '../../../../packages/modules/catalog/src/admin/components/ProductScopeOverview'
 );
-const { resetRequestFor, orphanDeleteRequest, pickLocalized } = await import(
+const { resetRequestFor, orphanDeleteRequest, pickLocalized, describeOverviewField } = await import(
   '../../../../packages/modules/catalog/src/admin/lib/scope-overview'
 );
 
@@ -276,6 +276,39 @@ describe('the owning endpoint of a reset (pure)', () => {
       kind: 'scopes',
       body: { channels: [{ channelId: B2B, languageStatuses: [{ languageCode: 'fr', status: null }] }] },
     });
+  });
+
+  it('names the media, attachment, packaging-unit and SEO fields (Phases 21–22, T143)', () => {
+    const t = (key: string, params?: Record<string, string>): string => {
+      const raw = (catalogEn as Record<string, string>)[key];
+      if (raw === undefined) throw new Error(`missing key ${key}`);
+      return raw.replace(/\{(\w+)\}/g, (_, name: string) => params?.[name] ?? '');
+    };
+    const label = (field: string): string => describeOverviewField(field, t, () => null);
+    expect(label('media:roles')).toBe('Gallery image roles');
+    expect(label('media:hidden')).toBe('Hidden gallery images');
+    expect(label('media:altText')).toBe('Gallery alt text');
+    expect(label('attachments:hidden')).toBe('Hidden attachments');
+    expect(label('attachments:name')).toBe('Attachment names');
+    expect(label('attachments:description')).toBe('Attachment descriptions');
+    expect(label('packagingUnits:name')).toBe('Packaging unit names');
+    expect(label('seo:title')).toBe('SEO title');
+    expect(label('seo:description')).toBe('SEO description');
+    expect(label('seo:ogTitle')).toBe('Social title');
+    expect(label('seo:ogDescription')).toBe('Social description');
+    expect(label('seo:ogImageUrl')).toBe('Social image');
+  });
+
+  it('a channel’s gallery roles reset and their orphan delete go through the channel-roles PUT; the item-level fields have neither', () => {
+    const clear = { kind: 'galleryRoles', body: { channelId: B2B, roles: { baseImage: null, smallImage: null, thumbnail: null } } };
+    expect(resetRequestFor({ field: 'media:roles', level: 'channel', channelId: B2B, languageCode: '' })).toEqual(clear);
+    expect(orphanDeleteRequest({ field: 'media:roles', channelId: B2B, languageCode: null, reason: 'not_a_member' })).toEqual(clear);
+    for (const field of ['media:hidden', 'attachments:hidden']) {
+      expect(resetRequestFor({ field, level: 'channel', channelId: B2B, languageCode: '' })).toBeNull();
+    }
+    for (const field of ['media:altText', 'attachments:name', 'packagingUnits:name']) {
+      expect(resetRequestFor({ field, level: 'language', channelId: '', languageCode: 'de' })).toBeNull();
+    }
   });
 
   it('a multilingual name follows the admin language, then English', () => {
