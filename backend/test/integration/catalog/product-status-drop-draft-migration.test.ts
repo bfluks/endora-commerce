@@ -75,9 +75,11 @@ describe('catalog product_status_drop_draft migration (T156b)', () => {
   async function product(id: string): Promise<{ status: string; archived_at: Date | null }> {
     const rows = (await em.execute(`select "status", "archived_at" from "products" where "id" = ?`, [id])) as Array<{
       status: string;
-      archived_at: Date | null;
+      archived_at: Date | string | null;
     }>;
-    return rows[0]!;
+    const row = rows[0]!;
+    // The raw driver read may hand `timestamptz` back as a string; normalise it.
+    return { status: row.status, archived_at: row.archived_at === null ? null : new Date(row.archived_at) };
   }
 
   async function expectRefused(sql: string, params: unknown[], constraint: string): Promise<void> {
