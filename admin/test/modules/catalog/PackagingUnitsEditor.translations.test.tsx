@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AppLanguageContext } from '@endora-commerce/admin-kit/i18n';
+import { ApiError } from '@endora-commerce/admin-kit/lib';
 import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/TranslationProvider';
 import catalogEn from '../../../../packages/modules/catalog/i18n/en.json';
 import catalogPl from '../../../../packages/modules/catalog/i18n/pl.json';
@@ -92,7 +93,7 @@ function wrap(ui: ReactElement, language: 'en' | 'pl' = 'en'): ReactElement {
 }
 
 async function openDialog(): Promise<HTMLElement> {
-  render(wrap(<PackagingUnitsEditor productId={PRODUCT_ID} />));
+  render(wrap(<PackagingUnitsEditor productId={PRODUCT_ID} canWrite />));
   await screen.findByDisplayValue('Carton');
   await userEvent.setup().click(screen.getByRole('button', { name: 'Names per language: Carton' }));
   return screen.findByRole('dialog', { name: 'Names per language: Carton' });
@@ -150,9 +151,72 @@ describe('PackagingUnitsEditor — names per language (US9 #5, FR-079)', () => {
     expect(fields).toEqual(['Name (CS)', 'Name (PL)']);
   });
 
+  it('shows the inherited global name as visible text beside each field (D9)', async () => {
+    serve();
+    const dialog = await openDialog();
+    const de = within(dialog).getByRole('textbox', { name: 'Name (DE)' });
+    expect(document.getElementById(de.getAttribute('aria-describedby') ?? '')).toHaveTextContent('Inherited: Carton');
+  });
+
+  it('a refusal shows the server’s message; anything else says nothing was saved (D16)', async () => {
+    serve();
+    patchSpy.mockRejectedValueOnce(
+      new ApiError(422, { error: { code: 'VALIDATION_FAILED', message: 'The name is too long.' } }),
+    );
+    const dialog = await openDialog();
+    const user = userEvent.setup();
+    await user.type(within(dialog).getByRole('textbox', { name: 'Name (DE)' }), 'X');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/^The name is too long\.$/);
+    patchSpy.mockRejectedValueOnce(new Error('network'));
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent('Nothing was saved. Try again.'));
+  });
+
+  it('says it is saving while the request is in flight (D16)', async () => {
+    serve();
+    patchSpy.mockImplementationOnce(() => new Promise(() => undefined));
+    const dialog = await openDialog();
+    const user = userEvent.setup();
+    await user.type(within(dialog).getByRole('textbox', { name: 'Name (DE)' }), 'X');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByRole('button', { name: 'Saving…' })).toBeDisabled();
+  });
+
+  it('Escape with unsaved names asks before discarding them (D16)', async () => {
+    serve();
+    const dialog = await openDialog();
+    const user = userEvent.setup();
+    await user.type(within(dialog).getByRole('textbox', { name: 'Name (DE)' }), 'X');
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(within(dialog).getByText(/changes that are not saved/i)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Keep editing' }));
+    expect(within(dialog).getByRole('textbox', { name: 'Name (DE)' })).toHaveValue('X');
+    await user.keyboard('{Escape}');
+    await user.click(within(dialog).getByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('without catalog:write nothing is editable and it says so (D15)', async () => {
+    serve();
+    render(wrap(<PackagingUnitsEditor productId={PRODUCT_ID} canWrite={false} />));
+    const name = await screen.findByDisplayValue('Carton');
+    expect(name).toBeDisabled();
+    expect(screen.getByText(/read-only: you can see the packaging units but not change them/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^add$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^remove$/i })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: /^name$/i, hidden: false })).toBe(name);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Names per language: Carton' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('textbox', { name: 'Name (PL)' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
   it('renders in Polish from the pl bundle', async () => {
     serve();
-    render(wrap(<PackagingUnitsEditor productId={PRODUCT_ID} />, 'pl'));
+    render(wrap(<PackagingUnitsEditor productId={PRODUCT_ID} canWrite />, 'pl'));
     await screen.findByDisplayValue('Carton');
     expect(screen.getByRole('button', { name: 'Nazwy w językach: Carton' })).toBeInTheDocument();
   });

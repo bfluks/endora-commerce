@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useId, useState, type ReactNode } from 'react';
-import { ORDER_MINIMUM_MAX, type PackagingUnitDto } from '@endora-commerce/contracts';
+import { ORDER_MINIMUM_MAX, PACKAGING_UNIT_NAME_MAX, type PackagingUnitDto } from '@endora-commerce/contracts';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
-import { Button, Input, Label } from '@endora-commerce/admin-kit/ui';
+import { Alert, AlertDescription, Button, Input, Label } from '@endora-commerce/admin-kit/ui';
 import { ModalDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { parseOrderMinimumInput } from './ProductOrderRulesCard.js';
 import type { ScopeContext } from './ProductScopeEditor.js';
+import { DiscardChangesPrompt, InheritedHint, scopedSaveError } from './ScopedDialogParts.js';
 import { getProductScopeContext } from '../lib/product-scopes-api.js';
 import { languagesToOffer, translationPatch, type TranslationMap } from '../lib/media-scopes.js';
 
@@ -23,7 +24,14 @@ import { languagesToOffer, translationPatch, type TranslationMap } from '../lib/
  * dialog over the member channels' languages plus any language the unit already
  * names; Save sends the changed languages only (`''` = use the global name).
  */
-export function PackagingUnitsEditor({ productId }: { productId: string }): ReactNode {
+export function PackagingUnitsEditor({
+  productId,
+  canWrite,
+}: {
+  productId: string;
+  /** Feature 163 (review D15) — without `catalog:write` every control is read-only. */
+  canWrite: boolean;
+}): ReactNode {
   const t = useTranslation('catalog');
   const base = `/api/v1/admin/catalog/products/${productId}/packaging-units`;
 
@@ -49,7 +57,7 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
       const res = await apiClient.get<{ data: PackagingUnitDto[] }>(base);
       setUnits(res.data);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t('packagingUnits.error.load'));
+      setError(err instanceof ApiError ? err.envelope.error.message : t('packagingUnits.error.load'));
     } finally {
       setLoading(false);
     }
@@ -85,7 +93,7 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
         await fn();
         await load();
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : t('packagingUnits.error.save'));
+        setError(scopedSaveError(err, t));
       } finally {
         setBusy(false);
       }
@@ -161,15 +169,16 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
       <div className="b2b-card__body b2b-col" style={{ gap: 12 }}>
         <div className="b2b-help">{t('packagingUnits.help')}</div>
         <div className="b2b-help">{t('packagingUnits.minOrderUnitsHelp')}</div>
+        {!canWrite ? <div className="b2b-help">{t('packagingUnits.readOnly')}</div> : null}
         {invalidMinimum !== null ? (
-          <div id={errorId} role="alert" className="b2b-alert b2b-alert--error">
-            {minimumMessage()}
-          </div>
+          <Alert id={errorId} variant="destructive">
+            <AlertDescription>{minimumMessage()}</AlertDescription>
+          </Alert>
         ) : null}
         {error ? (
-          <div role="alert" className="b2b-alert b2b-alert--error">
-            {error}
-          </div>
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         ) : null}
 
         {loading ? (
@@ -195,7 +204,7 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
                     <input
                       className="b2b-input"
                       defaultValue={u.name}
-                      disabled={busy}
+                      disabled={busy || !canWrite}
                       aria-label={t('packagingUnits.col.name')}
                       onBlur={(e) => {
                         const v = e.target.value.trim();
@@ -210,7 +219,7 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
                       min={1}
                       step={1}
                       defaultValue={u.baseQuantity}
-                      disabled={busy}
+                      disabled={busy || !canWrite}
                       aria-label={t('packagingUnits.col.baseQuantity')}
                       onBlur={(e) => {
                         const v = Number(e.target.value);
@@ -229,7 +238,7 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
                       max={ORDER_MINIMUM_MAX}
                       step={1}
                       defaultValue={u.minOrderUnits ?? ''}
-                      disabled={busy}
+                      disabled={busy || !canWrite}
                       aria-label={t('packagingUnits.col.minOrderUnits')}
                       {...minimumA11y(u.id)}
                       onChange={() => {
@@ -243,7 +252,7 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
                       type="radio"
                       name={`pkg-default-${productId}`}
                       checked={u.isDefault}
-                      disabled={busy}
+                      disabled={busy || !canWrite}
                       aria-label={t('packagingUnits.col.default')}
                       onChange={() => {
                         if (!u.isDefault) patch(u.id, { isDefault: true });
@@ -254,7 +263,7 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
                     <button
                       type="button"
                       className="b2b-btn b2b-btn--ghost b2b-btn--sm"
-                      disabled={busy || i === 0}
+                      disabled={busy || !canWrite || i === 0}
                       aria-label={t('packagingUnits.action.moveUp')}
                       onClick={() => move(i, -1)}
                     >
@@ -263,7 +272,7 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
                     <button
                       type="button"
                       className="b2b-btn b2b-btn--ghost b2b-btn--sm"
-                      disabled={busy || i === units.length - 1}
+                      disabled={busy || !canWrite || i === units.length - 1}
                       aria-label={t('packagingUnits.action.moveDown')}
                       onClick={() => move(i, 1)}
                     >
@@ -280,14 +289,16 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
                     >
                       {t('packagingUnits.translations.open')}
                     </button>
-                    <button
-                      type="button"
-                      className="b2b-btn b2b-btn--ghost b2b-btn--sm"
-                      disabled={busy}
-                      onClick={() => remove(u.id)}
-                    >
-                      {t('packagingUnits.action.remove')}
-                    </button>
+                    {canWrite ? (
+                      <button
+                        type="button"
+                        className="b2b-btn b2b-btn--ghost b2b-btn--sm"
+                        disabled={busy}
+                        onClick={() => remove(u.id)}
+                      >
+                        {t('packagingUnits.action.remove')}
+                      </button>
+                    ) : null}
                   </td>
                 </tr>
               ))}
@@ -295,57 +306,60 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
           </table>
         )}
 
-        <div className="b2b-row" style={{ gap: 8, alignItems: 'flex-end' }}>
-          <input
-            className="b2b-input"
-            placeholder={t('packagingUnits.newName')}
-            value={newName}
-            disabled={busy}
-            aria-label={t('packagingUnits.col.name')}
-            onChange={(e) => setNewName(e.target.value)}
-          />
-          <input
-            className="b2b-input"
-            type="number"
-            min={1}
-            step={1}
-            placeholder={t('packagingUnits.newQuantity')}
-            value={newQty}
-            disabled={busy}
-            aria-label={t('packagingUnits.col.baseQuantity')}
-            onChange={(e) => setNewQty(e.target.value)}
-          />
-          <input
-            className="b2b-input"
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={ORDER_MINIMUM_MAX}
-            step={1}
-            placeholder={t('packagingUnits.newMinimum')}
-            value={newMin}
-            disabled={busy}
-            aria-label={t('packagingUnits.col.minOrderUnits')}
-            {...minimumA11y('new')}
-            onChange={(e) => {
-              setNewMin(e.target.value);
-              if (invalidMinimum === 'new') setInvalidMinimum(null);
-            }}
-          />
-          <button
-            type="button"
-            className="b2b-btn b2b-btn--primary b2b-btn--sm"
-            disabled={busy}
-            onClick={add}
-          >
-            {t('packagingUnits.action.add')}
-          </button>
-        </div>
+        {canWrite ? (
+          <div className="b2b-row" style={{ gap: 8, alignItems: 'flex-end' }}>
+            <input
+              className="b2b-input"
+              placeholder={t('packagingUnits.newName')}
+              value={newName}
+              disabled={busy}
+              aria-label={t('packagingUnits.col.name')}
+              onChange={(e) => setNewName(e.target.value)}
+            />
+            <input
+              className="b2b-input"
+              type="number"
+              min={1}
+              step={1}
+              placeholder={t('packagingUnits.newQuantity')}
+              value={newQty}
+              disabled={busy}
+              aria-label={t('packagingUnits.col.baseQuantity')}
+              onChange={(e) => setNewQty(e.target.value)}
+            />
+            <input
+              className="b2b-input"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={ORDER_MINIMUM_MAX}
+              step={1}
+              placeholder={t('packagingUnits.newMinimum')}
+              value={newMin}
+              disabled={busy}
+              aria-label={t('packagingUnits.col.minOrderUnits')}
+              {...minimumA11y('new')}
+              onChange={(e) => {
+                setNewMin(e.target.value);
+                if (invalidMinimum === 'new') setInvalidMinimum(null);
+              }}
+            />
+            <button
+              type="button"
+              className="b2b-btn b2b-btn--primary b2b-btn--sm"
+              disabled={busy}
+              onClick={add}
+            >
+              {t('packagingUnits.action.add')}
+            </button>
+          </div>
+        ) : null}
       </div>
       {translating ? (
         <PackagingUnitTranslationsDialog
           unit={translating}
           context={context}
+          canWrite={canWrite}
           onClose={() => setTranslating(null)}
           onSave={async (nameTranslations) => {
             await apiClient.patch(`${base}/${translating.id}`, { nameTranslations });
@@ -357,16 +371,16 @@ export function PackagingUnitsEditor({ productId }: { productId: string }): Reac
   );
 }
 
-const UNIT_NAME_MAX = 160;
-
 function PackagingUnitTranslationsDialog({
   unit,
   context,
+  canWrite,
   onClose,
   onSave,
 }: {
   unit: PackagingUnitDto;
   context: ScopeContext | null;
+  canWrite: boolean;
   onClose: () => void;
   onSave: (nameTranslations: TranslationMap) => Promise<void>;
 }): ReactNode {
@@ -377,7 +391,14 @@ function PackagingUnitTranslationsDialog({
   const [names, setNames] = useState<TranslationMap>({ ...saved });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const languages = languagesToOffer(context, saved);
+  const dirty = translationPatch(saved, names) !== null;
+  /** Escape and Cancel: unsaved names are dropped only when the operator says so (D16). */
+  const requestClose = (): void => {
+    if (dirty && canWrite) setConfirmDiscard(true);
+    else onClose();
+  };
 
   const save = async (): Promise<void> => {
     const patch = translationPatch(saved, names);
@@ -391,7 +412,7 @@ function PackagingUnitTranslationsDialog({
       await onSave(patch);
       onClose();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t('packagingUnits.translations.error'));
+      setError(scopedSaveError(err, t));
     } finally {
       setBusy(false);
     }
@@ -400,26 +421,29 @@ function PackagingUnitTranslationsDialog({
   return (
     <ModalDialog
       title={t('packagingUnits.translations.title', { name: unit.name })}
-      onClose={onClose}
+      onClose={requestClose}
       busy={busy}
       dismissOnScrim={false}
       {...(error ? { 'aria-describedby': errorId } : {})}
       footer={
         <>
-          <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
+          <Button type="button" variant="outline" disabled={busy} onClick={requestClose}>
             {t('packagingUnits.translations.cancel')}
           </Button>
-          <Button type="button" disabled={busy} onClick={() => void save()}>
-            {t('packagingUnits.translations.save')}
+          <Button type="button" disabled={busy || !canWrite} aria-busy={busy} onClick={() => void save()}>
+            {busy ? t('productEditor.scopeDialog.saving') : t('packagingUnits.translations.save')}
           </Button>
         </>
       }
     >
       <div className="space-y-3">
+        {confirmDiscard ? (
+          <DiscardChangesPrompt onDiscard={onClose} onKeep={(): void => setConfirmDiscard(false)} t={t} />
+        ) : null}
         {error ? (
-          <div id={errorId} role="alert" className="b2b-alert b2b-alert--error">
-            {error}
-          </div>
+          <Alert id={errorId} variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         ) : null}
         <p className="text-xs text-muted-foreground">
           {languages.length === 0
@@ -435,10 +459,12 @@ function PackagingUnitTranslationsDialog({
               id={`${fieldId}-${language}`}
               value={names[language] ?? ''}
               placeholder={unit.name}
-              maxLength={UNIT_NAME_MAX}
-              disabled={busy}
+              maxLength={PACKAGING_UNIT_NAME_MAX}
+              disabled={busy || !canWrite}
+              aria-describedby={`${fieldId}-${language}-inherited`}
               onChange={(e): void => setNames((prev) => ({ ...prev, [language]: e.target.value }))}
             />
+            <InheritedHint id={`${fieldId}-${language}-inherited`} value={unit.name} t={t} />
           </div>
         ))}
       </div>
