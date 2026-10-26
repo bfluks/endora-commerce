@@ -1097,7 +1097,7 @@ export function ProductEditor(): ReactNode {
               {/* Feature 155 — returnable for every type; the minimum gates itself (D5). */}
               <ProductOrderRulesCard productId={id} productType={type} />
               {type === 'simple' || type === 'configurable' ? (
-                <PackagingUnitsEditor productId={id} />
+                <PackagingUnitsEditor productId={id} canWrite={canWrite} />
               ) : null}
             </div>
           ) : null}
