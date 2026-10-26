@@ -946,5 +946,6 @@
   "productsList.bulkEdit.result.caption": "Produkty pominięte, nieudane lub zapisane z ostrzeżeniem",
   "productsList.bulkEdit.result.product": "Produkt",
   "productsList.bulkEdit.result.status": "Wynik",
-  "productsList.bulkEdit.result.reason": "Powód"
+  "productsList.bulkEdit.result.reason": "Powód",
+  "productEditor.statusGate.refused": "Dane produktu nie zostały zapisane: do jego włączenia brakuje wartości. {details} Zmiany pozostają w formularzu."
 }
