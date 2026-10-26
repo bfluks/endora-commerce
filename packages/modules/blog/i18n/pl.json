@@ -36,7 +36,7 @@
   "pagination.previous": "Poprzednia",
   "productStatus.active": "aktywny",
   "productStatus.archived": "zarchiwizowany",
-  "productStatus.draft": "szkic",
+  "productStatus.inactive": "nieaktywny",
   "sections.lifecycle": "Cykl życia",
   "sections.metadata": "Metadane",
   "sections.relatedPosts": "Powiązane wpisy",
