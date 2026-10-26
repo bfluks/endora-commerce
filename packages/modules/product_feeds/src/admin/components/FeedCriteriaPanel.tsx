@@ -177,7 +177,6 @@ export function FeedCriteriaPanel(props: FeedCriteriaPanelProps): ReactNode {
       status: [
         { value: 'active', label: 'active' },
         { value: 'inactive', label: 'inactive' },
-        { value: 'draft', label: 'draft' },
       ],
       productType: ['simple', 'configurable', 'grouped', 'bundle', 'virtual'].map((type) => ({
         value: type,

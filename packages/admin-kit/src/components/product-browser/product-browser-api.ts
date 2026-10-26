@@ -4,7 +4,12 @@
 import { apiClient } from '../../lib/index.js';
 import type { ProductBrowserItem, ProductBrowserType } from './types.js';
 
-export type ProductBrowserStatusFilter = 'all' | 'active' | 'draft' | 'inactive';
+/**
+ * The browser's tabs. `all`, `active` and `inactive` list products that are **not**
+ * archived; `archived` lists the archived ones of either status (feature 163,
+ * FR-113, research R30.4). Archived is its own axis, never a status value.
+ */
+export type ProductBrowserStatusFilter = 'all' | 'active' | 'inactive' | 'archived';
 
 export interface ProductBrowserQuery {
   /** Zero-based. */
@@ -15,11 +20,12 @@ export interface ProductBrowserQuery {
   q: string;
 }
 
+/** The admin list's counts (R30.4): the first three over non-archived rows. */
 export interface ProductBrowserCounts {
   all: number;
   active: number;
-  draft: number;
   inactive: number;
+  archived: number;
 }
 
 export interface ProductBrowserPage {
@@ -38,15 +44,16 @@ const PRODUCTS_PATH = '/api/v1/admin/catalog/products';
 
 /**
  * The list request, in the order contract B1 fixes:
- * `includeArchived=1&page&pageSize[&status][&type][&q]`. `includeArchived` is always
- * sent so the Inactive tab is reachable on every host, as on the Products list.
+ * `[archived=only&]page&pageSize[&status][&type][&q]`. Archived products are left
+ * out by the list's default (`archived=exclude`, feature 163 R30.4), so the first
+ * three tabs and their counts agree; the Archived tab asks for them alone.
  */
 export function buildProductBrowserPath(query: ProductBrowserQuery): string {
   const params = new URLSearchParams();
-  params.set('includeArchived', '1');
+  if (query.status === 'archived') params.set('archived', 'only');
   params.set('page', String(query.page));
   params.set('pageSize', String(query.pageSize));
-  if (query.status !== 'all') params.set('status', query.status);
+  if (query.status === 'active' || query.status === 'inactive') params.set('status', query.status);
   if (query.type !== null) params.set('type', query.type);
   const trimmed = query.q.trim();
   if (trimmed.length > 0) params.set('q', trimmed);
@@ -64,6 +71,7 @@ export async function fetchProductBrowserPage(query: ProductBrowserQuery): Promi
       name: p.name,
       status: p.status,
       type: p.type,
+      archivedAt: p.archivedAt ?? null,
     })),
     total: res.pagination.total,
     counts: res.counts,
