@@ -67,6 +67,11 @@ You can hide an image or give it a role only in a channel the product is in;
 otherwise the request answers `422 SCOPE_INVALID`. Removing an override is always
 allowed, even after the product has left the channel.
 
+Hiding is presentation, not access control. A hidden image is not shown in the
+channel, but its file keeps its stable URL, and anyone who has that URL can still
+fetch it. Do not rely on hiding to keep an image confidential: a file that must
+not be public must not be in the product's gallery.
+
 Each of these writes is recorded once in the audit log as
 `product.media.update`, with the item's (or the channel's roles') state before and
 after. Sending the recorded before-state back through the same route restores it.
