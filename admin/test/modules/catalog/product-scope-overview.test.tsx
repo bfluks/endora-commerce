@@ -391,12 +391,12 @@ describe('ProductScopeOverview (US4)', () => {
     const table = await renderOverview();
     const deCell = cellOf(table, /B2B shop/, /^DE/);
     const loadsBefore = getSpy.mock.calls.filter(([p]) => p === OVERVIEW_PATH).length;
-    await user.click(within(deCell).getByRole('button', { name: 'Reset Name in B2B shop · DE to inherited' }));
+    await user.click(within(deCell).getByRole('button', { name: 'Use inherited for Name in B2B shop · DE' }));
     // A text value asks first (UX-1 = A), naming the field, the scope and what happens.
     const dialog = await screen.findByRole('dialog', { name: /Name.*B2B shop · DE/ });
     expect(dialog.textContent).toMatch(/inherited value applies/i);
     expect(patchSpy).not.toHaveBeenCalled();
-    await user.click(within(dialog).getByRole('button', { name: /^reset$/i }));
+    await user.click(within(dialog).getByRole('button', { name: /^use inherited$/i }));
     await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
     expect(patchSpy).toHaveBeenCalledWith(`${BASE}/value-overrides`, {
       upserts: [],
@@ -405,7 +405,7 @@ describe('ProductScopeOverview (US4)', () => {
     await waitFor(() =>
       expect(getSpy.mock.calls.filter(([p]) => p === OVERVIEW_PATH).length).toBeGreaterThan(loadsBefore),
     );
-    expect(await screen.findByRole('status')).toHaveTextContent(/reset to inherited/i);
+    expect(await screen.findByRole('status')).toHaveTextContent(/now uses the inherited value/i);
     // D11b — the button went with the value; focus returns to the overview's heading.
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: /scope overview/i })));
   });
@@ -413,7 +413,7 @@ describe('ProductScopeOverview (US4)', () => {
   it('a text value’s reset is not sent when the dialog is cancelled (UX-1 = A)', async () => {
     const user = userEvent.setup();
     const table = await renderOverview();
-    await user.click(within(cellOf(table, /B2B shop/, /^DE/)).getByRole('button', { name: 'Reset Name in B2B shop · DE to inherited' }));
+    await user.click(within(cellOf(table, /B2B shop/, /^DE/)).getByRole('button', { name: 'Use inherited for Name in B2B shop · DE' }));
     await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /^cancel$/i }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(patchSpy).not.toHaveBeenCalled();
@@ -424,7 +424,7 @@ describe('ProductScopeOverview (US4)', () => {
     const table = await renderOverview();
     // Not a text value: one click, no dialog (UX-1 = A).
     await user.click(
-      within(channelValuesOf(table, /B2B shop/)).getByRole('button', { name: 'Reset Publication window in B2B shop to inherited' }),
+      within(channelValuesOf(table, /B2B shop/)).getByRole('button', { name: 'Use inherited for Publication window in B2B shop' }),
     );
     expect(screen.queryByRole('dialog')).toBeNull();
     await waitFor(() =>
@@ -451,15 +451,15 @@ describe('ProductScopeOverview (US4)', () => {
       }),
     );
     const table = await renderOverview();
-    await user.click(within(languageValuesOf(table, /^EN/)).getByRole('button', { name: 'Reset URL key in EN to inherited' }));
-    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /^reset$/i }));
+    await user.click(within(languageValuesOf(table, /^EN/)).getByRole('button', { name: 'Use inherited for URL key in EN' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /^use inherited$/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/Hammer drill/);
   });
 
   it('lists orphaned overrides with a warning and deletes each through its owner (FR-015)', async () => {
     const user = userEvent.setup();
     await renderOverview();
-    const region = screen.getByRole('region', { name: /no longer apply/i });
+    const region = screen.getByRole('region', { name: /^no longer applies$/i });
     const items = within(region).getAllByRole('listitem');
     expect(items).toHaveLength(4);
     expect(items[0]?.textContent).toMatch(/Outlet/);
@@ -491,7 +491,7 @@ describe('ProductScopeOverview (US4)', () => {
   it('is read-only for catalog:read — no reset, no delete (US4 #3)', async () => {
     const table = await renderOverview({ permissions: ['catalog:read'] });
     expect(within(table).queryAllByRole('button')).toHaveLength(0);
-    const region = screen.getByRole('region', { name: /no longer apply/i });
+    const region = screen.getByRole('region', { name: /^no longer applies$/i });
     expect(within(region).queryAllByRole('button')).toHaveLength(0);
     expect(screen.getByText(/read-only/i)).toBeTruthy();
   });
@@ -541,5 +541,11 @@ describe('ProductScopeOverview (US4)', () => {
     render(wrap(<ProductScopeOverview productId={PRODUCT_ID} />, { language: 'pl' }));
     const table = await screen.findByRole('table', { name: /przegląd zakresów/i });
     expect(within(table).getByRole('rowheader', { name: /Sklep B2B/ })).toBeTruthy();
+    // UX-3 = A — one vocabulary: "Użyj dziedziczonego" returns to the inherited value,
+    // "Nie obowiązuje już" names an orphan; "Przywróć" is kept for archive restore.
+    expect(within(table).getAllByRole('button', { name: /^Użyj dziedziczonego: / }).length).toBeGreaterThan(0);
+    expect(within(table).queryByText(/Przywróć/)).toBeNull();
+    expect(cellOf(table, /Sklep B2B/, /^PL/).textContent).toBe('Język nieoferowany w kanale');
+    expect(screen.getByRole('region', { name: /^nie obowiązuje już$/i })).toBeTruthy();
   });
 });
