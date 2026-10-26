@@ -84,8 +84,17 @@ export async function getServerContext(input?: { langOverride?: string | null })
 
   // The header language/currency switchers persist the buyer's choice in
   // cookies (the root layout that renders the header can't read `?lang`
-  // query params). The cookie-set language takes priority over the explicit
-  // override and the Accept-Language header.
+  // query params). The cookie-set language takes priority over the
+  // Accept-Language header.
+  //
+  // An explicit override — the product page's `?lang=`, the only caller that
+  // passes one — beats the cookie (feature 163, owner decision L-1 = A,
+  // 2026-10-26): product URL keys are per language and a non-default-language
+  // product link is `/p/<key>?lang=<L>`, so rendering it in the cookie's
+  // language would look the key up in the wrong language and answer not-found.
+  // An override that is not an active language is skipped and the cookie
+  // decides. The cookie is deliberately not rewritten: opening a link is not
+  // choosing a preference, and only the header switcher stores one.
   const langCookie = jar.get('lang')?.value ?? null;
   const currency = jar.get('currency')?.value || undefined;
   // Issue #265 — who is in front of the page, for the readers that carry a
@@ -96,7 +105,7 @@ export async function getServerContext(input?: { langOverride?: string | null })
 
   const locale = resolveLocale({
     acceptLanguage,
-    langQuery: langCookie ?? input?.langOverride ?? null,
+    langQuery: [input?.langOverride, langCookie],
     config,
   });
 
