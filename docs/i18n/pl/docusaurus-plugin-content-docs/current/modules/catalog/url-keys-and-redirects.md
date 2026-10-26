@@ -47,7 +47,7 @@ Pominięta lista lub klucz pozostają bez zmian; `key: null` usuwa klucz w danym
 znowu obowiązuje tam klucz dziedziczony. Klucz składa się z małych liter, cyfr i łączników i ma
 najwyżej 160 znaków. Klucz dla kanału, do którego produkt nie należy, albo dla języka, którego kanał
 nie oferuje, jest odrzucany z kodem `422 SCOPE_INVALID`; klucz pozostawiony przez kanał, z którego
-produkt został usunięty, jest pokazywany jako nieużywany i można go usunąć.
+produkt został usunięty, jest oznaczony jako **Nie obowiązuje już** i można go usunąć.
 
 - **Klucz, który ma inny produkt** w tym języku, jest odrzucany z kodem `409 URL_KEY_TAKEN`, a
   odpowiedź wskazuje ten produkt (`details.conflicts`). Klucz globalny usuniętego produktu pozostaje
