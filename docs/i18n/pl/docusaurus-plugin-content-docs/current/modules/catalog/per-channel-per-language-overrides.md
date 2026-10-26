@@ -206,7 +206,7 @@ Zakładka **Details** strony edycji produktu ma nad istniejącymi polami dla ję
 3. Pokazuje efektywne Name i Description dla aktywnego kontekstu, z etykietą źródła przy każdym
    polu — `channel + language override` / `channel override` / `global baseline (language)` /
    `global baseline (fallback)` / `no value`.
-4. Przy każdym polu oferuje działania „Add override” / „Edit override” / „Reset to Global”. Zmiany
+4. Przy każdym polu oferuje działania „Add override” / „Edit override” / „Użyj dziedziczonego”. Zmiany
    są zapisywane przez `PATCH /value-overrides` z optymistycznym odświeżeniem.
 5. Zapisuje wybór redaktora `(channel, language)` przez `PUT /editor-preference` (z opóźnieniem,
    bez gwarancji), aby przy następnej wizycie ustawić ten sam kontekst.
@@ -331,9 +331,13 @@ zawiera:
 
 Nadpisania, które już nie obowiązują, są wymienione w `orphans` z powodem: `not_a_member`,
 `language_not_offered` albo `attribute_scope_changed`. Na zakładce Scopes wartość zakresu,
-nadpisanie wartości albo klucz URL można przywrócić do wartości dziedziczonej tam, gdzie są
-ustawione, a osierocone nadpisanie usunąć; zakładka wywołuje endpoint, do którego należy dana
-wartość (`…/scopes`, `…/value-overrides` albo `…/url-keys`). Produkt, który nie należy do żadnego
+nadpisanie wartości albo klucz URL wraca do wartości dziedziczonej przyciskiem **Użyj
+dziedziczonego** tam, gdzie jest ustawione — wartości samego kanału w kolumnie „Cały kanał”,
+wartości samego języka w wierszu „Każdy kanał” — a osierocone nadpisanie (wymienione w sekcji
+**Nie obowiązuje już**) można usunąć; zakładka wywołuje endpoint, do którego należy dana wartość
+(`…/scopes`, `…/value-overrides` albo `…/url-keys`). Przywrócenie wartości tekstowej (nazwy,
+opisu, klucza URL, pola SEO) i usunięcie osieroconej wartości wymagają potwierdzenia, które
+nazywa pole i zakres; pozostałe wartości wracają jednym kliknięciem. Produkt, który nie należy do żadnego
 kanału sprzedaży, nie ma kanałów i ma wszystkie aktywne języki platformy.
 
 Przed wyłączeniem flagi `channelScoped` lub `languageScoped` atrybutu
