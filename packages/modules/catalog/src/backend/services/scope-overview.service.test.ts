@@ -319,6 +319,81 @@ describe('buildScopeOverview (spec 163, T069)', () => {
   });
 });
 
+describe('buildScopeOverview — media and SEO scopes (spec 163, T134b, T118c)', () => {
+  it('lists gallery role / hidden overrides on the channel row and alt text on the language column (FR-041)', () => {
+    const overview = buildScopeOverview(
+      input({
+        scopedFields: [
+          { field: 'media:roles', channelId: B2B, languageCode: null },
+          { field: 'media:hidden', channelId: B2B, languageCode: null },
+          { field: 'media:altText', channelId: null, languageCode: 'de-de' },
+        ],
+      }),
+    );
+    expect(overview.channelRows.find((r) => r.channelId === B2B)?.overriddenFields).toEqual([
+      'media:hidden',
+      'media:roles',
+    ]);
+    expect(overview.languageColumns.find((c) => c.languageCode === 'de-DE')?.overriddenFields).toEqual([
+      'media:altText',
+    ]);
+    expect(cell(overview, B2B, 'de-DE').overriddenFields).toEqual([
+      { field: 'media:altText', level: 'language' },
+      { field: 'media:hidden', level: 'channel' },
+      { field: 'media:roles', level: 'channel' },
+    ]);
+    expect(cell(overview, B2C, 'pl-PL').overriddenFields).toEqual([]);
+  });
+
+  it('lists an SEO override at L, C and C × L, each at its level, after every other field', () => {
+    const overview = buildScopeOverview(
+      input({
+        scopedFields: [
+          { field: 'seo:title', channelId: null, languageCode: 'pl-PL' },
+          { field: 'seo:description', channelId: B2C, languageCode: null },
+          { field: 'seo:title', channelId: B2C, languageCode: 'en-gb' },
+          { field: 'media:roles', channelId: B2C, languageCode: null },
+        ],
+      }),
+    );
+    expect(cell(overview, B2C, 'en-GB').overriddenFields).toEqual([
+      { field: 'media:roles', level: 'channel' },
+      { field: 'seo:description', level: 'channel' },
+      { field: 'seo:title', level: 'channel_language' },
+    ]);
+    expect(cell(overview, B2C, 'pl-PL').overriddenFields).toEqual([
+      { field: 'media:roles', level: 'channel' },
+      { field: 'seo:description', level: 'channel' },
+      { field: 'seo:title', level: 'language' },
+    ]);
+    expect(cell(overview, B2B, 'de-DE').overriddenFields).toEqual([]);
+  });
+
+  it('lists a channel or channel × language override the resolution ignores as an orphan (FR-015)', () => {
+    const overview = buildScopeOverview(
+      input({
+        channels: [
+          { id: B2B, name: { 'en-US': 'B2B' }, languages: ['pl-PL', 'de-DE'], isMember: true },
+          { id: GONE, name: { 'en-US': 'Gone' }, languages: ['pl-PL'], isMember: false },
+        ],
+        scopedFields: [
+          { field: 'media:hidden', channelId: GONE, languageCode: null },
+          { field: 'seo:title', channelId: B2B, languageCode: 'fr-FR' },
+        ],
+      }),
+    );
+    expect(overview.orphans).toEqual([
+      { field: 'media:hidden', channelId: GONE, languageCode: null, reason: 'not_a_member' },
+      { field: 'seo:title', channelId: B2B, languageCode: 'fr-FR', reason: 'language_not_offered' },
+    ]);
+    expect(overview.cells.flatMap((c) => c.overriddenFields)).toEqual([]);
+  });
+
+  it('with no scoped field (seo off, no media override) the overview is unchanged', () => {
+    expect(buildScopeOverview(input({ scopedFields: [] }))).toEqual(buildScopeOverview(input()));
+  });
+});
+
 describe('ScopeOverviewService.read (spec 163, T069)', () => {
   it('answers PRODUCT_NOT_FOUND for an absent or soft-deleted product', async () => {
     const em = { findOne: async () => null };

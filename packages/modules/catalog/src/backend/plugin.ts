@@ -63,7 +63,7 @@ import { ProductListViewService } from './services/product-list-view-service.js'
 import { ProductOverridesService } from './services/product-overrides.service.js';
 import { ProductScopesService } from './services/product-scopes.service.js';
 import { UrlKeyService } from './services/url-key.service.js';
-import { ScopeOverviewService } from './services/scope-overview.service.js';
+import { ScopeOverviewService, type ListSeoProductScopes } from './services/scope-overview.service.js';
 import { composeCompletenessGate } from './services/scope-completeness.js';
 import { AttributeScopePreviewService } from './services/attribute-scope-preview.js';
 import { ProductScopeContextService } from './services/product-scope-context.service.js';
@@ -144,6 +144,12 @@ export interface CatalogModuleOptions {
    * Optional: without it the page serves its derived metadata.
    */
   resolveSeoProductMeta?: ResolveSeoProductMeta;
+  /**
+   * Feature 163 (T118c) — `seo`'s scopes of a product for the scope overview; answers
+   * `[]` while `seo` is not effectively present. Optional: without it the overview lists
+   * no SEO field.
+   */
+  listSeoProductScopes?: ListSeoProductScopes;
   /**
    * Feature 075 — `organizations`' read port. The external namespace's price
    * decoration resolves the calling organisation through it, where it used to
@@ -478,6 +484,7 @@ export function catalogModule(options: CatalogModuleOptions) {
       options.emFactory,
       options.commandBus,
       options.assets,
+      options.salesChannelMembership,
     );
     const attachmentService = new AttachmentService(
       options.emFactory,
@@ -576,6 +583,7 @@ export function catalogModule(options: CatalogModuleOptions) {
             options.salesChannelMembership,
             options.languageService,
             attributeReadService,
+            options.listSeoProductScopes,
           )
         : undefined;
     // Feature 163 — the FR-090 preview of an attribute's scope-flag change.

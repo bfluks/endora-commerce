@@ -34,6 +34,7 @@ import {
   putCategoryContentRequestSchema,
   updateCategoryRequestSchema,
   updateGalleryItemRequestSchema,
+  putGalleryChannelRolesRequestSchema,
   updateProductRequestSchema,
   updateVariantRequestSchema,
   createProductSavedViewRequestSchema,
@@ -1383,18 +1384,35 @@ export async function registerCatalogAdminRoutes(
       },
       async (request) => {
         const body = updateGalleryItemRequestSchema.parse(request.body);
+        // One audit entry per request (FR-080): the service's Command writes it — the
+        // `gallery_item.update` one, or `product.media.update` when the body carries
+        // alt text or the hidden channels (feature 163).
         const item = await gallery.update(
           request.params.productId,
           request.params.itemId,
           body,
           { replaceConflictingLabels: request.query.replace === 'true' },
         );
-        await auditEmit(request, {
-          action: 'gallery.update',
-          objectType: 'gallery_item',
-          objectId: request.params.itemId,
-        });
         return { data: item };
+      },
+    );
+
+    // Feature 163 (FR-076) — a channel's own holders of the gallery roles.
+    app.get<{ Params: { productId: string } }>(
+      '/api/v1/admin/catalog/products/:productId/gallery/channel-roles',
+      { preHandler: requireAdmin('catalog:read') },
+      async (request) => ({ data: await gallery.listChannelRoles(request.params.productId) }),
+    );
+
+    app.put<{ Params: { productId: string } }>(
+      '/api/v1/admin/catalog/products/:productId/gallery/channel-roles',
+      {
+        preHandler: requireAdmin('catalog:write'),
+        schema: { body: putGalleryChannelRolesRequestSchema },
+      },
+      async (request) => {
+        const body = putGalleryChannelRolesRequestSchema.parse(request.body);
+        return { data: await gallery.putChannelRoles(request.params.productId, body) };
       },
     );
 

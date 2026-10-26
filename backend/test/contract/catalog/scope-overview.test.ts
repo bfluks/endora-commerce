@@ -7,6 +7,7 @@ import {
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
 import { seedProductScopesAdmins } from '../../helpers/product-scopes-admins.js';
+import { withModuleOff } from '../../helpers/off-state.js';
 
 /**
  * Feature 163, Phase 9 (T067) — `GET /api/v1/admin/catalog/products/:id/scope-overview`
@@ -390,5 +391,93 @@ describe('Scope overview — GET /admin/catalog/products/:id/scope-overview (spe
     // The languages axis is every active platform language.
     expect(data.languages.length).toBeGreaterThan(0);
     expect(data.languageColumns.map((c) => c.languageCode)).toEqual(data.languages);
+  });
+
+  describe('media and SEO scopes (Phase 21: T134a, T118a)', () => {
+    async function seedImage(productId: string): Promise<string> {
+      const assetId = randomUUID();
+      await sql(
+        `insert into assets (id, kind, filename, mime_type, size_bytes, storage_url, created_at, updated_at)
+         values (?, 'image', 'overview.jpg', 'image/jpeg', 1, ?, now(), now())`,
+        [assetId, `https://cdn.test/${run}/${assetId}.jpg`],
+      );
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/catalog/products/${productId}/gallery`,
+        ...admin,
+        payload: { assetId },
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      return (res.json() as { data: { id: string } }).data.id;
+    }
+
+    it('lists gallery role / hidden overrides per channel and alt text per language, and their orphans (FR-041)', async () => {
+      const productId = await createProduct([b2b, b2c, left]);
+      const itemId = await seedImage(productId);
+      const roles = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/admin/catalog/products/${productId}/gallery/channel-roles`,
+        ...admin,
+        payload: { channelId: b2b, roles: { base_image: itemId } },
+      });
+      expect(roles.statusCode, roles.body).toBe(200);
+      const patched = await h.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/catalog/products/${productId}/gallery/${itemId}`,
+        ...admin,
+        payload: { hiddenInChannels: [b2c, left], altText: { 'de-DE': 'Bild' } },
+      });
+      expect(patched.statusCode, patched.body).toBe(200);
+      // The product leaves `left`: its hidden row there stays and is an orphan.
+      await sql(`delete from sales_channel_products where sales_channel_id = ? and product_id = ?`, [left, productId]);
+
+      const data = await overview(productId);
+      expect(data.channelRows.find((r) => r.channelId === b2b)?.overriddenFields).toEqual(['media:roles']);
+      expect(data.channelRows.find((r) => r.channelId === b2c)?.overriddenFields).toEqual(['media:hidden']);
+      expect(data.languageColumns.find((c) => c.languageCode === 'de-DE')?.overriddenFields).toEqual(['media:altText']);
+      expect(cell(data, b2b, 'de-DE').overriddenFields).toEqual(
+        expect.arrayContaining([
+          { field: 'media:roles', level: 'channel' },
+          { field: 'media:altText', level: 'language' },
+        ]),
+      );
+      expect(cell(data, b2c, 'pl-PL').overriddenFields).toEqual([{ field: 'media:hidden', level: 'channel' }]);
+      expect(data.orphans).toEqual([{ field: 'media:hidden', channelId: left, languageCode: null, reason: 'not_a_member' }]);
+    });
+
+    it('lists an SEO override at L, C and C × L, and nothing (no error) while seo is off', async () => {
+      const productId = await createProduct([b2b, b2c]);
+      const put = async (payload: Record<string, unknown>): Promise<void> => {
+        const res = await h.app.inject({
+          method: 'PUT',
+          url: `/api/v1/admin/seo/meta/product/${productId}`,
+          ...admin,
+          payload,
+        });
+        expect(res.statusCode, res.body).toBe(200);
+      };
+      await put({ locale: 'de-DE', title: 'Übersicht' });
+      await put({ channelId: b2c, description: 'B2C' });
+      await put({ channelId: b2b, locale: 'pl-PL', title: 'B2B PL', ogTitle: 'B2B PL OG' });
+      try {
+        const data = await overview(productId);
+        expect(data.languageColumns.find((c) => c.languageCode === 'de-DE')?.overriddenFields).toEqual(['seo:title']);
+        expect(data.channelRows.find((r) => r.channelId === b2c)?.overriddenFields).toEqual(['seo:description']);
+        expect(cell(data, b2b, 'pl-PL').overriddenFields).toEqual([
+          { field: 'seo:ogTitle', level: 'channel_language' },
+          { field: 'seo:title', level: 'channel_language' },
+        ]);
+        expect(cell(data, b2b, 'de-DE').overriddenFields).toEqual([{ field: 'seo:title', level: 'language' }]);
+        expect(cell(data, b2c, 'pl-PL').overriddenFields).toEqual([{ field: 'seo:description', level: 'channel' }]);
+
+        await withModuleOff('seo', 'deactivated', async () => {
+          const off = await overview(productId);
+          expect(off.cells.flatMap((c) => c.overriddenFields.map((f) => f.field)).filter((f) => f.startsWith('seo:'))).toEqual([]);
+          expect(off.languageColumns.flatMap((c) => c.overriddenFields)).toEqual([]);
+        });
+      } finally {
+        await sql(`delete from seo_meta_overrides where entity_id = ?`, [productId]);
+      }
+    });
   });
 });
