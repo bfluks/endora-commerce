@@ -707,6 +707,9 @@ no admin surface offers or labels `draft`.
   quick search no longer passes `includeArchived`, so it does not find archived products at all. Orders' quick search
   keeps `includeArchived` and shows an archived product refused with its reason; the brief asked RFQ to drop the
   prop, so the two screens differ there (owner question in the report). Inactive products stay selectable for RFQ.
+- *RFQ-c = B (owner, 2026-10-26).* The RFQ quick search behaves as the order's: `includeArchived` is back beside
+  `blockArchived`, so an archived product is listed, disabled, with the reason "archived". The browser is unchanged and
+  already matches orders (no Archived tab, All leaves archived out). Test: `RfqCreatePage.product-browser.test.tsx`.
 - *P-2 → A.* See T156z-sv.
 - *I1 → B.* Restore shows no gate message (none is built for it).
 
