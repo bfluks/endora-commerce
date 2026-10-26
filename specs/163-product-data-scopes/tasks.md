@@ -1198,11 +1198,24 @@ the losing product ("in every language" for a language-less redirect) retrying w
 `urlKeysChanges(saved, draft)` diff with trim + lowercase. `lib/product-url-keys-api.ts` and its error keys exist.
 T126/T128 (seo module channel selector) after that.
 
-- [ ] T125 [P] [US7] [S3] RED: URL-keys panel edits global / per-language / C×L keys with "use inherited"; shows effective URL per (C, L); `URL_KEY_TAKEN` names the holder; takeover confirmation dialog names the losing product and retries with `confirmTakeover`; redirect list with delete when the response carries `redirects`; **with `seo` off (`redirects` absent) no redirect list, no note and no redirect affordance is rendered (Q-C), while the takeover confirmation still appears and names the losing product**; a takeover of a language-less (former global) redirect says the product loses it **in every language**; effective URLs shown as the response's `url` (never composed in the admin) — `admin/test/modules/catalog/product-url-keys-panel.test.tsx`
-- [ ] T126 [P] [US8] [S3] RED: SEO panel gains a channel selector beside the language one, shows source per field, and "use inherited" deletes exactly the selected scope's row — `admin/test/modules/seo/seo-meta-scope.test.tsx`
-- [ ] T127 [US7] [S3] `ProductUrlKeysPanel.tsx` in the product editor — `src/admin/components/ProductUrlKeysPanel.tsx`
-- [ ] T128 [US8] [S3] SEO panel per scope, deleting a scope row by (`channelId?`, `locale?`) — `packages/modules/seo/src/admin/**`
-- [ ] T129 [S3] i18n keys in `catalog` and `seo` bundles (handover for catalog)
+- [x] T125 [P] [US7] [S3] RED: URL-keys panel edits global / per-language / C×L keys with "use inherited"; shows effective URL per (C, L); `URL_KEY_TAKEN` names the holder; takeover confirmation dialog names the losing product and retries with `confirmTakeover`; redirect list with delete when the response carries `redirects`; **with `seo` off (`redirects` absent) no redirect list, no note and no redirect affordance is rendered (Q-C), while the takeover confirmation still appears and names the losing product**; a takeover of a language-less (former global) redirect says the product loses it **in every language**; effective URLs shown as the response's `url` (never composed in the admin) — `admin/test/modules/catalog/product-url-keys-panel.test.tsx`
+- [x] T126 [P] [US8] [S3] RED: SEO panel gains a channel selector beside the language one, shows source per field, and "use inherited" deletes exactly the selected scope's row — `admin/test/modules/seo/seo-meta-scope.test.tsx`
+- [x] T127 [US7] [S3] `ProductUrlKeysPanel.tsx` in the product editor — `src/admin/components/ProductUrlKeysPanel.tsx`
+- [x] T128 [US8] [S3] SEO panel per scope, deleting a scope row by (`channelId?`, `locale?`) — `packages/modules/seo/src/admin/**`
+- [x] T129 [S3] i18n keys in `catalog` and `seo` bundles (handover for catalog)
+
+- S3 (2026-10-26): **Phase 20 done.** `ProductUrlKeysPanel` sits at the top of the editor's SEO tab (the old SEO stub
+  stays under it); the PUT body is the pure `urlKeysChanges(saved, draft)` in `lib/product-url-keys-api.ts` (trim +
+  lower-case, `null` = use inherited, saved entries first); keys are checked against `productSlugSchema` before
+  sending; deleting a redirect refreshes the redirect list only, so unsaved key edits survive. The SEO screen's meta
+  editor became `seo/src/admin/pages/SeoMetaScopeEditor.tsx`: the channel list is catalog's `scope-context` read over
+  HTTP (member channels only, **SEO-1 A**), a channel's languages plus "whole channel", free locale input for the
+  language row (legacy `en-US` rows stay reachable), Load as before. **Outside S3 ownership:** "source per field"
+  needed the admin GET to say it, so `seo`'s `GET /api/v1/admin/seo/meta/...` answers `data.sources` (additive;
+  `MetaTagResolverService.resolveWithSources`, `resolve` delegates) — one commit, `feat(seo): the admin meta read
+  names the scope each field comes from`, plus a `[PG]` assertion in
+  `backend/test/integration/seo/meta-channel-scope.test.ts` (unrun here). Catalog strings are in
+  `chore(163): s3 handover P20`; seo strings (`metaScope.*`) in the seo bundle.
 
 **Verification** (one invocation per line):
 - `pnpm --filter admin exec vitest run test/modules/catalog/product-url-keys-panel.test.tsx`
