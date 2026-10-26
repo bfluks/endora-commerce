@@ -12,8 +12,8 @@ import { setupPricingFixture, type PricingFixture } from '../../helpers/pricing-
  * editor borrowed for its variants list, is the **buyer's** view: a product
  * outside the request's sales channel answers `404`, archived or not — since
  * spec 163 (FR-005, O-3) the archived product's `410` is answered only where
- * the product would otherwise be available, and both fixtures are bound to no
- * channel. Both are asserted below, so the finding that ruled it out stays on
+ * the product would otherwise be available, and both fixtures sit in the
+ * system-default channel only, never in CH1. Both are asserted below, so the finding that ruled it out stays on
  * record; the admin read answers every variant of both.
  */
 describe('admin product variants read (161)', () => {
@@ -78,7 +78,7 @@ describe('admin product variants read (161)', () => {
 
   it('the storefront read is the buyer’s view: it hides both products', async () => {
     expect((await publicRead(unpublished)).statusCode).toBe(404);
-    // Archived, but outside CH1: the absent product's 404, never the 410 (spec 163, O-3).
+    // Archived, but not a member of CH1: the absent product's 404, never the 410 (spec 163, O-3).
     expect((await publicRead(inactive)).statusCode).toBe(404);
   });
 
