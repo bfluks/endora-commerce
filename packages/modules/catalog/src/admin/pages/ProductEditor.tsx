@@ -39,6 +39,7 @@ import { ProductOrderRulesCard } from '../components/ProductOrderRulesCard.js';
 import { ProductAttributesTab } from '../components/ProductAttributesTab.js';
 import { ProductScopeOverview } from '../components/ProductScopeOverview.js';
 import { ProductUrlKeysPanel } from '../components/ProductUrlKeysPanel.js';
+import { ProductSeoLink } from '../components/ProductSeoLink.js';
 import { GallerySection, type GallerySectionHandle } from '../components/ProductGallerySection.js';
 import { AttachmentsSection } from '../components/ProductAttachmentsSection.js';
 import { ArchivedPill, ProductStatusPill } from '../components/ProductStatusPills.js';
@@ -1091,7 +1092,7 @@ export function ProductEditor(): ReactNode {
           {activeTab === 'scopes' && id ? <ProductScopeOverview productId={id} /> : null}
 
           {activeTab === 'seo' && id ? <ProductUrlKeysPanel productId={id} /> : null}
-          {activeTab === 'seo' ? <SeoStub name={name} /> : null}
+          {activeTab === 'seo' ? <ProductSeoLink /> : null}
         </div>
       </div>
     </div>
@@ -1100,22 +1101,6 @@ export function ProductEditor(): ReactNode {
 
 function pickName(name: Record<string, string>): string {
   return name['en-US'] ?? Object.values(name)[0] ?? '';
-}
-
-function SeoStub({ name }: { name: Record<string, string> }): ReactNode {
-  const t = useTranslation('catalog');
-  return (
-    <div className="b2b-col" style={{ gap: 12 }}>
-      <div className="b2b-label">{t('productEditor.seo.title')}</div>
-      <div className="b2b-help" style={{ marginTop: 0 }}>
-        {t('productEditor.seo.description')}
-      </div>
-      <div>
-        <Label htmlFor="seo-title">{t('productEditor.seo.pageTitlePreview')}</Label>
-        <Input id="seo-title" defaultValue={pickName(name)} />
-      </div>
-    </div>
-  );
 }
 
 // ---------------------------------------------------------------------------
