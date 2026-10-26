@@ -4,9 +4,11 @@ import {
   type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
+  type CatalogProductUrlKeyReadPort,
   type ProductAudience,
 } from '@endora-commerce/contracts';
 import { CartItem } from '../entities/cart-item.entity.js';
+import { effectiveKeysAt } from './cart-availability.js';
 
 /**
  * Cart up-sell aggregator (feature 027 §R9 / FR-039).
@@ -45,6 +47,11 @@ export class CartUpsellService {
      * fails loudly rather than showing the strip unfiltered.
      */
     private readonly availability?: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
+    /**
+     * Feature 163 (T113a, R28) — with a scope, a target links to its effective
+     * key at the basket's (channel, language); without one, its global key.
+     */
+    private readonly urlKeys?: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>,
   ) {}
 
   async forCart(
@@ -109,6 +116,10 @@ export class CartUpsellService {
       products = products.filter((p) => isProductVisibleTo(p, audience));
     }
     const byId = new Map(products.map((p) => [p.id, p]));
+    const keys =
+      scope && this.urlKeys
+        ? await effectiveKeysAt(this.urlKeys, products.map((p) => p.id), scope.channelId, scope.languageCode)
+        : new Map<string, string>();
 
     const candidates: CartUpsellCandidate[] = targetIds
       .map((id) => byId.get(id))
@@ -116,7 +127,7 @@ export class CartUpsellService {
       .map((p) => ({
         productId: p.id,
         productName: this.localizedName(p),
-        productSlug: p.slug,
+        productSlug: keys.get(p.id) ?? p.slug,
         productThumbnailUrl: this.thumbnailFor(p),
         matchCount: matchCountByTarget.get(p.id) ?? 0,
       }));

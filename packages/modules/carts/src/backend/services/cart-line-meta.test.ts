@@ -24,4 +24,11 @@ describe('productMetaOf', () => {
     const meta = productMetaOf(records, 'en', new Set(['p-on']), new Map([['p-off', 'Effective off']]));
     expect(meta.get('p-off')).toEqual({ name: 'Effective off', slug: null, sku: 'OFF-1' });
   });
+
+  it('T113a: links an available product by its effective key at the basket’s (channel, language)', () => {
+    const meta = productMetaOf(records, 'en', new Set(['p-on']), new Map(), new Map([['p-on', 'on-key-de'], ['p-off', 'off-key-de']]));
+    expect(meta.get('p-on')?.slug).toBe('on-key-de');
+    // Unavailable: no link, whatever its key (S1 = A).
+    expect(meta.get('p-off')?.slug).toBeNull();
+  });
 });
