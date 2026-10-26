@@ -30,6 +30,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | Module | Binding | What it means |
 | --- | --- | --- |
 | `_i18n` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
+| `admin_roles` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `admin_users` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `assets_library` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `audit_logs` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
