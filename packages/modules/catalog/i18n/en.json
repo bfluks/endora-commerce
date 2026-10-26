@@ -643,6 +643,7 @@
   "auditLog.product.scopes.update": "Product settings per sales channel updated",
   "auditLog.product.url_keys.update": "Product URL keys updated",
   "auditLog.product.url_redirect.delete": "Product URL redirect deleted",
+  "auditLog.product.media.update": "Product media per sales channel and language updated",
   "auditLog.attribute_set.create": "Attribute set created",
   "auditLog.attribute_set.update": "Attribute set updated",
   "auditLog.attribute_set.delete": "Attribute set deleted",

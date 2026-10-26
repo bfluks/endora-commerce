@@ -1151,15 +1151,15 @@ already in. Bulk results carry no `pairs`, so a bulk gate message can name the s
 
 ### Phase 21: [backend + storefront] ⛔384 Gallery per channel and alt per language (US9 a, FR-076, FR-077)
 
-- [ ] T130 [P] [US9] [PG] [S1] RED: base-image override for B2B used by B2B PDP, listing card and OG image (US9 #1); hidden image never served in B2B (US9 #2); role uniqueness per channel; Polish-only product alt → English shows the asset's alt (US9 #3) — `backend/test/contract/catalog/media-scopes.test.ts`
-- [ ] T131 [S1] Migration `--module catalog --name product_media_scopes`; entities — data-model §7
-- [ ] T132 [US9] [S1] Gallery service + routes (`channel-roles`, item `altText`, `hiddenInChannels`), Command `product.media.update`, `changedFields: ['media']` — `services/gallery.service.ts`, `routes.admin.ts`
-- [ ] T133 [US9] [S1] Effective gallery in C and alt at L on PDP, listing card (`#listingCardReadsFor`), OG image — `catalog-query.service.ts`, `primary-asset-url.ts`
-- [ ] T134 [S1] Regenerate artefacts
-- [ ] T134a [P] [US4] [PG] [S1] RED: extend `backend/test/contract/catalog/scope-overview.test.ts` — gallery role/hidden overrides per channel, per-language alt, and their orphans (FR-041 "every field")
-- [ ] T134b [US4] [S1] `ScopeOverviewService` lists them — `services/scope-overview.service.ts`
-- [ ] T118a [P] [US4] [PG] [S1] RED (moved from Phase 18): extend `scope-overview.test.ts` with an SEO override at L, C and C×L, and the `seo`-off case (no SEO cells, no error)
-- [ ] T118c [US4] [S1] `ScopeOverviewService` lists SEO scopes through `seoProductMetaPort.listScopesForProduct` behind `effectiveState.isPresent('seo')` — `services/scope-overview.service.ts`
+- [x] T130 [P] [US9] [PG] [S1] RED: base-image override for B2B used by B2B PDP, listing card and OG image (US9 #1); hidden image never served in B2B (US9 #2); role uniqueness per channel; Polish-only product alt → English shows the asset's alt (US9 #3) — `backend/test/contract/catalog/media-scopes.test.ts`
+- [x] T131 [S1] Migration `--module catalog --name product_media_scopes`; entities — data-model §7
+- [x] T132 [US9] [S1] Gallery service + routes (`channel-roles`, item `altText`, `hiddenInChannels`), Command `product.media.update`, `changedFields: ['media']` — `services/gallery.service.ts`, `routes.admin.ts`
+- [x] T133 [US9] [S1] Effective gallery in C and alt at L on PDP, listing card (`#listingCardReadsFor`), OG image — `catalog-query.service.ts`, `primary-asset-url.ts`
+- [x] T134 [S1] Regenerate artefacts
+- [x] T134a [P] [US4] [PG] [S1] RED: extend `backend/test/contract/catalog/scope-overview.test.ts` — gallery role/hidden overrides per channel, per-language alt, and their orphans (FR-041 "every field")
+- [x] T134b [US4] [S1] `ScopeOverviewService` lists them — `services/scope-overview.service.ts`
+- [x] T118a [P] [US4] [PG] [S1] RED (moved from Phase 18): extend `scope-overview.test.ts` with an SEO override at L, C and C×L, and the `seo`-off case (no SEO cells, no error)
+- [x] T118c [US4] [S1] `ScopeOverviewService` lists SEO scopes through `seoProductMetaPort.listScopesForProduct` behind `effectiveState.isPresent('seo')` — `services/scope-overview.service.ts`
 
 **Verification** (one invocation per line):
 - `[PG] backend/test/contract/catalog/media-scopes.test.ts`
@@ -1167,6 +1167,63 @@ already in. Bulk results carry no `pairs`, so a bulk gate message can name the s
 - `[PG] backend/test/contract/catalog/gallery.test.ts`
 - `[PG] backend/test/integration/catalog/gallery-batch-read.test.ts`
 - `pnpm --filter @endora-commerce/mod-catalog run typecheck`
+
+**Phase 21 notes** (S1, 2026-10-26):
+- *Write path.* The media overrides are rows of their own tables (data-model §7: role holder keyed by (product,
+  channel, role), hidden item by (item, channel)), so they do not go through `writeChannelScopeRow` /
+  `writeLanguageScopeRow`, which own `product_channel_scopes` / `product_channel_language_scopes`. Same discipline:
+  **one writer per bridge-row kind** — `writeGalleryChannelRole`, `writeGalleryHiddenChannels`
+  (`services/gallery-scopes.ts`) — run only on the Command's `em` inside `product.media.update`
+  (`objectType: 'product'`, product row locked, `skipAudit` on a no-op, event `product.updated.v1` `['media']`).
+- *Routes / shapes (for S3, Phase 23).* `GET|PUT …/products/:productId/gallery/channel-roles` — read
+  `{ data: Array<{ channelId, roles: { base_image, small_image, thumbnail: itemId | null } }> }` (only channels with an
+  override); write `{ channelId, roles: { <role>?: itemId | null } }` (`null` = use inherited, absent = untouched).
+  `PATCH …/gallery/:itemId` takes `altText` (language → text, `''` removes, unnamed languages untouched) and
+  `hiddenInChannels` (replaces the set); a body with either runs as `product.media.update`, otherwise the old
+  `gallery_item.update`. The admin `GalleryItem` DTO carries `altText` and `hiddenInChannels`. `422 SCOPE_INVALID
+  not_a_member` for a new hidden channel / a role set in a non-member channel; clearing is always allowed.
+  The route-level `gallery.update` audit row is dropped (FR-080: one entry per request). Audit label
+  `auditLog.product.media.update` (EN/PL) added.
+- *Audit restore.* The `before` / `after` projections name every language either side names (`''` where absent), so
+  re-sending `before` (minus `itemId`) through the PATCH restores the item (FR-081).
+- *Reads.* `resolvePrimaryAssetUrls` takes the channel (listing card, related products, grouped / bundle children),
+  runs the chain over `effectiveGallery` and skips a legacy `product_assets` row naming a hidden image's asset; the
+  PDP's `gallery[].labels` are the channel-effective ones, hidden items are dropped (also from `assets`), the OG
+  image follows them, and `gallery[].altText` (new, optional in the contract) is `translationAt(item.altText, L)`
+  ?? the asset's alt pick. Storefront `GallerySwitcher` uses each item's `altText`, else the product name.
+- *Contracts.* `sameLanguage` moved to `scoped-translations.ts` (re-exported unchanged from `product-scopes.ts`) so
+  `catalog.ts` can use the translation helpers without importing `product-scopes.ts`. Added `translationAt`,
+  `applyTranslationPatch`, `translationMapPatchSchema`, `effectivePackagingUnitName` (used in Phase 22).
+- *Overview (T134b, T118c).* `buildScopeOverview` takes `scopedFields` routed by shape (channel / language / both):
+  `media:roles`, `media:hidden` (channel), `media:altText` (language), `seo:<field>` (L, C, C×L); non-member and
+  not-offered ones are orphans. SEO comes through `catalogSeoProductScopes`, probed with
+  `effectiveState.isPresent('seo')` before resolving the port, no catch (seo off → no SEO field, no error). **S3:
+  the Phase 14 field-label map needs these field names.**
+- *Sitemap stale set.* Not extended: the sitemap emits no image entries, so `media` changes no sitemap content.
+- *Not covered (owner question).* `GalleryService.listForProducts` (product feeds) and `baseImageUrls`
+  (comparisons) take no channel, so a hidden image can still reach a feed or a comparison column. T133 names
+  PDP / card / OG only. Option: both port methods gain `channelId`. Not built.
+- `gallery-batch-read.test.ts`: `list` now costs four round-trips per product (the hidden set), 2000 for 500.
+
+**Stopped here (2026-10-26, owner pause).** Phase 21 is complete except docs (EN/PL page text is T147 / T148).
+Phase 22 (T135–T139b) is **not started**. Next: T135 RED tests, T136 migration
+`attachment_packaging_translations`, T137 services/routes (drop the route-level `auditEmit` beside the Commands
+for the touched attachment and packaging routes, FR-080), T138 snapshots via `effectivePackagingUnitName` at
+`basketScopeLanguage` / `raisedInScopeLanguage` (keep `resolveLinePackaging`'s name match on the global `name`),
+T139 regen + changesets, T139a/b overview fields `attachments:hidden`, `attachments:name`,
+`attachments:description`, `packagingUnits:name` through `scopedFields`.
+
+**Carry-over notes (2026-10-26).**
+- **T156-pal — blocked, owner question.** A separate "Archived products" palette action with `targetRoute:
+  /catalog/products?status=archived` cannot be declared: `ModuleActionSchema.targetRoute` is
+  `/^\/[A-Za-z0-9/_-]*$/` and `admin-contributions.ts` states "No query string" as a design rule. Options:
+  (A) allow a query string in `targetRoute` (contracts change; strip it in the `action-route-permissions` rule and in
+  `batch-fifteen-palette-off-state`'s `routeAnswers`; AppShell already navigates `to: targetRoute`);
+  (B) S3 declares an SPA route `/catalog/products/archived` and the action targets it (no schema change);
+  (C) keep the keyword entry on `open-products`. Either A or B also needs the list to follow `?status=` / the route
+  after mount (S3). Recommendation: B.
+- **Feeds staleness — report only.** `product_feeds` regenerates on its schedule only and subscribes to no product
+  event, so a scope / media / status change reaches a feed at its next scheduled run. Nothing built; owner deciding.
 
 ### Phase 22: [backend + storefront] Attachments and packaging units (US9 b, FR-078, FR-079)
 
