@@ -12,6 +12,8 @@ import {
 } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  Archive,
+  ArchiveRestore,
   Trash2,
   ChevronLeft,
   Copy,
@@ -29,9 +31,9 @@ import {
   Store as StoreIcon,
   Warehouse as WarehouseIcon,
 } from 'lucide-react';
-import { ApiError, apiClient, useUnsavedChangesPrompt, toAbsoluteAssetUrl, cn } from '@endora-commerce/admin-kit/lib';
+import { ApiError, apiClient, useAuth, useUnsavedChangesPrompt, toAbsoluteAssetUrl, cn } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
-import { AssetPicker, StickyFormActions, TouchReorderButtons, CategoryTreePicker, ProductPicker } from '@endora-commerce/admin-kit/components';
+import { AssetPicker, ModalDialog, StickyFormActions, TouchReorderButtons, CategoryTreePicker, ProductPicker } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { AdminZone, useAdminZone } from '@endora-commerce/admin-kit/zones';
 import type { AssetSummary, AssetDetail } from '@endora-commerce/contracts';
@@ -65,6 +67,11 @@ interface AdminProduct {
   slug: string;
   type: 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
   status: 'active' | 'inactive';
+  /**
+   * Feature 163 (FR-019) — set by Archive, cleared by Restore, and by nothing else:
+   * archived state is independent of `status` at every scope.
+   */
+  archivedAt?: string | null;
   name: Record<string, string>;
   description: Record<string, string>;
   visibility: 'public' | 'logged_in_only' | 'organization_restricted';
@@ -121,9 +128,20 @@ export function ProductEditor(): ReactNode {
     productId: id ?? '',
   });
 
+  // Archive / Restore write the catalogue (FR-019): an operator without
+  // `catalog:write` is not offered either.
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('catalog:write');
+
   const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  // Feature 163 (FR-019) — the product's archived state, read with the product and
+  // moved only by the Archive / Restore actions below, never by Save.
+  const [archivedAt, setArchivedAt] = useState<string | null>(null);
+  const [archiveDialog, setArchiveDialog] = useState<'archive' | 'restore' | null>(null);
+  const [archiving, setArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const [categories, setCategories] = useState<AdminCategory[]>([]);
   const [sku, setSku] = useState('');
   const [type, setType] = useState<'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual'>('simple');
@@ -217,6 +235,7 @@ export function ProductEditor(): ReactNode {
         setSku(p.sku);
         setType(p.type);
         setStatus(p.status);
+        setArchivedAt(p.archivedAt ?? null);
         setVisibility(p.visibility);
         const loadedName = {
           'en-US': p.name['en-US'] ?? '',
@@ -311,6 +330,9 @@ export function ProductEditor(): ReactNode {
             {
               sku,
               type,
+              // A new product is `inactive` unless the operator chose otherwise
+              // (FR-010, Q1-d); the selector's value is sent, not assumed.
+              status,
               name: trimmedName,
               description: trimmedDescription,
               categoryIds,
@@ -410,7 +432,7 @@ export function ProductEditor(): ReactNode {
   const [duplicating, setDuplicating] = useState(false);
   const handleDuplicate = useCallback(async (): Promise<void> => {
     if (!id || duplicating) return;
-    if (!confirm('Duplicate this product? A draft copy will be created.')) return;
+    if (!confirm(t('productEditor.duplicateConfirm'))) return;
     setDuplicating(true);
     setError(null);
     try {
@@ -424,7 +446,34 @@ export function ProductEditor(): ReactNode {
     } finally {
       setDuplicating(false);
     }
-  }, [id, duplicating, navigate]);
+  }, [id, duplicating, navigate, t]);
+
+  // Feature 163 (FR-019) — Archive / Restore take effect at once, through their own
+  // routes; they touch `archivedAt` only, so the form's unsaved edits (status
+  // included) are neither sent nor lost.
+  const handleArchiveAction = useCallback(async (): Promise<void> => {
+    if (!id || archiveDialog === null || archiving) return;
+    setArchiving(true);
+    setArchiveError(null);
+    try {
+      const res = await apiClient.post<{ data: AdminProduct }>(
+        `/api/v1/admin/catalog/products/${id}/${archiveDialog}`,
+        {},
+      );
+      setArchivedAt(res.data.archivedAt ?? null);
+      setInfo(t(archiveDialog === 'archive' ? 'productEditor.archive.done' : 'productEditor.restore.done'));
+      setError(null);
+      setArchiveDialog(null);
+    } catch (err) {
+      setArchiveError(
+        err instanceof ApiError
+          ? err.envelope.error.message
+          : t(archiveDialog === 'archive' ? 'productEditor.archive.failed' : 'productEditor.restore.failed'),
+      );
+    } finally {
+      setArchiving(false);
+    }
+  }, [id, archiveDialog, archiving, t]);
 
   if (loading)
     return (
@@ -483,6 +532,7 @@ export function ProductEditor(): ReactNode {
           <div className="b2b-page-head__title">
             <span>{isNew ? 'New product' : pickName(name) || sku}</span>
             {!isNew ? <StatusPill status={status} /> : null}
+            {!isNew && archivedAt ? <ArchivedPill /> : null}
           </div>
           {!isNew ? (
             <div className="b2b-page-head__sub">
@@ -504,6 +554,28 @@ export function ProductEditor(): ReactNode {
               >
                 <Copy size={13} /> {duplicating ? 'Duplicating…' : 'Duplicate'}
               </button>
+              {/* Reversible, so not styled as danger; one of the two is offered,
+                  whichever changes something (FR-019). */}
+              {canWrite ? (
+                <button
+                  type="button"
+                  className="b2b-btn b2b-btn--default b2b-btn--sm"
+                  onClick={(): void => {
+                    setArchiveError(null);
+                    setArchiveDialog(archivedAt ? 'restore' : 'archive');
+                  }}
+                >
+                  {archivedAt ? (
+                    <>
+                      <ArchiveRestore size={13} aria-hidden="true" /> {t('productEditor.action.restore')}
+                    </>
+                  ) : (
+                    <>
+                      <Archive size={13} aria-hidden="true" /> {t('productEditor.action.archive')}
+                    </>
+                  )}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="b2b-btn b2b-btn--danger b2b-btn--sm"
@@ -534,6 +606,52 @@ export function ProductEditor(): ReactNode {
         <Alert variant="success" className="mb-4">
           <AlertDescription>{info}</AlertDescription>
         </Alert>
+      ) : null}
+      {/* Feature 163 (FR-019, O-5) — said where the operator looks first: archived
+          means unavailable everywhere, whatever the status, and only Restore
+          brings the product back. A standing state, so `status`, not `alert`. */}
+      {!isNew && archivedAt ? (
+        <Alert variant="warning" role="status" className="mb-4" data-testid="product-archived-notice">
+          <AlertDescription>
+            <strong>{t('productEditor.archived.title')}</strong>{' '}
+            {t('productEditor.archived.body')}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {archiveDialog !== null ? (
+        <ModalDialog
+          title={t(archiveDialog === 'archive' ? 'productEditor.archive.confirmTitle' : 'productEditor.restore.confirmTitle')}
+          onClose={(): void => setArchiveDialog(null)}
+          busy={archiving}
+          aria-describedby="product-archive-confirm-body"
+          footer={
+            <>
+              <Button type="button" variant="outline" disabled={archiving} onClick={(): void => setArchiveDialog(null)}>
+                {t('productEditor.archive.cancel')}
+              </Button>
+              <Button
+                type="button"
+                disabled={archiving}
+                aria-busy={archiving || undefined}
+                onClick={(): void => {
+                  void handleArchiveAction();
+                }}
+              >
+                {t(archiveDialog === 'archive' ? 'productEditor.archive.confirm' : 'productEditor.restore.confirm')}
+              </Button>
+            </>
+          }
+        >
+          <p id="product-archive-confirm-body" className="text-sm">
+            {t(archiveDialog === 'archive' ? 'productEditor.archive.confirmBody' : 'productEditor.restore.confirmBody')}
+          </p>
+          {archiveError ? (
+            <p role="alert" className="mt-3 text-sm text-destructive">
+              {archiveError}
+            </p>
+          ) : null}
+        </ModalDialog>
       ) : null}
 
       <div className="b2b-card">
@@ -690,17 +808,26 @@ export function ProductEditor(): ReactNode {
                       <Select
                         id="pstatus"
                         value={status}
+                        aria-describedby={
+                          !isNew && archivedAt ? 'pstatus-help pstatus-archived' : 'pstatus-help'
+                        }
                         onChange={(e): void =>
                           setStatus(e.target.value as AdminProduct['status'])
                         }
                       >
                         {STATUSES.map((s) => (
                           <option key={s} value={s}>
-                            {s}
+                            {t(`productEditor.statusValue.${s}`)}
                           </option>
                         ))}
                       </Select>
-                      <p className="b2b-help">{t('productEditor.field.status.help')}</p>
+                      <p id="pstatus-help" className="b2b-help">{t('productEditor.field.status.help')}</p>
+                      {/* O-5 — setting Active does not restore an archived product. */}
+                      {!isNew && archivedAt ? (
+                        <p id="pstatus-archived" className="b2b-help">
+                          {t('productEditor.field.status.archivedNote')}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -910,13 +1037,15 @@ export function ProductEditor(): ReactNode {
 }
 
 function StatusPill({ status }: { status: AdminProduct['status'] }): ReactNode {
-  const map = {
-    active: { cls: 'b2b-badge--success', label: 'Active' },
-    draft: { cls: 'b2b-badge--warn', label: 'Draft' },
-    inactive: { cls: '', label: 'Inactive' },
-  } as const;
-  const v = map[status];
-  return <span className={cn('b2b-badge', 'b2b-badge--dot', v.cls)}>{v.label}</span>;
+  const t = useTranslation('catalog');
+  const cls = status === 'active' ? 'b2b-badge--success' : '';
+  return <span className={cn('b2b-badge', 'b2b-badge--dot', cls)}>{t(`productEditor.statusValue.${status}`)}</span>;
+}
+
+/** Feature 163 (FR-019) — beside the status, never instead of it. */
+function ArchivedPill(): ReactNode {
+  const t = useTranslation('catalog');
+  return <span className="b2b-badge b2b-badge--warn">{t('productEditor.archived.badge')}</span>;
 }
 
 function pickName(name: Record<string, string>): string {
@@ -2012,7 +2141,8 @@ interface AdminProductSummary {
   id: string;
   sku: string;
   slug: string;
-  status: 'draft' | 'active' | 'inactive';
+  status: 'active' | 'inactive';
+  archivedAt?: string | null;
   name: Record<string, string>;
 }
 
@@ -2166,14 +2296,16 @@ function ProductLinksSection({ productId }: { productId: string }): ReactNode {
                       {byKind[kind].map((link) => {
                         const target = targetsById.get(link.targetProductId);
                         const isMissing = !target;
+                        // Feature 163 — `inactive` is plain off; archived is its own fact.
                         const isInactive = target?.status === 'inactive';
+                        const isArchived = target?.archivedAt != null;
                         return (
                           <TableRow key={link.id}>
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 <span
                                   className={
-                                    isMissing || isInactive ? 'text-muted-foreground' : ''
+                                    isMissing || isInactive || isArchived ? 'text-muted-foreground' : ''
                                   }
                                 >
                                   {target
@@ -2188,6 +2320,11 @@ function ProductLinksSection({ productId }: { productId: string }): ReactNode {
                                 {isInactive ? (
                                   <span className="rounded border px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">
                                     {t('productEditor.links.badge.inactive')}
+                                  </span>
+                                ) : null}
+                                {isArchived ? (
+                                  <span className="rounded border px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">
+                                    {t('productEditor.links.badge.archived')}
                                   </span>
                                 ) : null}
                               </div>

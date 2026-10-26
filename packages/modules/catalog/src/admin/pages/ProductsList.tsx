@@ -25,8 +25,11 @@ import {
 import { ProductsBulkEditDialog } from '../components/ProductsBulkEditDialog.js';
 import {
   BULK_EDIT_HARD_MAX,
+  isProductListTab,
+  productListTabQuery,
   resolveProductSelection,
   type ListFilterSnapshot,
+  type ProductListTab,
 } from '../lib/resolve-product-selection.js';
 import { ApiError, apiClient, cn, useAuth, usePageSizePreference } from '@endora-commerce/admin-kit/lib';
 import { PaginationFooter, SavedViewsControl } from '@endora-commerce/admin-kit/components';
@@ -38,14 +41,16 @@ interface AdminProduct {
   sku: string;
   slug: string;
   type: string;
-  status: 'draft' | 'active' | 'inactive';
+  status: 'active' | 'inactive';
+  /** Feature 163 (FR-019) — archived is its own fact, independent of `status`. */
+  archivedAt?: string | null;
   name: Record<string, string>;
   visibility: string;
   attributeValues: Record<string, unknown>;
   updatedAt: string;
 }
 
-type StatusFilter = 'all' | 'active' | 'draft' | 'inactive';
+type StatusFilter = ProductListTab;
 type StockFilter = 'all' | 'low' | 'out';
 type TypeFilter = 'all' | 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
 type SelectionMode = 'none' | 'page' | 'collection';
@@ -76,13 +81,35 @@ const STOCK_CYCLE: StockFilter[] = ['all', 'low', 'out'];
 interface ProductsResponse {
   data: AdminProduct[];
   pagination: { page: number; pageSize: number; total: number };
-  counts: { all: number; active: number; draft: number; inactive: number };
+  counts: ProductListCounts;
 }
 
-const STATUS_FILTERS: readonly StatusFilter[] = ['all', 'active', 'draft', 'inactive'];
+/** Feature 163 (R30.4) — `all` / `active` / `inactive` count non-archived products. */
+interface ProductListCounts {
+  all: number;
+  active: number;
+  inactive: number;
+  archived: number;
+}
 
-function isStatusFilter(value: unknown): value is StatusFilter {
-  return typeof value === 'string' && (STATUS_FILTERS as readonly string[]).includes(value);
+/**
+ * A saved view's filters → the tab it opens on (FR-012). The Archived tab is saved
+ * as its own key, `archived: 'only'`, never as a status (R30.4 rejects an
+ * "archived" pseudo-status). A `status` the page no longer offers — `draft` among
+ * them — opens as *All*; mapping `draft` onto `inactive` is an open owner question
+ * and deliberately not done here.
+ */
+export function savedViewTab(filters: Record<string, unknown>): StatusFilter {
+  if (filters['archived'] === 'only') return 'archived';
+  const status = filters['status'];
+  return status === 'active' || status === 'inactive' ? status : 'all';
+}
+
+/** The tab → the saved view's filter keys; the inverse of {@link savedViewTab}. */
+export function savedViewTabFilters(tab: StatusFilter): Record<string, unknown> {
+  if (tab === 'archived') return { archived: 'only' };
+  if (tab === 'active' || tab === 'inactive') return { status: tab };
+  return {};
 }
 
 function isTypeFilter(value: unknown): value is TypeFilter {
@@ -104,15 +131,13 @@ export function ProductsList(): ReactNode {
   const [searchParams] = useSearchParams();
   const [rows, setRows] = useState<AdminProduct[]>([]);
   const [total, setTotal] = useState(0);
-  const [counts, setCounts] = useState<{ all: number; active: number; draft: number; inactive: number }>(
-    { all: 0, active: 0, draft: 0, inactive: 0 },
-  );
+  const [counts, setCounts] = useState<ProductListCounts>({ all: 0, active: 0, inactive: 0, archived: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
     const fromUrl = searchParams.get('status');
-    return isStatusFilter(fromUrl) ? fromUrl : 'all';
+    return isProductListTab(fromUrl) ? fromUrl : 'all';
   });
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [stockFilter, setStockFilter] = useState<StockFilter>('all');
@@ -138,8 +163,11 @@ export function ProductsList(): ReactNode {
     setError(null);
     try {
       const params = new URLSearchParams();
-      params.set('includeArchived', '1');
-      if (statusFilter !== 'all') params.set('status', statusFilter);
+      // Feature 163 (FR-113) — archived products are hidden by the list's default
+      // (`archived=exclude`); only the Archived tab asks for them.
+      const tabQuery = productListTabQuery(statusFilter);
+      if (tabQuery.archived === 'only') params.set('archived', 'only');
+      if (tabQuery.status) params.set('status', tabQuery.status);
       if (typeFilter !== 'all') params.set('type', typeFilter);
       const trimmed = debouncedQuery.trim();
       if (trimmed) params.set('q', trimmed);
@@ -184,7 +212,7 @@ export function ProductsList(): ReactNode {
     const trimmed = query.trim();
     return {
       filters: {
-        ...(statusFilter !== 'all' ? { status: statusFilter } : {}),
+        ...savedViewTabFilters(statusFilter),
         ...(typeFilter !== 'all' ? { type: typeFilter } : {}),
         ...(trimmed ? { q: trimmed } : {}),
       },
@@ -199,7 +227,7 @@ export function ProductsList(): ReactNode {
   const applySavedView = (state: SavedViewState): void => {
     const f = state.filters;
     const q = typeof f['q'] === 'string' ? f['q'] : '';
-    setStatusFilter(isStatusFilter(f['status']) ? f['status'] : 'all');
+    setStatusFilter(savedViewTab(f));
     setTypeFilter(isTypeFilter(f['type']) ? f['type'] : 'all');
     setQuery(q);
     setDebouncedQuery(q);
@@ -428,8 +456,8 @@ export function ProductsList(): ReactNode {
           <div className="b2b-tabs" role="tablist">
             <Tab id="all" label={t('productsList.tab.all')} count={counts.all} active={statusFilter} onChange={setStatusFilter} />
             <Tab id="active" label={t('productsList.tab.active')} count={counts.active} active={statusFilter} onChange={setStatusFilter} />
-            <Tab id="draft" label={t('productsList.tab.draft')} count={counts.draft} active={statusFilter} onChange={setStatusFilter} />
             <Tab id="inactive" label={t('productsList.tab.inactive')} count={counts.inactive} active={statusFilter} onChange={setStatusFilter} />
+            <Tab id="archived" label={t('productsList.tab.archived')} count={counts.archived} active={statusFilter} onChange={setStatusFilter} />
           </div>
           </div>
         </div>
@@ -591,6 +619,10 @@ export function ProductsList(): ReactNode {
           <ProductsBulkEditDialog
             productIds={bulkEditProductIds}
             selectionScope={selection.mode === 'collection' ? 'collection' : 'page'}
+            // Feature 163 (FR-053) — one archive action, the one that changes
+            // something: the Archived tab holds only archived products, every
+            // other tab only products that are not.
+            archiveAction={canWrite ? (statusFilter === 'archived' ? 'restore' : 'archive') : null}
             onClose={(): void => {
               setBulkEditOpen(false);
               setBulkEditProductIds([]);
@@ -615,7 +647,9 @@ export function ProductsList(): ReactNode {
               <div className="b2b-empty__icon">
                 <Package size={20} />
               </div>
-              <div className="b2b-empty__title">{t('productsList.empty.title')}</div>
+              <div className="b2b-empty__title">
+                {statusFilter === 'archived' ? t('productsList.empty.archivedTitle') : t('productsList.empty.title')}
+              </div>
               {/*
                 The empty state's sentence is *"Try clearing filters, or use
                 + New product to create one."* — half advice, half affordance.
@@ -625,7 +659,9 @@ export function ProductsList(): ReactNode {
                 *"Try clearing filters, or use  to create one."*
               */}
               <div className="b2b-empty__sub">
-                {canWrite ? (
+                {statusFilter === 'archived' ? (
+                  t('productsList.empty.archivedSub')
+                ) : canWrite ? (
                   <>
                     {t('productsList.empty.prefix')}{' '}
                     <button
@@ -729,7 +765,10 @@ export function ProductsList(): ReactNode {
                       </span>
                     </td>
                     <td>
-                      <StatusPill status={r.status} />
+                      <span className="b2b-row" style={{ gap: 4, flexWrap: 'wrap' }}>
+                        <StatusPill status={r.status} />
+                        {r.archivedAt ? <ArchivedPill /> : null}
+                      </span>
                     </td>
                     <td>
                       <span style={{ fontSize: 12, textTransform: 'capitalize' }}>{r.type}</span>
@@ -818,13 +857,18 @@ function Chip(props: {
 }
 
 function StatusPill({ status }: { status: AdminProduct['status'] }): ReactNode {
-  const map: Record<AdminProduct['status'], { cls: string; label: string }> = {
-    active: { cls: 'b2b-badge--success', label: 'Active' },
-    draft: { cls: 'b2b-badge--warn', label: 'Draft' },
-    inactive: { cls: '', label: 'Inactive' },
-  } as const;
-  const v = map[status];
-  return <span className={cn('b2b-badge', 'b2b-badge--dot', v.cls)}>{v.label}</span>;
+  const t = useTranslation('catalog');
+  const cls = status === 'active' ? 'b2b-badge--success' : '';
+  return <span className={cn('b2b-badge', 'b2b-badge--dot', cls)}>{t(`productsList.status.${status}`)}</span>;
+}
+
+/**
+ * Feature 163 (FR-019) — shown beside the status, never instead of it: an archived
+ * product keeps its status, and the word, not a colour, carries the fact.
+ */
+function ArchivedPill(): ReactNode {
+  const t = useTranslation('catalog');
+  return <span className="b2b-badge b2b-badge--warn">{t('productsList.status.archived')}</span>;
 }
 
 function pickName(name: Record<string, string>): string {
