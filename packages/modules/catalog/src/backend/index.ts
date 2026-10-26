@@ -1191,6 +1191,8 @@ export function registerModule(ctx: ModuleContext): void {
       auditLogService: cradle().auditLogService,
       salesChannelMembership: cradle().salesChannelMembershipPort,
       redis: cradle().redis,
+      // Feature 163 (P-1 = A) — the Archive / Restore tools' audited Commands.
+      commandBus: cradle().commandBus,
     };
     const registry = cradle().promptActionToolRegistry;
     for (const tool of [
