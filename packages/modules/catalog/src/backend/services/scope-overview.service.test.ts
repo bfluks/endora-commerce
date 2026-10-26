@@ -345,6 +345,37 @@ describe('buildScopeOverview — media and SEO scopes (spec 163, T134b, T118c)',
     expect(cell(overview, B2C, 'pl-PL').overriddenFields).toEqual([]);
   });
 
+  it('lists attachment and packaging-unit overrides at their levels, beside the media ones (T139b)', () => {
+    const overview = buildScopeOverview(
+      input({
+        scopedFields: [
+          { field: 'attachments:hidden', channelId: B2C, languageCode: null },
+          { field: 'attachments:name', channelId: null, languageCode: 'pl-PL' },
+          { field: 'attachments:description', channelId: null, languageCode: 'pl-PL' },
+          { field: 'packagingUnits:name', channelId: null, languageCode: 'de-de' },
+          { field: 'media:hidden', channelId: B2C, languageCode: null },
+        ],
+      }),
+    );
+    expect(overview.channelRows.find((r) => r.channelId === B2C)?.overriddenFields).toEqual([
+      'attachments:hidden',
+      'media:hidden',
+    ]);
+    expect(overview.languageColumns.find((c) => c.languageCode === 'pl-PL')?.overriddenFields).toEqual([
+      'attachments:description',
+      'attachments:name',
+    ]);
+    expect(overview.languageColumns.find((c) => c.languageCode === 'de-DE')?.overriddenFields).toEqual([
+      'packagingUnits:name',
+    ]);
+    expect(cell(overview, B2C, 'pl-PL').overriddenFields).toEqual([
+      { field: 'attachments:description', level: 'language' },
+      { field: 'attachments:hidden', level: 'channel' },
+      { field: 'attachments:name', level: 'language' },
+      { field: 'media:hidden', level: 'channel' },
+    ]);
+  });
+
   it('lists an SEO override at L, C and C × L, each at its level, after every other field', () => {
     const overview = buildScopeOverview(
       input({

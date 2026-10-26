@@ -30,6 +30,7 @@ import type { CatalogAttributeReadService } from './catalog-attribute-read.servi
 import { toChannelRecord, toLanguageRecord } from './product-scopes.service.js';
 import { attributeSetDefinitionIds, checkCompleteness, requiredLanguageAttributeKeys } from './scope-completeness.js';
 import { loadMediaScopedFields } from './gallery-scopes.js';
+import { loadAttachmentPackagingScopedFields } from './attachment-packaging-scopes.js';
 
 /**
  * Feature 163 (`specs/163-product-data-scopes/`) — the scope overview of one product,
@@ -419,6 +420,7 @@ export class ScopeOverviewService {
       primary,
       setDefinitions,
       mediaFields,
+      attachmentPackagingFields,
       seoScopes,
     ] = await Promise.all([
         this.membership.listChannelsForEntity('product', productId),
@@ -431,10 +433,12 @@ export class ScopeOverviewService {
         this.languages.getDefault(),
         attributeSetDefinitionIds(em, product.attributeSetId),
         loadMediaScopedFields(em, productId),
+        loadAttachmentPackagingScopedFields(em, productId),
         this.seoScopes ? this.seoScopes(productId) : Promise.resolve([]),
       ]);
     const scopedFields: ScopedField[] = [
       ...mediaFields,
+      ...attachmentPackagingFields,
       ...seoScopes.flatMap((scope) =>
         scope.fields.map((field) => ({
           field: `seo:${field}`,

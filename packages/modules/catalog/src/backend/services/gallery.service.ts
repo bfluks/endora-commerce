@@ -37,6 +37,7 @@ import {
   writeGalleryChannelRole,
   writeGalleryHiddenChannels,
 } from './gallery-scopes.js';
+import { assertProductChannelMembers } from './attachment-packaging-scopes.js';
 import { Product } from '../entities/product.entity.js';
 import { GalleryItem } from '../entities/gallery-item.entity.js';
 import { GalleryItemLabel } from '../entities/gallery-item-label.entity.js';
@@ -185,10 +186,23 @@ export class GalleryService {
    * since, and answering 404 for the batch would be answering about a different
    * question. And there are **no labels**: neither consumer reads them here, and
    * fetching them costs a second statement per batch.
+   *
+   * Feature 163 (FR-076, owner decision MED-1 = A) — `channelId` is the feed's channel:
+   * an item hidden there is left out, in the same statement. `null` = the global gallery.
    */
-  async listForProducts(productIds: readonly string[]): Promise<CatalogGalleryBatchItem[]> {
+  async listForProducts(
+    productIds: readonly string[],
+    channelId: string | null,
+  ): Promise<CatalogGalleryBatchItem[]> {
     if (productIds.length === 0) return [];
     const ids = [...new Set(productIds)];
+    const hiddenInChannel =
+      channelId === null
+        ? ''
+        : `and not exists (
+                select 1 from gallery_item_channel_hidden h
+                 where h.gallery_item_id = gi.id and h.sales_channel_id = ?
+              )`;
     // `em.execute`, not `em.getConnection().execute`, so a caller that opens a
     // transaction around this read sees its own uncommitted writes (issue #200).
     const rows = await this.emFactory().execute<
@@ -199,8 +213,9 @@ export class GalleryService {
               gi.position
          from gallery_items gi
         where gi.product_id in (${ids.map(() => '?').join(',')})
+          ${hiddenInChannel}
         order by gi.product_id, gi.position asc, gi.id asc`,
-      ids,
+      channelId === null ? ids : [...ids, channelId],
     );
     return rows.map((row) => ({
       productId: row.product_id,
@@ -228,20 +243,51 @@ export class GalleryService {
    * The map holds one entry per requested id. `null` covers three cases the
    * callers render identically — no label, no product, no asset row — and the
    * inner join it replaces collapsed all three the same way.
+   *
+   * Feature 163 (FR-076, owner decision MED-1 = A) — in `channelId` (the viewer's
+   * resolved channel) the role is held by the channel's own holder when it has one that
+   * is one of the product's items, else by the global holder, and by nobody when that
+   * holder is hidden there (`effectiveGallery`'s rule, in one statement). `null` = the
+   * global holder.
    */
-  async baseImageUrls(productIds: readonly string[]): Promise<Map<string, string | null>> {
+  async baseImageUrls(
+    productIds: readonly string[],
+    channelId: string | null,
+  ): Promise<Map<string, string | null>> {
     const urlByProduct = new Map<string, string | null>();
     for (const id of productIds) urlByProduct.set(id, null);
     if (urlByProduct.size === 0) return urlByProduct;
 
     const ids = [...urlByProduct.keys()];
+    const placeholders = ids.map(() => '?').join(',');
     const rows = await this.emFactory().execute<Array<{ product_id: string; asset_id: string }>>(
-      `select gil.product_id::text as product_id, gi.asset_id::text as asset_id
-         from gallery_item_labels gil
-         join gallery_items gi on gi.id = gil.gallery_item_id
-        where gil.label = 'base_image'
-          and gil.product_id in (${ids.map(() => '?').join(',')})`,
-      ids,
+      channelId === null
+        ? `select gil.product_id::text as product_id, gi.asset_id::text as asset_id
+             from gallery_item_labels gil
+             join gallery_items gi on gi.id = gil.gallery_item_id
+            where gil.label = 'base_image'
+              and gil.product_id in (${placeholders})`
+        : `select holder.product_id::text as product_id, gi.asset_id::text as asset_id
+             from (
+               select p.id as product_id,
+                      coalesce(
+                        (select cl.gallery_item_id
+                           from gallery_item_channel_labels cl
+                           join gallery_items ci on ci.id = cl.gallery_item_id and ci.product_id = cl.product_id
+                          where cl.product_id = p.id and cl.sales_channel_id = ? and cl.label = 'base_image'),
+                        (select gil.gallery_item_id
+                           from gallery_item_labels gil
+                          where gil.product_id = p.id and gil.label = 'base_image')
+                      ) as gallery_item_id
+                 from products p
+                where p.id in (${placeholders})
+             ) holder
+             join gallery_items gi on gi.id = holder.gallery_item_id
+            where not exists (
+                    select 1 from gallery_item_channel_hidden h
+                     where h.gallery_item_id = holder.gallery_item_id and h.sales_channel_id = ?
+                  )`,
+      channelId === null ? ids : [channelId, ...ids, channelId],
     );
     if (rows.length === 0) return urlByProduct;
 
@@ -486,19 +532,7 @@ export class GalleryService {
 
   /** FR-014 — every channel in `channelIds` is one the product is a member of, else `422 SCOPE_INVALID`. */
   async #assertMembers(productId: string, channelIds: readonly string[]): Promise<void> {
-    if (!this.membership) {
-      throw new Error('GalleryService: the channel membership port is not wired — a channel override cannot be checked.');
-    }
-    const members = new Set(
-      (await this.membership.listChannelsForEntity('product', productId)).map((channel) => channel.id),
-    );
-    const outside = channelIds.find((channelId) => !members.has(channelId));
-    if (outside !== undefined) {
-      throw new HttpError(422, ERROR_CODES.SCOPE_INVALID, 'The product is not a member of this sales channel.', {
-        channelId: outside,
-        reason: 'not_a_member',
-      });
-    }
+    await assertProductChannelMembers(this.membership, productId, channelIds);
   }
 
   async #assertProductExists(em: EntityManager, productId: string): Promise<void> {
