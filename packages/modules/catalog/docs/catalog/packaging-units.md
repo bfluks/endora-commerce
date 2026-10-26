@@ -15,6 +15,7 @@ Manage packaging units in the **Inventory** section of the product card
 (simple and configurable products only). Each unit has:
 
 - a **name** (operator text, e.g. `Paleta`, `Karton`) — unique within the product,
+  optionally translated per language (see *Name per language* below),
 - a **base quantity** (whole number ≥ 1) — how many base pieces the unit holds,
 - a **default** flag — the unit pre-selected on the storefront,
 - a **position** — the order units appear in,
@@ -46,6 +47,32 @@ match one of the product's units. Anything else is refused with
 `422 PACKAGING_UNIT_MISMATCH` — an id that is unknown, deleted or another
 product's unit all give the same reason.
 
+## Name per language
+
+A unit's name can be translated: `nameTranslations` maps a language to a name, e.g.
+`{ "en-GB": "Pallet", "de-DE": "" }`. A named language is set, an empty string
+removes it, and a language left out is unchanged; each name is at most 160
+characters. The unit's own `name` stays the global name: it is the one that must be
+unique within the product, the one a quote line sent without an id is matched
+against, and the one minimum refusals name.
+
+Where a buyer sees the unit, its name is the translation in the request's language,
+else the global name:
+
+- the product page's `packagingUnits[].name`;
+- the name a basket line snapshots — in the basket's language on its channel. An
+  administrator who names the channel on a customer's behalf gets the global name;
+- the name a buyer's quote-request line snapshots — in the request's language on the
+  channel it is raised on.
+
+Creating or updating a unit is recorded once in the audit log, as
+`packaging_unit.create` or `packaging_unit.update`, with the unit's state before and
+after (its product, name, `nameTranslations`, base quantity, default flag and
+minimum). Sending the recorded before-state back through the same route (without
+`productId`) restores it. The write announces `product.updated.v1` with
+`changedFields: ["packagingUnits"]`. A request that changes nothing writes nothing
+and announces nothing.
+
 ## For buyers
 
 On the product page a selector offers the available units plus a *single piece*
@@ -57,7 +84,7 @@ line of the same product stay separate.
 ## How the label travels
 
 The unit name and base quantity are **snapshotted** on the line when it is
-created, so later edits to (or deletion of) a product's packaging units never
+created — the name in the line's language, as above — so later edits to (or deletion of) a product's packaging units never
 change historical carts, orders, or quote requests.
 
 - **Cart** — `cart_items` snapshot the unit; the cart serializer composes a
@@ -81,14 +108,14 @@ count.
 - Admin CRUD: `GET/POST /api/v1/admin/catalog/products/:id/packaging-units`,
   `PATCH/DELETE …/:unitId`, `PATCH …/packaging-units/reorder`
   (gated by `catalog:read` / `catalog:write`). Create and update accept an
-  optional `minOrderUnits` (`1…1000000`, or `null` to clear); the response
+  optional `nameTranslations` and an optional `minOrderUnits` (`1…1000000`, or `null` to clear); the response
   always carries it. The in-process `CatalogPackagingPort`, used by PIM
   connectors, accepts the same optional field and refuses an out-of-range
   value with `422 VALIDATION_FAILED`; a writer that never sends it keeps
   working.
 - Public: the product detail (`GET /api/v1/catalog/products/:idOrSlug`)
-  includes an optional `packagingUnits` array; each unit carries
-  `minOrderUnits` (`null` when none).
+  includes an optional `packagingUnits` array; each unit carries its name in
+  the request's language and `minOrderUnits` (`null` when none).
 - Cart: `POST /api/v1/cart/items` accepts an optional `packagingUnitId`; the
   resulting line quantity is `baseQuantity × quantity`.
 
@@ -99,7 +126,9 @@ Table `product_packaging_units` (migration
 (FK → `products`, cascade delete), `name`, `base_quantity`
 (`CHECK >= 1`), `position`, `is_default`, timestamps; `UNIQUE (product_id,
 name)`. Migration `20261016T082008_catalog_order_rules.ts` adds
-`min_order_units` (nullable, `CHECK` 1–1 000 000). Additive snapshot columns, each added by its owning module:
+`min_order_units` (nullable, `CHECK` 1–1 000 000), and
+`20261026T084533_catalog_attachment_packaging_translations.ts` adds
+`name_translations` (jsonb, `{}` by default). Additive snapshot columns, each added by its owning module:
 `cart_items` (`20260611T140413_carts_cart_item_packaging.ts`), `order_items`
 (`20260611T140414_orders_order_item_packaging.ts`), `quote_request_items`
 (`20260611T140415_quote_requests_qr_item_packaging.ts`; its
