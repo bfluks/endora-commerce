@@ -144,6 +144,16 @@ export class MetaTagResolverService implements SeoProductMetaPort {
   ) {}
 
   async resolve(input: SeoMetaScopeRequest): Promise<ResolvedMeta> {
+    return (await this.resolveWithSources(input)).resolved;
+  }
+
+  /**
+   * {@link resolve} plus, per field, the scope its value comes from — what the admin
+   * meta editor shows beside each resolved value (feature 163, T126).
+   */
+  async resolveWithSources(
+    input: SeoMetaScopeRequest,
+  ): Promise<{ resolved: ResolvedMeta; sources: Record<SeoProductMetaField, SeoProductMetaSource> }> {
     const address = seoMetaAddress(input);
     const locale = address.locale ?? FALLBACK_LOCALE;
     const ruleSource = await this.loadRuleSource(input.entityType, input.entityId);
@@ -160,11 +170,14 @@ export class MetaTagResolverService implements SeoProductMetaPort {
       ogImageUrl: rule.openGraph.image,
     });
     return {
-      title: walked.title,
-      description: walked.description,
-      openGraph: { title: walked.ogTitle, description: walked.ogDescription, image: walked.ogImageUrl },
-      source: FIELDS.some((field) => walked.sources[field] !== 'derived') ? 'override' : 'rule',
-      locale,
+      resolved: {
+        title: walked.title,
+        description: walked.description,
+        openGraph: { title: walked.ogTitle, description: walked.ogDescription, image: walked.ogImageUrl },
+        source: FIELDS.some((field) => walked.sources[field] !== 'derived') ? 'override' : 'rule',
+        locale,
+      },
+      sources: walked.sources,
     };
   }
 
