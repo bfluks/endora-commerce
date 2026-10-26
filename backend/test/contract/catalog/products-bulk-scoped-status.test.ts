@@ -293,10 +293,12 @@ describe('POST /products/bulk-update — fields.scopedStatus (spec 163, T073)', 
       expect(op?.touchedFields).toEqual(['scopedStatus']);
       for (const id of ids) expect(await languageStatus(id, b2c, 'de-DE')).toBe('inactive');
 
-      // Changed since the operation: refused, never clobbered.
+      // Changed since the operation to a third state (neither its before, `null`, nor
+      // its after, `inactive`): refused, never clobbered. Put back to `null` it would
+      // count as already reverted.
       const changed = ids[0]!;
       expect(
-        (await bulk([changed], { scopedStatus: { channelId: b2c, languageCode: 'de-DE', value: 'inherit' } })).statusCode,
+        (await bulk([changed], { scopedStatus: { channelId: b2c, languageCode: 'de-DE', value: 'active' } })).statusCode,
       ).toBe(200);
 
       const seen = capture(events, ids);
@@ -307,7 +309,7 @@ describe('POST /products/bulk-update — fields.scopedStatus (spec 163, T073)', 
         expect(undo.conflicts).toEqual([{ recordId: changed, reason: 'changed_since_operation' }]);
         expect(undo.reverted).toHaveLength(59);
       }
-      expect(await languageStatus(changed, b2c, 'de-DE')).toBeUndefined();
+      expect(await languageStatus(changed, b2c, 'de-DE')).toBe('active');
       expect(await languageStatus(ids[1]!, b2c, 'de-DE')).toBe('active');
       for (const id of ids.slice(2)) expect(await languageStatus(id, b2c, 'de-DE')).toBeUndefined();
       for (const id of ids.slice(1)) {

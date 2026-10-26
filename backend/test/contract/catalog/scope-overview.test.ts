@@ -197,7 +197,13 @@ describe('Scope overview — GET /admin/catalog/products/:id/scope-overview (spe
     expect(data.channels.every((c) => c.isMember)).toBe(true);
     expect(data.languages).toEqual(['de-DE', 'en-GB', 'pl-PL']);
     expect(data.cells).toHaveLength(6);
-    for (const c of data.cells) expect(c).not.toHaveProperty('missing');
+    // Phase 11 (T080a, FR-041): `missing` on every cell of a member channel in a
+    // language it offers, whatever its status; absent on every other cell.
+    for (const c of data.cells) {
+      const channel = data.channels.find((ch) => ch.channelId === c.channelId)!;
+      if (channel.isMember && channel.languages.includes(c.languageCode)) expect(Array.isArray(c.missing)).toBe(true);
+      else expect(c).not.toHaveProperty('missing');
+    }
 
     expect(cell(data, b2b, 'de-DE')).toMatchObject({
       effectiveStatus: 'active',
