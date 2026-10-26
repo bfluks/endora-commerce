@@ -71,10 +71,15 @@ interface ItemRow {
 }
 
 /** The order's selectability rules for the picker and the quick search (Clarifications). */
+/**
+ * Feature 163 (FR-019) — an archived product cannot be ordered whatever its status,
+ * so it is refused on its own, beside `inactive`.
+ */
 const ORDER_PRODUCT_RULES: ProductBrowserRules = {
   initialStatus: 'active',
   blockedTypes: ['grouped', 'bundle'],
   blockedStatuses: ['inactive'],
+  blockArchived: true,
 };
 
 // Members of `ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE`, named rather than taken by

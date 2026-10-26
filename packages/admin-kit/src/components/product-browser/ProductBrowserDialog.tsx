@@ -26,6 +26,7 @@ import {
 import { productDisplayName } from './product-line.js';
 import {
   NO_PRODUCT_IDS,
+  isProductArchived,
   productSelectability,
   productSelectabilityReasonKey,
   type ProductBrowserRules,
@@ -81,13 +82,15 @@ export function ProductBrowserDialog(props: ProductBrowserDialogProps): ReactNod
 
 const SEARCH_DEBOUNCE_MS = 250;
 const TYPES: readonly ProductBrowserType[] = productTypeSchema.options;
-const STATUS_TABS: readonly ProductBrowserStatusFilter[] = ['all', 'active', 'draft', 'inactive'];
+// Feature 163 (FR-113, R30.4) — the Products list's tabs: three over products that
+// are not archived, then Archived on its own axis.
+const STATUS_TABS: readonly ProductBrowserStatusFilter[] = ['all', 'active', 'inactive', 'archived'];
 
 const TAB_LABEL_KEY: Record<ProductBrowserStatusFilter, string> = {
   all: 'productBrowser.tab.all',
   active: 'productBrowser.tab.active',
-  draft: 'productBrowser.tab.draft',
   inactive: 'productBrowser.tab.inactive',
+  archived: 'productBrowser.tab.archived',
 };
 const STATUS_LABEL_KEY: Record<ProductBrowserStatus, string> = {
   active: 'productBrowser.status.active',
@@ -140,9 +143,15 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
   const [counts, setCounts] = useState<ProductBrowserCounts>({
     all: 0,
     active: 0,
-    draft: 0,
     inactive: 0,
+    archived: 0,
   });
+  // A host that refuses archived products is not offered a tab of rows it cannot
+  // tick (Hick's law); every other host can browse them.
+  const tabs = useMemo(
+    () => (rules.blockArchived ? STATUS_TABS.filter((tab) => tab !== 'archived') : STATUS_TABS),
+    [rules.blockArchived],
+  );
   const [load, setLoad] = useState<'loading' | 'ready' | 'error'>('loading');
   const [reloadToken, setReloadToken] = useState(0);
   const [confirm, setConfirm] = useState<ConfirmState>({ kind: 'idle' });
@@ -371,8 +380,15 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
     {
       id: 'status',
       header: t('productBrowser.column.status'),
+      // Archived is shown beside the status, never instead of it: the two are
+      // independent (FR-019), and the word carries it, not a colour alone.
       render: (row): ReactNode => (
-        <Badge variant={STATUS_BADGE_VARIANT[row.status]}>{t(STATUS_LABEL_KEY[row.status])}</Badge>
+        <span className="inline-flex flex-wrap gap-1">
+          <Badge variant={STATUS_BADGE_VARIANT[row.status]}>{t(STATUS_LABEL_KEY[row.status])}</Badge>
+          {isProductArchived(row) ? (
+            <Badge variant="secondary">{t('productBrowser.status.archived')}</Badge>
+          ) : null}
+        </span>
       ),
     },
     {
@@ -415,7 +431,7 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
           <div style={{ padding: '4px 12px 0', overflow: 'hidden' }}>
             <div className="b2b-tabs-scroll">
               <div className="b2b-tabs" role="tablist">
-                {STATUS_TABS.map((tab) => (
+                {tabs.map((tab) => (
                   <button
                     key={tab}
                     type="button"

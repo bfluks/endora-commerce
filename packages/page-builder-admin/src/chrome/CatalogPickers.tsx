@@ -153,7 +153,7 @@ function ProductSearchModal({
   onApply: (slugs: string[]) => void;
 }): ReactElement | null {
   const [query, setQuery] = useState('');
-  const [status, setStatus] = useState<'all' | 'active' | 'draft' | 'inactive'>('active');
+  const [status, setStatus] = useState<'all' | 'active' | 'inactive'>('active');
   const [page, setPage] = useState(0);
   const [products, setProducts] = useState<AdminProduct[]>([]);
   const [total, setTotal] = useState(0);
@@ -234,7 +234,6 @@ function ProductSearchModal({
           >
             <option value="all">All statuses</option>
             <option value="active">Active</option>
-            <option value="draft">Draft</option>
             <option value="inactive">Inactive</option>
           </select>
         </div>
