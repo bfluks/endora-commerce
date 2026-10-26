@@ -1487,10 +1487,31 @@ also green for product_feeds, comparisons, backend, storefront, admin. **Not run
 
 ### Phase 23: [admin UI] Media, attachments, packaging per scope (US9) — after Phases 21–22
 
-- [ ] T140 [P] [US9] [S3] RED: gallery panel per-channel roles and hide toggles; per-language alt; attachment translations + hide per channel; packaging-unit name translations — `admin/test/modules/catalog/product-media-scopes.test.tsx`, `admin/test/modules/catalog/PackagingUnitsEditor.translations.test.tsx`
-- [ ] T141 [US9] [S3] Gallery / attachments UI in the product editor — `src/admin/components/` (gallery and attachment sections of `ProductEditor.tsx`)
-- [ ] T142 [US9] [S3] `PackagingUnitsEditor.tsx` translations
-- [ ] T143 [S3] i18n keys (handover)
+- [x] T140 [P] [US9] [S3] RED: gallery panel per-channel roles and hide toggles; per-language alt; attachment translations + hide per channel; packaging-unit name translations — `admin/test/modules/catalog/product-media-scopes.test.tsx`, `admin/test/modules/catalog/PackagingUnitsEditor.translations.test.tsx`
+- [x] T141 [US9] [S3] Gallery / attachments UI in the product editor — `src/admin/components/` (gallery and attachment sections of `ProductEditor.tsx`)
+- [x] T142 [US9] [S3] `PackagingUnitsEditor.tsx` translations
+- [x] T143 [S3] i18n keys (handover)
+
+- S3 (2026-10-26): **Phase 23 done.** Both sections moved out of `ProductEditor.tsx` first (pure move) into
+  `components/ProductGallerySection.tsx` / `ProductAttachmentsSection.tsx`. **Both now list the admin reads**
+  (`GET …/gallery`, `…/attachments`): the public PDP they used is channel-resolved since P21/P22, so an item hidden in
+  the admin request's channel vanished and the gallery's channel-effective `labels` became the baseline the page Save
+  wrote back with `replace=true`. The PDP is only a best-effort URL lookup now — an image or attachment hidden in that
+  channel has no preview / file link in the admin (no batch admin asset read in the stack; noted, not built).
+  Gallery: a **Channel** selector over the member channels (`scope-context`) shows that channel's role holders
+  (`Use inherited (Image N)` names the global holder; an image hidden there is not offered) and a hide checkbox per
+  image; an **Alt text language** selector edits alt text per language (member languages ∪ languages already named).
+  All staged, written by the page Save (`flushGallery`): labels PATCH as before, one `PATCH …/gallery/:id` per item
+  with the alt-text patch and/or the whole hidden set (a channel the product has left is carried over), the order PUT,
+  one `PUT …/gallery/channel-roles` per changed channel with the changed roles only. Attachments: a per-row
+  "Translations and channels" dialog (`AttachmentScopesDialog.tsx`), one PATCH of what changed; rows show where they
+  are hidden. Packaging units: a per-row "Names per language" dialog, one PATCH with the changed languages. Pure
+  helpers in `lib/media-scopes.ts`. Scope overview: labels for `media:*`, `attachments:*`, `packagingUnits:name`,
+  `seo:<field>`; `media:roles` resets / deletes its orphan through the channel-roles PUT, the item-level fields have
+  no reset there (the overview names no item). Gallery and attachment scope controls are disabled without
+  `catalog:write`; `PackagingUnitsEditor` keeps its existing ungated behaviour (it has no session in its callers'
+  tests). Strings in `chore(163): s3 handover P23`. No changeset: the phase asks for none, and `.changeset/` is S1's
+  (Phase 24 writes them).
 
 **Verification** (one invocation per line):
 - `pnpm --filter admin exec vitest run test/modules/catalog/product-media-scopes.test.tsx`
