@@ -119,9 +119,23 @@ export async function getProductBySlug(
   const res = await apiGetForViewer<{ data: ProductDetail }>(
     withQuery(`/api/v1/catalog/products/${encodeURIComponent(slug)}`, params),
     ctx,
-    { revalidate: 60, tags: ['catalog:product', `catalog:product:${slug}`] },
+    { revalidate: 60, tags: productCacheTags(slug) },
   );
   return res.data;
+}
+
+/** Next drops a cache tag longer than this. */
+const CACHE_TAG_MAX_LENGTH = 256;
+
+/**
+ * Feature 163 (checkpoint E security review, I4) — a product read's cache tags: the
+ * shared tag, and `catalog:product:<key>` while it fits Next's tag limit. The key
+ * comes from the URL, so it can be any length; an over-long one keeps the shared tag
+ * alone (nothing revalidates the per-key tag by itself today).
+ */
+export function productCacheTags(key: string, shared = 'catalog:product'): string[] {
+  const keyed = `catalog:product:${key}`;
+  return keyed.length <= CACHE_TAG_MAX_LENGTH ? [shared, keyed] : [shared];
 }
 
 /**
@@ -142,7 +156,7 @@ export async function resolveProductKey(
   const res = await apiGetForViewer<{ data: ProductKeyResolution }>(
     `/api/v1/catalog/products/resolve/${encodeURIComponent(key)}`,
     ctx,
-    { revalidate: 60, tags: ['catalog:product', `catalog:product:${key}`] },
+    { revalidate: 60, tags: productCacheTags(key) },
   );
   return res.data;
 }
@@ -239,7 +253,7 @@ export async function getProductLinks(
     }>(
       withQuery(`/api/v1/catalog/products/${encodeURIComponent(productIdOrSlug)}/links`, linkParams),
       ctx,
-      { revalidate: 60, tags: ['catalog:links', `catalog:product:${productIdOrSlug}`] },
+      { revalidate: 60, tags: productCacheTags(productIdOrSlug, 'catalog:links') },
     );
     return res.data;
   } catch {
