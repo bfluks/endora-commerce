@@ -19,6 +19,7 @@ import { ProductPackagingUnit } from '../entities/product-packaging-unit.entity.
 import { BundleSlot } from '../entities/bundle-slot.entity.js';
 import { BundleSlotOption } from '../entities/bundle-slot-option.entity.js';
 import { resolvePrimaryAssetUrls } from './primary-asset-url.js';
+import { effectiveGallery, loadGalleryChannelOverrides } from './gallery-scopes.js';
 import { viewerOrganizationFor } from './viewer-organization.js';
 import {
   effectiveAttributeValues,
@@ -65,12 +66,14 @@ import {
   listingPriceChannelContext,
   resolveScopeLanguage,
   listingPriceMoney,
+  translationAt,
   type AssetReadPort,
   type AssetRecord,
   type CategoryNode,
   type CategoryPageContent,
   type CustomFieldDefinitionReadPort,
   type FilterDefinition,
+  type GalleryLabel,
   type ListingPriceOrderCursor,
   type ListingPriceOrderPort,
   type ListingPrice,
@@ -882,8 +885,9 @@ export class CatalogQueryService {
 
     // Primary asset — for listings prefer the gallery's Thumbnail (US3),
     // then Base Image, then any first gallery item, finally the legacy
-    // product_assets row. Resolution chain pinned by T096.
-    const assetUrlByProduct = await resolvePrimaryAssetUrls(em, this.#requireAssets(), productIds);
+    // product_assets row. Resolution chain pinned by T096; run over the gallery as
+    // the request's channel shows it (feature 163, FR-076).
+    const assetUrlByProduct = await resolvePrimaryAssetUrls(em, this.#requireAssets(), productIds, channelId);
 
     const ids = [...productIds];
     const catRows = await em.execute<{ product_id: string; slug: string }[]>(
@@ -2020,7 +2024,7 @@ export class CatalogQueryService {
       [product.id],
     );
     const assetIds = assetRows.map((r) => r.asset_id);
-    const assets = await this.#requireAssets().findByIds(assetIds);
+    const allAssets = await this.#requireAssets().findByIds(assetIds);
 
     // Variants
     const variants = product.type === 'configurable' ? await em.find(ProductVariant, { parentProductId: product.id }) : [];
@@ -2035,26 +2039,49 @@ export class CatalogQueryService {
     // Feature 002 US3 — eager-load gallery + attachments for the PDP.
     // Gallery: items + label bridge zipped per item; Asset urls
     // resolved into a flat shape the storefront can render directly.
-    const galleryItems = await em.find(
+    // Feature 163 (FR-076, R14) — the gallery as the request's channel shows it:
+    // hidden items dropped, each role at its channel holder (`effectiveGallery`).
+    const storedGalleryItems = await em.find(
       GalleryItem,
       { productId: product.id },
       { orderBy: { position: 'asc', id: 'asc' } },
     );
-    const galleryAssetIds = galleryItems.map((g) => g.assetId);
+    const galleryLabels = storedGalleryItems.length > 0
+      ? await em.find(GalleryItemLabel, { productId: product.id })
+      : [];
+    const globalLabelsByItem = new Map<string, GalleryLabel[]>();
+    for (const l of galleryLabels) {
+      const existing = globalLabelsByItem.get(l.galleryItemId) ?? [];
+      existing.push(l.label);
+      globalLabelsByItem.set(l.galleryItemId, existing);
+    }
+    const galleryOverrides =
+      storedGalleryItems.length > 0
+        ? (await loadGalleryChannelOverrides(em, [product.id], channel.id)).get(product.id)
+        : undefined;
+    const galleryItems = effectiveGallery(
+      storedGalleryItems.map((item) => ({ id: item.id, item, labels: globalLabelsByItem.get(item.id) ?? [] })),
+      galleryOverrides,
+    );
+    const labelsByItem = new Map(galleryItems.map((g) => [g.id, g.labels]));
+    const galleryAssetIds = galleryItems.map((g) => g.item.assetId);
     const galleryAssetsById = new Map<string, AssetRecord>();
     if (galleryAssetIds.length > 0) {
       const galleryAssets = await this.#requireAssets().findByIds(galleryAssetIds);
       for (const a of galleryAssets) galleryAssetsById.set(a.id, a);
     }
-    const galleryLabels = galleryItems.length > 0
-      ? await em.find(GalleryItemLabel, { productId: product.id })
-      : [];
-    const labelsByItem = new Map<string, ('base_image' | 'small_image' | 'thumbnail')[]>();
-    for (const l of galleryLabels) {
-      const existing = labelsByItem.get(l.galleryItemId) ?? [];
-      existing.push(l.label);
-      labelsByItem.set(l.galleryItemId, existing);
-    }
+    // An image hidden in the channel stays hidden when a legacy `product_assets` row
+    // names the same asset.
+    const hiddenAssetIds = new Set(
+      storedGalleryItems.filter((item) => galleryOverrides?.hidden.has(item.id)).map((item) => item.assetId),
+    );
+    const assets = allAssets.filter((asset) => !hiddenAssetIds.has(asset.id));
+    // FR-077 (R15) — the product's own alt text at the scope language, else the
+    // asset's alt text through the existing pick.
+    const scopeLanguage = this.#availabilityScope(ctx).languageCode;
+    const altTextOf = (item: GalleryItem, asset: AssetRecord): string | null =>
+      translationAt(item.altText, scopeLanguage) ??
+      (asset.altText ? this.pickLang(asset.altText, ctx.preferredLanguage, channel) : null);
 
     // Attachments + their types, eager-loaded in two queries.
     const attachmentRows = await em.find(
@@ -2125,7 +2152,7 @@ export class CatalogQueryService {
     // shares should land on it.
     const labelled = (label: 'base_image' | 'thumbnail'): AssetRecord | null =>
       galleryItems
-        .map((g) => ({ asset: galleryAssetsById.get(g.assetId) ?? null, labels: labelsByItem.get(g.id) ?? [] }))
+        .map((g) => ({ asset: galleryAssetsById.get(g.item.assetId) ?? null, labels: labelsByItem.get(g.id) ?? [] }))
         .find((g) => g.asset && g.labels.includes(label))?.asset ?? null;
     const derivedSeo: SeoProductMetaValues = {
       title: nameText,
@@ -2206,14 +2233,15 @@ export class CatalogQueryService {
           }
         : {}),
       gallery: galleryItems.flatMap((g) => {
-        const a = galleryAssetsById.get(g.assetId);
+        const a = galleryAssetsById.get(g.item.assetId);
         if (!a) return [];
         return [
           {
             id: g.id,
-            position: g.position,
-            labels: [...(labelsByItem.get(g.id) ?? [])].sort(),
+            position: g.item.position,
+            labels: [...g.labels].sort(),
             asset: { id: a.id, kind: a.kind, url: a.storageUrl },
+            altText: altTextOf(g.item, a),
           },
         ];
       }),
@@ -2407,7 +2435,7 @@ export class CatalogQueryService {
     // Primary asset url via gallery thumb chain -> base_image -> first item
     // -> legacy product_assets first row. One helper, shared with `toSummary`
     // and `ProductLinkService`, so the chain and the port call have one home.
-    const assetUrlByProduct = await resolvePrimaryAssetUrls(em, this.#requireAssets(), ids);
+    const assetUrlByProduct = await resolvePrimaryAssetUrls(em, this.#requireAssets(), ids, channel.id);
 
     const resolvedPrices = await this.#listingPricesFor(products, ctx);
     // Issue #384 — one statement for every child's override rows on this channel.

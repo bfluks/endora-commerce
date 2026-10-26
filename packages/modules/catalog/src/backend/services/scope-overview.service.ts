@@ -8,6 +8,7 @@ import {
   isNonEmpty,
   isOn,
   isSystemAttributeKey,
+  sameLanguage,
   type AttributeScope,
   type LanguageReadPort,
   type OverrideRow,
@@ -28,6 +29,7 @@ import { ProductValueOverride } from '../entities/product-value-override.entity.
 import type { CatalogAttributeReadService } from './catalog-attribute-read.service.js';
 import { toChannelRecord, toLanguageRecord } from './product-scopes.service.js';
 import { attributeSetDefinitionIds, checkCompleteness, requiredLanguageAttributeKeys } from './scope-completeness.js';
+import { loadMediaScopedFields } from './gallery-scopes.js';
 
 /**
  * Feature 163 (`specs/163-product-data-scopes/`) — the scope overview of one product,
@@ -99,7 +101,22 @@ export interface ScopeOverviewInput {
   primaryLanguage: string;
   /** Every active platform language: the languages axis when the product is in no channel (US4 #4). */
   platformLanguages: readonly string[];
+  /**
+   * Feature 163 (T134b, T139b, T118c) — overrides kept outside the scope and value
+   * tables: the gallery (`media:roles`, `media:hidden`, `media:altText`), the
+   * attachments (`attachments:hidden`, `attachments:name`, `attachments:description`),
+   * the packaging units (`packagingUnits:name`) and SEO (`seo:<field>`). The level is
+   * the shape: a channel alone, a language alone, or both. Absent = none.
+   */
+  scopedFields?: ReadonlyArray<ScopedField>;
   now: Date;
+}
+
+/** One override held outside the scope and value tables, at a channel, a language, or both. */
+export interface ScopedField {
+  field: string;
+  channelId: string | null;
+  languageCode: string | null;
 }
 
 const CHANNEL_FIELDS = ['status', 'window', 'audience', 'minOrderQuantity', 'returnable'] as const;
@@ -110,11 +127,15 @@ function overrideField(attributeKey: string): string {
   return isSystemAttributeKey(attributeKey) ? attributeKey : `attribute:${attributeKey}`;
 }
 
-/** name, description, then attributes by key, then the URL key. */
+/** name, description, then attributes by key, the URL key, media / attachments / packaging units, then SEO. */
 function fieldOrder(field: string): [number, string] {
   if (field === 'name') return [0, ''];
   if (field === 'description') return [1, ''];
   if (field === 'urlKey') return [3, ''];
+  if (field.startsWith('seo:')) return [5, field];
+  if (field.startsWith('media:') || field.startsWith('attachments:') || field.startsWith('packagingUnits:')) {
+    return [4, field];
+  }
   return [2, field];
 }
 
@@ -155,6 +176,9 @@ function languageFields(
   languageCode: string,
 ): string[] {
   const fields: string[] = [];
+  for (const scoped of input.scopedFields ?? []) {
+    if (scoped.channelId === null && sameLanguage(scoped.languageCode, languageCode)) fields.push(scoped.field);
+  }
   if (languageCode !== input.primaryLanguage) {
     for (const [field, values] of baselines) {
       if (isNonEmpty(values[languageCode])) fields.push(field);
@@ -163,7 +187,7 @@ function languageFields(
   if (input.urlKeys.some((key) => key.salesChannelId == null && key.languageCode === languageCode)) {
     fields.push('urlKey');
   }
-  return fields.sort(byFieldOrder);
+  return [...new Set(fields)].sort(byFieldOrder);
 }
 
 /** The pure core of the overview (`admin-scopes-api.md` §3). */
@@ -229,6 +253,30 @@ export function buildScopeOverview(input: ScopeOverviewInput): ScopeOverview {
     const slot = byLanguage.get(row.languageCode ?? '') ?? new Set<string>();
     byLanguage.set(row.languageCode ?? '', slot);
     slot.add(field);
+  }
+
+  // --- Media, attachments, packaging units, SEO (T134b, T139b, T118c) ----------------
+  for (const scoped of input.scopedFields ?? []) {
+    if (scoped.channelId === null) continue; // a language alone: the language column
+    const base = { field: scoped.field, channelId: scoped.channelId, languageCode: scoped.languageCode };
+    if (!isMember(scoped.channelId)) {
+      orphans.push({ ...base, reason: 'not_a_member' });
+      continue;
+    }
+    let slotLanguage = '';
+    if (scoped.languageCode !== null) {
+      const offered = channelById.get(scoped.channelId)?.languages.find((code) => sameLanguage(code, scoped.languageCode));
+      if (offered === undefined) {
+        orphans.push({ ...base, reason: 'language_not_offered' });
+        continue;
+      }
+      slotLanguage = offered;
+    }
+    const byLanguage = overrideFields.get(scoped.channelId) ?? new Map<string, Set<string>>();
+    overrideFields.set(scoped.channelId, byLanguage);
+    const slot = byLanguage.get(slotLanguage) ?? new Set<string>();
+    byLanguage.set(slotLanguage, slot);
+    slot.add(scoped.field);
   }
 
   // --- URL keys -------------------------------------------------------------------
@@ -337,12 +385,22 @@ export function buildScopeOverview(input: ScopeOverviewInput): ScopeOverview {
   };
 }
 
+/**
+ * Feature 163 (T118c) — `seo`'s scopes of a product for the overview; `[]` while `seo`
+ * is not effectively present (the caller probes before resolving the port).
+ */
+export type ListSeoProductScopes = (
+  productId: string,
+) => Promise<Array<{ channelId: string | null; locale: string | null; fields: readonly string[] }>>;
+
 export class ScopeOverviewService {
   constructor(
     private readonly emFactory: () => EntityManager,
     private readonly membership: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>,
     private readonly languages: Pick<LanguageReadPort, 'listActive' | 'getDefault'>,
     private readonly attributeRead: Pick<CatalogAttributeReadService, 'listAll'>,
+    /** Without it the overview lists no SEO field (as with `seo` off). */
+    private readonly seoScopes?: ListSeoProductScopes,
   ) {}
 
   /** `GET /admin/catalog/products/:id/scope-overview`. */
@@ -350,8 +408,19 @@ export class ScopeOverviewService {
     const em = this.emFactory();
     const product = await em.findOne(Product, { id: productId, deletedAt: null });
     if (!product) throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
-    const [members, channelRows, languageRows, overrides, urlKeys, attributes, active, primary, setDefinitions] =
-      await Promise.all([
+    const [
+      members,
+      channelRows,
+      languageRows,
+      overrides,
+      urlKeys,
+      attributes,
+      active,
+      primary,
+      setDefinitions,
+      mediaFields,
+      seoScopes,
+    ] = await Promise.all([
         this.membership.listChannelsForEntity('product', productId),
         em.find(ProductChannelScope, { productId }),
         em.find(ProductChannelLanguageScope, { productId }),
@@ -361,7 +430,19 @@ export class ScopeOverviewService {
         this.languages.listActive(),
         this.languages.getDefault(),
         attributeSetDefinitionIds(em, product.attributeSetId),
+        loadMediaScopedFields(em, productId),
+        this.seoScopes ? this.seoScopes(productId) : Promise.resolve([]),
       ]);
+    const scopedFields: ScopedField[] = [
+      ...mediaFields,
+      ...seoScopes.flatMap((scope) =>
+        scope.fields.map((field) => ({
+          field: `seo:${field}`,
+          channelId: scope.channelId,
+          languageCode: scope.locale,
+        })),
+      ),
+    ];
 
     const memberIds = new Set(members.map((channel) => channel.id));
     const otherIds = [
@@ -371,6 +452,7 @@ export class ScopeOverviewService {
           ...languageRows.map((row) => row.salesChannelId),
           ...overrides.map((row) => row.channelId),
           ...urlKeys.flatMap((row) => (row.salesChannelId == null ? [] : [row.salesChannelId])),
+          ...scopedFields.flatMap((row) => (row.channelId === null ? [] : [row.channelId])),
         ].filter((id) => !memberIds.has(id)),
       ),
     ];
@@ -413,6 +495,7 @@ export class ScopeOverviewService {
       ),
       primaryLanguage: primary?.code ?? active[0]?.code ?? 'en',
       platformLanguages: active.map((language) => language.code),
+      scopedFields,
       now,
     });
   }
