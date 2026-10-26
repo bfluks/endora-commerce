@@ -49,11 +49,22 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
   };
 });
 
+// The page Save's two staged writers, as handles: what matters here is whether, and
+// when, the page calls them — never before the product PATCH has been accepted.
+const flushOverridesSpy = vi.fn((): Promise<void> => Promise.resolve());
+
 vi.mock('../../../../packages/modules/catalog/src/admin/components/ProductScopeEditor', async () => {
   const actual = await vi.importActual<Record<string, unknown>>(
     '../../../../packages/modules/catalog/src/admin/components/ProductScopeEditor',
   );
-  return { ...actual, ProductScopeEditor: (): null => null };
+  const { forwardRef, useImperativeHandle } = await import('react');
+  return {
+    ...actual,
+    ProductScopeEditor: forwardRef(function ScopeEditorStub(_props: unknown, ref): null {
+      useImperativeHandle(ref, () => ({ flushOverrides: (): Promise<void> => flushOverridesSpy() }));
+      return null;
+    }),
+  };
 });
 
 const { ProductEditor } = await import('../../../../packages/modules/catalog/src/admin/pages/ProductEditor');
@@ -185,6 +196,7 @@ const incomplete = (): ApiError =>
 beforeEach(() => {
   getSpy.mockReset();
   patchSpy.mockReset();
+  flushOverridesSpy.mockClear();
   primeGets();
 });
 afterEach(() => vi.clearAllMocks());
@@ -226,6 +238,31 @@ describe('the global status save and the completeness gate (US6)', () => {
     expect(document.body.textContent).not.toContain('SCOPE_INCOMPLETE');
     // The edit stays in the form, to be completed or changed.
     expect((screen.getByRole('combobox', { name: /^status/i }) as HTMLSelectElement).value).toBe('active');
+  });
+
+  it('refuse: the staged channel overrides are not written either — the whole change is refused (US6 #3, C-1)', async () => {
+    const user = userEvent.setup();
+    patchSpy.mockRejectedValue(incomplete());
+    renderEditor();
+    await switchOnAndSave(user);
+    await screen.findByText(/were not saved/i);
+    expect(flushOverridesSpy).not.toHaveBeenCalled();
+  });
+
+  it('accepted: the staged channel overrides are written after the product PATCH answered (C-1)', async () => {
+    const user = userEvent.setup();
+    const order: string[] = [];
+    patchSpy.mockImplementation(async () => {
+      order.push('patch');
+      return { data: { ...PRODUCT, status: 'active' }, warnings: [] };
+    });
+    flushOverridesSpy.mockImplementation(async () => {
+      order.push('overrides');
+    });
+    renderEditor();
+    await switchOnAndSave(user);
+    expect(await screen.findByText('Saved.')).toBeTruthy();
+    expect(order).toEqual(['patch', 'overrides']);
   });
 
   it('a channel whose name cannot be read is named by a short id', async () => {
