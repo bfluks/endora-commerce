@@ -22,9 +22,10 @@ import { errorBodyOf } from '../../helpers/product-scope-fixture.js';
  * Also: a product with no scope rows inherits everywhere ("use inherited"); an
  * archived one answers 410 to a caller who may see it; an unresolvable channel
  * matches nothing (FR-007). Phase 9c (T156s, spec Session 2026-10-25): a member
- * switched off by its global status but not archived answers the absent 404 at every
- * scope, overrides or not; the 410 is an archived product's only, and only where it
- * would be available to the caller with the archive taken away.
+ * switched off by its global status but not archived is plain off — the absent 404 —
+ * wherever no narrower `active` override turns it on, and never answers 410; the 410
+ * is an archived product's only, and only where it would be available to the caller
+ * with the archive taken away.
  *
  * Every fixture name carries a per-run token; the channels are this suite's own.
  */
@@ -281,8 +282,11 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
   });
 
   // Phase 9c (T156s, FR-005, FR-010, O-3, O-4) — the product page's "gone" answer.
-  it('T156s: a member switched off globally but not archived answers the absent 404 at every (C, L), overrides or not', async () => {
-    // OFF is `inactive` globally; C1 says `active`, and so does C2 × pl-PL.
+  it('T156s: a member switched off globally but not archived is off wherever no override turns it on, and never answers 410', async () => {
+    // OFF is `inactive` globally; C1 says `active`, and so does C2 × pl-PL. A narrower
+    // override wins (FR-008, FR-010: `inactive` means off *there*), so OFF is on at
+    // (C1, *) and (C2, pl-PL) and plain off — the absent product's 404 — at (C2, en-US).
+    // Not archived, so no pair answers 410.
     await sql(
       `insert into product_channel_scopes (product_id, sales_channel_id, status, created_at, updated_at)
        values (?, ?, 'active', now(), now())`,
@@ -293,6 +297,7 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
        values (?, ?, 'pl-PL', 'active', now(), now())`,
       [ids['off'], c2.id],
     );
+    const offOn = (channel: Channel, language: Language): boolean => channel === c1 || language === 'pl-PL';
     try {
       for (const [channel, language] of pairs()) {
         const absent = await h.app.inject({
@@ -305,7 +310,29 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
           url: `/api/v1/catalog/products/${slugs['off']}`,
           headers: headers(channel, language),
         });
-        expect(res.statusCode, `OFF at ${channel.code}/${language}`).toBe(404);
+        expect(res.statusCode, `OFF at ${channel.code}/${language}`).not.toBe(410);
+        if (offOn(channel, language)) {
+          expect(res.statusCode, `OFF at ${channel.code}/${language}`).toBe(200);
+        } else {
+          expect(res.statusCode, `OFF at ${channel.code}/${language}`).toBe(404);
+          expect(errorBodyOf(res)).toEqual(errorBodyOf(absent));
+        }
+      }
+      // Without its overrides OFF is off at every pair: the absent 404, never 410.
+      await sql(`delete from product_channel_language_scopes where product_id = ?`, [ids['off']]);
+      await sql(`delete from product_channel_scopes where product_id = ?`, [ids['off']]);
+      for (const [channel, language] of pairs()) {
+        const absent = await h.app.inject({
+          method: 'GET',
+          url: `/api/v1/catalog/products/does-not-exist-${RUN}`,
+          headers: headers(channel, language),
+        });
+        const res = await h.app.inject({
+          method: 'GET',
+          url: `/api/v1/catalog/products/${slugs['off']}`,
+          headers: headers(channel, language),
+        });
+        expect(res.statusCode, `bare OFF at ${channel.code}/${language}`).toBe(404);
         expect(errorBodyOf(res)).toEqual(errorBodyOf(absent));
       }
     } finally {
