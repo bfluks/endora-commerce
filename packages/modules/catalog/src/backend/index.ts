@@ -1200,7 +1200,9 @@ export function registerModule(ctx: ModuleContext): void {
       salesChannelMembership: cradle().salesChannelMembershipPort,
       redis: cradle().redis,
       // Feature 163 (P-1 = A) — the Archive / Restore tools' audited Commands.
-      commandBus: cradle().commandBus,
+      // Read only when registered: a composition without a bus (the absent-owner
+      // harness) still boots, and the two tools are simply not offered.
+      ...('commandBus' in cradle() ? { commandBus: cradle().commandBus } : {}),
     };
     const registry = cradle().promptActionToolRegistry;
     for (const tool of [
