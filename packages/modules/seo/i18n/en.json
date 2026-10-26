@@ -77,6 +77,17 @@
   "metaScope.removed": "Override removed. This scope inherits its values again.",
   "metaScope.error.remove": "The override could not be removed. Try again.",
   "productLink.title": "SEO meta tags",
-  "productLink.hint": "Titles and descriptions are set per sales channel and language on the SEO screen — pick this product there.",
-  "productLink.link": "Edit SEO meta per channel →"
+  "productLink.hint": "Titles and descriptions are set per sales channel and language on the SEO screen.",
+  "productLink.link": "Edit SEO meta per channel →",
+  "metaScope.loadingChannels": "Reading the product’s sales channels…",
+  "metaScope.scope.channelLanguage": "{channel} · {language}",
+  "metaScope.scope.channel": "{channel} (whole channel)",
+  "metaScope.scope.language": "{language} (every channel)",
+  "metaScope.discard.title": "Discard unsaved changes?",
+  "metaScope.discard.body": "The override for {scope} has changes that are not saved. Switching to another scope discards them.",
+  "metaScope.discard.confirm": "Discard and switch",
+  "metaScope.discard.cancel": "Keep editing",
+  "metaScope.inherit.title": "Use inherited for {scope}?",
+  "metaScope.inherit.body": "The override for {scope} is removed — {fields}. Each of them then shows the inherited value.",
+  "metaScope.inherit.cancel": "Cancel"
 }
