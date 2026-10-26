@@ -1473,7 +1473,12 @@ T139 regen + changesets, T139a/b overview fields `attachments:hidden`, `attachme
   the change (the other two pin behaviour that must not move). `[PG]` case added to
   `backend/test/integration/quote_requests/effective-names.test.ts`, unrun. Changeset: `mod-quote-requests` added to
   `163-catalog-attachments-packaging-per-scope.md`.
-- *N2 for the unit name — left open, owner's call.* An operator naming the channel (basket `input.salesChannelId`)
+- *N2 for the unit name — **decided B and built** (owner, 2026-10-26; checkpoint F fix round): an operator naming
+  the channel snapshots the unit name at that channel's default language (`CartService#channelDefaultLanguage`,
+  `salesChannelResolutionPort.getById`, read only when a unit is named). The quote-seeded basket copies the quote
+  line's stored name and does not re-resolve. Unit: `cart-batch-add.test.ts` (N2 block); [PG]:
+  `backend/test/integration/carts/packaging-unit-name-snapshot.test.ts` (last case). The note below is history.*
+  ~~N2 for the unit name — left open, owner's call.~~ An operator naming the channel (basket `input.salesChannelId`)
   snapshots the **global** unit name, while the product name beside it is at the channel's default language (N2).
   Not changed: the Phase 22 recipe and the cart comment both write "operator: `null` → global" under the 2026-10-26
   decision, and the fix needs the channel's `defaultLanguage`, which `CartService` does not read today. Size if the

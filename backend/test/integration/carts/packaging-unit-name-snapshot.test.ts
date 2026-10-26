@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { setupBackendServer, teardownBackendServer, type BackendServerHandle } from '../../helpers/test-server.js';
-import { TEST_CUSTOMER_ID } from '../../helpers/test-actors.js';
+import type { CartWritePort } from '@endora-commerce/contracts';
+import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { createMinimumProduct, minimumFixtureRun, type MinimumProductFixture } from '../../helpers/order-minimum-fixture.js';
 
 /**
@@ -13,6 +14,12 @@ import { createMinimumProduct, minimumFixtureRun, type MinimumProductFixture } f
  *
  * The channel is the seeded `pl_retail`; its default language is read, not assumed, and
  * the translation is keyed by it.
+ *
+ * Owner decision N2 = B (2026-10-26) — a caller that names the channel itself (an
+ * operator surface, through `CartWritePort` with `salesChannelId`) has no request
+ * language: the unit name is snapshotted at that channel's default language, as the
+ * product name beside it is. No HTTP route passes a unit with a named channel today, so
+ * the last case drives the port as such a surface would.
  */
 
 const BUYER = { b2b_session: 'stub-customer-session' };
@@ -24,6 +31,7 @@ describe('163 — packaging-unit name snapshot in the basket language [integrati
   let product: MinimumProductFixture;
   let language: string;
   let unitId: string;
+  let channelId: string;
 
   const headers = (): Record<string, string> => ({ 'x-sales-channel': 'pl_retail', 'accept-language': language });
 
@@ -48,6 +56,7 @@ describe('163 — packaging-unit name snapshot in the basket language [integrati
     const em = h.em();
     const channel = await em.findOneOrFail(SalesChannel, { code: 'pl_retail' });
     language = channel.defaultLanguage;
+    channelId = channel.id;
     product = await createMinimumProduct(em, {
       sku: `S163-PU-${RUN}`,
       nameEn: 'Shelf',
@@ -111,5 +120,23 @@ describe('163 — packaging-unit name snapshot in the basket language [integrati
     });
     expect(added.statusCode, added.body).toBeLessThan(300);
     expect((await basketLine())?.packagingUnitName).toBe('Box');
+  });
+
+  it("an operator naming the channel snapshots the name at the channel's default language (N2)", async () => {
+    await completeActiveBaskets();
+    const set = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/catalog/products/${product.id}/packaging-units/${unitId}`,
+      cookies: ADMIN,
+      payload: { nameTranslations: { [language]: `Skrzynia ${RUN}` } },
+    });
+    expect(set.statusCode, set.body).toBe(200);
+    const cartWrite = (h.container.cradle as unknown as { cartWritePort: CartWritePort }).cartWritePort;
+    const added = await cartWrite.addItem(
+      { customer: { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID, salesChannelId: channelId } },
+      { productId: product.id, quantity: 1, packagingUnitId: unitId, salesChannelId: channelId },
+    );
+    const line = added.items.find((i) => i.productId === product.id);
+    expect(line?.packagingUnitName).toBe(`Skrzynia ${RUN}`);
   });
 });

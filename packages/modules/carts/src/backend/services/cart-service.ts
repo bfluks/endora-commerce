@@ -25,6 +25,7 @@ import type {
   OrganizationDetailsPort,
 } from '@endora-commerce/contracts';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
+import type { SalesChannelResolutionPort } from '@endora-commerce/platform/kernel';
 import { basketScopeLanguage, withBasketOrderRules } from './cart-availability.js';
 import type { CartApprovalService } from './cart-approval-service.js';
 import type { CartAuditService } from './cart-audit-service.js';
@@ -125,7 +126,8 @@ interface ResolvedCartLine {
   packagingUnit: CatalogPackagingUnitRecord | null;
   /**
    * Feature 163 (FR-079, T138) — the unit's name the line snapshots: its name in the
-   * basket's scope language, else its global name. `null` without a unit.
+   * basket's scope language (an operator-named channel's default language, N2), else
+   * its global name. `null` without a unit.
    */
   packagingUnitName: string | null;
   /** Base pieces. */
@@ -187,6 +189,12 @@ export class CartService {
     private readonly approvalService?: CartApprovalService,
     private readonly auditService?: CartAuditService,
     private readonly recomputeCache?: CartRecomputeCache,
+    /**
+     * Feature 163, owner decision N2 = B — the kernel's channel accessor, read for one
+     * fact: the default language of a channel an operator names, where a packaging
+     * unit's name is snapshotted. Absent (some rigs) = the global name.
+     */
+    private readonly channelReads?: Pick<SalesChannelResolutionPort, 'getById'>,
   ) {
     this.#linePricing = new CartLinePricing(
       this.pricingService,
@@ -907,10 +915,21 @@ export class CartService {
       : input.quantity;
     // Feature 163 (FR-079, T138; owner decision 2026-10-26) — the snapshot takes the
     // unit's name in the basket's language; a placed line keeps it, never re-resolved.
-    // An operator naming the channel has no request language here (`null`): the global
-    // name, as before.
-    const packagingUnitName = packagingUnit ? effectivePackagingUnitName(packagingUnit, scopeLanguage) : null;
+    // An operator naming the channel has no request language: the name is taken at
+    // that channel's default language (owner decision N2 = B), as the product name
+    // beside it is. The channel is read only when a unit is named.
+    const unitLanguage =
+      packagingUnit && input.salesChannelId
+        ? await this.#channelDefaultLanguage(input.salesChannelId)
+        : scopeLanguage;
+    const packagingUnitName = packagingUnit ? effectivePackagingUnitName(packagingUnit, unitLanguage) : null;
     return { product, packagingUnit, packagingUnitName, effectiveQuantity };
+  }
+
+  /** N2 — a named channel's default language, `null` (the global name) when unknown. */
+  async #channelDefaultLanguage(channelId: string): Promise<string | null> {
+    if (!this.channelReads) return null;
+    return (await this.channelReads.getById(channelId))?.defaultLanguage ?? null;
   }
 
   /**
