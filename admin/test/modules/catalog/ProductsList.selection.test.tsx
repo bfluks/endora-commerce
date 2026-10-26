@@ -64,7 +64,6 @@ const BUNDLE = passthroughBundle('catalog', [
   'productsList.subtitle',
   'productsList.tab.all',
   'productsList.tab.active',
-  'productsList.tab.draft',
   'productsList.tab.archived',
   'productsList.search.placeholder',
   'productsList.chip.type',
@@ -110,7 +109,7 @@ describe('ProductsList — collection selection (feature 033)', () => {
     answerList({
       data: [row('00000000-0000-4000-8000-000000000001', 'Alpha'), row('00000000-0000-4000-8000-000000000002', 'Beta')],
       pagination: { page: 0, pageSize: 2, total: 5 },
-      counts: { all: 5, active: 5, draft: 0, archived: 0 },
+      counts: { all: 5, active: 5, inactive: 0, archived: 0 },
     });
     postSpy.mockResolvedValue({
       data: {
@@ -157,7 +156,7 @@ describe('ProductsList — collection selection (feature 033)', () => {
     answerList({
       data: [row('00000000-0000-4000-8000-00000000000a', 'Solo')],
       pagination: { page: 0, pageSize: 2, total: 1 },
-      counts: { all: 1, active: 1, draft: 0, archived: 0 },
+      counts: { all: 1, active: 1, inactive: 0, archived: 0 },
     });
 
     renderWithI18n(
@@ -195,7 +194,7 @@ describe('ProductsList — collection selection (feature 033)', () => {
         row('00000000-0000-4000-8000-000000000002', 'Two'),
       ],
       pagination: { page: 0, pageSize: 2, total: overLimit },
-      counts: { all: overLimit, active: overLimit, draft: 0, archived: 0 },
+      counts: { all: overLimit, active: overLimit, inactive: 0, archived: 0 },
     });
     postSpy.mockResolvedValue({ data: { productIds: manyIds, total: overLimit } });
 
