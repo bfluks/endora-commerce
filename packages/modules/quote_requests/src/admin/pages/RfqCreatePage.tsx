@@ -211,7 +211,8 @@ function CustomerPicker(props: {
 /**
  * The quote request's selectability rules for the picker and the quick search (Clarifications).
  * An archived product cannot be quoted (feature 163, owner decision P-3 → A): the browser offers
- * no Archived tab and the quick search does not look among archived products.
+ * no Archived tab, and the quick search lists archived products refused with the reason, as the
+ * order's does (owner decision RFQ-c → B).
  */
 const RFQ_PRODUCT_RULES: ProductBrowserRules = {
   initialStatus: 'active',
@@ -554,6 +555,7 @@ export function RfqCreatePage(): ReactNode {
                 onChange={(): void => {}}
                 onPickProduct={(item): void => appendLines([item])}
                 rules={RFQ_PRODUCT_RULES}
+                includeArchived
                 placeholder={t('rfqCreate.placeholder.product')}
               />
             </div>
