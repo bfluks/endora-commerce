@@ -53,7 +53,7 @@ function renderEditor(language: 'en' | 'pl' = 'en'): void {
   render(
     <StrictMode>
       <TranslationProvider language={language} initialBundle={{ catalog }}>
-        <PackagingUnitsEditor productId="p1" />
+        <PackagingUnitsEditor productId="p1" canWrite />
       </TranslationProvider>
     </StrictMode>,
   );
