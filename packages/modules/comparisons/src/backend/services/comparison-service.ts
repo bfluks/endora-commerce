@@ -82,6 +82,13 @@ import {
  * kind is what keeps it from being expressed as a permissive audience
  * somebody later reuses on a storefront path.
  */
+/**
+ * Feature 163, owner decision CMP-1 = A — whether a view's reader is the comparison's
+ * owner (the `/me` routes, the owner opening their own share link, the owner's PDF,
+ * and the operator's audit screen) or anybody else (a share-link recipient).
+ */
+export type ComparisonReader = 'owner' | 'recipient';
+
 export type ComparisonViewer =
   | {
       readonly kind: 'buyer';
@@ -582,6 +589,14 @@ export class ComparisonService {
      * price — the answer every reader may see — rather than one buyer's.
      */
     viewer: ComparisonViewer = ANONYMOUS_COMPARISON_VIEWER,
+    /**
+     * Feature 163, owner decision CMP-1 = A — whether the reader is the comparison's
+     * owner. A column whose product is not available at the reader's (channel,
+     * language) is the owner's own history: the owner keeps it with `available:
+     * false`, any other reader gets the `(removed product)` column. Defaulted to
+     * `'recipient'`, the answer that discloses nothing.
+     */
+    reader: ComparisonReader = 'recipient',
   ): Promise<ComparisonOwnerView> {
     const em = this.emFactory();
 
@@ -597,12 +612,35 @@ export class ComparisonService {
     // Issue #227's predicate, over this reader. A product the reader may not
     // see leaves the view entirely — it is not a `(removed product)` column,
     // which would disclose that the sender holds something.
-    const products =
+    const visibleToReader =
       viewer.kind === 'administrator'
         ? stored
         : stored.filter((product) => isProductVisibleTo(product, viewer.audience));
-    const hiddenProductCount = stored.length - products.length;
+    const hiddenProductCount = stored.length - visibleToReader.length;
+    const visibleProductIds = visibleToReader.map((p) => p.id);
+
+    // Feature 163 — whether each column can still be acquired here, now, by
+    // this reader, as `catalog` answers it; no status is tested in this module
+    // (FR-002). An administrator reads it as the public would.
+    const availableHere =
+      visibleProductIds.length > 0
+        ? await this.availability.filterAvailable(visibleProductIds, {
+            channelId: viewerSalesChannelId,
+            languageCode: comparisonScopeLanguage(
+              viewerSalesChannelId,
+              viewer.kind === 'buyer' ? viewer.languageTag : undefined,
+            ),
+            audience: viewer.kind === 'buyer' ? viewer.audience : ANONYMOUS_PRODUCT_AUDIENCE,
+          })
+        : new Set<string>();
+    // Owner decision CMP-1 = A — for anybody but the owner, an unavailable column
+    // is the `(removed product)` column below: nothing of it is read, priced or
+    // projected, and `hiddenProductCount` does not count it, so a removed product
+    // and an unavailable one read the same.
+    const products =
+      reader === 'owner' ? visibleToReader : visibleToReader.filter((p) => availableHere.has(p.id));
     const productById = new Map(products.map((p) => [p.id, p]));
+    const shownProductIds = products.map((p) => p.id);
 
     const channel = await em.findOne(SalesChannel, { id: viewerSalesChannelId });
     const currency = channel?.defaultCurrency ?? 'PLN';
@@ -640,12 +678,11 @@ export class ComparisonService {
     // reaches in a single join and invisible to every import check in the tree.
     // The owner answers it now, from its own two tables plus the asset port it
     // already holds.
-    const visibleProductIds = products.map((p) => p.id);
     const baseImageByProduct =
-      visibleProductIds.length > 0
+      shownProductIds.length > 0
         ? // Feature 163 (FR-076, owner decision MED-1 = A) — the base image as the
           // viewer's resolved channel shows it: an image hidden there is not served.
-          await this.catalogGallery.baseImageUrls(visibleProductIds, viewerSalesChannelId)
+          await this.catalogGallery.baseImageUrls(shownProductIds, viewerSalesChannelId)
         : new Map<string, string | null>();
 
     // Comparable attribute definitions (catalog adapter port — Constitution I).
@@ -657,24 +694,11 @@ export class ComparisonService {
     // A row this reader may not see is dropped; a row whose product is *gone*
     // still renders as `(removed product)`, which is the owner's own history
     // and says nothing about anybody's entitlement.
+    const readerMaySee = new Set(visibleProductIds);
     const withheldIds = new Set(
-      stored.filter((p) => !productById.has(p.id)).map((p) => p.id),
+      stored.filter((p) => !readerMaySee.has(p.id)).map((p) => p.id),
     );
     const visibleRows = bridgeRows.filter((row) => !withheldIds.has(row.productId));
-    // Feature 163 — whether each column can still be acquired here, now, by
-    // this reader, as `catalog` answers it; no status is tested in this module
-    // (FR-002). An administrator reads it as the public would.
-    const availableHere =
-      visibleProductIds.length > 0
-        ? await this.availability.filterAvailable(visibleProductIds, {
-            channelId: viewerSalesChannelId,
-            languageCode: comparisonScopeLanguage(
-              viewerSalesChannelId,
-              viewer.kind === 'buyer' ? viewer.languageTag : undefined,
-            ),
-            audience: viewer.kind === 'buyer' ? viewer.audience : ANONYMOUS_PRODUCT_AUDIENCE,
-          })
-        : new Set<string>();
     // Feature 163 (FR-017 c) — names and compared values as the storefront
     // shows them at this reader's (channel, language): #384's walk over this
     // channel's override rows, from `catalog`'s read port.
@@ -694,12 +718,12 @@ export class ComparisonService {
     // minimum (FR-100), one read each for the view.
     const keyLanguage = scopeLanguage ?? channel?.defaultLanguage ?? null;
     const [keysByProduct, rulesByProduct] =
-      visibleProductIds.length > 0
+      shownProductIds.length > 0
         ? await Promise.all([
             this.urlKeys
-              ? this.urlKeys.effectiveKeys(visibleProductIds, viewerSalesChannelId)
+              ? this.urlKeys.effectiveKeys(shownProductIds, viewerSalesChannelId)
               : Promise.resolve(new Map<string, Map<string, string>>()),
-            this.availability.effectiveOrderRules(visibleProductIds, viewerSalesChannelId),
+            this.availability.effectiveOrderRules(shownProductIds, viewerSalesChannelId),
           ])
         : [new Map<string, Map<string, string>>(), new Map<string, { minOrderQuantity: number | null; returnable: boolean }>()];
     const productSummaries = visibleRows.map((row) => {

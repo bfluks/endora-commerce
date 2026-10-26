@@ -111,8 +111,11 @@ działać.
 - **Produkt znika z katalogu** — gdy produkt zostanie wycofany, będąc w porównaniu, jego kolumna
   zostaje, ale jest oznaczona jako niedostępna, a przycisk *Add to cart* w tej kolumnie jest
   nieaktywny.
-- **Link otwarty w innym kanale sprzedaży** — odbiorca widzi ceny w walucie swojego kanału, a produkt
-  niesprzedawany w jego kanale nadal jest widoczny, ale oznaczony jako niedostępny.
+- **Link otwarty w innym kanale sprzedaży** — odbiorca widzi ceny w walucie swojego kanału. Produkt
+  niedostępny dla odbiorcy w jego kanale i języku (niesprzedawany tam, wyłączony, poza okresem
+  publikacji, zarchiwizowany) wygląda dla niego dokładnie tak jak produkt usunięty: kolumna
+  `(removed product)` bez nazwy, SKU, ceny, obrazu i wartości atrybutów. Tylko właściciel porównania
+  nadal widzi taką kolumnę ze szczegółami, oznaczoną jako niedostępna.
 - **Link otwarty przez kupującego z innej organizacji** — ceny w kolumnach są wyznaczane według umów
   tego kupującego, a produkt, którego nie może widzieć, jest pomijany z informacją o tym.
 - **Atrybuty wielowartościowe** — dwa produkty są zgodne w atrybucie wielowartościowym (np. lista

@@ -147,6 +147,8 @@ export async function registerComparisonsPublicRoutes(
         comparison,
         channel.id,
         buyerViewerOf(request),
+        // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+        'owner',
       ),
     };
   });
@@ -177,6 +179,8 @@ export async function registerComparisonsPublicRoutes(
         comparison,
         channel.id,
         buyerViewerOf(request),
+        // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+        'owner',
       ),
     };
   });
@@ -206,6 +210,8 @@ export async function registerComparisonsPublicRoutes(
           comparison,
           channel.id,
           buyerViewerOf(request),
+          // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+          'owner',
         ),
       };
     },
@@ -232,6 +238,8 @@ export async function registerComparisonsPublicRoutes(
         comparison,
         channel.id,
         buyerViewerOf(request),
+        // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+        'owner',
       ),
     };
   });
@@ -251,6 +259,8 @@ export async function registerComparisonsPublicRoutes(
         comparison,
         channel.id,
         buyerViewerOf(request),
+        // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+        'owner',
       );
       if (view.products.length === 0) {
         throw new HttpError(
