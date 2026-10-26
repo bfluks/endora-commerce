@@ -54,6 +54,11 @@ Ukryć załącznik można tylko w kanale, do którego należy produkt; w przeciw
 się błędem `422 SCOPE_INVALID`. Usunięcie kanału ze zbioru jest zawsze dozwolone, także po usunięciu
 produktu z kanału.
 
+Ukrycie dotyczy tylko prezentacji, a nie kontroli dostępu. Ukryty załącznik nie jest pokazywany w
+kanale, ale jego plik zachowuje stały adres URL i każdy, kto ten adres zna, nadal może go pobrać.
+Ukrycie nie zapewnia poufności dokumentu: pliku, który nie może być publiczny, nie należy dołączać
+do produktu.
+
 Utworzenie lub zmiana załącznika trafia do dziennika zdarzeń raz, jako `product_attachment.create`
 albo `product_attachment.update`, ze stanem załącznika przed zmianą i po niej: produktem, typem,
 nazwą, opisem, pozycją, obiema mapami tłumaczeń i `hiddenInChannels`. Wysłanie zapisanego stanu
