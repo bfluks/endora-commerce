@@ -84,8 +84,9 @@ export class GalleryService {
 
   /**
    * Feature 054 — run a gallery-item write through the Command Bus. The item +
-   * audit are co-transactional; the raw-SQL LABEL writes stay AFTER the command
-   * (a gallery item with no labels is a valid state, so nothing is orphaned).
+   * audit are co-transactional. On `create` the raw-SQL label writes stay AFTER
+   * the command (a gallery item with no labels is a valid state, so nothing is
+   * orphaned); an update's labels run inside `product.media.update` (163, B-1).
    */
   async #audited<T>(
     action: string,
