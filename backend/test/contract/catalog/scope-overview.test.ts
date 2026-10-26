@@ -445,6 +445,58 @@ describe('Scope overview — GET /admin/catalog/products/:id/scope-overview (spe
       expect(data.orphans).toEqual([{ field: 'media:hidden', channelId: left, languageCode: null, reason: 'not_a_member' }]);
     });
 
+    it('lists attachment hidden channels and translations, packaging-unit names, and their orphans (T139a)', async () => {
+      const productId = await createProduct([b2b, b2c, left]);
+      const assetId = randomUUID();
+      await sql(
+        `insert into assets (id, kind, filename, mime_type, size_bytes, storage_url, created_at, updated_at)
+         values (?, 'pdf', 'overview.pdf', 'application/pdf', 1, ?, now(), now())`,
+        [assetId, `https://cdn.test/${run}/${assetId}.pdf`],
+      );
+      const types = await h.app.inject({ method: 'GET', url: '/api/v1/admin/catalog/attachment-types', ...admin });
+      const typeId = (types.json() as { data: Array<{ id: string }> }).data[0]?.id;
+      expect(typeId, 'a seeded attachment type').toBeDefined();
+      const attachment = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/catalog/products/${productId}/attachments`,
+        ...admin,
+        payload: {
+          assetId,
+          attachmentTypeId: typeId,
+          name: 'Data sheet',
+          nameTranslations: { 'pl-PL': 'Karta katalogowa' },
+          descriptionTranslations: { 'de-DE': 'Datenblatt' },
+          hiddenInChannels: [b2c, left],
+        },
+      });
+      expect(attachment.statusCode, attachment.body).toBe(201);
+      const unit = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/catalog/products/${productId}/packaging-units`,
+        ...admin,
+        payload: { name: 'Carton', baseQuantity: 6, nameTranslations: { 'de-DE': 'Kiste' } },
+      });
+      expect(unit.statusCode, unit.body).toBe(201);
+      // The product leaves `left`: the attachment's hidden row there stays and is an orphan.
+      await sql(`delete from sales_channel_products where sales_channel_id = ? and product_id = ?`, [left, productId]);
+
+      const data = await overview(productId);
+      expect(data.channelRows.find((r) => r.channelId === b2c)?.overriddenFields).toEqual(['attachments:hidden']);
+      expect(data.channelRows.find((r) => r.channelId === b2b)?.overriddenFields).toEqual([]);
+      expect(data.languageColumns.find((c) => c.languageCode === 'pl-PL')?.overriddenFields).toEqual(['attachments:name']);
+      expect(data.languageColumns.find((c) => c.languageCode === 'de-DE')?.overriddenFields).toEqual([
+        'attachments:description',
+        'packagingUnits:name',
+      ]);
+      expect(cell(data, b2c, 'pl-PL').overriddenFields).toEqual([
+        { field: 'attachments:hidden', level: 'channel' },
+        { field: 'attachments:name', level: 'language' },
+      ]);
+      expect(data.orphans).toEqual([
+        { field: 'attachments:hidden', channelId: left, languageCode: null, reason: 'not_a_member' },
+      ]);
+    });
+
     it('lists an SEO override at L, C and C × L, and nothing (no error) while seo is off', async () => {
       const productId = await createProduct([b2b, b2c]);
       const put = async (payload: Record<string, unknown>): Promise<void> => {
