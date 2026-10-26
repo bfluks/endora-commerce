@@ -67,6 +67,29 @@ vi.mock('../../../../packages/modules/catalog/src/admin/components/ProductScopeE
   };
 });
 
+const flushGallerySpy = vi.fn((): Promise<void> => Promise.resolve());
+
+vi.mock('../../../../packages/modules/catalog/src/admin/components/ProductGallerySection', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>(
+    '../../../../packages/modules/catalog/src/admin/components/ProductGallerySection',
+  );
+  const { forwardRef, useImperativeHandle } = await import('react');
+  return {
+    ...actual,
+    GallerySection: forwardRef(function GalleryStub(
+      props: { onDirtyChange?: (dirty: boolean) => void },
+      ref,
+    ) {
+      useImperativeHandle(ref, () => ({ flushGallery: (): Promise<void> => flushGallerySpy() }));
+      return (
+        <button type="button" onClick={(): void => props.onDirtyChange?.(true)}>
+          stage a gallery edit
+        </button>
+      );
+    }),
+  };
+});
+
 const { ProductEditor } = await import('../../../../packages/modules/catalog/src/admin/pages/ProductEditor');
 const { ProductScopeControls } = await import(
   '../../../../packages/modules/catalog/src/admin/components/ProductScopeControls'
@@ -197,6 +220,7 @@ beforeEach(() => {
   getSpy.mockReset();
   patchSpy.mockReset();
   flushOverridesSpy.mockClear();
+  flushGallerySpy.mockClear();
   primeGets();
 });
 afterEach(() => vi.clearAllMocks());
@@ -263,6 +287,52 @@ describe('the global status save and the completeness gate (US6)', () => {
     await switchOnAndSave(user);
     expect(await screen.findByText('Saved.')).toBeTruthy();
     expect(order).toEqual(['patch', 'overrides']);
+  });
+
+  async function stageGalleryEditThenGoBack(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    await user.click(await screen.findByRole('tab', { name: /^media$/i }));
+    await user.click(await screen.findByRole('button', { name: 'stage a gallery edit' }));
+    await user.click(screen.getByRole('tab', { name: /^details$/i }));
+  }
+
+  it('gallery edits staged on Media survive a tab switch and are written after the PATCH (D4, C-1)', async () => {
+    const user = userEvent.setup();
+    const order: string[] = [];
+    patchSpy.mockImplementation(async () => {
+      order.push('patch');
+      return { data: { ...PRODUCT, status: 'active' }, warnings: [] };
+    });
+    flushGallerySpy.mockImplementation(async () => {
+      order.push('gallery');
+    });
+    renderEditor();
+    await stageGalleryEditThenGoBack(user);
+    await switchOnAndSave(user);
+    expect(await screen.findByText('Saved.')).toBeTruthy();
+    expect(order).toEqual(['patch', 'gallery']);
+  });
+
+  it('refuse: staged gallery edits are not written (US6 #3, C-1)', async () => {
+    const user = userEvent.setup();
+    patchSpy.mockRejectedValue(incomplete());
+    renderEditor();
+    await stageGalleryEditThenGoBack(user);
+    await switchOnAndSave(user);
+    await screen.findByText(/were not saved/i);
+    expect(flushGallerySpy).not.toHaveBeenCalled();
+  });
+
+  it('staged gallery edits count as unsaved changes for the leave-page prompt (D4)', async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    await user.click(await screen.findByRole('tab', { name: /^media$/i }));
+    const before = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(before);
+    expect(before.defaultPrevented).toBe(false);
+    await user.click(await screen.findByRole('button', { name: 'stage a gallery edit' }));
+    const after = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(after);
+    expect(after.defaultPrevented).toBe(true);
   });
 
   it('a channel whose name cannot be read is named by a short id', async () => {
