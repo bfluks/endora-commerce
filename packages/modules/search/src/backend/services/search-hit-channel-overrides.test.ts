@@ -93,7 +93,11 @@ function serviceWith(
     listValueOverridesByProductIds,
   } as unknown as CatalogProductReadPort;
   // Feature 163 — every hit is available here; this file is about names.
-  const availableEverywhere = { filterAvailable: async (ids: readonly string[]) => new Set(ids) };
+  const availableEverywhere = {
+    filterAvailable: async (ids: readonly string[]) => new Set(ids),
+    // No channel order rule in this file: the record's minimum stands.
+    effectiveOrderRules: async () => new Map<string, { minOrderQuantity: number | null; returnable: boolean }>(),
+  };
   return {
     service: new SearchQueryService(port, undefined, {}, undefined, undefined, availableEverywhere),
     listValueOverridesByProductIds,

@@ -16,6 +16,7 @@ import type {
 import { availabilityCondition } from './product-availability.sql.js';
 import { effectiveTextSql } from './effective-value.sql.js';
 import { toScopeChannel } from './product-availability.service.js';
+import { loadEffectiveKeys } from './url-key-resolution.service.js';
 
 /**
  * The buyer-facing quick-search read model (issue #174).
@@ -183,11 +184,14 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
       ],
     );
 
+    // Feature 163 (T113a, R28) — a hit links to its effective URL key at (C, L),
+    // the key the product page resolves there; the global key where it has none.
+    const keys = await loadEffectiveKeys(em, rows, { id: channel.id, languages: [languageCode] });
     const lowered = needle.toLowerCase();
     return rows.map((row) => ({
       productId: row.id,
       sku: row.sku,
-      slug: row.slug,
+      slug: keys.get(row.id)?.get(languageCode) ?? row.slug,
       name: row.name,
       effectiveName: row.effective_name,
       status: row.status as CatalogQuickSearchHit['status'],

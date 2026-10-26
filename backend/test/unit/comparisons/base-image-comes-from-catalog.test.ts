@@ -99,6 +99,8 @@ const attributePortStub: CatalogAttributeReadPort = {
  */
 const availableEverywhere = {
   filterAvailable: async (ids: readonly string[]) => new Set(ids),
+  // Feature 163 (FR-100) — no channel rule here: each record's own minimum stands.
+  effectiveOrderRules: async () => new Map<string, { minOrderQuantity: number | null; returnable: boolean }>(),
 };
 
 const catalogProducts = {

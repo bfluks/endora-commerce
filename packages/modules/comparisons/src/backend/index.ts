@@ -5,6 +5,7 @@ import type {
   CatalogAttributeReadPort,
   CatalogGalleryPort,
   CatalogProductAvailabilityPort,
+  CatalogProductUrlKeyReadPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   ListingPricePort,
@@ -122,6 +123,9 @@ export function registerModule(ctx: ModuleContext): void {
             // `check:port-dependencies` reads the manifest's transitive
             // closure.
             lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+            // Feature 163 (T113a, R28) — a column links to the product's effective
+            // URL key at the reader's (channel, language); `catalog` owns the port.
+            lazyPort<CatalogProductUrlKeyReadPort>(ctx, 'catalogProductUrlKeyReadPort'),
           ),
       )
       .singleton(),

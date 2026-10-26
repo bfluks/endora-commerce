@@ -18,11 +18,18 @@ import {
   ERROR_CODES,
   OrganizationCannotTransactError,
   type CatalogProductAvailabilityPort,
+  type CatalogProductUrlKeyReadPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
   type PromotionApplication,
 } from '@endora-commerce/contracts';
-import { availableRecords, basketScopeLanguage, firstLanguageTag, withBasketOrderRules } from './services/cart-availability.js';
+import {
+  availableRecords,
+  basketScopeLanguage,
+  effectiveKeysAt,
+  firstLanguageTag,
+  withBasketOrderRules,
+} from './services/cart-availability.js';
 import { cartAudience, type CartActor, type CartService } from './services/cart-service.js';
 import type { CartUpsellService } from './services/cart-upsell-service.js';
 import type { CartCouponService } from './services/cart-coupon-service.js';
@@ -147,6 +154,8 @@ export interface CartsDeps {
    * a product with no record.
    */
   catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveNames' | 'effectiveOrderRules'>;
+  /** Feature 163 (T113a, R28) — the effective URL key per channel language, for the lines' links. */
+  catalogUrlKeys: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>;
   /**
    * Optional gate — when provided, signed-in customers whose Organization
    * is not `active` (pending_verification / blocked / rejected) cannot add
@@ -290,11 +299,18 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
     );
     // Feature 163 (S1 = A) — an unavailable line keeps its name and SKU and
     // loses its slug: its product page answers 404 here.
+    // Feature 163 (T113a, R28) — an available line links to its effective key here.
     const productMeta = productMetaOf(
       records,
       preferredLanguage,
       new Set(products.map((p) => p.id)),
       effectiveNames,
+      await effectiveKeysAt(
+        deps.catalogUrlKeys,
+        products.map((p) => p.id),
+        actor.salesChannelId,
+        basketScopeLanguage(actor.salesChannelId, actor.languageTag),
+      ),
     );
     // Feature 163 (FR-100) — the minimums of the basket's channel, flagged and reported.
     const minimumViews = await evaluateCartViewMinimums(
