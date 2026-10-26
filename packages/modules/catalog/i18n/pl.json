@@ -861,7 +861,7 @@
   "settingLabels.catalog.scope_completeness_gate.description": "Co się dzieje, gdy operator włącza produkt w kanale sprzedaży i języku, w którym brakuje nazwy, klucza URL albo wymaganego atrybutu zależnego od języka w tym języku. „warn” zapisuje zmianę i pokazuje, czego brakuje; „refuse” jej nie zapisuje. Dotyczy edytora produktu i edycji zbiorczej, nigdy importów i integracji. Jedna wartość dla całej platformy.",
   "productEditor.tab.scopes": "Zakresy",
   "productEditor.scopeOverview.title": "Przegląd zakresów",
-  "productEditor.scopeOverview.help": "Każda komórka to jeden kanał sprzedaży w jednym języku: status, czy produkt jest tam teraz dostępny, oraz wartości ustawione dla tego zakresu. Wartość przywraca się tam, gdzie ją ustawiono — wartość kanału w jego wierszu, wartość języka w jego kolumnie.",
+  "productEditor.scopeOverview.help": "Każda komórka to jeden kanał sprzedaży w jednym języku: status, czy produkt jest tam teraz widoczny, i wartości ustawione dla tego zakresu. Wartości samego kanału są w kolumnie „Cały kanał”, a wartości samego języka w wierszu „Każdy kanał” — każdą przywraca się tam, gdzie jest pokazana.",
   "productEditor.scopeOverview.readOnly": "Tylko do odczytu: widzisz zakresy, ale nie możesz ich zmieniać.",
   "productEditor.scopeOverview.loading": "Wczytywanie przeglądu zakresów…",
   "productEditor.scopeOverview.loadFailed": "Nie udało się wczytać przeglądu zakresów.",
@@ -1067,5 +1067,14 @@
   "productEditor.gallery.remove.title": "Usunąć {item}?",
   "productEditor.gallery.remove.body": "{item} zostanie od razu usunięte z galerii, bez czekania na Zapisz. Plik pozostaje w bibliotece.",
   "productEditor.gallery.remove.confirm": "Usuń obraz",
-  "productEditor.gallery.remove.cancel": "Anuluj"
+  "productEditor.gallery.remove.cancel": "Anuluj",
+  "productEditor.scopeOverview.wholeChannelColumn": "Cały kanał",
+  "productEditor.scopeOverview.everyChannelRow": "Każdy kanał",
+  "productEditor.scopeOverview.nothingSetChannel": "Nic nie ustawiono dla całego kanału.",
+  "productEditor.scopeOverview.confirmReset.title": "Przywrócić {field} w {scope}?",
+  "productEditor.scopeOverview.confirmReset.body": "Wartość „{field}” ustawiona dla {scope} zostanie usunięta i znowu będzie obowiązywać wartość dziedziczona.",
+  "productEditor.scopeOverview.confirmDelete.title": "Usunąć {field} w {scope}?",
+  "productEditor.scopeOverview.confirmDelete.body": "Zapisana wartość „{field}” dla {scope} zostanie usunięta na stałe. Teraz nie obowiązuje, więc klient nie zobaczy żadnej zmiany.",
+  "productEditor.scopeOverview.confirm.cancel": "Anuluj",
+  "productEditor.scopeOverview.tableRegion": "Tabela przeglądu zakresów"
 }
