@@ -112,7 +112,8 @@ describe('PackagingUnitsEditor — names per language (US9 #5, FR-079)', () => {
   it('offers the member channels’ languages and every language the unit already has a name in', async () => {
     serve();
     const dialog = await openDialog();
-    const fields = within(dialog).getAllByRole('textbox').map((el) => el.getAttribute('aria-label'));
+    const fields = within(dialog).getAllByText(/^Name \(/).map((label) => label.textContent);
+    expect(within(dialog).getAllByRole('textbox')).toHaveLength(fields.length);
     expect(fields).toEqual(['Name (CS)', 'Name (DE)', 'Name (EN)', 'Name (PL)']);
     expect(within(dialog).getByRole('textbox', { name: 'Name (PL)' })).toHaveValue('Karton');
     expect(within(dialog).getByRole('textbox', { name: 'Name (DE)' })).toHaveAttribute('placeholder', 'Carton');
@@ -144,7 +145,8 @@ describe('PackagingUnitsEditor — names per language (US9 #5, FR-079)', () => {
   it('without the channel read, the languages the unit already has stay editable', async () => {
     serve({ contextFails: true });
     const dialog = await openDialog();
-    const fields = within(dialog).getAllByRole('textbox').map((el) => el.getAttribute('aria-label'));
+    const fields = within(dialog).getAllByText(/^Name \(/).map((label) => label.textContent);
+    expect(within(dialog).getAllByRole('textbox')).toHaveLength(fields.length);
     expect(fields).toEqual(['Name (CS)', 'Name (PL)']);
   });
 
