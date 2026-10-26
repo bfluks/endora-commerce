@@ -132,7 +132,11 @@ export const manifest = defineModuleManifest({
     'audit_logs',
     // `admin_roles` owns `permissionService`, which a queued bulk operation asks at
     // worker start whether its requester may still write the catalogue (feature 163,
-    // checkpoint F, S-3). `admin_roles` depends on nothing, so the edge closes no cycle.
+    // checkpoint F, S-3). `admin_roles` depends on nothing, so the edge closes no cycle,
+    // and it declares `activation.nonDeactivatable`, so the edge costs no operator an
+    // activation control and has no absent state to degrade through — the shape
+    // `prompt_actions` and `admin_actions` use for the same port. Were the port ever
+    // unresolvable, `lazyPort` throws at worker start and the operation fails closed.
     'admin_roles',
     'admin_users',
     'assets_library',
