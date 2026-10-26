@@ -234,6 +234,9 @@ export function ProductEditor(): ReactNode {
     ((initialSnapshotRef.current !== '' && currentSnapshot !== initialSnapshotRef.current) || galleryDirty);
   useUnsavedChangesPrompt(dirty);
 
+  // Read through a ref so a language switch does not re-load the product (and drop edits).
+  const tRef = useRef(t);
+  tRef.current = t;
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true);
     setError(null);
@@ -320,7 +323,7 @@ export function ProductEditor(): ReactNode {
         });
       }
     } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : 'Failed to load.');
+      setError(err instanceof ApiError ? err.envelope.error.message : tRef.current('productEditor.error.load'));
     } finally {
       setLoading(false);
     }
@@ -343,7 +346,7 @@ export function ProductEditor(): ReactNode {
         if (description[l]) trimmedDescription[l] = description[l];
       }
       if (Object.keys(trimmedName).length === 0) {
-        setError('At least one locale name is required.');
+        setError(t('productEditor.error.nameRequired'));
         return;
       }
       // The Attributes-tab edits. A product has no price of its own: prices
@@ -419,7 +422,7 @@ export function ProductEditor(): ReactNode {
               }),
             );
           } else {
-            setInfo('Saved.');
+            setInfo(t('productEditor.saved'));
           }
           await refresh();
         }
@@ -446,7 +449,7 @@ export function ProductEditor(): ReactNode {
             ? t('productEditor.error.publishWindow')
             : err instanceof ApiError
               ? err.envelope.error.message
-              : 'Save failed.',
+              : t('productEditor.error.save'),
         );
       }
     },
@@ -493,7 +496,7 @@ export function ProductEditor(): ReactNode {
       await apiClient.delete<void>(`/api/v1/admin/catalog/products/${id}`);
       navigate('/catalog/products');
     } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : 'Delete failed.');
+      setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.error.delete'));
     }
   }, [id, navigate, t]);
 
@@ -510,7 +513,7 @@ export function ProductEditor(): ReactNode {
       );
       navigate(`/catalog/products/${res.data.id}`);
     } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : 'Duplicate failed.');
+      setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.error.duplicate'));
     } finally {
       setDuplicating(false);
     }
