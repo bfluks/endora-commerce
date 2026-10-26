@@ -56,12 +56,8 @@ export const UNDEFINED_CLASS_RENDERS: UndefinedClassRenderLedger = {
     'renders as an unmodified `b2b-btn`; the design system defines `--primary`, `--ghost` and `--danger`',
   'packages/modules/product_feeds/src/admin/pages/FeedRunDetailPage.tsx::b2b-btn--outline':
     'the same missing variant',
-  'packages/modules/catalog/src/admin/components/PackagingUnitsEditor.tsx::b2b-alert--error':
-    'a modifier of `b2b-alert`, which is itself undefined — see the entry below',
 
   // -- a block that was never in the vocabulary --------------------------
-  'packages/modules/catalog/src/admin/components/PackagingUnitsEditor.tsx::b2b-alert':
-    'no `b2b-alert` block exists; the kit publishes `ui/alert`',
   'packages/modules/catalog/src/admin/components/PackagingUnitsEditor.tsx::b2b-input':
     'no `b2b-input` block exists; the kit publishes `ui/input`',
   'packages/admin-shell/src/components/prompt-actions/PromptModePanel.tsx::b2b-input':
