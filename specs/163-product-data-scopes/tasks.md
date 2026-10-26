@@ -1688,4 +1688,5 @@ link gated on `{ module: 'seo' }` → new zone `product.editor.seo.after`, contr
   preview); bulk scoped status has no default value; narrowing confirmation uses plural forms.
 - *Left* — D17's roving tabindex / `aria-controls` on the list tabs (needs a tabpanel and arrow-key handling across
   the list page; not contained). B-5 (channel-roles warning) stays labelled in the UI only.
+- *Docs* — overrides, URL keys and SEO pages (EN + PL, cache refreshed) follow UX-3 and the new SEO editor flow.
 - *Not run on this host* (Intel macOS false reds): `check:naming`, `check:language`, `test:unit:fast`.
