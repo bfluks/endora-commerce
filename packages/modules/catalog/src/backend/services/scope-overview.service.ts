@@ -27,6 +27,7 @@ import { ProductUrlKey } from '../entities/product-url-key.entity.js';
 import { ProductValueOverride } from '../entities/product-value-override.entity.js';
 import type { CatalogAttributeReadService } from './catalog-attribute-read.service.js';
 import { toChannelRecord, toLanguageRecord } from './product-scopes.service.js';
+import { attributeSetDefinitionIds, checkCompleteness, requiredLanguageAttributeKeys } from './scope-completeness.js';
 
 /**
  * Feature 163 (`specs/163-product-data-scopes/`) — the scope overview of one product,
@@ -52,8 +53,11 @@ import { toChannelRecord, toLanguageRecord } from './product-scopes.service.js';
  * Status is shown as stored; "available" is composed from the shared rule's pieces
  * (`isOn`, `effectiveStatus`, `effectiveWindow`, `isInsideWindow`) and the product's
  * `archivedAt`, never from a status value. The audience is shown as the rule, not
- * evaluated (SC-003). `cells[].missing` is left absent until the completeness check
- * exists (T080a).
+ * evaluated (SC-003). `cells[].missing` is the completeness gate's own check
+ * (`checkCompleteness`, T080a, FR-041) for every cell whose channel the product is a
+ * member of and whose language that channel offers, whatever its status — so a cell
+ * made live by a change that does not fire the gate shows what it lacks; absent on
+ * every other cell.
  */
 
 export type ScopeOverview = ScopeOverviewResponse['data'];
@@ -78,7 +82,11 @@ export interface ScopeOverviewInput {
     name: Record<string, string>;
     description: Record<string, string> | null;
     attributeValues: Record<string, unknown>;
+    /** The global URL key. */
+    slug: string;
   };
+  /** The required, language-scoped attributes of the product's attribute set (the gate's list). */
+  requiredLanguageAttributes: readonly string[];
   /** The member channels and every other channel a row of this product names, in display order. */
   channels: readonly ScopeOverviewChannel[];
   channelRows: readonly ProductChannelScopeRecord[];
@@ -257,6 +265,15 @@ export function buildScopeOverview(input: ScopeOverviewInput): ScopeOverview {
 
   // --- Cells ----------------------------------------------------------------------
   const global = { status: input.product.status, window: input.product.window };
+  const completeness = {
+    name: input.product.name,
+    slug: input.product.slug,
+    attributeValues: input.product.attributeValues,
+    requiredLanguageAttributes: input.requiredLanguageAttributes,
+    attributeScopes: input.attributeScopes,
+    valueOverrides: input.valueOverrides,
+    urlKeys: input.urlKeys,
+  };
   const cells: OverviewCell[] = [];
   for (const channel of input.channels) {
     for (const languageCode of languages) {
@@ -300,6 +317,7 @@ export function buildScopeOverview(input: ScopeOverviewInput): ScopeOverview {
         effectiveStatus: status,
         statusSource,
         overriddenFields,
+        ...(offered ? { missing: checkCompleteness(completeness, channel.id, languageCode) } : {}),
       });
     }
   }
@@ -332,16 +350,18 @@ export class ScopeOverviewService {
     const em = this.emFactory();
     const product = await em.findOne(Product, { id: productId, deletedAt: null });
     if (!product) throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
-    const [members, channelRows, languageRows, overrides, urlKeys, attributes, active, primary] = await Promise.all([
-      this.membership.listChannelsForEntity('product', productId),
-      em.find(ProductChannelScope, { productId }),
-      em.find(ProductChannelLanguageScope, { productId }),
-      em.find(ProductValueOverride, { productId }),
-      em.find(ProductUrlKey, { productId }),
-      this.attributeRead.listAll(),
-      this.languages.listActive(),
-      this.languages.getDefault(),
-    ]);
+    const [members, channelRows, languageRows, overrides, urlKeys, attributes, active, primary, setDefinitions] =
+      await Promise.all([
+        this.membership.listChannelsForEntity('product', productId),
+        em.find(ProductChannelScope, { productId }),
+        em.find(ProductChannelLanguageScope, { productId }),
+        em.find(ProductValueOverride, { productId }),
+        em.find(ProductUrlKey, { productId }),
+        this.attributeRead.listAll(),
+        this.languages.listActive(),
+        this.languages.getDefault(),
+        attributeSetDefinitionIds(em, product.attributeSetId),
+      ]);
 
     const memberIds = new Set(members.map((channel) => channel.id));
     const otherIds = [
@@ -372,7 +392,9 @@ export class ScopeOverviewService {
         name: product.name,
         description: product.description ?? null,
         attributeValues: product.attributeValues ?? {},
+        slug: product.slug ?? '',
       },
+      requiredLanguageAttributes: requiredLanguageAttributeKeys(attributes, setDefinitions),
       channels,
       channelRows: channelRows.map(toChannelRecord),
       languageRows: languageRows.map(toLanguageRecord),

@@ -799,5 +799,8 @@
   "orderRules.channels.loadFailed": "Could not load the channel rules. Reload the page to try again.",
   "orderRules.channels.save": "Save channel rules",
   "orderRules.channels.saved": "Channel rules saved.",
-  "orderRules.channels.error.save": "Could not save the channel rules. Your changes are still here — try again."
+  "orderRules.channels.error.save": "Could not save the channel rules. Your changes are still here — try again.",
+  "settingGroups.catalog.name": "Catalog",
+  "settingLabels.catalog.scope_completeness_gate.name": "Completeness check when switching a product on",
+  "settingLabels.catalog.scope_completeness_gate.description": "What happens when an operator switches a product on for a sales channel and language where its name, URL key or a required language-dependent attribute is missing in that language. \"warn\" saves the change and lists what is missing; \"refuse\" does not save it. It applies to the product editor and to bulk edits, never to imports and integrations. One value for the whole platform."
 }
