@@ -323,6 +323,62 @@ describe('Gallery per channel, alt text per language (spec 163, T130)', () => {
     expect(updates.fields()).toEqual([]);
   });
 
+  it('audits a label change, a reorder and a delete once each, inside the Command (checkpoint F, B-1, S-4)', async () => {
+    const auditRows = (action: string, objectId: string) =>
+      h.em().fork().find(AuditLogEntry, { action, objectId });
+    const count = (await mediaAuditRows()).length;
+    const updates = captureUpdates();
+
+    // A labels-only body is one product.media.update entry naming the labels.
+    const swap = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/catalog/products/${productId}/gallery/${items.life}?replace=true`,
+      ...admin,
+      payload: { labels: ['small_image'] },
+    });
+    expect(swap.statusCode, swap.body).toBe(200);
+    let rows = await mediaAuditRows();
+    expect(rows).toHaveLength(count + 1);
+    expect(rows.at(-1)!.stateBefore).toMatchObject({ itemId: items.life, labels: [] });
+    expect(rows.at(-1)!.stateAfter).toMatchObject({ itemId: items.life, labels: ['small_image'], changedFields: ['media'] });
+    expect(await auditRows('gallery_item.update', items.life)).toHaveLength(0);
+
+    // Put the label back where it was (two more entries).
+    expect((await patchItem(items.life, { labels: [] })).statusCode).toBe(200);
+    expect((await patchItem(items.side, { labels: ['small_image'] })).statusCode).toBe(200);
+
+    // A reorder is one entry with the order before and after; re-sending before restores it.
+    const order = (ids: string[]) =>
+      h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/admin/catalog/products/${productId}/gallery/order`,
+        ...admin,
+        payload: { orderedGalleryItemIds: ids },
+      });
+    expect((await order([items.life, items.side, items.hero])).statusCode).toBe(204);
+    rows = await mediaAuditRows();
+    expect(rows).toHaveLength(count + 4);
+    expect(rows.at(-1)!.stateBefore).toEqual({ orderedGalleryItemIds: [items.hero, items.side, items.life] });
+    expect(rows.at(-1)!.stateAfter).toMatchObject({ orderedGalleryItemIds: [items.life, items.side, items.hero] });
+    expect(await auditRows('gallery.reorder', productId)).toHaveLength(0);
+    expect((await order([items.hero, items.side, items.life])).statusCode).toBe(204);
+    expect((await order([items.hero, items.side, items.life])).statusCode).toBe(204);
+    expect(await mediaAuditRows()).toHaveLength(count + 5);
+    updates.stop();
+    expect(updates.fields()).toHaveLength(5);
+
+    // A delete is the service's one gallery_item.delete entry, with no route-level twin.
+    const extra = await addItem(await seedAsset(`https://cdn.test/${run}/extra.jpg`, null), []);
+    const removed = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/admin/catalog/products/${productId}/gallery/${extra}`,
+      ...admin,
+    });
+    expect(removed.statusCode).toBe(204);
+    expect(await auditRows('gallery_item.delete', extra)).toHaveLength(1);
+    expect(await auditRows('gallery.delete', extra)).toHaveLength(0);
+  });
+
   it('refuses a channel the product is not a member of, and always allows clearing (FR-014, FR-015)', async () => {
     const hide = await patchItem(items.side, { hiddenInChannels: [b2b.id, outside.id] });
     expect(hide.statusCode).toBe(422);
