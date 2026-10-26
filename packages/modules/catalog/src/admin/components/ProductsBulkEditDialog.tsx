@@ -170,8 +170,11 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
   const [scopedChannelId, setScopedChannelId] = useState('');
   // '' = every language of the channel: the channel-level override.
   const [scopedLanguage, setScopedLanguage] = useState('');
-  const [scopedValue, setScopedValue] = useState<ScopedStatusValue>('inactive');
+  // D19 — no default value: the operator chooses one ('' = not chosen yet).
+  const [scopedValue, setScopedValue] = useState<ScopedStatusValue | ''>('');
   const [scopedChannelMissing, setScopedChannelMissing] = useState(false);
+  const [scopedValueMissing, setScopedValueMissing] = useState(false);
+  const scopedValueRef = useRef<HTMLSelectElement | null>(null);
   const [languagesByChannel, setLanguagesByChannel] = useState<Record<string, ChannelLanguages>>({});
   const scopedChannelRef = useRef<HTMLSelectElement | null>(null);
 
@@ -397,6 +400,11 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
         scopedChannelRef.current?.focus();
         return;
       }
+      if (scopedValue === '') {
+        setScopedValueMissing(true);
+        scopedValueRef.current?.focus();
+        return;
+      }
       const languageCode = scopedLanguage === '' ? null : scopedLanguage;
       fields.scopedStatus = { channelId: scopedChannelId, languageCode, value: scopedValue };
       const channel = channels.find((c) => c.id === scopedChannelId);
@@ -588,7 +596,10 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
               touched={touchScoped}
               onToggle={(next): void => {
                 setTouchScoped(next);
-                if (!next) setScopedChannelMissing(false);
+                if (!next) {
+                  setScopedChannelMissing(false);
+                  setScopedValueMissing(false);
+                }
               }}
               disabledReason={touchStatus ? t('productsList.bulkEdit.scopedStatus.notWithStatus') : null}
               asGroup
@@ -606,7 +617,12 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
                 language={scopedLanguage}
                 onLanguage={setScopedLanguage}
                 value={scopedValue}
-                onValue={setScopedValue}
+                onValue={(next): void => {
+                  setScopedValue(next);
+                  setScopedValueMissing(false);
+                }}
+                valueMissing={scopedValueMissing}
+                valueRef={scopedValueRef}
                 t={t}
               />
             </FieldGroup>
@@ -905,8 +921,11 @@ interface ScopedStatusFieldsProps {
   languages: ChannelLanguages | null;
   language: string;
   onLanguage: (code: string) => void;
-  value: ScopedStatusValue;
-  onValue: (value: ScopedStatusValue) => void;
+  value: ScopedStatusValue | '';
+  onValue: (value: ScopedStatusValue | '') => void;
+  /** Set when Apply was pressed without a value (D19). */
+  valueMissing: boolean;
+  valueRef: RefObject<HTMLSelectElement | null>;
   t: ReturnType<typeof useTranslation>;
 }
 
@@ -922,6 +941,7 @@ function ScopedStatusFields(props: ScopedStatusFieldsProps): ReactNode {
   const languageId = `${idPrefix}-scoped-language`;
   const languageHelpId = `${idPrefix}-scoped-language-help`;
   const valueId = `${idPrefix}-scoped-value`;
+  const valueErrorId = `${idPrefix}-scoped-value-error`;
   const gateHelpId = `${idPrefix}-scoped-gate-help`;
   const loadingLanguages = props.languages?.state === 'loading';
   const codes = props.languages?.state === 'ready' ? props.languages.codes : [];
@@ -989,16 +1009,26 @@ function ScopedStatusFields(props: ScopedStatusFieldsProps): ReactNode {
         </label>
         <select
           id={valueId}
+          ref={props.valueRef}
           className="b2b-field"
           disabled={props.disabled}
-          aria-describedby={gateHelpId}
+          aria-describedby={props.valueMissing ? `${valueErrorId} ${gateHelpId}` : gateHelpId}
+          aria-invalid={props.valueMissing || undefined}
           value={props.value}
-          onChange={(e): void => props.onValue(e.target.value as ScopedStatusValue)}
+          onChange={(e): void => props.onValue(e.target.value as ScopedStatusValue | '')}
         >
+          <option value="" disabled>
+            {t('productsList.bulkEdit.scopedStatus.valuePlaceholder')}
+          </option>
           <option value="active">{t('productsList.status.active')}</option>
           <option value="inactive">{t('productsList.status.inactive')}</option>
           <option value="inherit">{t('productsList.bulkEdit.scopedStatus.inherit')}</option>
         </select>
+        {props.valueMissing ? (
+          <p id={valueErrorId} role="alert" style={{ margin: 0, fontSize: 12, color: 'var(--danger-soft-fg)' }}>
+            {t('productsList.bulkEdit.scopedStatus.valueRequired')}
+          </p>
+        ) : null}
       </div>
       <p id={gateHelpId} className="b2b-help" style={{ margin: 0, gridColumn: '1 / -1' }}>
         {t('productsList.bulkEdit.scopedStatus.gateHelp')}
