@@ -364,7 +364,14 @@ export interface CatalogProductAvailabilityPort {
     productIds: readonly string[],
     scope: { channelId: string; languageCode: string | null },
   ): Promise<Map<string, string>>;
-  /** FR-100 — the effective minimum order quantity and returnable flag in the channel. */
+  /**
+   * FR-100 — the effective minimum order quantity and returnable flag in the channel.
+   *
+   * **Applies no availability** (checkpoint C security review, I8): it answers for
+   * every id it is given, whether or not the product is available — or even visible —
+   * to anyone in the channel. A buyer-facing caller narrows the ids with
+   * {@link filterAvailable} first and never discloses a rule for an id it dropped.
+   */
   effectiveOrderRules(
     productIds: readonly string[],
     channelId: string,
