@@ -313,7 +313,7 @@ function ProductPickerBody(
       }
       const statusSuffix =
         product.status === 'active' ? '' : ` · ${t(STATUS_LABEL_KEY[product.status])}`;
-      // Feature 163 (FR-019) — archived is its own fact beside the status.
+      // Archived is its own fact beside the status.
       const archivedSuffix = isProductArchived(product) ? ` · ${t('productBrowser.status.archived')}` : '';
       return { ...opt, description: `${product.sku}${statusSuffix}${archivedSuffix}` };
     });
