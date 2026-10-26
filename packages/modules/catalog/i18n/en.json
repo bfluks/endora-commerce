@@ -1090,5 +1090,7 @@
   "productEditor.error.nameRequired": "At least one locale name is required.",
   "productEditor.error.save": "Save failed.",
   "productEditor.error.delete": "Delete failed.",
-  "productEditor.error.duplicate": "Duplicate failed."
+  "productEditor.error.duplicate": "Duplicate failed.",
+  "productsList.bulkEdit.scopedStatus.valuePlaceholder": "Choose a status…",
+  "productsList.bulkEdit.scopedStatus.valueRequired": "Choose the status to set in the channel."
 }
