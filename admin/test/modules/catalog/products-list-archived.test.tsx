@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import type { ReactElement } from 'react';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
 import { adminSession, withSession } from '../../helpers/render-with-session';
 import core from '../../../../packages/modules/_i18n/i18n/en.json';
@@ -40,7 +41,7 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
 });
 
 const { ProductsList } = await import('../../../../packages/modules/catalog/src/admin/pages/ProductsList');
-const { productListTabQuery, resolveProductSelectionBody } = await import(
+const { productListTabFromUrl, productListTabQuery, resolveProductSelectionBody } = await import(
   '../../../../packages/modules/catalog/src/admin/lib/resolve-product-selection'
 );
 const { savedViewTab, savedViewTabFilters } = await import(
@@ -200,6 +201,51 @@ describe('ProductsList — the Archived filter (FR-113)', () => {
     }
   });
 
+  it('its own address, /catalog/products/archived, opens the Archived tab (PAL-1)', async () => {
+    renderList({ url: '/catalog/products/archived' });
+    await screen.findByText('Old stool');
+    expect(tab('Archived')).toHaveAttribute('aria-selected', 'true');
+    expect(listRequests().at(-1)!.get('archived')).toBe('only');
+  });
+
+  it('follows the URL after its first load, also back to an address it is already on (PAL-1)', async () => {
+    function GoTo(props: { to: string; label: string }): ReactElement {
+      const navigate = useNavigate();
+      return (
+        <button type="button" onClick={(): void => navigate(props.to)}>
+          {props.label}
+        </button>
+      );
+    }
+    renderWithI18n(
+      withSession(
+        <MemoryRouter initialEntries={['/catalog/products']}>
+          <GoTo to="/catalog/products/archived" label="go archived" />
+          <GoTo to="/catalog/products?status=inactive" label="go inactive" />
+          <ProductsList />
+        </MemoryRouter>,
+        { session: adminSession({ permissions: ['*'] }) },
+      ),
+      BUNDLE,
+    );
+    const user = userEvent.setup();
+    await screen.findByText('Oak chair');
+    expect(tab('All')).toHaveAttribute('aria-selected', 'true');
+
+    await user.click(screen.getByRole('button', { name: 'go archived' }));
+    await waitFor(() => expect(tab('Archived')).toHaveAttribute('aria-selected', 'true'));
+    await waitFor(() => expect(listRequests().at(-1)!.get('archived')).toBe('only'));
+
+    // A tab click does not navigate; the palette sending the operator to the same
+    // address again still lands on Archived.
+    await user.click(tab('All'));
+    await user.click(screen.getByRole('button', { name: 'go archived' }));
+    await waitFor(() => expect(tab('Archived')).toHaveAttribute('aria-selected', 'true'));
+
+    await user.click(screen.getByRole('button', { name: 'go inactive' }));
+    await waitFor(() => expect(tab('Inactive')).toHaveAttribute('aria-selected', 'true'));
+  });
+
   it('a ?status=draft link opens All', async () => {
     renderList({ url: '/catalog/products?status=draft' });
     await screen.findByText('Oak chair');
@@ -343,6 +389,17 @@ describe('ProductsList — bulk Archive / Restore from the tab (FR-053)', () => 
     await openBulkEdit(user, 'Oak chair');
     await screen.findByRole('checkbox', { name: new RegExp(`^${t('productsList.bulkEdit.section.status')}`) });
     expect(screen.queryByRole('button', { name: t('productsList.bulkEdit.archive.action', { count: 1 }) })).toBeNull();
+  });
+});
+
+describe('the URL → tab mapping (pure, PAL-1)', () => {
+  it('reads the Archived path, then ?status=, else All', () => {
+    expect(productListTabFromUrl('/catalog/products/archived', '')).toBe('archived');
+    expect(productListTabFromUrl('/catalog/products/archived/', '?status=active')).toBe('archived');
+    expect(productListTabFromUrl('/catalog/products', '?status=inactive')).toBe('inactive');
+    expect(productListTabFromUrl('/catalog/products', '?status=archived')).toBe('archived');
+    expect(productListTabFromUrl('/catalog/products', '?status=draft')).toBe('all');
+    expect(productListTabFromUrl('/catalog/products', '')).toBe('all');
   });
 });
 
