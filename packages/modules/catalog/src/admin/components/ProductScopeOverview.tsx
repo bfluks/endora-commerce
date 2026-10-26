@@ -1,12 +1,14 @@
-import { useCallback, useContext, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, CircleSlash, RotateCcw, Trash2 } from 'lucide-react';
 import { apiClient, useAuth } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Badge, Button } from '@endora-commerce/admin-kit/ui';
+import { ModalDialog } from '@endora-commerce/admin-kit/components';
 import { AppLanguageContext, useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { scopeSaveErrorMessage } from '../lib/product-scopes-api.js';
 import {
   describeOverviewField,
   getScopeOverview,
+  isTextField,
   orphanDeleteRequest,
   pickLocalized,
   resetRequestFor,
@@ -24,13 +26,14 @@ import { urlKeyErrorMessage } from '../lib/product-url-keys-api.js';
  * table of channels × languages (`GET …/scope-overview`).
  *
  * Each override is shown, and reset, **where it lives** (Common Region): a channel value
- * in the channel's row header, a language value in the language's column header, a
- * channel × language value in its cell. A cell also names the channel and language
+ * in its row's "whole channel" cell, a language value in the "every channel" row of its
+ * column, a channel × language value in its cell — never inside a header cell (D11). A cell also names the channel and language
  * values that win there, without a second reset button for them, so one override never
  * has two controls (Similarity). A reset goes to the field's owning endpoint with `null`
- * for that field only (`lib/scope-overview.ts`) and reloads the table; it is not
- * confirmed — it removes one value, is audited, and the inherited value it falls back to
- * is shown beside it. A per-language value of the product itself (its German
+ * for that field only (`lib/scope-overview.ts`) and reloads the table. Owner decision
+ * UX-1 = A: a reset of a text value and every orphan delete ask first in a dialog naming
+ * the field, the scope and the outcome; any other reset is one click. After a reset
+ * focus returns to the overview's heading, since the button went with the value (D11b). A per-language value of the product itself (its German
  * description) is the product's own text, edited on the Details and Attributes tabs,
  * and has no reset here.
  *
@@ -58,6 +61,10 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
   const language = useContext(AppLanguageContext)?.language ?? 'en';
   const headingId = useId();
   const orphansHeadingId = useId();
+  const confirmBodyId = useId();
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  /** Where focus lands when the confirmation closes: the heading after a done action, else the opener. */
+  const dialogFinalFocus = useRef<HTMLElement | null>(null);
 
   const [overview, setOverview] = useState<ScopeOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,6 +74,13 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
+  /** A text reset or an orphan delete waiting on the operator's yes (UX-1 = A). */
+  const [confirming, setConfirming] = useState<{
+    kind: 'reset' | 'delete';
+    request: ScopeFieldRequest;
+    field: string;
+    scope: string;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,6 +146,9 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
         await sendScopeFieldRequest(productId, request);
         setStatus(t(doneKey));
         setReloadToken((n) => n + 1);
+        // D11b — the control unmounts with the value it removed; keep focus in the overview.
+        dialogFinalFocus.current = headingRef.current;
+        headingRef.current?.focus();
       } catch (err) {
         setActionError(
           urlKeyErrorMessage(err, t) ??
@@ -139,13 +156,21 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
         );
       } finally {
         setBusy(false);
+        setConfirming(null);
       }
     },
     [productId, t, channelName],
   );
 
-  const reset = (request: ScopeFieldRequest | null): void => {
-    if (request) void run(request, 'productEditor.scopeOverview.resetDone');
+  /** Every reset passes here: a text value asks first (UX-1 = A), anything else is one click. */
+  const reset = (request: ScopeFieldRequest | null, field: string, scope: string): void => {
+    if (!request) return;
+    if (isTextField(field)) {
+      dialogFinalFocus.current = null;
+      setConfirming({ kind: 'reset', request, field, scope });
+      return;
+    }
+    void run(request, 'productEditor.scopeOverview.resetDone');
   };
 
   const members = useMemo(() => overview?.channels.filter((c) => c.isMember) ?? [], [overview]);
@@ -159,7 +184,7 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
 
   if (loading) {
     return (
-      <p className="b2b-help" aria-busy="true">
+      <p role="status" aria-live="polite" className="b2b-help" aria-busy="true">
         {t('productEditor.scopeOverview.loading')}
       </p>
     );
@@ -188,34 +213,33 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
   const languageColumnOf = (code: string): string[] =>
     overview.languageColumns.find((c) => c.languageCode === code)?.overriddenFields ?? [];
 
-  const languageHeader = (code: string): ReactNode => {
+  /** A language's own values, with their resets — rendered in a body cell, never a header (D11). */
+  const languageValues = (code: string): ReactNode => {
     const fields = languageColumnOf(code);
+    if (fields.length === 0) return <span className="b2b-help">{t('productEditor.scopeOverview.nothingSet')}</span>;
     return (
-      <>
-        <span className="font-semibold">{code.toUpperCase()}</span>
-        {fields.length > 0 ? (
-          <FieldList
-            caption={t('productEditor.scopeOverview.languageValues')}
-            fields={fields}
-            fieldLabel={fieldLabel}
-            resetFor={(field): ScopeFieldRequest | null =>
-              canWrite ? resetRequestFor({ field, level: 'language', channelId: '', languageCode: code }) : null
-            }
-            resetLabel={(field): string =>
-              t('productEditor.scopeOverview.resetAria', { field: fieldLabel(field), scope: code.toUpperCase() })
-            }
-            busy={busy}
-            onReset={reset}
-            t={t}
-          />
-        ) : null}
-      </>
+      <FieldList
+        fields={fields}
+        fieldLabel={fieldLabel}
+        resetFor={(field): ScopeFieldRequest | null =>
+          canWrite ? resetRequestFor({ field, level: 'language', channelId: '', languageCode: code }) : null
+        }
+        resetLabel={(field): string =>
+          t('productEditor.scopeOverview.resetAria', { field: fieldLabel(field), scope: code.toUpperCase() })
+        }
+        busy={busy}
+        onReset={(request, field): void => reset(request, field, code.toUpperCase())}
+        t={t}
+      />
     );
   };
 
+  /** Sticky row headers keep the channel in view while the languages scroll (D11). */
+  const stickyRowHeader = { position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 } as const;
+
   return (
     <section className="b2b-col" style={{ gap: 12 }} aria-labelledby={headingId} aria-busy={busy || undefined}>
-      <h3 id={headingId} className="text-sm font-semibold" style={{ margin: 0 }}>
+      <h3 id={headingId} ref={headingRef} tabIndex={-1} className="text-sm font-semibold" style={{ margin: 0 }}>
         {t('productEditor.scopeOverview.title')}
       </h3>
       <p className="b2b-help" style={{ margin: 0 }}>
@@ -238,7 +262,12 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
           <Alert role="note">
             <AlertDescription>{t('productEditor.scopeOverview.noChannels')}</AlertDescription>
           </Alert>
-          <div style={{ overflowX: 'auto' }}>
+          <div
+            role="region"
+            tabIndex={0}
+            aria-label={t('productEditor.scopeOverview.languagesCaption')}
+            style={{ overflowX: 'auto' }}
+          >
             <table className="b2b-tbl" style={{ width: '100%' }}>
               <caption className="sr-only">{t('productEditor.scopeOverview.languagesCaption')}</caption>
               <thead>
@@ -250,12 +279,10 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
               <tbody>
                 {overview.languages.map((code) => (
                   <tr key={code}>
-                    <th scope="row">{languageHeader(code)}</th>
-                    <td>
-                      {languageColumnOf(code).length === 0 ? (
-                        <span className="b2b-help">{t('productEditor.scopeOverview.nothingSet')}</span>
-                      ) : null}
-                    </td>
+                    <th scope="row" style={{ verticalAlign: 'top', textAlign: 'left' }}>
+                      <span className="font-semibold">{code.toUpperCase()}</span>
+                    </th>
+                    <td style={{ verticalAlign: 'top' }}>{languageValues(code)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -263,27 +290,50 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
           </div>
         </>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
+        <div
+          role="region"
+          tabIndex={0}
+          aria-label={t('productEditor.scopeOverview.tableRegion')}
+          style={{ overflowX: 'auto' }}
+        >
           <table className="b2b-tbl" style={{ width: '100%' }}>
             <caption className="sr-only">{t('productEditor.scopeOverview.title')}</caption>
             <thead>
               <tr>
-                <th scope="col">{t('productEditor.scopeOverview.channelColumn')}</th>
+                <th scope="col" style={stickyRowHeader}>
+                  {t('productEditor.scopeOverview.channelColumn')}
+                </th>
+                <th scope="col">{t('productEditor.scopeOverview.wholeChannelColumn')}</th>
                 {overview.languages.map((code) => (
                   <th key={code} scope="col" style={{ verticalAlign: 'top' }}>
-                    {languageHeader(code)}
+                    <span className="font-semibold">{code.toUpperCase()}</span>
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
+              <tr>
+                <th scope="row" style={{ ...stickyRowHeader, verticalAlign: 'top', textAlign: 'left' }}>
+                  <span className="font-semibold">{t('productEditor.scopeOverview.everyChannelRow')}</span>
+                </th>
+                <td style={{ verticalAlign: 'top' }}>
+                  <span className="b2b-help" aria-hidden="true">
+                    —
+                  </span>
+                </td>
+                {overview.languages.map((code) => (
+                  <td key={code} style={{ verticalAlign: 'top' }}>
+                    {languageValues(code)}
+                  </td>
+                ))}
+              </tr>
               {overview.channels.map((channel) => {
                 const name = pickLocalized(channel.name, language);
                 const rowFields =
                   overview.channelRows.find((r) => r.channelId === channel.channelId)?.overriddenFields ?? [];
                 return (
                   <tr key={channel.channelId}>
-                    <th scope="row" style={{ verticalAlign: 'top', textAlign: 'left' }}>
+                    <th scope="row" style={{ ...stickyRowHeader, verticalAlign: 'top', textAlign: 'left' }}>
                       <span className="font-semibold">{name}</span>
                       {!channel.isMember ? (
                         <>
@@ -291,9 +341,10 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
                           <Badge variant="outline">{t('productEditor.scopeOverview.notAMember')}</Badge>
                         </>
                       ) : null}
+                    </th>
+                    <td style={{ verticalAlign: 'top' }}>
                       {rowFields.length > 0 ? (
                         <FieldList
-                          caption={t('productEditor.scopeOverview.channelValues')}
                           fields={rowFields}
                           fieldLabel={fieldLabel}
                           resetFor={(field): ScopeFieldRequest | null =>
@@ -305,26 +356,29 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
                             t('productEditor.scopeOverview.resetAria', { field: fieldLabel(field), scope: name })
                           }
                           busy={busy}
-                          onReset={reset}
+                          onReset={(request, field): void => reset(request, field, name)}
                           t={t}
                         />
-                      ) : null}
-                    </th>
+                      ) : (
+                        <span className="b2b-help">{t('productEditor.scopeOverview.nothingSetChannel')}</span>
+                      )}
+                    </td>
                     {overview.languages.map((code) => {
                       const cell = overview.cells.find(
                         (c) => c.channelId === channel.channelId && c.languageCode === code,
                       );
                       const offered = channel.isMember && channel.languages.includes(code);
+                      const scopeName = `${name} · ${code.toUpperCase()}`;
                       return (
                         <td key={code} style={{ verticalAlign: 'top' }}>
                           {cell && offered ? (
                             <OverviewCell
                               cell={cell}
-                              scopeName={`${name} · ${code.toUpperCase()}`}
+                              scopeName={scopeName}
                               canWrite={canWrite}
                               busy={busy}
                               fieldLabel={fieldLabel}
-                              onReset={reset}
+                              onReset={(request, field): void => reset(request, field, scopeName)}
                               t={t}
                             />
                           ) : (
@@ -364,7 +418,13 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
                   busy={busy}
                   fieldLabel={fieldLabel}
                   onDelete={(request): void => {
-                    void run(request, 'productEditor.scopeOverview.orphans.deleted');
+                    dialogFinalFocus.current = null;
+                    setConfirming({
+                      kind: 'delete',
+                      request,
+                      field: orphan.field,
+                      scope: orphanScope(orphan, channelName),
+                    });
                   }}
                   t={t}
                 />
@@ -373,6 +433,57 @@ export function ProductScopeOverview({ productId }: ProductScopeOverviewProps): 
           </>
         )}
       </section>
+
+      {confirming ? (
+        <ModalDialog
+          title={t(
+            confirming.kind === 'reset'
+              ? 'productEditor.scopeOverview.confirmReset.title'
+              : 'productEditor.scopeOverview.confirmDelete.title',
+            { field: fieldLabel(confirming.field), scope: confirming.scope },
+          )}
+          aria-describedby={confirmBodyId}
+          busy={busy}
+          finalFocusRef={dialogFinalFocus}
+          onClose={(): void => setConfirming(null)}
+          footer={
+            <>
+              <Button type="button" variant="outline" disabled={busy} onClick={(): void => setConfirming(null)}>
+                {t('productEditor.scopeOverview.confirm.cancel')}
+              </Button>
+              <Button
+                type="button"
+                variant={confirming.kind === 'delete' ? 'destructive' : 'default'}
+                disabled={busy}
+                aria-busy={busy}
+                onClick={(): void =>
+                  void run(
+                    confirming.request,
+                    confirming.kind === 'reset'
+                      ? 'productEditor.scopeOverview.resetDone'
+                      : 'productEditor.scopeOverview.orphans.deleted',
+                  )
+                }
+              >
+                {t(
+                  confirming.kind === 'reset'
+                    ? 'productEditor.scopeOverview.reset'
+                    : 'productEditor.scopeOverview.orphans.delete',
+                )}
+              </Button>
+            </>
+          }
+        >
+          <p id={confirmBodyId} className="text-sm">
+            {t(
+              confirming.kind === 'reset'
+                ? 'productEditor.scopeOverview.confirmReset.body'
+                : 'productEditor.scopeOverview.confirmDelete.body',
+              { field: fieldLabel(confirming.field), scope: confirming.scope },
+            )}
+          </p>
+        </ModalDialog>
+      ) : null}
     </section>
   );
 }
@@ -410,7 +521,7 @@ function OverviewCell({
   canWrite: boolean;
   busy: boolean;
   fieldLabel: (field: string) => string;
-  onReset: (request: ScopeFieldRequest | null) => void;
+  onReset: (request: ScopeFieldRequest | null, field: string) => void;
   t: Translate;
 }): ReactNode {
   const missing = cell.missing ?? [];
@@ -443,7 +554,7 @@ function OverviewCell({
                   <ResetButton
                     label={t('productEditor.scopeOverview.resetAria', { field: fieldLabel(field), scope: scopeName })}
                     busy={busy}
-                    onClick={(): void => onReset(request)}
+                    onClick={(): void => onReset(request, field)}
                     t={t}
                   />
                 ) : null}
@@ -465,7 +576,6 @@ function OverviewCell({
 }
 
 function FieldList({
-  caption,
   fields,
   fieldLabel,
   resetFor,
@@ -474,34 +584,28 @@ function FieldList({
   onReset,
   t,
 }: {
-  caption: string;
   fields: readonly string[];
   fieldLabel: (field: string) => string;
   resetFor: (field: string) => ScopeFieldRequest | null;
   resetLabel: (field: string) => string;
   busy: boolean;
-  onReset: (request: ScopeFieldRequest | null) => void;
+  onReset: (request: ScopeFieldRequest | null, field: string) => void;
   t: Translate;
 }): ReactNode {
   return (
-    <div className="b2b-col" style={{ gap: 2, marginTop: 4, fontWeight: 400 }}>
-      <span className="b2b-help" style={{ margin: 0 }}>
-        {caption}
-      </span>
-      <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none' }} className="b2b-col">
-        {fields.map((field) => {
-          const request = resetFor(field);
-          return (
-            <li key={field} className="b2b-row" style={{ gap: 6, alignItems: 'center' }}>
-              <span>{fieldLabel(field)}</span>
-              {request ? (
-                <ResetButton label={resetLabel(field)} busy={busy} onClick={(): void => onReset(request)} t={t} />
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
-    </div>
+    <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none', gap: 4 }} className="b2b-col">
+      {fields.map((field) => {
+        const request = resetFor(field);
+        return (
+          <li key={field} className="b2b-row" style={{ gap: 8, alignItems: 'center' }}>
+            <span>{fieldLabel(field)}</span>
+            {request ? (
+              <ResetButton label={resetLabel(field)} busy={busy} onClick={(): void => onReset(request, field)} t={t} />
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -517,7 +621,16 @@ function ResetButton({
   t: Translate;
 }): ReactNode {
   return (
-    <Button type="button" size="sm" variant="ghost" aria-label={label} title={label} disabled={busy} onClick={onClick}>
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      aria-label={label}
+      title={label}
+      disabled={busy}
+      onClick={onClick}
+      style={{ minHeight: 24, minWidth: 24 }}
+    >
       <RotateCcw size={12} aria-hidden="true" /> {t('productEditor.scopeOverview.reset')}
     </Button>
   );
