@@ -948,5 +948,7 @@
   "productsList.bulkEdit.result.status": "Result",
   "productsList.bulkEdit.result.reason": "Reason",
   "productEditor.statusGate.refused": "The product's details were not saved: switching it on needs values that are missing. {details} Your edits are still in the form.",
-  "productsList.bulk.restore": "Restore…"
+  "productsList.bulk.restore": "Restore…",
+  "productsList.savedView.draftRemoved": "This view used the removed Draft status and now shows all products. Choose a tab and use Save view to keep a view without it.",
+  "productsList.savedView.dismiss": "Dismiss"
 }
