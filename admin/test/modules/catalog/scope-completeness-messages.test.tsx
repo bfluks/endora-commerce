@@ -244,7 +244,7 @@ describe('the global status save and the completeness gate (US6)', () => {
   it('any other refusal keeps its own message', async () => {
     const user = userEvent.setup();
     patchSpy.mockRejectedValue(
-      new ApiError(409, { error: { code: 'SKU_TAKEN', message: 'SKU GATE-SKU is taken.' } }),
+      new ApiError(409, { error: { code: 'VERSION_CONFLICT', message: 'SKU GATE-SKU is taken.' } }),
     );
     renderEditor();
     await switchOnAndSave(user);
