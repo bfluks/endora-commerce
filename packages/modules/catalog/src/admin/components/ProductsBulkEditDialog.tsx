@@ -3,12 +3,13 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
-  type CSSProperties,
   type ReactNode,
+  type RefObject,
 } from 'react';
 import { Link } from 'react-router-dom';
-import { Archive, ArchiveRestore, X } from 'lucide-react';
+import { Archive, ArchiveRestore } from 'lucide-react';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
 import { CategoryTreePicker, ModalDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
@@ -26,11 +27,10 @@ import { useTranslation } from '@endora-commerce/admin-kit/i18n';
  * selected product. Products are not returnable until marked, existing ones included, so
  * the group carries a standing hint saying so: this is where an operator fixes that.
  *
- * Feature 163 (FR-053, research R30.3) — bulk **Archive** / **Restore**. The request
- * carries `fields.archived` and nothing else (the route refuses it beside any other
- * field), so it is not one of the "touched" field groups that Apply combines: it is
- * its own action below them, behind its own confirmation, offered only while no
- * field is touched. The host passes the one that changes something for the
+ * Bulk **Archive** / **Restore** (feature 163). The request carries `fields.archived`
+ * and nothing else — the route refuses it beside any other field — so it is not one
+ * of the "touched" field groups that Apply combines: it is its own action below them,
+ * confirmed in a second step, offered only while no field is touched. The host passes the one that changes something for the
  * selection (`archiveAction`), or `null` for an operator without `catalog:write`.
  */
 
@@ -102,30 +102,9 @@ export interface ProductsBulkEditDialogProps {
   onClose: () => void;
   /** Invoked after a successful apply so the parent can refresh the list. */
   onApplied?: () => void;
-  /** Feature 163 — the archive action offered for this selection; `null`/absent offers none. */
+  /** The archive action offered for this selection; `null`/absent offers none. */
   archiveAction?: BulkArchiveAction | null;
 }
-
-const OVERLAY_STYLE: CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(0, 0, 0, 0.4)',
-  zIndex: 50,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const PANEL_STYLE: CSSProperties = {
-  background: 'var(--bg-surface, #fff)',
-  borderRadius: 8,
-  width: 640,
-  maxWidth: '90vw',
-  maxHeight: '90vh',
-  overflow: 'auto',
-  boxShadow: '0 20px 50px rgba(0,0,0,0.3)',
-  padding: 0,
-};
 
 export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): ReactNode {
   const t = useTranslation('catalog');
@@ -177,6 +156,12 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
   // What the result on screen came from — the archive summary also names the
   // products that were already in the requested state.
   const [sentArchive, setSentArchive] = useState<BulkArchiveAction | null>(null);
+  // The control that started the request unmounts with its step, so focus moves
+  // to the outcome's heading rather than falling to the page.
+  const outcomeHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {
+    if (result || queued) outcomeHeadingRef.current?.focus();
+  }, [result, queued]);
 
   // Load mass-editable attributes + channel / category metadata on mount.
   useEffect(() => {
@@ -344,61 +329,119 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
     t,
   ]);
 
-  return (
-    <div style={OVERLAY_STYLE} role="dialog" aria-modal="true">
-      <div style={PANEL_STYLE}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '14px 18px',
-            borderBottom: '1px solid var(--border, #e5e7eb)',
+  const confirming = confirmingArchive && archiveAction !== null && !result && !queued;
+  const editing = !confirming && !result && !queued;
+  const editFooter = (
+    <>
+      <button type="button" className="b2b-btn" onClick={onClose} disabled={submitting}>
+        {t('productsList.bulkEdit.action.cancel')}
+      </button>
+      <button
+        type="button"
+        className="b2b-btn b2b-btn--primary"
+        onClick={(): void => {
+          void submit();
+        }}
+        disabled={submitting || !anyTouched}
+      >
+        {t('productsList.bulkEdit.action.apply')}
+      </button>
+    </>
+  );
+  const confirmFooter =
+    archiveAction !== null ? (
+      <>
+        <button
+          type="button"
+          className="b2b-btn"
+          disabled={submitting}
+          onClick={(): void => setConfirmingArchive(false)}
+        >
+          {t('productsList.bulkEdit.action.back')}
+        </button>
+        <button
+          type="button"
+          className="b2b-btn b2b-btn--primary"
+          disabled={submitting}
+          aria-busy={submitting || undefined}
+          onClick={(): void => {
+            void submitArchive();
           }}
         >
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600 }}>
-              {t('productsList.bulkEdit.title', { count: productIds.length })}
-            </div>
-            {selectionScope ? (
-              <div className="b2b-muted" style={{ fontSize: 12, marginTop: 2 }}>
-                {selectionScope === 'collection'
-                  ? t('productsList.selection.scopeCollection')
-                  : t('productsList.selection.scopePage')}
-              </div>
-            ) : null}
-          </div>
-          <button
-            type="button"
-            className="b2b-btn b2b-btn--ghost b2b-btn--icon b2b-btn--sm"
-            onClick={onClose}
-            aria-label="close"
-          >
-            <X size={14} />
-          </button>
+          {t(`productsList.bulkEdit.${archiveAction}.confirm`, { count: productIds.length })}
+        </button>
+      </>
+    ) : null;
+
+  // One modal root: the archive confirmation is a second step of this dialog, not
+  // a dialog over it. Escape on that step goes back to the form, not out of it.
+  return (
+    <ModalDialog
+      title={
+        confirming && archiveAction !== null
+          ? t(`productsList.bulkEdit.${archiveAction}.confirmTitle`, { count: productIds.length })
+          : t('productsList.bulkEdit.title', { count: productIds.length })
+      }
+      onClose={confirming ? (): void => setConfirmingArchive(false) : onClose}
+      busy={submitting}
+      dismissOnScrim={false}
+      widthClassName="max-w-2xl"
+      {...(confirming ? { 'aria-describedby': archiveConfirmBodyId } : {})}
+      {...(editing ? { footer: editFooter } : confirming && confirmFooter ? { footer: confirmFooter } : {})}
+    >
+      {selectionScope && editing ? (
+        <div className="b2b-muted" style={{ fontSize: 12, marginTop: -8, marginBottom: 12 }}>
+          {selectionScope === 'collection'
+            ? t('productsList.selection.scopeCollection')
+            : t('productsList.selection.scopePage')}
         </div>
+      ) : null}
 
-        {error ? (
-          <div
-            style={{
-              margin: '12px 18px 0',
-              padding: '10px 12px',
-              background: 'var(--danger-soft, #fee2e2)',
-              color: 'var(--danger-soft-fg, #991b1b)',
-              borderRadius: 6,
-              fontSize: 13,
-            }}
-          >
-            {error}
-          </div>
-        ) : null}
+      {/* While confirming, the error is said once, inside the step, as an alert. */}
+      {error && !confirming ? (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: '10px 12px',
+            background: 'var(--danger-soft, #fee2e2)',
+            color: 'var(--danger-soft-fg, #991b1b)',
+            borderRadius: 6,
+            fontSize: 13,
+          }}
+        >
+          {error}
+        </div>
+      ) : null}
 
-        {queued ? (
-          <BulkEditQueuedAck queued={queued} onClose={onClose} t={t} />
-        ) : result ? (
-          <BulkEditSummary result={result} archiveAction={sentArchive} onClose={onClose} t={t} />
-        ) : (
-          <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {queued ? (
+        <BulkEditQueuedAck
+          queued={queued}
+          archiveAction={sentArchive}
+          headingRef={outcomeHeadingRef}
+          onClose={onClose}
+          t={t}
+        />
+      ) : result ? (
+        <BulkEditSummary
+          result={result}
+          archiveAction={sentArchive}
+          headingRef={outcomeHeadingRef}
+          onClose={onClose}
+          t={t}
+        />
+      ) : confirming && archiveAction !== null ? (
+        <div>
+          <p id={archiveConfirmBodyId} style={{ fontSize: 14, lineHeight: 1.5 }}>
+            {t(`productsList.bulkEdit.${archiveAction}.confirmBody`)}
+          </p>
+          {error ? (
+            <p role="alert" style={{ marginTop: 8, fontSize: 13, color: 'var(--danger-soft-fg, #991b1b)' }}>
+              {error}
+            </p>
+          ) : null}
+        </div>
+      ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             <FieldGroup
               label={t('productsList.bulkEdit.section.status')}
               touched={touchStatus}
@@ -630,81 +673,8 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
               </section>
             ) : null}
           </div>
-        )}
-
-        {confirmingArchive && archiveAction !== null ? (
-          <ModalDialog
-            title={t(`productsList.bulkEdit.${archiveAction}.confirmTitle`, { count: productIds.length })}
-            onClose={(): void => setConfirmingArchive(false)}
-            busy={submitting}
-            aria-describedby={archiveConfirmBodyId}
-            footer={
-              <>
-                <button
-                  type="button"
-                  className="b2b-btn"
-                  disabled={submitting}
-                  onClick={(): void => setConfirmingArchive(false)}
-                >
-                  {t('productsList.bulkEdit.action.cancel')}
-                </button>
-                <button
-                  type="button"
-                  className="b2b-btn b2b-btn--primary"
-                  disabled={submitting}
-                  aria-busy={submitting || undefined}
-                  onClick={(): void => {
-                    void submitArchive();
-                  }}
-                >
-                  {t(`productsList.bulkEdit.${archiveAction}.confirm`, { count: productIds.length })}
-                </button>
-              </>
-            }
-          >
-            <p id={archiveConfirmBodyId} style={{ fontSize: 14, lineHeight: 1.5 }}>
-              {t(`productsList.bulkEdit.${archiveAction}.confirmBody`)}
-            </p>
-            {error ? (
-              <p role="alert" style={{ marginTop: 8, fontSize: 13, color: 'var(--danger-soft-fg, #991b1b)' }}>
-                {error}
-              </p>
-            ) : null}
-          </ModalDialog>
-        ) : null}
-
-        {!result && !queued ? (
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'flex-end',
-              gap: 8,
-              padding: 14,
-              borderTop: '1px solid var(--border, #e5e7eb)',
-            }}
-          >
-            <button
-              type="button"
-              className="b2b-btn"
-              onClick={onClose}
-              disabled={submitting}
-            >
-              {t('productsList.bulkEdit.action.cancel')}
-            </button>
-            <button
-              type="button"
-              className="b2b-btn b2b-btn--primary"
-              onClick={(): void => {
-                void submit();
-              }}
-              disabled={submitting || !anyTouched}
-            >
-              {t('productsList.bulkEdit.action.apply')}
-            </button>
-          </div>
-        ) : null}
-      </div>
-    </div>
+      )}
+    </ModalDialog>
   );
 }
 
@@ -818,13 +788,16 @@ function MultiSelect(props: MultiSelectProps): ReactNode {
 
 interface BulkEditQueuedAckProps {
   queued: BulkUpdateQueuedData;
+  archiveAction: BulkArchiveAction | null;
+  headingRef: RefObject<HTMLHeadingElement | null>;
   onClose: () => void;
   t: ReturnType<typeof useTranslation>;
 }
 
 function BulkEditQueuedAck(props: BulkEditQueuedAckProps): ReactNode {
+  const prefix = props.archiveAction ? `productsList.bulkEdit.${props.archiveAction}` : 'productsList.bulkEdit';
   return (
-    <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div
         style={{
           padding: 14,
@@ -835,20 +808,33 @@ function BulkEditQueuedAck(props: BulkEditQueuedAckProps): ReactNode {
           lineHeight: 1.5,
         }}
       >
-        <strong>{props.t('productsList.bulkEdit.queued.title')}</strong>
+        <h3 ref={props.headingRef} tabIndex={-1} style={{ fontWeight: 600 }}>
+          {props.t(`${prefix}.queued.title`)}
+        </h3>
         <div style={{ marginTop: 4 }}>
-          {props.t('productsList.bulkEdit.queued.body', { total: props.queued.total })}
+          {props.t(`${prefix}.queued.body`, { total: props.queued.total })}
         </div>
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-        <Link
-          to="/catalog/bulk-operations"
-          className="b2b-btn"
-          onClick={props.onClose}
-          style={{ textDecoration: 'none' }}
-        >
-          {props.t('productsList.bulkEdit.queued.viewAll')}
-        </Link>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {/* A queued run is persisted: its page holds the per-product record and Undo. */}
+          <Link
+            to={`/catalog/bulk-operations/${props.queued.bulkOperationId}`}
+            className="b2b-btn"
+            onClick={props.onClose}
+            style={{ textDecoration: 'none' }}
+          >
+            {props.t('productsList.bulkEdit.viewOperation')}
+          </Link>
+          <Link
+            to="/catalog/bulk-operations"
+            className="b2b-btn"
+            onClick={props.onClose}
+            style={{ textDecoration: 'none' }}
+          >
+            {props.t('productsList.bulkEdit.queued.viewAll')}
+          </Link>
+        </span>
         <button type="button" className="b2b-btn b2b-btn--primary" onClick={props.onClose}>
           {props.t('productsList.bulkEdit.action.close')}
         </button>
@@ -859,40 +845,40 @@ function BulkEditQueuedAck(props: BulkEditQueuedAckProps): ReactNode {
 
 interface BulkEditSummaryProps {
   result: BulkUpdateSyncData;
-  /** Feature 163 — set when the result is a bulk Archive / Restore. */
-  archiveAction?: BulkArchiveAction | null;
+  /** Set when the result is a bulk Archive / Restore. */
+  archiveAction: BulkArchiveAction | null;
+  headingRef: RefObject<HTMLHeadingElement | null>;
   onClose: () => void;
   t: ReturnType<typeof useTranslation>;
 }
 
 /**
- * Feature 163 (FR-053, O-6) — products already in the requested state succeed with
- * nothing changed; the archive summary says how many, so "Succeeded" is not read
- * as "all of them moved".
+ * Products already in the requested state succeed with nothing changed; the archive
+ * summary says how many, so "Succeeded" is not read as "all of them moved".
  */
 export function unchangedArchiveCount(results: readonly BulkUpdateResultRow[]): number {
   return results.filter((r) => r.status === 'succeeded' && (r.changedFields?.length ?? 0) === 0).length;
 }
 
 function BulkEditSummary(props: BulkEditSummaryProps): ReactNode {
-  const { summary, results, bulkOperationId } = props.result;
+  const { summary, results } = props.result;
   const unchanged = props.archiveAction ? unchangedArchiveCount(results) : 0;
   return (
-    <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {props.archiveAction ? (
-        <div role="status">
-          <p style={{ fontSize: 14, fontWeight: 600 }}>
-            {props.t(`productsList.bulkEdit.${props.archiveAction}.done`, {
-              count: summary.succeeded - unchanged,
-            })}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div>
+        <h3 ref={props.headingRef} tabIndex={-1} style={{ fontSize: 14, fontWeight: 600 }}>
+          {props.archiveAction
+            ? props.t(`productsList.bulkEdit.${props.archiveAction}.done`, {
+                count: summary.succeeded - unchanged,
+              })
+            : props.t('productsList.bulkEdit.summary.title')}
+        </h3>
+        {props.archiveAction && unchanged > 0 ? (
+          <p className="b2b-help">
+            {props.t(`productsList.bulkEdit.${props.archiveAction}.unchanged`, { count: unchanged })}
           </p>
-          {unchanged > 0 ? (
-            <p className="b2b-help">
-              {props.t(`productsList.bulkEdit.${props.archiveAction}.unchanged`, { count: unchanged })}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
+        ) : null}
+      </div>
       <div style={{ display: 'flex', gap: 12 }}>
         <SummaryBadge
           label={props.t('productsList.bulkEdit.summary.succeeded')}
@@ -960,16 +946,8 @@ function BulkEditSummary(props: BulkEditSummaryProps): ReactNode {
         </div>
       ) : null}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-        {/* The operation's page holds its per-product record and its Undo. */}
-        <Link
-          to={`/catalog/bulk-operations/${bulkOperationId}`}
-          className="b2b-btn"
-          onClick={props.onClose}
-          style={{ textDecoration: 'none' }}
-        >
-          {props.t('productsList.bulkEdit.viewOperation')}
-        </Link>
+      {/* An inline run is not persisted as an operation, so there is no page to link. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
         <button
           type="button"
           className="b2b-btn b2b-btn--primary"

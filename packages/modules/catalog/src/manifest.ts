@@ -664,13 +664,13 @@ export const manifest = defineModuleManifest({
         'zakres',
         'visibility per channel',
         'publication window',
-        // Feature 163 (R23, FR-019, FR-113) — the Archived filter and the
+        // The Archived filter and the
         // Archive / Restore actions live on the product list and editor. One
         // entry, because an action carries at most ten keywords
         // (`adminActionSchema`) and this was the tenth; the palette matches a
-        // substring of the joined keywords, so "archive", "archived", "archiwum"
-        // and "zarchiwizowane" all find it.
-        'archived archiwum zarchiwizowane',
+        // substring of the joined keywords, so "archive", "archived", "archiwum",
+        // "archiwiz", "restore" and "przywr" all find it.
+        'archived archiwum zarchiwizowane restore przywróć',
       ],
       weight: 200,
     },
