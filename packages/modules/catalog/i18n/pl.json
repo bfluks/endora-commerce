@@ -1317,5 +1317,6 @@
   "productsList.bulkEdit.result.product": "Produkt",
   "productsList.bulkEdit.result.status": "Wynik",
   "productsList.bulkEdit.result.reason": "Powód",
-  "productEditor.statusGate.refused": "Dane produktu nie zostały zapisane: do jego włączenia brakuje wartości. {details} Zmiany pozostają w formularzu."
+  "productEditor.statusGate.refused": "Dane produktu nie zostały zapisane: do jego włączenia brakuje wartości. {details} Zmiany pozostają w formularzu.",
+  "productsList.bulk.restore": "Przywróć…"
 }
