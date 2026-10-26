@@ -39,7 +39,7 @@ import { QuoteRequestItem } from '../entities/quote-request-item.entity.js';
 import { QuoteRequestItemGroup } from '../entities/quote-request-item-group.entity.js';
 import { underRowLock } from './transition-lock.js';
 import type { RfqService} from './rfq-service.js';
-import { rfqAudience, type RfqEventBus, type RfqEvents } from './rfq-service.js';
+import { isNotArchived, rfqAudience, type RfqEventBus, type RfqEvents } from './rfq-service.js';
 import type { RfqEventService } from './rfq-event-service.js';
 import type { RfqRevisionService } from './rfq-revision-service.js';
 import type { RfqNotificationService } from './rfq-notification-service.js';
@@ -721,9 +721,10 @@ export class RfqAdminService {
       }
 
       if (body.items) {
-        const products = await this.deps.catalogProducts.findByIds(
-        body.items.map((it) => it.productId),
-      );
+        // Feature 163, P-3 = A — an archived product is refused like an unknown one.
+        const products = (
+          await this.deps.catalogProducts.findByIds(body.items.map((it) => it.productId))
+        ).filter(isNotArchived);
         const productById = new Map(products.map((p) => [p.id, p]));
         if (productById.size !== new Set(body.items.map((it) => it.productId)).size) {
           throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
@@ -960,9 +961,14 @@ export class RfqAdminService {
     //
     // The channel this quote *is* raised on is recorded below and is the
     // honest answer to "where did this come from", not a filter.
-    const products = await this.deps.catalogProducts.findByIds(
-      body.items.map((it) => it.productId),
-    );
+    //
+    // **One exception, by owner decision P-3 = A (feature 163, 2026-10-26)**: an
+    // archived product is refused here as it is on the buyer's paths — with the
+    // unknown product's 404, before anything is numbered or written. The
+    // availability warnings below stay warnings for every other reason.
+    const products = (
+      await this.deps.catalogProducts.findByIds(body.items.map((it) => it.productId))
+    ).filter(isNotArchived);
     const productById = new Map(products.map((p) => [p.id, p]));
     if (productById.size !== new Set(body.items.map((it) => it.productId)).size) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
