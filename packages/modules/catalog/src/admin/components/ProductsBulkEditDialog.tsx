@@ -32,9 +32,20 @@ import { useTranslation } from '@endora-commerce/admin-kit/i18n';
  * of the "touched" field groups that Apply combines: it is its own action below them,
  * confirmed in a second step, offered only while no field is touched. The host passes the one that changes something for the
  * selection (`archiveAction`), or `null` for an operator without `catalog:write`.
+ * `initialStep="confirmArchive"` opens the dialog on that confirmation (the Archived
+ * tab's own Restore button): there is no form behind it, so its Back reads Cancel.
+ *
+ * **Status in one channel** (feature 163, US5; FR-050–FR-052). One channel, optionally
+ * one of its languages, and Active, Inactive or Use inherited — sent as
+ * `fields.scopedStatus`. The route refuses it beside `fields.status`, so each of the two
+ * groups is disabled while the other is touched, with the reason beside it. The result
+ * names the products skipped as not in the channel (`scope_invalid`, never added to it)
+ * or refused by the completeness check (`completeness_gate`), and those switched on with
+ * values missing (`warn` mode: a succeeded row carrying `details.code = 'SCOPE_INCOMPLETE'`).
  */
 
 type BulkStatus = 'active' | 'inactive';
+type ScopedStatusValue = 'active' | 'inactive' | 'inherit';
 export type BulkArchiveAction = 'archive' | 'restore';
 type BulkVisibility = 'public' | 'logged_in_only' | 'organization_restricted';
 type BulkMode = 'add' | 'replace';
@@ -51,6 +62,19 @@ interface SalesChannel {
   id: string;
   code: string;
   name: Record<string, string> | string;
+}
+
+function channelLabel(c: SalesChannel): string {
+  return typeof c.name === 'string' ? c.name : (c.name['en-US'] ?? c.name['pl-PL'] ?? c.code);
+}
+
+/** A channel's languages, loaded when it is chosen: the list endpoint does not carry them. */
+type ChannelLanguages = { state: 'loading' } | { state: 'failed' } | { state: 'ready'; codes: string[] };
+
+/** The scope a scoped-status request named, kept to say it in the result. */
+interface SentScope {
+  channelName: string;
+  languageCode: string | null;
 }
 
 interface AdminCategory {
@@ -104,11 +128,19 @@ export interface ProductsBulkEditDialogProps {
   onApplied?: () => void;
   /** The archive action offered for this selection; `null`/absent offers none. */
   archiveAction?: BulkArchiveAction | null;
+  /** Open on the archive action's confirmation instead of the form. */
+  initialStep?: 'form' | 'confirmArchive';
+}
+
+/** A result row the summary lists: not succeeded, or succeeded with values missing. */
+export function isReportedResult(r: BulkUpdateResultRow): boolean {
+  return r.status !== 'succeeded' || r.details?.code === 'SCOPE_INCOMPLETE';
 }
 
 export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): ReactNode {
   const t = useTranslation('catalog');
-  const { productIds, selectionScope, onClose, onApplied, archiveAction = null } = props;
+  const { productIds, selectionScope, onClose, onApplied, archiveAction = null, initialStep = 'form' } = props;
+  const openedOnConfirm = initialStep === 'confirmArchive' && archiveAction !== null;
   const formId = useId();
   const returnableRadioName = `${formId}-returnable`;
   const returnableHintId = `${formId}-returnable-hint`;
@@ -119,6 +151,15 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
   // flag is true. Default values are placeholders that are NOT sent.
   const [touchStatus, setTouchStatus] = useState(false);
   const [status, setStatus] = useState<BulkStatus>('active');
+
+  const [touchScoped, setTouchScoped] = useState(false);
+  const [scopedChannelId, setScopedChannelId] = useState('');
+  // '' = every language of the channel: the channel-level override.
+  const [scopedLanguage, setScopedLanguage] = useState('');
+  const [scopedValue, setScopedValue] = useState<ScopedStatusValue>('inactive');
+  const [scopedChannelMissing, setScopedChannelMissing] = useState(false);
+  const [languagesByChannel, setLanguagesByChannel] = useState<Record<string, ChannelLanguages>>({});
+  const scopedChannelRef = useRef<HTMLSelectElement | null>(null);
 
   const [touchVisibility, setTouchVisibility] = useState(false);
   const [visibility, setVisibility] = useState<BulkVisibility>('public');
@@ -152,7 +193,8 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BulkUpdateSyncData | null>(null);
   const [queued, setQueued] = useState<BulkUpdateQueuedData | null>(null);
-  const [confirmingArchive, setConfirmingArchive] = useState(false);
+  const [confirmingArchive, setConfirmingArchive] = useState(openedOnConfirm);
+  const [sentScope, setSentScope] = useState<SentScope | null>(null);
   // What the result on screen came from — the archive summary also names the
   // products that were already in the requested state.
   const [sentArchive, setSentArchive] = useState<BulkArchiveAction | null>(null);
@@ -202,9 +244,33 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
     };
   }, []);
 
+  const chooseScopedChannel = useCallback(
+    (channelId: string): void => {
+      setScopedChannelId(channelId);
+      setScopedLanguage('');
+      setScopedChannelMissing(false);
+      const channel = channels.find((c) => c.id === channelId);
+      if (!channel || languagesByChannel[channelId]) return;
+      setLanguagesByChannel((prev) => ({ ...prev, [channelId]: { state: 'loading' } }));
+      apiClient
+        .get<{ languages?: string[] }>(`/api/v1/admin/sales-channels/${encodeURIComponent(channel.code)}`)
+        .then((detail): void => {
+          setLanguagesByChannel((prev) => ({
+            ...prev,
+            [channelId]: { state: 'ready', codes: [...(detail.languages ?? [])].sort() },
+          }));
+        })
+        .catch((): void => {
+          setLanguagesByChannel((prev) => ({ ...prev, [channelId]: { state: 'failed' } }));
+        });
+    },
+    [channels, languagesByChannel],
+  );
+
   const anyTouched = useMemo(
     () =>
       touchStatus ||
+      touchScoped ||
       touchVisibility ||
       touchChannels ||
       touchCategories ||
@@ -213,6 +279,7 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
       touchedAttrs.size > 0,
     [
       touchStatus,
+      touchScoped,
       touchVisibility,
       touchChannels,
       touchCategories,
@@ -289,6 +356,18 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
     }
     const fields: Record<string, unknown> = {};
     if (touchStatus) fields.status = status;
+    let scope: SentScope | null = null;
+    if (touchScoped) {
+      if (scopedChannelId === '') {
+        setScopedChannelMissing(true);
+        scopedChannelRef.current?.focus();
+        return;
+      }
+      const languageCode = scopedLanguage === '' ? null : scopedLanguage;
+      fields.scopedStatus = { channelId: scopedChannelId, languageCode, value: scopedValue };
+      const channel = channels.find((c) => c.id === scopedChannelId);
+      scope = { channelName: channel ? channelLabel(channel) : scopedChannelId.slice(0, 8), languageCode };
+    }
     if (touchVisibility) fields.visibility = visibility;
     if (touchChannels) {
       fields.salesChannels = { mode: channelsMode, channelIds };
@@ -306,11 +385,16 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
       for (const k of touchedAttrs) av[k] = attributeValues[k];
       fields.attributeValues = av;
     }
-    await send(fields);
+    if (await send(fields)) setSentScope(scope);
   }, [
     anyTouched,
     touchStatus,
     status,
+    touchScoped,
+    scopedChannelId,
+    scopedLanguage,
+    scopedValue,
+    channels,
     touchVisibility,
     visibility,
     touchChannels,
@@ -351,13 +435,14 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
   const confirmFooter =
     archiveAction !== null ? (
       <>
+        {/* Opened on the confirmation, there is no form to go back to. */}
         <button
           type="button"
           className="b2b-btn"
           disabled={submitting}
-          onClick={(): void => setConfirmingArchive(false)}
+          onClick={openedOnConfirm ? onClose : (): void => setConfirmingArchive(false)}
         >
-          {t('productsList.bulkEdit.action.back')}
+          {openedOnConfirm ? t('productsList.bulkEdit.action.cancel') : t('productsList.bulkEdit.action.back')}
         </button>
         <button
           type="button"
@@ -382,7 +467,7 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
           ? t(`productsList.bulkEdit.${archiveAction}.confirmTitle`, { count: productIds.length })
           : t('productsList.bulkEdit.title', { count: productIds.length })
       }
-      onClose={confirming ? (): void => setConfirmingArchive(false) : onClose}
+      onClose={confirming && !openedOnConfirm ? (): void => setConfirmingArchive(false) : onClose}
       busy={submitting}
       dismissOnScrim={false}
       widthClassName="max-w-2xl"
@@ -425,6 +510,7 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
         <BulkEditSummary
           result={result}
           archiveAction={sentArchive}
+          scope={sentScope}
           headingRef={outcomeHeadingRef}
           onClose={onClose}
           t={t}
@@ -446,10 +532,12 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
               label={t('productsList.bulkEdit.section.status')}
               touched={touchStatus}
               onToggle={setTouchStatus}
+              disabledReason={touchScoped ? t('productsList.bulkEdit.scopedStatus.notWithScoped') : null}
               t={t}
             >
               <select
                 className="b2b-field"
+                aria-label={t('productsList.bulkEdit.section.status')}
                 disabled={!touchStatus}
                 value={status}
                 onChange={(e): void => setStatus(e.target.value as BulkStatus)}
@@ -457,6 +545,34 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
                 <option value="active">{t('productsList.status.active')}</option>
                 <option value="inactive">{t('productsList.status.inactive')}</option>
               </select>
+            </FieldGroup>
+
+            <FieldGroup
+              label={t('productsList.bulkEdit.section.scopedStatus')}
+              touched={touchScoped}
+              onToggle={(next): void => {
+                setTouchScoped(next);
+                if (!next) setScopedChannelMissing(false);
+              }}
+              disabledReason={touchStatus ? t('productsList.bulkEdit.scopedStatus.notWithStatus') : null}
+              asGroup
+              t={t}
+            >
+              <ScopedStatusFields
+                idPrefix={formId}
+                disabled={!touchScoped}
+                channels={channels}
+                channelId={scopedChannelId}
+                onChannel={chooseScopedChannel}
+                channelMissing={scopedChannelMissing}
+                channelRef={scopedChannelRef}
+                languages={scopedChannelId ? (languagesByChannel[scopedChannelId] ?? null) : null}
+                language={scopedLanguage}
+                onLanguage={setScopedLanguage}
+                value={scopedValue}
+                onValue={setScopedValue}
+                t={t}
+              />
             </FieldGroup>
 
             <FieldGroup
@@ -490,13 +606,7 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
                 t={t}
               />
               <MultiSelect
-                options={channels.map((c) => ({
-                  id: c.id,
-                  label:
-                    typeof c.name === 'string'
-                      ? c.name
-                      : c.name['en-US'] ?? c.name['pl-PL'] ?? c.code,
-                }))}
+                options={channels.map((c) => ({ id: c.id, label: channelLabel(c) }))}
                 selected={channelIds}
                 onChange={setChannelIds}
                 disabled={!touchChannels}
@@ -684,38 +794,179 @@ interface FieldGroupProps {
   onToggle: (next: boolean) => void;
   t: ReturnType<typeof useTranslation>;
   children: ReactNode;
+  /** Why the group cannot be touched now; the checkbox is disabled and described by it. */
+  disabledReason?: string | null;
+  /** Render as a `fieldset` named by its checkbox label (a group of several controls). */
+  asGroup?: boolean;
 }
 
 function FieldGroup(props: FieldGroupProps): ReactNode {
+  const reasonId = useId();
+  const blocked = Boolean(props.disabledReason) && !props.touched;
+  const header = (
+    <label
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: 13,
+        fontWeight: 600,
+        marginBottom: 6,
+        cursor: blocked ? 'default' : 'pointer',
+      }}
+    >
+      <input
+        type="checkbox"
+        className="b2b-cbx"
+        checked={props.touched}
+        disabled={blocked}
+        {...(blocked ? { 'aria-describedby': reasonId } : {})}
+        onChange={(e): void => props.onToggle(e.target.checked)}
+      />
+      {props.label}
+      {!props.touched ? (
+        <span style={{ fontWeight: 400, color: 'var(--fg-muted, #64748b)', fontSize: 12 }}>
+          {props.t('productsList.bulkEdit.untouched')}
+        </span>
+      ) : null}
+    </label>
+  );
+  const body = (
+    <div style={{ paddingLeft: 26, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {blocked ? (
+        <p id={reasonId} className="b2b-help" style={{ margin: 0 }}>
+          {props.disabledReason}
+        </p>
+      ) : null}
+      {props.children}
+    </div>
+  );
+  if (props.asGroup) {
+    return (
+      <fieldset style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+        <legend style={{ padding: 0 }}>{header}</legend>
+        {body}
+      </fieldset>
+    );
+  }
   return (
     <div>
-      <label
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          fontSize: 13,
-          fontWeight: 600,
-          marginBottom: 6,
-          cursor: 'pointer',
-        }}
-      >
-        <input
-          type="checkbox"
-          className="b2b-cbx"
-          checked={props.touched}
-          onChange={(e): void => props.onToggle(e.target.checked)}
-        />
-        {props.label}
-        {!props.touched ? (
-          <span style={{ fontWeight: 400, color: 'var(--fg-muted, #64748b)', fontSize: 12 }}>
-            {props.t('productsList.bulkEdit.untouched')}
-          </span>
+      {header}
+      {body}
+    </div>
+  );
+}
+
+interface ScopedStatusFieldsProps {
+  idPrefix: string;
+  disabled: boolean;
+  channels: SalesChannel[];
+  channelId: string;
+  onChannel: (channelId: string) => void;
+  channelMissing: boolean;
+  channelRef: RefObject<HTMLSelectElement | null>;
+  /** The chosen channel's languages; `null` before a channel is chosen. */
+  languages: ChannelLanguages | null;
+  language: string;
+  onLanguage: (code: string) => void;
+  value: ScopedStatusValue;
+  onValue: (value: ScopedStatusValue) => void;
+  t: ReturnType<typeof useTranslation>;
+}
+
+/**
+ * Channel first, because the languages depend on it; then the language, which defaults to
+ * the whole channel; then the value. Three labelled native selects (Jakob), one help line
+ * saying what switching on checks, so a gate result is not a surprise.
+ */
+function ScopedStatusFields(props: ScopedStatusFieldsProps): ReactNode {
+  const { idPrefix, t } = props;
+  const channelId = `${idPrefix}-scoped-channel`;
+  const channelErrorId = `${idPrefix}-scoped-channel-error`;
+  const languageId = `${idPrefix}-scoped-language`;
+  const languageHelpId = `${idPrefix}-scoped-language-help`;
+  const valueId = `${idPrefix}-scoped-value`;
+  const gateHelpId = `${idPrefix}-scoped-gate-help`;
+  const loadingLanguages = props.languages?.state === 'loading';
+  const codes = props.languages?.state === 'ready' ? props.languages.codes : [];
+  const labelStyle = { fontSize: 12, fontWeight: 500 } as const;
+  return (
+    <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <label htmlFor={channelId} style={labelStyle}>
+          {t('productsList.bulkEdit.scopedStatus.channel')}
+        </label>
+        <select
+          id={channelId}
+          ref={props.channelRef}
+          className="b2b-field"
+          disabled={props.disabled}
+          value={props.channelId}
+          aria-invalid={props.channelMissing || undefined}
+          {...(props.channelMissing ? { 'aria-describedby': channelErrorId } : {})}
+          onChange={(e): void => props.onChannel(e.target.value)}
+        >
+          <option value="">{t('productsList.bulkEdit.scopedStatus.channelPlaceholder')}</option>
+          {props.channels.map((c) => (
+            <option key={c.id} value={c.id}>
+              {channelLabel(c)}
+            </option>
+          ))}
+        </select>
+        {props.channelMissing ? (
+          <p id={channelErrorId} role="alert" style={{ margin: 0, fontSize: 12, color: 'var(--danger-soft-fg, #991b1b)' }}>
+            {t('productsList.bulkEdit.scopedStatus.channelRequired')}
+          </p>
         ) : null}
-      </label>
-      <div style={{ paddingLeft: 26, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {props.children}
       </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <label htmlFor={languageId} style={labelStyle}>
+          {t('productsList.bulkEdit.scopedStatus.language')}
+        </label>
+        <select
+          id={languageId}
+          className="b2b-field"
+          disabled={props.disabled || props.channelId === '' || loadingLanguages}
+          aria-busy={loadingLanguages || undefined}
+          aria-describedby={languageHelpId}
+          value={props.language}
+          onChange={(e): void => props.onLanguage(e.target.value)}
+        >
+          <option value="">{t('productsList.bulkEdit.scopedStatus.allLanguages')}</option>
+          {codes.map((code) => (
+            <option key={code} value={code}>
+              {code.toUpperCase()}
+            </option>
+          ))}
+        </select>
+        <p id={languageHelpId} className="b2b-help" style={{ margin: 0 }}>
+          {props.languages?.state === 'failed'
+            ? t('productsList.bulkEdit.scopedStatus.languagesFailed')
+            : loadingLanguages
+              ? t('productsList.bulkEdit.scopedStatus.languagesLoading')
+              : t('productsList.bulkEdit.scopedStatus.languageHelp')}
+        </p>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <label htmlFor={valueId} style={labelStyle}>
+          {t('productsList.bulkEdit.scopedStatus.value')}
+        </label>
+        <select
+          id={valueId}
+          className="b2b-field"
+          disabled={props.disabled}
+          aria-describedby={gateHelpId}
+          value={props.value}
+          onChange={(e): void => props.onValue(e.target.value as ScopedStatusValue)}
+        >
+          <option value="active">{t('productsList.status.active')}</option>
+          <option value="inactive">{t('productsList.status.inactive')}</option>
+          <option value="inherit">{t('productsList.bulkEdit.scopedStatus.inherit')}</option>
+        </select>
+      </div>
+      <p id={gateHelpId} className="b2b-help" style={{ margin: 0, gridColumn: '1 / -1' }}>
+        {t('productsList.bulkEdit.scopedStatus.gateHelp')}
+      </p>
     </div>
   );
 }
@@ -847,6 +1098,8 @@ interface BulkEditSummaryProps {
   result: BulkUpdateSyncData;
   /** Set when the result is a bulk Archive / Restore. */
   archiveAction: BulkArchiveAction | null;
+  /** Set when the result is a status in one channel. */
+  scope: SentScope | null;
   headingRef: RefObject<HTMLHeadingElement | null>;
   onClose: () => void;
   t: ReturnType<typeof useTranslation>;
@@ -863,6 +1116,21 @@ export function unchangedArchiveCount(results: readonly BulkUpdateResultRow[]): 
 function BulkEditSummary(props: BulkEditSummaryProps): ReactNode {
   const { summary, results } = props.result;
   const unchanged = props.archiveAction ? unchangedArchiveCount(results) : 0;
+  const reported = results.filter(isReportedResult);
+  const savedIncomplete = results.filter((r) => r.status === 'succeeded' && r.details?.code === 'SCOPE_INCOMPLETE').length;
+  const t = props.t;
+  const scopeName = props.scope
+    ? props.scope.languageCode
+      ? t('productsList.bulkEdit.scopedStatus.scopeLanguage', {
+          channel: props.scope.channelName,
+          language: props.scope.languageCode.toUpperCase(),
+        })
+      : t('productsList.bulkEdit.scopedStatus.scopeChannel', { channel: props.scope.channelName })
+    : null;
+  const reasonText = (r: BulkUpdateResultRow): string => {
+    if (r.status === 'succeeded') return t('productsList.bulkEdit.result.savedIncomplete');
+    return r.reason ? t(`productsList.bulkEdit.reason.${r.reason}`) : '';
+  };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div>
@@ -871,12 +1139,17 @@ function BulkEditSummary(props: BulkEditSummaryProps): ReactNode {
             ? props.t(`productsList.bulkEdit.${props.archiveAction}.done`, {
                 count: summary.succeeded - unchanged,
               })
-            : props.t('productsList.bulkEdit.summary.title')}
+            : scopeName
+              ? t('productsList.bulkEdit.scopedStatus.done', { scope: scopeName })
+              : props.t('productsList.bulkEdit.summary.title')}
         </h3>
         {props.archiveAction && unchanged > 0 ? (
           <p className="b2b-help">
             {props.t(`productsList.bulkEdit.${props.archiveAction}.unchanged`, { count: unchanged })}
           </p>
+        ) : null}
+        {savedIncomplete > 0 ? (
+          <p className="b2b-help">{t('productsList.bulkEdit.result.savedIncompleteCount', { count: savedIncomplete })}</p>
         ) : null}
       </div>
       <div style={{ display: 'flex', gap: 12 }}>
@@ -902,7 +1175,7 @@ function BulkEditSummary(props: BulkEditSummaryProps): ReactNode {
         />
       </div>
 
-      {results.some((r) => r.status !== 'succeeded') ? (
+      {reported.length > 0 ? (
         <div
           style={{
             maxHeight: 260,
@@ -911,18 +1184,16 @@ function BulkEditSummary(props: BulkEditSummaryProps): ReactNode {
             borderRadius: 6,
           }}
         >
-          <table className="b2b-tbl" style={{ width: '100%' }}>
+          <table className="b2b-tbl" style={{ width: '100%' }} aria-label={t('productsList.bulkEdit.result.caption')}>
             <thead>
               <tr>
-                <th>Product</th>
-                <th>Status</th>
-                <th>Reason</th>
+                <th scope="col">{t('productsList.bulkEdit.result.product')}</th>
+                <th scope="col">{t('productsList.bulkEdit.result.status')}</th>
+                <th scope="col">{t('productsList.bulkEdit.result.reason')}</th>
               </tr>
             </thead>
             <tbody>
-              {results
-                .filter((r) => r.status !== 'succeeded')
-                .map((r) => (
+              {reported.map((r) => (
                   <tr key={r.productId}>
                     <td>
                       <Link
@@ -932,11 +1203,9 @@ function BulkEditSummary(props: BulkEditSummaryProps): ReactNode {
                         {r.productId.slice(0, 8)}…
                       </Link>
                     </td>
-                    <td>{r.status}</td>
+                    <td>{t(`productsList.bulkEdit.summary.${r.status}`)}</td>
                     <td>
-                      {r.reason
-                        ? props.t(`productsList.bulkEdit.reason.${r.reason}`)
-                        : ''}
+                      {reasonText(r)}
                       {r.details?.attribute ? ` (${r.details.attribute})` : ''}
                     </td>
                   </tr>
