@@ -13,6 +13,7 @@ import { Archive, ArchiveRestore } from 'lucide-react';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
 import { CategoryTreePicker, ModalDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { lookupProductLabels, type ProductLabel } from '../lib/product-labels.js';
 
 /**
  * Feature 022 — Products Bulk Edit dialog.
@@ -130,6 +131,11 @@ export interface ProductsBulkEditDialogProps {
   archiveAction?: BulkArchiveAction | null;
   /** Open on the archive action's confirmation instead of the form. */
   initialStep?: 'form' | 'confirmArchive';
+  /**
+   * Names and SKUs the caller already holds (the page's rows), by product id. A reported
+   * product missing here — a "select all N" selection — is looked up (D3).
+   */
+  productLabels?: Readonly<Record<string, ProductLabel>>;
 }
 
 /** A result row the summary lists: not succeeded, or succeeded with values missing. */
@@ -139,7 +145,15 @@ export function isReportedResult(r: BulkUpdateResultRow): boolean {
 
 export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): ReactNode {
   const t = useTranslation('catalog');
-  const { productIds, selectionScope, onClose, onApplied, archiveAction = null, initialStep = 'form' } = props;
+  const {
+    productIds,
+    selectionScope,
+    onClose,
+    onApplied,
+    archiveAction = null,
+    initialStep = 'form',
+    productLabels,
+  } = props;
   const openedOnConfirm = initialStep === 'confirmArchive' && archiveAction !== null;
   const formId = useId();
   const returnableRadioName = `${formId}-returnable`;
@@ -198,6 +212,26 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
   // What the result on screen came from — the archive summary also names the
   // products that were already in the requested state.
   const [sentArchive, setSentArchive] = useState<BulkArchiveAction | null>(null);
+  // D3 — the result names each reported product by name and SKU: what the caller holds,
+  // and a lookup of the rest.
+  const [labels, setLabels] = useState<Readonly<Record<string, ProductLabel>>>(() => productLabels ?? {});
+  useEffect(() => {
+    if (!result) return undefined;
+    const missing = [...new Set(result.results.filter(isReportedResult).map((r) => r.productId))].filter(
+      (id) => !labels[id],
+    );
+    if (missing.length === 0) return undefined;
+    let cancelled = false;
+    void lookupProductLabels(missing).then((found) => {
+      if (!cancelled && Object.keys(found).length > 0) setLabels((prev) => ({ ...prev, ...found }));
+    });
+    return (): void => {
+      cancelled = true;
+    };
+    // `labels` is read, not followed: a lookup runs once per result.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result]);
+
   // The control that started the request unmounts with its step, so focus moves
   // to the outcome's heading rather than falling to the page.
   const outcomeHeadingRef = useRef<HTMLHeadingElement | null>(null);
@@ -485,11 +519,12 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
       {/* While confirming, the error is said once, inside the step, as an alert. */}
       {error && !confirming ? (
         <div
+          role="alert"
           style={{
             marginBottom: 12,
             padding: '10px 12px',
-            background: 'var(--danger-soft, #fee2e2)',
-            color: 'var(--danger-soft-fg, #991b1b)',
+            background: 'var(--danger-soft)',
+            color: 'var(--danger-soft-fg)',
             borderRadius: 6,
             fontSize: 13,
           }}
@@ -511,6 +546,7 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
           result={result}
           archiveAction={sentArchive}
           scope={sentScope}
+          labels={labels}
           headingRef={outcomeHeadingRef}
           onClose={onClose}
           t={t}
@@ -521,7 +557,7 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
             {t(`productsList.bulkEdit.${archiveAction}.confirmBody`)}
           </p>
           {error ? (
-            <p role="alert" style={{ marginTop: 8, fontSize: 13, color: 'var(--danger-soft-fg, #991b1b)' }}>
+            <p role="alert" style={{ marginTop: 8, fontSize: 13, color: 'var(--danger-soft-fg)' }}>
               {error}
             </p>
           ) : null}
@@ -712,7 +748,7 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
                           alignItems: 'center',
                           gap: 10,
                           padding: 10,
-                          background: 'var(--bg-muted, #f8fafc)',
+                          background: 'var(--surface-muted)',
                           borderRadius: 6,
                         }}
                       >
@@ -756,7 +792,7 @@ export function ProductsBulkEditDialog(props: ProductsBulkEditDialogProps): Reac
             {archiveAction !== null ? (
               <section
                 aria-labelledby={`${formId}-archive-title`}
-                style={{ borderTop: '1px solid var(--border, #e5e7eb)', paddingTop: 14 }}
+                style={{ borderTop: '1px solid var(--border-color)', paddingTop: 14 }}
               >
                 <div id={`${formId}-archive-title`} style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
                   {t(`productsList.bulkEdit.${archiveAction}.title`)}
@@ -825,7 +861,7 @@ function FieldGroup(props: FieldGroupProps): ReactNode {
       />
       {props.label}
       {!props.touched ? (
-        <span style={{ fontWeight: 400, color: 'var(--fg-muted, #64748b)', fontSize: 12 }}>
+        <span style={{ fontWeight: 400, color: 'var(--fg-muted)', fontSize: 12 }}>
           {props.t('productsList.bulkEdit.untouched')}
         </span>
       ) : null}
@@ -914,7 +950,7 @@ function ScopedStatusFields(props: ScopedStatusFieldsProps): ReactNode {
           ))}
         </select>
         {props.channelMissing ? (
-          <p id={channelErrorId} role="alert" style={{ margin: 0, fontSize: 12, color: 'var(--danger-soft-fg, #991b1b)' }}>
+          <p id={channelErrorId} role="alert" style={{ margin: 0, fontSize: 12, color: 'var(--danger-soft-fg)' }}>
             {t('productsList.bulkEdit.scopedStatus.channelRequired')}
           </p>
         ) : null}
@@ -1053,8 +1089,8 @@ function BulkEditQueuedAck(props: BulkEditQueuedAckProps): ReactNode {
         style={{
           padding: 14,
           borderRadius: 8,
-          background: 'var(--info-bg, #eff6ff)',
-          border: '1px solid var(--info-border, #bfdbfe)',
+          background: 'var(--info-soft)',
+          border: '1px solid var(--info)',
           fontSize: 14,
           lineHeight: 1.5,
         }}
@@ -1100,6 +1136,8 @@ interface BulkEditSummaryProps {
   archiveAction: BulkArchiveAction | null;
   /** Set when the result is a status in one channel. */
   scope: SentScope | null;
+  /** Names and SKUs by product id; an id missing here is shown shortened. */
+  labels: Readonly<Record<string, ProductLabel>>;
   headingRef: RefObject<HTMLHeadingElement | null>;
   onClose: () => void;
   t: ReturnType<typeof useTranslation>;
@@ -1156,22 +1194,22 @@ function BulkEditSummary(props: BulkEditSummaryProps): ReactNode {
         <SummaryBadge
           label={props.t('productsList.bulkEdit.summary.succeeded')}
           count={summary.succeeded}
-          color="#16a34a"
+          color="var(--success)"
         />
         <SummaryBadge
           label={props.t('productsList.bulkEdit.summary.skipped')}
           count={summary.skipped}
-          color="#ca8a04"
+          color="var(--warn)"
         />
         <SummaryBadge
           label={props.t('productsList.bulkEdit.summary.failed')}
           count={summary.failed}
-          color="#dc2626"
+          color="var(--danger)"
         />
         <SummaryBadge
           label={props.t('productsList.bulkEdit.summary.total')}
           count={summary.total}
-          color="#475569"
+          color="var(--neutral-soft-fg)"
         />
       </div>
 
@@ -1180,7 +1218,7 @@ function BulkEditSummary(props: BulkEditSummaryProps): ReactNode {
           style={{
             maxHeight: 260,
             overflow: 'auto',
-            border: '1px solid var(--border, #e5e7eb)',
+            border: '1px solid var(--border-color)',
             borderRadius: 6,
           }}
         >
@@ -1196,12 +1234,18 @@ function BulkEditSummary(props: BulkEditSummaryProps): ReactNode {
               {reported.map((r) => (
                   <tr key={r.productId}>
                     <td>
+                      {/* A scoped-status row opens where the product's scopes are edited. */}
                       <Link
-                        to={`/catalog/products/${r.productId}`}
-                        style={{ color: 'var(--primary-color, #2563eb)' }}
+                        to={`/catalog/products/${r.productId}${props.scope ? '?tab=scopes' : ''}`}
+                        style={{ color: 'var(--primary-color)' }}
                       >
-                        {r.productId.slice(0, 8)}…
+                        {props.labels[r.productId]?.name || `${r.productId.slice(0, 8)}…`}
                       </Link>
+                      {props.labels[r.productId] ? (
+                        <div className="b2b-help font-mono" style={{ margin: 0 }}>
+                          {props.labels[r.productId]!.sku}
+                        </div>
+                      ) : null}
                     </td>
                     <td>{t(`productsList.bulkEdit.summary.${r.status}`)}</td>
                     <td>
@@ -1236,11 +1280,11 @@ function SummaryBadge(props: { label: string; count: number; color: string }): R
         flex: 1,
         padding: '10px 12px',
         borderRadius: 6,
-        background: 'var(--bg-muted, #f8fafc)',
+        background: 'var(--surface-muted)',
         borderLeft: `4px solid ${props.color}`,
       }}
     >
-      <div style={{ fontSize: 11, color: 'var(--fg-muted, #64748b)' }}>{props.label}</div>
+      <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{props.label}</div>
       <div style={{ fontSize: 20, fontWeight: 600, color: props.color }}>{props.count}</div>
     </div>
   );
