@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PromptActionTool, ToolContext } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
+import { ModuleDisabledError } from '@endora-commerce/platform/kernel';
 import { catalogPromptMutationTools, type CatalogPromptToolsDeps } from './prompt-tools.js';
 
 /**
@@ -136,6 +137,15 @@ describe('163 P-1 — assistant tools to archive and restore products', () => {
     expect(result.summary).toMatchObject({ total: 2, succeeded: 1, failed: 1 });
     expect(result.summary.failures.map((f) => f.id)).toEqual([UNKNOWN]);
     expect(h.rows.get(A)?.archivedAt).toBeInstanceOf(Date);
+  });
+
+  it('a disabled module is not a per-item failure: it fails the whole run closed', async () => {
+    const h = harness([product(A), product(B)]);
+    vi.mocked(h.commandBus.run).mockRejectedValueOnce(new ModuleDisabledError('catalog'));
+    await expect(
+      h.tool('catalog.archive_product').execute({ productIds: [A, B] }, toolCtx),
+    ).rejects.toBeInstanceOf(ModuleDisabledError);
+    expect(h.rows.get(B)?.archivedAt).toBeNull();
   });
 
   it('the preview counts the products and says only Restore brings them back; an unknown id is refused', async () => {
