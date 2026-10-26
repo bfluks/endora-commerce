@@ -2,28 +2,53 @@ import {
   forwardRef,
   useCallback,
   useEffect,
+  useId,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   type DragEvent,
   type ReactNode,
 } from 'react';
 import { GripVertical } from 'lucide-react';
-import { ApiError, apiClient, toAbsoluteAssetUrl } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
+import { GALLERY_ALT_TEXT_MAX, type AssetSummary, type AssetDetail, type GalleryChannelRoles, type GalleryItem } from '@endora-commerce/contracts';
+import { ApiError, apiClient, toAbsoluteAssetUrl, useAuth } from '@endora-commerce/admin-kit/lib';
+import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
 import { AssetPicker, TouchReorderButtons } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
-import type { AssetSummary, AssetDetail } from '@endora-commerce/contracts';
+import type { ScopeContext } from './ProductScopeEditor.js';
+import { getProductScopeContext } from '../lib/product-scopes-api.js';
+import {
+  NO_CHANNEL_ROLES,
+  ROLE_KEYS,
+  channelNameIn,
+  channelRolesChanges,
+  languagesToOffer,
+  memberChannels,
+  sameSet,
+  translationPatch,
+  withChannelHidden,
+  type ChannelRoles,
+  type TranslationMap,
+} from '../lib/media-scopes.js';
 
 // ---------------------------------------------------------------------------
 // Gallery section (T085) — admin CRUD for the Product's gallery items.
 // Foundation lacks an admin Asset upload endpoint, so for now the form
 // accepts an existing assetId; future work adds drag-and-drop on top of
 // an Assets module admin upload route.
+//
+// Feature 163 (T141, US9, FR-076, FR-077) — the list is the admin read, so an
+// image hidden in the channel the public read resolves to stays listed (the
+// public read is only where the preview URLs come from). Per member channel the
+// operator picks a role holder or "use inherited" and hides images there; alt
+// text is edited per language. Everything is staged and written by the page Save.
 // ---------------------------------------------------------------------------
 
 const GALLERY_LABELS = ['base_image', 'small_image', 'thumbnail'] as const;
 type GalleryLabel = (typeof GALLERY_LABELS)[number];
+
+type Translate = (key: string, params?: Record<string, string>) => string;
 
 interface AdminGalleryItem {
   id: string;
@@ -31,6 +56,8 @@ interface AdminGalleryItem {
   assetId: string;
   position: number;
   labels: GalleryLabel[];
+  altText: TranslationMap;
+  hiddenInChannels: string[];
   asset?: { url: string; kind: string };
 }
 
@@ -41,8 +68,14 @@ interface AdminProductImage {
   altText: string | null;
 }
 
+/** What the public product read carries that the admin read does not: the asset URLs. */
+interface PublicMedia {
+  gallery?: Array<{ id: string; asset: { id: string; kind: string; url: string } }>;
+  assets?: Array<{ id: string; kind: string; url: string; altText?: string | null }>;
+}
+
 export interface GallerySectionHandle {
-  /** Persist staged label + order edits. Called by the page-Save button. */
+  /** Persist staged label, order, alt-text, hidden-channel and channel-role edits. Called by the page-Save button. */
   flushGallery: () => Promise<void>;
 }
 
@@ -56,68 +89,90 @@ function moveGalleryItem<T>(items: T[], from: number, to: number): T[] {
   return next;
 }
 
+/** The server truth the page Save diffs against. */
+interface Baseline {
+  items: Map<string, { labels: string; altText: TranslationMap; hiddenInChannels: string[] }>;
+  order: string;
+  roles: Map<string, ChannelRoles>;
+}
+
+const EMPTY_BASELINE: Baseline = { items: new Map(), order: '', roles: new Map() };
+
 export const GallerySection = forwardRef<GallerySectionHandle, { productId: string }>(
   function GallerySection({ productId }, ref): ReactNode {
-  const t = useTranslation('catalog');
+  const t = useTranslation('catalog') as Translate;
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('catalog:write');
+  const scopeSelectId = useId();
+  const languageSelectId = useId();
   const [items, setItems] = useState<AdminGalleryItem[]>([]);
   const [images, setImages] = useState<AdminProductImage[]>([]);
+  const [context, setContext] = useState<ScopeContext | null>(null);
+  const [roles, setRoles] = useState<Map<string, ChannelRoles>>(() => new Map());
+  const [channelId, setChannelId] = useState('');
+  const [altLanguage, setAltLanguage] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const dragIdRef = useRef<string | null>(null);
-  // Server-truth snapshot (id order + labels) used to diff the staged edits
-  // that the page-Save button flushes.
-  const baselineRef = useRef<string>('');
-
-  const snapshot = (list: AdminGalleryItem[]): string =>
-    JSON.stringify(list.map((g) => ({ id: g.id, labels: [...g.labels].sort() })));
+  // Server-truth snapshot used to diff the staged edits that the page-Save button flushes.
+  const baselineRef = useRef<Baseline>(EMPTY_BASELINE);
 
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true);
     setError(null);
     try {
-      // Public PDP carries the resolved gallery (with asset urls) so
-      // admins see the same shape customers do; the admin GET returns
-      // bare ids without urls. The PDP also carries the product's flat
-      // `assets` (legacy product_assets) — the storefront renders those
-      // when the label-aware gallery is empty, so we surface them here
-      // too, otherwise a product whose images live on product_assets
-      // looks empty in the admin while showing fine on the storefront.
-      const res = await apiClient.get<{
-        data: {
-          gallery?: Array<{
-            id: string;
-            position: number;
-            labels: GalleryLabel[];
-            asset: { id: string; kind: string; url: string };
-          }>;
-          assets?: Array<{
-            id: string;
-            kind: string;
-            url: string;
-            altText?: string | null;
-          }>;
-        };
-      }>(`/api/v1/catalog/products/${productId}`);
-      const gallery = res.data.gallery ?? [];
-      const mapped = gallery
+      // The admin read is the list (every item, with its alt text and hidden channels).
+      // The public read only lends the asset URLs — it resolves one channel, so an image
+      // hidden there has no preview here — and the product's flat `assets` (legacy
+      // product_assets), which the storefront renders when the gallery is empty.
+      const [galleryRes, rolesRes, scope, publicRes] = await Promise.all([
+        apiClient.get<{ data: GalleryItem[] }>(`/api/v1/admin/catalog/products/${productId}/gallery`),
+        apiClient.get<{ data: GalleryChannelRoles[] }>(
+          `/api/v1/admin/catalog/products/${productId}/gallery/channel-roles`,
+        ),
+        getProductScopeContext(productId).catch(() => null),
+        apiClient
+          .get<{ data: PublicMedia }>(`/api/v1/catalog/products/${productId}`)
+          .catch(() => ({ data: {} as PublicMedia })),
+      ]);
+      const publicMedia = publicRes.data ?? {};
+      const urlByItem = new Map((publicMedia.gallery ?? []).map((g) => [g.id, g.asset]));
+      const urlByAsset = new Map((publicMedia.assets ?? []).map((a) => [a.id, a]));
+      const mapped: AdminGalleryItem[] = (galleryRes.data ?? [])
         .slice()
         .sort((a, b) => a.position - b.position)
-        .map((g) => ({
-          id: g.id,
-          productId,
-          assetId: g.asset.id,
-          position: g.position,
-          labels: g.labels,
-          asset: { url: g.asset.url, kind: g.asset.kind },
-        }));
+        .map((g) => {
+          const asset = urlByItem.get(g.id) ?? urlByAsset.get(g.assetId);
+          return {
+            id: g.id,
+            productId,
+            assetId: g.assetId,
+            position: g.position,
+            labels: g.labels as GalleryLabel[],
+            altText: { ...(g.altText ?? {}) },
+            hiddenInChannels: [...(g.hiddenInChannels ?? [])].sort(),
+            ...(asset ? { asset: { url: asset.url, kind: asset.kind } } : {}),
+          };
+        });
+      const savedRoles = new Map((rolesRes.data ?? []).map((r) => [r.channelId, { ...NO_CHANNEL_ROLES, ...r.roles }]));
       setItems(mapped);
-      baselineRef.current = snapshot(mapped);
-      const assets = res.data.assets ?? [];
+      setRoles(new Map(savedRoles));
+      setContext(scope);
+      baselineRef.current = {
+        items: new Map(
+          mapped.map((it) => [
+            it.id,
+            { labels: [...it.labels].sort().join(','), altText: it.altText, hiddenInChannels: it.hiddenInChannels },
+          ]),
+        ),
+        order: mapped.map((it) => it.id).join(','),
+        roles: savedRoles,
+      };
       setImages(
-        assets
+        (publicMedia.assets ?? [])
           .filter((a) => a.kind === 'image' || a.kind === 'video')
           .map((a) => ({
             id: a.id,
@@ -137,6 +192,23 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
     void refresh();
   }, [refresh]);
 
+  const channels = memberChannels(context);
+  const channel = channels.find((c) => c.id === channelId) ?? null;
+  const languages = useMemo(
+    () => languagesToOffer(context, ...items.map((it) => it.altText)),
+    [context, items],
+  );
+  const language = languages.includes(altLanguage) ? altLanguage : (languages[0] ?? '');
+  const itemName = useCallback(
+    (itemId: string): string =>
+      t('productEditor.gallery.itemName', { n: String(items.findIndex((it) => it.id === itemId) + 1) }),
+    [items, t],
+  );
+  const channelName = useCallback(
+    (id: string): string => channelNameIn(context, id, t('productEditor.mediaScopes.unknownChannel')),
+    [context, t],
+  );
+
   // --- Staged label edits: each label lives on at most one item; assigning it
   //     to one item strips it from every other (radio semantics). Persisted on
   //     page Save, so no per-row Save button and no "already taken" error. ---
@@ -153,6 +225,32 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
   const clearLabel = useCallback((label: GalleryLabel): void => {
     setInfo(null);
     setItems((prev) => prev.map((it) => ({ ...it, labels: it.labels.filter((l) => l !== label) })));
+  }, []);
+
+  // --- Staged per-channel and per-language edits (feature 163). ---
+  const setChannelRole = useCallback((forChannel: string, label: GalleryLabel, itemId: string | null): void => {
+    setInfo(null);
+    setRoles((prev) => {
+      const next = new Map(prev);
+      next.set(forChannel, { ...(prev.get(forChannel) ?? NO_CHANNEL_ROLES), [ROLE_KEYS[label]]: itemId });
+      return next;
+    });
+  }, []);
+
+  const setHidden = useCallback((itemId: string, forChannel: string, hidden: boolean): void => {
+    setInfo(null);
+    setItems((prev) =>
+      prev.map((it) =>
+        it.id === itemId ? { ...it, hiddenInChannels: withChannelHidden(it.hiddenInChannels, forChannel, hidden) } : it,
+      ),
+    );
+  }, []);
+
+  const setAltText = useCallback((itemId: string, forLanguage: string, text: string): void => {
+    setInfo(null);
+    setItems((prev) =>
+      prev.map((it) => (it.id === itemId ? { ...it, altText: { ...it.altText, [forLanguage]: text } } : it)),
+    );
   }, []);
 
   // --- Staged reorder (array order === display order). ---
@@ -208,35 +306,64 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
     [productId, refresh, t],
   );
 
-  // --- Page-Save hook: flush staged label + order edits. Labels are patched
-  //     with `replace=true` so reassigning a label moves it atomically. ---
+  // --- Page-Save hook: flush the staged edits. Labels are patched with
+  //     `replace=true` so reassigning a label moves it atomically; alt text and
+  //     hidden channels go in one PATCH per item (`product.media.update`); the
+  //     channel roles in one PUT per changed channel, changed roles only. ---
   const flushGallery = useCallback(async (): Promise<void> => {
-    const baseline = JSON.parse(baselineRef.current || '[]') as Array<{ id: string; labels: string[] }>;
-    const baseLabels = new Map(baseline.map((b) => [b.id, [...b.labels].sort().join(',')]));
-    const changed = items.filter(
-      (it) => baseLabels.get(it.id) !== [...it.labels].sort().join(','),
-    );
-    for (const it of changed) {
-      await apiClient.patch(
-        `/api/v1/admin/catalog/products/${productId}/gallery/${it.id}?replace=true`,
-        { labels: it.labels },
-      );
+    const baseline = baselineRef.current;
+    let wrote = false;
+    for (const it of items) {
+      const before = baseline.items.get(it.id);
+      if (!before) continue;
+      if (before.labels !== [...it.labels].sort().join(',')) {
+        await apiClient.patch(
+          `/api/v1/admin/catalog/products/${productId}/gallery/${it.id}?replace=true`,
+          { labels: it.labels },
+        );
+        wrote = true;
+      }
+      const altText = translationPatch(before.altText, it.altText);
+      const hiddenChanged = !sameSet(before.hiddenInChannels, it.hiddenInChannels);
+      if (altText || hiddenChanged) {
+        await apiClient.patch(`/api/v1/admin/catalog/products/${productId}/gallery/${it.id}`, {
+          ...(altText ? { altText } : {}),
+          ...(hiddenChanged ? { hiddenInChannels: it.hiddenInChannels } : {}),
+        });
+        wrote = true;
+      }
     }
-    const baseOrder = baseline.map((b) => b.id).join(',');
     const curOrder = items.map((it) => it.id).join(',');
-    if (items.length > 0 && curOrder !== baseOrder) {
+    if (items.length > 0 && curOrder !== baseline.order) {
       await apiClient.put(`/api/v1/admin/catalog/products/${productId}/gallery/order`, {
         orderedGalleryItemIds: items.map((it) => it.id),
       });
+      wrote = true;
     }
-    if (changed.length > 0 || curOrder !== baseOrder) {
+    for (const [forChannel, draft] of roles) {
+      const changes = channelRolesChanges(baseline.roles.get(forChannel) ?? NO_CHANNEL_ROLES, draft);
+      if (!changes) continue;
+      await apiClient.put(`/api/v1/admin/catalog/products/${productId}/gallery/channel-roles`, {
+        channelId: forChannel,
+        roles: changes,
+      });
+      wrote = true;
+    }
+    if (wrote) {
       await refresh();
     }
-  }, [items, productId, refresh]);
+  }, [items, productId, refresh, roles]);
 
   useImperativeHandle(ref, () => ({ flushGallery }), [flushGallery]);
 
   const disabled = busy || loading;
+  const scopeDisabled = disabled || !canWrite;
+
+  /** The item holding a role globally (the staged labels), named for "use inherited". */
+  const globalHolderName = (label: GalleryLabel): string => {
+    const holder = items.find((it) => it.labels.includes(label));
+    return holder ? itemName(holder.id) : t('productEditor.gallery.channelRole.none');
+  };
 
   return (
     <Card className="mt-4">
@@ -289,17 +416,111 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
           <p className="text-sm text-muted-foreground">{t('productEditor.gallery.empty')}</p>
         ) : (
           <>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-1">
+                <Label htmlFor={scopeSelectId}>{t('productEditor.gallery.scope.label')}</Label>
+                <Select
+                  id={scopeSelectId}
+                  value={channel ? channel.id : ''}
+                  disabled={disabled}
+                  onChange={(e): void => setChannelId(e.target.value)}
+                >
+                  <option value="">{t('productEditor.gallery.scope.global')}</option>
+                  {channels.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {channels.length === 0
+                    ? t('productEditor.gallery.scope.noChannels')
+                    : t('productEditor.gallery.scope.hint')}
+                </p>
+              </div>
+              {languages.length > 0 ? (
+                <div className="space-y-1">
+                  <Label htmlFor={languageSelectId}>{t('productEditor.gallery.alt.language')}</Label>
+                  <Select
+                    id={languageSelectId}
+                    value={language}
+                    disabled={disabled}
+                    onChange={(e): void => setAltLanguage(e.target.value)}
+                  >
+                    {languages.map((code) => (
+                      <option key={code} value={code}>
+                        {code.toUpperCase()}
+                      </option>
+                    ))}
+                  </Select>
+                  <p className="text-xs text-muted-foreground">{t('productEditor.gallery.alt.hint')}</p>
+                </div>
+              ) : null}
+            </div>
+
+            {channel ? (
+              <div className="grid gap-3 md:grid-cols-3" role="group" aria-label={channel.name}>
+                {GALLERY_LABELS.map((label) => {
+                  const key = ROLE_KEYS[label];
+                  const value = roles.get(channel.id)?.[key] ?? '';
+                  const selectId = `${scopeSelectId}-${label}`;
+                  const options = items.filter(
+                    (it) => it.id === value || !it.hiddenInChannels.includes(channel.id),
+                  );
+                  return (
+                    <div key={label} className="space-y-1">
+                      <Label htmlFor={selectId}>
+                        {t('productEditor.gallery.channelRole.label', {
+                          role: t(`productEditor.gallery.label.${label}`),
+                          channel: channel.name,
+                        })}
+                      </Label>
+                      <Select
+                        id={selectId}
+                        value={value}
+                        disabled={scopeDisabled}
+                        onChange={(e): void => setChannelRole(channel.id, label, e.target.value || null)}
+                      >
+                        <option value="">
+                          {t('productEditor.gallery.channelRole.inherited', { item: globalHolderName(label) })}
+                        </option>
+                        {options.map((it) => (
+                          <option key={it.id} value={it.id}>
+                            {itemName(it.id)}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+
             <p className="text-xs text-muted-foreground">{t('productEditor.gallery.dragHint')}</p>
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-8" />
                   <TableHead>{t('productEditor.gallery.column.preview')}</TableHead>
-                  {GALLERY_LABELS.map((label) => (
-                    <TableHead key={label} className="text-center">
-                      {t(`productEditor.gallery.label.${label}`)}
+                  {channel ? (
+                    <TableHead className="text-center">
+                      {t('productEditor.gallery.column.hidden', { channel: channel.name })}
                     </TableHead>
-                  ))}
+                  ) : (
+                    <>
+                      {GALLERY_LABELS.map((label) => (
+                        <TableHead key={label} className="text-center">
+                          {t(`productEditor.gallery.label.${label}`)}
+                        </TableHead>
+                      ))}
+                      <TableHead>{t('productEditor.gallery.column.hiddenIn')}</TableHead>
+                    </>
+                  )}
+                  {language ? (
+                    <TableHead>
+                      {t('productEditor.gallery.column.altText', { language: language.toUpperCase() })}
+                    </TableHead>
+                  ) : null}
                   <TableHead>{t('productEditor.gallery.column.assetId')}</TableHead>
                   <TableHead className="w-[1%] whitespace-nowrap text-right">
                     {t('productEditor.gallery.column.actions')}
@@ -311,11 +532,18 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
                   <GalleryRow
                     key={item.id}
                     item={item}
+                    name={itemName(item.id)}
                     index={index}
                     total={items.length}
                     disabled={disabled}
+                    scopeDisabled={scopeDisabled}
+                    channel={channel}
+                    language={language}
+                    channelName={channelName}
                     onAssignLabel={assignLabel}
                     onClearLabel={clearLabel}
+                    onSetHidden={setHidden}
+                    onSetAltText={setAltText}
                     onMove={moveItem}
                     onDragStart={(id) => {
                       dragIdRef.current = id;
@@ -367,11 +595,18 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
 
 function GalleryRow({
   item,
+  name,
   index,
   total,
   disabled,
+  scopeDisabled,
+  channel,
+  language,
+  channelName,
   onAssignLabel,
   onClearLabel,
+  onSetHidden,
+  onSetAltText,
   onMove,
   onDragStart,
   onDragOver,
@@ -381,11 +616,20 @@ function GalleryRow({
   onDelete,
 }: {
   item: AdminGalleryItem;
+  name: string;
   index: number;
   total: number;
   disabled: boolean;
+  scopeDisabled: boolean;
+  /** The channel being edited; `null` = the global roles. */
+  channel: { id: string; name: string } | null;
+  /** The alt-text language being edited; `''` = none to offer. */
+  language: string;
+  channelName: (channelId: string) => string;
   onAssignLabel: (label: GalleryLabel, itemId: string) => void;
   onClearLabel: (label: GalleryLabel) => void;
+  onSetHidden: (itemId: string, channelId: string, hidden: boolean) => void;
+  onSetAltText: (itemId: string, language: string, text: string) => void;
   onMove: (from: number, to: number) => void;
   onDragStart: (itemId: string) => void;
   onDragOver: (event: DragEvent<HTMLTableRowElement>) => void;
@@ -394,7 +638,7 @@ function GalleryRow({
   onPreview: (url: string) => void;
   onDelete: (id: string) => void;
 }): ReactNode {
-  const t = useTranslation('catalog');
+  const t = useTranslation('catalog') as Translate;
   const url = item.asset?.url ? toAbsoluteAssetUrl(item.asset.url) : null;
 
   return (
@@ -415,41 +659,75 @@ function GalleryRow({
         </span>
       </TableCell>
       <TableCell>
-        {url ? (
-          item.asset?.kind === 'video' ? (
-            <video src={url} className="h-12 w-12 rounded border object-cover" muted />
+        <div className="flex items-center gap-2">
+          {url ? (
+            item.asset?.kind === 'video' ? (
+              <video src={url} className="h-12 w-12 rounded border object-cover" muted />
+            ) : (
+              <button
+                type="button"
+                className="block rounded border p-0"
+                title={t('productEditor.gallery.preview.open')}
+                onClick={() => onPreview(url)}
+              >
+                <img src={url} alt="" className="h-12 w-12 rounded object-cover" />
+              </button>
+            )
           ) : (
-            <button
-              type="button"
-              className="block rounded border p-0"
-              title={t('productEditor.gallery.preview.open')}
-              onClick={() => onPreview(url)}
-            >
-              <img src={url} alt="" className="h-12 w-12 rounded object-cover" />
-            </button>
-          )
-        ) : (
-          <span className="text-muted-foreground text-xs">—</span>
-        )}
+            <span className="text-muted-foreground text-xs" aria-hidden>
+              —
+            </span>
+          )}
+          <span className="text-sm">{name}</span>
+        </div>
       </TableCell>
-      {GALLERY_LABELS.map((label) => {
-        const checked = item.labels.includes(label);
-        return (
-          <TableCell key={label} className="text-center">
-            <input
-              type="radio"
-              name={`gallery-label-${label}`}
-              checked={checked}
-              disabled={disabled}
-              aria-label={t(`productEditor.gallery.label.${label}`)}
-              onChange={() => {}}
-              onClick={() =>
-                checked ? onClearLabel(label) : onAssignLabel(label, item.id)
-              }
-            />
+      {channel ? (
+        <TableCell className="text-center">
+          <input
+            type="checkbox"
+            checked={item.hiddenInChannels.includes(channel.id)}
+            disabled={scopeDisabled}
+            aria-label={t('productEditor.gallery.hide.label', { item: name, channel: channel.name })}
+            onChange={(e) => onSetHidden(item.id, channel.id, e.target.checked)}
+          />
+        </TableCell>
+      ) : (
+        <>
+          {GALLERY_LABELS.map((label) => {
+            const checked = item.labels.includes(label);
+            return (
+              <TableCell key={label} className="text-center">
+                <input
+                  type="radio"
+                  name={`gallery-label-${label}`}
+                  checked={checked}
+                  disabled={disabled}
+                  aria-label={t(`productEditor.gallery.label.${label}`)}
+                  onChange={() => {}}
+                  onClick={() =>
+                    checked ? onClearLabel(label) : onAssignLabel(label, item.id)
+                  }
+                />
+              </TableCell>
+            );
+          })}
+          <TableCell className="text-xs text-muted-foreground">
+            {item.hiddenInChannels.length > 0 ? item.hiddenInChannels.map(channelName).join(', ') : '—'}
           </TableCell>
-        );
-      })}
+        </>
+      )}
+      {language ? (
+        <TableCell>
+          <Input
+            value={item.altText[language] ?? ''}
+            disabled={scopeDisabled}
+            maxLength={GALLERY_ALT_TEXT_MAX}
+            placeholder={t('productEditor.gallery.alt.placeholder')}
+            aria-label={t('productEditor.gallery.alt.label', { item: name, language: language.toUpperCase() })}
+            onChange={(e) => onSetAltText(item.id, language, e.target.value)}
+          />
+        </TableCell>
+      ) : null}
       <TableCell className="font-mono text-xs">{item.assetId.slice(0, 8)}…</TableCell>
       <TableCell className="space-x-2 whitespace-nowrap text-right">
         <TouchReorderButtons
@@ -535,4 +813,5 @@ function CreateGalleryItemInline({
     </div>
   );
 }
+
 
