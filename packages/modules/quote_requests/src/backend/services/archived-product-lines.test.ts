@@ -8,8 +8,11 @@ import { RfqService } from './rfq-service.js';
  * line whose product is archived, on every path that names products: the
  * buyer's create (and so cart conversion, quick order, shopping lists and order
  * clone, which all come through it), and the operator's create on a customer's
- * behalf. The refusal is the one each path already gives an unknown product —
- * the whole request answers `404 PRODUCT_NOT_FOUND` before anything is written.
+ * behalf. On the buyer's paths the refusal is the one each already gives an
+ * unknown product — the whole request answers `404 PRODUCT_NOT_FOUND` before
+ * anything is written, so nothing about the product is disclosed. The operator
+ * is told why (owner decision P-3b = A): `409 PRODUCT_ARCHIVED`, catalog's code,
+ * still before anything is written; an id that does not exist stays a 404.
  *
  * Fast and service-free: the services are built over the few collaborators the
  * refusal reaches, and every collaborator past it is a spy that must not run.
@@ -51,7 +54,7 @@ async function refusalOf(promise: Promise<unknown>): Promise<{ statusCode: numbe
 }
 
 describe('163 P-3 — a quote request refuses an archived product', () => {
-  it('the operator’s create on a customer’s behalf answers 404 PRODUCT_NOT_FOUND before anything is created', async () => {
+  it('the operator’s create on a customer’s behalf answers 409 PRODUCT_ARCHIVED before anything is created', async () => {
     const create = vi.fn();
     const generateBusinessId = vi.fn();
     const service = new RfqAdminService({
@@ -74,9 +77,27 @@ describe('163 P-3 — a quote request refuses an archived product', () => {
         } as never,
       ),
     );
-    expect(refusal).toEqual({ statusCode: 404, code: ERROR_CODES.PRODUCT_NOT_FOUND });
+    expect(refusal).toEqual({ statusCode: 409, code: ERROR_CODES.PRODUCT_ARCHIVED });
     expect(generateBusinessId).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it('the operator’s create still answers 404 PRODUCT_NOT_FOUND for an id that does not exist', async () => {
+    const generateBusinessId = vi.fn();
+    const service = new RfqAdminService({
+      emFactory: () => ({}),
+      customerAccounts: { findById: async () => ({ id: CUSTOMER_ID, organizationId: ORG_ID }) },
+      catalogProducts: { findByIds: async () => [] },
+      rfqService: { generateBusinessId },
+    } as never);
+    const refusal = await refusalOf(
+      service.createOnBehalf(
+        { adminUserId: 'admin-1', isPlatformAdmin: true, roleLabel: 'Platform administrator' },
+        { organizationId: ORG_ID, customerAccountId: CUSTOMER_ID, items: [{ productId: ARCHIVED_ID, quantity: 1 }] } as never,
+      ),
+    );
+    expect(refusal).toEqual({ statusCode: 404, code: ERROR_CODES.PRODUCT_NOT_FOUND });
+    expect(generateBusinessId).not.toHaveBeenCalled();
   });
 
   it('the operator’s create still accepts a request whose products are all live', async () => {
