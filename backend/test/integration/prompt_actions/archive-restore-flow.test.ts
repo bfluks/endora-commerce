@@ -7,7 +7,7 @@ import {
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
 import { ScriptedLlm, seedPromptActionsSettings } from '../../helpers/prompt-actions.js';
-import { Product, PromptActionRequest } from '../../helpers/package-entities.js';
+import { Product } from '../../helpers/package-entities.js';
 import { TEST_ADMIN_ID } from '../../helpers/test-actors.js';
 
 /**
@@ -58,9 +58,10 @@ describe('163 P-1 — assistant Archive / Restore [integration]', () => {
     delete process.env['SETTINGS_SECRET_ENCRYPTION_KEY'];
   });
 
-  beforeEach(async () => {
+  // No wipe of prompt_action_requests (issue #166): every assertion reads the
+  // request this file created, by id.
+  beforeEach(() => {
     llm.reset();
-    await h.em().nativeDelete(PromptActionRequest, {});
   });
 
   const submit = async (prompt: string) => {
