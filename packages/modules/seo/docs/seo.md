@@ -579,9 +579,10 @@ other than the channel's default.
 
 The public route (`GET /catalog/sitemap.xml`) returns the cached payload;
 when the row is older than `staleAfterMs` (default 6 h) it regenerates
-inline. A product change that alters what a sitemap lists — its status in a channel or language,
-its publication window (including the moment a window opens or closes), its audience or its URL
-keys — marks every channel's cached sitemap stale, so the next request rebuilds it. A
+inline. A product change that alters what a sitemap lists — its status (global, in a channel or
+in a language), its archiving, its publication window (including the moment a window opens or
+closes), its audience (global or per channel) or its URL keys — marks every channel's cached
+sitemap stale, so the next request rebuilds it. A
 `Cache-Control: public, max-age=3600` header is set on the
 response so well-behaved CDNs hold the payload for an hour.
 
@@ -601,6 +602,8 @@ ever exposed to crawlers.
 `SeoMetaOverride` (entityType, entityId, salesChannelId?, locale?, title?, description?,
 ogTitle?, ogDescription?, ogImageUrl?; at least one of `salesChannelId` and `locale`), `SitemapCache` (singleton key,
 payload, urlCount, byteSize, generatedAt).
+An override's `ogImageUrl` is an `http(s)` URL or a path starting with a single `/`; any other
+value is refused with `400 VALIDATION_FAILED`.
 
 ## Extension points
 
