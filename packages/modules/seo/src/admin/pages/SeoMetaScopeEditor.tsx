@@ -185,6 +185,11 @@ export function SeoMetaScopeEditor({ entityType, entityId }: SeoMetaScopeEditorP
   /** A product's scopes are offered once its channels are known (or known to be unreadable). */
   const ready = !isProduct || channels !== null || channelsFailed;
 
+  // Read through a ref: an admin-language switch must not re-run the load effect and drop
+  // an unsaved draft without the discard question.
+  const tCoreRef = useRef(tCore);
+  tCoreRef.current = tCore;
+
   const load = useCallback(
     async (target: Scope): Promise<void> => {
       const seq = ++loadSeq.current;
@@ -197,13 +202,13 @@ export function SeoMetaScopeEditor({ entityType, entityId }: SeoMetaScopeEditorP
         setDraft(draftOf(res.data.override));
       } catch (err) {
         if (seq !== loadSeq.current) return;
-        setError(err instanceof ApiError ? err.envelope.error.message : tCore('seo.meta.error.load'));
+        setError(err instanceof ApiError ? err.envelope.error.message : tCoreRef.current('seo.meta.error.load'));
         setMeta(null);
       } finally {
         if (seq === loadSeq.current) setBusy(false);
       }
     },
-    [metaPath, tCore],
+    [metaPath],
   );
 
   // A scope loads as soon as it is selected (D5).
