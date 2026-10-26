@@ -12,6 +12,7 @@ import { effectiveState } from '@endora-commerce/platform/kernel';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import { applyUndo, type RevertRecord } from '@endora-commerce/platform/commands';
+import { withSystemScopeActingFor } from '@endora-commerce/platform/tenancy';
 import { Product } from '../entities/product.entity.js';
 import type { CatalogEventBus } from './catalog-admin.service.js';
 import {
@@ -45,6 +46,9 @@ import { readScopedStatuses, restoreScopedStatus, type StatusScope } from './pro
  *     in-app bell notification and an email.
  *   - `list()` / `get()` back the "Bulk actions" admin page.
  */
+
+/** The requester the bulk-update route records when it resolved no admin (`routes.admin.ts`). */
+const NO_REQUESTER = '00000000-0000-0000-0000-000000000000';
 
 /** Per-product outcomes are capped on the row so a huge run can't bloat it. */
 const MAX_PERSISTED_RESULTS = 1000;
@@ -375,7 +379,15 @@ export class BulkOperationService {
         : null;
 
     try {
-      const result = await this.bulkUpdateService.bulkUpdate(
+      // Feature 163 (S-W2) — every per-product Command (Archive / Restore, a scope
+      // write) runs acting for the admin who queued the operation, so its audit row
+      // names them as the inline path's does; the id is the one the route recorded
+      // server-side at `create()`. A run nobody is recorded as requesting stays system.
+      const actingFor = <T>(fn: () => Promise<T>): Promise<T> =>
+        op.requestedByAdminUserId && op.requestedByAdminUserId !== NO_REQUESTER
+          ? withSystemScopeActingFor(op.requestedByAdminUserId, `catalog bulk operation ${id} for its requester`, fn)
+          : fn();
+      const result = await actingFor(() => this.bulkUpdateService.bulkUpdate(
         req,
         { actorAdminUserId: op.requestedByAdminUserId },
         {
@@ -393,7 +405,7 @@ export class BulkOperationService {
             );
           },
         },
-      );
+      ));
 
       logs.push(
         logEntry(
