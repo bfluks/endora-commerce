@@ -24,6 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import { ProductsBulkEditDialog } from '../components/ProductsBulkEditDialog.js';
+import { resolveProductName, type ProductLabel } from '../lib/product-labels.js';
 import { ArchivedPill, ProductStatusPill } from '../components/ProductStatusPills.js';
 import {
   BULK_EDIT_HARD_MAX,
@@ -163,6 +164,14 @@ export function ProductsList(): ReactNode {
   const [bulkInitialStep, setBulkInitialStep] = useState<'form' | 'confirmArchive'>('form');
   const [deleting, setDeleting] = useState(false);
   const [bulkEditProductIds, setBulkEditProductIds] = useState<string[]>([]);
+  // D3 — the names and SKUs of the selected rows on this page, so the dialog's result
+  // names them without a lookup; a "select all N" selection's other rows are looked up there.
+  const bulkEditLabels = useMemo(() => {
+    const wanted = new Set(bulkEditProductIds);
+    const labels: Record<string, ProductLabel> = {};
+    for (const r of rows) if (wanted.has(r.id)) labels[r.id] = { name: resolveProductName(r.name), sku: r.sku };
+    return labels;
+  }, [bulkEditProductIds, rows]);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [resolvingSelection, setResolvingSelection] = useState(false);
   const { pageSize, setPageSize } = usePageSizePreference('catalog-products');
@@ -692,6 +701,7 @@ export function ProductsList(): ReactNode {
         {bulkEditOpen && bulkEditProductIds.length > 0 ? (
           <ProductsBulkEditDialog
             productIds={bulkEditProductIds}
+            productLabels={bulkEditLabels}
             selectionScope={selection.mode === 'collection' ? 'collection' : 'page'}
             // One archive action, the one that changes something: the Archived tab
             // holds only archived products, every other tab only products that are

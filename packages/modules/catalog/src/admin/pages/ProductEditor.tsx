@@ -7,7 +7,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Archive,
   ArchiveRestore,
@@ -68,6 +68,23 @@ const PRODUCT_TYPES = [
 ] as const;
 const VISIBILITIES = ['public', 'logged_in_only', 'organization_restricted'] as const;
 const STATUSES = ['active', 'inactive'] as const;
+
+/**
+ * The tabs `?tab=` may open (review D3: the bulk scoped-status result links to
+ * `?tab=scopes`) — those every saved product shows. A type-dependent or zone-counted
+ * tab, or an unknown value, opens Details.
+ */
+const LINKABLE_TABS = new Set([
+  'details',
+  'attributes',
+  'pricing',
+  'media',
+  'inventory',
+  'attachments',
+  'links',
+  'scopes',
+  'seo',
+]);
 
 interface AdminProduct {
   id: string;
@@ -163,7 +180,11 @@ export function ProductEditor(): ReactNode {
     'pl-PL': '',
   });
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState<string>('details');
+  const [searchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const linked = searchParams.get('tab');
+    return !isNew && linked !== null && LINKABLE_TABS.has(linked) ? linked : 'details';
+  });
   // Feature 002 (T034) — Attribute Set selector
   const [attributeSets, setAttributeSets] = useState<AdminAttributeSet[]>([]);
   const [attributeSetId, setAttributeSetId] = useState<string>('');
