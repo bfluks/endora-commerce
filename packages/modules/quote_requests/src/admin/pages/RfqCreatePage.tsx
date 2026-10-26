@@ -208,10 +208,15 @@ function CustomerPicker(props: {
   );
 }
 
-/** The quote request's selectability rules for the picker and the quick search (Clarifications). */
+/**
+ * The quote request's selectability rules for the picker and the quick search (Clarifications).
+ * An archived product cannot be quoted (feature 163, owner decision P-3 → A): the browser offers
+ * no Archived tab and the quick search does not look among archived products.
+ */
 const RFQ_PRODUCT_RULES: ProductBrowserRules = {
   initialStatus: 'active',
   blockedTypes: ['grouped', 'bundle'],
+  blockArchived: true,
 };
 
 /** Feature 159 (research N-31) — nothing is "already added": a product may be a line twice. */
@@ -554,7 +559,6 @@ export function RfqCreatePage(): ReactNode {
                 onChange={(): void => {}}
                 onPickProduct={(item): void => appendLines([item])}
                 rules={RFQ_PRODUCT_RULES}
-                includeArchived
                 placeholder={t('rfqCreate.placeholder.product')}
               />
             </div>
