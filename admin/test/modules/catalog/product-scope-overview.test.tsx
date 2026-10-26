@@ -212,6 +212,17 @@ async function renderOverview(
   return screen.findByRole('table', { name: /scope overview/i });
 }
 
+/** The row's "whole channel" cell — where a channel's own values are listed and reset (D11). */
+function channelValuesOf(table: HTMLElement, channel: RegExp): HTMLElement {
+  const row = within(table).getByRole('rowheader', { name: channel }).closest('tr') as HTMLElement;
+  return within(row).getAllByRole('cell')[0] as HTMLElement;
+}
+
+/** The "every channel" row's cell of one language — where a language's own values are listed and reset (D11). */
+function languageValuesOf(table: HTMLElement, language: RegExp): HTMLElement {
+  return cellOf(table, /^every channel/i, language);
+}
+
 function cellOf(table: HTMLElement, channel: RegExp, language: RegExp): HTMLElement {
   const row = within(table).getByRole('rowheader', { name: channel }).closest('tr') as HTMLElement;
   const headers = within(table).getAllByRole('columnheader');
@@ -266,6 +277,10 @@ describe('the owning endpoint of a reset (pure)', () => {
       kind: 'urlKeys',
       body: { languageKeys: [{ languageCode: 'en', key: null }] },
     });
+  });
+
+  it('a URL key has no channel-wide value, so a channel-level reset is none (C-7)', () => {
+    expect(resetRequestFor({ field: 'urlKey', level: 'channel', channelId: B2B, languageCode: '' })).toBeNull();
   });
 
   it('every orphan kind has a delete (FR-015)', () => {
@@ -342,9 +357,23 @@ describe('ProductScopeOverview (US4)', () => {
 
   it('names the channel row’s and the language column’s overrides', async () => {
     const table = await renderOverview();
-    expect(within(table).getByRole('rowheader', { name: /B2C shop/ }).textContent).toMatch(/Status/);
-    expect(within(table).getByRole('columnheader', { name: /^DE/ }).textContent).toMatch(/Description/);
-    expect(within(table).getByRole('columnheader', { name: /^EN/ }).textContent).toMatch(/URL key/);
+    expect(channelValuesOf(table, /B2C shop/).textContent).toMatch(/Status/);
+    expect(languageValuesOf(table, /^DE/).textContent).toMatch(/Description/);
+    expect(languageValuesOf(table, /^EN/).textContent).toMatch(/URL key/);
+  });
+
+  it('keeps every reset out of the table’s headers, in a focusable, named scroll region (D11)', async () => {
+    const table = await renderOverview();
+    expect(table.querySelectorAll('th button')).toHaveLength(0);
+    const region = screen.getByRole('region', { name: /scope overview table/i });
+    expect(region).toContainElement(table);
+    expect(region).toHaveAttribute('tabindex', '0');
+  });
+
+  it('says it is loading in a live region (D11)', async () => {
+    getSpy.mockImplementation(() => new Promise(() => undefined));
+    render(wrap(<ProductScopeOverview productId={PRODUCT_ID} />));
+    expect(await screen.findByRole('status')).toHaveTextContent(/loading the scope overview/i);
   });
 
   it('lists what a cell is missing by name, with an accessible marker; nothing for [] or absent (FR-041)', async () => {
@@ -363,6 +392,11 @@ describe('ProductScopeOverview (US4)', () => {
     const deCell = cellOf(table, /B2B shop/, /^DE/);
     const loadsBefore = getSpy.mock.calls.filter(([p]) => p === OVERVIEW_PATH).length;
     await user.click(within(deCell).getByRole('button', { name: 'Reset Name in B2B shop · DE to inherited' }));
+    // A text value asks first (UX-1 = A), naming the field, the scope and what happens.
+    const dialog = await screen.findByRole('dialog', { name: /Name.*B2B shop · DE/ });
+    expect(dialog.textContent).toMatch(/inherited value applies/i);
+    expect(patchSpy).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: /^reset$/i }));
     await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
     expect(patchSpy).toHaveBeenCalledWith(`${BASE}/value-overrides`, {
       upserts: [],
@@ -372,13 +406,27 @@ describe('ProductScopeOverview (US4)', () => {
       expect(getSpy.mock.calls.filter(([p]) => p === OVERVIEW_PATH).length).toBeGreaterThan(loadsBefore),
     );
     expect(await screen.findByRole('status')).toHaveTextContent(/reset to inherited/i);
+    // D11b — the button went with the value; focus returns to the overview's heading.
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: /scope overview/i })));
+  });
+
+  it('a text value’s reset is not sent when the dialog is cancelled (UX-1 = A)', async () => {
+    const user = userEvent.setup();
+    const table = await renderOverview();
+    await user.click(within(cellOf(table, /B2B shop/, /^DE/)).getByRole('button', { name: 'Reset Name in B2B shop · DE to inherited' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(patchSpy).not.toHaveBeenCalled();
   });
 
   it('a channel-level field resets once, from the channel row, through the scopes PATCH', async () => {
     const user = userEvent.setup();
     const table = await renderOverview();
-    const row = within(table).getByRole('rowheader', { name: /B2B shop/ });
-    await user.click(within(row).getByRole('button', { name: 'Reset Publication window in B2B shop to inherited' }));
+    // Not a text value: one click, no dialog (UX-1 = A).
+    await user.click(
+      within(channelValuesOf(table, /B2B shop/)).getByRole('button', { name: 'Reset Publication window in B2B shop to inherited' }),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
     await waitFor(() =>
       expect(patchSpy).toHaveBeenCalledWith(`${BASE}/scopes`, { channels: [{ channelId: B2B, window: null }] }),
     );
@@ -386,8 +434,7 @@ describe('ProductScopeOverview (US4)', () => {
 
   it('offers no reset for a value the language itself holds (the product’s own description in German)', async () => {
     const table = await renderOverview();
-    const header = within(table).getByRole('columnheader', { name: /^DE/ });
-    expect(within(header).queryByRole('button', { name: /Description/ })).toBeNull();
+    expect(within(languageValuesOf(table, /^DE/)).queryByRole('button', { name: /Description/ })).toBeNull();
   });
 
   it('a language URL key reset that would hand the key back to another product names the holder', async () => {
@@ -404,8 +451,8 @@ describe('ProductScopeOverview (US4)', () => {
       }),
     );
     const table = await renderOverview();
-    const header = within(table).getByRole('columnheader', { name: /^EN/ });
-    await user.click(within(header).getByRole('button', { name: 'Reset URL key in EN to inherited' }));
+    await user.click(within(languageValuesOf(table, /^EN/)).getByRole('button', { name: 'Reset URL key in EN to inherited' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /^reset$/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/Hammer drill/);
   });
 
@@ -420,11 +467,20 @@ describe('ProductScopeOverview (US4)', () => {
     expect(items[1]?.textContent).toMatch(/FR/);
     expect(items[2]?.textContent).toMatch(/Colour/);
 
+    // Every orphan delete asks first (UX-1 = A): the stored value is gone for good.
     await user.click(within(items[0] as HTMLElement).getByRole('button', { name: /Delete/ }));
+    const first = await screen.findByRole('dialog', { name: /Status.*Outlet/ });
+    expect(first.textContent).toMatch(/deleted for good/i);
+    expect(patchSpy).not.toHaveBeenCalled();
+    await user.click(within(first).getByRole('button', { name: /^delete$/i }));
     await waitFor(() =>
       expect(patchSpy).toHaveBeenCalledWith(`${BASE}/scopes`, { channels: [{ channelId: OLD, status: null }] }),
     );
-    await user.click(within(items[3] as HTMLElement).getByRole('button', { name: /Delete/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await user.click(
+      within(within(region).getAllByRole('listitem')[3] as HTMLElement).getByRole('button', { name: /Delete/ }),
+    );
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /^delete$/i }));
     await waitFor(() =>
       expect(putSpy).toHaveBeenCalledWith(`${BASE}/url-keys`, {
         channelKeys: [{ channelId: OLD, languageCode: 'pl', key: null }],
@@ -447,12 +503,17 @@ describe('ProductScopeOverview (US4)', () => {
     expect(screen.queryByRole('table', { name: /scope overview/i })).toBeNull();
     const table = screen.getByRole('table', { name: /language/i });
     expect(within(table).queryAllByRole('rowheader')).toHaveLength(2);
-    expect(within(table).getByRole('rowheader', { name: /^PL/ }).textContent).toMatch(/Name/);
+    const pl = within(table).getByRole('rowheader', { name: /^PL/ }).closest('tr') as HTMLElement;
+    expect(within(pl).getAllByRole('cell')[0]?.textContent).toMatch(/Name/);
+    expect(table.querySelectorAll('th button')).toHaveLength(0);
   });
 
   it('keyboard: Tab reaches the first reset; every control has an accessible name', async () => {
     const user = userEvent.setup();
     const table = await renderOverview();
+    // The scrollable table is reachable first (D11), then its first reset.
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: /scope overview table/i }));
     await user.tab();
     expect(document.activeElement?.tagName).toBe('BUTTON');
     for (const button of within(table).getAllByRole('button')) {
