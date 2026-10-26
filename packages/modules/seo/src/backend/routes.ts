@@ -349,6 +349,7 @@ export async function registerSeoRoutes(
     '/api/v1/admin/seo/meta/:entityType/:entityId',
     { preHandler: requireAdmin('catalog:write') },
     async (request) => {
+      assertEntityId(request.params.entityId);
       const entityType = seoEntityTypeSchema.parse(request.params.entityType);
       const scope = seoMetaScopeQuerySchema.parse(request.query ?? {});
       const target = { entityType, entityId: request.params.entityId, ...scope };
@@ -382,6 +383,7 @@ export async function registerSeoRoutes(
       schema: { body: upsertSeoMetaOverrideRequestSchema },
     },
     async (request) => {
+      assertEntityId(request.params.entityId);
       const entityType = seoEntityTypeSchema.parse(request.params.entityType);
       const body = upsertSeoMetaOverrideRequestSchema.parse(request.body);
       const row = await metaResolver.upsertOverride({
@@ -416,10 +418,24 @@ export async function registerSeoRoutes(
     '/api/v1/admin/seo/meta/:entityType/:entityId',
     { preHandler: requireAdmin('catalog:write') },
     async (request, reply) => {
+      assertEntityId(request.params.entityId);
       const entityType = seoEntityTypeSchema.parse(request.params.entityType);
       const scope = seoMetaScopeQuerySchema.parse(request.query ?? {});
       await metaResolver.deleteOverride({ entityType, entityId: request.params.entityId, ...scope });
       return reply.status(204).send();
     },
   );
+}
+
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Feature 163, checkpoint F (S-5) — `seo_meta_overrides.entity_id` is a `uuid` column,
+ * so an id that is not one would reach PostgreSQL as a 500. It names no entity: `404`.
+ * Shape only, as PostgreSQL checks it (no version or variant bits).
+ */
+function assertEntityId(entityId: string): void {
+  if (!UUID_SHAPE.test(entityId)) {
+    throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'SEO target not found.');
+  }
 }
