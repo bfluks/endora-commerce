@@ -91,12 +91,23 @@ export function resetRequestFor(input: {
   }
   if (field === 'media:roles') return level === 'channel' ? clearGalleryRoles(channelId) : null;
   if (field === 'urlKey') {
+    // A URL key has no channel-wide value: a channel row never holds one (C-7).
+    if (level === 'channel') return null;
     if (level === 'channel_language') {
       return { kind: 'urlKeys', body: { channelKeys: [{ channelId, languageCode, key: null }] } };
     }
     return { kind: 'urlKeys', body: { languageKeys: [{ languageCode, key: null }] } };
   }
   return null;
+}
+
+/**
+ * Owner decision UX-1 = A — a reset of a text value (a name, a description, a URL key, an
+ * SEO field) loses words somebody wrote, so the overview asks first; a status, a window,
+ * an audience, a minimum, roles … are one click.
+ */
+export function isTextField(field: string): boolean {
+  return field === 'name' || field === 'description' || field === 'urlKey' || field.startsWith('seo:');
 }
 
 /**
