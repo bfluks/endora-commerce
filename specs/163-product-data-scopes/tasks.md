@@ -1541,14 +1541,14 @@ also green for product_feeds, comparisons, backend, storefront, admin. **Not run
 
 ### Phase 24: Off-state, deploy parity, docs, changesets
 
-- [ ] T144 [P] [PG] [S1] RED deploy parity (FR-110, SC-001): on a seeded pre-feature dataset, listed / searchable / reachable-by-URL / sitemap / feed sets per channel × language are identical before and after the migrations, except the *Intended behaviour changes* of `plan.md` (products off and not archived — today's `draft`, `inactive` after the Q1 migration — not reachable by URL and not addable to a basket; name sort by effective name; existing per-language SEO overrides served — R21, D2, D6, Q-A) — `backend/test/integration/catalog/deploy-parity.test.ts` **Q1 additions (SC-009, FR-110, O-4)**: the seeded dataset includes `draft` products and scope rows and `inactive` products with and without `archived_at`; after the migrations no stored status other than `active` / `inactive`, no formerly `inactive` product without `archived_at`, and every formerly `inactive` product answers 410 exactly where it answered 410 before (T156b covers the migration itself)
-- [ ] T145 [P] [PG] [S1] SC-007 sweep: every FR-004 consumer (every row of `contracts/consumers.md`, CMS product blocks included) refuses a product off at (C, L) — one table-driven test reusing each seam's fixture — `backend/test/contract/catalog/scoped-availability-all-consumers.test.ts`
-- [ ] T146 [P] [PG] [S1] Test: `search` off → the Postgres listing applies the same predicate — add the search-backend-off case to `backend/test/contract/catalog/scoped-availability-matrix.test.ts` (`seo` off is already covered by T108/T115). Run it before T146a
-- [ ] T146a [S1] Make T146 pass if it is red (the degrade path's narrowing goes in the statement, issue #151); if green, record "no change" here
+- [x] T144 [P] [PG] [S1] RED deploy parity (FR-110, SC-001): on a seeded pre-feature dataset, listed / searchable / reachable-by-URL / sitemap / feed sets per channel × language are identical before and after the migrations, except the *Intended behaviour changes* of `plan.md` (products off and not archived — today's `draft`, `inactive` after the Q1 migration — not reachable by URL and not addable to a basket; name sort by effective name; existing per-language SEO overrides served — R21, D2, D6, Q-A) — `backend/test/integration/catalog/deploy-parity.test.ts` **Q1 additions (SC-009, FR-110, O-4)**: the seeded dataset includes `draft` products and scope rows and `inactive` products with and without `archived_at`; after the migrations no stored status other than `active` / `inactive`, no formerly `inactive` product without `archived_at`, and every formerly `inactive` product answers 410 exactly where it answered 410 before (T156b covers the migration itself)
+- [x] T145 [P] [PG] [S1] SC-007 sweep: every FR-004 consumer (every row of `contracts/consumers.md`, CMS product blocks included) refuses a product off at (C, L) — one table-driven test reusing each seam's fixture — `backend/test/contract/catalog/scoped-availability-all-consumers.test.ts`
+- [x] T146 [P] [PG] [S1] Test: `search` off → the Postgres listing applies the same predicate — add the search-backend-off case to `backend/test/contract/catalog/scoped-availability-matrix.test.ts` (`seo` off is already covered by T108/T115). Run it before T146a
+- [x] T146a [S1] Make T146 pass if it is red (the degrade path's narrowing goes in the statement, issue #151); if green, record "no change" here
 - [x] T147 [S1] Docs (EN): extend `packages/modules/catalog/docs/catalog/per-channel-per-language-overrides.md` (scopes, inheritance, status semantics, window, audience, overview, bulk, gate, order rules); new `url-keys-and-redirects.md`; `seo` and `search` pages updated *(Q1: status semantics = two values, `inactive` is plain off at every scope, archiving is the Archive / Restore action documented in `catalog.md` by T156p — link to it, do not restate)*
 - [x] T148 [S1] Docs (PL): translation cache entries and materialised pages for every page above; `pnpm --filter backend run check:docs-translations`; `pnpm --filter backend run check:module-docs`
-- [ ] T149 [S1] Changesets: one per meaning for every published package touched (`contracts` minor; modules patch/minor as their exports changed; the Q1 status change is breaking and is written at `minor` with a breaking body — T156q, T156y, D-225 refuses `major` in `0.x`); `pnpm changeset:status`
-- [ ] T150 [S1] AGENTS.md traps: grep `backend/test/**` for every file path renamed or deleted in this feature; re-derive anything derived from moved files (e.g. `module-removal.test.ts` ledger); re-record a read size **only** if the band refuses it, after reading `specs/conventions/check-estate.md`
+- [x] T149 [S1] Changesets: one per meaning for every published package touched (`contracts` minor; modules patch/minor as their exports changed; the Q1 status change is breaking and is written at `minor` with a breaking body — T156q, T156y, D-225 refuses `major` in `0.x`); `pnpm changeset:status`
+- [x] T150 [S1] AGENTS.md traps: grep `backend/test/**` for every file path renamed or deleted in this feature; re-derive anything derived from moved files (e.g. `module-removal.test.ts` ledger); re-record a read size **only** if the band refuses it, after reading `specs/conventions/check-estate.md`
 
 - S1 (2026-10-26, T147/T148): written from the `.changeset/163-*` bodies, not from memory. Overrides page: new
   *Availability per sales channel and language* (the availability rule, scopes and inheritance table, window,
@@ -1564,6 +1564,69 @@ also green for product_feeds, comparisons, backend, storefront, admin. **Not run
   `check:docs-translations` 0 findings, `check:module-docs` 0 findings, `check:default-language-prose` 0
   violations, `pnpm --filter docs run build` green for `en` and `pl` (run after the overrides page; the later
   url-keys and seo edits add no links).
+
+- S1 (2026-10-26, Phase 24 — T144, T145, T146/T146a, T149, T150; the three test files are [PG] and **unrun
+  locally**, no Postgres on the workstation: written against the existing fixtures, `tsc -p test/tsconfig.json`
+  and eslint clean, red state not observed — the coordinator runs them on ci-pg).
+  - *T144* `integration/catalog/deploy-parity.test.ts`. Part A runs the Q1 migration's own `down`, seeds a
+    pre-feature dataset (`active` / `draft` / `inactive` with and without `archived_at`, three audiences,
+    members and non-members), runs `up` in one rolled-back transaction, and holds the pre-feature predicates —
+    restated over the rows as stored before `up` — against the shipped `ProductAvailabilityService`: listed
+    per channel × language × buyer, searchable (the documents' projection), the product page's 200/404/410,
+    and SC-009 (only `active` / `inactive` stored, every formerly `inactive` product archived, `draft` →
+    `inactive` not archived). Part B reads the HTTP surfaces on `pl_retail` over a dataset in the shape the
+    migrations leave: listing per channel language, `sort=name` (intended change 3), product pages, the
+    search projection, the sitemap, the feed selection count and basket add. Every other migration of the
+    feature is additive (new tables, nullable or defaulted columns), so a pre-feature database holds no row
+    they change. Intended change 4 (SEO overrides served) is asserted by the SEO page tests, not re-seeded here.
+    **Two answers change beyond `plan.md`'s list, found while writing this — for the coordinator / PO**:
+    (a) pre-feature `getProductByIdOrSlug` answered **410 to every `inactive` product before it tested the
+    channel or the audience** (master `catalog-query.service.ts` ~`:1653`); after T036's deviation (security
+    checkpoints A/B) the 410 is answered only where the product would be available with the archive taken
+    away, so a formerly `inactive` product outside the channel or the caller's audience now answers the
+    absent 404. The task text "every formerly `inactive` product answers 410 exactly where it answered 410
+    before" is therefore not literally true; the test asserts the shipped (narrower) behaviour and names it.
+    (b) basket add tested no status at all before (R0 F1), so formerly `inactive` (now archived) products
+    were addable too; intended change 1 names only the off-and-not-archived half. Both are deliberate
+    security outcomes; `plan.md` *Intended behaviour changes* should probably list them.
+  - *T145* `contract/catalog/scoped-availability-all-consumers.test.ts`: one entry per `consumers.md` row,
+    every entry asserting both arms (ON admitted, OFF refused with the absent id's body where the seam has
+    one). Off = channel-scope `inactive` on both buyer channels (off at every (C, L)); the per-seam files keep
+    the language, window and audience arms. Row 12 includes the owner's `available: false` column, row 26 the
+    archived buyer 404 and operator `409 PRODUCT_ARCHIVED`, row 20 the reorder exemption (seeded, then refused
+    at placement). Rows 15 and 25 refuse nothing (they pick a value) and row 10 has no backend seam — the file
+    header names where each is asserted, and a last case fails if a row 1–26 has neither an entry nor a reason.
+    Rows 7–8 assert the documents' projection; the index filter itself is `integration/search/…` (Meilisearch).
+  - *T146* — a case in `scoped-availability-matrix.test.ts`: `CATALOG_SEARCH_BACKEND=meilisearch` (the harness
+    pins Postgres), `withModuleOff('search', 'deactivated', …)`, then `x-search-backend: postgres` and the same
+    P/Q/off/archived sets and facet counts at all four (C, L) pairs. *T146a* — **no change** expected: the route's
+    `useMeili` carries `effectiveState.isPresent('search')` and the fallback is `queryService.listProducts`, whose
+    `#listingNarrowing` holds `availabilityCondition` (T034). To be confirmed green on ci-pg; if red, T146a reopens.
+  - *T149* — audit of the 55 `.changeset/163-*` files against `git diff --name-only <merge-base>...HEAD --
+    packages/`: every touched published package is named (admin-kit, contracts, platform, page-builder-admin,
+    mod-i18n, blog, carts, catalog, comparisons, import-export, inventory, orders, price-lists, product-feeds,
+    quick-order, quote-requests, search, seo, shopping-lists). `prompt_actions` changed only `PROMPT_TOOLS.md`,
+    outside its `files` (`dist`, `i18n`, `docs`) — no changeset, correctly. The status change is `minor` with a
+    **BREAKING** body in `163-product-status-model.md` (contracts, catalog) and `163-admin-status-archive-screens.md`
+    (admin-kit, page-builder-admin, …); no `major`. No new changeset needed: the one change of this phase to a
+    published package is a comment in catalog's manifest. `check:release-intent` 0 violations, also with
+    `--since <merge-base>` (`shape=ordinary changesets-added=55 violations=0`); `pnpm changeset:status` plans `minor`.
+  - *T150* — deleted / renamed in the feature (`git log --diff-filter=DR <merge-base>..HEAD`):
+    `backend/test/unit/catalog/product-status-coerce.test.ts`, `packages/modules/catalog/src/admin/components/ProductSeoLink.tsx`,
+    `admin/test/modules/catalog/product-seo-link.test.tsx` → `admin/test/modules/seo/product-seo-link-zone.test.tsx`,
+    the spec directory `159-` → `162-` → `163-product-data-scopes` and `.changeset/162-*` → `163-*`. Grep of each path
+    and basename over `backend/test`, `admin/test`, `storefront/test`, `backend/scripts`, `scripts`, `packages`:
+    no reference left (the remaining `ProductSeoLink` hits are `seo`'s own live zone). No module moved, so no
+    `module-removal.test.ts` ledger entry is derived from this feature; the test is green (unit config).
+    Read sizes: see the Phase 24 read-size line below.
+  - *Task A (review of S-3)* — `catalog` declaring `admin_roles` is the sanctioned shape and stays:
+    `admin_roles` is `activation.nonDeactivatable` with `dependencies: []` (no cycle, no operator control lost,
+    no absent state to degrade through — `module-composition.md` exempts a non-deactivatable owner from the
+    consequence ledger), `prompt_actions` and `admin_actions` declare it for the same `permissionService` port,
+    and an instance always carries it (non-deactivatable modules are closed over `dependencies`). If the port were
+    ever unresolvable, `lazyPort` throws at worker start and the operation is marked failed — fail closed. The
+    manifest comment now says so; `check:port-dependencies`, `check:port-catches`, `check:module-boundary` 0,
+    `unit/db/module-graph.test.ts` 7/7, `bulk-operation-requester.test.ts` 4/4.
 
 **Verification** (one invocation per line): `[PG] backend/test/integration/catalog/deploy-parity.test.ts`; `[PG] backend/test/contract/catalog/scoped-availability-all-consumers.test.ts`; `[PG] backend/test/contract/catalog/scoped-availability-matrix.test.ts`; `pnpm --filter backend run check:docs-translations`; `pnpm --filter backend run check:module-docs`; `pnpm changeset:status`; `pnpm run check:naming && pnpm run check:language` (in Docker Ubuntu on the macOS host — the BSD-tool gap)
 
