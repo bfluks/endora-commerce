@@ -27,12 +27,17 @@ export function productMetaOf(
   available: ReadonlySet<string>,
   /** The effective names at the basket's (channel, language), where known. */
   effectiveNames: ReadonlyMap<string, string> = new Map(),
+  /**
+   * Feature 163 (T113a, R28) — the effective URL key at the basket's (channel,
+   * language), where known; else the global key.
+   */
+  effectiveKeys: ReadonlyMap<string, string> = new Map(),
 ): Map<string, ProductMeta> {
   const meta = new Map<string, ProductMeta>();
   for (const p of products) {
     meta.set(p.id, {
       name: effectiveNames.get(p.id) || pickLocalized(p.name, preferredLanguage),
-      slug: available.has(p.id) ? p.slug : null,
+      slug: available.has(p.id) ? (effectiveKeys.get(p.id) ?? p.slug) : null,
       sku: p.sku,
     });
   }

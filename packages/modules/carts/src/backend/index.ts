@@ -8,6 +8,7 @@ import type {
   CartReadPort,
   CartWritePort,
   CatalogProductAvailabilityPort,
+  CatalogProductUrlKeyReadPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   LinePricesPort,
@@ -344,10 +345,13 @@ export function registerModule(ctx: ModuleContext): void {
       cartService,
       catalogProducts: lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
       catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
+      // Feature 163 (T113a, R28) — basket and up-sell links use the effective key.
+      catalogUrlKeys: lazyPort<CatalogProductUrlKeyReadPort>(ctx, 'catalogProductUrlKeyReadPort'),
       cartUpsellService: new CartUpsellService(
         emFactory,
         lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
         lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
+        lazyPort<CatalogProductUrlKeyReadPort>(ctx, 'catalogProductUrlKeyReadPort'),
       ),
       cartCouponService: new CartCouponService(
         emFactory,
