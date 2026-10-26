@@ -1624,3 +1624,30 @@ P15, US7 P16–P17 + P20, US8 P18 + P20, US9 P21–P23, US10 P12 + P13.
 
 **Phase 9d resumed and closed (2026-10-26).** The `check:port-catches` red is fixed, the full check sweep is
 green, and P-3a / P-3b are recorded — see the Phase 9d note. T156-pal-b landed with S3.
+
+**Checkpoint F fix round (backend, S1, 2026-10-26).** Review findings of `0404a3b6a` (`review-163-DF/backend-fixes.md`):
+- *B-1 / S-4 fixed* — a gallery `PATCH` carrying `labels` runs `product.media.update` and replaces the labels on the
+  Command's `em` under the product lock (`labels` in the item projection); `PUT …/gallery/order` is
+  `product.media.update` with `orderedGalleryItemIds` before/after, one transaction; the route-level `gallery.delete`,
+  `gallery.reorder`, `attachment.delete` rows are gone (the services' Commands write the one row). Not changed: the
+  `gallery.create` route still writes a row beside the service's `gallery_item.create` (same duplicate shape, not in
+  the findings). Unit `gallery-media-command.test.ts`; [PG] `test/contract/catalog/media-scopes.test.ts` (new case).
+- *B-2 fixed* — resolver comment, and the API-client rule on the packaging-units page (EN + PL).
+- *B-3 fixed* — `409 PRODUCT_ARCHIVED` carries `details.productIds`. Unit `operator-line-products.test.ts`; [PG]
+  `test/integration/quote_requests/archived-product.test.ts`.
+- *B-4 fixed* — platform line dropped from `163-admin-attribute-scope-flags.md`.
+- *B-5 left* — a warning in the channel-roles PUT response would change `GalleryChannelRoles` in contracts and the
+  admin consumer S3 owns; the UI labels the case.
+- *B-6 fixed* — `adminAttributeResponseSchema.numericKind` is `.nullable().optional()`; the [PG]
+  `test/contract/catalog/attribute-scope-flags-response.test.ts` parses the full schema again.
+- *S-1 / S-2 fixed* — six product-id tool schemas `.max(PROMPT_PRODUCT_IDS_MAX = 10 000)`; every catalog mutation tool
+  dedupes ids; a per-item reason is an `HttpError`'s message, else `failed`.
+- *S-3 fixed* — `BulkOperationService` re-checks the requester (`isActiveAdministrator` + `catalog:write`, through
+  `admin_roles`' `permissionService`) at worker start and fails closed; `catalog` declares `admin_roles`.
+- *S-5 fixed* — SEO meta routes answer `404 NOT_FOUND` for a non-UUID `:entityId`.
+- *S-6 fixed* — gallery and attachments pages: hiding is presentation, the stable URL stays fetchable (EN + PL).
+- *Phase 14 note* — the backend gap is closed (see there).
+- *Owner decisions built:* **N2 = B** (operator-named channel → unit name at the channel's default language; Phase 22
+  note) and **CMP-1 = A** (non-owner reader → `(removed product)` column for an unavailable product;
+  `consumers.md` row 12). [PG] `test/integration/carts/packaging-unit-name-snapshot.test.ts` (new case),
+  `test/contract/comparisons/share-unavailable-columns.test.ts` (new).
