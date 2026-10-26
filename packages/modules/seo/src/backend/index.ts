@@ -32,6 +32,7 @@ import { registerSeoRoutes, type SeoRouteSettingsPort } from './routes.js';
 import { createCrawlerTextValidator } from './services/crawler-text-validator.js';
 import { SeoMetaOverride } from './entities/seo-meta-override.entity.js';
 import { SitemapCache } from './entities/sitemap-cache.entity.js';
+import { marksSitemapStale } from './services/sitemap-staleness.js';
 
 /**
  * `seo` — the sitemap that only read its setting in production (feature 072,
@@ -60,13 +61,6 @@ import { SitemapCache } from './entities/sitemap-cache.entity.js';
  * before and after — rather than through a hand-held audit sink.
  */
 
-/** The `product.updated.v1` fields that change what a sitemap lists (feature 163, R10). */
-const SITEMAP_PRODUCT_FIELDS: ReadonlySet<string> = new Set([
-  'scopedStatus',
-  'publicationWindow',
-  'audience',
-  'urlKeys',
-]);
 
 export interface SeoCradle {
   readonly emFactory: () => EntityManager;
@@ -192,11 +186,17 @@ export function registerModule(ctx: ModuleContext): void {
    * crawler may open now, so a change to that answer marks the cached documents
    * stale: the scoped status, the publication window (the catalogue's window
    * sweep emits `publicationWindow` for every bound it crosses), the audience and
-   * the URL keys. `ctx.subscribe` gates the handler on this module's presence.
+   * the URL keys, and the global status, archive and audience (`marksSitemapStale`,
+   * S-W1). `ctx.subscribe` gates the handler on this module's presence.
    */
   ctx.subscribe('product.updated.v1', async (payload) => {
     const { changedFields } = payload as { changedFields?: readonly string[] };
-    if (!changedFields?.some((field) => SITEMAP_PRODUCT_FIELDS.has(field))) return;
+    if (!marksSitemapStale(changedFields)) return;
+    await ctx.cradle<SeoCradle>().seoSitemapService.markAllStale();
+  });
+  // S-W1 — an archived product leaves every sitemap (its `product.updated.v1`
+  // `['archivedAt']` does too; this one also covers an emitter that announces only it).
+  ctx.subscribe('product.archived.v1', async () => {
     await ctx.cradle<SeoCradle>().seoSitemapService.markAllStale();
   });
 
