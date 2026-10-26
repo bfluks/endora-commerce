@@ -1621,8 +1621,9 @@ also green for product_feeds, comparisons, backend, storefront, admin. **Not run
     Read sizes (`unit/scripts/check-read-size.test.ts`, unit config): the one completed run had 7 reds — 6
     `stale-artefact` on `mod-catalog`, caused by this phase's manifest comment landing mid-run (catalog rebuilt
     since), and `check-pdfmake-footprint.sh`'s BSD `du -b` (the macOS gap) — and no entry the band refused;
-    the drift inside the band is left alone (`check-estate.md`). Two re-runs on the loaded host hit the
-    `beforeAll` hook timeout; nothing re-recorded. Static checks after the test files landed, all exit 0:
+    the drift inside the band is left alone (`check-estate.md`). A re-run hit the 900 s `beforeAll` hook timeout
+    (spawn pool of 1: 178 MB free on the host); a third, with a longer hook timeout, was still running at
+    handback. Nothing re-recorded. Static checks after the test files landed, all exit 0:
     `check:harness-teardown`, `check:fixture-substitution`, `check:port-dependencies`, `check:port-catches`,
     `check:module-boundary`, `check:module-docs`, `check:docs-translations`, `check:off-state-coverage`,
     `check:env-inputs`, `check:singleton-identity`, `check:platform-surface`, `check:divergence`,
