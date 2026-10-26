@@ -1036,7 +1036,6 @@
   "productEditor.attachments.scopes.hide": "Ukryj w kanale {channel}",
   "productEditor.attachments.scopes.save": "Zapisz",
   "productEditor.attachments.scopes.cancel": "Anuluj",
-  "productEditor.attachments.scopes.error": "Zapis nie powiódł się.",
   "productEditor.attachments.scopes.saved": "Załącznik zaktualizowany.",
   "packagingUnits.translations.open": "Nazwy w językach",
   "packagingUnits.translations.title": "Nazwy w językach: {name}",
@@ -1045,7 +1044,6 @@
   "packagingUnits.translations.name": "Nazwa ({language})",
   "packagingUnits.translations.save": "Zapisz",
   "packagingUnits.translations.cancel": "Anuluj",
-  "packagingUnits.translations.error": "Zapis nie powiódł się.",
   "productEditor.scopeOverview.field.mediaRoles": "Role zdjęć galerii",
   "productEditor.scopeOverview.field.mediaHidden": "Ukryte zdjęcia galerii",
   "productEditor.scopeOverview.field.mediaAltText": "Tekst alternatywny galerii",
@@ -1079,5 +1077,12 @@
   "productEditor.scopeOverview.tableRegion": "Tabela przeglądu zakresów",
   "productEditor.urlKeys.inheritedHint": "Dziedziczony: {key}",
   "productEditor.urlKeys.unsaved": "Jeszcze niezapisane — zapisz klucze URL, aby je zastosować.",
-  "productEditor.urlKeys.noChanges": "Brak zmian do zapisania."
+  "productEditor.urlKeys.noChanges": "Brak zmian do zapisania.",
+  "productEditor.scopeDialog.inherited": "Dziedziczone: {value}",
+  "productEditor.scopeDialog.error": "Nic nie zapisano. Spróbuj ponownie.",
+  "productEditor.scopeDialog.saving": "Zapisywanie…",
+  "productEditor.scopeDialog.discard.body": "Masz zmiany, które nie są zapisane. Zamknąć i je odrzucić?",
+  "productEditor.scopeDialog.discard.confirm": "Odrzuć zmiany",
+  "productEditor.scopeDialog.discard.keep": "Wróć do edycji",
+  "packagingUnits.readOnly": "Tylko do odczytu: widzisz jednostki opakowań, ale nie możesz ich zmieniać."
 }
