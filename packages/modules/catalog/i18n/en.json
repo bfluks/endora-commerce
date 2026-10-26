@@ -1317,5 +1317,6 @@
   "productsList.bulkEdit.result.product": "Product",
   "productsList.bulkEdit.result.status": "Result",
   "productsList.bulkEdit.result.reason": "Reason",
-  "productEditor.statusGate.refused": "The product's details were not saved: switching it on needs values that are missing. {details} Your edits are still in the form."
+  "productEditor.statusGate.refused": "The product's details were not saved: switching it on needs values that are missing. {details} Your edits are still in the form.",
+  "productsList.bulk.restore": "Restore…"
 }

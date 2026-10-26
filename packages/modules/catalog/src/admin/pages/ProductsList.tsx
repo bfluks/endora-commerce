@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  ArchiveRestore,
   CircleDollarSign,
   Download,
   MoreHorizontal,
@@ -144,6 +145,8 @@ export function ProductsList(): ReactNode {
   const [stockFilter, setStockFilter] = useState<StockFilter>('all');
   const [selection, setSelection] = useState<ProductListSelection>(emptySelection);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  // The Archived tab's bar Restore opens the dialog on its confirmation (owner P-4 → B).
+  const [bulkInitialStep, setBulkInitialStep] = useState<'form' | 'confirmArchive'>('form');
   const [deleting, setDeleting] = useState(false);
   const [bulkEditProductIds, setBulkEditProductIds] = useState<string[]>([]);
   const [selectionError, setSelectionError] = useState<string | null>(null);
@@ -258,6 +261,7 @@ export function ProductsList(): ReactNode {
   // The Archived tab's own empty copy is true only when nothing narrows it; a
   // filtered Archived tab gets the usual "try clearing filters".
   const filtersAtDefault = query.trim() === '' && typeFilter === 'all' && stockFilter === 'all';
+  const restoreFromBar = canWrite && statusFilter === 'archived';
   const archivedEmpty = statusFilter === 'archived' && filtersAtDefault;
   // A search that finds nothing among live products may be looking for an archived
   // one, which every other tab hides; one step takes the query there.
@@ -343,7 +347,7 @@ export function ProductsList(): ReactNode {
     return Array.from(selection.pageIds);
   };
 
-  const openBulkEdit = async (): Promise<void> => {
+  const openBulkEdit = async (step: 'form' | 'confirmArchive' = 'form'): Promise<void> => {
     setSelectionError(null);
     setResolvingSelection(true);
     try {
@@ -362,6 +366,7 @@ export function ProductsList(): ReactNode {
         return;
       }
       setBulkEditProductIds(ids);
+      setBulkInitialStep(step);
       setBulkEditOpen(true);
     } catch {
       setSelectionError(t('productsList.selection.resolveFailed'));
@@ -580,9 +585,25 @@ export function ProductsList(): ReactNode {
                 : t('productsList.selection.scopePage')}
             </span>
             <div className="actions">
+              {/* On the Archived tab the one thing a selection is for is bringing it
+                  back, so Restore leads as the primary and Bulk edit steps down (Von
+                  Restorff); the placeholder Edit price goes, keeping three actions (Hick),
+                  and Delete stays last (owner P-4 → B). */}
+              {restoreFromBar ? (
+                <button
+                  type="button"
+                  className="b2b-btn b2b-btn--primary"
+                  disabled={resolvingSelection}
+                  onClick={(): void => {
+                    void openBulkEdit('confirmArchive');
+                  }}
+                >
+                  <ArchiveRestore size={13} aria-hidden="true" /> {t('productsList.bulk.restore')}
+                </button>
+              ) : null}
               <button
                 type="button"
-                className="b2b-btn b2b-btn--primary"
+                className={restoreFromBar ? 'b2b-btn' : 'b2b-btn b2b-btn--primary'}
                 disabled={resolvingSelection}
                 onClick={(): void => {
                   void openBulkEdit();
@@ -593,18 +614,20 @@ export function ProductsList(): ReactNode {
                   ? t('productsList.selection.resolving')
                   : t('productsList.bulk.edit')}
               </button>
-              <button
-                type="button"
-                className="b2b-btn"
-                disabled={resolvingSelection}
-                onClick={(): void => {
-                  void runWithResolvedIds(async () => {
-                    /* Edit price — placeholder until dedicated flow ships */
-                  });
-                }}
-              >
-                <CircleDollarSign size={13} /> {t('productsList.bulk.editPrice')}
-              </button>
+              {statusFilter !== 'archived' ? (
+                <button
+                  type="button"
+                  className="b2b-btn"
+                  disabled={resolvingSelection}
+                  onClick={(): void => {
+                    void runWithResolvedIds(async () => {
+                      /* Edit price — placeholder until dedicated flow ships */
+                    });
+                  }}
+                >
+                  <CircleDollarSign size={13} /> {t('productsList.bulk.editPrice')}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="b2b-btn b2b-btn--danger"
@@ -629,10 +652,20 @@ export function ProductsList(): ReactNode {
           <ProductsBulkEditDialog
             productIds={bulkEditProductIds}
             selectionScope={selection.mode === 'collection' ? 'collection' : 'page'}
-            // One archive action, the one that changes
-            // something: the Archived tab holds only archived products, every
-            // other tab only products that are not.
-            archiveAction={canWrite ? (statusFilter === 'archived' ? 'restore' : 'archive') : null}
+            // One archive action, the one that changes something: the Archived tab
+            // holds only archived products, every other tab only products that are
+            // not. On the Archived tab Restore lives on the bar (P-4 → B), so the
+            // form opened by Bulk edit offers none.
+            archiveAction={
+              !canWrite
+                ? null
+                : statusFilter !== 'archived'
+                  ? 'archive'
+                  : bulkInitialStep === 'confirmArchive'
+                    ? 'restore'
+                    : null
+            }
+            initialStep={bulkInitialStep}
             onClose={(): void => {
               setBulkEditOpen(false);
               setBulkEditProductIds([]);
