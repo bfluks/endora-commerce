@@ -423,6 +423,19 @@ order already placed. A line whose product could not be read at placement is
 recorded as not returnable. What the Returns module does with the recorded
 value is on its own page.
 
+### Per sales channel
+
+Both rules can be overridden for one sales channel — **Order rules** per channel in the
+product's scopes (`PATCH /api/v1/admin/catalog/products/:id/scopes`, `minOrderQuantity` and
+`returnable` on a channel entry; `null` uses the global value again). The channel's value
+applies wherever a basket, an order or a quote request belongs to that channel: adding to
+the basket, the basket view, submitting for approval, the checkout preview, placement, the
+admin order preview, quote requests and the buyer's quick-order import. A channel minimum
+of 1 means no minimum in that channel, whatever the global value. Placement records the
+order channel's returnable flag on each line, so returns follow the channel the order was
+placed in. The storefront product detail and listing report the minimum of the request's
+channel.
+
 ### Audit and copies
 
 Setting or clearing either rule is audited like any product edit, with the old

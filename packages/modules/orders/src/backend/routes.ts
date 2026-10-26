@@ -23,6 +23,7 @@ import {
   updateOrderSavedViewRequestSchema,
   updateOrderStatusRequestSchema,
   roundAmountHalfUp,
+  withChannelOrderRules,
 } from '@endora-commerce/contracts';
 import type {
   AdminOrderDetail,
@@ -155,7 +156,7 @@ export interface OrdersDeps {
    */
   catalogProductRead: CatalogProductReadPort;
   /** Feature 163 — the admin preview reports a line no longer available in the channel. */
-  catalogProductAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
+  catalogProductAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>;
   customerAccountRead: CustomerAccountReadPort;
   organizationDetails: OrganizationDetailsPort;
   /**
@@ -1048,8 +1049,18 @@ export async function registerOrderRoutes(
       // lines that passed steps 1–4 — a line with an earlier code counts toward
       // no total and never carries a minimum. Creating the order would refuse
       // a marked line, so it is priced like any other unavailable line.
+      // Feature 163 (FR-100) — judged on the order channel's minimum, not the global one.
+      const orderableIds = [...new Set(evaluated.flatMap((e) => (e.code === null ? [e.product.id] : [])))];
+      const channelRules =
+        orderableIds.length > 0
+          ? await deps.catalogProductAvailability.effectiveOrderRules(orderableIds, body.salesChannelId)
+          : new Map<string, { minOrderQuantity: number | null; returnable: boolean }>();
       const belowMinimum = previewBelowMinimums(
-        evaluated.map((e) => (e.code === null ? { product: e.product, quantity: e.item.quantity } : null)),
+        evaluated.map((e) =>
+          e.code === null
+            ? { product: withChannelOrderRules([e.product], channelRules)[0]!, quantity: e.item.quantity }
+            : null,
+        ),
       );
 
       const unavailableLine = (entry: EvaluatedLine) => ({
