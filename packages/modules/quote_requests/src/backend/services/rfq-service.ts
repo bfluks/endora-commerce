@@ -233,7 +233,10 @@ export class RfqService {
      */
     salesChannelId: string | undefined,
   ): Promise<Map<string, CatalogProductRecord>> {
-    const records = await this.deps.catalogProducts.findByIds(productIds);
+    // Feature 163, owner decision P-3 = A — an archived product is never a quote
+    // line, at any channel or none. With a channel `filterAvailable` already says
+    // so; without one the audience rule below would not.
+    const records = (await this.deps.catalogProducts.findByIds(productIds)).filter(isNotArchived);
     const channelId = salesChannelId ?? raisedOnChannelId();
     // Outside a request, with no channel named, there is no channel to ask
     // about (FR-007): the audience filter alone, as before. A buyer route
@@ -1209,8 +1212,14 @@ export class RfqService {
     // The sibling ruling covers `orders`' reorder, which re-acquires a placed
     // order's lines through the same port; its comment carries the second-order
     // consequence that makes the obvious fix wrong there.
+    //
+    // Feature 163, P-3 = A (2026-10-26) — "archived" is now `archivedAt`, which
+    // `findByIds` does not filter, so the edge case above is asked of it here.
+    // Archived is global and not the channel question the ruling exempts; the
+    // seeded basket's placement would refuse the line anyway (consumers.md row
+    // 14), and this answers before the basket is cleared.
     const productIds = items.map((it) => it.productId);
-    const products = await this.deps.catalogProducts.findByIds(productIds);
+    const products = (await this.deps.catalogProducts.findByIds(productIds)).filter(isNotArchived);
     if (products.length !== new Set(productIds).size) {
       throw new HttpError(
         409,
@@ -1641,6 +1650,17 @@ function groupBy<T, K>(arr: T[], key: (t: T) => K): Map<K, T[]> {
  */
 export function rfqAudience(ctx: Pick<CustomerContext, 'organizationId'>): ProductAudience {
   return { organizationId: ctx.organizationId, authenticated: true };
+}
+
+/**
+ * Feature 163, owner decision P-3 = A (2026-10-26) — may this product be a quote
+ * line at all? Archived (`archivedAt` set by catalog's Archive action) is global,
+ * not a scope axis, so it is asked of the record on every path that names
+ * products — the buyer's and the operator's alike — and a line that fails it
+ * gets the same answer as a product that does not exist.
+ */
+export function isNotArchived(product: Pick<CatalogProductRecord, 'archivedAt'>): boolean {
+  return (product.archivedAt ?? null) === null;
 }
 
 /**
