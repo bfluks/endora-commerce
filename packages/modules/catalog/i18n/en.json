@@ -469,7 +469,6 @@
   "productEditor.gallery.success.add": "Gallery item added.",
   "productEditor.gallery.success.update": "Labels updated.",
   "productEditor.gallery.success.remove": "Gallery item removed.",
-  "productEditor.gallery.removeConfirm": "Remove this gallery item?",
   "productEditor.gallery.column.preview": "Preview",
   "productEditor.gallery.column.labels": "Labels",
   "productEditor.gallery.column.position": "Position",
@@ -1428,5 +1427,15 @@
   "productEditor.scopeOverview.field.seoDescription": "SEO description",
   "productEditor.scopeOverview.field.seoOgTitle": "Social title",
   "productEditor.scopeOverview.field.seoOgDescription": "Social description",
-  "productEditor.scopeOverview.field.seoOgImageUrl": "Social image"
+  "productEditor.scopeOverview.field.seoOgImageUrl": "Social image",
+  "productEditor.gallery.itemOption": "{item} · {file}",
+  "productEditor.gallery.channelRole.hiddenHere": "{item}, hidden here",
+  "productEditor.gallery.channelRole.hiddenHolder": "{item} is the {role} in {channel} but is hidden there, so the storefront does not show it.",
+  "productEditor.gallery.alt.hintChannel": "Alt text is per language and applies in every channel.",
+  "productEditor.gallery.readOnly": "Read-only: you can see the gallery but not change it.",
+  "productEditor.gallery.stagedBlocksAddRemove": "Save your changes first.",
+  "productEditor.gallery.remove.title": "Remove {item}?",
+  "productEditor.gallery.remove.body": "{item} is removed from the gallery now, without waiting for Save. The asset stays in the library.",
+  "productEditor.gallery.remove.confirm": "Remove image",
+  "productEditor.gallery.remove.cancel": "Cancel"
 }
