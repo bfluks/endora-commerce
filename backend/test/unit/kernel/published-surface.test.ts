@@ -302,8 +302,13 @@ const PUBLISHED_TENANCY_SURFACE: Readonly<Record<string, readonly string[]>> = {
     'TransitivelyScoped',
     'RuleScoped',
   ],
-  /** Row 21 — the one symbol of the escape hatch a module takes. */
-  'escape-hatch.js': ['withSystemScope'],
+  /**
+   * Row 21 — the symbols of the escape hatch a module takes. `withSystemScopeActingFor`
+   * joined `withSystemScope` in feature 163 (S-W2): a worker finishing work an admin
+   * queued runs system-scoped *as that admin*, so its Commands are audited with the
+   * requester — `catalog`'s `bulk-operation.service.ts` is the reach.
+   */
+  'escape-hatch.js': ['withSystemScope', 'withSystemScopeActingFor'],
   /** Row 28, plus `orgConstraintFor`'s return shape. */
   'derived-scope.js': ['orgConstraintFor', 'isOrgInScope', 'ruleVisibleForScope', 'OrgConstraint'],
 };
