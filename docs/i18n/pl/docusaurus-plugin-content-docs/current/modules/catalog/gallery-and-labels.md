@@ -66,6 +66,11 @@ Ukryć element lub nadać mu rolę można tylko w kanale, do którego należy pr
 przeciwnym razie żądanie kończy się błędem `422 SCOPE_INVALID`. Usunięcie ustawienia
 jest zawsze dozwolone, także po usunięciu produktu z kanału.
 
+Ukrycie dotyczy tylko prezentacji, a nie kontroli dostępu. Ukryty element nie jest
+pokazywany w kanale, ale jego plik zachowuje stały adres URL i każdy, kto ten adres zna,
+nadal może go pobrać. Ukrycie nie zapewnia poufności obrazu: pliku, który nie może być
+publiczny, nie należy umieszczać w galerii produktu.
+
 Każdy taki zapis trafia do dziennika zdarzeń raz, jako `product.media.update`, ze
 stanem elementu (lub ról kanału) przed zmianą i po niej. Wysłanie zapisanego stanu
 sprzed zmiany tą samą ścieżką przywraca go. Zapis ogłasza zdarzenie
