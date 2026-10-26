@@ -19,6 +19,18 @@ import { CartItem } from '../entities/cart-item.entity.js';
 import { CART_MAX_LINES, CartService, type CustomerContext } from './cart-service.js';
 
 /**
+ * The request channel `basketScopeLanguage` resolves against — none (outside a request)
+ * unless a case sets one (feature 163, T138).
+ */
+const requestChannel = vi.hoisted(() => ({
+  current: null as { id: string; languages: string[]; defaultLanguage: string } | null,
+}));
+vi.mock('@endora-commerce/platform/kernel', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@endora-commerce/platform/kernel')>()),
+  currentSalesChannel: () => requestChannel.current,
+}));
+
+/**
  * Feature 155, Phase 7 (T048) — `CartService.addItems`, the one batch every batch
  * path into a cart goes through (`specs/155-catalog-order-constraints/research.md`
  * R8, `contracts/cart-and-checkout-api.md` §4).
@@ -79,7 +91,15 @@ const PRODUCTS = new Map<string, CatalogProductRecord>([
 ]);
 
 const UNITS: CatalogPackagingUnitRecord[] = [
-  { id: PALLET, productId: C, name: 'Pallet', baseQuantity: 64, minOrderUnits: 2 } as CatalogPackagingUnitRecord,
+  {
+    id: PALLET,
+    productId: C,
+    name: 'Pallet',
+    // Feature 163 (FR-079) — the name per language; the line snapshots it in the basket language.
+    nameTranslations: { 'pl-PL': 'Paleta' },
+    baseQuantity: 64,
+    minOrderUnits: 2,
+  } as CatalogPackagingUnitRecord,
 ];
 
 // ── the rig ─────────────────────────────────────────────────────────────────
@@ -912,5 +932,44 @@ describe('addItems — bounded work (F4, R20)', () => {
     expect(result.outcomes.every((o) => o.status === 'added')).toBe(true);
     // One unit read for the whole batch, not one per line.
     expect(r.catalog.listPackagingUnitsByProductIds).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Feature 163 (FR-079, T138; owner decision 2026-10-26) — a line ordered by a packaging
+ * unit snapshots the unit's name in the basket's scope language (the request tag resolved
+ * against the basket's channel), else the global name. The minimum refusal keeps naming
+ * the global unit (feature 155's sentence, unchanged here).
+ */
+describe('CartService — the packaging-unit name snapshot in the basket language', () => {
+  const pallets = [{ productId: C, quantity: 2, packagingUnitId: PALLET }];
+
+  it('takes the translation at the request language on the basket channel', async () => {
+    requestChannel.current = { id: CUSTOMER.salesChannelId!, languages: ['en-US', 'pl-PL'], defaultLanguage: 'en-US' };
+    try {
+      const r = rig({ carts: [existingCart()] });
+      const result = await r.service.addItems({ ...ACTOR, languageTag: 'pl' }, pallets, { onLineError: 'report' });
+      expect(result.outcomes.map((o) => o.status)).toEqual(['added']);
+      expect(r.items.map((i) => i['packagingUnitName'])).toEqual(['Paleta']);
+    } finally {
+      requestChannel.current = null;
+    }
+  });
+
+  it('takes the global name in a language with no translation', async () => {
+    requestChannel.current = { id: CUSTOMER.salesChannelId!, languages: ['en-US', 'pl-PL'], defaultLanguage: 'en-US' };
+    try {
+      const r = rig({ carts: [existingCart()] });
+      await r.service.addItems({ ...ACTOR, languageTag: 'en-US' }, pallets, { onLineError: 'report' });
+      expect(r.items.map((i) => i['packagingUnitName'])).toEqual(['Pallet']);
+    } finally {
+      requestChannel.current = null;
+    }
+  });
+
+  it('takes the global name outside a request (no scope language)', async () => {
+    const r = rig({ carts: [existingCart()] });
+    await r.service.addItems({ ...ACTOR, languageTag: 'pl' }, pallets, { onLineError: 'report' });
+    expect(r.items.map((i) => i['packagingUnitName'])).toEqual(['Pallet']);
   });
 });

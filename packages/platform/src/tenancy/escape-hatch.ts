@@ -90,7 +90,6 @@ export function withSystemScope<T>(reason: string, fn: () => Promise<T>): Promis
   return runWithTenantContext(systemTenantContext(reason), fn);
 }
 
-/** Run `fn` pinned to a single organization (e.g. a per-org background job). */
 /**
  * Feature 163 (checkpoint C security review, S-W2) — the system scope of a worker
  * finishing work an admin queued, **acting for that admin**: the context an admin
@@ -112,6 +111,7 @@ export function withSystemScopeActingFor<T>(adminUserId: string, reason: string,
   return runWithTenantContext({ mode: 'system', actor: { kind: 'admin', id: adminUserId }, reason }, fn);
 }
 
+/** Run `fn` pinned to a single organization (e.g. a per-org background job). */
 export function withOrgScope<T>(organizationId: string, reason: string, fn: () => Promise<T>): Promise<T> {
   requireReason(reason);
   auditSink({ scope: 'org', reason, organizationId });

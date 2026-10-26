@@ -792,7 +792,9 @@ export class FeedGenerationService {
     // catalogue. The edge binds, exactly as the two reads above it do: a feed
     // assembled out of a module the platform is not serving is worse than a run
     // that stops and records why.
-    const galleryRows = await this.deps.catalogGallery.listForProducts(productIds);
+    // Feature 163 (FR-076, owner decision MED-1 = A) — the gallery as the feed's channel
+    // shows it: an image hidden there never reaches the feed.
+    const galleryRows = await this.deps.catalogGallery.listForProducts(productIds, salesChannelId);
     const publicUrls = await this.deps.resolvePublicImageUrls([
       ...new Set(galleryRows.map((r) => r.assetId)),
     ]);

@@ -14,7 +14,14 @@ import { randomUUID } from 'crypto';
 @GlobalEntity()
 @Entity({ tableName: 'product_attachments' })
 export class ProductAttachment {
-  [OptionalProps]?: 'id' | 'description' | 'position' | 'createdAt' | 'updatedAt';
+  [OptionalProps]?:
+    | 'id'
+    | 'description'
+    | 'position'
+    | 'nameTranslations'
+    | 'descriptionTranslations'
+    | 'createdAt'
+    | 'updatedAt';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -38,6 +45,17 @@ export class ProductAttachment {
 
   @Property({ type: 'integer' })
   position: number = 0;
+
+  /**
+   * Feature 163 (FR-078, R16) — the name per language, `{ "<lang>": "<text>" }`; a
+   * language absent here shows `name`.
+   */
+  @Property({ type: 'json' })
+  nameTranslations: Record<string, string> = {};
+
+  /** Feature 163 (FR-078, R16) — the description per language; a language absent here shows `description`. */
+  @Property({ type: 'json' })
+  descriptionTranslations: Record<string, string> = {};
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();
