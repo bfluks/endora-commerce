@@ -9,6 +9,7 @@ import {
   isOn,
   isProductEffectivelyAvailable,
   pairsTurningOn,
+  withChannelOrderRules,
   PRODUCT_SCOPE_STATUSES,
   resolveScopeLanguage,
   type ProductChannelLanguageScopeRecord,
@@ -431,5 +432,23 @@ describe('resolveScopeLanguage (A-3, R7)', () => {
 
   it.each([null, undefined, '', '   '])('%s answers the channel default', (tag) => {
     expect(resolveScopeLanguage(channel, tag)).toBe('pl-PL');
+  });
+});
+
+describe('withChannelOrderRules — the channel-effective records a seam judges (FR-100, R26)', () => {
+  const records = [
+    { id: 'a', type: 'simple', minOrderQuantity: null, returnable: false, name: 'A' },
+    { id: 'b', type: 'simple', minOrderQuantity: 5, returnable: true, name: 'B' },
+  ];
+
+  it('replaces the minimum and the returnable flag with the channel’s, keeping every other field', () => {
+    const out = withChannelOrderRules(records, new Map([['a', { minOrderQuantity: 10, returnable: true }]]));
+    expect(out[0]).toEqual({ id: 'a', type: 'simple', minOrderQuantity: 10, returnable: true, name: 'A' });
+  });
+
+  it('leaves a record the rules do not name as it is, and never mutates the input', () => {
+    const out = withChannelOrderRules(records, new Map([['a', { minOrderQuantity: 10, returnable: true }]]));
+    expect(out[1]).toBe(records[1]);
+    expect(records[0]!.minOrderQuantity).toBeNull();
   });
 });

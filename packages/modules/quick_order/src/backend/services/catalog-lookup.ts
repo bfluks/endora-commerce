@@ -35,7 +35,7 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
      * accessor) together with the effective status at (channel, L), the
      * window and the effective audience.
      */
-    private readonly availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
+    private readonly availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>,
   ) {}
 
   /**
@@ -73,6 +73,23 @@ export class CatalogPortLookup implements QuickOrderCatalogLookup {
       languageCode: null,
       audience,
     });
+  }
+
+  /**
+   * Feature 163 (FR-100) — the buyer's channel's effective minimum per product,
+   * from `catalog`. The operator's import has no channel yet and keeps the global
+   * minimum (a warning only, judged again by the build at the chosen channel).
+   */
+  async channelMinimums(
+    productIds: string[],
+    audience: QuickOrderImportAudience,
+    salesChannelId?: string,
+  ): Promise<ReadonlyMap<string, number | null>> {
+    if (audience === 'unrestricted' || productIds.length === 0) return new Map();
+    const channelId = salesChannelId ?? currentSalesChannel()?.id ?? null;
+    if (channelId === null) return new Map();
+    const rules = await this.availability.effectiveOrderRules(productIds, channelId);
+    return new Map([...rules].map(([productId, rule]) => [productId, rule.minOrderQuantity]));
   }
 
   async findProductsBySku(
