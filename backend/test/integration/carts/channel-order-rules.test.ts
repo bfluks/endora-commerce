@@ -143,16 +143,29 @@ describe('163 — order rules per channel: the minimum (T082) [integration]', ()
     });
 
     it('the quick-order batch into the basket judges the basket’s channel', async () => {
-      const build = (channel: { code: string }) =>
-        h.app.inject({
+      // `/quick-order/build` is the signed-in buyer's, on the system-default channel ("B2C").
+      const build = async () => {
+        const res = await h.app.inject({
           method: 'POST',
           url: '/api/v1/quick-order/build',
-          cookies: anonBasket(),
-          headers: { 'x-sales-channel': channel.code },
-          payload: { target: 'cart', items: [{ productId: P.id, quantity: 5 }] },
+          cookies: CUSTOMER,
+          payload: { target: 'cart', items: [{ productId: R.id, quantity: 5 }] },
         });
-      expect((await build(b2b)).statusCode).toBe(422);
-      expect((await build(b2c)).statusCode).toBeLessThan(300);
+        expect(res.statusCode, res.body).toBe(200);
+        return (res.json() as { data: { rejected: Array<{ reason: string }> } }).data.rejected;
+      };
+      // A minimum in B2B does not reach the B2C basket …
+      await setChannelMinimum(R.id, b2b.id, 10);
+      try {
+        expect(await build()).toEqual([]);
+        await completeActiveBaskets();
+        // … B2C's own does.
+        await setChannelMinimum(R.id, b2c.id, 10);
+        expect(await build()).toEqual([expect.objectContaining({ reason: 'below_minimum' })]);
+      } finally {
+        await setChannelMinimum(R.id, b2b.id, null);
+        await setChannelMinimum(R.id, b2c.id, null);
+      }
     });
   });
 
