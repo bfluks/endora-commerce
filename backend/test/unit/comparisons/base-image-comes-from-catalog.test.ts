@@ -181,7 +181,8 @@ describe('comparisons — the base image arrives over catalogGalleryPort', () =>
     ]).buildOwnerView(COMPARISON, 'channel-1');
 
     expect(baseImageUrls).toHaveBeenCalledTimes(1);
-    expect(baseImageUrls).toHaveBeenCalledWith([PRODUCT_A, PRODUCT_B]);
+    // Feature 163 (MED-1 = A) — the base image as the viewer's resolved channel shows it.
+    expect(baseImageUrls).toHaveBeenCalledWith([PRODUCT_A, PRODUCT_B], 'channel-1');
     expect(view.products.map((p) => p.primaryAssetUrl)).toEqual([
       'https://cdn.test/a.png',
       null,

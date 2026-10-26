@@ -644,7 +644,9 @@ export class ComparisonService {
     const visibleProductIds = products.map((p) => p.id);
     const baseImageByProduct =
       visibleProductIds.length > 0
-        ? await this.catalogGallery.baseImageUrls(visibleProductIds)
+        ? // Feature 163 (FR-076, owner decision MED-1 = A) — the base image as the
+          // viewer's resolved channel shows it: an image hidden there is not served.
+          await this.catalogGallery.baseImageUrls(visibleProductIds, viewerSalesChannelId)
         : new Map<string, string | null>();
 
     // Comparable attribute definitions (catalog adapter port — Constitution I).

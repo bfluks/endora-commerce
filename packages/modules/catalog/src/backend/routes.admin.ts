@@ -1526,13 +1526,10 @@ export async function registerCatalogAdminRoutes(
       },
       async (request, reply) => {
         const body = createAttachmentRequestSchema.parse(request.body);
+        // Feature 163 (FR-080) — one audit entry per request: the service's Command
+        // writes it, so the route writes none of its own.
         const a = await att.createAttachment(request.params.productId, body);
         reply.status(201);
-        await auditEmit(request, {
-          action: 'attachment.create',
-          objectType: 'product_attachment',
-          objectId: a.id,
-        });
         return { data: a };
       },
     );
@@ -1545,16 +1542,13 @@ export async function registerCatalogAdminRoutes(
       },
       async (request) => {
         const body = updateAttachmentRequestSchema.parse(request.body);
+        // Feature 163 (FR-080) — one audit entry per request: the service's Command
+        // writes it, so the route writes none of its own.
         const a = await att.updateAttachment(
           request.params.productId,
           request.params.attachmentId,
           body,
         );
-        await auditEmit(request, {
-          action: 'attachment.update',
-          objectType: 'product_attachment',
-          objectId: request.params.attachmentId,
-        });
         return { data: a };
       },
     );
@@ -1598,13 +1592,10 @@ export async function registerCatalogAdminRoutes(
       },
       async (request, reply) => {
         const body = createPackagingUnitRequestSchema.parse(request.body);
+        // Feature 163 (FR-080) — one audit entry per request: the service's Command
+        // writes it, so the route writes none of its own.
         const unit = await pkg.create(request.params.productId, body);
         reply.status(201);
-        await auditEmit(request, {
-          action: 'packaging_unit.create',
-          objectType: 'product_packaging_unit',
-          objectId: unit.id,
-        });
         return { data: unit };
       },
     );
@@ -1617,16 +1608,13 @@ export async function registerCatalogAdminRoutes(
       },
       async (request) => {
         const body = updatePackagingUnitRequestSchema.parse(request.body);
+        // Feature 163 (FR-080) — one audit entry per request: the service's Command
+        // writes it, so the route writes none of its own.
         const unit = await pkg.update(
           request.params.productId,
           request.params.unitId,
           body,
         );
-        await auditEmit(request, {
-          action: 'packaging_unit.update',
-          objectType: 'product_packaging_unit',
-          objectId: request.params.unitId,
-        });
         return { data: unit };
       },
     );
@@ -2092,6 +2080,9 @@ function serializeAdminAttribute(
     // Feature 061 (additive) — id of the backing product-host Custom Field
     // definition (adminAttributeResponseSchema.customFieldDefinitionId).
     customFieldDefinitionId: a.customFieldDefinitionId,
+    // Feature 023 / 163 (T095b) — the scope flags the attribute editor shows and edits.
+    channelScoped: a.channelScoped,
+    languageScoped: a.languageScoped,
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
   };
