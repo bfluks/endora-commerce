@@ -64,7 +64,7 @@ import { ProductOverridesService } from './services/product-overrides.service.js
 import { ProductScopesService } from './services/product-scopes.service.js';
 import { UrlKeyService } from './services/url-key.service.js';
 import { ScopeOverviewService } from './services/scope-overview.service.js';
-import { ScopeCompletenessGate } from './services/scope-completeness.js';
+import { composeCompletenessGate } from './services/scope-completeness.js';
 import { AttributeScopePreviewService } from './services/attribute-scope-preview.js';
 import { ProductScopeContextService } from './services/product-scope-context.service.js';
 import { ProductValueResolverService } from './services/product-value-resolver.service.js';
@@ -358,10 +358,14 @@ export function catalogModule(options: CatalogModuleOptions) {
     // Feature 163 (FR-060, FR-061) — the completeness gate, composed into the
     // operator's admin services only (this file); the integration ports registered in
     // `index.ts` are built without it, so imports and connectors are never gated (A-6).
-    const completenessGate =
-      options.salesChannelMembership && attributeReadService && options.settingsReadPort
-        ? new ScopeCompletenessGate(options.salesChannelMembership, attributeReadService, options.settingsReadPort)
-        : undefined;
+    const completenessGate = composeCompletenessGate(
+      {
+        membership: options.salesChannelMembership,
+        attributeRead: attributeReadService,
+        settings: options.settingsReadPort,
+      },
+      options.log ?? app.log,
+    );
     const adminService = new CatalogAdminService(
       options.emFactory,
       options.eventBus as CatalogEventBus,
