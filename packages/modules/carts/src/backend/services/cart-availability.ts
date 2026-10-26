@@ -3,6 +3,7 @@ import {
   scopeLanguageOf,
   type CatalogProductAvailabilityPort,
   type ProductAudience,
+  withChannelOrderRules,
 } from '@endora-commerce/contracts';
 import { currentSalesChannel } from '@endora-commerce/platform/kernel';
 
@@ -49,6 +50,30 @@ export async function availableRecords<T extends { id: string }>(
     { channelId: scope.channelId, languageCode: scope.languageCode, audience: scope.audience },
   );
   return records.filter((r) => available.has(r.id));
+}
+
+/**
+ * Feature 163 (FR-100, research R26) — `records` with the basket channel's effective
+ * minimum order quantity and returnable flag in place of the global ones, so the
+ * minimums the basket judges and the minimum its view reports are the channel's.
+ * A basket with no channel is not asked about (FR-007); its records are returned
+ * as they are.
+ */
+export async function withBasketOrderRules<
+  T extends { id: string; minOrderQuantity: number | null; returnable: boolean },
+>(
+  availability: Pick<CatalogProductAvailabilityPort, 'effectiveOrderRules'>,
+  records: readonly T[],
+  channelId: string | null | undefined,
+): Promise<T[]> {
+  if (records.length === 0 || !channelId) return [...records];
+  return withChannelOrderRules(
+    records,
+    await availability.effectiveOrderRules(
+      records.map((r) => r.id),
+      channelId,
+    ),
+  );
 }
 
 /** The first `Accept-Language` tag without its quality parameter — the one home is `@endora-commerce/contracts`. */
