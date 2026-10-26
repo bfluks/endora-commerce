@@ -676,6 +676,21 @@ export const manifest = defineModuleManifest({
       ],
       weight: 200,
     },
+    // Feature 163, owner decision PAL-1 = B (2026-10-26) — the product list's
+    // Archived tab as a palette row of its own. A `targetRoute` takes no query
+    // string, so it opens a dedicated route the admin layer declares before the
+    // editor's `/catalog/products/:id`. Polish keywords are one word per entry
+    // (`check:default-language-prose`).
+    {
+      id: 'open-archived-products',
+      labelKey: 'actions.openArchivedProducts.label',
+      descriptionKey: 'actions.openArchivedProducts.description',
+      icon: 'Archive',
+      targetRoute: '/catalog/products/archived',
+      requiredPermission: 'catalog:read',
+      keywords: ['archived', 'archive', 'restore', 'archived products', 'archiwum', 'zarchiwizowane', 'przywróć'],
+      weight: 210,
+    },
     {
       id: 'open-categories',
       labelKey: 'actions.openCategories.label',
