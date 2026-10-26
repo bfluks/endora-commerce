@@ -725,7 +725,8 @@ function AttributeForm({ mode, attribute, onSubmit, onCancel }: AttributeFormPro
         </fieldset>
       ) : null}
       <div className="flex gap-2">
-        <Button type="submit" disabled={busy}>
+        {/* Disabled and announced as busy while the save — or a narrowing's preview — runs (D18). */}
+        <Button type="submit" disabled={busy} aria-busy={busy || undefined}>
           {isEdit ? t('attributes.action.saveEdit') : t('attributes.action.create')}
         </Button>
         {onCancel ? (
