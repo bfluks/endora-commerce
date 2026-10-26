@@ -354,26 +354,26 @@ export function ProductEditor(): ReactNode {
           );
           navigate(`/catalog/products/${res.data.id}`);
         } else if (id) {
-          // Feature 023 — page-Save commits both the per-language baseline
-          // (carried by `trimmedName` / `trimmedDescription` via the existing
-          // PATCH) AND any pending channel-scoped override drafts held in
-          // the ProductScopeEditor panel. Run them in parallel; if the
-          // override flush rejects, the page PATCH still committed.
-          const [saved] = await Promise.all([
-            apiClient.patch<{ data: AdminProduct; warnings?: ScopeWarning[] }>(
-              `/api/v1/admin/catalog/products/${id}`,
-              {
-                sku: sku.trim(),
-                status,
-                name: trimmedName,
-                description: trimmedDescription,
-                categoryIds,
-                attributeValues,
-                visibility,
-                ...(attributeSetId ? { attributeSetId } : {}),
-                ...(windowPatch ?? {}),
-              },
-            ),
+          // Feature 023 — page-Save commits the per-language baseline (the product
+          // PATCH) and the drafts staged in the ProductScopeEditor panel and the
+          // gallery. Feature 163 (US6 #3): the PATCH goes first and alone — when the
+          // completeness gate refuses it (`422 SCOPE_INCOMPLETE`) nothing else is
+          // written, so "not saved, still in the form" is true of the whole change.
+          const saved = await apiClient.patch<{ data: AdminProduct; warnings?: ScopeWarning[] }>(
+            `/api/v1/admin/catalog/products/${id}`,
+            {
+              sku: sku.trim(),
+              status,
+              name: trimmedName,
+              description: trimmedDescription,
+              categoryIds,
+              attributeValues,
+              visibility,
+              ...(attributeSetId ? { attributeSetId } : {}),
+              ...(windowPatch ?? {}),
+            },
+          );
+          await Promise.all([
             scopeEditorRef.current?.flushOverrides() ?? Promise.resolve(),
             galleryRef.current?.flushGallery() ?? Promise.resolve(),
           ]);
