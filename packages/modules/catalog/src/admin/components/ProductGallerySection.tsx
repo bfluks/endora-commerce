@@ -13,7 +13,7 @@ import {
 import { GripVertical } from 'lucide-react';
 import { GALLERY_ALT_TEXT_MAX, type AssetSummary, type AssetDetail, type GalleryChannelRoles, type GalleryItem } from '@endora-commerce/contracts';
 import { ApiError, apiClient, toAbsoluteAssetUrl, useAuth } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
+import { Alert, AlertDescription, Button, Card, Checkbox, CardContent, CardHeader, CardTitle, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
 import { AssetPicker, TouchReorderButtons } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import type { ScopeContext } from './ProductScopeEditor.js';
@@ -683,8 +683,7 @@ function GalleryRow({
       </TableCell>
       {channel ? (
         <TableCell className="text-center">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={item.hiddenInChannels.includes(channel.id)}
             disabled={scopeDisabled}
             aria-label={t('productEditor.gallery.hide.label', { item: name, channel: channel.name })}

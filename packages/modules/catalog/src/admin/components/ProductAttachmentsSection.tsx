@@ -1,14 +1,26 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
+import type { ProductAttachment } from '@endora-commerce/contracts';
+import { ApiError, apiClient, useAuth } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
 import { AssetPicker } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import type { ScopeContext } from './ProductScopeEditor.js';
+import { AttachmentScopesDialog } from './AttachmentScopesDialog.js';
+import { getProductScopeContext } from '../lib/product-scopes-api.js';
+import { channelNameIn, type TranslationMap } from '../lib/media-scopes.js';
 
 // ---------------------------------------------------------------------------
 // Attachments section (T086) — admin CRUD for Product Attachments. The
 // Library picker (feature 013 / US1) replaces the manual UUID input; assets
 // are picked from the Library or uploaded inline.
+//
+// Feature 163 (T141, US9 #4, FR-078) — the list is the admin read, so an
+// attachment hidden in the channel the public read resolves to stays listed (the
+// public read only lends the file links). Each row opens its names and
+// descriptions per language and its hidden channels.
 // ---------------------------------------------------------------------------
+
+type Translate = (key: string, params?: Record<string, string>) => string;
 
 interface AdminAttachmentType {
   id: string;
@@ -25,14 +37,28 @@ interface AdminAttachment {
   name: string;
   description: string | null;
   position: number;
+  nameTranslations: TranslationMap;
+  descriptionTranslations: TranslationMap;
+  hiddenInChannels: string[];
   asset?: { url: string; filename: string; mimeType: string };
-  type?: { code: string; name: Record<string, string> };
+}
+
+/** What the public product read carries that the admin read does not: the file links. */
+interface PublicAttachments {
+  attachments?: Array<{
+    id: string;
+    asset: { id: string; url: string; filename: string; mimeType: string };
+  }>;
 }
 
 export function AttachmentsSection({ productId }: { productId: string }): ReactNode {
-  const t = useTranslation('catalog');
+  const t = useTranslation('catalog') as Translate;
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('catalog:write');
   const [attachments, setAttachments] = useState<AdminAttachment[]>([]);
   const [types, setTypes] = useState<AdminAttachmentType[]>([]);
+  const [context, setContext] = useState<ScopeContext | null>(null);
+  const [editing, setEditing] = useState<AdminAttachment | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -41,55 +67,56 @@ export function AttachmentsSection({ productId }: { productId: string }): ReactN
     setLoading(true);
     setError(null);
     try {
-      const [detail, typesRes] = await Promise.all([
-        apiClient.get<{
-          data: {
-            attachments?: Array<{
-              id: string;
-              position: number;
-              name: string;
-              description: string | null;
-              type: { id: string; code: string; name: Record<string, string> };
-              asset: {
-                id: string;
-                kind: string;
-                url: string;
-                filename: string;
-                sizeBytes: number;
-                mimeType: string;
-              };
-            }>;
-          };
-        }>(`/api/v1/catalog/products/${productId}`),
+      const [list, typesRes, scope, detail] = await Promise.all([
+        apiClient.get<{ data: ProductAttachment[] }>(`/api/v1/admin/catalog/products/${productId}/attachments`),
         apiClient.get<{ data: AdminAttachmentType[] }>(
           '/api/v1/admin/catalog/attachment-types',
         ),
+        getProductScopeContext(productId).catch(() => null),
+        apiClient
+          .get<{ data: PublicAttachments }>(`/api/v1/catalog/products/${productId}`)
+          .catch(() => ({ data: {} as PublicAttachments })),
       ]);
-      const detailAttachments = detail.data.attachments ?? [];
+      const assetById = new Map((detail.data?.attachments ?? []).map((a) => [a.id, a.asset]));
       setAttachments(
-        detailAttachments.map((a) => ({
-          id: a.id,
-          productId,
-          assetId: a.asset.id,
-          attachmentTypeId: a.type.id,
-          name: a.name,
-          description: a.description,
-          position: a.position,
-          asset: {
-            url: a.asset.url,
-            filename: a.asset.filename,
-            mimeType: a.asset.mimeType,
-          },
-          type: { code: a.type.code, name: a.type.name },
-        })),
+        (list.data ?? []).map((a) => {
+          const asset = assetById.get(a.id);
+          return {
+            id: a.id,
+            productId,
+            assetId: a.assetId,
+            attachmentTypeId: a.attachmentTypeId,
+            name: a.name,
+            description: a.description,
+            position: a.position,
+            nameTranslations: { ...(a.nameTranslations ?? {}) },
+            descriptionTranslations: { ...(a.descriptionTranslations ?? {}) },
+            hiddenInChannels: [...(a.hiddenInChannels ?? [])].sort(),
+            ...(asset ? { asset: { url: asset.url, filename: asset.filename, mimeType: asset.mimeType } } : {}),
+          };
+        }),
       );
       setTypes(typesRes.data);
+      setContext(scope);
     } catch (err) {
       setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.attachments.error.load'));
     } finally {
       setLoading(false);
     }
   }, [productId, t]);
+
+  const typeName = (typeId: string): string => {
+    const type = types.find((typ) => typ.id === typeId);
+    return type ? (type.name['en-US'] ?? type.code) : '—';
+  };
+  const hiddenIn = (attachment: AdminAttachment): string | null =>
+    attachment.hiddenInChannels.length === 0
+      ? null
+      : t('productEditor.mediaScopes.hiddenIn', {
+          channels: attachment.hiddenInChannels
+            .map((id) => channelNameIn(context, id, t('productEditor.mediaScopes.unknownChannel')))
+            .join(', '),
+        });
 
   useEffect(() => {
     void refresh();
@@ -169,8 +196,13 @@ export function AttachmentsSection({ productId }: { productId: string }): ReactN
             <TableBody>
               {attachments.map((att) => (
                 <TableRow key={att.id}>
-                  <TableCell>{att.type?.name['en-US'] ?? att.type?.code ?? '—'}</TableCell>
-                  <TableCell className="font-medium">{att.name}</TableCell>
+                  <TableCell>{typeName(att.attachmentTypeId)}</TableCell>
+                  <TableCell>
+                    <div className="font-medium">{att.name}</div>
+                    {hiddenIn(att) ? (
+                      <div className="text-xs text-muted-foreground">{hiddenIn(att)}</div>
+                    ) : null}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">
                     {att.description ?? '—'}
                   </TableCell>
@@ -188,7 +220,16 @@ export function AttachmentsSection({ productId }: { productId: string }): ReactN
                       '—'
                     )}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="space-x-2 whitespace-nowrap">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      aria-label={t('productEditor.attachments.scopes.title', { name: att.name })}
+                      onClick={() => setEditing(att)}
+                    >
+                      {t('productEditor.attachments.scopes.open')}
+                    </Button>
                     <Button
                       type="button"
                       size="sm"
@@ -206,6 +247,19 @@ export function AttachmentsSection({ productId }: { productId: string }): ReactN
 
         <CreateAttachmentInline types={types} onCreate={handleCreate} />
       </CardContent>
+      {editing ? (
+        <AttachmentScopesDialog
+          productId={productId}
+          attachment={editing}
+          context={context}
+          canWrite={canWrite}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setInfo(t('productEditor.attachments.scopes.saved'));
+            void refresh();
+          }}
+        />
+      ) : null}
     </Card>
   );
 }
