@@ -113,7 +113,9 @@ export function createCatalogProductScopeWritePort(
     async applyScopes(productId, input, options) {
       const request = toScopesPatch(input);
       if (request.channels.length > 0 || request.global !== undefined) {
-        await getScopes().apply(productId, request);
+        // The write alone (checkpoint C code review, N2): an integration reads nothing
+        // back, and passes no completeness mode — it is never gated (A-6).
+        await getScopes().writeStatus(productId, request);
       }
       const urlKeys = input.urlKeys?.length ? await getUrlKeys().importKeys(productId, input.urlKeys, options.source) : [];
       return { urlKeys };
