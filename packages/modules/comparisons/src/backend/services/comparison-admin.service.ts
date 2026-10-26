@@ -171,6 +171,9 @@ export class ComparisonAdminService {
       comparison,
       comparison.salesChannelId,
       { kind: 'administrator' },
+      // Owner decision CMP-1 = A — the operator's audit screen reads the owner's
+      // comparison as the owner keeps it, unavailable columns included.
+      'owner',
     );
 
     const channel = await em.findOne(SalesChannel, { id: comparison.salesChannelId });

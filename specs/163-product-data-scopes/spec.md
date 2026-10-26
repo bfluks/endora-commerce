@@ -266,6 +266,13 @@ It replaces the 2026-10-21 Q1 answer and extends N1.
   2026-10-26)** — at the named channel's **default language** (its translation there, else the global
   name), consistent with the product name beside it (FR-079). The channel is read through the kernel's
   channel accessor, and only when a unit is named. A buyer's basket keeps the request language.
+- Q: (CMP-1) What does a reader who is not a comparison's owner see for a column whose product is not
+  available at their (channel, language)? Until now: the column with its name, SKU, price, image and
+  values, marked unavailable. → A: **CMP-1 = A (owner, 2026-10-26)** — for any reader who is not the
+  owner (a share-link recipient), such a column collapses to the existing `(removed product)` column
+  shape: no name, SKU, slug, price, attributes or image. A removed product and an unavailable one must
+  not be distinguishable to that reader, and no count may reveal the difference. The owner keeps seeing
+  their own history with `available: false` (FR-002, FR-004; `contracts/consumers.md` row 12).
 
 ## Current state (origin/master cde5563ea)
 
