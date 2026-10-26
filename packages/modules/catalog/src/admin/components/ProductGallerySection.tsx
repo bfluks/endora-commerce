@@ -14,7 +14,7 @@ import { GripVertical } from 'lucide-react';
 import { GALLERY_ALT_TEXT_MAX, type AssetSummary, type AssetDetail, type GalleryChannelRoles, type GalleryItem } from '@endora-commerce/contracts';
 import { ApiError, apiClient, toAbsoluteAssetUrl, useAuth } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Button, Card, Checkbox, CardContent, CardHeader, CardTitle, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
-import { AssetPicker, TouchReorderButtons } from '@endora-commerce/admin-kit/components';
+import { AssetPicker, ModalDialog, TouchReorderButtons } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import type { ScopeContext } from './ProductScopeEditor.js';
 import { getProductScopeContext } from '../lib/product-scopes-api.js';
@@ -98,13 +98,51 @@ interface Baseline {
 
 const EMPTY_BASELINE: Baseline = { items: new Map(), order: '', roles: new Map() };
 
-export const GallerySection = forwardRef<GallerySectionHandle, { productId: string }>(
-  function GallerySection({ productId }, ref): ReactNode {
+/** The file an asset URL names, for telling images apart while their places shift (D13). */
+function assetFileName(url: string | undefined): string | null {
+  if (!url) return null;
+  const last = url.split('?')[0]?.split('/').filter(Boolean).pop();
+  if (!last) return null;
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
+
+/** Whether the staged gallery differs from the server truth the page Save diffs against. */
+function hasStagedEdits(items: AdminGalleryItem[], roles: Map<string, ChannelRoles>, baseline: Baseline): boolean {
+  if (items.map((it) => it.id).join(',') !== baseline.order) return true;
+  for (const it of items) {
+    const before = baseline.items.get(it.id);
+    if (!before) continue;
+    if (before.labels !== [...it.labels].sort().join(',')) return true;
+    if (translationPatch(before.altText, it.altText)) return true;
+    if (!sameSet(before.hiddenInChannels, it.hiddenInChannels)) return true;
+  }
+  for (const [forChannel, draft] of roles) {
+    if (channelRolesChanges(baseline.roles.get(forChannel) ?? NO_CHANNEL_ROLES, draft)) return true;
+  }
+  return false;
+}
+
+export interface GallerySectionProps {
+  productId: string;
+  /**
+   * Told whether staged (unsaved) edits exist, so the page's unsaved-changes prompt
+   * covers them (review D4).
+   */
+  onDirtyChange?: (dirty: boolean) => void;
+}
+
+export const GallerySection = forwardRef<GallerySectionHandle, GallerySectionProps>(
+  function GallerySection({ productId, onDirtyChange }, ref): ReactNode {
   const t = useTranslation('catalog') as Translate;
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('catalog:write');
   const scopeSelectId = useId();
   const languageSelectId = useId();
+  const stagedReasonId = useId();
   const [items, setItems] = useState<AdminGalleryItem[]>([]);
   const [images, setImages] = useState<AdminProductImage[]>([]);
   const [context, setContext] = useState<ScopeContext | null>(null);
@@ -116,6 +154,8 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  /** The item a Remove is waiting on the operator's yes for (D4: a kit dialog, not `confirm()`). */
+  const [removing, setRemoving] = useState<string | null>(null);
   const dragIdRef = useRef<string | null>(null);
   // Server-truth snapshot used to diff the staged edits that the page-Save button flushes.
   const baselineRef = useRef<Baseline>(EMPTY_BASELINE);
@@ -204,6 +244,14 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
       t('productEditor.gallery.itemName', { n: String(items.findIndex((it) => it.id === itemId) + 1) }),
     [items, t],
   );
+  /** "Image N · file" — the role selects' wording, since the place alone shifts on reorder (D13). */
+  const itemOptionName = useCallback(
+    (itemId: string): string => {
+      const file = assetFileName(items.find((it) => it.id === itemId)?.asset?.url);
+      return file ? t('productEditor.gallery.itemOption', { item: itemName(itemId), file }) : itemName(itemId);
+    },
+    [items, itemName, t],
+  );
   const channelName = useCallback(
     (id: string): string => channelNameIn(context, id, t('productEditor.mediaScopes.unknownChannel')),
     [context, t],
@@ -291,7 +339,6 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
 
   const handleDelete = useCallback(
     async (itemId: string): Promise<void> => {
-      if (!confirm(t('productEditor.gallery.removeConfirm'))) return;
       setBusy(true);
       try {
         await apiClient.delete(`/api/v1/admin/catalog/products/${productId}/gallery/${itemId}`);
@@ -301,6 +348,7 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
         setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.gallery.error.delete'));
       } finally {
         setBusy(false);
+        setRemoving(null);
       }
     },
     [productId, refresh, t],
@@ -356,14 +404,39 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
 
   useImperativeHandle(ref, () => ({ flushGallery }), [flushGallery]);
 
+  // D4 — staged edits feed the page's unsaved-changes prompt.
+  const dirty = !loading && hasStagedEdits(items, roles, baselineRef.current);
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
   const disabled = busy || loading;
   const scopeDisabled = disabled || !canWrite;
+  // UX-2 = A — Add and Remove write at once and re-read the gallery, which would drop the
+  // staged edits, so while there are any they wait for the page Save, and say so.
+  const addRemoveBlocked = dirty;
 
-  /** The item holding a role globally (the staged labels), named for "use inherited". */
-  const globalHolderName = (label: GalleryLabel): string => {
+  /**
+   * The item holding a role globally (the staged labels), named for "use inherited" —
+   * saying so when it is hidden in the channel being edited (C-9).
+   */
+  const globalHolderName = (label: GalleryLabel, forChannel: string): string => {
     const holder = items.find((it) => it.labels.includes(label));
-    return holder ? itemName(holder.id) : t('productEditor.gallery.channelRole.none');
+    if (!holder) return t('productEditor.gallery.channelRole.none');
+    return holder.hiddenInChannels.includes(forChannel)
+      ? t('productEditor.gallery.channelRole.hiddenHere', { item: itemName(holder.id) })
+      : itemOptionName(holder.id);
   };
+
+  /** A channel's own role holders that are hidden in that very channel (D13). */
+  const hiddenHolders = channel
+    ? GALLERY_LABELS.flatMap((label) => {
+        const holderId = roles.get(channel.id)?.[ROLE_KEYS[label]] ?? null;
+        const holder = holderId ? items.find((it) => it.id === holderId) : undefined;
+        return holder && holder.hiddenInChannels.includes(channel.id) ? [{ label, holder }] : [];
+      })
+    : [];
+  const removingItem = removing ? items.find((it) => it.id === removing) ?? null : null;
 
   return (
     <Card className="mt-4">
@@ -371,6 +444,7 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
         <CardTitle>{t('productEditor.gallery.title')}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {!canWrite ? <p className="text-sm text-muted-foreground">{t('productEditor.gallery.readOnly')}</p> : null}
         {error ? (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
@@ -457,6 +531,7 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
                   </Select>
                   <p id={`${languageSelectId}-hint`} className="text-xs text-muted-foreground">
                     {t('productEditor.gallery.alt.hint')}
+                    {channel ? ` ${t('productEditor.gallery.alt.hintChannel')}` : ''}
                   </p>
                 </div>
               ) : null}
@@ -486,11 +561,13 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
                         onChange={(e): void => setChannelRole(channel.id, label, e.target.value || null)}
                       >
                         <option value="">
-                          {t('productEditor.gallery.channelRole.inherited', { item: globalHolderName(label) })}
+                          {t('productEditor.gallery.channelRole.inherited', {
+                            item: globalHolderName(label, channel.id),
+                          })}
                         </option>
                         {options.map((it) => (
                           <option key={it.id} value={it.id}>
-                            {itemName(it.id)}
+                            {itemOptionName(it.id)}
                           </option>
                         ))}
                       </Select>
@@ -498,6 +575,21 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
                   );
                 })}
               </div>
+            ) : null}
+            {channel && hiddenHolders.length > 0 ? (
+              <Alert variant="warning">
+                <AlertDescription>
+                  {hiddenHolders
+                    .map(({ label, holder }) =>
+                      t('productEditor.gallery.channelRole.hiddenHolder', {
+                        item: itemName(holder.id),
+                        role: t(`productEditor.gallery.label.${label}`).toLowerCase(),
+                        channel: channel.name,
+                      }),
+                    )
+                    .join(' ')}
+                </AlertDescription>
+              </Alert>
             ) : null}
 
             <p className="text-xs text-muted-foreground">{t('productEditor.gallery.dragHint')}</p>
@@ -558,7 +650,8 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
                       dragIdRef.current = null;
                     }}
                     onPreview={setPreviewUrl}
-                    onDelete={handleDelete}
+                    onDelete={setRemoving}
+                    removeBlockedReasonId={canWrite && addRemoveBlocked ? stagedReasonId : null}
                   />
                 ))}
               </TableBody>
@@ -566,32 +659,61 @@ export const GallerySection = forwardRef<GallerySectionHandle, { productId: stri
           </>
         )}
 
-        <CreateGalleryItemInline disabled={disabled} onCreate={handleCreate} />
+        {canWrite && addRemoveBlocked ? (
+          <p id={stagedReasonId} className="text-sm text-muted-foreground">
+            {t('productEditor.gallery.stagedBlocksAddRemove')}
+          </p>
+        ) : null}
+        <CreateGalleryItemInline
+          disabled={disabled || addRemoveBlocked}
+          blockedReasonId={canWrite && addRemoveBlocked ? stagedReasonId : null}
+          onCreate={handleCreate}
+        />
       </CardContent>
 
       {previewUrl ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('productEditor.gallery.preview.title')}
-          onClick={() => setPreviewUrl(null)}
+        <ModalDialog
+          title={t('productEditor.gallery.preview.title')}
+          onClose={(): void => setPreviewUrl(null)}
+          widthClassName="max-w-4xl"
+          footer={
+            <Button type="button" variant="outline" onClick={(): void => setPreviewUrl(null)}>
+              {t('productEditor.gallery.preview.close')}
+            </Button>
+          }
         >
           <img
             src={previewUrl}
             alt={t('productEditor.gallery.preview.title')}
-            className="max-h-full max-w-full rounded shadow-lg"
-            onClick={(e) => e.stopPropagation()}
+            className="mx-auto max-h-[70vh] max-w-full rounded"
           />
-          <button
-            type="button"
-            className="b2b-btn b2b-btn--sm"
-            style={{ position: 'fixed', top: 16, right: 16 }}
-            onClick={() => setPreviewUrl(null)}
-          >
-            {t('productEditor.gallery.preview.close')}
-          </button>
-        </div>
+        </ModalDialog>
+      ) : null}
+
+      {removingItem ? (
+        <ModalDialog
+          title={t('productEditor.gallery.remove.title', { item: itemName(removingItem.id) })}
+          busy={busy}
+          onClose={(): void => setRemoving(null)}
+          footer={
+            <>
+              <Button type="button" variant="outline" disabled={busy} onClick={(): void => setRemoving(null)}>
+                {t('productEditor.gallery.remove.cancel')}
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={busy}
+                aria-busy={busy}
+                onClick={(): void => void handleDelete(removingItem.id)}
+              >
+                {t('productEditor.gallery.remove.confirm')}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm">{t('productEditor.gallery.remove.body', { item: itemOptionName(removingItem.id) })}</p>
+        </ModalDialog>
       ) : null}
     </Card>
   );
@@ -618,6 +740,7 @@ function GalleryRow({
   onDragEnd,
   onPreview,
   onDelete,
+  removeBlockedReasonId,
 }: {
   item: AdminGalleryItem;
   name: string;
@@ -641,6 +764,8 @@ function GalleryRow({
   onDragEnd: () => void;
   onPreview: (url: string) => void;
   onDelete: (id: string) => void;
+  /** Set while Remove waits for the page Save (UX-2): the id of the sentence saying so. */
+  removeBlockedReasonId: string | null;
 }): ReactNode {
   const t = useTranslation('catalog') as Translate;
   const url = item.asset?.url ? toAbsoluteAssetUrl(item.asset.url) : null;
@@ -706,10 +831,11 @@ function GalleryRow({
                   checked={checked}
                   disabled={disabled}
                   aria-label={t(`productEditor.gallery.label.${label}`)}
-                  onChange={() => {}}
-                  onClick={() =>
-                    checked ? onClearLabel(label) : onAssignLabel(label, item.id)
-                  }
+                  onChange={() => onAssignLabel(label, item.id)}
+                  // A checked radio fires no change: clicking it again clears the role.
+                  onClick={() => {
+                    if (checked) onClearLabel(label);
+                  }}
                 />
               </TableCell>
             );
@@ -744,8 +870,9 @@ function GalleryRow({
           type="button"
           size="sm"
           variant="destructive"
-          disabled={disabled}
-          onClick={() => void onDelete(item.id)}
+          disabled={disabled || removeBlockedReasonId !== null}
+          aria-describedby={removeBlockedReasonId ?? undefined}
+          onClick={() => onDelete(item.id)}
         >
           {t('productEditor.gallery.action.remove')}
         </Button>
@@ -756,9 +883,12 @@ function GalleryRow({
 
 function CreateGalleryItemInline({
   disabled,
+  blockedReasonId,
   onCreate,
 }: {
   disabled: boolean;
+  /** Set while Add waits for the page Save (UX-2): the id of the sentence saying so. */
+  blockedReasonId: string | null;
   onCreate: (assetId: string) => Promise<void>;
 }): ReactNode {
   const t = useTranslation('catalog');
@@ -801,6 +931,7 @@ function CreateGalleryItemInline({
         <Button
           type="button"
           disabled={disabled || !assetId}
+          aria-describedby={blockedReasonId ?? undefined}
           onClick={() => {
             if (!assetId) return;
             void onCreate(assetId).then(() => {
