@@ -22,7 +22,7 @@ import {
 } from '@endora-commerce/contracts';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { StorefrontRevalidator } from '@endora-commerce/platform/http';
-import type { PlatformLogger } from '@endora-commerce/platform/kernel';
+import type { AdminPermissionChecker, PlatformLogger } from '@endora-commerce/platform/kernel';
 import {
   createBulkOperationQueue,
   createBulkOperationWorker,
@@ -169,6 +169,11 @@ export interface CatalogModuleOptions {
    * completion notice reads: the requester's e-mail address.
    */
   adminUsers?: AdminUserReadPort;
+  /**
+   * Feature 163, checkpoint F (S-3) — `admin_roles`' `permissionService`: a queued
+   * bulk operation re-checks, at worker start, that its requester may still write.
+   */
+  permissionChecker?: AdminPermissionChecker;
   /**
    * Feature 005 / T027 — when provided, every newly-created Product is
    * automatically bound to the system-default Sales Channel unless it
@@ -412,6 +417,7 @@ export function catalogModule(options: CatalogModuleOptions) {
         : {}),
       ...(options.mailer ? { mailer: options.mailer } : {}),
       ...(options.adminUsers ? { adminUsers: options.adminUsers } : {}),
+      ...(options.permissionChecker ? { permissionChecker: options.permissionChecker } : {}),
       ...(options.reindexSearchIndexes
         ? { reindexRunner: options.reindexSearchIndexes }
         : {}),

@@ -50,7 +50,7 @@ import type {
   OrganizationDetailsPort,
   ProductAvailability,
 } from '@endora-commerce/contracts';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AdminPermissionChecker, AuditPort } from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBus } from '@endora-commerce/platform/events';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -693,6 +693,11 @@ export function registerModule(ctx: ModuleContext): void {
             // another module's entity against another module's table.
             organizations: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
             adminUsers: lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort'),
+            // Feature 163, checkpoint F (S-3) — the queued bulk operation's requester
+            // is re-checked at worker start. `admin_roles` is declared in
+            // `dependencies`; with it absent the gated port throws and the
+            // operation fails closed.
+            permissionChecker: lazyPort<AdminPermissionChecker>(ctx, 'permissionService'),
             requireAdmin: (permission) => async (req, reply) =>
               cradle().requireAdmin(permission)(req, reply),
             requireApiKey: requireApiKeyGate,
