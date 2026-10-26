@@ -53,7 +53,7 @@ w obu przypadkach każda cena podaje swoją walutę. Niepoprawny kod jest odrzuc
 | `DELETE /api/v1/admin/catalog/categories/:id` | administrator | Usunięcie miękkie; odrzucane z 409, gdy odwołuje się do niej aktywna kategoria podrzędna |
 | `GET /api/v1/admin/catalog/categories/:id/content` | administrator | Treść strony kategorii — jeden dokument Page Buildera na język ([Treść strony kategorii](./catalog/category-content.md)) |
 | `PUT /api/v1/admin/catalog/categories/:id/content` | administrator | Zastąpienie treści strony kategorii; `null` ją czyści |
-| `PUT /api/v1/catalog/products/by-sku/:sku` | klucz API | Idempotentne utworzenie lub aktualizacja (synchronizacja PIM) |
+| `PUT /api/v1/catalog/products/by-sku/:sku` | klucz API | Idempotentne utworzenie lub aktualizacja (synchronizacja PIM); aktualizacja jest audytowana jako `product.update` ze wskazaniem klucza (`apiKeyId`) i nigdy nie podlega kontroli kompletności |
 
 ## Status produktu i archiwizacja
 
@@ -78,7 +78,10 @@ niczego nie zmienia — bez wpisu audytu i bez zdarzenia.
   `fields: { archived: true }` archiwizuje każdy zaznaczony produkt, a `false` je przywraca —
   każdy tą samą akcją i z własnym wpisem audytu. `archived` musi być jedynym polem żądania.
   Duże zaznaczenia działają jako zbiorcza operacja w tle, a jej cofnięcie przywraca każdy
-  produkt do poprzedniego stanu.
+  produkt do poprzedniego stanu. Operacja w tle zapisuje w audycie każdego produktu
+  administratora, który jej zażądał, tak jak operacja wykonana od razu. Archiwizacja i
+  przywracanie blokują produkt, więc dwie równoczesne archiwizacje jednego produktu
+  archiwizują go raz.
 - **Ustawienie `active` nigdy nie przywraca.** Zarchiwizowany produkt pozostaje zarchiwizowany
   niezależnie od statusu; przywraca go tylko Przywróć. Przywrócenie produktu `inactive`
   pozostawia go wyłączonym.

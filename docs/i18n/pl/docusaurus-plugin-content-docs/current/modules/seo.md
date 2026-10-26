@@ -596,8 +596,9 @@ z `?lang=<język>` dla każdego języka innego niż domyślny język kanału.
 
 Trasa publiczna (`GET /catalog/sitemap.xml`) zwraca treść z pamięci podręcznej; gdy wiersz jest
 starszy niż `staleAfterMs` (domyślnie 6 h), mapa jest generowana od razu w trakcie żądania. Zmiana
-produktu, która wpływa na zawartość mapy — jego status w kanale lub języku, okno publikacji
-(również chwila, w której okno się otwiera lub zamyka), grupa odbiorców albo klucze URL — oznacza
+produktu, która wpływa na zawartość mapy — jego status (globalny, w kanale lub w języku),
+archiwizacja, okno publikacji (również chwila, w której okno się otwiera lub zamyka), grupa
+odbiorców (globalna lub kanału) albo klucze URL — oznacza
 mapy wszystkich kanałów w pamięci podręcznej jako nieaktualne, więc następne żądanie buduje je od
 nowa. Odpowiedź ma nagłówek `Cache-Control: public, max-age=3600`, więc poprawnie działające CDN
 przechowują ją przez godzinę.
@@ -617,6 +618,8 @@ klient.
 
 `SeoMetaOverride` (entityType, entityId, salesChannelId?, locale?, title?, description?, ogTitle?,
 ogDescription?, ogImageUrl?; co najmniej jedno z `salesChannelId` i `locale`), `SitemapCache` (pojedynczy klucz, treść, urlCount, byteSize, generatedAt).
+`ogImageUrl` nadpisania to adres `http(s)` albo ścieżka zaczynająca się od pojedynczego `/`; każda
+inna wartość jest odrzucana z `400 VALIDATION_FAILED`.
 
 ## Punkty rozszerzenia
 
