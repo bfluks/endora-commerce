@@ -82,7 +82,7 @@ export function ProductBrowserDialog(props: ProductBrowserDialogProps): ReactNod
 
 const SEARCH_DEBOUNCE_MS = 250;
 const TYPES: readonly ProductBrowserType[] = productTypeSchema.options;
-// Feature 163 (FR-113, R30.4) — the Products list's tabs: three over products that
+// The Products list's tabs: three over products that
 // are not archived, then Archived on its own axis.
 const STATUS_TABS: readonly ProductBrowserStatusFilter[] = ['all', 'active', 'inactive', 'archived'];
 
@@ -381,15 +381,22 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
       id: 'status',
       header: t('productBrowser.column.status'),
       // Archived is shown beside the status, never instead of it: the two are
-      // independent (FR-019), and the word carries it, not a colour alone.
-      render: (row): ReactNode => (
-        <span className="inline-flex flex-wrap gap-1">
-          <Badge variant={STATUS_BADGE_VARIANT[row.status]}>{t(STATUS_LABEL_KEY[row.status])}</Badge>
-          {isProductArchived(row) ? (
-            <Badge variant="secondary">{t('productBrowser.status.archived')}</Badge>
-          ) : null}
-        </span>
-      ),
+      // independent. While archived the status drops to a neutral outline so the
+      // Archived pill — the catalogue's own `b2b-badge--warn` look — is the one
+      // coloured mark, as on the Products list and the editor.
+      render: (row): ReactNode => {
+        const archived = isProductArchived(row);
+        return (
+          <span className="inline-flex flex-wrap gap-1">
+            <Badge variant={archived ? 'outline' : STATUS_BADGE_VARIANT[row.status]}>
+              {t(STATUS_LABEL_KEY[row.status])}
+            </Badge>
+            {archived ? (
+              <span className="b2b-badge b2b-badge--warn">{t('productBrowser.status.archived')}</span>
+            ) : null}
+          </span>
+        );
+      },
     },
     {
       id: 'type',

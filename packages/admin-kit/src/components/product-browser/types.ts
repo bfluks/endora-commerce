@@ -19,7 +19,7 @@ export interface ProductBrowserItem {
   status: ProductBrowserStatus;
   type: ProductBrowserType;
   /**
-   * Feature 163 (FR-019) — when the product was archived, `null` when it is not.
+   * When the product was archived, `null` when it is not.
    * Archived state is independent of `status`. Optional so a host building an item
    * from a source without it (a line it already holds) need not invent one; absent
    * reads as not archived.
