@@ -439,9 +439,7 @@
   "productEditor.restore.failed": "Nie udało się przywrócić produktu. Spróbuj ponownie.",
   "productEditor.field.localizedName": "Nazwa [{locale}]",
   "productEditor.field.localizedDescription": "Opis [{locale}]",
-  "productEditor.seo.title": "SEO per locale",
-  "productEditor.seo.description": "Nadpisania meta per strona znajdują się w module SEO — ten panel ujawni je tu w przyszłej iteracji.",
-  "productEditor.seo.pageTitlePreview": "Tytuł strony (podgląd)",
+  "productEditor.seo.title": "Meta tagi SEO",
   "productEditor.variants.title": "Warianty",
   "productEditor.variants.empty": "Brak wariantów. Konfigurowalny Produkt MUSI mieć co najmniej jeden Wariant zanim będzie mógł zostać aktywowany.",
   "productEditor.variants.error.load": "Wczytywanie nie powiodło się.",
@@ -1427,5 +1425,7 @@
   "productEditor.scopeOverview.field.seoDescription": "Opis SEO",
   "productEditor.scopeOverview.field.seoOgTitle": "Tytuł w mediach społecznościowych",
   "productEditor.scopeOverview.field.seoOgDescription": "Opis w mediach społecznościowych",
-  "productEditor.scopeOverview.field.seoOgImageUrl": "Obraz w mediach społecznościowych"
+  "productEditor.scopeOverview.field.seoOgImageUrl": "Obraz w mediach społecznościowych",
+  "productEditor.seo.link": "Edytuj meta SEO w kanałach →",
+  "productEditor.seo.linkHint": "Tytuły i opisy ustawia się dla kanału sprzedaży i języka na ekranie SEO — wybierz tam ten produkt."
 }
