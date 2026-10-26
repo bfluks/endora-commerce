@@ -62,6 +62,7 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 | Akcja | Otwiera | Uprawnienie |
 | --- | --- | --- |
 | `new-product` | `/catalog/products/new` | `catalog:write` |
+| `open-archived-products` | `/catalog/products/archived` | `catalog:read` |
 | `open-attributes` | `/catalog/attributes` | `catalog:read` |
 | `open-categories` | `/catalog/categories` | `catalog:read` |
 | `open-products` | `/catalog/products` | `catalog:read` |

@@ -41,6 +41,17 @@ const EXPECTED: ReadonlyArray<ExpectedAction> = [
     labelKey: 'actions.newProduct.label',
   },
   {
+    // Feature 163, owner decision PAL-1 = B (2026-10-26) — the Archived tab of the
+    // product list, on a route of its own because a target carries no query string.
+    module: { id: 'catalog', manifest: catalogManifest },
+    actionId: 'open-archived-products',
+    targetRoute: '/catalog/products/archived',
+    icon: 'Archive',
+    requiredPermission: 'catalog:read',
+    weight: 210,
+    labelKey: 'actions.openArchivedProducts.label',
+  },
+  {
     module: { id: 'import_export', manifest: importExportManifest },
     actionId: 'import-products',
     targetRoute: '/import-export',
@@ -168,11 +179,11 @@ const EXPECTED: ReadonlyArray<ExpectedAction> = [
 ];
 
 describe('seeded action manifests — v1 set', () => {
-  it('exactly 14 distinct (moduleId, actionId) pairs', () => {
+  it('exactly 15 distinct (moduleId, actionId) pairs', () => {
     const pairs = EXPECTED.map((e) => `${e.module.id}:${e.actionId}`);
     const unique = new Set(pairs);
-    expect(unique.size).toBe(14);
-    expect(pairs.length).toBe(14);
+    expect(unique.size).toBe(15);
+    expect(pairs.length).toBe(15);
   });
 
   for (const expected of EXPECTED) {

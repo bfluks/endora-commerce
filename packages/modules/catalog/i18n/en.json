@@ -729,6 +729,8 @@
   "nav.bulkOperations.label": "Bulk actions",
   "actions.openProducts.label": "Products",
   "actions.openProducts.description": "Catalog rows",
+  "actions.openArchivedProducts.label": "Archived products",
+  "actions.openArchivedProducts.description": "Products taken out of every sales channel, to restore",
   "actions.openCategories.label": "Categories",
   "actions.openCategories.description": "Tree of catalog categories",
   "actions.openAttributes.label": "Attributes",
