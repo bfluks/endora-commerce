@@ -104,6 +104,9 @@ export interface CatalogProductAvailabilityPort {
 - **Never** answers for an unresolved channel (FR-007): a caller with no channel does not call it; the
   exempt seams (R6) keep their documented exemption.
 - `filterAvailable` is one statement: the SQL of §4 with `id in (…)`.
+- `effectiveNames` and `effectiveOrderRules` apply **no availability**: they answer for every id given.
+  A buyer-facing caller filters with `filterAvailable` first (checkpoint C security review, I8). The
+  same holds for `catalogProductUrlKeyReadPort.effectiveKeys`, which narrows by membership only.
 
 ## 4. SQL restatement (catalog-internal) — `product-availability.sql.ts`
 
