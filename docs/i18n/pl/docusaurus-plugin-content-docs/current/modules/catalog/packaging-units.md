@@ -43,6 +43,12 @@ identyfikatora, jest przyjmowana tylko wtedy, gdy oba pasują do jednej z jednos
 Wszystko inne jest odrzucane z kodem `422 PACKAGING_UNIT_MISMATCH` — identyfikator nieznany,
 usunięty albo należący do innego produktu daje ten sam powód.
 
+**Dla klientów API:** nazwa przesłana bez identyfikatora jest porównywana wyłącznie z
+**globalną** nazwą jednostki, nigdy z jej tłumaczeniami (zob. *Nazwa w języku*). Pozycja,
+która przesyła nazwę widzianą przez kupującego w przetłumaczonym storefroncie — `Pallet`, gdy
+nazwa globalna to `Paleta` — jest odrzucana z kodem `422 PACKAGING_UNIT_MISMATCH` (powód
+`name_unknown`). Należy przesłać `packagingUnitId` albo nazwę globalną.
+
 ## Nazwa w języku
 
 Nazwę jednostki można przetłumaczyć: `nameTranslations` przypisuje nazwę do języka, np.
