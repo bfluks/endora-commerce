@@ -643,8 +643,9 @@ no admin surface offers or labels `draft`.
   `ProductBrowserRules.blockArchived` with reason `archived` — evaluated after the type and before the status,
   so an archived `active` product names the reason that applies; a host that sets it gets no Archived tab
   (Hick). Orders set it (blocked statuses `['inactive']` + archived); quote requests and price lists leave it
-  off, matching their rules before 163 (neither refused an archived product then). The quick search (`ProductPicker`)
-  names an archived product beside its status. Blog's related-products picker badges inactive and archived
+  off, matching their rules before 163 (neither refused an archived product then). With host `rules`, the quick search
+  (`ProductPicker`) names an archived product beside its status; the no-rules path (`SeoPage`, `RfqDetail`, the
+  editor's links picker) keeps its raw status suffix and says nothing about archived. Blog's related-products picker badges inactive and archived
   separately (`productStatus.inactive` added — the key it used, `status.inactive`, was the post status).
   Feed criteria and page-builder's catalog picker lose `draft`.
 - *Palette.* `adminActionSchema` caps an action at ten keywords and `open-products` had nine, so the four R23
