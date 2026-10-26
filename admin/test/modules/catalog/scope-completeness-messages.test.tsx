@@ -358,6 +358,20 @@ describe('the global status save and the completeness gate (US6)', () => {
     expect(await screen.findByText('SKU GATE-SKU is taken.')).toBeTruthy();
   });
 
+  it('says "saved" and a failed save in the admin language (C-10)', async () => {
+    const user = userEvent.setup();
+    patchSpy.mockResolvedValue({ data: { ...PRODUCT, status: 'active' }, warnings: [] });
+    renderEditor('pl');
+    const status = await screen.findByRole('combobox', { name: /^status/i });
+    await waitFor(() => expect((status as HTMLSelectElement).value).toBe('inactive'));
+    await user.selectOptions(status, 'active');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(await screen.findByText(String(catalogPl['productEditor.saved']))).toBeTruthy();
+    patchSpy.mockRejectedValueOnce(new Error('network'));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(await screen.findByText(String(catalogPl['productEditor.error.save']))).toBeTruthy();
+  });
+
   it('says it in Polish', async () => {
     const user = userEvent.setup();
     patchSpy.mockResolvedValue({
