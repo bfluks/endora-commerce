@@ -350,11 +350,24 @@ export function catalogModule(options: CatalogModuleOptions) {
       options.customFieldsPort,
       options.copyWarehouseThresholds,
     );
+    // Feature 163 — scoped values per channel and channel × language. Needs the
+    // membership accessor for FR-014 and the C4 warning, like the overrides.
+    // Owner decision U1 — `organizations` names the audience's organizations in the answer.
+    const scopesService = options.salesChannelMembership
+      ? new ProductScopesService(
+          options.emFactory,
+          options.salesChannelMembership,
+          options.commandBus,
+          options.organizations,
+        )
+      : undefined;
     const bulkUpdateService = new CatalogBulkUpdateService(
       options.emFactory,
       adminService,
       options.salesChannelMembership,
       options.auditLogService,
+      // Feature 163 (FR-050) — bulk scoped status runs the operator's scope write.
+      scopesService,
     );
 
     // Queued bulk-edit (Principle X): large selections persist as `pending`
@@ -534,17 +547,6 @@ export function catalogModule(options: CatalogModuleOptions) {
         )
       : undefined;
 
-    // Feature 163 — scoped values per channel and channel × language. Needs the
-    // membership accessor for FR-014 and the C4 warning, like the overrides.
-    // Owner decision U1 — `organizations` names the audience's organizations in the answer.
-    const scopesService = options.salesChannelMembership
-      ? new ProductScopesService(
-          options.emFactory,
-          options.salesChannelMembership,
-          options.commandBus,
-          options.organizations,
-        )
-      : undefined;
     // Feature 163 — the scope overview (US4) reads membership through the kernel
     // accessor and, for a product in no channel, the active platform languages.
     const scopeOverviewService =
