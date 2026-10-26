@@ -48,7 +48,7 @@ describe('CatalogBulkUpdateService — fields.scopedStatus', () => {
     const em = { findOne: async (_entity: unknown, where: { id: string }) => ({ id: where.id, attributeSetId: 'set' }) };
     const svc = new CatalogBulkUpdateService(
       () => em as unknown as EntityManager,
-      {} as CatalogAdminService,
+      { completenessMode: async () => 'warn' } as unknown as CatalogAdminService,
       undefined,
       undefined,
       {
@@ -121,11 +121,140 @@ describe('CatalogBulkUpdateService — fields.scopedStatus', () => {
 
   it('without a scope writer the request fails per product rather than silently doing nothing', async () => {
     const em = { findOne: async (_entity: unknown, where: { id: string }) => ({ id: where.id, attributeSetId: 'set' }) };
-    const svc = new CatalogBulkUpdateService(() => em as unknown as EntityManager, {} as CatalogAdminService);
+    const svc = new CatalogBulkUpdateService(
+      () => em as unknown as EntityManager,
+      { completenessMode: async () => undefined } as unknown as CatalogAdminService,
+    );
     const result = await svc.bulkUpdate({
       productIds: [P1],
       fields: { scopedStatus: { channelId: C, languageCode: null, value: 'inactive' } },
     });
     expect(result.results[0]).toMatchObject({ status: 'failed', reason: 'validation_failed' });
+  });
+});
+
+describe('CatalogBulkUpdateService — the completeness gate (FR-061, US6 #4)', () => {
+  const em = { findOne: async (_entity: unknown, where: { id: string }) => ({ id: where.id, attributeSetId: 'set' }) };
+  const incomplete = (): HttpError =>
+    new HttpError(422, ERROR_CODES.SCOPE_INCOMPLETE, 'missing', {
+      pairs: [{ channelId: C, languageCode: 'de-DE', missing: ['name'] }],
+    });
+
+  it('reads the mode once per run and passes it to every scope write', async () => {
+    let reads = 0;
+    const modes: unknown[] = [];
+    const svc = new CatalogBulkUpdateService(
+      () => em as unknown as EntityManager,
+      {
+        completenessMode: async () => {
+          reads += 1;
+          return 'refuse';
+        },
+      } as unknown as CatalogAdminService,
+      undefined,
+      undefined,
+      {
+        writeStatus: async (_id, _request, options) => {
+          modes.push(options?.completeness);
+          return { changedFields: ['scopedStatus'], warnings: [] };
+        },
+      },
+    );
+    await svc.bulkUpdate({
+      productIds: [P1, P2],
+      fields: { scopedStatus: { channelId: C, languageCode: 'de-DE', value: 'active' } },
+    });
+    expect(reads).toBe(1);
+    expect(modes).toEqual(['refuse', 'refuse']);
+  });
+
+  it('refuse: a failing product is skipped as completeness_gate, the passing one changes', async () => {
+    const svc = new CatalogBulkUpdateService(
+      () => em as unknown as EntityManager,
+      { completenessMode: async () => 'refuse' } as unknown as CatalogAdminService,
+      undefined,
+      undefined,
+      {
+        writeStatus: async (id) => {
+          if (id === P1) throw incomplete();
+          return { changedFields: ['scopedStatus'], warnings: [] };
+        },
+      },
+    );
+    const result = await svc.bulkUpdate({
+      productIds: [P1, P2],
+      fields: { scopedStatus: { channelId: C, languageCode: 'de-DE', value: 'active' } },
+    });
+    expect(result.results).toEqual([
+      {
+        productId: P1,
+        status: 'skipped',
+        reason: 'completeness_gate',
+        details: { code: ERROR_CODES.SCOPE_INCOMPLETE, message: 'missing' },
+      },
+      { productId: P2, status: 'succeeded', changedFields: ['scopedStatus'] },
+    ]);
+  });
+
+  it('warn: the product succeeds and its result carries details.code SCOPE_INCOMPLETE', async () => {
+    const svc = new CatalogBulkUpdateService(
+      () => em as unknown as EntityManager,
+      { completenessMode: async () => 'warn' } as unknown as CatalogAdminService,
+      undefined,
+      undefined,
+      {
+        writeStatus: async () => ({
+          changedFields: ['scopedStatus'],
+          warnings: [{ kind: 'completeness', channelId: C, languageCode: 'de-DE', missing: ['name'] }],
+        }),
+      },
+    );
+    const result = await svc.bulkUpdate({
+      productIds: [P1],
+      fields: { scopedStatus: { channelId: C, languageCode: 'de-DE', value: 'active' } },
+    });
+    expect(result.results).toEqual([
+      { productId: P1, status: 'succeeded', changedFields: ['scopedStatus'], details: { code: ERROR_CODES.SCOPE_INCOMPLETE } },
+    ]);
+  });
+
+  it('a bulk global status runs the gate through the product update, with the mode read once', async () => {
+    let reads = 0;
+    const gates: unknown[] = [];
+    const svc = new CatalogBulkUpdateService(
+      () => em as unknown as EntityManager,
+      {
+        completenessMode: async () => {
+          reads += 1;
+          return 'refuse';
+        },
+        updateProduct: async (id: string, _req: unknown, _ctx: unknown, gate: { completeness?: string }) => {
+          gates.push(gate?.completeness);
+          if (id === P1) throw incomplete();
+          return {};
+        },
+      } as unknown as CatalogAdminService,
+    );
+    const result = await svc.bulkUpdate({ productIds: [P1, P2], fields: { status: 'active' } });
+    expect(reads).toBe(1);
+    expect(gates).toEqual(['refuse', 'refuse']);
+    expect(result.results[0]).toMatchObject({ productId: P1, status: 'skipped', reason: 'completeness_gate' });
+    expect(result.results[1]).toMatchObject({ productId: P2, status: 'succeeded', changedFields: ['status'] });
+  });
+
+  it('a bulk edit touching no status reads no mode', async () => {
+    let reads = 0;
+    const svc = new CatalogBulkUpdateService(
+      () => em as unknown as EntityManager,
+      {
+        completenessMode: async () => {
+          reads += 1;
+          return 'refuse';
+        },
+        updateProduct: async () => ({}),
+      } as unknown as CatalogAdminService,
+    );
+    await svc.bulkUpdate({ productIds: [P1], fields: { visibility: 'public' } });
+    expect(reads).toBe(0);
   });
 });
