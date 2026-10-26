@@ -171,6 +171,29 @@ describe('AttributesManager — scope flags (FR-090)', () => {
     expect(patchSpy.mock.calls[0]?.[1]).toMatchObject({ channelScoped: false, languageScoped: true });
   });
 
+  it('Save says it is busy while the narrowing preview loads, so it cannot ask twice (D18)', async () => {
+    const user = userEvent.setup();
+    let release: (value: unknown) => void = () => undefined;
+    const base = getSpy.getMockImplementation()!;
+    getSpy.mockImplementation((path: string) =>
+      path.startsWith(PREVIEW_PREFIX)
+        ? new Promise((resolve) => {
+            release = (): void => resolve({ data: preview });
+          })
+        : base(path),
+    );
+    const group = await openEdit();
+    await user.click(within(group).getByRole('checkbox', { name: /per sales channel/i }));
+    const save = screen.getByRole('button', { name: /^save$/i });
+    await user.click(save);
+    await waitFor(() => expect(save).toBeDisabled());
+    expect(save).toHaveAttribute('aria-busy', 'true');
+    await user.click(save);
+    expect(getSpy.mock.calls.filter(([p]) => String(p).startsWith(PREVIEW_PREFIX))).toHaveLength(1);
+    release(undefined);
+    expect(await screen.findByRole('dialog', { name: /material/i })).toBeInTheDocument();
+  });
+
   it('cancel sends nothing', async () => {
     const user = userEvent.setup();
     const group = await openEdit();
