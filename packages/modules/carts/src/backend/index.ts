@@ -28,6 +28,7 @@ import { lazyPort } from '@endora-commerce/platform/kernel';
 import type { OrganizationReadPort } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory, RequireCustomerGuard } from '@endora-commerce/platform/kernel';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
+import type { SalesChannelResolutionPort } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { abandonmentSettingsReaders } from './services/cart-abandonment-settings.js';
 import { CartQueryService } from './services/cart-query-service.js';
@@ -250,6 +251,8 @@ export function registerModule(ctx: ModuleContext): void {
             cartApprovalService,
             cartAuditService,
             cartRecomputeCache,
+            // Feature 163 (N2) — a named channel's default language, for the unit name.
+            lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
           ),
       )
       .singleton(),

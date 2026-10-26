@@ -62,8 +62,9 @@ Tam, gdzie kupujący widzi jednostkę, jej nazwa jest tłumaczeniem w języku ż
 nazwą globalną:
 
 - `packagingUnits[].name` na stronie produktu;
-- nazwa kopiowana do pozycji koszyka — w języku koszyka w jego kanale. Administrator, który wskazuje
-  kanał w imieniu klienta, otrzymuje nazwę globalną;
+- nazwa kopiowana do pozycji koszyka — w języku koszyka w jego kanale. Gdy administrator wskazuje
+  kanał w imieniu klienta, nazwa jest brana w domyślnym języku tego kanału, tak jak nazwa produktu
+  obok niej;
 - nazwa kopiowana do pozycji zapytania ofertowego kupującego — w języku żądania w kanale, w którym
   zapytanie jest składane.
 
