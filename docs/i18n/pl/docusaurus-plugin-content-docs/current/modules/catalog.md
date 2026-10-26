@@ -404,6 +404,20 @@ zamówienia. Pozycja, której produktu nie dało się odczytać przy składaniu 
 zapisywana jako niepodlegająca zwrotowi. To, co moduł Returns robi z zapisaną wartością, opisuje
 jego własna strona.
 
+### Dla kanału sprzedaży
+
+Obie zasady można nadpisać dla jednego kanału sprzedaży — **Zasady zamawiania** kanału w
+zakresach produktu (`PATCH /api/v1/admin/catalog/products/:id/scopes`, pola
+`minOrderQuantity` i `returnable` wpisu kanału; `null` przywraca wartość globalną).
+Wartość kanału obowiązuje wszędzie, gdzie koszyk, zamówienie albo zapytanie ofertowe należy
+do tego kanału: przy dodawaniu do koszyka, w widoku koszyka, przy przekazaniu do akceptacji,
+w podglądzie zamówienia, przy składaniu zamówienia, w podglądzie zamówienia tworzonego przez
+operatora, w zapytaniach ofertowych i w imporcie szybkiego zamówienia przez kupującego.
+Minimum kanału równe 1 oznacza brak minimum w tym kanale niezależnie od wartości globalnej.
+Przy składaniu zamówienia na każdej pozycji zapisywana jest flaga zwrotu z kanału
+zamówienia, więc zwroty podążają za kanałem, w którym złożono zamówienie. Karta produktu i
+lista produktów w sklepie podają minimum kanału żądania.
+
 ### Audyt i kopie
 
 Ustawienie lub usunięcie którejkolwiek zasady trafia do dziennika audytu jak każda edycja

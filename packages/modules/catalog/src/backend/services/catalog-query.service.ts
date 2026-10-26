@@ -57,6 +57,7 @@ import {
   decimalText,
   formatUnits,
   isOrderMinimumEligibleType,
+  effectiveOrderRules,
   normaliseAmount,
   effectiveAudience,
   isPriceSort,
@@ -248,6 +249,11 @@ export interface ListingCardReads {
    * Read page-wide like the rest; the language is the request's, not the viewer's.
    */
   effectiveKeyByProduct: Map<string, string>;
+  /**
+   * Feature 163 (FR-100) — product id -> its minimum order quantity in the
+   * request's sales channel (the channel row's, else the global one).
+   */
+  minOrderQuantityByProduct: Map<string, number | null>;
 }
 
 export interface ListProductsParams {
@@ -939,6 +945,7 @@ export class CatalogQueryService {
         categorySlugsByProduct,
         overridesByProduct: new Map(),
         effectiveKeyByProduct: new Map(),
+        minOrderQuantityByProduct: new Map(),
       };
     }
 
@@ -964,8 +971,25 @@ export class CatalogQueryService {
 
     const overridesByProduct = await loadChannelOverridesByProduct(em, ids, channelId);
     const effectiveKeyByProduct = await this.#effectiveKeysAt(em, products, ctx);
+    // Feature 163 (FR-100) — the channel's minimum, read page-wide with its scope rows.
+    const scopeRows = await loadChannelScopeRows(em, ids, channelId);
+    const minOrderQuantityByProduct = new Map(
+      products.map((product) => [
+        product.id,
+        effectiveOrderRules(
+          { minOrderQuantity: product.minOrderQuantity ?? null, returnable: product.returnable },
+          scopeRows.channelRows.get(product.id),
+        ).minOrderQuantity,
+      ]),
+    );
 
-    return { assetUrlByProduct, categorySlugsByProduct, overridesByProduct, effectiveKeyByProduct };
+    return {
+      assetUrlByProduct,
+      categorySlugsByProduct,
+      overridesByProduct,
+      effectiveKeyByProduct,
+      minOrderQuantityByProduct,
+    };
   }
 
   /**
@@ -3192,8 +3216,11 @@ export class CatalogQueryService {
       stockIndicator: null,
       stockLevel: null,
       // Feature 155 (FR-014) — emitted for the types the minimum applies to only.
+      // Feature 163 (FR-100) — the request channel's minimum.
       minOrderQuantity: isOrderMinimumEligibleType(product.type)
-        ? (product.minOrderQuantity ?? null)
+        ? (cardReads.minOrderQuantityByProduct.has(product.id)
+            ? (cardReads.minOrderQuantityByProduct.get(product.id) ?? null)
+            : (product.minOrderQuantity ?? null))
         : null,
       resolvedPrice: this.#summaryResolvedPrice(resolvedPrices, product.id),
       ...this.#summaryPriceBookFields(resolvedPrices, product.id),

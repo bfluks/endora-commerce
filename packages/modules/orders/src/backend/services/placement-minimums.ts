@@ -14,6 +14,7 @@ import {
   type OrderMinimumLine,
   type OrderMinimumViolation,
   type OrderPreviewTotalResponse,
+  withChannelOrderRules,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { customerAudience } from './preview-line-availability.js';
@@ -142,9 +143,14 @@ export function belowMinimumLinesOf(
  * Feature 163 (FR-006) — the records whose product is available at
  * (`channelId`, `languageCode`) to the Organization, now, as `catalog` answers
  * it. The availability rule is `catalog`'s; nothing here tests a status.
+ *
+ * FR-100 (research R26) — each record carries the **channel's** effective
+ * minimum order quantity and returnable flag, so the minimums placement and the
+ * preview judge and the `returnable_at_purchase` placement stamps are the order's
+ * channel's, not the global values.
  */
 export async function availableOnly(
-  availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
+  availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>,
   products: CatalogProductRecord[],
   scope: { channelId: string; languageCode: string | null; organizationId: string },
 ): Promise<CatalogProductRecord[]> {
@@ -157,5 +163,7 @@ export async function availableOnly(
       audience: customerAudience(scope.organizationId),
     },
   );
-  return products.filter((p) => available.has(p.id));
+  const kept = products.filter((p) => available.has(p.id));
+  if (kept.length === 0) return kept;
+  return withChannelOrderRules(kept, await availability.effectiveOrderRules(kept.map((p) => p.id), scope.channelId));
 }
