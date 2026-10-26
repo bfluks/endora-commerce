@@ -78,8 +78,9 @@ const PLAIN_PIECES: ResolvedPackaging = {
  * Feature 163 (FR-079, T138; owner decision 2026-10-26) — the stored name is
  * the unit's name at `scopeLanguage` (its translation there, else the global
  * name; `null` or absent = the global name). The name match above stays on the
- * global name, so a line sent with the name a buyer saw in another language is
- * not refused by a translation.
+ * global name only: a line that names its unit by a translation (the name a
+ * buyer saw in another language) matches no unit and is refused as
+ * `name_unknown`. A client names the unit by its id, or by its global name.
  */
 export function resolveLinePackaging(
   lines: readonly PackagingReferenceLine[],

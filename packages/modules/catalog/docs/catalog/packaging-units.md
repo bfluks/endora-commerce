@@ -47,6 +47,13 @@ match one of the product's units. Anything else is refused with
 `422 PACKAGING_UNIT_MISMATCH` — an id that is unknown, deleted or another
 product's unit all give the same reason.
 
+**For API clients:** a name sent without an id is matched against the unit's
+**global** name only, never against its translations (see *Name per language*).
+A line that sends the name a buyer saw in a translated storefront — `Pallet`
+where the global name is `Paleta` — is refused with
+`422 PACKAGING_UNIT_MISMATCH` (reason `name_unknown`). Send the
+`packagingUnitId`, or the global name.
+
 ## Name per language
 
 A unit's name can be translated: `nameTranslations` maps a language to a name, e.g.
