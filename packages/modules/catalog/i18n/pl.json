@@ -1076,5 +1076,8 @@
   "productEditor.scopeOverview.confirmDelete.title": "Usunąć {field} w {scope}?",
   "productEditor.scopeOverview.confirmDelete.body": "Zapisana wartość „{field}” dla {scope} zostanie usunięta na stałe. Teraz nie obowiązuje, więc klient nie zobaczy żadnej zmiany.",
   "productEditor.scopeOverview.confirm.cancel": "Anuluj",
-  "productEditor.scopeOverview.tableRegion": "Tabela przeglądu zakresów"
+  "productEditor.scopeOverview.tableRegion": "Tabela przeglądu zakresów",
+  "productEditor.urlKeys.inheritedHint": "Dziedziczony: {key}",
+  "productEditor.urlKeys.unsaved": "Jeszcze niezapisane — zapisz klucze URL, aby je zastosować.",
+  "productEditor.urlKeys.noChanges": "Brak zmian do zapisania."
 }
