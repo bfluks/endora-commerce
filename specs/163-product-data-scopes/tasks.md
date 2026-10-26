@@ -1385,7 +1385,7 @@ T139 regen + changesets, T139a/b overview fields `attachments:hidden`, `attachme
 - [x] T135 [P] [US9] [PG] [S1] RED: attachment hidden in B2C neither listed nor referenced from the B2C PDP (US9 #4); names/descriptions per language with global fallback; packaging-unit names per language on PDP, basket and order line; placed line keeps its name after a rename (US9 #5) — `backend/test/contract/catalog/attachment-packaging-translations.test.ts`, `backend/test/integration/carts/packaging-unit-name-snapshot.test.ts`
 - [x] T136 [S1] Migration `--module catalog --name attachment_packaging_translations`; entities — data-model §8
 - [x] T137 [US9] [S1] Attachment + packaging services/routes accept translations and `hiddenInChannels` (admin packaging schemas stay `.strict()` with the key added). Writes ride the **existing** Commands — `product_attachment.update` (`objectType: 'product_attachment'`) and `packaging_unit.update` (`objectType: 'packaging_unit'`) — one audit entry per request, i.e. one per product (FR-080); their `before`/`after` projections gain `productId`, the translations and `hiddenInChannels`; events `changedFields: ['attachments']` / `['packagingUnits']` — `services/{attachment,packaging-unit}.service.ts`, `packages/contracts/src/catalog.ts`
-- [ ] T138 [US9] [S1] PDP DTO and basket/RFQ snapshot take the effective name at the scope language — `catalog-query.service.ts`, `cart-service.ts`, `rfq-service.ts` *(PDP and basket done 2026-10-26; the RFQ half is open — see the Phase 22 notes)*
+- [x] T138 [US9] [S1] PDP DTO and basket/RFQ snapshot take the effective name at the scope language — `catalog-query.service.ts`, `cart-service.ts`, `rfq-service.ts` *(PDP and basket 2026-10-26; RFQ 2026-10-26, second pass — see the Phase 22 notes)*
 - [x] T139 [S1] Regenerate artefacts; changesets
 - [x] T139a [P] [US4] [PG] [S1] RED: extend `backend/test/contract/catalog/scope-overview.test.ts` — attachment translations / hidden per channel and packaging-unit name translations
 - [x] T139b [US4] [S1] `ScopeOverviewService` lists them — `services/scope-overview.service.ts`
@@ -1396,6 +1396,8 @@ T139 regen + changesets, T139a/b overview fields `attachments:hidden`, `attachme
 - `[PG] backend/test/contract/catalog/scope-overview.test.ts`
 - `[PG] backend/test/contract/catalog/packaging-units.contract.test.ts`
 - `[PG] backend/test/contract/catalog/attachments.test.ts`
+- `[PG] backend/test/integration/quote_requests/effective-names.test.ts` (T138 RFQ case)
+- `pnpm --filter @endora-commerce/mod-quote-requests exec vitest run src/backend/services/packaging-resolution.test.ts`
 - `pnpm --filter @endora-commerce/mod-catalog run typecheck`
 - `pnpm --filter @endora-commerce/mod-carts run typecheck`
 - `pnpm --filter @endora-commerce/mod-quote-requests run typecheck`
@@ -1447,6 +1449,23 @@ T139 regen + changesets, T139a/b overview fields `attachments:hidden`, `attachme
   `withSystemScopeActingFor` in `escape-hatch.ts`.
 - *Docs.* P21's gallery page (EN + PL, cache re-pinned) is written under T147/T148; the attachments and
   packaging-unit pages for P22 are still open under T147/T148.
+- *T138 — RFQ half (S1, second pass).* `resolveLinePackaging(lines, units, scopeLanguage?)` stores
+  `effectivePackagingUnitName(unit, scopeLanguage)`; `PackagingUnitCandidate.nameTranslations?` (the catalogue record
+  already carries it). `RfqService#resolvePackaging` takes the channel `lineNames` is asked at — `raisedOnChannelId()`
+  (hoisted) on create, `rfq.salesChannelId` on the draft edit — and passes `raisedInScopeLanguage(language, channel)`,
+  `null` without a channel; so the unit name and the product name it is appended to share one scope language. The name
+  match stays on `unit.name`; draft-edit pairing is by unit id first (pass 2a), so a translated snapshot does not
+  unpair a stored line. Operator paths resolve no packaging (create-on-behalf has none; `modify` copies the stored
+  row), so nothing changes there. Red seen: two of the four new cases in `packaging-resolution.test.ts` failed before
+  the change (the other two pin behaviour that must not move). `[PG]` case added to
+  `backend/test/integration/quote_requests/effective-names.test.ts`, unrun. Changeset: `mod-quote-requests` added to
+  `163-catalog-attachments-packaging-per-scope.md`.
+- *N2 for the unit name — left open, owner's call.* An operator naming the channel (basket `input.salesChannelId`)
+  snapshots the **global** unit name, while the product name beside it is at the channel's default language (N2).
+  Not changed: the Phase 22 recipe and the cart comment both write "operator: `null` → global" under the 2026-10-26
+  decision, and the fix needs the channel's `defaultLanguage`, which `CartService` does not read today. Size if the
+  owner wants it: one channel-default read (the `SalesChannel` row, read only when a unit is named) and one call
+  site in `cart-service.ts` `#resolveLine`; the RFQ has no operator path that resolves a unit today.
 - *Shapes for S3 (Phase 23).* Attachment admin DTO: `nameTranslations`, `descriptionTranslations`
   (`Record<lang, string>`), `hiddenInChannels: uuid[]` (sorted). `POST|PATCH …/attachments[/:id]` accept the same three
   (maps are patches: `''` removes a language, unnamed untouched; name ≤ 160, description ≤ 4000; `hiddenInChannels`

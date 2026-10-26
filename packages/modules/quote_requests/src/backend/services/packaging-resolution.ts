@@ -1,4 +1,4 @@
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, effectivePackagingUnitName, type TranslationMap } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 
 /**
@@ -24,6 +24,8 @@ export interface PackagingUnitCandidate {
   productId: string;
   name: string;
   baseQuantity: number;
+  /** Feature 163 (FR-079) — the unit's name per language; a snapshot reads it, a name match never does. */
+  nameTranslations?: TranslationMap | null;
 }
 
 /** What a line stores: the catalogue's unit, or plain pieces (all `null`). */
@@ -72,10 +74,17 @@ const PLAIN_PIECES: ResolvedPackaging = {
  *
  * A failing line resolves to plain pieces in the output; the caller refuses the
  * whole request when `mismatches` is not empty.
+ *
+ * Feature 163 (FR-079, T138; owner decision 2026-10-26) — the stored name is
+ * the unit's name at `scopeLanguage` (its translation there, else the global
+ * name; `null` or absent = the global name). The name match above stays on the
+ * global name, so a line sent with the name a buyer saw in another language is
+ * not refused by a translation.
  */
 export function resolveLinePackaging(
   lines: readonly PackagingReferenceLine[],
   units: readonly PackagingUnitCandidate[],
+  scopeLanguage?: string | null,
 ): { lines: ResolvedPackaging[]; mismatches: PackagingMismatch[] } {
   const unitsById = new Map(units.map((unit) => [unit.id, unit]));
   const resolved: ResolvedPackaging[] = [];
@@ -83,7 +92,7 @@ export function resolveLinePackaging(
 
   const fromUnit = (unit: PackagingUnitCandidate): ResolvedPackaging => ({
     packagingUnitId: unit.id,
-    packagingUnitName: unit.name,
+    packagingUnitName: effectivePackagingUnitName(unit, scopeLanguage),
     packagingUnitBaseQuantity: unit.baseQuantity,
   });
 
