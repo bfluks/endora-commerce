@@ -130,6 +130,10 @@ export const manifest = defineModuleManifest({
     // (`specs/150-admin-global-search/`).
     '_i18n',
     'audit_logs',
+    // `admin_roles` owns `permissionService`, which a queued bulk operation asks at
+    // worker start whether its requester may still write the catalogue (feature 163,
+    // checkpoint F, S-3). `admin_roles` depends on nothing, so the edge closes no cycle.
+    'admin_roles',
     'admin_users',
     'assets_library',
     'custom_fields',

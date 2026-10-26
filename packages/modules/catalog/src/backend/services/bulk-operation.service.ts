@@ -10,6 +10,7 @@ import {
 
 import { effectiveState } from '@endora-commerce/platform/kernel';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
+import type { AdminPermissionChecker } from '@endora-commerce/platform/kernel';
 import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import { applyUndo, type RevertRecord } from '@endora-commerce/platform/commands';
 import { withSystemScopeActingFor } from '@endora-commerce/platform/tenancy';
@@ -199,6 +200,13 @@ export class BulkOperationService {
        * silently, as it did before.
        */
       events?: CatalogEventBus;
+      /**
+       * Feature 163, checkpoint F (S-3) — `admin_roles`' `permissionService`. A queued
+       * operation runs acting for its requester; at worker start the requester must
+       * still be an active administrator holding `catalog:write`, else it fails closed.
+       * Absent only in compositions that queue nothing for an admin (some tests).
+       */
+      permissionChecker?: AdminPermissionChecker;
     } = {},
     /**
      * Feature 054 — when injected, product bulk edits capture per-product revert
@@ -383,6 +391,7 @@ export class BulkOperationService {
       // write) runs acting for the admin who queued the operation, so its audit row
       // names them as the inline path's does; the id is the one the route recorded
       // server-side at `create()`. A run nobody is recorded as requesting stays system.
+      await this.#assertRequesterMayWrite(op.requestedByAdminUserId);
       const actingFor = <T>(fn: () => Promise<T>): Promise<T> =>
         op.requestedByAdminUserId && op.requestedByAdminUserId !== NO_REQUESTER
           ? withSystemScopeActingFor(op.requestedByAdminUserId, `catalog bulk operation ${id} for its requester`, fn)
@@ -526,6 +535,26 @@ export class BulkOperationService {
         { status: 'failed', error: message, logs, finishedAt: new Date() },
       );
       await this.notify(op, 'failed', null, message);
+    }
+  }
+
+  /**
+   * Checkpoint F (S-3) — the requester recorded at `create()` may have been
+   * deactivated or lost `catalog:write` while the operation waited in the queue.
+   * Throws (the caller marks the operation failed) unless they are still allowed; a
+   * permission check that cannot answer throws too. A run nobody is recorded as
+   * requesting stays a system run.
+   */
+  async #assertRequesterMayWrite(requesterId: string | null): Promise<void> {
+    const checker = this.deps.permissionChecker;
+    if (!checker || !requesterId || requesterId === NO_REQUESTER) return;
+    const allowed =
+      (await checker.isActiveAdministrator(requesterId)) &&
+      (await checker.hasPermission(requesterId, 'catalog:write'));
+    if (!allowed) {
+      throw new Error(
+        'The administrator who queued this operation is no longer active or no longer holds catalog:write.',
+      );
     }
   }
 
