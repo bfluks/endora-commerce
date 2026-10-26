@@ -5,8 +5,8 @@
  * **The largest surface in the drain, and a zone *host* six members over.**
  * `ProductEditor.tsx` mounts `product.editor.details.before`,
  * `product.editor.field.after` (five times, once per editable core field),
- * `product.editor.pricing.before`, `product.editor.pricing.after` and
- * `product.editor.channels`; `ProductAttributesTab.tsx` mounts a sixth
+ * `product.editor.pricing.before`, `product.editor.pricing.after`,
+ * `product.editor.channels` and `product.editor.seo.after` (feature 163); `ProductAttributesTab.tsx` mounts a sixth
  * `product.editor.field.after`; and `CategoriesTree.tsx` mounts
  * `category.editor.after`. P4b and P7a published those members and the
  * contributors were scheduled against them in batch 13 — this is the host
