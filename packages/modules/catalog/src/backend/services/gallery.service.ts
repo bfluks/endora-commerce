@@ -357,33 +357,33 @@ export class GalleryService {
     req: UpdateGalleryItemRequest,
     options: GalleryServiceOptions,
   ): Promise<GalleryItemDto> {
-    if (req.altText !== undefined || req.hiddenInChannels !== undefined) {
-      await this.#updateScoped(productId, itemId, req);
+    if (req.altText !== undefined || req.hiddenInChannels !== undefined || req.labels !== undefined) {
+      await this.#updateScoped(productId, itemId, req, options);
     } else {
       await this.#updatePosition(productId, itemId, req);
     }
-
-    // Label replacement runs AFTER the item update (bridge-after-command).
-    if (req.labels !== undefined) {
-      const em = this.emFactory();
-      const labels = this.#normalizeAndValidateLabels(req.labels);
-      await em.execute(`delete from gallery_item_labels where gallery_item_id = ?`, [itemId]);
-      if (labels.length > 0) {
-        await this.#applyLabels(em, productId, itemId, labels, options);
-      }
-    }
-
     return (await this.#fetchOne(this.emFactory(), itemId))!;
   }
 
   /**
-   * Feature 163 (FR-076, FR-077) — an item write carrying alt text or the hidden set:
-   * the Command `product.media.update` (one audit entry: the item's position, alt text
-   * and hidden channels before and after), `product.updated.v1` `['media']` after
-   * commit. A new hidden channel must be one the product is a member of (FR-014);
-   * removing one never asks (FR-015).
+   * Feature 163 (FR-076, FR-077) — an item write carrying alt text, the hidden set or
+   * the labels: the Command `product.media.update` (one audit entry: the item's
+   * position, alt text, hidden channels and labels before and after),
+   * `product.updated.v1` `['media']` after commit. A new hidden channel must be one the
+   * product is a member of (FR-014); removing one never asks (FR-015).
+   *
+   * Checkpoint F (B-1) — the labels are replaced on the Command's own `em`, under the
+   * product row lock and in its transaction, so a label conflict rolls the whole write
+   * back. With `?replace=true` a label taken from another item is that item's loss: the
+   * entry restores this item, not the other one's label.
    */
-  async #updateScoped(productId: string, itemId: string, req: UpdateGalleryItemRequest): Promise<void> {
+  async #updateScoped(
+    productId: string,
+    itemId: string,
+    req: UpdateGalleryItemRequest,
+    options: GalleryServiceOptions,
+  ): Promise<void> {
+    const requestedLabels = req.labels === undefined ? undefined : this.#normalizeAndValidateLabels(req.labels);
     await this.#runMediaCommand(productId, async (em) => {
       const item = await em.findOne(GalleryItem, { id: itemId, productId });
       if (!item) {
@@ -394,7 +394,9 @@ export class GalleryService {
         );
       }
       const hiddenBefore = (await loadHiddenChannelsByItem(em, [itemId])).get(itemId) ?? [];
-      const before = itemProjection(item, hiddenBefore);
+      const labelsBefore = (await em.find(GalleryItemLabel, { galleryItemId: itemId })).map((l) => l.label);
+      const labelsAfter = requestedLabels ?? labelsBefore;
+      const before = itemProjection(item, hiddenBefore, labelsBefore);
       const hiddenAfter =
         req.hiddenInChannels === undefined ? hiddenBefore : [...new Set(req.hiddenInChannels)].sort();
       const added = hiddenAfter.filter((channelId) => !hiddenBefore.includes(channelId));
@@ -402,13 +404,19 @@ export class GalleryService {
 
       if (req.position !== undefined) item.position = req.position;
       if (req.altText !== undefined) item.altText = applyTranslationPatch(item.altText, req.altText);
-      const after = itemProjection(item, hiddenAfter);
+      const after = itemProjection(item, hiddenAfter, labelsAfter);
       if (JSON.stringify(before) === JSON.stringify(after)) return null;
       // Re-sending `before` through the PATCH restores the item exactly (FR-081): a
       // language the write added reads `''` there, which removes it again.
       withRemovals(before, after);
       if (req.hiddenInChannels !== undefined) {
         await writeGalleryHiddenChannels(em, productId, itemId, hiddenAfter);
+      }
+      if (requestedLabels !== undefined && JSON.stringify(before['labels']) !== JSON.stringify(after['labels'])) {
+        await em.execute(`delete from gallery_item_labels where gallery_item_id = ?`, [itemId]);
+        if (requestedLabels.length > 0) {
+          await this.#applyLabels(em, productId, itemId, requestedLabels, options);
+        }
       }
       await em.flush();
       return { before, after };
@@ -447,33 +455,36 @@ export class GalleryService {
     });
   }
 
+  /**
+   * `PUT …/gallery/order` — the Command `product.media.update` (checkpoint F, S-4): the
+   * positions are written on the Command's `em`, under the product row lock and in one
+   * transaction, so a failure part-way leaves the old order. The audit entry carries
+   * the order before and after as `orderedGalleryItemIds`, the body that restores it;
+   * an order the gallery already has writes and announces nothing.
+   */
   async reorder(productId: string, orderedIds: string[]): Promise<void> {
-    const em = this.emFactory();
-    await this.#assertProductExists(em, productId);
-    // Verify all ids belong to this product.
-    const existing = await em.find(GalleryItem, { productId });
-    const existingIds = new Set(existing.map((i) => i.id));
-    if (
-      orderedIds.length !== existing.length ||
-      !orderedIds.every((id) => existingIds.has(id))
-    ) {
-      throw new HttpError(
-        400,
-        ERROR_CODES.VALIDATION_FAILED,
-        'orderedGalleryItemIds must cover every existing gallery item exactly once.',
-      );
-    }
-    // One UPDATE per row. `em.execute`, not `em.getConnection().execute`, so a
-    // caller that ever opens a transaction around this gets the whole reorder
-    // in it (issue #207). This comment used to claim the loop was transactional
-    // and it is not: `em` here is a bare fork, so a failure part-way through
-    // leaves the gallery in the order the successful updates put it.
-    for (let i = 0; i < orderedIds.length; i++) {
-      await em.execute(
-        `update gallery_items set position = ? where id = ?`,
-        [i, orderedIds[i]],
-      );
-    }
+    await this.#runMediaCommand(productId, async (em) => {
+      const existing = await em.find(GalleryItem, { productId }, { orderBy: { position: 'asc', id: 'asc' } });
+      const existingIds = new Set(existing.map((i) => i.id));
+      if (
+        orderedIds.length !== existing.length ||
+        new Set(orderedIds).size !== orderedIds.length ||
+        !orderedIds.every((id) => existingIds.has(id))
+      ) {
+        throw new HttpError(
+          400,
+          ERROR_CODES.VALIDATION_FAILED,
+          'orderedGalleryItemIds must cover every existing gallery item exactly once.',
+        );
+      }
+      const before = existing.map((i) => i.id);
+      const unchanged = existing.every((item, index) => item.id === orderedIds[index] && item.position === index);
+      if (unchanged) return null;
+      for (let i = 0; i < orderedIds.length; i++) {
+        await em.execute(`update gallery_items set position = ? where id = ?`, [i, orderedIds[i]]);
+      }
+      return { before: { orderedGalleryItemIds: before }, after: { orderedGalleryItemIds: [...orderedIds] } };
+    });
   }
 
   // -- INTERNALS -------------------------------------------------------------
@@ -703,11 +714,21 @@ function sameRoles(a: GalleryChannelRoles['roles'], b: GalleryChannelRoles['role
 }
 
 /** The audit projection of one item's scoped media write (FR-080): enough to restore it by re-sending. */
-function itemProjection(item: GalleryItem, hiddenInChannels: readonly string[]): Record<string, unknown> {
+function itemProjection(
+  item: GalleryItem,
+  hiddenInChannels: readonly string[],
+  labels: readonly GalleryLabel[],
+): Record<string, unknown> {
   const altText = Object.fromEntries(
     Object.entries(item.altText ?? {}).sort(([a], [b]) => a.localeCompare(b)),
   );
-  return { itemId: item.id, position: item.position, altText, hiddenInChannels: [...hiddenInChannels].sort() };
+  return {
+    itemId: item.id,
+    position: item.position,
+    altText,
+    hiddenInChannels: [...hiddenInChannels].sort(),
+    labels: [...labels].sort(),
+  };
 }
 
 /**
