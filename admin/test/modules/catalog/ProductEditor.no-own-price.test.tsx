@@ -69,7 +69,7 @@ const MOCK_PRODUCT = {
   sku: 'NO-OWN-PRICE',
   slug: 'no-own-price',
   type: 'simple' as const,
-  status: 'draft' as const,
+  status: 'inactive' as const,
   name: { 'en-US': 'Test product', 'pl-PL': '' },
   description: { 'en-US': 'Desc', 'pl-PL': '' },
   visibility: 'public' as const,
