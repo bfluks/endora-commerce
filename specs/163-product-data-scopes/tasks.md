@@ -550,6 +550,17 @@ release notes exist.
   `coerceProductStatusWrite|productStatusWriteSchema` — only the changeset and the test asserting the
   absence.
 
+- **ci-pg on `50922e6ef` (5 red files of 52), fixed in `ae3ef63df`** (S1, 2026-10-26): (1) a bulk Restore's undo
+  restored nothing — `#snapshotProductFields` read the after-state on the em holding the before-state, and MikroORM's
+  merge never lets a fresh `null` replace a loaded value, so the revert record's `after` kept the stale `archivedAt`
+  and the undo saw every product as changed since; the snapshot now reads with `refresh: true` (product fix);
+  (2) `product-archive-restore` and `product-status-drop-draft-migration` read `timestamptz` raw and got strings —
+  normalised; the create-without-status case passed `undefined` into a default parameter that turned it into
+  `'active'` — it now omits status (the service default `inactive` was right); (3) `admin-product-variants-read`
+  (161): the archived fixture is not a member of CH1, so the absent 404 is right under O-3; (4) catalog
+  `webhooks`: two cases archived by writing `status: 'inactive'` and waited for `product.archived.v1` forever —
+  they archive through the Archive route now.
+
 ### Phase 9c: [backend] The product page's "gone" answer (FR-005) — S2, inside Phase 17
 
 **Goal**: 410 for an archived product only, and only where O-3 allows (R30.7). **Assigned to S2 as part of
@@ -573,6 +584,12 @@ extends S1's `scoped-availability-matrix.test.ts` (T031); S2 edits it in its own
   answers the absent 404 anonymously and 410 to its organisation's buyer. Outside the window and a C×L `inactive`
   override are the existing AW/AL case. `url-key-resolution.test.ts` keeps its archived → 410 and non-archived
   `inactive` → 404 cases.
+
+- S1 (2026-10-26, ci-pg on the integrated tip `8404f6b4f`): T156s's first case read "404 at every (C, L), even where a C
+  or C×L override is `active`", which contradicts FR-008 / FR-010 (`inactive` is off *there*; a narrower `active`
+  override wins, as the shared rule says). The case now expects 200 exactly at the overridden pairs ((C1, *),
+  (C2, pl-PL)), the absent 404 elsewhere, no 410 at any pair, and the absent 404 everywhere once the overrides are
+  removed (coordinator, option b). Product code unchanged.
 
 **Verification**:
 - `[PG] backend/test/contract/catalog/scoped-availability-matrix.test.ts`
