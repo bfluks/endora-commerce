@@ -75,5 +75,8 @@
   "metaScope.source.derived": "From the product",
   "metaScope.useInherited": "Use inherited",
   "metaScope.removed": "Override removed. This scope inherits its values again.",
-  "metaScope.error.remove": "The override could not be removed. Try again."
+  "metaScope.error.remove": "The override could not be removed. Try again.",
+  "productLink.title": "SEO meta tags",
+  "productLink.hint": "Titles and descriptions are set per sales channel and language on the SEO screen — pick this product there.",
+  "productLink.link": "Edit SEO meta per channel →"
 }
