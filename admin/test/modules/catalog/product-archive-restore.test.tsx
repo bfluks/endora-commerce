@@ -456,7 +456,8 @@ describe('ProductsBulkEditDialog — Set status and bulk Archive / Restore (FR-0
 
   it('offers neither when the host passes none (no catalog:write)', async () => {
     renderDialog(null);
-    await screen.findByText(tr('productsList.bulkEdit.section.status'));
+    // By role: "Status" is also the value label of "Set status in one channel" (163 T097).
+    await screen.findByRole('checkbox', { name: new RegExp(`^${tr('productsList.bulkEdit.section.status')}`) });
     expect(screen.queryByRole('region', { name: tr('productsList.bulkEdit.archive.title') })).toBeNull();
     expect(screen.queryByRole('region', { name: tr('productsList.bulkEdit.restore.title') })).toBeNull();
   });
