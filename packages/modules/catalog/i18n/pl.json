@@ -643,6 +643,7 @@
   "auditLog.product.scopes.update": "Zaktualizowano ustawienia produktu w kanałach sprzedaży",
   "auditLog.product.url_keys.update": "Zaktualizowano klucze URL produktu",
   "auditLog.product.url_redirect.delete": "Usunięto przekierowanie URL produktu",
+  "auditLog.product.media.update": "Zaktualizowano multimedia produktu w kanałach sprzedaży i językach",
   "auditLog.attribute_set.create": "Utworzono zestaw atrybutów",
   "auditLog.attribute_set.update": "Zaktualizowano zestaw atrybutów",
   "auditLog.attribute_set.delete": "Usunięto zestaw atrybutów",
