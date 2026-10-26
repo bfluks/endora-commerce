@@ -292,6 +292,13 @@ describe('POST /products/bulk-update — fields.scopedStatus (spec 163, T073)', 
       expect(op?.reversible).toBe(true);
       expect(op?.touchedFields).toEqual(['scopedStatus']);
       for (const id of ids) expect(await languageStatus(id, b2c, 'de-DE')).toBe('inactive');
+      // S-W2 — each product's entry names the admin who queued the operation, not a null actor.
+      const actorRows = await conn().execute<Array<{ actor_admin_user_id: string | null }>>(
+        `select distinct actor_admin_user_id from audit_log_entries
+          where action = 'product.scopes.update' and object_id = any(?::uuid[])`,
+        [`{${ids.join(',')}}`],
+      );
+      expect(actorRows.map((row) => row.actor_admin_user_id)).toEqual([op?.requestedByAdminUserId]);
 
       // Changed since the operation to a third state (neither its before, `null`, nor
       // its after, `inactive`): refused, never clobbered. Put back to `null` it would
