@@ -217,7 +217,7 @@ describe('catalog — baseImageUrls', () => {
 });
 
 describe('catalog — the round-trip cost the batch read exists to remove', () => {
-  it('costs one round-trip for 500 products where `list` costs 1500', async () => {
+  it('costs one round-trip for 500 products where `list` costs 2000', async () => {
     const ids = Array.from({ length: 500 }, (_, i) => `product-${i}`);
 
     const batch: Recorded = { statements: [], entityReads: [] };
@@ -230,7 +230,8 @@ describe('catalog — the round-trip cost the batch read exists to remove', () =
     for (const id of ids) await oneByOne.list(id);
 
     expect(roundTrips(batch)).toBe(1);
-    // `#assertProductExists` + `find(GalleryItem)` + `find(GalleryItemLabel)`.
-    expect(roundTrips(perProduct)).toBe(1500);
+    // `#assertProductExists` + `find(GalleryItem)` + `find(GalleryItemLabel)` + the
+    // item's hidden channels (feature 163, FR-076).
+    expect(roundTrips(perProduct)).toBe(2000);
   });
 });

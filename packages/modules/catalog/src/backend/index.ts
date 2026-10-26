@@ -71,6 +71,8 @@ import { BulkOperation } from './entities/bulk-operation.entity.js';
 import { BundleSlotOption } from './entities/bundle-slot-option.entity.js';
 import { BundleSlot } from './entities/bundle-slot.entity.js';
 import { Category } from './entities/category.entity.js';
+import { GalleryItemChannelHidden } from './entities/gallery-item-channel-hidden.entity.js';
+import { GalleryItemChannelLabel } from './entities/gallery-item-channel-label.entity.js';
 import { GalleryItemLabel } from './entities/gallery-item-label.entity.js';
 import { GalleryItem } from './entities/gallery-item.entity.js';
 import { GroupedItem } from './entities/grouped-item.entity.js';
@@ -276,6 +278,8 @@ export interface CatalogCradle {
   readonly catalogSearchReindex: NonNullable<CatalogModuleOptions['reindexSearchIndexes']>;
   /** Feature 163 — `seo`'s product metadata, `null` while `seo` is off (`seoProductMetaPort`). */
   readonly catalogSeoProductMeta: NonNullable<CatalogModuleOptions['resolveSeoProductMeta']>;
+  /** Feature 163 (T118c) — `seo`'s scopes of a product, `[]` while `seo` is off. */
+  readonly catalogSeoProductScopes: NonNullable<CatalogModuleOptions['listSeoProductScopes']>;
   /**
    * Owned by `assets_library`: the registry that refuses to delete an asset a
    * product gallery, attachment, virtual download or category image points at.
@@ -510,6 +514,22 @@ export function registerModule(ctx: ModuleContext): void {
       .singleton(),
 
     /**
+     * Feature 163 (T118c) — `seo`'s scopes of one product for the scope overview, by
+     * the same probe-before-resolve as the page's metadata above: with `seo` off the
+     * overview lists no SEO field and answers no error, and there is no `catch` to
+     * hide a genuine `seo` failure behind that absence.
+     */
+    catalogSeoProductScopes: ctx
+      .asFunction((): CatalogCradle['catalogSeoProductScopes'] => {
+        const seoMeta = lazyPort<SeoProductMetaPort>(ctx, 'seoProductMetaPort');
+        return async (productId) => {
+          if (!effectiveState.isPresent('seo')) return [];
+          return seoMeta.listScopesForProduct(productId);
+        };
+      })
+      .singleton(),
+
+    /**
      * The storefront product-image placeholder
      * (`general.product_image_placeholder_url`), resolved per channel.
      *
@@ -684,6 +704,7 @@ export function registerModule(ctx: ModuleContext): void {
               cradle().catalogImagePlaceholderUrl(salesChannelCode),
             reindexSearchIndexes: () => cradle().catalogSearchReindex(),
             resolveSeoProductMeta: (input) => cradle().catalogSeoProductMeta(input),
+            listSeoProductScopes: (productId) => cradle().catalogSeoProductScopes(productId),
             categoryRevalidator: cradle().catalogCategoryRevalidator,
             copyWarehouseThresholds,
           }),
@@ -1045,6 +1066,7 @@ export function registerModule(ctx: ModuleContext): void {
             emFactory,
             commandBus,
             lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
           ),
       )
       .singleton(),
@@ -1298,6 +1320,8 @@ export const entities = [
   BundleSlotOption,
   BundleSlot,
   Category,
+  GalleryItemChannelHidden,
+  GalleryItemChannelLabel,
   GalleryItemLabel,
   GalleryItem,
   GroupedItem,
