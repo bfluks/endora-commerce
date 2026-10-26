@@ -859,6 +859,12 @@ export class CatalogQueryService {
     products: readonly Product[],
     /** The request: its resolved sales channel (override rows and keys are read for it alone) and language. */
     ctx: CatalogQueryContext,
+    /**
+     * What a single-product caller (the product page) has already read for its one
+     * product: its scope rows in the channel and its keys per channel language — not
+     * read again (checkpoint C code review, N1).
+     */
+    preloaded?: { scopeRows: ChannelScopeRows; keysByLanguage: ReadonlyMap<string, string> },
   ): Promise<ListingCardReads> {
     const channelId = ctx.resolvedChannel.id;
     const productIds = products.map((p) => p.id);
@@ -894,9 +900,11 @@ export class CatalogQueryService {
     }
 
     const overridesByProduct = await loadChannelOverridesByProduct(em, ids, channelId);
-    const effectiveKeyByProduct = await this.#effectiveKeysAt(em, products, ctx);
+    const effectiveKeyByProduct = preloaded
+      ? this.#keysAtScopeLanguage(products, preloaded.keysByLanguage, ctx)
+      : await this.#effectiveKeysAt(em, products, ctx);
     // Feature 163 (FR-100) — the channel's minimum, read page-wide with its scope rows.
-    const scopeRows = await loadChannelScopeRows(em, ids, channelId);
+    const scopeRows = preloaded?.scopeRows ?? (await loadChannelScopeRows(em, ids, channelId));
     const minOrderQuantityByProduct = new Map(
       products.map((product) => [
         product.id,
@@ -914,6 +922,16 @@ export class CatalogQueryService {
       effectiveKeyByProduct,
       minOrderQuantityByProduct,
     };
+  }
+
+  /** The one product's key at the request's language, from keys already read (N1). */
+  #keysAtScopeLanguage(
+    products: ReadonlyArray<{ id: string; slug: string }>,
+    keysByLanguage: ReadonlyMap<string, string>,
+    ctx: CatalogQueryContext,
+  ): Map<string, string> {
+    const { languageCode } = this.#availabilityScope(ctx);
+    return new Map(products.map((product) => [product.id, keysByLanguage.get(languageCode) ?? product.slug]));
   }
 
   /**
@@ -1916,15 +1934,15 @@ export class CatalogQueryService {
    * language where the product is available to the **anonymous** audience,
    * whoever is asking: `hreflang` tells a crawler what it may open.
    */
-  async #pagePaths(
-    em: EntityManager,
+  #pagePaths(
     product: Product,
     scopeRows: ChannelScopeRows,
     ctx: CatalogQueryContext,
-  ): Promise<ProductPagePaths> {
+    /** The product's effective key per channel language, already read by the page. */
+    keys: ReadonlyMap<string, string>,
+  ): ProductPagePaths {
     const scope = this.#availabilityScope(ctx);
     const channel = scope.channel;
-    const keys = (await loadEffectiveKeys(em, [product], channel)).get(product.id) ?? new Map<string, string>();
     const pathAt = (languageCode: string): string =>
       productPath({
         key: keys.get(languageCode) ?? product.slug,
@@ -1963,8 +1981,13 @@ export class CatalogQueryService {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
     const scopeRows = await this.assertReachable(product, ctx);
+    // The product's keys in every channel language, read once for the card's link and
+    // the page's canonical and alternates (checkpoint C code review, N1).
+    const keysByLanguage =
+      (await loadEffectiveKeys(em, [product], this.#availabilityScope(ctx).channel)).get(product.id) ??
+      new Map<string, string>();
 
-    const cardReads = await this.#listingCardReadsFor(em, [product], ctx);
+    const cardReads = await this.#listingCardReadsFor(em, [product], ctx, { scopeRows, keysByLanguage });
     const summary = this.toSummary(
       product,
       channel,
@@ -2142,7 +2165,7 @@ export class CatalogQueryService {
         name: this.pickLang(c.name, ctx.preferredLanguage, channel),
         slug: c.slug,
       })),
-      paths: await this.#pagePaths(em, product, scopeRows, ctx),
+      paths: this.#pagePaths(product, scopeRows, ctx, keysByLanguage),
       seo: {
         metaTitle: seoMeta.title,
         metaDescription: seoMeta.description,

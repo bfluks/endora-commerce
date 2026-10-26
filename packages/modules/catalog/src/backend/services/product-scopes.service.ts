@@ -16,6 +16,7 @@ import {
   type ScopeSnapshot,
   toScopeChannel,
   type ScopeWarning,
+  sameLanguage,
 } from '@endora-commerce/contracts';
 import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -208,7 +209,7 @@ function assertScopeValid(entry: ChannelPatch, languages: readonly string[] | un
   }
   for (const language of entry.languageStatuses ?? []) {
     if (language.status === null) continue;
-    if (!languages.some((code) => code.toLowerCase() === language.languageCode.toLowerCase())) {
+    if (!languages.some((code) => sameLanguage(code, language.languageCode))) {
       throw new HttpError(422, ERROR_CODES.SCOPE_INVALID, 'The sales channel does not offer this language.', {
         channelId: entry.channelId,
         languageCode: language.languageCode,
@@ -225,10 +226,9 @@ function channelSpelling(
   rows: readonly ProductChannelLanguageScopeRecord[],
   channelId: string,
 ): string {
-  const lower = requested.toLowerCase();
-  const offered = languages?.find((code) => code.toLowerCase() === lower);
+  const offered = languages?.find((code) => sameLanguage(code, requested));
   if (offered !== undefined) return offered;
-  const stored = rows.find((row) => row.channelId === channelId && row.languageCode.toLowerCase() === lower);
+  const stored = rows.find((row) => row.channelId === channelId && sameLanguage(row.languageCode, requested));
   return stored?.languageCode ?? requested;
 }
 
@@ -292,7 +292,8 @@ function channelChanges(before: ProductChannelScopeRecord, after: ProductChannel
   return fields;
 }
 
-function inheritsEverything(row: ProductChannelScopeRecord): boolean {
+/** A channel row whose every field inherits holds no override and is deleted (FR-012). */
+export function inheritsEverything(row: ProductChannelScopeRecord): boolean {
   return (
     row.status === null &&
     row.window === null &&
@@ -425,50 +426,88 @@ export async function readScopedStatuses(
     for (const row of rows) out.set(row.productId, row.status ?? null);
     return out;
   }
-  const wanted = scope.languageCode.toLowerCase();
   const rows = await em.find(
     ProductChannelLanguageScope,
     { productId: { $in: [...productIds] }, salesChannelId: scope.channelId },
     { refresh: true },
   );
   for (const row of rows) {
-    if (row.languageCode.toLowerCase() === wanted) out.set(row.productId, row.status);
+    if (sameLanguage(row.languageCode, scope.languageCode)) out.set(row.productId, row.status);
   }
   return out;
 }
 
+/** The rows of the products a write touches, loaded once and kept current by the writers below. */
+export interface ScopeRowSet {
+  channelRows: ProductChannelScope[];
+  languageRows: ProductChannelLanguageScope[];
+}
+
+/** Every scope row of `productIds`, for the writers below. */
+export async function loadScopeRows(em: EntityManager, productIds: readonly string[]): Promise<ScopeRowSet> {
+  const ids = [...new Set(productIds)];
+  if (ids.length === 0) return { channelRows: [], languageRows: [] };
+  const [channelRows, languageRows] = await Promise.all([
+    em.find(ProductChannelScope, { productId: { $in: ids } }),
+    em.find(ProductChannelLanguageScope, { productId: { $in: ids } }),
+  ]);
+  return { channelRows, languageRows };
+}
+
 /**
- * Put the status at `scope` back to `status` (`null` = inherit) on `em` — the undo of
- * a bulk scoped-status edit, inside its audited `product.bulk_update.undo` Command. A
- * channel row whose every field inherits afterwards is deleted, as the scopes write
- * does (FR-012); a new language row takes the channel's own spelling of the language.
+ * Checkpoint C code review (C-W3) — **the one write of a channel row**: `next` replaces
+ * the row, and a row whose every field inherits (or `next: null`) is deleted (FR-012).
+ * On the caller's `em`, inside the caller's Command or transaction; `rows` is kept
+ * current. Every writer of `product_channel_scopes` goes through here.
  */
-export async function restoreScopedStatus(
+export function writeChannelScopeRow(
   em: EntityManager,
+  rows: ScopeRowSet,
   productId: string,
-  scope: StatusScope,
-  status: ProductScopeStatus | null,
-): Promise<void> {
-  // command-coverage-ignore: a helper on the caller's `em`, run only inside the bulk
-  // undo's audited Command `product.bulk_update.undo`, which commits and audits it.
-  if (scope.languageCode === null) {
-    const row = await em.findOne(ProductChannelScope, { productId, salesChannelId: scope.channelId });
-    const current = row ? toChannelRecord(row) : emptyRow(productId, scope.channelId);
-    const next: ProductChannelScopeRecord = { ...current, status };
-    if (inheritsEverything(next)) {
-      if (row) em.remove(row);
-      return;
+  channelId: string,
+  next: ProductChannelScopeRecord | null,
+): void {
+  // command-coverage-ignore: a helper on the caller's `em`, run only inside the caller's
+  // audited Command (the scopes write, the bulk undo) or the import's audited transaction.
+  const index = rows.channelRows.findIndex((r) => r.productId === productId && r.salesChannelId === channelId);
+  const row = index === -1 ? undefined : rows.channelRows[index];
+  if (next === null || inheritsEverything(next)) {
+    if (row) {
+      em.remove(row);
+      rows.channelRows.splice(index, 1);
     }
-    const target = row ?? em.create(ProductChannelScope, { productId, salesChannelId: scope.channelId });
-    writeChannelRow(target, next);
-    em.persist(target);
     return;
   }
-  const wanted = scope.languageCode.toLowerCase();
-  const rows = await em.find(ProductChannelLanguageScope, { productId, salesChannelId: scope.channelId });
-  const row = rows.find((r) => r.languageCode.toLowerCase() === wanted);
+  const target = row ?? em.create(ProductChannelScope, { productId, salesChannelId: channelId });
+  writeChannelRow(target, next);
+  em.persist(target);
+  if (!row) rows.channelRows.push(target);
+}
+
+/**
+ * Checkpoint C code review (C-W3) — **the one write of a channel × language row**:
+ * `status` replaces it, `null` deletes it. `languageCode` is matched case-insensitively
+ * and a new row takes it as given (the caller passes the channel's spelling).
+ */
+export function writeLanguageScopeRow(
+  em: EntityManager,
+  rows: ScopeRowSet,
+  productId: string,
+  channelId: string,
+  languageCode: string,
+  status: ProductScopeStatus | null,
+): void {
+  // command-coverage-ignore: a helper on the caller's `em`, run only inside the caller's
+  // audited Command (the scopes write, the bulk undo) or the import's audited transaction.
+  const index = rows.languageRows.findIndex(
+    (r) => r.productId === productId && r.salesChannelId === channelId && sameLanguage(r.languageCode, languageCode),
+  );
+  const row = index === -1 ? undefined : rows.languageRows[index];
   if (status === null) {
-    if (row) em.remove(row);
+    if (row) {
+      em.remove(row);
+      rows.languageRows.splice(index, 1);
+    }
     return;
   }
   if (row) {
@@ -476,9 +515,55 @@ export async function restoreScopedStatus(
     em.persist(row);
     return;
   }
-  const channel = await em.findOne(SalesChannel, { id: scope.channelId });
-  const languageCode = channel?.languages.find((code) => code.toLowerCase() === wanted) ?? scope.languageCode;
-  em.persist(em.create(ProductChannelLanguageScope, { productId, salesChannelId: scope.channelId, languageCode, status }));
+  const created = em.create(ProductChannelLanguageScope, { productId, salesChannelId: channelId, languageCode, status });
+  em.persist(created);
+  rows.languageRows.push(created);
+}
+
+/**
+ * The status at one scope set to `status` (`null` = inherit) — the bulk undo's and the
+ * CSV import's write, over the two row writers above. Answers whether anything changed.
+ */
+export function writeScopedStatus(
+  em: EntityManager,
+  rows: ScopeRowSet,
+  productId: string,
+  scope: StatusScope,
+  status: ProductScopeStatus | null,
+): boolean {
+  if (scope.languageCode === null) {
+    const row = rows.channelRows.find((r) => r.productId === productId && r.salesChannelId === scope.channelId);
+    const current = row ? toChannelRecord(row) : emptyRow(productId, scope.channelId);
+    if (current.status === status) return false;
+    writeChannelScopeRow(em, rows, productId, scope.channelId, { ...current, status });
+    return true;
+  }
+  const row = rows.languageRows.find(
+    (r) => r.productId === productId && r.salesChannelId === scope.channelId && sameLanguage(r.languageCode, scope.languageCode),
+  );
+  if ((row?.status ?? null) === status) return false;
+  writeLanguageScopeRow(em, rows, productId, scope.channelId, scope.languageCode, status);
+  return true;
+}
+
+/**
+ * Put the status at `scope` back to `status` (`null` = inherit) on `em` — the undo of
+ * a bulk scoped-status edit, inside its audited `product.bulk_update.undo` Command. A
+ * new language row takes the channel's own spelling of the language.
+ */
+export async function restoreScopedStatus(
+  em: EntityManager,
+  productId: string,
+  scope: StatusScope,
+  status: ProductScopeStatus | null,
+): Promise<void> {
+  let languageCode = scope.languageCode;
+  if (languageCode !== null && status !== null) {
+    const channel = await em.findOne(SalesChannel, { id: scope.channelId });
+    const requested = languageCode;
+    languageCode = channel?.languages.find((code) => sameLanguage(code, requested)) ?? languageCode;
+  }
+  writeScopedStatus(em, await loadScopeRows(em, [productId]), productId, { channelId: scope.channelId, languageCode }, status);
 }
 
 // --- The service ---------------------------------------------------------------------
@@ -757,27 +842,13 @@ export class ProductScopesService {
               )
             : [];
 
+        // C-W3 — the one write path of each row kind, shared with the undo and the import.
+        const rows: ScopeRowSet = { channelRows: [...channelRows], languageRows: [...languageRows] };
         for (const { channelId, next } of plan.channelRows) {
-          const row = channelRows.find((r) => r.salesChannelId === channelId);
-          if (next === null) {
-            if (row) em.remove(row);
-          } else if (row) {
-            writeChannelRow(row, next);
-          } else {
-            const created = em.create(ProductChannelScope, { productId, salesChannelId: channelId });
-            writeChannelRow(created, next);
-            em.persist(created);
-          }
+          writeChannelScopeRow(em, rows, productId, channelId, next);
         }
         for (const { channelId, languageCode, next } of plan.languageRows) {
-          const row = languageRows.find((r) => r.salesChannelId === channelId && r.languageCode === languageCode);
-          if (next === null) {
-            if (row) em.remove(row);
-          } else if (row) {
-            row.status = next;
-          } else {
-            em.persist(em.create(ProductChannelLanguageScope, { productId, salesChannelId: channelId, languageCode, status: next }));
-          }
+          writeLanguageScopeRow(em, rows, productId, channelId, languageCode, next);
         }
         if (plan.globalWindow) {
           product.publishFrom = plan.globalWindow.from;
