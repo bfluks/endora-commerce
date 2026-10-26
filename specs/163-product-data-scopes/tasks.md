@@ -601,12 +601,59 @@ extends S1's `scoped-availability-matrix.test.ts` (T031); S2 edits it in its own
 **Goal**: the screens offer two status values, Archive / Restore single and bulk, and the Archived filter;
 no admin surface offers or labels `draft`.
 
-- [ ] T156u [P] [US1] [S3] RED catalog screens: the editor's global status selector offers `active` / `inactive` only, a new product starts `inactive`; an archived product shows an "Archived" state with **Restore**, a non-archived one **Archive**, each behind a confirmation that says what it does (Archive: gone from every channel, status kept; Restore: back where its status allows, setting `active` alone does not restore), both hidden for `catalog:read`; the duplicate confirmation no longer says "draft"; the list offers *All · Active · Inactive · Archived* with the counts of R30.4 and sends `archived` instead of `includeArchived=1`; an archived row shows its badge; a saved view holding `status: 'draft'` opens as "All"; the bulk dialog offers **Archive** and **Restore** (confirmation, per-product result, undo link as for other bulk edits) and no `draft` in "Set status"; keyboard reachable and labelled (WCAG 2.2 AA, `ux-laws`) — `admin/test/modules/catalog/product-archive-restore.test.tsx`, `admin/test/modules/catalog/products-list-archived.test.tsx`
-- [ ] T156v [P] [S3] RED the shared pickers: the admin-kit product browser's tabs and counts follow R30.4 (no `draft`), archived products are not selectable where a browser blocks them; `ProductPicker` labels; `page-builder-admin` catalog picker, blog related-products picker, the orders create page's browser (`blockedStatuses` → `['inactive']` plus archived) and the product-feeds criteria status options carry no `draft` — `admin/test/kit/kit-product-browser.test.tsx`, `admin/test/kit/kit-pickers.test.tsx`, `admin/test/kit/kit-product-browser-selectability.test.ts`, `admin/test/modules/orders/OrderCreatePage.product-browser.test.tsx`
-- [ ] T156w [S3] Catalog screens — `src/admin/pages/{ProductEditor,ProductsList}.tsx`, `src/admin/components/{ProductsBulkEditDialog,ProductScopeControls}.tsx`, `src/admin/lib/{resolve-product-selection,product-scope-drafts}.ts` (admin-kit primitives only, IX)
-- [ ] T156x [S3] Shared pickers — `packages/admin-kit/src/components/{product-browser/{types.ts,ProductBrowserDialog.tsx,product-browser-api.ts},product-picker/ProductPicker.tsx}`, `packages/page-builder-admin/src/chrome/CatalogPickers.tsx`, `packages/modules/blog/src/admin/components/RelatedProductsPicker.tsx`, `packages/modules/orders/src/admin/pages/OrderCreatePage.tsx`, `packages/modules/product_feeds/src/admin/components/FeedCriteriaPanel.tsx`; their bundles' `draft` labels removed
-- [ ] T156y [S3] Handover commit: catalog i18n keys en+pl for Archive / Restore, confirmations, the Archived tab and badge, bulk actions; `open-products` palette keywords gain "archive", "archived", "archiwum", "zarchiwizowane" (R23); changesets for `@endora-commerce/admin-kit` and `@endora-commerce/page-builder-admin`, breaking at `minor` (the product browser's status type and counts narrowed, R30.6)
-- [ ] T156z [S3] Existing admin tests that assert `draft`: `admin/test/modules/catalog/{product-scope-controls,ProductEditor.attribute-set-swap,ProductEditor.category-tree,ProductEditor.channels-tab,ProductEditor.no-own-price,ProductEditor.publish-window,ProductEditor.sku-status,ProductsList.saved-views}.test.tsx`, `admin/test/modules/webhooks/contributed-event-types.test.tsx` (event label wording only if it changed)
+- [x] T156u [P] [US1] [S3] RED catalog screens: the editor's global status selector offers `active` / `inactive` only, a new product starts `inactive`; an archived product shows an "Archived" state with **Restore**, a non-archived one **Archive**, each behind a confirmation that says what it does (Archive: gone from every channel, status kept; Restore: back where its status allows, setting `active` alone does not restore), both hidden for `catalog:read`; the duplicate confirmation no longer says "draft"; the list offers *All · Active · Inactive · Archived* with the counts of R30.4 and sends `archived` instead of `includeArchived=1`; an archived row shows its badge; a saved view holding `status: 'draft'` opens as "All"; the bulk dialog offers **Archive** and **Restore** (confirmation, per-product result, undo link as for other bulk edits) and no `draft` in "Set status"; keyboard reachable and labelled (WCAG 2.2 AA, `ux-laws`) — `admin/test/modules/catalog/product-archive-restore.test.tsx`, `admin/test/modules/catalog/products-list-archived.test.tsx`
+- [x] T156v [P] [S3] RED the shared pickers: the admin-kit product browser's tabs and counts follow R30.4 (no `draft`), archived products are not selectable where a browser blocks them; `ProductPicker` labels; `page-builder-admin` catalog picker, blog related-products picker, the orders create page's browser (`blockedStatuses` → `['inactive']` plus archived) and the product-feeds criteria status options carry no `draft` — `admin/test/kit/kit-product-browser.test.tsx`, `admin/test/kit/kit-pickers.test.tsx`, `admin/test/kit/kit-product-browser-selectability.test.ts`, `admin/test/modules/orders/OrderCreatePage.product-browser.test.tsx`
+- [x] T156w [S3] Catalog screens — `src/admin/pages/{ProductEditor,ProductsList}.tsx`, `src/admin/components/{ProductsBulkEditDialog,ProductScopeControls}.tsx`, `src/admin/lib/{resolve-product-selection,product-scope-drafts}.ts` (admin-kit primitives only, IX)
+- [x] T156x [S3] Shared pickers — `packages/admin-kit/src/components/{product-browser/{types.ts,ProductBrowserDialog.tsx,product-browser-api.ts},product-picker/ProductPicker.tsx}`, `packages/page-builder-admin/src/chrome/CatalogPickers.tsx`, `packages/modules/blog/src/admin/components/RelatedProductsPicker.tsx`, `packages/modules/orders/src/admin/pages/OrderCreatePage.tsx`, `packages/modules/product_feeds/src/admin/components/FeedCriteriaPanel.tsx`; their bundles' `draft` labels removed
+- [x] T156y [S3] Handover commit: catalog i18n keys en+pl for Archive / Restore, confirmations, the Archived tab and badge, bulk actions; `open-products` palette keywords gain "archive", "archived", "archiwum", "zarchiwizowane" (R23); changesets for `@endora-commerce/admin-kit` and `@endora-commerce/page-builder-admin`, breaking at `minor` (the product browser's status type and counts narrowed, R30.6)
+- [x] T156z [S3] Existing admin tests that assert `draft`: `admin/test/modules/catalog/{product-scope-controls,ProductEditor.attribute-set-swap,ProductEditor.category-tree,ProductEditor.channels-tab,ProductEditor.no-own-price,ProductEditor.publish-window,ProductEditor.sku-status,ProductsList.saved-views}.test.tsx`, `admin/test/modules/webhooks/contributed-event-types.test.tsx` (event label wording only if it changed)
+
+- [ ] T156z-sv [S3] **Open — owner decision pending (coordinator, 2026-10-26).** Whether a saved view holding
+  `status: 'draft'` should open on *Inactive* instead of *All*. Not built: such a view opens as *All* (the planned
+  R30.4 fallback, asserted in `ProductsList.saved-views.test.tsx` and `products-list-archived.test.tsx`), and no
+  client-side `draft` → `inactive` mapping exists. If the owner chooses the mapping it is one line in
+  `savedViewTab` (`ProductsList.tsx`) plus its two test cases.
+
+**Phase 15a note** (S3, 2026-10-26). Decisions taken in the code, for checkpoint Q-UI:
+- *Editor.* Archive / Restore is one header button (whichever applies), `default` style rather than danger — it is
+  reversible, Save stays the one primary and Delete the one danger. Each opens the kit's `ModalDialog`
+  (`aria-describedby` = the sentence saying what it does), posts to its own route and updates the archived state
+  in place: unsaved form edits stay in the form and are not sent. An archived product shows an Archived badge
+  beside the status pill and a standing `role="status"` warning ("setting Active does not change that — only
+  Restore brings it back", O-5); the status selector is also described by that note while archived. Both
+  buttons need `catalog:write`; the archived state is shown to `catalog:read`. The create request now carries the
+  selected status (it sent none, so the selector was decorative on create). The duplicate confirmation is a
+  bundle key ("created as Inactive and not archived").
+- *List.* Tabs *All · Active · Inactive · Archived*; the mapping is the pure `productListTabQuery`
+  (`lib/resolve-product-selection.ts`): the first three send `status` (or nothing) and rely on the default
+  `archived=exclude`, Archived sends `archived=only`; `status=archived` never reaches the wire, and a bookmarked
+  `?status=archived` opens the Archived tab. `resolve-ids` always receives `archived` (`exclude` / `only`) because
+  its own default is `include` — without it "select all N matching" on All would reach archived products the
+  operator cannot see. A saved view stores the Archived tab as `{ archived: 'only' }`, never as a status
+  (R30.4 rejects the pseudo-status). Row status labels are bundle keys now (`productsList.status.*`).
+- *Bulk.* `fields.archived` must travel alone, so Archive / Restore is not a "touched" field group: it is a
+  separate section at the foot of the bulk dialog with its own `ModalDialog` confirmation, disabled (with the
+  reason as its description) while any field is touched. The list passes the one action that changes something
+  on the tab — Restore on Archived, Archive elsewhere — and none without `catalog:write`. The result names how
+  many moved and how many were already in that state (`changedFields: []`, O-6), and every bulk summary now
+  links to its operation page ("Review or undo this change"), where the existing Undo lives. The bulk bar itself
+  is unchanged (its feature-022 test still holds it to three actions).
+- *Shared pickers.* The admin-kit browser mirrors the list: tabs `all/active/inactive/archived`, counts
+  `{ all, active, inactive, archived }`, no `includeArchived=1`. `ProductBrowserItem.archivedAt` (optional) and
+  `ProductBrowserRules.blockArchived` with reason `archived` — evaluated after the type and before the status,
+  so an archived `active` product names the reason that applies; a host that sets it gets no Archived tab
+  (Hick). Orders set it (blocked statuses `['inactive']` + archived); quote requests and price lists leave it
+  off, matching their rules before 163 (neither refused an archived product then). The quick search (`ProductPicker`)
+  names an archived product beside its status. Blog's related-products picker badges inactive and archived
+  separately (`productStatus.inactive` added — the key it used, `status.inactive`, was the post status).
+  Feed criteria and page-builder's catalog picker lose `draft`.
+- *Palette.* `adminActionSchema` caps an action at ten keywords and `open-products` had nine, so the four R23
+  words are one entry, `'archived archiwum zarchiwizowane'`; the palette matches a substring of the joined
+  keywords, so each of "archive", "archived", "archiwum", "zarchiwizowane" finds the action.
+- *Tests outside T156z's list that the model change reached:* `RfqCreatePage.product-browser`,
+  `OrderCreatePage.{catalog-permission,minimum}`, `ProductsList.{test,selection,create-affordance-gating}`,
+  `ProductsBulkEditDialog{,.returnable}` (now under a router: the summary links to its operation) and
+  `admin/test/helpers/price-book-grid.ts`.
 
 **Verification** (one invocation per line):
 - `pnpm --filter admin exec vitest run test/modules/catalog/product-archive-restore.test.tsx test/modules/catalog/products-list-archived.test.tsx`
