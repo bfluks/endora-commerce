@@ -10,7 +10,11 @@ import {
 import { ApiError, apiClient, cn } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardHeader, CardTitle, Input } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
-import type { ProductScopeStatus } from '@endora-commerce/contracts';
+import type {
+  ProductScopeChannel,
+  ProductScopeContextResponse,
+  ProductScopeStatus,
+} from '@endora-commerce/contracts';
 import { ProductScopeControls } from './ProductScopeControls.js';
 
 /**
@@ -37,26 +41,12 @@ import { ProductScopeControls } from './ProductScopeControls.js';
  * here in a follow-up patch. This first slice is read-only.
  */
 
-export interface Channel {
-  id: string;
-  code: string;
-  name: string;
-  languages: string[];
-  isDefault: boolean;
-}
-
-interface PreferenceFields {
-  lastChannelId: string | null;
-  lastLanguageCode: string | null;
-}
-
-export interface ScopeContext {
-  productId: string;
-  channels: Channel[];
-  languagesUnion: string[];
-  primaryAdminLanguage: string;
-  preference: PreferenceFields | null;
-}
+/**
+ * The product's scope context (`GET …/scope-context`), typed by the contract rather than
+ * re-declared here (review C-8).
+ */
+export type Channel = ProductScopeChannel;
+export type ScopeContext = ProductScopeContextResponse;
 
 /**
  * Compute the language-switcher pool for a given channel context.
