@@ -5,6 +5,7 @@ import {
   type CatalogAttributeReadPort,
   type CatalogGalleryPort,
   type CatalogProductAvailabilityPort,
+  type CatalogProductUrlKeyReadPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
   ANONYMOUS_PRODUCT_AUDIENCE,
@@ -121,7 +122,7 @@ export class ComparisonService {
      * `catalogProducts` is: an optional one would spell "this rig wired
      * nothing" and "this channel offers the product" as the same answer.
      */
-    private readonly availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
+    private readonly availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>,
     /**
      * Feature 075 / D-87 — `catalog`'s gallery read model, for the base image
      * of each column. Required for the same reason `catalogProducts` is: the
@@ -179,6 +180,12 @@ export class ComparisonService {
      * reject with a message about a constraint the caller never heard of.
      */
     private readonly customerAccounts?: CustomerAccountReadPort,
+    /**
+     * Feature 163 (T113a, R28) — the effective URL key per channel language, so a
+     * column links to the key that resolves at the reader's (channel, language).
+     * Absent (a rig that wires none), a column keeps the global key.
+     */
+    private readonly urlKeys?: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>,
   ) {}
 
   /**
@@ -680,6 +687,19 @@ export class ComparisonService {
       channel?.defaultLanguage ?? undefined,
       attributeDefs,
     );
+    // Feature 163 — each column's link and minimum in this channel: the effective
+    // URL key at the reader's (channel, language) (T113a, R28) and the channel's
+    // minimum (FR-100), one read each for the view.
+    const keyLanguage = scopeLanguage ?? channel?.defaultLanguage ?? null;
+    const [keysByProduct, rulesByProduct] =
+      visibleProductIds.length > 0
+        ? await Promise.all([
+            this.urlKeys
+              ? this.urlKeys.effectiveKeys(visibleProductIds, viewerSalesChannelId)
+              : Promise.resolve(new Map<string, Map<string, string>>()),
+            this.availability.effectiveOrderRules(visibleProductIds, viewerSalesChannelId),
+          ])
+        : [new Map<string, Map<string, string>>(), new Map<string, { minOrderQuantity: number | null; returnable: boolean }>()];
     const productSummaries = visibleRows.map((row) => {
       const p = productById.get(row.productId);
       if (!p) {
@@ -702,13 +722,18 @@ export class ComparisonService {
         id: p.id,
         sku: p.sku,
         name: effective.names.get(p.id) ?? p.name,
-        slug: p.slug,
+        slug: (keyLanguage !== null ? keysByProduct.get(p.id)?.get(keyLanguage) : undefined) ?? p.slug,
         type: p.type,
         primaryAssetUrl: baseImageByProduct.get(p.id) ?? null,
         price,
         available: availableHere.has(p.id),
         // Feature 155 (FR-014) — emitted for the types the minimum applies to only.
-        minOrderQuantity: isOrderMinimumEligibleType(p.type) ? p.minOrderQuantity : null,
+        // Feature 163 (FR-100) — the reader's channel's minimum.
+        minOrderQuantity: isOrderMinimumEligibleType(p.type)
+          ? rulesByProduct.has(p.id)
+            ? (rulesByProduct.get(p.id)?.minOrderQuantity ?? null)
+            : p.minOrderQuantity
+          : null,
         addedAt: row.addedAt.toISOString(),
       };
     });

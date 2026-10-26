@@ -9,6 +9,7 @@ import {
   overrideLanguages,
   type CatalogAttributeReadPort,
   type CatalogProductAvailabilityPort,
+  type CatalogProductUrlKeyReadPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
   type ListingPrice,
@@ -174,7 +175,13 @@ export class SearchQueryService {
      * signature: hydration without it fails loudly rather than trusting the
      * index.
      */
-    private readonly availability?: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
+    private readonly availability?: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>,
+    /**
+     * Feature 163 (T113a, R28) — the effective URL key per channel language, so a
+     * card links to the key that resolves at the request's (channel, language).
+     * Absent (a rig that wires none), a card keeps the global key.
+     */
+    private readonly urlKeys?: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>,
   ) {
     const host =
       options.meilisearchHost ??
@@ -374,6 +381,18 @@ export class SearchQueryService {
     // channel's default language only, so it is wrong for any other request
     // language — it stays what the index ranks and sorts by.
     const overridesByProduct = await this.#channelOverridesFor(products, channel.id);
+    // Feature 163 — the card's link and minimum in this channel: the effective URL
+    // key at (channel, L) (T113a, R28) and the channel's minimum (FR-100), one read
+    // each for the page.
+    const scopeLanguage = searchScopeLanguage(channel, ctx.preferredLanguage);
+    const productIds = products.map((p) => p.id);
+    const [keysByProduct, rulesByProduct] =
+      productIds.length > 0
+        ? await Promise.all([
+            this.urlKeys ? this.urlKeys.effectiveKeys(productIds, channel.id) : Promise.resolve(new Map()),
+            this.#requireAvailability().effectiveOrderRules(productIds, channel.id),
+          ])
+        : [new Map<string, Map<string, string>>(), new Map<string, { minOrderQuantity: number | null; returnable: boolean }>()];
     const summaries: ProductSummary[] = [];
     for (const hit of hits) {
       const product = productById.get(hit.id);
@@ -388,6 +407,12 @@ export class SearchQueryService {
           resolvedPrices.get(product.id)?.price,
           resolvedPrices.get(product.id),
           overridesByProduct.get(product.id),
+          {
+            slug: (keysByProduct as Map<string, Map<string, string>>).get(product.id)?.get(scopeLanguage),
+            minOrderQuantity: rulesByProduct.has(product.id)
+              ? (rulesByProduct.get(product.id)?.minOrderQuantity ?? null)
+              : undefined,
+          },
         ),
       );
     }
@@ -413,7 +438,7 @@ export class SearchQueryService {
     ];
   }
 
-  #requireAvailability(): Pick<CatalogProductAvailabilityPort, 'filterAvailable'> {
+  #requireAvailability(): Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'> {
     if (!this.availability) {
       throw new Error(
         'SearchQueryService: the availability port is not wired — a hit cannot be hydrated without it.',
@@ -634,6 +659,12 @@ export function searchHitSummary(
    * it was before.
    */
   overrides?: readonly OverrideRow[],
+  /**
+   * Feature 163 — the product's values in this channel: the effective URL key at
+   * the request's (channel, language) (T113a) and the channel's minimum (FR-100).
+   * An absent value keeps the record's.
+   */
+  inChannel: { slug?: string | undefined; minOrderQuantity?: number | null | undefined } = {},
 ): ProductSummary {
   const price = resolvedPrice === undefined ? null : listingPriceMoney(resolvedPrice);
 
@@ -652,7 +683,7 @@ export function searchHitSummary(
         product.name,
         pickLang(product.name, preferredLanguage, channel),
       ) || hit.name,
-    slug: product.slug,
+    slug: inChannel.slug ?? product.slug,
     categorySlugs: hit.categorySlugs,
     primaryAssetUrl: hit.primaryAssetUrl ?? null,
     price,
@@ -660,7 +691,11 @@ export function searchHitSummary(
     stockLevel: null,
     // Feature 155 (FR-014) — from the hydrated record, never from the index;
     // emitted for the types the minimum applies to only.
-    minOrderQuantity: isOrderMinimumEligibleType(product.type) ? product.minOrderQuantity : null,
+    minOrderQuantity: isOrderMinimumEligibleType(product.type)
+      ? inChannel.minOrderQuantity !== undefined
+        ? inChannel.minOrderQuantity
+        : product.minOrderQuantity
+      : null,
     ...(detail
       ? {
           resolvedPrice: {

@@ -94,7 +94,11 @@ function serviceWith(
   // Names are this file's subject, not prices: the pricing port resolves nothing.
   const prices = { resolveListingPriceDetails: async () => new Map() } as unknown as ListingPriceDetailPort;
   // Feature 163 — every hit is available here; this file is about names.
-  const availableEverywhere = { filterAvailable: async (ids: readonly string[]) => new Set(ids) };
+  const availableEverywhere = {
+    filterAvailable: async (ids: readonly string[]) => new Set(ids),
+    // No channel order rule in this file: the record's minimum stands.
+    effectiveOrderRules: async () => new Map<string, { minOrderQuantity: number | null; returnable: boolean }>(),
+  };
   return {
     service: new SearchQueryService(port, undefined, {}, prices, undefined, availableEverywhere),
     listValueOverridesByProductIds,
