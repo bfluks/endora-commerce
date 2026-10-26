@@ -260,6 +260,12 @@ It replaces the 2026-10-21 Q1 answer and extends N1.
   2026-10-26)** — no. The overview offers "reset to inherited" only for sales channel and sales channel ×
   language overrides; a product's own text in a language is edited in the product editor and has no reset
   in the overview (FR-041, US4 #2).
+- Q: (N2, packaging unit) When an operator names the channel on a customer's behalf and a basket line is
+  ordered by a packaging unit, in which language is the unit's name snapshotted? Until now: the global
+  name, while the product name beside it is at the channel's default language. → B: **N2 = B (owner,
+  2026-10-26)** — at the named channel's **default language** (its translation there, else the global
+  name), consistent with the product name beside it (FR-079). The channel is read through the kernel's
+  channel accessor, and only when a unit is named. A buyer's basket keeps the request language.
 
 ## Current state (origin/master cde5563ea)
 
