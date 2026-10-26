@@ -605,11 +605,11 @@ przechowują ją przez godzinę.
 
 ## Tylko to, co widzi anonimowy użytkownik
 
-Mapa witryny pomija:
-- produkty ze `status != 'active'`
-- produkty z `visibility != 'public'`
-- wiersze zarchiwizowane (`archivedAt`) i usunięte miękko (`deletedAt`)
-- kategorie usunięte miękko
+Produkt trafia do mapy witryny kanału tylko tam, gdzie w chwili generowania jest w tym kanale
+dostępny dla anonimowego odwiedzającego: należy do kanału, nie jest zarchiwizowany ani usunięty,
+jest włączony w danym języku kanału, mieści się w okresie publikacji i obejmuje go obowiązujący zakres
+odbiorców (kanału, a gdy go nie ma — globalny). Produkt wyłączony globalnie, ale włączony w kanale,
+trafia do mapy; produkt wyłączony w kanale — nie. Pomijane są też kategorie usunięte miękko.
 
 Zasada jest prosta: robotom wyszukiwarek udostępnia się wyłącznie to, co może zobaczyć anonimowy
 klient.
