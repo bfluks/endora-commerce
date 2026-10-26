@@ -73,6 +73,15 @@ describe('productIdForKey', () => {
     expect(navigation.permanentRedirect).toHaveBeenCalledWith('/p/wiertarka?lang=pl-PL');
   });
 
+  it.each(['//evil.example/p/x', 'https://evil.example/p/x', '/\\evil.example', '/cart', 'p/x', '/p//evil.example'])(
+    'never redirects off the product pages: %s is not-found (checkpoint E security review, I3)',
+    async (path) => {
+      catalogApi.resolveProductKey.mockResolvedValue({ kind: 'redirect', key: 'k', languageCode: 'pl-PL', path });
+      await expect(productIdForKey('drill', ctx)).rejects.toBeInstanceOf(NotFoundSignal);
+      expect(navigation.permanentRedirect).not.toHaveBeenCalled();
+    },
+  );
+
   it('answers the product id the key resolved to', async () => {
     catalogApi.resolveProductKey.mockResolvedValue({
       kind: 'product',

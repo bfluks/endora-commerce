@@ -23,7 +23,9 @@ import { StorefrontApiError, type RequestContext } from '../../../../lib/api/cli
  * product's `410`, a backend failure) is the error page, as before.
  *
  * `permanentRedirect` and `notFound` throw: neither may be called inside a
- * `try` that would catch it.
+ * `try` that would catch it. The 308 is not shared-cacheable: the page reads the
+ * request's cookies (`getServerContext`), so Next renders it dynamically and sends
+ * `Cache-Control: private, no-cache, no-store`.
  */
 export async function productIdForKey(key: string, ctx: RequestContext): Promise<string> {
   let resolution;
@@ -33,8 +35,19 @@ export async function productIdForKey(key: string, ctx: RequestContext): Promise
     if (err instanceof StorefrontApiError && err.status === 404) notFound();
     throw err;
   }
-  if (resolution.kind === 'redirect') permanentRedirect(resolution.path);
+  if (resolution.kind === 'redirect') {
+    // Checkpoint E security review (I3) — a redirect never leaves the product pages:
+    // a path the backend did not build as `/p/<key>` (protocol-relative, absolute,
+    // backslash or another route) is answered as a key of no product.
+    if (!isProductPagePath(resolution.path)) notFound();
+    permanentRedirect(resolution.path);
+  }
   return resolution.productId;
+}
+
+/** `/p/<one segment>`, optionally with a query — never `//…`, a scheme or a backslash. */
+function isProductPagePath(path: string): boolean {
+  return /^\/p\/[^/\\?#]+(\?[^\\#]*)?$/.test(path);
 }
 
 /**
