@@ -289,6 +289,79 @@ describe('ProductUrlKeysPanel', () => {
     });
   });
 
+  it('a confirmed takeover refused again re-opens the dialog with the new list (C-4)', async () => {
+    const user = userEvent.setup();
+    putSpy
+      .mockRejectedValueOnce(takeoverError([{ languageCode: 'de', key: 'bohrer-neu', losingProductName: 'Old drill' }]))
+      .mockRejectedValueOnce(
+        takeoverError([
+          { languageCode: 'de', key: 'bohrer-neu', losingProductName: 'Old drill' },
+          { languageCode: 'de', key: 'bohrer-neu', losingProductName: 'Older drill' },
+        ]),
+      );
+    const panel = await renderPanel();
+    const de = within(panel).getByRole('textbox', { name: /^url key in de$/i });
+    await user.clear(de);
+    await user.type(de, 'bohrer-neu');
+    await user.click(within(panel).getByRole('button', { name: /^save url keys$/i }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /take over and save/i }));
+    await waitFor(() => expect(putSpy).toHaveBeenCalledTimes(2));
+    const again = await screen.findByRole('dialog');
+    await waitFor(() => expect(again).toHaveTextContent('Older drill'));
+    expect(within(panel).queryByText(/could not be saved/i)).toBeNull();
+  });
+
+  it('refuses a key the grammar refuses before sending it, marking the field (C-6b, D10)', async () => {
+    const user = userEvent.setup();
+    const panel = await renderPanel();
+    const global = within(panel).getByRole('textbox', { name: /^global url key$/i });
+    await user.clear(global);
+    await user.type(global, 'bad key!');
+    await user.click(within(panel).getByRole('button', { name: /^save url keys$/i }));
+    const error = await within(panel).findByText(/bad key! is not a valid url key/i);
+    expect(putSpy).not.toHaveBeenCalled();
+    expect(global).toHaveAttribute('aria-invalid', 'true');
+    expect(global.getAttribute('aria-describedby')).toContain(error.closest('[id]')!.id);
+  });
+
+  it('shows the keys when the channel context cannot be read, naming channels generically and offering no new scope (C-3)', async () => {
+    getSpy.mockImplementation((path: string) => {
+      if (path === URL_KEYS_PATH) return Promise.resolve({ data: urlKeysFixture() });
+      if (path === CONTEXT_PATH) return Promise.reject(new Error('down'));
+      return Promise.reject(new Error(`unexpected GET ${path}`));
+    });
+    const panel = await renderPanel();
+    expect(await within(panel).findByRole('textbox', { name: /^global url key$/i })).toHaveValue('drill');
+    expect(within(panel).getByRole('textbox', { name: /^url key in de$/i })).toHaveValue('bohrer');
+    expect(within(panel).getAllByText(/a channel the product left/i).length).toBeGreaterThan(0);
+    expect(within(panel).queryByRole('combobox', { name: /add a channel key/i })).toBeNull();
+  });
+
+  it('shows the inherited key as visible text, not only as a placeholder (D9)', async () => {
+    const panel = await renderPanel();
+    const en = within(panel).getByRole('textbox', { name: /^url key in en$/i });
+    const hint = document.getElementById(en.getAttribute('aria-describedby') ?? '');
+    expect(hint).toHaveTextContent('Inherited: drill');
+  });
+
+  it('says when edits are not saved yet, and why Save is disabled when there are none (D10)', async () => {
+    const user = userEvent.setup();
+    const panel = await renderPanel();
+    const save = within(panel).getByRole('button', { name: /^save url keys$/i });
+    expect(save).toBeDisabled();
+    expect(document.getElementById(save.getAttribute('aria-describedby') ?? '')).toHaveTextContent(/no changes to save/i);
+    await user.click(within(panel).getByRole('button', { name: /^use inherited for de$/i }));
+    expect(within(panel).getByText(/not saved yet/i)).toBeInTheDocument();
+    expect(save).not.toBeDisabled();
+  });
+
+  it('names its sections with headings under the panel title (D10)', async () => {
+    const panel = await renderPanel();
+    expect(within(panel).getByRole('heading', { level: 4, name: /^per language$/i })).toBeInTheDocument();
+    expect(within(panel).getByRole('heading', { level: 4, name: /^per sales channel and language$/i })).toBeInTheDocument();
+    expect(within(panel).getByRole('heading', { level: 4, name: /^effective urls$/i })).toBeInTheDocument();
+  });
+
   it('says the losing product loses a former global redirect in every language', async () => {
     const user = userEvent.setup();
     putSpy.mockRejectedValueOnce(takeoverError([{ languageCode: null, key: 'classic', losingProductName: 'Old drill' }]));
