@@ -26,6 +26,7 @@ import { HttpError } from '@endora-commerce/platform/http';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
+import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import { Category } from './entities/category.entity.js';
 import { Product } from './entities/product.entity.js';
 import { CatalogAdminService, type CatalogEventBus } from './services/catalog-admin.service.js';
@@ -434,7 +435,10 @@ function archiveRestoreTools(
         if (archive) await adminService.archiveProduct(id);
         else await adminService.restoreProduct(id);
       } catch (err) {
-        // One product's failure never rolls back another's (FR-011).
+        // A per-item tolerance: one product's failure never rolls back
+        // another's (FR-011). A disabled module is not a per-item failure,
+        // so it still fails the whole run closed.
+        rethrowIfModuleDisabled(err);
         failures.push({ id, reason: err instanceof Error ? err.message : 'failed' });
       }
     }
