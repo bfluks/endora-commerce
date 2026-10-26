@@ -1209,8 +1209,11 @@ async function writeLineGroups(
  * 404 so nothing is disclosed. 409 because the product exists and the request
  * conflicts with its state — the status this module answers for a state
  * conflict, and the one convert gives a product archived since approval.
+ * `details.productIds` names the archived products (checkpoint F, B-3).
+ *
+ * Exported for its unit test only.
  */
-function operatorLineProducts<P extends Pick<CatalogProductRecord, 'id' | 'archivedAt'>>(
+export function operatorLineProducts<P extends Pick<CatalogProductRecord, 'id' | 'archivedAt'>>(
   records: readonly P[],
   productIds: readonly string[],
 ): Map<string, P> {
@@ -1218,8 +1221,13 @@ function operatorLineProducts<P extends Pick<CatalogProductRecord, 'id' | 'archi
   if (found.size !== new Set(productIds).size) {
     throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
   }
-  if (records.some((p) => !isNotArchived(p))) {
-    throw new HttpError(409, ERROR_CODES.PRODUCT_ARCHIVED, 'Product is archived.');
+  // Checkpoint F (B-3): an edit sends every line, so the refusal names which products
+  // are archived — in `details`, the sentence stays catalog's.
+  const archivedIds = records.filter((p) => !isNotArchived(p)).map((p) => p.id);
+  if (archivedIds.length > 0) {
+    throw new HttpError(409, ERROR_CODES.PRODUCT_ARCHIVED, 'Product is archived.', {
+      productIds: [...new Set(archivedIds)],
+    });
   }
   return found;
 }
