@@ -69,6 +69,26 @@ export function describeIncompletePair(
   });
 }
 
+/** A completeness refusal (`422 SCOPE_INCOMPLETE`) — the one refusal the page Save names by scope. */
+export function isScopeIncomplete(err: unknown): boolean {
+  return err instanceof ApiError && err.envelope.error.code === 'SCOPE_INCOMPLETE';
+}
+
+/**
+ * Channel names for a gate message, from the product's member channels. A gate pair is
+ * always a member channel; a channel the read cannot name gets its short id.
+ */
+export async function loadChannelNamer(productId: string): Promise<(channelId: string) => string> {
+  const names = new Map<string, string>();
+  try {
+    const context = await getProductScopeContext(productId);
+    for (const c of context.channels) names.set(c.id, c.name);
+  } catch {
+    // The message still names the language and the values; the channel falls back to its id.
+  }
+  return (channelId: string): string => names.get(channelId) ?? shortId(channelId);
+}
+
 /**
  * A refused scope write as one translated sentence. The error code never reaches the
  * operator; an unknown refusal gets the generic sentence, which says the edit is kept.
@@ -78,6 +98,7 @@ export function scopeSaveErrorMessage(
   channelName: (channelId: string) => string,
   t: Translate,
   genericKey = 'productEditor.scopeControls.error.generic',
+  incompleteKey = 'productEditor.scopeControls.error.incomplete',
 ): string {
   if (!(err instanceof ApiError)) return t(genericKey);
   if (err.status === 403) return t('productEditor.scopeControls.error.forbidden');
@@ -108,7 +129,7 @@ export function scopeSaveErrorMessage(
       languageCode: string;
       missing: ScopeMissingValue[];
     }>;
-    return t('productEditor.scopeControls.error.incomplete', {
+    return t(incompleteKey, {
       details: pairs.map((pair) => describeIncompletePair(pair, channelName, t)).join('; '),
     });
   }
