@@ -75,8 +75,9 @@ const STALE = view('22222222-2222-4222-8222-222222222222', 'Stale', {
 
 /**
  * Feature 163 (FR-010, R30.4) — a view saved before `draft` was removed. It opens as
- * *All*, as any value the page no longer offers does; mapping it onto `inactive` is
- * an open owner question and deliberately not done.
+ * *All*, as any value the page no longer offers does; owner decision P-2 → A
+ * (2026-10-26) keeps that rather than mapping it onto `inactive`, and the list says so
+ * once, when the view is applied.
  */
 const LEGACY_DRAFT = view('44444444-4444-4444-8444-444444444444', 'Legacy drafts', { status: 'draft' });
 /** Feature 163 — the Archived tab is saved as its own key, never as a status. */
@@ -318,6 +319,26 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
       expect(params.get('archived')).toBeNull();
     }
     expect(screen.queryByText('Failed to load.')).toBeNull();
+  });
+
+  it('says once that a draft view now shows all products, until a tab is chosen or it is dismissed (P-2)', async () => {
+    const user = await renderList();
+    const note = (catalog as Record<string, string>)['productsList.savedView.draftRemoved']!;
+    expect(screen.queryByText(note)).toBeNull();
+
+    await user.selectOptions(savedViewsSelect(), LEGACY_DRAFT.id);
+    const shown = await screen.findByText(note);
+    expect(shown.closest('[role="status"]')).not.toBeNull();
+
+    await user.click(tab('Inactive'));
+    expect(screen.queryByText(note)).toBeNull();
+
+    await user.selectOptions(savedViewsSelect(), INACTIVE_CHAIRS.id);
+    expect(screen.queryByText(note)).toBeNull();
+    await user.selectOptions(savedViewsSelect(), LEGACY_DRAFT.id);
+    await screen.findByText(note);
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(note)).toBeNull();
   });
 
   it('saves the Archived tab as archived: only, and a view holding it opens the Archived tab (feature 163)', async () => {

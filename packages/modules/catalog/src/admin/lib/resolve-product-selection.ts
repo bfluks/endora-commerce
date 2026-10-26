@@ -14,6 +14,19 @@ export function isProductListTab(value: unknown): value is ProductListTab {
   return typeof value === 'string' && (PRODUCT_LIST_TABS as readonly string[]).includes(value);
 }
 
+/** The Archived tab's own address — the palette's "Archived products" opens it (owner PAL-1 → B). */
+export const ARCHIVED_PRODUCTS_PATH = '/catalog/products/archived';
+
+/**
+ * The tab a URL asks for: the Archived tab's own path, else a `?status=` naming a tab
+ * (a bookmarked `?status=archived` included), else *All*.
+ */
+export function productListTabFromUrl(pathname: string, search: string): ProductListTab {
+  if (pathname.replace(/\/+$/, '') === ARCHIVED_PRODUCTS_PATH) return 'archived';
+  const status = new URLSearchParams(search).get('status');
+  return isProductListTab(status) ? status : 'all';
+}
+
 /** What a tab asks the list (and `resolve-ids`) for. */
 export interface ProductListTabQuery {
   status?: 'active' | 'inactive';
