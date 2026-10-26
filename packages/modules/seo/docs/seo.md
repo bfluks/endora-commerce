@@ -588,11 +588,11 @@ response so well-behaved CDNs hold the payload for an hour.
 
 ## Anonymous-only filtering
 
-The sitemap excludes:
-- products with `status != 'active'`
-- products with `visibility != 'public'`
-- archived (`archivedAt`) and soft-deleted (`deletedAt`) rows
-- soft-deleted categories
+A product is listed in a channel's sitemap only where it is available there to an anonymous
+visitor at generation time: a member of the channel, not archived or deleted, on in that channel
+language, inside its publication window, and admitted by its effective audience rule (the
+channel's, else the global one). A product off globally but on in the channel is listed; one
+switched off in the channel is not. Soft-deleted categories are excluded too.
 
 The contract is simple: only what an anonymous Customer can see is
 ever exposed to crawlers.
