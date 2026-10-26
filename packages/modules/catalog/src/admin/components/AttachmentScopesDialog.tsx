@@ -1,7 +1,7 @@
 import { useId, useState, type ReactNode } from 'react';
 import { ATTACHMENT_DESCRIPTION_TRANSLATION_MAX } from '@endora-commerce/contracts';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
-import { Button, Checkbox, Input, Label, Textarea } from '@endora-commerce/admin-kit/ui';
+import { Alert, AlertDescription, Button, Checkbox, Input, Label, Textarea } from '@endora-commerce/admin-kit/ui';
 import { ModalDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import type { ScopeContext } from './ProductScopeEditor.js';
@@ -111,9 +111,9 @@ export function AttachmentScopesDialog({
     >
       <div className="space-y-6">
         {error ? (
-          <div id={errorId} role="alert" className="b2b-alert b2b-alert--error">
-            {error}
-          </div>
+          <Alert id={errorId} variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         ) : null}
 
         <section className="space-y-3" aria-labelledby={`${fieldId}-languages`}>
