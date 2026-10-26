@@ -704,7 +704,11 @@ export class BulkOperationService {
   ): Promise<Map<string, Record<string, unknown>>> {
     const out = new Map<string, Record<string, unknown>>();
     if (productIds.length === 0) return out;
-    const products = await em.find(Product, { id: { $in: [...productIds] } });
+    // `refresh`: the after-state is read on the em that already holds the
+    // before-state, and MikroORM's merge never lets a fresh `null` replace a loaded
+    // non-null value — a bulk Restore's after-state read back the stale
+    // `archivedAt`, so its undo saw every product as changed since (ci-pg, 163 Q).
+    const products = await em.find(Product, { id: { $in: [...productIds] } }, { refresh: true });
     for (const p of products) {
       out.set(p.id, pickProductFields(p, keys));
     }
