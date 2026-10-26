@@ -219,10 +219,18 @@ export const SetStockLevelParamsSchema = z.object({
 });
 export type SetStockLevelParams = z.infer<typeof SetStockLevelParamsSchema>;
 
+/**
+ * The most product ids one assistant tool call may name — the bulk product route's own
+ * hard cap (`bulkUpdateProductsRequestSchema.productIds`), so a plan can never ask for
+ * more than an operator could (feature 163, checkpoint F, S-1).
+ */
+export const PROMPT_PRODUCT_IDS_MAX = 10_000;
+
 export const AssignProductsToCategoryParamsSchema = z.object({
   productIds: z
     .array(z.uuid())
     .min(1)
+    .max(PROMPT_PRODUCT_IDS_MAX)
     .describe('IDs of the products to assign, resolved via catalog.search_products.'),
   categoryId: z.uuid().describe('ID of the target category, resolved via catalog.search_categories.'),
 });
@@ -232,6 +240,7 @@ export const RemoveProductsFromCategoryParamsSchema = z.object({
   productIds: z
     .array(z.uuid())
     .min(1)
+    .max(PROMPT_PRODUCT_IDS_MAX)
     .describe('IDs of the products to remove from the category, resolved via catalog.search_products.'),
   categoryId: z.uuid().describe('ID of the category to remove the products from, resolved via catalog.search_categories.'),
 });
@@ -252,6 +261,7 @@ export const SetProductStatusParamsSchema = z.object({
   productIds: z
     .array(z.uuid())
     .min(1)
+    .max(PROMPT_PRODUCT_IDS_MAX)
     .describe('IDs of the products to update, resolved via catalog.search_products.'),
   status: z
     .enum(['active', 'inactive'])
@@ -270,6 +280,7 @@ export const ArchiveProductsParamsSchema = z.object({
   productIds: z
     .array(z.uuid())
     .min(1)
+    .max(PROMPT_PRODUCT_IDS_MAX)
     .describe('IDs of the products to archive, resolved via catalog.search_products.'),
 });
 export type ArchiveProductsParams = z.infer<typeof ArchiveProductsParamsSchema>;
@@ -278,6 +289,7 @@ export const RestoreProductsParamsSchema = z.object({
   productIds: z
     .array(z.uuid())
     .min(1)
+    .max(PROMPT_PRODUCT_IDS_MAX)
     .describe('IDs of the archived products to restore, resolved via catalog.search_products.'),
 });
 export type RestoreProductsParams = z.infer<typeof RestoreProductsParamsSchema>;
@@ -286,6 +298,7 @@ export const SetProductsVisibilityParamsSchema = z.object({
   productIds: z
     .array(z.uuid())
     .min(1)
+    .max(PROMPT_PRODUCT_IDS_MAX)
     .describe('IDs of the products to update, resolved via catalog.search_products.'),
   visibility: z
     .enum(['public', 'logged_in_only', 'organization_restricted'])

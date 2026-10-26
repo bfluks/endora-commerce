@@ -386,7 +386,26 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
     setProductStatus as PromptActionTool,
     setProductsVisibility as PromptActionTool,
     ...(deps.commandBus ? archiveRestoreTools(deps, deps.commandBus, bulkOperationService) : []),
-  ];
+  ].map(withUniqueProductIds);
+}
+
+/**
+ * Feature 163, checkpoint F (S-1) — a model may name one product twice. Every product
+ * mutation tool sees each id once, in first-seen order: a repeated id neither fails the
+ * preview's existence count (`id in (…)` answers one row for it) nor runs twice.
+ */
+function withUniqueProductIds(tool: PromptActionTool): PromptActionTool {
+  const unique = (params: unknown): unknown => {
+    if (typeof params !== 'object' || params === null) return params;
+    const ids = (params as { productIds?: unknown }).productIds;
+    return Array.isArray(ids) ? { ...params, productIds: [...new Set(ids)] } : params;
+  };
+  const preview = tool.preview;
+  return {
+    ...tool,
+    execute: (params, ctx) => tool.execute(unique(params), ctx),
+    ...(preview ? { preview: (params: unknown, ctx: ToolContext) => preview.call(tool, unique(params), ctx) } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +458,10 @@ function archiveRestoreTools(
         // another's (FR-011). A disabled module is not a per-item failure,
         // so it still fails the whole run closed.
         rethrowIfModuleDisabled(err);
-        failures.push({ id, reason: err instanceof Error ? err.message : 'failed' });
+        // Feature 163, checkpoint F (S-2) — the reason reaches the assistant's
+        // transcript: only an HttpError's message is written for a reader; any other
+        // error's text (a driver message, a stack detail) stays in the server log.
+        failures.push({ id, reason: err instanceof HttpError ? err.message : 'failed' });
       }
     }
     return {
