@@ -3,6 +3,7 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   BULK_OPERATION_TYPES,
   type AdminUserReadPort,
+  type ProductScopeStatus,
   type BulkUpdateProductsRequest,
   type EmailMailerPort,
 } from '@endora-commerce/contracts';
@@ -24,6 +25,7 @@ import type {
   CatalogBulkUpdateService,
   BulkUpdateOutcome,
 } from './catalog-bulk-update.service.js';
+import { readScopedStatuses, restoreScopedStatus, type StatusScope } from './product-scopes.service.js';
 
 /**
  * BulkOperationService — queued product bulk-edit.
@@ -366,9 +368,10 @@ export class BulkOperationService {
     // when the edit touches revertible direct columns (never the category
     // bridge). Read BEFORE the mutation so the snapshot is the true pre-state.
     const revertKeys = this.commandBus ? revertibleFieldKeys(op.payload.fields) : null;
+    const statusScope = statusScopeOf(op.payload);
     const beforeByProduct =
       revertKeys && revertKeys.length > 0
-        ? await this.#snapshotProductFields(em, op.payload.productIds, revertKeys)
+        ? await this.#snapshotProductFields(em, op.payload.productIds, revertKeys, statusScope)
         : null;
 
     try {
@@ -414,7 +417,7 @@ export class BulkOperationService {
           .filter((r) => r.status === 'succeeded')
           .map((r) => r.productId)
           .filter((pid) => beforeByProduct.has(pid));
-        const afterByProduct = await this.#snapshotProductFields(em, succeededIds, revertKeys);
+        const afterByProduct = await this.#snapshotProductFields(em, succeededIds, revertKeys, statusScope);
         revertState = succeededIds.map((pid) => ({
           recordId: pid,
           before: beforeByProduct.get(pid)!,
@@ -614,7 +617,9 @@ export class BulkOperationService {
       after: r.after,
     }));
     const restored: RestoredProduct[] = [];
-    const outcome = await this.commandBus.run(this.#undoCommand(operationId, records, restored));
+    const outcome = await this.commandBus.run(
+      this.#undoCommand(operationId, records, restored, statusScopeOf(op.payload)),
+    );
     // After commit only: `commandBus.run` has resolved, so the restores are saved.
     // The undo emits for every reverted field — a status or visibility undo used to
     // leave search, feeds and webhooks stale until the next write — and in one
@@ -647,6 +652,8 @@ export class BulkOperationService {
     records: readonly RevertRecord[],
     /** Written by `restore`: every product the undo wrote, for the after-commit announcements. */
     restored: RestoredProduct[],
+    /** Feature 163 (FR-052) — the scope a bulk scoped-status edit wrote, when it was one. */
+    statusScope: StatusScope | null,
   ): Command<UndoOutcome> {
     return {
       action: 'product.bulk_update.undo',
@@ -663,20 +670,35 @@ export class BulkOperationService {
         const res = await applyUndo(em, records, {
           readCurrent: async (tem, rec) => {
             const p = await tem.findOne(Product, { id: rec.recordId });
-            return p ? pickProductFields(p, Object.keys(rec.after)) : null;
+            if (!p) return null;
+            const keys = Object.keys(rec.after);
+            const current = pickProductFields(p, keys.filter((k) => k !== SCOPED_STATUS_KEY));
+            if (keys.includes(SCOPED_STATUS_KEY) && statusScope) {
+              const statuses = await readScopedStatuses(tem, [p.id], statusScope);
+              current[SCOPED_STATUS_KEY] = statuses.get(p.id) ?? null;
+            }
+            return current;
           },
           restore: async (tem, rec) => {
             const p = await tem.findOne(Product, { id: rec.recordId });
             if (!p) return;
             const wasArchived = (p.archivedAt ?? null) !== null;
+            // Feature 163 (FR-052) — a scope's status is a scope row, not a product
+            // column: put the row back, then the product columns.
+            const { [SCOPED_STATUS_KEY]: scopedStatus, ...columns } = rec.before;
+            if (SCOPED_STATUS_KEY in rec.before && statusScope) {
+              await restoreScopedStatus(tem, p.id, statusScope, (scopedStatus ?? null) as ProductScopeStatus | null);
+            }
             // The revert record is JSON: a captured `archivedAt` is an ISO string,
             // which the column takes back as the instant it names.
             const before =
-              typeof rec.before['archivedAt'] === 'string'
-                ? { ...rec.before, archivedAt: new Date(rec.before['archivedAt']) }
-                : rec.before;
-            tem.assign(p, before);
-            tem.persist(p);
+              typeof columns['archivedAt'] === 'string'
+                ? { ...columns, archivedAt: new Date(columns['archivedAt']) }
+                : columns;
+            if (Object.keys(before).length > 0) {
+              tem.assign(p, before);
+              tem.persist(p);
+            }
             restored.push({
               productId: p.id,
               changedFields: Object.keys(rec.before),
@@ -696,21 +718,32 @@ export class BulkOperationService {
     };
   }
 
-  /** Read `productIds` and pick each product's values for `keys`. */
+  /**
+   * Read `productIds` and pick each product's values for `keys`; `scopedStatus` is the
+   * stored status at the edit's scope (`null` = inherit), read from the scope rows.
+   */
   async #snapshotProductFields(
     em: EntityManager,
     productIds: readonly string[],
-    keys: readonly string[],
+    allKeys: readonly string[],
+    statusScope: StatusScope | null,
   ): Promise<Map<string, Record<string, unknown>>> {
     const out = new Map<string, Record<string, unknown>>();
     if (productIds.length === 0) return out;
+    const keys = allKeys.filter((k) => k !== SCOPED_STATUS_KEY);
+    const statuses =
+      allKeys.includes(SCOPED_STATUS_KEY) && statusScope
+        ? await readScopedStatuses(em, productIds, statusScope)
+        : null;
     // `refresh`: the after-state is read on the em that already holds the
     // before-state, and MikroORM's merge never lets a fresh `null` replace a loaded
     // non-null value — a bulk Restore's after-state read back the stale
     // `archivedAt`, so its undo saw every product as changed since (ci-pg, 163 Q).
     const products = await em.find(Product, { id: { $in: [...productIds] } }, { refresh: true });
     for (const p of products) {
-      out.set(p.id, pickProductFields(p, keys));
+      const picked = pickProductFields(p, keys);
+      if (statuses) picked[SCOPED_STATUS_KEY] = statuses.get(p.id) ?? null;
+      out.set(p.id, picked);
     }
     return out;
   }
@@ -745,6 +778,17 @@ function revertibleFieldKeys(fields: Record<string, unknown>): string[] {
   if (keys.length === 0) return [];
   if (keys.some((k) => NON_REVERTIBLE_BULK_FIELDS.has(k))) return [];
   return [...new Set(keys.map((k) => BULK_FIELD_COLUMN[k] ?? k))];
+}
+
+/** The revert-record key of a bulk scoped-status edit (FR-052): the status at its one scope. */
+const SCOPED_STATUS_KEY = 'scopedStatus';
+
+/** The scope a bulk scoped-status edit wrote, or `null` for any other edit. */
+function statusScopeOf(payload: BulkOperationPayload): StatusScope | null {
+  const field = (payload.fields as Record<string, unknown> | undefined)?.[SCOPED_STATUS_KEY] as
+    | { channelId: string; languageCode: string | null }
+    | undefined;
+  return field ? { channelId: field.channelId, languageCode: field.languageCode } : null;
 }
 
 /** Pick a plain, JSON-cloned snapshot of a product's `keys` for revert state. */
