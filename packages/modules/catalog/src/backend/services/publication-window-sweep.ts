@@ -127,6 +127,9 @@ export async function runPublicationWindowSweepTick(deps: {
  * The Job Scheduler and its consumer, where the host says this process consumes
  * queues and offers a connection — the `assets_library` retention sweep's
  * shape. `attach` is `ctx.worker`, which stops the consumer with the module.
+ * `queuePrefix` is BullMQ's key prefix and is left alone in production: a test
+ * that shares a Redis with other runs sets one of its own (the quote-request
+ * expiry sweep's shape).
  */
 export async function startPublicationWindowSweep(input: {
   readonly processRunsWorkers: boolean;
@@ -135,11 +138,14 @@ export async function startPublicationWindowSweep(input: {
   readonly log: PlatformLogger;
   readonly attach: (worker: Worker<PublicationWindowSweepJobData>) => void;
   readonly onClose: (close: () => Promise<void>) => void;
+  readonly queuePrefix?: string;
 }): Promise<boolean> {
-  const { processRunsWorkers, moduleQueueRedis } = input;
+  const { processRunsWorkers, moduleQueueRedis, queuePrefix } = input;
   if (!processRunsWorkers || moduleQueueRedis === undefined) return false;
+  const prefix = queuePrefix !== undefined ? { prefix: queuePrefix } : {};
   const queue = new Queue<PublicationWindowSweepJobData>(PUBLICATION_WINDOW_SWEEP_QUEUE, {
     connection: moduleQueueRedis,
+    ...prefix,
     defaultJobOptions: { removeOnComplete: { count: 20 }, removeOnFail: { count: 100 } },
   });
   input.onClose(async () => {
@@ -154,7 +160,7 @@ export async function startPublicationWindowSweep(input: {
         enterSystemScope(PUBLICATION_WINDOW_SWEEP_SCOPE_REASON, () =>
           runPublicationWindowSweepTick({ sweep: input.sweep, log: input.log }),
         ),
-      { connection: moduleQueueRedis, concurrency: 1 },
+      { connection: moduleQueueRedis, concurrency: 1, ...prefix },
     ),
   );
   await queue.upsertJobScheduler(
