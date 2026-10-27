@@ -19,7 +19,14 @@ const LEFT = '00000000-0000-4000-8000-0000000000c9';
 
 type Row = { productId: string; attributeKey: string; channelId: string; languageCode: string | null };
 
-function rig(rows: Row[]) {
+type Channel = { id: string; languages: string[]; defaultLanguage: string };
+
+const CHANNELS: Channel[] = [
+  { id: MEMBER, languages: ['pl-PL'], defaultLanguage: 'pl-PL' },
+  { id: LEFT, languages: ['pl-PL'], defaultLanguage: 'pl-PL' },
+];
+
+function rig(rows: Row[], channels: Channel[] = CHANNELS) {
   const removed: Row[] = [];
   const commands: string[] = [];
   const em = {
@@ -39,11 +46,8 @@ function rig(rows: Row[]) {
     },
     find: async (entity: unknown) => {
       if (entity === ProductValueOverride) return rows.filter((r) => !removed.includes(r));
-      // SalesChannel: the member offers pl-PL only; the left channel still exists.
-      return [
-        { id: MEMBER, languages: ['pl-PL'] },
-        { id: LEFT, languages: ['pl-PL'] },
-      ];
+      // SalesChannel: by default the member offers pl-PL only; the left channel still exists.
+      return channels;
     },
     remove: (row: Row) => removed.push(row),
     persist: () => undefined,
@@ -111,5 +115,31 @@ describe('ProductOverridesService.applyBulk — deleting orphans (spec 163, T071
     });
     expect(result.applied.deleted).toBe(0);
     expect(removed).toEqual([]);
+  });
+});
+
+describe('ProductOverridesService.applyBulk — the channel default language is offered (spec 163)', () => {
+  // `toScopeChannel` is the one home of "a channel offers its own default language,
+  // whether or not its list names it"; the read side resolves a default-language
+  // override on such a channel, so the write side must accept one.
+  const defaultOnly: Channel[] = [{ id: MEMBER, languages: [], defaultLanguage: 'pl-PL' }];
+
+  it('accepts an upsert in the default language of a channel whose language list is empty', async () => {
+    const { service, commands } = rig([], defaultOnly);
+    const result = await service.applyBulk(P, {
+      upserts: [{ attributeKey: 'color', channelId: MEMBER, languageCode: 'pl-PL', value: { v: 'x' } }],
+      deletes: [],
+    });
+    expect(result.applied).toEqual({ upserted: 1, deleted: 0 });
+    expect(commands).toEqual(['product.overrides_apply']);
+  });
+
+  it('still refuses a language the channel neither lists nor defaults to', async () => {
+    const { service } = rig([], defaultOnly);
+    const attempt = service.applyBulk(P, {
+      upserts: [{ attributeKey: 'color', channelId: MEMBER, languageCode: 'fr-FR', value: { v: 'x' } }],
+      deletes: [],
+    });
+    await expect(attempt).rejects.toMatchObject({ statusCode: 422, message: 'language_not_in_channel' });
   });
 });
