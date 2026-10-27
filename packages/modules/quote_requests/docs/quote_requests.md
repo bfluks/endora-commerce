@@ -1004,6 +1004,29 @@ one e-mail this module does send is the explicit *Send PDF to customer* (see
 *Quote PDF*), delivered while the representative waits and recorded on the
 quote's History.
 
+## Archived products are never quote lines
+
+A product archived with the Catalog module's **Archive** action cannot be put
+on a quote request by any path; restore it first. What each path answers:
+
+- **A customer** — creating a request, editing a draft and resubmitting it,
+  and so converting a basket, a quick-order list or a shopping list into a
+  request, or cloning an order into one — gets `404 PRODUCT_NOT_FOUND`,
+  exactly what a product that does not exist gets, so nothing about the
+  product is disclosed.
+- **An operator** — `POST /api/v1/admin/quote-requests` (create on a
+  customer's behalf) and `PATCH /api/v1/admin/quote-requests/:id` (modify) —
+  gets `409 PRODUCT_ARCHIVED` ("Product is archived."), with the archived
+  products' ids in `details.productIds`, and nothing is written. A product id
+  that does not exist still answers `404 PRODUCT_NOT_FOUND`. A line that is
+  unavailable for any other reason — switched off in the request's sales
+  channel or language, outside its publication window or its audience — is
+  still accepted there with the `PRODUCT_UNAVAILABLE_IN_SCOPE` warning.
+- **Converting an approved quote** whose product was archived after approval
+  answers `409` before the customer's basket is touched.
+
+Price lists are not affected: an archived product can still be priced.
+
 ## Conversion to order
 
 `POST /api/v1/quote-requests/:id/convert-to-order` fills the customer's
@@ -1094,12 +1117,14 @@ products in two ways:
   **Active** tab: the catalogue in pages, with status tabs and their counts, a
   type filter and a search by SKU, slug or name. The selection survives page,
   page-size and filter changes, and **Add N** adds every ticked product as a
-  line of quantity 1 — at most 200 in one step. Draft and inactive products
-  may be added; grouped and bundle parents are listed with their reason and
-  cannot be ticked. A product already on the request can be added again, as a
+  line of quantity 1 — at most 200 in one step. Inactive products may be
+  added. Archived products are not offered: the browser has no Archived tab
+  and its **All** tab leaves them out. Grouped and bundle parents are listed
+  with their reason and cannot be ticked. A product already on the request can be added again, as a
   line of its own — for instance to put it in a second group.
 - **Quick add by name or SKU**, beside it, appends one product under the same
-  rules.
+  rules. An archived product is listed in its results, disabled, with the
+  reason *archived*, as on the order create screen.
 
 Both are disabled, each with a hint, for an operator without `catalog:read`.
 
