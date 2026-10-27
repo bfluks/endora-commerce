@@ -3066,6 +3066,90 @@ anything you construct — and the channel cache key moves to `sales-channels:v4
 
 This entry was written on 2026-10-28 on the branch of issue #492 (`fix/492-retire-ispublic`).
 
+#### Products: two statuses, Archive and Restore, and data per channel and language {#after-0-109-0-product-status}
+
+This release gives a product's status, publication window, audience, URL key, SEO texts, gallery,
+attachments, packaging-unit names and order rules a value per sales channel and per language, and it
+changes the product status model. **The status change is breaking**; the rest is additive.
+
+**For operators.**
+
+- **A product's status is `active` or `inactive`; `draft` is gone.** The upgrade's migration turns
+  every `draft` product, and every `draft` override per channel or channel × language, into
+  `inactive` without archiving anything. New and duplicated products start `inactive`.
+- **`inactive` no longer archives.** It switches a product off where it is set — the product is not
+  listed, not searchable, not orderable, and its page answers as for a product that does not exist —
+  and nothing more. Archiving is its own action, **Archive** / **Restore**, in the product editor,
+  in bulk on the product list and from the admin assistant, behind `catalog:write`.
+- **Every product `inactive` at the upgrade stays archived and needs an explicit Restore.** Until
+  this release `inactive` was how a product was archived, so the migration keeps such products
+  archived (with their archived time, or their last-update time when they had none). Setting one
+  `active` does **not** bring it back: open the product list's **Archived** tab
+  (`/catalog/products/archived`, or **Archived products** in the command palette), select the
+  products to sell again and choose **Restore**.
+- **An archived product answers "gone" (`410`) only to a buyer who could otherwise see it** — in its
+  channel, language and audience; everyone else gets the absent product's `404`. An archived product
+  can no longer be added to a basket or put on a quote request.
+- **A saved product-list view that used the Draft status** opens on **All**, with a note saying so.
+- **After deploying over an existing database, run one search reindex per sales channel** (Bulk
+  actions page), so the search index carries each product's per-channel and per-language state.
+
+**For API clients and integrators.**
+
+- `status` takes `active` or `inactive` only. `draft` and the legacy write alias `archived` are
+  refused with `400 VALIDATION_FAILED` — on `POST` / `PATCH /api/v1/admin/catalog/products`, the bulk
+  update, `POST …/products/resolve-ids`, the API-key upsert `PUT /api/v1/catalog/products/by-sku/:sku`
+  and a catalogue import. Send `inactive` where you sent `draft`; to archive, call
+  `POST /api/v1/admin/catalog/products/:id/archive` (`…/restore` to bring it back), or the bulk update
+  with `fields: { archived: true }` (`false` restores) as the only field.
+- **Admin product list:** `counts.draft` is replaced by `counts.archived` (`counts` is
+  `{ all, active, inactive, archived }`), and the filter `status=archived` by `archived=only`
+  (`archived=exclude|include|only`, default `exclude`; `includeArchived=1` still means `include`).
+- **`product.archived.v1`** means "archived by the Archive action", no longer "status moved to
+  `inactive`"; Restore sends `product.updated.v1` with `changedFields: ['archivedAt']`.
+- **Quote requests** refuse an archived product: an operator's create and edit answer
+  `409 PRODUCT_ARCHIVED` with `details.productIds`, a customer's paths the absent product's `404`.
+- The Catalog and Quote requests module pages describe the rest — the per-channel and per-language
+  values, URL keys and redirects, and the external order intake's `404 PRODUCT_NOT_FOUND` for a
+  product the key's Organization cannot see in its channel.
+
+**For module and overlay authors.**
+
+- **`productStatusSchema`** is `active | inactive`; `coerceProductStatusWrite` and
+  `productStatusWriteSchema` are removed — use `productStatusSchema`.
+- **`CatalogGalleryPort.listForProducts(productIds, channelId)`** and
+  **`CatalogGalleryPort.baseImageUrls(productIds, channelId)`** take a required `channelId`
+  (`string | null`): pass the sales channel you serve, or `null` for the previous, global answer. An
+  overlay implementing the port leaves out the items hidden in that channel.
+- **`CatalogBulkImportPort`** has a new required method, `exportScopedStatuses()`.
+- **`ProductDetail`** has a required `paths` (`productPagePathsSchema`): a literal you build must
+  carry it.
+- **`seoMetaOverrideSchema.locale`** and **`cartViewLineSchema.productSlug`** may be `null`.
+- **A new admin zone, `product.editor.seo.after`**, at the end of the product editor's SEO tab. Its
+  props are `ProductEditorZoneProps` (`productId`). The `seo` module's link to its meta-tag editor
+  is a contribution to it, so the Catalog module no longer names `seo`:
+
+  ```ts
+  import { zoneComponent, type AdminContributions } from '@endora-commerce/admin-kit/contributions';
+
+  export const contributions: AdminContributions = {
+    zones: [
+      zoneComponent('product.editor.seo.after', () => import('./zones/ProductSeoNote.js'), {
+        requiredPermission: 'catalog:read',
+      }),
+    ],
+  };
+  ```
+
+  A contribution vanishes with its module, and a failing one does not take the tab with it.
+
+**In an existing storefront.** The release's storefront renders the product page's canonical and
+alternate-language links from the response's `paths`, and lets the link's `?lang=` beat the
+language cookie on the product page. Bring the release's storefront over, so that the product
+page's links follow the per-language URL keys.
+
+This entry was written on 2026-10-27 against the branch of spec 163 (`feat/163-product-data-scopes`).
+
 ## An instance that is mixed from the start
 
 The installer of `0.101.x` or earlier wrote every package of the release with a `^` except

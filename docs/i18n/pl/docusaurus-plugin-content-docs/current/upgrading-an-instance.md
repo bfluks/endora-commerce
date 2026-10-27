@@ -3208,6 +3208,99 @@ usuń je z obiektów, które budujesz — a klucz pamięci podręcznej kanałów
 
 Ten wpis został napisany 2026-10-28 na gałęzi zgłoszenia #492 (`fix/492-retire-ispublic`).
 
+#### Produkty: dwa statusy, Archiwizuj i Przywróć oraz dane per kanał i język {#after-0-109-0-product-status}
+
+To wydanie nadaje statusowi produktu, oknu publikacji, odbiorcom, kluczowi URL, tekstom SEO, galerii,
+załącznikom, nazwom jednostek opakowania i zasadom zamawiania wartość per kanał sprzedaży i per język
+oraz zmienia model statusu produktu. **Zmiana statusu jest niezgodna wstecz**; reszta tylko dodaje
+nowe możliwości.
+
+**Dla operatorów.**
+
+- **Status produktu to `active` albo `inactive`; `draft` znika.** Migracja wydania zamienia każdy
+  produkt `draft` i każde nadpisanie `draft` w kanale lub parze kanał × język na `inactive`, niczego
+  nie archiwizując. Nowe i zduplikowane produkty zaczynają jako `inactive`.
+- **`inactive` już nie archiwizuje.** Wyłącza produkt tam, gdzie jest ustawiony — produkt nie jest
+  wyświetlany na liście, wyszukiwany ani zamawiany, a jego strona odpowiada jak dla produktu, który
+  nie istnieje — i nic więcej. Archiwizacja to osobna akcja, **Archiwizuj** / **Przywróć**, w
+  edytorze produktu, zbiorczo na liście produktów i z asystenta AI panelu, za uprawnieniem
+  `catalog:write`.
+- **Każdy produkt, który w chwili aktualizacji jest `inactive`, pozostaje zarchiwizowany i wymaga
+  jawnego Przywróć.** Do tego wydania produkt archiwizowało się, ustawiając go jako `inactive`, więc
+  migracja zostawia takie produkty zarchiwizowane (z ich czasem archiwizacji albo, gdy go nie miały,
+  z czasem ostatniej zmiany). Ustawienie `active` **nie** przywraca produktu: otwórz kartę
+  **Zarchiwizowane** listy produktów (`/catalog/products/archived` albo **Zarchiwizowane produkty**
+  w palecie poleceń), zaznacz produkty, które mają wrócić do sprzedaży, i wybierz **Przywróć**.
+- **Zarchiwizowany produkt odpowiada „usunięty” (`410`) tylko kupującemu, który w przeciwnym razie
+  mógłby go zobaczyć** — w jego kanale, języku i grupie odbiorców; wszyscy inni dostają `404`
+  produktu nieistniejącego. Zarchiwizowanego produktu nie da się już dodać do koszyka ani umieścić
+  w zapytaniu ofertowym.
+- **Zapisany widok listy produktów, który używał statusu Draft**, otwiera się na karcie
+  **Wszystkie**, z informacją o tym.
+- **Po wdrożeniu na istniejącą bazę danych uruchom jedno przeindeksowanie wyszukiwarki na każdy
+  kanał sprzedaży** (strona akcji zbiorczych), aby indeks znał stan każdego produktu per kanał i
+  per język.
+
+**Dla klientów API i integratorów.**
+
+- `status` przyjmuje tylko `active` albo `inactive`. `draft` i dawny alias zapisu `archived` są
+  odrzucane z `400 VALIDATION_FAILED` — w `POST` / `PATCH /api/v1/admin/catalog/products`, w
+  aktualizacji zbiorczej, w `POST …/products/resolve-ids`, w zapisie kluczem API
+  `PUT /api/v1/catalog/products/by-sku/:sku` i w imporcie katalogu. Wyślij `inactive` tam, gdzie
+  wysyłano `draft`; aby zarchiwizować, wywołaj `POST /api/v1/admin/catalog/products/:id/archive`
+  (`…/restore`, aby przywrócić) albo aktualizację zbiorczą z `fields: { archived: true }` (`false`
+  przywraca) jako jedynym polem.
+- **Lista produktów w panelu:** `counts.archived` zastępuje `counts.draft` (`counts` to
+  `{ all, active, inactive, archived }`), a `archived=only` — filtr `status=archived`
+  (`archived=exclude|include|only`, domyślnie `exclude`; `includeArchived=1` nadal oznacza
+  `include`).
+- **`product.archived.v1`** oznacza „zarchiwizowany akcją Archiwizuj”, a nie „status zmieniony na
+  `inactive`”; Przywróć wysyła `product.updated.v1` z `changedFields: ['archivedAt']`.
+- **Zapytania ofertowe** odrzucają zarchiwizowany produkt: utworzenie i edycja przez operatora
+  odpowiadają `409 PRODUCT_ARCHIVED` z `details.productIds`, drogi klienta — `404` produktu
+  nieistniejącego.
+- Strony modułów Catalog i Quote requests opisują resztę — wartości per kanał i per język, klucze URL
+  i przekierowania oraz `404 PRODUCT_NOT_FOUND` zewnętrznego przyjmowania zamówień dla produktu,
+  którego organizacja klucza nie widzi w jego kanale.
+
+**Dla autorów modułów i modułów nakładkowych.**
+
+- **`productStatusSchema`** to `active | inactive`; `coerceProductStatusWrite` i
+  `productStatusWriteSchema` zostały usunięte — używaj `productStatusSchema`.
+- **`CatalogGalleryPort.listForProducts(productIds, channelId)`** i
+  **`CatalogGalleryPort.baseImageUrls(productIds, channelId)`** przyjmują wymagany `channelId`
+  (`string | null`): przekaż kanał sprzedaży, który obsługujesz, albo `null`, aby dostać dotychczasową,
+  globalną odpowiedź. Moduł nakładkowy implementujący port pomija elementy ukryte w tym kanale.
+- **`CatalogBulkImportPort`** ma nową wymaganą metodę `exportScopedStatuses()`.
+- **`ProductDetail`** ma wymagane pole `paths` (`productPagePathsSchema`): literał, który budujesz,
+  musi je zawierać.
+- **`seoMetaOverrideSchema.locale`** i **`cartViewLineSchema.productSlug`** mogą mieć wartość `null`.
+- **Nowa strefa panelu, `product.editor.seo.after`**, na końcu karty SEO edytora produktu. Jej
+  właściwości to `ProductEditorZoneProps` (`productId`). Link modułu `seo` do edytora metatagów jest
+  wkładem do tej strefy, więc moduł Catalog nie wymienia już `seo`:
+
+  ```ts
+  import { zoneComponent, type AdminContributions } from '@endora-commerce/admin-kit/contributions';
+
+  export const contributions: AdminContributions = {
+    zones: [
+      zoneComponent('product.editor.seo.after', () => import('./zones/ProductSeoNote.js'), {
+        requiredPermission: 'catalog:read',
+      }),
+    ],
+  };
+  ```
+
+  Wkład znika razem ze swoim modułem, a wkład, który zawiedzie, nie psuje całej karty.
+
+**W istniejącym storefroncie.** Storefront z tego wydania buduje kanoniczny link strony produktu i
+linki do wersji językowych z pola `paths` odpowiedzi, a na stronie produktu parametr `?lang=` z
+linku ma pierwszeństwo przed ciasteczkiem języka. Przenieś storefront z tego wydania, aby linki strony
+produktu korzystały z kluczy URL per język.
+
+Ten wpis został napisany 2026-10-27 na podstawie gałęzi specyfikacji 163
+(`feat/163-product-data-scopes`).
+
 ## Instancja niespójna od początku
 
 Instalator `0.101.x` lub starszy zapisywał każdy pakiet wydania z `^` poza
