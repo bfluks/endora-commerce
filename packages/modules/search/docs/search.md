@@ -212,7 +212,7 @@ functional with a stale index until the next offline `search:reindex`.
 
 ### Availability per channel and language
 
-Since product data scopes (feature 163) a product can be switched on or off per sales channel and per channel language, carry a publication window, and have a channel-specific audience. The indexer asks `catalog` (`catalogProductAvailabilityPort.describeChannelAvailability`) instead of reading the product status:
+Since product data scopes (`specs/163-product-data-scopes/`) a product can be switched on or off per sales channel and per channel language, carry a publication window, and have a channel-specific audience. The indexer asks `catalog` (`catalogProductAvailabilityPort.describeChannelAvailability`) instead of reading the product status:
 
 - a channel member is indexed when it is on in **at least one** language of the channel; archived and deleted products are on in none;
 - each document carries `liveLanguages` (the channel languages it is on in), `publishFromMs` / `publishUntilMs` (the effective window in epoch milliseconds; `0` and `Number.MAX_SAFE_INTEGER` when open), and the channel-effective `visibility` and `allowedOrganizationIds`. All five are filterable attributes;
