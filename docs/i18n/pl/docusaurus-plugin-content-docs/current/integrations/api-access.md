@@ -147,6 +147,12 @@ Idempotency-Key: acme-order-1001
   `billingAddress` bezpośrednio w treści.
 - Odrzucenie pojedynczych pozycji daje odpowiedź `422` dla całego zamówienia, z problemem przy
   każdej pozycji (`SKU_NOT_IN_ASSORTMENT`, `PRICE_UNAVAILABLE`); nic nie zostaje zapisane.
+- Pozycja, której SKU należy do asortymentu kanału, ale której produkt nie jest teraz dostępny dla
+  Twojej organizacji w tym kanale — wyłączony w kanale, zarchiwizowany, poza oknem publikacji albo
+  ograniczony do innych klientów — odrzuca całe zamówienie odpowiedzią `404 PRODUCT_NOT_FOUND`, bez nazwy
+  produktu; nic nie zostaje zapisane. To sprawdzenie następuje po sprawdzeniu pozycji, więc `422`
+  ma pierwszeństwo. Różnica między tymi odpowiedziami jest zamierzona: klucz jest powiązany z jedną
+  organizacją i jednym kanałem — Twoją własną integracją — a numery SKU są zwykle publiczne.
 - Odpowiedź po powodzeniu (`201`) to standardowa struktura zamówienia — taka sama jak w sesjach
   klientów. Zamówienia można śledzić przez `GET /api/v1/external/orders` i
   `GET /api/v1/external/orders/:id` (`orders:read`); identyfikatory spoza zakresu widoczności zwracają
@@ -190,5 +196,6 @@ ponawiania opisuje [przegląd integracji](./README.md)). Dla partnerów istotne 
 | `IDEMPOTENCY_KEY_REUSED` | 409 | Ten sam klucz idempotencji, inna treść |
 | `SKU_NOT_IN_ASSORTMENT` | 422 (dla pozycji) | SKU nie występuje w asortymencie powiązanego kanału |
 | `PRICE_UNAVAILABLE` | 422 (dla pozycji) | Nie da się wyznaczyć ceny dla organizacji |
+| `PRODUCT_NOT_FOUND` | 404 | Produkt z asortymentu nie jest teraz dostępny dla organizacji w kanale |
 | `STOCK_UNAVAILABLE` | 409 | Niewystarczający stan magazynowy przy składaniu zamówienia |
 | `FORBIDDEN` (`organization_cannot_transact`) | 423 | Organizacja jest zawieszona albo nie może składać zamówień |

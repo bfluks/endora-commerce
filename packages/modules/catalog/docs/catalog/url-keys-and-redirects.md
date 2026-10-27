@@ -22,7 +22,9 @@ A key is valid only in its own language, and is unique per language across all s
 no two products share a key in one language. Changing a key keeps the previous one as a permanent
 redirect in its language, straight to the current key; redirects are kept until an operator deletes
 them. Redirects are served while the `seo` module is switched on; with `seo` off an old key answers
-"not found", and the redirects come back when `seo` is switched on.
+"not found", and the redirects come back when `seo` is switched on. A product's other **current** keys
+are not redirects: with `seo` off too, a request for its language or global key where a channel ×
+language key overrides it, or for another channel's key, still leads to its URL in that channel.
 
 ## Managing keys
 
