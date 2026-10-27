@@ -433,9 +433,15 @@ export async function registerCatalogAdminRoutes(
         const auditCtx = deps.resolveAdminAuditContext?.(request);
 
         if (bulkOperationService && body.productIds.length > BULK_ASYNC_THRESHOLD) {
+          // Final security review S-L3 — the queued run acts for, and is re-checked
+          // against, the admin recorded here; a request no admin is resolved for is not
+          // queued at all (`requireAdmin` above makes this a composition defect).
+          const requester = auditCtx?.actorAdminUserId;
+          if (!requester) {
+            throw new HttpError(401, ERROR_CODES.UNAUTHORIZED, 'No administrator was resolved for this request.');
+          }
           const op = await bulkOperationService.create({
-            requestedByAdminUserId:
-              auditCtx?.actorAdminUserId ?? '00000000-0000-0000-0000-000000000000',
+            requestedByAdminUserId: requester,
             payload: { productIds: body.productIds, fields: body.fields },
           });
           reply.status(202);
