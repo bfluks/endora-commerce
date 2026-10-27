@@ -274,6 +274,13 @@ It replaces the 2026-10-21 Q1 answer and extends N1.
   not be distinguishable to that reader, and no count may reveal the difference. The owner keeps seeing
   their own history with `available: false` (FR-002, FR-004; `contracts/consumers.md` row 12).
 
+### Session 2026-10-27
+
+- Q: (T144) The deploy-parity test found two storefront answers that change beyond the listed intended
+  behaviour changes — the archived product's 410 narrowed to callers who could otherwise see it, and an
+  archived product refused at basket add. Intended, or defects? → A: **intended (owner, 2026-10-27)** —
+  both are recorded as `plan.md` *Intended behaviour changes* 7 and 8 (FR-005, FR-110).
+
 ## Current state (origin/master cde5563ea)
 
 Paths are relative to the repository root. Behaviour below is read from the code, not observed at
