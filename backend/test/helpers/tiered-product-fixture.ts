@@ -30,6 +30,9 @@ export async function createTieredProduct(h: BackendServerHandle, suffix: string
       categoryIds: [],
       attributeValues: {},
       visibility: 'public',
+      // Feature 163 (Q1-d) — a product created without a status is `inactive`,
+      // which no basket or placement accepts; this one is meant to be on sale.
+      status: 'active',
     },
     cookies: { b2b_session: 'stub-admin-session' },
   });
@@ -63,6 +66,9 @@ export async function createUnpricedProduct(h: BackendServerHandle, suffix: stri
       categoryIds: [],
       attributeValues: {},
       visibility: 'public',
+      // Feature 163 (Q1-d) — a product created without a status is `inactive`,
+      // which no basket or placement accepts; this one is meant to be on sale.
+      status: 'active',
     },
     cookies: { b2b_session: 'stub-admin-session' },
   });
