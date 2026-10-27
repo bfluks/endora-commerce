@@ -1665,7 +1665,7 @@ checkpoint F fix round (see the Phase 22 notes).
 - [x] T151 [S1] `pnpm -r run typecheck` and `pnpm -r run lint` *(2026-10-27: green on `c8249a0f6` — hosted `quality` run https://github.com/bfluks/endora-commerce/actions/runs/40531658444 runs `pnpm -r run typecheck` and `pnpm -r run lint`)*
 - [x] T152 [S1] `pnpm --filter backend run test:unit:fast` and `pnpm --filter '!backend' run test` (Docker Ubuntu on the macOS host) *(2026-10-27: green on `c8249a0f6` — the same run's `test:backend:unit` (`test:unit:fast` on Ubuntu) and `test:frontend` (`pnpm --filter '!backend' run test`) jobs)*
 - [x] T153 [S1] Every `check:*` in the `quality` job: `check:module-boundary`, `check:port-dependencies`, `check:port-catches`, `check:subscribe-seam`, `check:entry-presence`, `check:off-state-coverage`, `check:action-route-permissions`, `check:bundle-pairing`, `check:release-intent -- --since origin/master`, `manifests:check`, `overlay:check` *(2026-10-27: green on `c8249a0f6` — the same run's `quality` and `quality:static` jobs run every `check:*` of the job)*
-- [x] T154 [S1] Fork `ci-pg` fully green on the rebased tip; record the run URL *(2026-10-27: green on `c8249a0f6` — fork ci-pg https://github.com/bfluks/endora-commerce/actions/runs/40532195479: 127 files, 910 tests, 0 failed; SC-004 bench ×0.920 / ×0.928 default, ×1.041 / ×1.069 sort=name, ×0.991 free text)*
+- [x] T154 [S1] Fork `ci-pg` fully green on the rebased tip; record the run URL *(2026-10-27: green on `c8249a0f6` — fork ci-pg https://github.com/bfluks/endora-commerce/actions/runs/40532195479: 127 files, 910 tests, 0 failed; SC-004 bench ×0.920 / ×0.928 default, ×1.041 / ×1.069 sort=name, ×0.991 free text)* *(T151–T154 predate the rebase onto `0bf86450d`: hosted `quality` and fork `ci-pg` re-run pending on the new tip)*
 - [ ] T155 [S1] Re-run `quickstart.md` §1–§9 on a dev stack; record findings in the PR
 - [x] T156 **Coordinator re-asks owner Q1 (status values A — `draft`/`active`/`inactive` — vs B — enabled/disabled per scope + global archive action) before acceptance.** If B: add a phase (contract constant + `CHECK`s + data migration mapping scope values + admin control + archive action), per research R3; nothing else changes
   - **Answered 2026-10-25** (spec Clarifications, Session 2026-10-25): B in the existing vocabulary — `active` / `inactive` at every scope, `draft` removed, `inactive` plain off everywhere, archiving a separate global Archive / Restore action, no alias. More than R3's "nothing else changes": the global status path, the PDP's 410, the bulk undo's revert keys, the gate's `statusOnAt` and three consumers also read "inactive" as "archived" (research R30). The work is **Block Q** (Phases 9a, 9b, 9c, 15a).
@@ -1761,6 +1761,8 @@ checkpoint F fix round (see the Phase 22 notes).
   `check:language`, `test:unit:fast`, `moved-module-tree.test.ts`; [PG] files left to ci-pg — first among them
   master's `contract/catalog/products-list.test.ts`, which creates its products with `em.create(Product, { status:
   'active' })` and a raw `sales_channel_products` row and reads `summary` on the listing and on the PDP by slug.
+  The four bundles both sides touched and auto-merged (`_i18n`, `blog`, en + pl) and the catalog pair parse with no
+  duplicate key; no test of ours compares a whole product card strictly, so master's new `summary` field breaks none.
 
 **Verification**: as listed in T151–T154.
 
