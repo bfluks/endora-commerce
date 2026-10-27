@@ -649,3 +649,96 @@ describe('ProductOrderRulesCard — minimum and returnable per channel (US10, FR
     expect(screen.queryByRole('button', { name: 'Save channel rules' })).toBeNull();
   });
 });
+
+/**
+ * Final QA review Q-M5 (FR-013, A-9) — a global change never touches the overrides and
+ * never warns about them: the overrides keep their values, the inheriting channels show
+ * the new global value, nothing asks and nothing writes `…/scopes`. The global audience is
+ * the page form's (its Save reloads the editor, which mounts these controls again); the
+ * global order rules are the order-rules card's own.
+ */
+describe('a global change leaves the channel overrides alone and warns about nothing (Q-M5, FR-013, A-9)', () => {
+  function expectNoOverrideWarning(): void {
+    for (const alert of screen.queryAllByRole('alert')) {
+      expect(alert.textContent ?? '').not.toMatch(/override/i);
+    }
+    expect(document.body.textContent ?? '').not.toMatch(/overrides? (will|would) be|remove (the )?overrides?/i);
+  }
+
+  it('a global audience change: the inheriting channel follows it, the overriding channel keeps its rule', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    const first = render(wrap(controls(B2B)));
+    expect(await screen.findByText('Inherited from global: Everyone')).toBeInTheDocument();
+    first.unmount();
+
+    // The page Save wrote the global audience; the editor reloads and mounts the controls again.
+    const changed = scopesFixture();
+    changed.global.visibility = 'logged_in_only';
+    primeGets(changed);
+    const second = render(wrap(controls(B2B)));
+    expect(await screen.findByText('Inherited from global: Signed-in buyers only')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Set an audience for this channel' })).not.toBeChecked();
+    expectNoOverrideWarning();
+    second.unmount();
+
+    render(wrap(controls(B2C)));
+    const override = await screen.findByRole('checkbox', { name: 'Set an audience for this channel' });
+    expect(override).toBeChecked();
+    expect(screen.getByRole('combobox', { name: 'Who can see it' })).toHaveValue('organization_restricted');
+    expect(screen.queryByText(/^Inherited from global:/)).toBeNull();
+    expectNoOverrideWarning();
+
+    expect(patchSpy).not.toHaveBeenCalled();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('a global minimum change writes the product only; the channel minimum and returnable overrides stay', async () => {
+    patchSpy.mockResolvedValue({ data: {} });
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    render(wrap(<ProductOrderRulesCard productId={PRODUCT_ID} productType="simple" />));
+    const user = userEvent.setup();
+    const b2bMinimum = await screen.findByRole('spinbutton', { name: 'Minimum order quantity in B2B' });
+    expect(b2bMinimum).toHaveAttribute('placeholder', 'Inherited: 10');
+
+    const global = screen.getByRole('spinbutton', { name: 'Minimum order quantity (pcs)' });
+    await user.clear(global);
+    await user.type(global, '25');
+    await user.click(screen.getByRole('button', { name: 'Save minimum' }));
+
+    await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
+    expect(patchSpy).toHaveBeenCalledWith(PRODUCT_PATH, { minOrderQuantity: 25 });
+    expect(patchSpy).not.toHaveBeenCalledWith(SCOPES_PATH, expect.anything());
+    // The inheriting channel follows the new global value; the overriding one keeps its own.
+    await waitFor(() => expect(b2bMinimum).toHaveAttribute('placeholder', 'Inherited: 25'));
+    expect(b2bMinimum).toHaveValue(null);
+    expect(screen.getByRole('spinbutton', { name: 'Minimum order quantity in B2C' })).toHaveValue(1);
+    expect(screen.getByRole('combobox', { name: 'Returnable in B2C' })).toHaveValue('no');
+    expectNoOverrideWarning();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('a global returnable change writes the product only; the channel returnable override stays', async () => {
+    patchSpy.mockResolvedValue({ data: {} });
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    render(wrap(<ProductOrderRulesCard productId={PRODUCT_ID} productType="simple" />));
+    const user = userEvent.setup();
+    const b2bReturnable = await screen.findByRole('combobox', { name: 'Returnable in B2B' });
+    expect(within(b2bReturnable).getByRole('option', { name: 'Use inherited (returnable)' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Returnable' }));
+
+    await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
+    expect(patchSpy).toHaveBeenCalledWith(PRODUCT_PATH, { returnable: false });
+    await waitFor(() =>
+      expect(within(b2bReturnable).getByRole('option', { name: 'Use inherited (not returnable)' })).toBeInTheDocument(),
+    );
+    expect(b2bReturnable).toHaveValue('inherit');
+    expect(screen.getByRole('combobox', { name: 'Returnable in B2C' })).toHaveValue('no');
+    expect(screen.getByRole('spinbutton', { name: 'Minimum order quantity in B2C' })).toHaveValue(1);
+    expectNoOverrideWarning();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+});

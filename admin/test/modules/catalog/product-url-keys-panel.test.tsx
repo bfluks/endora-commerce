@@ -416,6 +416,56 @@ describe('ProductUrlKeysPanel', () => {
     expect(within(panel).queryByRole('combobox', { name: /add a channel key/i })).toBeNull();
   });
 
+  // Final QA review Q-M5 (FR-013, A-9): a global key change is a global write only — every
+  // language and channel × language override is left as it is, and nothing warns about them.
+  it('a global key change sends the global key only, keeps every override and warns about nothing (Q-M5)', async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    const panel = await renderPanel();
+    const global = within(panel).getByRole('textbox', { name: /^global url key$/i });
+    await user.clear(global);
+    await user.type(global, 'drill-2');
+    expect(within(panel).getByRole('textbox', { name: /^url key in de$/i })).toHaveValue('bohrer');
+    expect(within(panel).getByRole('textbox', { name: /^url key in b2b shop · en$/i })).toHaveValue('drill-pro');
+    await user.click(within(panel).getByRole('button', { name: /^save url keys$/i }));
+
+    await waitFor(() => expect(putSpy).toHaveBeenCalledTimes(1));
+    expect(putSpy).toHaveBeenCalledWith(URL_KEYS_PATH, { globalKey: 'drill-2' });
+    expect(await within(panel).findByRole('status')).toHaveTextContent(/url keys saved/i);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryAllByRole('alert')).toEqual([]);
+    expect(within(panel).getByRole('textbox', { name: /^url key in de$/i })).toHaveValue('bohrer');
+    expect(within(panel).getByRole('textbox', { name: /^url key in b2b shop · en$/i })).toHaveValue('drill-pro');
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  // Final QA review Q-L10 — owner decision UX-3 = A: one vocabulary, "Use inherited" for a
+  // return to the inherited value and "No longer applies" for an orphan; no "Reset" or
+  // "Restore" (kept for archive restore) anywhere in the panel.
+  it('speaks the UX-3 vocabulary in English (Q-L10)', async () => {
+    const panel = await renderPanel();
+    expect(within(panel).getByRole('button', { name: 'Use inherited for DE' })).toHaveTextContent('Use inherited');
+    expect(within(panel).getByText('No longer applies')).toBeInTheDocument();
+    expect(
+      within(panel).getByRole('button', { name: 'Remove the key wiertarka-outlet, which no longer applies' }),
+    ).toBeInTheDocument();
+    expect(panel.textContent ?? '').not.toMatch(/\breset|\brestore/i);
+  });
+
+  it('speaks the UX-3 vocabulary in Polish (Q-L10)', async () => {
+    render(wrap(<ProductUrlKeysPanel productId={PRODUCT_ID} />, { language: 'pl' }));
+    const panel = await screen.findByRole('region', { name: /^klucze url$/i });
+    expect(within(panel).getByRole('button', { name: 'Użyj dziedziczonego dla DE' })).toHaveTextContent(
+      'Użyj dziedziczonego',
+    );
+    expect(within(panel).getByText('Nie obowiązuje już')).toBeInTheDocument();
+    expect(
+      within(panel).getByRole('button', { name: 'Usuń klucz wiertarka-outlet, który nie obowiązuje już' }),
+    ).toBeInTheDocument();
+    expect(panel.textContent ?? '').not.toMatch(/przywróć|resetuj|zresetuj/i);
+  });
+
   it('renders in Polish from the Polish bundle', async () => {
     render(wrap(<ProductUrlKeysPanel productId={PRODUCT_ID} />, { language: 'pl' }));
     expect(await screen.findByRole('region', { name: /klucze url/i })).toBeInTheDocument();
