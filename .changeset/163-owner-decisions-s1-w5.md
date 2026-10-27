@@ -2,8 +2,10 @@
 '@endora-commerce/mod-carts': patch
 '@endora-commerce/mod-orders': minor
 '@endora-commerce/mod-catalog': patch
-'@endora-commerce/contracts': patch
+'@endora-commerce/contracts': minor
 ---
+
+**BREAKING — `cartViewLineSchema.productSlug` is `string | null | undefined`.** Recorded at `minor`, which in a `0.x` series already takes every caret dependent out of range. A basket line whose product is unavailable carries `productSlug: null`, so a reader that typed it as `string | undefined` must handle `null` (render the line without a product link); `productSku` is new beside it.
 
 Product data scopes reach the basket view and the two external API seams that did not follow them yet.
 
