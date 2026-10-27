@@ -11,6 +11,7 @@ import {
   type UrlKeyRedirectTakeoverRequiredDetails,
   type UrlKeyTakenDetails,
   sameLanguage,
+  toScopeChannel,
 } from '@endora-commerce/contracts';
 import type { Command, CommandBus, CommandEvent } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -642,7 +643,7 @@ export class UrlKeyService {
 
     const effective: ProductUrlKeysResponse['data']['effective'] = [];
     for (const channel of [...members].sort((a, b) => a.code.localeCompare(b.code))) {
-      for (const languageCode of channel.languages) {
+      for (const languageCode of toScopeChannel(channel).languages) {
         const channelKey = channelKeys.find(
           (row) => row.salesChannelId === channel.id && sameLanguage(row.languageCode, languageCode),
         );
@@ -674,7 +675,7 @@ export class UrlKeyService {
           channelId: row.salesChannelId!,
           languageCode: row.languageCode,
           key: row.key,
-          orphaned: !channel || !channel.languages.some((code) => sameLanguage(code, row.languageCode)),
+          orphaned: !channel || !toScopeChannel(channel).languages.some((code) => sameLanguage(code, row.languageCode)),
         };
       }),
       effective,
@@ -760,7 +761,7 @@ export class UrlKeyService {
         : await em.find(ProductUrlKey, { productId: { $in: liveSlugProductIds }, salesChannelId: null });
     const channelLanguages = new Map<string, string>();
     for (const channel of channels) {
-      for (const code of channel.languages) if (!channelLanguages.has(lower(code))) channelLanguages.set(lower(code), code);
+      for (const code of toScopeChannel(channel).languages) if (!channelLanguages.has(lower(code))) channelLanguages.set(lower(code), code);
     }
     return {
       product,
@@ -775,7 +776,7 @@ export class UrlKeyService {
         otherRedirects: otherRedirects.map(toRedirectRow),
         productNames: new Map([...holders, ...otherSlugProducts].map((p) => [p.id, displayName(p)])),
         channelLanguages: [...channelLanguages.values()],
-        memberChannels: new Map(members.map((channel) => [channel.id, [...channel.languages]])),
+        memberChannels: new Map(members.map((channel) => [channel.id, toScopeChannel(channel).languages])),
       },
     };
   }

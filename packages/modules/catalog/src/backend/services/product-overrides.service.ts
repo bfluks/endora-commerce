@@ -1,5 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, toScopeChannel } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
@@ -31,8 +31,9 @@ import type {
  *                                       language slot).
  *   - `channel_not_assigned_to_product` — channel is not in the
  *                                       product's membership set.
- *   - `language_not_in_channel`      — language is not in the channel's
- *                                       SalesChannel.languages array.
+ *   - `language_not_in_channel`      — language is not one the channel
+ *                                       offers: its `languages` plus its
+ *                                       default (`toScopeChannel`, spec 163).
  *   - `value_invalid`                — value shape does not satisfy the
  *                                       attribute's valueType.
  *
@@ -208,7 +209,7 @@ export class ProductOverridesService {
       }
       const channel = channelById.get(e.channelId);
       if (!deleting && e.languageCode !== null) {
-        if (!channel || !channel.languages.includes(e.languageCode)) {
+        if (!channel || !toScopeChannel(channel).languages.includes(e.languageCode)) {
           throw new HttpError(
             422,
             ERROR_CODES.VALIDATION_FAILED,
