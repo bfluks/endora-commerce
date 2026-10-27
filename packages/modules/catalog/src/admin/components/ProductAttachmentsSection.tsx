@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { ProductAttachment } from '@endora-commerce/contracts';
 import { ApiError, apiClient, useAuth } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
-import { AssetPicker } from '@endora-commerce/admin-kit/components';
+import { AssetPicker, ModalDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import type { ScopeContext } from './ProductScopeEditor.js';
 import { AttachmentScopesDialog } from './AttachmentScopesDialog.js';
@@ -59,6 +59,9 @@ export function AttachmentsSection({ productId }: { productId: string }): ReactN
   const [types, setTypes] = useState<AdminAttachmentType[]>([]);
   const [context, setContext] = useState<ScopeContext | null>(null);
   const [editing, setEditing] = useState<AdminAttachment | null>(null);
+  /** The attachment waiting on "delete it?" — asked in the kit dialog, as the gallery asks. */
+  const [removing, setRemoving] = useState<AdminAttachment | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -147,15 +150,19 @@ export function AttachmentsSection({ productId }: { productId: string }): ReactN
 
   const handleDelete = useCallback(
     async (attachmentId: string, name: string): Promise<void> => {
-      if (!confirm(t('productEditor.attachments.deleteConfirm', { name }))) return;
+      setRemoveBusy(true);
       try {
         await apiClient.delete(
           `/api/v1/admin/catalog/products/${productId}/attachments/${attachmentId}`,
         );
+        setRemoving(null);
         setInfo(t('productEditor.attachments.success.delete', { name }));
         await refresh();
       } catch (err) {
+        setRemoving(null);
         setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.attachments.error.delete'));
+      } finally {
+        setRemoveBusy(false);
       }
     },
     [productId, refresh, t],
@@ -234,7 +241,7 @@ export function AttachmentsSection({ productId }: { productId: string }): ReactN
                       type="button"
                       size="sm"
                       variant="destructive"
-                      onClick={() => void handleDelete(att.id, att.name)}
+                      onClick={() => setRemoving(att)}
                     >
                       {t('productEditor.attachments.action.delete')}
                     </Button>
@@ -247,6 +254,31 @@ export function AttachmentsSection({ productId }: { productId: string }): ReactN
 
         <CreateAttachmentInline types={types} onCreate={handleCreate} />
       </CardContent>
+      {removing ? (
+        <ModalDialog
+          title={t('productEditor.attachments.deleteConfirm', { name: removing.name })}
+          busy={removeBusy}
+          onClose={(): void => setRemoving(null)}
+          footer={
+            <>
+              <Button type="button" variant="outline" disabled={removeBusy} onClick={(): void => setRemoving(null)}>
+                {t('productEditor.attachments.remove.cancel')}
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={removeBusy}
+                aria-busy={removeBusy}
+                onClick={(): void => void handleDelete(removing.id, removing.name)}
+              >
+                {t('productEditor.attachments.remove.confirm')}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm">{t('productEditor.attachments.remove.body', { name: removing.name })}</p>
+        </ModalDialog>
+      ) : null}
       {editing ? (
         <AttachmentScopesDialog
           productId={productId}
