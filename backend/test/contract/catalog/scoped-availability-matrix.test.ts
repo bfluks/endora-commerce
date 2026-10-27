@@ -5,7 +5,8 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { OTHER_TEST_ORGANIZATION_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { seedOtherTestOrganization } from '../../helpers/seed-organizations.js';
 import { errorBodyOf } from '../../helpers/product-scope-fixture.js';
 import { withModuleOff } from '../../helpers/off-state.js';
 
@@ -31,12 +32,19 @@ import { withModuleOff } from '../../helpers/off-state.js';
  * Phase 24 (T146): with `search` switched off the listing degrades to Postgres and
  * answers the same sets.
  *
+ * Final QA Q-M4 (US3 #1–#3): U is public globally and restricted to organization X
+ * on C1 by a channel audience override; C2 inherits the global audience. On C1 only X's
+ * buyer lists and opens it — the anonymous reader and organization Y's buyer get the
+ * absent answer — and on C2 all three do.
+ *
  * Every fixture name carries a per-run token; the channels are this suite's own.
  */
 
 const RUN = randomUUID().slice(0, 8);
 const ADMIN = { b2b_session: 'stub-admin-session' };
 const BUYER = { b2b_session: 'stub-customer-session' };
+/** Organization Y's buyer (`OTHER_TEST_ORGANIZATION_ID`); X is `BUYER`'s `TEST_ORGANIZATION_ID`. */
+const OTHER_ORG_BUYER = { b2b_session: 'stub-customer-session-other-org' };
 const LANGUAGES = ['pl-PL', 'en-US'] as const;
 type Language = (typeof LANGUAGES)[number];
 
@@ -79,11 +87,11 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
 
   async function insertProduct(
     key: string,
-    fields: { status?: string; type?: string; archived?: boolean; channels: Channel[] },
+    fields: { status?: string; type?: string; archived?: boolean; noFacet?: boolean; channels: Channel[] },
   ): Promise<void> {
     const id = randomUUID();
     const sku = `S163-${RUN}-${key}`.toUpperCase();
-    const attributeValues = facetKey ? { [facetKey]: facetValue } : {};
+    const attributeValues = facetKey && !fields.noFacet ? { [facetKey]: facetValue } : {};
     await sql(
       `insert into products (id, sku, slug, type, status, name, description, attribute_values, visibility,
                              allowed_organization_ids, archived_at, created_at, updated_at)
@@ -108,6 +116,9 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
 
   beforeAll(async () => {
     h = await setupBackendServer();
+    // Organization Y exists before any request, so no empty permitted-channel set is
+    // cached for its buyer (feature 154).
+    await seedOtherTestOrganization(h.em());
     // A filterable option-style attribute to count facets on.
     const filters = await h.app.inject({ method: 'GET', url: '/api/v1/catalog/filters' });
     const defs = (filters.json() as { data: Array<{ attributeKey: string; valueType: string }> }).data;
@@ -135,6 +146,21 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
     );
     // Q — no scope rows: inherits `active` everywhere.
     await insertProduct('q', { channels: [c1, c2] });
+    // U (Q-M4, US3) — public globally; C1's audience override admits organization X
+    // only. Carries no facet value, so the facet counts below stay P's and Q's.
+    await insertProduct('u', { noFacet: true, channels: [c1, c2] });
+    await sql(
+      `insert into product_channel_scopes (product_id, sales_channel_id, visibility, allowed_organization_ids, created_at, updated_at)
+       values (?, ?, 'organization_restricted', ?::jsonb, now(), now())`,
+      [ids['u'], c1.id, JSON.stringify([TEST_ORGANIZATION_ID])],
+    );
+    for (const channel of [c1, c2]) {
+      await sql(
+        `insert into sales_channel_organizations (sales_channel_id, organization_id) values (?, ?)
+         on conflict do nothing`,
+        [channel.id, OTHER_TEST_ORGANIZATION_ID],
+      );
+    }
     // O — a member switched off by its global status (not archived); its PDP answer
     // is Phase 9c's (T156s). A — archived.
     await insertProduct('off', { status: 'inactive', channels: [c1, c2] });
@@ -206,6 +232,47 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
       expect(listed, `Q inherits at ${channel.code}/${language}`).toContain(ids['q']);
       expect(listed, 'a member switched off is never listed').not.toContain(ids['off']);
       expect(listed, 'an archived product is never listed').not.toContain(ids['a']);
+    }
+  });
+
+  it('US3: a channel audience override admits organization X on C1 only; C2 inherits the public rule', async () => {
+    const readers: Array<[string, Record<string, string> | undefined]> = [
+      ['anonymous', undefined],
+      ['organization X', BUYER],
+      ['organization Y', OTHER_ORG_BUYER],
+    ];
+    const absentSlug = `s163-${RUN}-absent`;
+    for (const channel of [c1, c2]) {
+      for (const [reader, cookies] of readers) {
+        const admitted = channel === c2 || reader === 'organization X';
+        const where = `${reader} on ${channel === c1 ? 'C1 (B2B override)' : 'C2 (inherits public)'}`;
+        const list = await h.app.inject({
+          method: 'GET',
+          url: `/api/v1/catalog/products?q=${encodeURIComponent(`S163-${RUN}`)}&limit=50`,
+          headers: headers(channel, 'pl-PL'),
+          ...(cookies ? { cookies } : {}),
+        });
+        expect(list.statusCode, `${where}: ${list.body}`).toBe(200);
+        const listed = (list.json() as { data: Array<{ id: string }> }).data.map((p) => p.id);
+        expect(listed.includes(ids['u']!), `U listed for ${where}`).toBe(admitted);
+        expect(listed, `Q listed for ${where}`).toContain(ids['q']);
+
+        const page = (slug: string) =>
+          h.app.inject({
+            method: 'GET',
+            url: `/api/v1/catalog/products/${slug}`,
+            headers: headers(channel, 'pl-PL'),
+            ...(cookies ? { cookies } : {}),
+          });
+        const res = await page(slugs['u']!);
+        if (admitted) {
+          expect(res.statusCode, `U's page for ${where}`).toBe(200);
+        } else {
+          const absent = await page(absentSlug);
+          expect(res.statusCode, `U's page for ${where}`).toBe(404);
+          expect(errorBodyOf(res)).toEqual(errorBodyOf(absent));
+        }
+      }
     }
   });
 
