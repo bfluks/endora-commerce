@@ -241,6 +241,15 @@ describe('SeoMetaScopeEditor — a product override per sales channel × languag
     );
   });
 
+  it('encodes the entity id into the meta path, so an id cannot address another admin route (S-M1)', async () => {
+    getSpy.mockImplementation(() => Promise.resolve(metaAnswer(null)));
+    render(wrap(<SeoMetaScopeEditor entityType="category" entityId="../../platform/modules" />));
+    await waitFor(() =>
+      expect(getSpy).toHaveBeenCalledWith('/api/v1/admin/seo/meta/category/..%2F..%2Fplatform%2Fmodules?locale=en-US'),
+    );
+    expect(getSpy).not.toHaveBeenCalledWith(expect.stringContaining('/category/../'));
+  });
+
   it('loads a scope as soon as it is selected, without pressing Load (D5)', async () => {
     const user = userEvent.setup();
     render(wrap(<SeoMetaScopeEditor entityType="product" entityId={PRODUCT_ID} />));
