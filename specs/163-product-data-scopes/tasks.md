@@ -1731,6 +1731,36 @@ checkpoint F fix round (see the Phase 22 notes).
   `tsc -p test/tsconfig.json`, eslint, `check:fixture-substitution`, `check:shared-table-wipes`,
   `check:harness-teardown`, `serial-test-files.test.ts`; typecheck + lint of mod-catalog and mod-comparisons; unit
   suites of mod-comparisons (60) and the touched catalog tests; backend `unit/comparisons`.
+- 2026-10-27 (S1, second Phase 25 rebase): rebased with `--signoff` onto `origin/master` `0bf86450d` (merge of
+  #469, `specs/163-page-builder-marketing-pages/` — a different feature on the same number, one squashed commit);
+  backup ref `backup/163-pre-rebase-20261027b` = `27496ac5b`. Conflicts, in replay order: `.specify/feature.json`
+  (master's value kept at every stop — it is what the tip carried before); the catalog `i18n/{en,pl}.json` bundles at
+  the S3 P13 handover (a three-way key merge — master's keys plus ours, no key changed on both sides; the tip equals
+  the pre-rebase bundles with master's 372 added keys, checked key by key); the `AGENTS.md` appendix's Recent Changes
+  (`feat/163-product-data-scopes`, `163-page-builder-marketing-pages`, `161-price-book-editor` — the script's
+  branch-name entry, newest three; Active Technologies untouched, neither 163 adds a dependency); the Polish catalog
+  translation cache (our side taken during the replay, re-pinned at the tip to the merged English hash and Polish
+  page); `catalog-query.service.ts` `toSummary` (our effective URL key beside master's new `summary`). **Master's one
+  new buyer-facing product field**, the card's `summary` (R-16 there), is derived in `toSummary` from the description
+  through the same `effectiveSystemText` override and language pick as the PDP, on rows the listing has already cut
+  through `filterAvailable` — no new read, no new predicate; the PDP carries it through its `...summary` spread. Its
+  product blocks moved from `catalog-block-data.ts` to `block-data.ts` (storefront and `cms-components`) and gained a
+  single-product `ProductCard` block on the same `getProductBySlug` request, so consumers.md row 19 is renamed, not
+  added to; the block files carry no predicate (grep). Published text now cites this spec by slug (`search.md` EN +
+  PL, the upgrade guide EN + PL; their Polish caches re-pinned); master's own `163-*` changesets left alone.
+  `composer:generate`, `manifests:generate`, `pnpm install --lockfile-only` moved nothing — no regenerate commit.
+  Upstream deleted or renamed `ImageSlider`, `ButtonLinkFields` and the `catalog-block-data` files; nothing of ours
+  under `backend/test/**`, `admin/test/**` or `storefront/**` names them. Green: `--frozen-lockfile`, `build:packages`,
+  `pnpm -r run typecheck`, `pnpm -r run lint` (warnings only), every T153 check plus `docs-translations` (0 findings),
+  `module-docs`, `class-vocabulary`, `admin-zones`, `error-translations`, `composer:check`, `release-intent --since
+  origin/master` (56 changesets, 0 violations); unit: mod-catalog (30 files) and contracts (78 files) in full; backend
+  `agents-router`, `error-code-routing-equality`, `module-removal`, `read-size-drift`, `no-new-enum-values`,
+  `seo/cross-module-ports`, `blog/block-declarations`; storefront `server-context-language`, `active-channel`,
+  `pdp-redirect`, `ssr/catalog-blocks`, `ssr/blocks`; admin `cms/block-data-source`,
+  `batch-sixteen-surfaces.module-owned-surface`. Not run here (Intel host false reds): `check:naming`,
+  `check:language`, `test:unit:fast`, `moved-module-tree.test.ts`; [PG] files left to ci-pg — first among them
+  master's `contract/catalog/products-list.test.ts`, which creates its products with `em.create(Product, { status:
+  'active' })` and a raw `sales_channel_products` row and reads `summary` on the listing and on the PDP by slug.
 
 **Verification**: as listed in T151–T154.
 
