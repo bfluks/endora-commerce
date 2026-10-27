@@ -684,12 +684,15 @@ no admin surface offers or labels `draft`.
   compares `productListTabQuery` with admin-kit's `buildProductBrowserPath` over the four tabs. Provenance
   prefixes in the 15a comments are trimmed.
 - *Palette (W5).* The stems go into the one keyword entry: `'archived archiwum zarchiwizowane restore
-  przywróć'`. **Deferred:** a separate "Archived products" action would change the generated catalog reference
+  przywróć'`. **Superseded by PAL-1 = B (owner, 2026-10-26)** — the separate "Archived products" action and its
+  route `/catalog/products/archived` were built (Phase 9d, T156-pal-a / T156-pal-b), and the list now follows the
+  URL on every navigation. ~~**Deferred:** a separate "Archived products" action would change the generated catalog reference
   page and its Polish cache entry and `backend/test/integration/_admin_surfaces/batch-fifteen-palette-off-state`,
   which lists catalog's actions — backend files outside S3 this round; and the list reads `?status=` only on
-  mount, so the action would also need the tab to follow the URL.
+  mount, so the action would also need the tab to follow the URL.~~
 - *Copy.* PL `productsList.bulkEdit.archive.hint` ends "…a po przywróceniu wracają do sprzedaży."
-- Not this round (owner): bar-level Restore on the Archived tab (designer W1), saved-view `draft` mapping, RFQ.
+- ~~Not this round (owner): bar-level Restore on the Archived tab (designer W1), saved-view `draft` mapping, RFQ.~~
+  All three were decided on 2026-10-26 and built: P-4 = B, P-2 = A, P-3 = A / RFQ-c = B (below).
 
 **Owner decisions applied** (S3, 2026-10-26, after Phase 15):
 - *P-4 → B.* On the Archived tab the bulk bar is **Restore** (primary) / Bulk edit / Delete — still three; Edit price
@@ -1036,7 +1039,8 @@ minimum, quick order's channel minimum). Decisions to confirm at checkpoint C:
   labels from `GET …/attributes`, key as fallback). Absent and `[]` render nothing.
 - *Orphans.* A region below the table with a standing note (role `note`), each with its reason and **Delete**.
 - *No channel (US4 #4).* A note and a per-language table only. Read-only (US4 #3): no buttons and a read-only line.
-- *Not built:* "jump from a cell to the field" (US4's story text; not in T093).
+- *Not built:* "jump from a cell to the field" (US4's story text; not in T093) **Deferred (2026-10-27, QA L7):** US4's story text now says what is
+  built and spec *Out of Scope* lists the cell-to-field link as a follow-up.
 - *Attribute flags (T095a/b).* A **Scope** fieldset in `AttributesManager`'s form; narrowing → preview → `ModalDialog`
   with the total and per channel (channel names best effort from `/admin/sales-channels`, short id otherwise; 0 → "No
   values … are affected"); cancel sends nothing; widening saves at once; built-in attributes fixed and read-only;
@@ -1373,8 +1377,9 @@ S3 note under T129.
   PDP / card / OG only. Option: both port methods gain `channelId`. Not built. *(Owner decision MED-1 = A, 2026-10-26: built in Phase 22's block — see the Phase 22 notes.)*
 - `gallery-batch-read.test.ts`: `list` now costs four round-trips per product (the hidden set), 2000 for 500.
 
-**Stopped here (2026-10-26, owner pause).** Phase 21 is complete except docs (EN/PL page text is T147 / T148). *(Resumed 2026-10-26: Phase 22 built and the gallery page written — see the Phase 22 notes; the RFQ half of T138 is open.)*
-Phase 22 (T135–T139b) is **not started**. Next: T135 RED tests, T136 migration
+**Done (2026-10-26; was "Stopped here", owner pause).** Phase 21 is complete, docs included (T147 / T148). Phase 22
+was built after the pause, the RFQ half of T138 included — see the Phase 22 notes. Kept as history: at the pause
+Phase 22 (T135–T139b) had not started, and the plan then was: T135 RED tests, T136 migration
 `attachment_packaging_translations`, T137 services/routes (drop the route-level `auditEmit` beside the Commands
 for the touched attachment and packaging routes, FR-080), T138 snapshots via `effectivePackagingUnitName` at
 `basketScopeLanguage` / `raisedInScopeLanguage` (keep `resolveLinePackaging`'s name match on the global `name`),
@@ -1490,12 +1495,14 @@ T139 regen + changesets, T139a/b overview fields `attachments:hidden`, `attachme
   replaces the set; `422 SCOPE_INVALID not_a_member` for a newly hidden non-member channel). Packaging-unit admin DTO:
   `nameTranslations`; `POST|PATCH …/packaging-units[/:id]` accept `nameTranslations` (strict schemas, ≤ 160).
 
-**Stopped here (2026-10-26, session end).** Phase 22 built and committed (T135–T137, T139–T139b; T138 PDP and
+**Done (2026-10-26; was "Stopped here", session end).** Phase 22 built and committed (T135–T137, T139–T139b; T138 PDP and
 basket half), MED-1 = A built, attribute scope flags in the admin response, `withOrgScope` comment moved, the P21
 gallery page EN/PL written. Verified: contracts, platform, catalog, carts typecheck + lint; product_feeds typecheck;
 catalog/carts/product_feeds/comparisons/platform unit suites; check:naming (Docker), check:language,
 default-language-prose, platform-surface, docs-translations, module-docs, i18n:hardcoded. Typecheck + lint
-also green for product_feeds, comparisons, backend, storefront, admin. **Not run:** the `[PG]` files. Next: the RFQ half of T138 (recipe in the Phase 22 notes, owner of `quote_requests`) and the P22 docs (T147/T148). *(Second pass 2026-10-26: both done — T138 RFQ half, T147/T148 ticked; N2 for the basket unit name left open for the owner, see the Phase 22 notes.)*
+also green for product_feeds, comparisons, backend, storefront, admin. **Not run** at that point: the `[PG]` files. What was then next — the RFQ half of T138 and the P22 docs (T147/T148) —
+was done in the second pass of 2026-10-26, and N2 for the basket unit name was decided B and built in the
+checkpoint F fix round (see the Phase 22 notes).
 `contracts` `crm-rich-text.test.ts` "reads quickly" failed at 747 ms / 500 ms under host load 828 — untouched file.
 
 ### Phase 23: [admin UI] Media, attachments, packaging per scope (US9) — after Phases 21–22
