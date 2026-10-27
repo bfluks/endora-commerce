@@ -553,6 +553,55 @@ describe('Attachments per language and per channel (US9, FR-078)', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
+  // Final code review C-m2: deleting an attachment asks in the kit dialog, as the gallery
+  // does, never in the browser's native confirm().
+  it('asks in a dialog before deleting an attachment, and deletes nothing on Cancel', async () => {
+    serve();
+    const nativeConfirm = vi.spyOn(window, 'confirm');
+    await renderAttachments();
+    const user = userEvent.setup();
+    const row = screen.getByText('Manual').closest('tr') as HTMLElement;
+    await user.click(within(row).getByRole('button', { name: 'Delete' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete attachment "Manual"?' });
+    expect(dialog).toHaveTextContent('The attachment Manual is removed from this product now. The file stays in the library.');
+    expect(deleteSpy).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(nativeConfirm).not.toHaveBeenCalled();
+  });
+
+  it('deletes the attachment once the dialog is confirmed, then reloads the list', async () => {
+    serve();
+    const nativeConfirm = vi.spyOn(window, 'confirm');
+    await renderAttachments();
+    const user = userEvent.setup();
+    const row = screen.getByText('Manual').closest('tr') as HTMLElement;
+    await user.click(within(row).getByRole('button', { name: 'Delete' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete attachment "Manual"?' });
+    const listReads = getSpy.mock.calls.filter(([p]) => p === `${ADMIN}/attachments`).length;
+    await user.click(within(dialog).getByRole('button', { name: 'Delete attachment' }));
+    await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith(`${ADMIN}/attachments/${A2}`));
+    expect(deleteSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() =>
+      expect(getSpy.mock.calls.filter(([p]) => p === `${ADMIN}/attachments`).length).toBeGreaterThan(listReads),
+    );
+    expect(nativeConfirm).not.toHaveBeenCalled();
+  });
+
+  it('asks in Polish from the Polish bundle', async () => {
+    serve();
+    render(wrap(<AttachmentsSection productId={PRODUCT_ID} />, { language: 'pl' }));
+    await screen.findByText('Manual');
+    const user = userEvent.setup();
+    const row = screen.getByText('Manual').closest('tr') as HTMLElement;
+    await user.click(within(row).getByRole('button', { name: 'Usuń' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Usunąć załącznik „Manual”?' });
+    expect(within(dialog).getByRole('button', { name: 'Anuluj' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Usuń załącznik' })).toBeInTheDocument();
+  });
+
   it('is read-only for catalog:read — the dialog’s fields and Save are disabled', async () => {
     serve();
     await renderAttachments(['catalog:read']);
