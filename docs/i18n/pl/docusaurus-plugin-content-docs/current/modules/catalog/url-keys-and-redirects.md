@@ -23,7 +23,9 @@ sprzedaży: żadne dwa produkty nie mają tego samego klucza w jednym języku. Z
 poprzedni jako stałe przekierowanie w jego języku, prosto do bieżącego klucza; przekierowania są
 przechowywane, dopóki operator ich nie usunie. Przekierowania działają, gdy moduł `seo` jest
 włączony; przy wyłączonym `seo` stary klucz odpowiada „nie znaleziono”, a po ponownym włączeniu
-`seo` przekierowania wracają.
+`seo` przekierowania wracają. Pozostałe **bieżące** klucze produktu nie są przekierowaniami: także
+przy wyłączonym `seo` żądanie jego klucza językowego lub globalnego, gdy nadpisuje go klucz pary
+kanał × język, albo klucza innego kanału nadal prowadzi do jego adresu w danym kanale.
 
 ## Zarządzanie kluczami
 

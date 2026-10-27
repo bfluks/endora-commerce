@@ -582,7 +582,9 @@ sprzedaży produktu, potem jeden z języków kanału albo cały kanał (**Załad
 ponownie). Opuszczenie zakresu z niezapisanymi zmianami wymaga potwierdzenia, a **Użyj
 dziedziczonego** pyta przed usunięciem nadpisania dokładnie w pokazanym zakresie. Karta SEO w
 edytorze produktu prowadzi do tego ekranu z już wybranym produktem
-(`/seo?entityType=product&entityId=<id>`).
+(`/seo?entityType=product&entityId=<id>`). Ten link to wkład modułu do strefy panelu
+`product.editor.seo.after` w edytorze produktu, więc jest widoczny tylko wtedy, gdy `seo` jest
+włączony, a administrator ma uprawnienie `catalog:write`.
 
 **Każda zmiana trafia do dziennika zdarzeń.** Zapis nadpisania to jeden wpis
 `seo_meta_override.upsert`, usunięcie — jeden wpis `seo_meta_override.delete`, każdy z pełnym
