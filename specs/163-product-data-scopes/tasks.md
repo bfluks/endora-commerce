@@ -1652,6 +1652,30 @@ also green for product_feeds, comparisons, backend, storefront, admin. **Not run
 - [x] T156 **Coordinator re-asks owner Q1 (status values A — `draft`/`active`/`inactive` — vs B — enabled/disabled per scope + global archive action) before acceptance.** If B: add a phase (contract constant + `CHECK`s + data migration mapping scope values + admin control + archive action), per research R3; nothing else changes
   - **Answered 2026-10-25** (spec Clarifications, Session 2026-10-25): B in the existing vocabulary — `active` / `inactive` at every scope, `draft` removed, `inactive` plain off everywhere, archiving a separate global Archive / Restore action, no alias. More than R3's "nothing else changes": the global status path, the PDP's 410, the bulk undo's revert keys, the gate's `statusOnAt` and three consumers also read "inactive" as "archived" (research R30). The work is **Block Q** (Phases 9a, 9b, 9c, 15a).
 
+- 2026-10-27 (S1, Phase 25 start): rebased with `--signoff` onto `origin/master` `2b27fa2dd` (27 commits: #429
+  four-place unit prices, release 0.108.0, #430 sub-cent feeds / quote PDF, #428 money follow-ups); backup ref
+  `backup/163-pre-rebase-20261026` = `be4db1d62`. Two conflicts: the Polish carts page's translation cache (feature
+  side taken, then re-pinned at the tip to the merged English hash and Polish page — `check:docs-translations`
+  0 findings) and the `@endora-commerce/contracts` import in `orders/routes.ts` (master's `unitPriceHalfUp` beside our
+  `withChannelOrderRules`; our `roundAmountHalfUp` dropped, unused once master's four-place rule replaced it).
+  Fifteen files changed on both sides merged cleanly and were read: the catalog/seo migration registry (ours after
+  master's, master added none to catalog/seo), `errors.ts`, the `_i18n` bundles (parse), `reference-ledgers.ts`,
+  `quote-requests.ts`, `orders/index.ts`, `feed-generation.service.ts`, `OrderCreatePage.tsx`, `RfqCreatePage.tsx`,
+  `cart-batch-add.test.ts`, the carts docs, `seo/package.json`, the lockfile. `composer:generate`,
+  `manifests:generate` and `pnpm install --lockfile-only` moved nothing, so there is no regenerate commit;
+  `--frozen-lockfile` clean. Upstream deleted only consumed changesets — nothing under `backend/test/**` names
+  them. Green: `build:packages`, `pnpm -r run typecheck`, `pnpm -r run lint` (warnings only), `check:module-boundary`,
+  `port-dependencies`, `port-catches`, `subscribe-seam`, `entry-presence`, `off-state-coverage`,
+  `action-route-permissions`, `bundle-pairing`, `module-docs`, `class-vocabulary`, `admin-zones`,
+  `error-translations`, `docs-translations`, `release-intent --since origin/master` (55 changesets, 0 violations),
+  `composer:check`, `manifests:check`, `overlay:check`; unit suites of mod-carts, mod-orders, mod-quote-requests,
+  mod-product-feeds, contracts; backend `agents-router`, `error-code-routing-equality`, `module-removal`,
+  `read-size-drift`, `no-new-enum-values`; admin `OrderCreatePage*`, `RfqCreatePage*`, `money-unit-price`
+  (one run under load timed `OrderCreatePage.minimum` out at ~5 s; green alone twice). Not run on this Intel
+  host (false reds): `check:naming`, `check:language`, `test:unit:fast`, `moved-module-tree.test.ts`; [PG] files
+  are left to ci-pg. Owner decision A (2026-10-27) on T144's two findings recorded before the push (plan.md
+  intended changes 7–8).
+
 **Verification**: as listed in T151–T154.
 
 ---
