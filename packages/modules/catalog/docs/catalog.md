@@ -97,9 +97,17 @@ one that is not archived, answers `200` and changes nothing — no audit entry, 
   `archived=only` lists them and `archived=include` lists them beside the rest. The
   `inactive` count and filter cover products that are off but not archived.
   On the product list the **Archived** tab has its own address,
-  `/catalog/products/archived`, so the browser's Back button and a reload return to it.
+  `/catalog/products/archived`, so the browser's Back button and a reload return to it, and
+  the command palette (⌘K / CTRL+K) opens it as **Archived products** — search for
+  "archived" or "archiwum".
   With a selection, its bar offers Restore, Bulk edit and Delete; **Edit price** is shown
   on the other tabs but disabled, because prices are set in price books.
+- **From the admin assistant.** The assistant's `catalog.archive_product` and
+  `catalog.restore_product` tools (`catalog:write`) archive and restore products after
+  you confirm the plan it shows, through the same action and audit entry, with you as
+  the actor; larger selections run as the bulk operation above. Its status tool,
+  `catalog.set_product_status`, only switches products on or off and never archives or
+  restores, and its product search lists archived products and says which they are.
 
 ### Status per channel and language, in bulk
 
@@ -369,6 +377,9 @@ modules are present. The payload is sent whole; the strict schemas are
   context, and every price it renders is resolved for that channel; new gating
   (e.g. customer-segment-specific catalogs) is added by composing into
   `catalog-query.service.ts`.
+- **Product editor zones** — the editor mounts admin zones other modules contribute to;
+  `product.editor.seo.after`, at the end of the SEO tab (props: `productId`), is where the
+  SEO module puts its link to the meta-tag editor, so the catalog never names that module.
 - **Slug uniqueness** — the slug is unique across all Sales Channels by
   default; override the slugifier in `catalog-admin.service.ts` if locale
   collisions become a concern.
