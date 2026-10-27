@@ -1675,6 +1675,10 @@ also green for product_feeds, comparisons, backend, storefront, admin. **Not run
   host (false reds): `check:naming`, `check:language`, `test:unit:fast`, `moved-module-tree.test.ts`; [PG] files
   are left to ci-pg. Owner decision A (2026-10-27) on T144's two findings recorded before the push (plan.md
   intended changes 7–8).
+  ci-pg on `ff9f135cc`: 120/122; the two reds (`place-order-line-price-current`, `cart-read-equals-placement`, both new
+  from master's #428/#429) created their products through the admin route without a status, which under Q1-d is
+  `inactive` — fixed in `fb91cc237` by creating them `status: 'active'` (`createTieredProduct`,
+  `createUnpricedProduct`, the inline base-priced product); no product behaviour changed.
 
 **Verification**: as listed in T151–T154.
 
