@@ -203,7 +203,7 @@ It replaces the 2026-10-21 Q1 answer and extends N1.
   and the admin product-list filter reject `draft` with a validation error; there is no alias period. This
   is a breaking change and ships with a major-bump changeset note (FR-092, FR-112, *Compatibility and
   release*). *(Recorded at bump level `minor` with a body marked BREAKING: `specs/conventions/release-intent.md`
-  (D-225) refuses `major` while a package is in `0.x`, and `@endora-commerce/contracts` is `0.107.0` —
+  (D-225) refuses `major` while a package is in `0.x`, and `@endora-commerce/contracts` is `0.108.0` —
   coordinator, 2026-10-25; research R30.6.)*
 - Q: (Q1-f) Where is the work done? → A: Inside this feature, as a block before acceptance.
 - D-1 (whether a never-published `draft` product stays reachable by direct link as a preview) is **moot**:
@@ -1258,7 +1258,7 @@ Added in Session 2026-10-25 (Q1-e). Everything else in this feature is additive;
 - **Breaking**: `productStatusSchema` and the scope status value set narrow from
   `draft | active | inactive` to `active | inactive` (FR-010, FR-112). `@endora-commerce/contracts` MUST
   ship a changeset marked **BREAKING**, at bump level **`minor`** — `specs/conventions/release-intent.md`
-  (D-225) refuses `major` while a package is in `0.x` (`contracts` is `0.107.0`), and in a `0.x` series
+  (D-225) refuses `major` while a package is in `0.x` (`contracts` is `0.108.0`), and in a `0.x` series
   `minor` already takes every caret dependent out of range (coordinator, 2026-10-25; research R30.6) —
   whose note says: `draft` is removed with no alias; the legacy `archived` write
   alias is removed too and `archived` is refused like `draft` (FR-112, O-1); existing `draft` data is
