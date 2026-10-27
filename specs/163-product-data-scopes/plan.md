@@ -364,6 +364,13 @@ decision of 2026-10-25. Lockstep releases every package at the highest pending b
 
 No violations. **No new runtime, dev or workspace dependency** (R25). Block Q adds none either.
 
+One manifest edge, recorded so it is not read as a new dependency: `@endora-commerce/mod-seo` gains
+`react-router-dom` `^7` as an **optional peer** (and the matching devDependency), rendered by
+`manifests:generate`, because its contribution to the new admin zone `product.editor.seo.after` (the
+product editor's link to the SEO screen, Session 2026-10-26 *SEO stub*, UX-4) is a router `Link`. The
+Admin UI already depends on `react-router-dom` 7, and `@endora-commerce/mod-catalog` declares the same
+optional peer, so no application gains a runtime dependency and the lockfile resolves the same version.
+
 ## Handoff summary (for `endora-commerce-dev`)
 
 Build in `tasks.md` order; the blocks and streams there are the unit of a builder spawn. Read before the
