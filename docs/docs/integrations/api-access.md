@@ -158,6 +158,15 @@ Idempotency-Key: acme-order-1001
   `deliveryAddress` / `billingAddress` objects.
 - Per-line refusals are whole-order `422`s with per-line issues
   (`SKU_NOT_IN_ASSORTMENT`, `PRICE_UNAVAILABLE`); nothing is persisted.
+- A line whose SKU is in the channel's assortment but whose product is not
+  available to your Organization there now — switched off in the channel,
+  archived, outside its publication window, or restricted to other
+  customers — refuses
+  the whole order with `404 PRODUCT_NOT_FOUND`, without naming the product;
+  nothing is persisted. It is asked after the per-line checks, so a `422` takes
+  precedence. The difference between the two answers is deliberate: the key is
+  bound to one Organization and one channel — your own integration — and SKUs
+  are generally public.
 - The success response (`201`) is the standard order envelope — the same shape
   customer sessions receive. Track orders with
   `GET /api/v1/external/orders` and `GET /api/v1/external/orders/:id`
@@ -206,5 +215,6 @@ retry semantics). Two facts matter for partners:
 | `IDEMPOTENCY_KEY_REUSED` | 409 | Same idempotency key, different payload |
 | `SKU_NOT_IN_ASSORTMENT` | 422 (per line) | SKU absent from the bound channel's assortment |
 | `PRICE_UNAVAILABLE` | 422 (per line) | No resolvable organization price |
+| `PRODUCT_NOT_FOUND` | 404 | A product in the assortment is not available to the Organization in the channel now |
 | `STOCK_UNAVAILABLE` | 409 | Insufficient stock at placement |
 | `FORBIDDEN` (`organization_cannot_transact`) | 423 | Organization suspended / cannot transact |
