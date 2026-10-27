@@ -180,7 +180,7 @@ export function SeoMetaScopeEditor({ entityType, entityId }: SeoMetaScopeEditorP
     };
   }, [isProduct, entityId]);
 
-  const metaPath = `/api/v1/admin/seo/meta/${entityType}/${entityId}`;
+  const metaPath = `/api/v1/admin/seo/meta/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}`;
   const selectedChannel = channels?.find((c) => c.id === scope.channelId) ?? null;
   /** A product's scopes are offered once its channels are known (or known to be unreadable). */
   const ready = !isProduct || channels !== null || channelsFailed;

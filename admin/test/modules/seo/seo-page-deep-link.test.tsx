@@ -90,4 +90,19 @@ describe('the SEO screen opens on the product its address names (UX-4 = A)', () 
     expect(getSpy).not.toHaveBeenCalledWith(expect.stringContaining('/scope-context'));
     expect(getSpy).not.toHaveBeenCalledWith(expect.stringContaining('/seo/meta/order/'));
   });
+
+  // Final security review S-M1: the address is attacker-controllable, so an id that is not
+  // a UUID is ignored outright — nothing is selected and no request is sent for it.
+  it.each([
+    ['a path climbing out of the meta route', '../../platform/modules'],
+    ['an encoded path climbing out of the meta route', '..%2F..%2Fsettings'],
+    ['a UUID followed by a path', `${PRODUCT_ID}/../../orders`],
+    ['a non-UUID token', 'not-a-product'],
+  ])('ignores an entity id that is not a UUID: %s', async (_label, entityId) => {
+    renderAt(`/seo?entityType=product&entityId=${encodeURIComponent(entityId)}`);
+    await waitFor(() => expect(getSpy).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(getSpy).not.toHaveBeenCalledWith(expect.stringContaining('/scope-context'));
+    expect(getSpy).not.toHaveBeenCalledWith(expect.stringContaining('/seo/meta/'));
+  });
 });

@@ -255,18 +255,27 @@ function isEntityType(value: string | null): value is SeoEntityType {
   return value !== null && (ENTITY_TYPES as readonly string[]).includes(value);
 }
 
+/** A product and a category are addressed by a UUID; nothing else names one. */
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isEntityId(value: string | null): value is string {
+  return value !== null && UUID_SHAPE.test(value);
+}
+
 function MetaEditorCard(): ReactNode {
   const t = useTranslation('core');
   const [entityType, setEntityType] = useState<SeoEntityType>('product');
   const [entityId, setEntityId] = useState('');
   // Feature 163 (owner decision UX-4 = A) — `?entityType=product&entityId=<id>` opens the
   // screen on that entity; the product editor's SEO link points here. Read on mount and
-  // on every navigation that changes them; an unknown type is ignored.
+  // on every navigation that changes them; an unknown type is ignored. The address is
+  // anybody's to write, so an id that is not a UUID is ignored too and sends nothing —
+  // it would otherwise become a path segment of the editor's admin requests (S-M1).
   const [searchParams] = useSearchParams();
   const linkedType = searchParams.get('entityType');
   const linkedId = searchParams.get('entityId');
   useEffect(() => {
-    if (!isEntityType(linkedType) || !linkedId) return;
+    if (!isEntityType(linkedType) || !isEntityId(linkedId)) return;
     setEntityType(linkedType);
     setEntityId(linkedId);
   }, [linkedType, linkedId]);
