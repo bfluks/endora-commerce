@@ -14,7 +14,13 @@ import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
  *   a visibility, and window bounds on a row that does not override the window;
  * - `products.publish_from` / `publish_until` exist with the same ordering check;
  * - both tables cascade on a product's hard delete and on a channel's delete
- *   (edge case *Channel deleted*).
+ *   (edge case *Channel deleted*);
+ * - final QA Q-L3: so does every other channel-keyed table of the feature —
+ *   `product_url_keys`' channel × language keys and `seo_meta_overrides`' channel rows
+ *   (rows inserted and deleted with the channel), and the gallery / attachment
+ *   per-channel tables (their foreign key to `sales_channels` is `on delete cascade`,
+ *   read from `pg_constraint`: a row there needs an asset the schema test does not
+ *   build).
  *
  * Rows are inserted with raw SQL, so every default and refusal asserted is the
  * database's. Every refusal runs under a savepoint so the test transaction
@@ -263,5 +269,62 @@ describe('163 — product scope tables [integration]', () => {
     await em.execute(`delete from "sales_channels" where "id" = ?`, [channelId]);
     expect(await count(em, 'product_channel_scopes', productId)).toBe(0);
     expect(await count(em, 'product_channel_language_scopes', productId)).toBe(0);
+  });
+
+  it('a channel delete cascades to its URL keys and its SEO overrides (Q-L3)', async () => {
+    const em = db.em();
+    const productId = await insertProduct(em);
+    const channelId = await insertChannel(em);
+    const key = `s163-cascade-${productId.slice(0, 8)}`;
+    await em.execute(
+      `insert into "product_url_keys" ("id", "product_id", "language_code", "sales_channel_id", "key")
+       values (?, ?, 'pl-PL', ?, ?)`,
+      [randomUUID(), productId, channelId, key],
+    );
+    await em.execute(
+      `insert into "seo_meta_overrides" ("id", "entity_type", "entity_id", "locale", "sales_channel_id", "title", "created_at", "updated_at")
+       values (?, 'product', ?, null, ?, 'Channel title', now(), now()),
+              (?, 'product', ?, 'pl-PL', ?, 'Channel x language title', now(), now())`,
+      [randomUUID(), productId, channelId, randomUUID(), productId, channelId],
+    );
+    expect(await count(em, 'product_url_keys', productId)).toBe(1);
+    await em.execute(`delete from "sales_channels" where "id" = ?`, [channelId]);
+    expect(await count(em, 'product_url_keys', productId)).toBe(0);
+    const [seo] = await em.execute<{ n: string }[]>(
+      `select count(*)::text as "n" from "seo_meta_overrides" where "entity_id" = ?`,
+      [productId],
+    );
+    expect(Number(seo?.n)).toBe(0);
+  });
+
+  it('every per-channel media table cascades on a channel delete (Q-L3)', async () => {
+    const em = db.em();
+    const rows = await em.execute<Array<{ table: string; on_delete: string }>>(
+      `select c.conrelid::regclass::text as "table", c.confdeltype::text as "on_delete"
+         from pg_constraint c
+        where c.contype = 'f'
+          and c.confrelid = 'sales_channels'::regclass
+          and c.conrelid::regclass::text in (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        'gallery_item_channel_labels',
+        'gallery_item_channel_hidden',
+        'product_attachment_channel_hidden',
+        'product_url_keys',
+        'seo_meta_overrides',
+        'product_channel_scopes',
+        'product_channel_language_scopes',
+      ],
+    );
+    const byTable = Object.fromEntries(rows.map((row) => [row.table.replace(/"/g, ''), row.on_delete]));
+    // `c` is `on delete cascade`.
+    expect(byTable).toEqual({
+      gallery_item_channel_labels: 'c',
+      gallery_item_channel_hidden: 'c',
+      product_attachment_channel_hidden: 'c',
+      product_url_keys: 'c',
+      seo_meta_overrides: 'c',
+      product_channel_scopes: 'c',
+      product_channel_language_scopes: 'c',
+    });
   });
 });
