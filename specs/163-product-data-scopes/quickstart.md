@@ -62,7 +62,7 @@ has no default value: nothing is set until a status is picked. Result: the non-m
 reported (each row names the product and links to its Scopes tab); Bulk actions page shows the operation;
 *Undo* reverts it.
 
-## 5a. Archive / Restore (FR-019, FR-053, FR-113)
+## 5a. Archive / Restore (FR-019, FR-053, FR-113–FR-116)
 
 - Editor → **Archive** P → confirm. Storefront: `/p/wiertarka` answers 410 in B2B and B2C wherever P was
   available; the editor still shows P's status as `active` at every scope. P has left the product list's
