@@ -14,11 +14,12 @@ import { clearProductScopes, setChannelStatus } from '../../helpers/product-scop
 
 /**
  * Feature 163, Phase 6 (T045a) — a CMS product block reads through the two
- * catalogue requests `storefront/lib/page-builder/catalog-block-data.ts` makes
+ * catalogue requests `storefront/lib/page-builder/block-data.ts` makes
  * (`contracts/consumers.md` row 19): the category listing
  * (`GET /api/v1/catalog/products?categorySlug=&limit=`) and the product by its
- * stored slug (`GET /api/v1/catalog/products/:slug`). Neither that file nor
- * `packages/cms-components/src/utils/catalog-block-data.ts` carries a predicate
+ * stored slug (`GET /api/v1/catalog/products/:slug`, also behind the
+ * single-product `ProductCard` block). Neither that file nor
+ * `packages/cms-components/src/utils/block-data.ts` carries a predicate
  * of its own, so the block omits a product off at (C, L) and shows it where it
  * is on — through the catalogue's own seams (rows 1 and 3).
  */

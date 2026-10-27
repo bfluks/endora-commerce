@@ -193,7 +193,7 @@ w działaniu przy nieaktualnym indeksie aż do następnego ręcznego `search:rei
 
 ### Dostępność w kanale i języku
 
-Od wprowadzenia zakresów danych produktu (funkcja 163) produkt można włączyć lub wyłączyć w każdym kanale sprzedaży i w każdym języku kanału, nadać mu okno publikacji i odbiorców właściwych dla kanału. Indeksator pyta moduł `catalog` (`catalogProductAvailabilityPort.describeChannelAvailability`) zamiast czytać status produktu:
+Od wprowadzenia zakresów danych produktu (`specs/163-product-data-scopes/`) produkt można włączyć lub wyłączyć w każdym kanale sprzedaży i w każdym języku kanału, nadać mu okno publikacji i odbiorców właściwych dla kanału. Indeksator pyta moduł `catalog` (`catalogProductAvailabilityPort.describeChannelAvailability`) zamiast czytać status produktu:
 
 - produkt należący do kanału trafia do indeksu, gdy jest włączony w **co najmniej jednym** języku kanału; produkt zarchiwizowany lub usunięty nie jest włączony w żadnym;
 - każdy dokument zawiera `liveLanguages` (języki kanału, w których produkt jest włączony), `publishFromMs` / `publishUntilMs` (obowiązujące okno w milisekundach od epoki; `0` i `Number.MAX_SAFE_INTEGER`, gdy okno jest otwarte) oraz obowiązujące w kanale `visibility` i `allowedOrganizationIds`. Wszystkie pięć to atrybuty filtrowalne;
