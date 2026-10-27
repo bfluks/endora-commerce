@@ -1588,7 +1588,9 @@ also green for product_feeds, comparisons, backend, storefront, admin. **Not run
     before" is therefore not literally true; the test asserts the shipped (narrower) behaviour and names it.
     (b) basket add tested no status at all before (R0 F1), so formerly `inactive` (now archived) products
     were addable too; intended change 1 names only the off-and-not-archived half. Both are deliberate
-    security outcomes; `plan.md` *Intended behaviour changes* should probably list them.
+    security outcomes. **Accepted as intended by the owner on 2026-10-27 (decision A)**: recorded as `plan.md`
+    *Intended behaviour changes* 7 (a) and 8 (b) and spec Clarifications Session 2026-10-27; the test header
+    cites them.
   - *T145* `contract/catalog/scoped-availability-all-consumers.test.ts`: one entry per `consumers.md` row,
     every entry asserting both arms (ON admitted, OFF refused with the absent id's body where the seam has
     one). Off = channel-scope `inactive` on both buyer channels (off at every (C, L)); the per-seam files keep
