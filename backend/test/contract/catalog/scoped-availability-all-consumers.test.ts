@@ -54,6 +54,20 @@ import { clearProductScopes, errorBodyOf, setChannelStatus } from '../../helpers
  *    `unit/comparisons/base-image-comes-from-catalog.test.ts`.
  *  - 7–8's index filter needs Meilisearch (`integration/search/scoped-availability.test.ts`,
  *    serial project); the entry here holds the projection the documents are built from.
+ *
+ * The ARCHIVED arm (final code review C-m1) — asserted here wherever the seam's refusal
+ * is its single not-found or an absence: rows 1, 2, 4, 5, 6, 7–8, 9, 14 (a basket line
+ * archived before placement), and every seam that goes through `expectSingleNotFound`
+ * (12 add, 13, 16 buyer, 17 save, 21, 22); row 3 answers the archived product's own
+ * `410`; row 26 is archived-only. Not here, and where instead: 11 (the feed's selection
+ * — `integration/product_feeds/generation.test.ts` emits no archived product), 18
+ * (quick-order import reports `product_archived`, a different reason by design —
+ * `packages/modules/quick_order/src/backend/services/import-pipeline.test.ts`), row 26's
+ * draft edit, resubmit, operator edit and approved-quote conversion
+ * (`integration/quote_requests/archived-product.test.ts`). **Not asserted for an archived
+ * product anywhere**: 20 (reorder of a line archived since — its placement refusal is
+ * row 14's seam), 23 (external intake — its archived answer waits on owner decision
+ * S-M2) and 24 (the bulk-price probe's reason for an archived SKU).
  */
 
 const ADMIN = { b2b_session: 'stub-admin-session' };
@@ -110,6 +124,9 @@ const SEED_WAREHOUSE_ID = '00000000-0000-4000-8000-00000000d017';
     const refused = await call(off.id);
     expect(refused.statusCode, refused.body).toBe(404);
     expect(errorBodyOf(refused)).toEqual(errorBodyOf(absent));
+    const gone = await call(archived.id);
+    expect(gone.statusCode, `ARCHIVED: ${gone.body}`).toBe(404);
+    expect(errorBodyOf(gone)).toEqual(errorBodyOf(absent));
     const res = await call(on.id);
     expect(admitted(res), `ON: ${res.statusCode} ${res.body}`).toBe(true);
   }
@@ -147,17 +164,19 @@ const SEED_WAREHOUSE_ID = '00000000-0000-4000-8000-00000000d017';
     const defs = (filters.json() as { data: Array<{ attributeKey: string; valueType: string }> }).data;
     facetKey = defs.find((d) => ['enum', 'select', 'string'].includes(d.valueType))?.attributeKey ?? null;
     if (facetKey) {
-      await sql(`update "products" set "attribute_values" = ?::jsonb where "id" in (?, ?)`, [
+      await sql(`update "products" set "attribute_values" = ?::jsonb where "id" in (?, ?, ?)`, [
         JSON.stringify({ [facetKey]: facetValue }),
         on.id,
         off.id,
+        archived.id,
       ]);
     }
     // Row 4 — SOURCE names ON and OFF as related.
     await sql(
       `insert into product_links (id, source_product_id, target_product_id, kind, position, created_at, updated_at)
-       values (?, ?, ?, 'related', 0, now(), now()), (?, ?, ?, 'related', 1, now(), now())`,
-      [randomUUID(), source.id, on.id, randomUUID(), source.id, off.id],
+       values (?, ?, ?, 'related', 0, now(), now()), (?, ?, ?, 'related', 1, now(), now()),
+              (?, ?, ?, 'related', 2, now(), now())`,
+      [randomUUID(), source.id, on.id, randomUUID(), source.id, off.id, randomUUID(), source.id, archived.id],
     );
     // Rows 23–24 — keys bound to the retail channel and the test buyer.
     const binding = { organizationId: TEST_ORGANIZATION_ID, salesChannelId: retailId, customerAccountId: TEST_CUSTOMER_ID };
@@ -223,6 +242,8 @@ const SEED_WAREHOUSE_ID = '00000000-0000-4000-8000-00000000d017';
         const refused = await page(slug(off));
         expect(refused.statusCode).toBe(404);
         expect(errorBodyOf(refused)).toEqual(errorBodyOf(absent));
+        // FR-005 — an archived product the reader could otherwise see is gone, not absent.
+        expect((await page(slug(archived))).statusCode).toBe(410);
         expect((await page(slug(on))).statusCode).toBe(200);
       },
     },
@@ -235,6 +256,7 @@ const SEED_WAREHOUSE_ID = '00000000-0000-4000-8000-00000000d017';
         const targets = (res.json() as { data: Array<{ product: { id: string } }> }).data.map((l) => l.product.id);
         expect(targets).toContain(on.id);
         expect(targets).not.toContain(off.id);
+        expect(targets).not.toContain(archived.id);
       },
     },
     {
@@ -251,6 +273,7 @@ const SEED_WAREHOUSE_ID = '00000000-0000-4000-8000-00000000d017';
         const hits = (res.json() as { data: Array<{ productId: string }> }).data.map((hit) => hit.productId);
         expect(hits).toContain(on.id);
         expect(hits).not.toContain(off.id);
+        expect(hits).not.toContain(archived.id);
       },
     },
     {
@@ -264,6 +287,7 @@ const SEED_WAREHOUSE_ID = '00000000-0000-4000-8000-00000000d017';
         };
         expect(await find(`Sweep on ${RUN}`)).toContain(on.id);
         expect(await find(`Sweep off ${RUN}`)).not.toContain(off.id);
+        expect(await find(`Sweep archived ${RUN}`)).not.toContain(archived.id);
       },
     },
     {
@@ -272,9 +296,10 @@ const SEED_WAREHOUSE_ID = '00000000-0000-4000-8000-00000000d017';
       check: async () => {
         const port = (h.container.cradle as never as { catalogProductAvailabilityPort: CatalogProductAvailabilityPort })
           .catalogProductAvailabilityPort;
-        const described = await port.describeChannelAvailability([on.id, off.id], retailId);
+        const described = await port.describeChannelAvailability([on.id, off.id, archived.id], retailId);
         expect(described.get(on.id)?.liveLanguages.length ?? 0).toBeGreaterThan(0);
         expect(described.get(off.id)?.liveLanguages ?? []).toEqual([]);
+        expect(described.get(archived.id)?.liveLanguages ?? []).toEqual([]);
       },
     },
     {
@@ -292,6 +317,7 @@ const SEED_WAREHOUSE_ID = '00000000-0000-4000-8000-00000000d017';
         expect(res.statusCode).toBe(200);
         expect(res.body).toContain(`/p/${slug(on)}`);
         expect(res.body).not.toContain(`/p/${slug(off)}`);
+        expect(res.body).not.toContain(`/p/${slug(archived)}`);
       },
     },
     {
@@ -364,6 +390,18 @@ const SEED_WAREHOUSE_ID = '00000000-0000-4000-8000-00000000d017';
         const res = await h.app.inject({ method: 'POST', url: '/api/v1/orders', cookies: BUYER, payload: PLACEMENT });
         expect(res.statusCode, res.body).toBe(404);
         expect(errorCode(res)).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
+        // ARCHIVED — the same line, on again, archived before placement.
+        await clearProductScopes(h.em(), [goes.id]);
+        await completeActiveBaskets();
+        expect((await addToBasket(goes.id)).statusCode).toBeLessThan(300);
+        await sql(`update "products" set "archived_at" = now() where "id" = ?`, [goes.id]);
+        try {
+          const gone = await h.app.inject({ method: 'POST', url: '/api/v1/orders', cookies: BUYER, payload: PLACEMENT });
+          expect(gone.statusCode, gone.body).toBe(404);
+          expect(errorCode(gone)).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
+        } finally {
+          await sql(`update "products" set "archived_at" = null where "id" = ?`, [goes.id]);
+        }
       },
     },
     {
