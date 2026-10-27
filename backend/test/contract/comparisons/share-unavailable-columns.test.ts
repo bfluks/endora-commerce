@@ -4,14 +4,14 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { TEST_CUSTOMER_ID } from '../../helpers/test-actors.js';
+import { OTHER_TEST_ORGANIZATION_ID, TEST_CUSTOMER_ID } from '../../helpers/test-actors.js';
 import {
   buyerChannelIds,
   createMinimumProduct,
   minimumFixtureRun,
   type MinimumProductFixture,
 } from '../../helpers/order-minimum-fixture.js';
-import { clearProductScopes, setChannelStatus } from '../../helpers/product-scope-fixture.js';
+import { clearProductScopes, setChannelAudience, setChannelStatus } from '../../helpers/product-scope-fixture.js';
 
 /**
  * Feature 163, owner decision CMP-1 = A (2026-10-26; FR-002, FR-004,
@@ -22,8 +22,26 @@ import { clearProductScopes, setChannelStatus } from '../../helpers/product-scop
  * - any other reader (a share-link recipient) gets the existing `(removed product)`
  *   column shape — no name, SKU, slug, price, image or compared values — so a removed
  *   product and an unavailable one cannot be told apart, and `hiddenProductCount`
- *   does not move.
+ *   does not move. The column carries an opaque per-view key, not the product's id
+ *   (final security review S-L1a).
+ *
+ * Owner decision SEC-2 = A (2026-10-27) — the owner keeps the history column only for a
+ * lifecycle reason. A product the channel's effective audience no longer admits the
+ * owner's organization to collapses to the `(removed product)` column for the owner
+ * too (`/me`, the share link read by its owner; `/me/pdf` renders the same view),
+ * counted nowhere; the operator's audit view keeps every column.
  */
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ADMIN = { b2b_session: 'stub-admin-session' };
+const REMOVED = {
+  sku: '',
+  name: { en: '(removed product)' },
+  slug: '',
+  primaryAssetUrl: null,
+  price: null,
+  available: false,
+};
 
 const BUYER = { b2b_session: 'stub-customer-session' };
 const CHANNEL = { 'x-sales-channel': 'pl_retail' };
@@ -38,6 +56,7 @@ interface Column {
   available: boolean;
 }
 interface View {
+  id: string;
   shareToken: string;
   products: Column[];
   comparableAttributes: Array<{ values: unknown[] }>;
@@ -50,6 +69,7 @@ describe('163 CMP-1 — an unavailable column is shown only to the owner [contra
   let channels: string[] = [];
   let on: MinimumProductFixture;
   let off: MinimumProductFixture;
+  let aud: MinimumProductFixture;
   let shareToken: string;
 
   const clearComparisons = () =>
@@ -72,8 +92,9 @@ describe('163 CMP-1 — an unavailable column is shown only to the owner [contra
     channels = await buyerChannelIds(em);
     on = await createMinimumProduct(em, { sku: `S163-CMP1-ON-${RUN}`, nameEn: 'Shown', namePl: 'Widoczny', channelIds: channels });
     off = await createMinimumProduct(em, { sku: `S163-CMP1-OFF-${RUN}`, nameEn: 'Gone off', namePl: 'Wyłączony', channelIds: channels });
+    aud = await createMinimumProduct(em, { sku: `S163-CMP1-AUD-${RUN}`, nameEn: 'Audience gone', namePl: 'Poza odbiorcami', channelIds: channels });
     await clearComparisons();
-    for (const productId of [on.id, off.id]) {
+    for (const productId of [on.id, off.id, aud.id]) {
       const added = await h.app.inject({
         method: 'POST',
         url: '/api/v1/comparisons/me/products',
@@ -85,12 +106,17 @@ describe('163 CMP-1 — an unavailable column is shown only to the owner [contra
       shareToken = (added.json() as { data: View }).data.shareToken;
     }
     await setChannelStatus(em, off.id, channels, 'inactive');
+    // SEC-2 — the buyer channels' audience now admits another organization only.
+    await setChannelAudience(em, aud.id, channels, {
+      visibility: 'organization_restricted',
+      allowedOrganizationIds: [OTHER_TEST_ORGANIZATION_ID],
+    });
   }, 60_000);
 
   afterAll(async () => {
     if (!h) return;
     await clearComparisons();
-    await clearProductScopes(h.em(), [on.id, off.id]);
+    await clearProductScopes(h.em(), [on.id, off.id, aud.id]);
     await teardownBackendServer(h);
   });
 
@@ -112,19 +138,65 @@ describe('163 CMP-1 — an unavailable column is shown only to the owner [contra
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json() as { data: View; meta: { viewerIsOwner: boolean } };
     expect(body.meta.viewerIsOwner).toBe(false);
-    const index = body.data.products.findIndex((p) => p.id === off.id);
-    expect(body.data.products[index]).toEqual(
-      expect.objectContaining({
-        sku: '',
-        name: { en: '(removed product)' },
-        slug: '',
-        primaryAssetUrl: null,
-        price: null,
-        available: false,
-      }),
-    );
+    // Columns keep the order they were added in: ON, OFF, AUD.
+    const index = 1;
+    expect(body.data.products[index]).toEqual(expect.objectContaining(REMOVED));
     for (const row of body.data.comparableAttributes) expect(row.values[index]).toBeNull();
     expect(body.data.products.find((p) => p.id === on.id)).toMatchObject({ sku: on.sku, available: true });
     expect(body.data.hiddenProductCount).toBe(0);
+  });
+
+  it('a recipient’s removed-product column names no product id (S-L1a)', async () => {
+    const first = (await share()).json() as { data: View };
+    const second = (await share()).json() as { data: View };
+    const ids = first.data.products.map((p) => p.id);
+    expect(ids).not.toContain(off.id);
+    expect(ids).not.toContain(aud.id);
+    for (const index of [1, 2]) {
+      expect(first.data.products[index]!.id).toMatch(UUID);
+      expect(first.data.products[index]!.id).not.toBe(second.data.products[index]!.id);
+    }
+  });
+
+  it('the owner’s column of a product the channel audience no longer admits them to collapses (SEC-2)', async () => {
+    const me = await h.app.inject({ method: 'GET', url: '/api/v1/comparisons/me', cookies: BUYER, headers: CHANNEL });
+    expect(me.statusCode, me.body).toBe(200);
+    const view = (me.json() as { data: View }).data;
+    expect(view.products.map((p) => p.id)).toEqual([on.id, off.id, aud.id]);
+    expect(view.products[2]).toEqual(expect.objectContaining(REMOVED));
+    for (const row of view.comparableAttributes) expect(row.values[2]).toBeNull();
+    expect(view.hiddenProductCount).toBe(0);
+    // A lifecycle reason still keeps the owner's history column.
+    expect(view.products[1]).toMatchObject({ sku: off.sku, available: false });
+
+    const own = (await share(BUYER)).json() as { data: View; meta: { viewerIsOwner: boolean } };
+    expect(own.meta.viewerIsOwner).toBe(true);
+    const { id: _ownId, ...ownColumn } = own.data.products[2]!;
+    const { id: _recipientId, ...recipientColumn } = ((await share()).json() as { data: View }).data.products[2]!;
+    expect(ownColumn).toEqual(recipientColumn);
+    expect(own.data.hiddenProductCount).toBe(0);
+  });
+
+  it('the operator’s audit view keeps every column (SEC-2 does not reach it)', async () => {
+    const me = (
+      (await h.app.inject({ method: 'GET', url: '/api/v1/comparisons/me', cookies: BUYER, headers: CHANNEL })).json() as {
+        data: View;
+      }
+    ).data;
+    const res = await h.app.inject({ method: 'GET', url: `/api/v1/admin/comparisons/${me.id}`, cookies: ADMIN });
+    expect(res.statusCode, res.body).toBe(200);
+    const products = (res.json() as { data: { products: Column[] } }).data.products;
+    expect(products.find((p) => p.id === aud.id)).toMatchObject({ sku: aud.sku, available: false });
+  });
+
+  it('the owner still removes the collapsed column by the product id', async () => {
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/comparisons/me/products/${aud.id}`,
+      cookies: BUYER,
+      headers: CHANNEL,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((res.json() as { data: View }).data.products.map((p) => p.id)).toEqual([on.id, off.id]);
   });
 });

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { z } from 'zod';
 import {
@@ -129,7 +130,10 @@ export class ComparisonService {
      * `catalogProducts` is: an optional one would spell "this rig wired
      * nothing" and "this channel offers the product" as the same answer.
      */
-    private readonly availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>,
+    private readonly availability: Pick<
+      CatalogProductAvailabilityPort,
+      'filterAvailable' | 'effectiveOrderRules' | 'describeChannelAvailability'
+    >,
     /**
      * Feature 075 / D-87 — `catalog`'s gallery read model, for the base image
      * of each column. Required for the same reason `catalogProducts` is: the
@@ -637,8 +641,30 @@ export class ComparisonService {
     // is the `(removed product)` column below: nothing of it is read, priced or
     // projected, and `hiddenProductCount` does not count it, so a removed product
     // and an unavailable one read the same.
+    //
+    // Owner decision SEC-2 = A (2026-10-27) — the owner keeps the history column
+    // only for a lifecycle reason (off at the scope, archived, outside the window,
+    // not a member of the channel). A column the channel's effective audience
+    // refuses the owner is one they may no longer see, so it collapses to the
+    // `(removed product)` column for them too, and is counted nowhere. Asked of
+    // `catalog` for the owner's unavailable columns only; a non-member is absent
+    // from the answer and stays lifecycle. The operator's audit view
+    // (`administrator`) is not a buyer and keeps every column.
+    const refusedByAudience = new Set<string>();
+    if (reader === 'owner' && viewer.kind === 'buyer') {
+      const unavailable = visibleProductIds.filter((id) => !availableHere.has(id));
+      if (unavailable.length > 0) {
+        const described = await this.availability.describeChannelAvailability(unavailable, viewerSalesChannelId);
+        for (const id of unavailable) {
+          const inChannel = described.get(id);
+          if (inChannel && !isProductVisibleTo(inChannel.audience, viewer.audience)) refusedByAudience.add(id);
+        }
+      }
+    }
     const products =
-      reader === 'owner' ? visibleToReader : visibleToReader.filter((p) => availableHere.has(p.id));
+      reader === 'owner'
+        ? visibleToReader.filter((p) => !refusedByAudience.has(p.id))
+        : visibleToReader.filter((p) => availableHere.has(p.id));
     const productById = new Map(products.map((p) => [p.id, p]));
     const shownProductIds = products.map((p) => p.id);
 
@@ -730,7 +756,11 @@ export class ComparisonService {
       const p = productById.get(row.productId);
       if (!p) {
         return {
-          id: row.productId,
+          // Final security review S-L1a — a reader other than the owner learns
+          // nothing from this column, its product's id included: an opaque key,
+          // fresh per view. The owner keeps the id, which they added and remove
+          // the column by (`DELETE /me/products/:productId`).
+          id: reader === 'owner' ? row.productId : randomUUID(),
           sku: '',
           name: { en: '(removed product)' },
           slug: '',
