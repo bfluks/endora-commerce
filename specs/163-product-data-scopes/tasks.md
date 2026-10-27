@@ -1686,6 +1686,12 @@ checkpoint F fix round (see the Phase 22 notes).
   from master's #428/#429) created their products through the admin route without a status, which under Q1-d is
   `inactive` — fixed in `fb91cc237` by creating them `status: 'active'` (`createTieredProduct`,
   `createUnpricedProduct`, the inline base-priced product); no product behaviour changed.
+- 2026-10-27 (S3, final fix round (UI)): *S-M1* the SEO screen takes `?entityId=` only in UUID shape and the meta
+  editor encodes the id into its path; *C-m2* attachment delete asks in a kit `ModalDialog`; *Q-M5* global audience,
+  URL key and order-rule changes keep every override and warn about nothing (scope controls, URL keys panel, order
+  rules card); *Q-M7* the PDP alone passes `langOverride` (both call sites); *Q-L10* UX-3 vocabulary asserted in the
+  URL keys panel, scope editor and bulk dialog — which found the scope editor's outcome "N override(s) reset" (now
+  "… removed, the inherited value applies").
 
 **Verification**: as listed in T151–T154.
 
