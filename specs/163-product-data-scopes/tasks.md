@@ -1845,3 +1845,11 @@ link gated on `{ module: 'seo' }` → new zone `product.editor.seo.after`, contr
   the list page; not contained). B-5 (channel-roles warning) stays labelled in the UI only.
 - *Docs* — overrides, URL keys and SEO pages (EN + PL, cache refreshed) follow UX-3 and the new SEO editor flow.
 - *Not run on this host* (Intel macOS false reds): `check:naming`, `check:language`, `test:unit:fast`.
+- 2026-10-27 (S1, CI reds on `dea35d0c4`): the six comparisons catalog-availability stubs gain
+  `describeChannelAvailability` (empty map — they drop no id); **product defect** — a channel's default language counts as
+  offered (`toScopeChannel`) on every read path, but the override PATCH validator, the scopes read/write
+  (`memberChannels`, `orphaned`, status-language spelling), the scope overview, the URL-key read/write and the scope
+  context read the raw `languages` list, so a channel listing no languages refused its own default (ci-pg Q-M2) — all now
+  go through `toScopeChannel` (unit red first in `product-overrides.service.test.ts`); admin CRM reds are flakes, no 163
+  commit touches CRM or `ReferenceField` (`comments` green 9/9 locally, 6 under parallel load; `board-card-fields`
+  2/3, its one red the same ~5 s timeout as CI, while a recursive typecheck loaded the host).

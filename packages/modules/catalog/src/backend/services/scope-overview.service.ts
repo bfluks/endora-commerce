@@ -17,6 +17,7 @@ import {
   type ProductScopeStatus,
   type PublicationWindow,
   type ScopeOverviewResponse,
+  toScopeChannel,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
@@ -466,7 +467,8 @@ export class ScopeOverviewService {
       .map((channel) => ({
         id: channel.id,
         name: channel.name,
-        languages: [...channel.languages],
+        // The default is offered even when the list omits it (`toScopeChannel`).
+        languages: toScopeChannel(channel).languages,
         isMember: memberIds.has(channel.id),
       }));
 
