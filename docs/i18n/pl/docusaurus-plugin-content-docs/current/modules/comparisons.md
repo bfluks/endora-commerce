@@ -115,7 +115,12 @@ działać.
   niedostępny dla odbiorcy w jego kanale i języku (niesprzedawany tam, wyłączony, poza okresem
   publikacji, zarchiwizowany) wygląda dla niego dokładnie tak jak produkt usunięty: kolumna
   `(removed product)` bez nazwy, SKU, ceny, obrazu i wartości atrybutów. Tylko właściciel porównania
-  nadal widzi taką kolumnę ze szczegółami, oznaczoną jako niedostępna.
+  nadal widzi taką kolumnę ze szczegółami, oznaczoną jako niedostępna — i tylko wtedy, gdy powodem
+  jest cykl życia samego produktu: wyłączenie w tym kanale lub języku, archiwizacja, okres poza
+  oknem publikacji albo wycofanie produktu ze sprzedaży w kanale. Produkt, którego właściciel nie
+  może już widzieć ze względu na to, kto może go oglądać — kanał ogranicza go do innych klientów
+  albo organizacji właściciela nie ma już wśród klientów dopuszczonych do kanału — także dla
+  właściciela jest kolumną `(removed product)`.
 - **Link otwarty przez kupującego z innej organizacji** — ceny w kolumnach są wyznaczane według umów
   tego kupującego, a produkt, którego nie może widzieć, jest pomijany z informacją o tym.
 - **Atrybuty wielowartościowe** — dwa produkty są zgodne w atrybucie wielowartościowym (np. lista
