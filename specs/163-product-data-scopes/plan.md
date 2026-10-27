@@ -150,6 +150,18 @@ deploy-parity exceptions: no product's storefront answer changes at deployment b
 6. **New and duplicated products start `inactive`**, and the admin list hides archived products by default
    behind an *Archived* filter of its own (FR-010, FR-113).
 
+Deploy-parity exceptions found by T144 and accepted by the owner on 2026-10-27 (spec Session 2026-10-27).
+Like 1–4 they change a storefront answer at deployment; `deploy-parity.test.ts` asserts them.
+
+7. **The 410 of an archived product is answered only to a caller who could see it were it not archived**
+   (a channel member, inside the product's audience); everyone else gets the absent product's
+   `404 PRODUCT_NOT_FOUND` (T036's deviation, security checkpoints A and B). Before this feature every
+   `inactive` product answered 410 to everyone, before the channel or the audience was tested.
+8. **An archived product can no longer be added to a basket** — refused like an absent id. Before this
+   feature basket add checked no status (R0 F1), so today's `inactive` products were addable and only
+   placement refused them; item 1 covers the off-and-not-archived half. A consequence of Q1: archived means
+   gone from every channel.
+
 ## Questions for the owner (not decided here)
 
 - **Q1 — decided 2026-10-25** (spec Session 2026-10-25, with O-1…O-6): `active` / `inactive` at every

@@ -47,19 +47,18 @@ import { errorBodyOf } from '../../helpers/product-scope-fixture.js';
  *  2. it is not reachable by URL (yesterday a `draft` member answered 200);
  *  3. listing name sort follows the effective name, not the slug;
  *  4. existing per-language SEO overrides are served (asserted by the SEO page tests,
- *     `contract/catalog/product-seo-scoped.test.ts`; nothing here seeds one).
+ *     `contract/catalog/product-seo-scoped.test.ts`; nothing here seeds one);
+ *  7. an archived product answers 410 only where it would be available with the archive
+ *     taken away (T036's deviation, security checkpoints A and B), and the absent
+ *     product's 404 elsewhere (a non-member, a caller outside its audience) — before,
+ *     `getProductByIdOrSlug` answered 410 to every `inactive` product before it checked
+ *     the channel or the audience;
+ *  8. an archived product is not addable to a basket — basket add tested no status at
+ *     all (R0 F1), so yesterday's `inactive` products were addable too; item 1 names the
+ *     `draft` half.
  *
- * Two answers change beyond that list, and both are recorded here rather than
- * hidden — the coordinator decides whether `plan.md` lists them:
- *
- *  - **410 narrowed to where the product would be available** (T036's deviation,
- *    security checkpoints A and B): before, `getProductByIdOrSlug` answered 410 to every
- *    `inactive` product before it checked the channel or the audience; now an archived
- *    product answers 410 only where it would be available with the archive taken away,
- *    and the absent product's 404 elsewhere (a non-member, a caller outside its audience).
- *  - **An archived product is not addable to a basket.** Basket add tested no status at
- *    all (R0 F1), so yesterday's `inactive` products were addable too; item 1 names the
- *    `draft` half only.
+ * Items 7 and 8 were found by this test and accepted by the owner on 2026-10-27 (spec
+ * Clarifications, Session 2026-10-27).
  *
  * Part A runs the Q1 migration itself — its own `down`, a pre-feature dataset, its
  * `up` — inside one transaction the test rolls back (the backfill is table-wide; see
@@ -181,7 +180,7 @@ describe('163 — deploy parity across the Q1 status migration [integration]', (
     },
   };
 
-  it('keeps every listed and searchable set, per channel × language × buyer, and the product pages but for the recorded changes', async () => {
+  it('keeps every listed and searchable set, per channel × language × buyer, and the product pages but for the intended changes', async () => {
     await run('down');
     const { channel, byLabel } = await seed();
     const seeds = new Map(SEEDS.map((s) => [byLabel.get(s.label)!, s]));
@@ -239,7 +238,7 @@ describe('163 — deploy parity across the Q1 status migration [integration]', (
             // Intended change 2: yesterday's `draft` member is not reachable by URL.
             expect(pageAfter, `${s.label} page — ${tag}`).toBe(404);
           } else if (pageBefore === 410 && !(s.member && visibleBefore(s, audience))) {
-            // Recorded change: 410 narrowed to where the product would be available.
+            // Intended change 7: 410 narrowed to where the product would be available.
             expect(pageAfter, `${s.label} page — ${tag}`).toBe(404);
           } else {
             expect(pageAfter, `${s.label} page — ${tag}`).toBe(pageBefore);
@@ -388,7 +387,7 @@ describe('163 — deploy parity on the buyer surfaces [integration]', () => {
     }
   });
 
-  it('answers the product pages as before but for the recorded changes', async () => {
+  it('answers the product pages as before but for the intended changes', async () => {
     for (const language of languages) {
       const absent = await h.app.inject({
         method: 'GET',
@@ -413,7 +412,7 @@ describe('163 — deploy parity on the buyer surfaces [integration]', () => {
       const draft = await page(formerDraft);
       expect(draft.statusCode).toBe(404);
       expect(errorBodyOf(draft)).toEqual(errorBodyOf(absent));
-      // Recorded change — before 410 (`inactive` answered before the channel test); after
+      // Intended change 7 — before 410 (`inactive` answered before the channel test); after
       // the absent 404, the product being in no channel.
       const elsewhere = await page(formerInactiveElsewhere);
       expect(elsewhere.statusCode).toBe(404);
@@ -456,7 +455,7 @@ describe('163 — deploy parity on the buyer surfaces [integration]', () => {
     expect(await feedCount()).toBe(feedCountBefore + 2);
   });
 
-  it('refuses a basket add of an off product, archived or not (intended change 1 and the recorded archived half)', async () => {
+  it('refuses a basket add of an off product, archived or not (intended changes 1 and 8)', async () => {
     const add = (productId: string) =>
       h.app.inject({ method: 'POST', url: '/api/v1/cart/items', cookies: CUSTOMER, payload: { productId, quantity: 1 } });
     const absent = await add(randomUUID());
