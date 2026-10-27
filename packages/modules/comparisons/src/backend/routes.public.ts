@@ -27,7 +27,6 @@ import {
   ProductNotInComparisonError,
   type ComparisonOwner,
   type ComparisonService,
-  type ComparisonViewer,
 } from './services/comparison-service.js';
 import type { ComparisonPdfRenderer } from './services/comparison-pdf-renderer.js';
 import {
@@ -38,6 +37,7 @@ import {
 import type { ShareTokenGenerator } from './services/share-token-generator.js';
 import type { Comparison } from './entities/comparison.entity.js';
 import { customerActor } from './request-actor.js';
+import { buyerViewerOf, languageTagOf } from './buyer-viewer.js';
 
 /**
  * Public HTTP surface — feature 007 / US1 (T027).
@@ -442,24 +442,3 @@ function parse<T>(schema: z.ZodType<T>, input: unknown): T {
 
 // Re-export the cookie name so test-server / docs can reference it.
 export { COMPARE_TOKEN_COOKIE };
-
-/**
- * Feature 163 — the reader as a comparison view takes it: the session's
- * audience and the request's language tag, which the scope language L of the
- * column's availability is resolved from.
- */
-function buyerViewerOf(request: FastifyRequest): ComparisonViewer {
-  const tag = languageTagOf(request);
-  return {
-    kind: 'buyer',
-    audience: productAudienceOf(request),
-    ...(tag ? { languageTag: tag } : {}),
-  };
-}
-
-/** The first `Accept-Language` tag without its quality parameter, or `undefined`. */
-function languageTagOf(request: FastifyRequest): string | undefined {
-  const header = request.headers['accept-language'];
-  const tag = typeof header === 'string' ? header.split(',')[0]?.split(';')[0]?.trim() : undefined;
-  return tag ? tag : undefined;
-}
