@@ -537,6 +537,64 @@ describe('URL-key uniqueness and redirects (spec 163, T100)', () => {
       expect(await keysOf(p)).toEqual([]);
     });
   });
+  // Final QA Q-M6 (FR-070, SC-008) — the global key a create or a duplicate derives
+  // (`CatalogAdminService.allocateUniqueSlug`) skips every key another product holds:
+  // a language key, a channel × language key and a redirecting key.
+  describe('a derived global key skips keys other products hold (FR-070, SC-008)', () => {
+    async function create(name: string): Promise<{ id: string; slug: string }> {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/catalog/products',
+        ...admin,
+        payload: {
+          sku: `U162-${run}-${products.length}`,
+          type: 'simple',
+          name: { 'en-US': name },
+          description: { 'en-US': '' },
+          categoryIds: [],
+          attributeValues: {},
+          visibility: 'public',
+          status: 'active',
+        },
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const data = (res.json() as { data: { id: string; slug: string } }).data;
+      products.push(data.id);
+      return data;
+    }
+
+    it('a created product derives past a language key, a channel × language key and a redirect', async () => {
+      const holder = await insertProduct('Derived holder', k('derived-holder'), [chA]);
+      await putOk(holder, {
+        languageKeys: [{ languageCode: 'pl-PL', key: k('derived-lang') }],
+        channelKeys: [{ channelId: chA, languageCode: 'de-DE', key: k('derived-channel') }],
+      });
+      // The first language key changes: the old one stays as the holder's redirect.
+      await putOk(holder, { languageKeys: [{ languageCode: 'de-DE', key: k('derived-gone') }] });
+      await putOk(holder, { languageKeys: [{ languageCode: 'de-DE', key: k('derived-gone-2') }] });
+      expect(tag(await redirectsOf(holder))).toContain(`de-DE:${k('derived-gone')}`);
+
+      for (const base of ['derived-lang', 'derived-channel', 'derived-gone']) {
+        const created = await create(`${base} ${run}`);
+        expect(created.slug, base).not.toBe(k(base));
+        expect(created.slug, base).toBe(`${k(base)}-2`);
+      }
+      await assertNoSharedKey([holder, ...products.slice(-3)]);
+    });
+
+    it('a duplicate derives its "-copy" key past a key another product holds in a language', async () => {
+      const source = await insertProduct('Duplicate source', k('dup-source'), [chA]);
+      const holder = await insertProduct('Copy holder', k('dup-holder'), [chB]);
+      await putOk(holder, { languageKeys: [{ languageCode: 'pl-PL', key: `${k('dup-source')}-copy` }] });
+      const res = await h.app.inject({ method: 'POST', url: `/api/v1/admin/catalog/products/${source}/duplicate`, ...admin });
+      expect(res.statusCode, res.body).toBe(201);
+      const dup = (res.json() as { data: { id: string; slug: string } }).data;
+      products.push(dup.id);
+      expect(dup.slug).not.toBe(`${k('dup-source')}-copy`);
+      expect(dup.slug).toBe(`${k('dup-source')}-copy-2`);
+    });
+  });
+
   // T105a — the scope overview offers to delete orphaned channel × language keys.
   it('T105a: deletes an orphaned channel × language key (channel left, language dropped), keeping it as a redirect', async () => {
     const own = await insertChannel(['pl-PL', 'de-DE']);
