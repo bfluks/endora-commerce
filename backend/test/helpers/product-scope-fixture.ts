@@ -35,6 +35,28 @@ export async function setChannelStatus(
   }
 }
 
+/**
+ * The channel audience override of `productId` on each channel — the rule replaces the
+ * global one whole (C4); `null` removes the override (inherit).
+ */
+export async function setChannelAudience(
+  em: EntityManager,
+  productId: string,
+  channelIds: readonly string[],
+  rule: { visibility: string; allowedOrganizationIds: readonly string[] } | null,
+): Promise<void> {
+  for (const channelId of channelIds) {
+    await exec(
+      em,
+      `insert into product_channel_scopes (product_id, sales_channel_id, visibility, allowed_organization_ids, created_at, updated_at)
+       values (?, ?, ?, ?::jsonb, now(), now())
+       on conflict (product_id, sales_channel_id) do update
+         set visibility = excluded.visibility, allowed_organization_ids = excluded.allowed_organization_ids, updated_at = now()`,
+      [productId, channelId, rule?.visibility ?? null, rule ? JSON.stringify(rule.allowedOrganizationIds) : null],
+    );
+  }
+}
+
 /** The channel × language status; `null` removes the row. */
 export async function setLanguageStatus(
   em: EntityManager,
