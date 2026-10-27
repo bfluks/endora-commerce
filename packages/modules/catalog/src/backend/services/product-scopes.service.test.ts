@@ -549,6 +549,79 @@ describe('ProductScopesService.read — organization names (U1)', () => {
   });
 });
 
+/**
+ * Final QA Q-M5 (FR-013, A-9) — a change of the product's **global** audience or order
+ * rules (written by the product update, not by this service) neither alters nor removes
+ * a channel override, and raises no warning: the scopes read answers the same channel
+ * entries, and the C4 non-member warning is computed from the channel rule alone, never
+ * from the global one. A global window change through this service likewise leaves
+ * every override as it was.
+ */
+describe('ProductScopesService.read — a global change leaves the overrides alone (FR-013, A-9)', () => {
+  const channelRow = {
+    productId: P,
+    salesChannelId: B2B,
+    status: 'inactive',
+    windowOverridden: false,
+    visibility: 'organization_restricted',
+    allowedOrganizationIds: [ORG_A],
+    minOrderQuantity: 3,
+    returnable: false,
+  };
+  function rig(global: { visibility: string; allowedOrganizationIds: string[]; minOrderQuantity: number | null; returnable: boolean }) {
+    const product = { id: P, type: 'simple', status: 'active', publishFrom: null, publishUntil: null, ...global };
+    const em = {
+      findOne: async () => product,
+      find: async (entity: unknown) => (entity === ProductChannelScope ? [{ ...channelRow }] : []),
+    };
+    const membership = {
+      listChannelsForEntity: async () => [{ id: B2B, code: 'b2b', languages: ['pl-PL'] }],
+      // ORG_A is offered the channel; ORG_B is not.
+      filterEntityIdsAvailableInChannel: async (_c: string, _k: string, ids: readonly string[]) =>
+        ids.filter((id) => id === ORG_A),
+    };
+    return new ProductScopesService(() => em as never, membership as never);
+  }
+
+  it('answers the same channel overrides, with no warning, whatever the global audience and order rules', async () => {
+    const before = await rig({ visibility: 'public', allowedOrganizationIds: [], minOrderQuantity: null, returnable: true }).read(P);
+    // The global rule now names an organization the channel does not offer, and the
+    // global order rules moved.
+    const after = await rig({
+      visibility: 'organization_restricted',
+      allowedOrganizationIds: [ORG_B],
+      minOrderQuantity: 10,
+      returnable: false,
+    }).read(P);
+    expect(after.global).toMatchObject({ allowedOrganizationIds: [ORG_B], minOrderQuantity: 10, returnable: false });
+    expect(after.channels).toEqual(before.channels);
+    expect(after.channels[0]).toMatchObject({
+      status: 'inactive',
+      audience: { visibility: 'organization_restricted', allowedOrganizationIds: [ORG_A], nonMemberOrganizationIds: [] },
+      minOrderQuantity: 3,
+      returnable: false,
+    });
+  });
+
+  it('a global window change writes no channel row, whatever overrides the channel holds', () => {
+    const current = state({
+      channelRows: [
+        row({
+          status: 'inactive',
+          window: { from: new Date('2026-11-01T00:00:00.000Z'), until: null },
+          audience: { visibility: 'organization_restricted', allowedOrganizationIds: [ORG_A] },
+          minOrderQuantity: 3,
+          returnable: false,
+        }),
+      ],
+    });
+    const plan = planProductScopeWrite(current, { channels: [], global: { publishUntil: '2027-01-01T00:00:00.000Z' } });
+    expect(plan.channelRows).toEqual([]);
+    expect(plan.languageRows).toEqual([]);
+    expect(plan.changedFields).toEqual(['publicationWindow']);
+  });
+});
+
 describe('writeScopedStatus — the one write of a scope row (checkpoint C code review, C-W3)', () => {
   const P = 'p-1';
   const C = 'c-1';
