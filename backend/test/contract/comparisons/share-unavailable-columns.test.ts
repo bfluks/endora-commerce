@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -177,6 +177,25 @@ describe('163 CMP-1 — an unavailable column is shown only to the owner [contra
     expect(own.data.hiddenProductCount).toBe(0);
   });
 
+  // Final QA Q-L6 — the owner's own PDF renders the view `/me` answers: the history
+  // column kept, the audience-refused one collapsed (the renderer is spied on, as in
+  // `pdf-template-export.test.ts`: PDF bytes are compressed).
+  it('the owner’s PDF renders exactly the view /me answers (CMP-1, SEC-2)', async () => {
+    const renderer = h.container.resolve('documentRenderer') as { buildDefinition: (input: unknown) => Promise<unknown> };
+    const spy = vi.spyOn(renderer, 'buildDefinition');
+    try {
+      const pdf = await h.app.inject({ method: 'GET', url: '/api/v1/comparisons/me/pdf', cookies: BUYER, headers: CHANNEL });
+      expect(pdf.statusCode, pdf.body).toBe(200);
+      const call = spy.mock.calls[0]?.[0] as { data: { view: View } } | undefined;
+      const me = await h.app.inject({ method: 'GET', url: '/api/v1/comparisons/me', cookies: BUYER, headers: CHANNEL });
+      expect(call?.data.view).toEqual((me.json() as { data: View }).data);
+      expect(call?.data.view.products[1]).toMatchObject({ id: off.id, sku: off.sku, available: false });
+      expect(call?.data.view.products[2]).toEqual(expect.objectContaining(REMOVED));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('the operator’s audit view keeps every column (SEC-2 does not reach it)', async () => {
     const me = (
       (await h.app.inject({ method: 'GET', url: '/api/v1/comparisons/me', cookies: BUYER, headers: CHANNEL })).json() as {
@@ -187,6 +206,8 @@ describe('163 CMP-1 — an unavailable column is shown only to the owner [contra
     expect(res.statusCode, res.body).toBe(200);
     const products = (res.json() as { data: { products: Column[] } }).data.products;
     expect(products.find((p) => p.id === aud.id)).toMatchObject({ sku: aud.sku, available: false });
+    // CMP-1 (Q-L6) — and the column gone off, as the owner keeps it.
+    expect(products.find((p) => p.id === off.id)).toMatchObject({ sku: off.sku, available: false });
   });
 
   it('the owner still removes the collapsed column by the product id', async () => {
