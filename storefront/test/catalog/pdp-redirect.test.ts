@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync, readdirSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProductKeyResolution } from '@endora-commerce/contracts';
 import { StorefrontApiError } from '../../lib/api/client';
@@ -154,5 +154,51 @@ describe('the product page composes no product URL of its own', () => {
       expect(source).not.toMatch(/['"`]\/p\/(?!\[slug\])/);
       expect(source).not.toMatch(/canonicalPath\(/);
     }
+  });
+});
+
+/**
+ * Final QA review Q-M7 (L-1) — the product page alone lets `?lang=` choose the request's
+ * language: both its metadata and its body hand `requestedLanguage(search.lang)` to the
+ * server context, and no other caller passes a language override.
+ */
+describe('only the product page passes the `?lang` override to the server context (Q-M7, L-1)', () => {
+  const root = resolve(import.meta.dirname, '../..');
+  const pagePath = resolve(root, 'app/(catalog)/p/[slug]/page.tsx');
+  const page = readFileSync(pagePath, 'utf8');
+  const OVERRIDE = 'getServerContext({ langOverride: requestedLanguage(search.lang) })';
+
+  function body(source: string, signature: RegExp): string {
+    const start = source.search(signature);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const next = source.slice(start + 1).search(/\nexport (default )?async function /);
+    return next < 0 ? source.slice(start) : source.slice(start, start + 1 + next);
+  }
+
+  it('generateMetadata and the page both pass requestedLanguage(search.lang)', () => {
+    expect(body(page, /export async function generateMetadata\(/)).toContain(OVERRIDE);
+    expect(body(page, /export default async function ProductPage\(/)).toContain(OVERRIDE);
+    expect(page.split('langOverride').length - 1).toBe(2);
+  });
+
+  it('no other storefront source passes langOverride', () => {
+    const skip = new Set(['node_modules', '.next', 'test', 'dist', 'coverage', 'public']);
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (skip.has(entry.name) || entry.name.startsWith('.')) continue;
+        const full = resolve(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+          if (full === pagePath) continue;
+          const text = readFileSync(full, 'utf8');
+          // A call passes it as `langOverride: …` or as the shorthand `{ langOverride }`;
+          // the declaration in `lib/server-context.ts` (`langOverride?:`) passes nothing.
+          if (/[{,]\s*langOverride\s*[:,}]/.test(text)) offenders.push(relative(root, full));
+        }
+      }
+    };
+    walk(root);
+    expect(offenders).toEqual([]);
   });
 });
