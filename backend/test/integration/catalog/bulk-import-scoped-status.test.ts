@@ -19,6 +19,9 @@ import {
  *   value for a channel the product is not in or a language it does not offer, a
  *   value that is not a status — applies nothing.
  *
+ * Final QA Q-L2 (FR-092, SC-009) — an import never archives and never restores: a
+ * status cell, global or scoped, moves the status and leaves `archived_at` as it was.
+ *
  * Status values are taken from the contract's enumeration, never hard-coded here
  * beyond the two the fixture sets.
  */
@@ -185,5 +188,37 @@ describe('Products CSV — scoped status columns (spec 163, T121)', () => {
       expect(report.errors.length, lines.join(' | ')).toBeGreaterThan(0);
     }
     expect([await channelStatus(productId), await languageStatus(productId, 'pl-PL')]).toEqual(before);
+  });
+
+  it('a status import never archives nor restores: archived_at is left as it was (FR-092, SC-009)', async () => {
+    const archivedAt = async (id: string): Promise<string | null> => {
+      const [row] = await sql<Array<{ archived_at: Date | null; status: string }>>(
+        `select archived_at, status from products where id = ?`,
+        [id],
+      );
+      return row?.archived_at ? new Date(row.archived_at).toISOString() : null;
+    };
+    const globalStatus = async (id: string): Promise<string | undefined> =>
+      (await sql<Array<{ status: string }>>(`select status from products where id = ?`, [id]))[0]?.status;
+    const stamp = new Date('2026-10-01T08:00:00.000Z');
+    try {
+      // `inactive` on a live product switches it off; it does not archive it.
+      expect(await importCsv([base, `${outsiderSku},inactive,,,`])).toEqual({ imported: 1, errors: [] });
+      expect(await globalStatus(outsiderId)).toBe('inactive');
+      expect(await archivedAt(outsiderId)).toBeNull();
+
+      // `active` on an archived product, globally and at a channel scope: the status
+      // moves, the archive stays.
+      await sql(`update products set archived_at = ? where id in (?, ?)`, [stamp, outsiderId, productId]);
+      expect(await importCsv([base, `${outsiderSku},active,,,`])).toEqual({ imported: 1, errors: [] });
+      expect(await globalStatus(outsiderId)).toBe('active');
+      expect(await archivedAt(outsiderId)).toBe(stamp.toISOString());
+
+      expect(await importCsv([`${base},status@${channelCode}`, `${sku},,,,,active`])).toEqual({ imported: 1, errors: [] });
+      expect(await channelStatus(productId)).toBe('active');
+      expect(await archivedAt(productId)).toBe(stamp.toISOString());
+    } finally {
+      await sql(`update products set archived_at = null, status = 'active' where id in (?, ?)`, [outsiderId, productId]);
+    }
   });
 });
