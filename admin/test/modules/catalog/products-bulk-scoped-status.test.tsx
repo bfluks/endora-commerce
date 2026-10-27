@@ -310,6 +310,22 @@ describe('bulk status in one channel (US5)', () => {
     expect(screen.queryByRole('table')).toBeNull();
   });
 
+  // Final QA review Q-L10 — owner decision UX-3 = A: the return to the inherited status is
+  // "Use inherited", in both languages; "Reset" is not used and "Restore" stays the archive's.
+  it.each([
+    ['en', /status in one channel/i, 'Use inherited (remove the override)', /\breset|\brestore/i],
+    ['pl', /status w jednym kanale/i, 'Użyj dziedziczonego (usuń nadpisanie)', /przywróć|resetuj|zresetuj/i],
+  ] as const)('speaks the UX-3 vocabulary (%s, Q-L10)', async (language, groupName, inherit, banned) => {
+    const user = userEvent.setup();
+    renderDialog(language);
+    await user.click(await screen.findByRole('checkbox', { name: groupName }));
+    const group = await screen.findByRole('group', { name: groupName });
+    const status = within(group).getAllByRole('combobox').at(-1) as HTMLSelectElement;
+    const inheritOption = within(status).getByRole('option', { name: inherit }) as HTMLOptionElement;
+    expect(inheritOption.value).toBe('inherit');
+    expect(group.textContent ?? '').not.toMatch(banned);
+  });
+
   it('renders in Polish', async () => {
     renderDialog('pl');
     expect(await screen.findByRole('checkbox', { name: /status w jednym kanale/i })).toBeTruthy();
