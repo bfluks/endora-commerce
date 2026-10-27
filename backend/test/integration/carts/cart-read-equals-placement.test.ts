@@ -71,6 +71,8 @@ describe('#168 — the cart read shows the price placement charges', () => {
         categoryIds: [],
         attributeValues: {},
         visibility: 'public',
+        // Feature 163 (Q1-d) — a product created without a status is `inactive`.
+        status: 'active',
       },
       cookies: { b2b_session: 'stub-admin-session' },
     });
