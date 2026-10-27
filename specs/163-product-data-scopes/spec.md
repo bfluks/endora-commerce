@@ -272,7 +272,62 @@ It replaces the 2026-10-21 Q1 answer and extends N1.
   owner (a share-link recipient), such a column collapses to the existing `(removed product)` column
   shape: no name, SKU, slug, price, attributes or image. A removed product and an unavailable one must
   not be distinguishable to that reader, and no count may reveal the difference. The owner keeps seeing
-  their own history with `available: false` (FR-002, FR-004; `contracts/consumers.md` row 12).
+  their own history with `available: false` (FR-002, FR-004; `contracts/consumers.md` row 12). *(Narrowed
+  on 2026-10-27, SEC-2: for an audience reason the owner sees the `(removed product)` column too.)*
+- Q: (P-1) May the admin assistant archive and restore products? → A: **P-1 = A (owner, 2026-10-26)** — yes,
+  through two tools of their own, `catalog.archive_product` and `catalog.restore_product` (`catalog:write`,
+  planned with a preview and run only after the operator confirms), which run the same audited Archive /
+  Restore Commands as the admin screens with the confirming admin as actor. `catalog.set_product_status`
+  keeps switching products on or off and never archives or restores; `catalog.search_products` includes
+  archived products and says which are archived, so one can be found to restore it (FR-114).
+- Q: (P-2) A saved product-list view that stored `status: 'draft'` — which tab does it open on? → A: **P-2 =
+  A (owner, 2026-10-26)** — on *All*, with a one-time note that the view used the removed Draft status
+  (FR-112, FR-113).
+- Q: (P-3) Do quote requests and price lists accept an archived product? → A: **P-3 = A (owner,
+  2026-10-26)** — quote requests refuse it on every path; price lists are unchanged (an archived product may
+  still be priced) (FR-115). **P-3a = A (owner-confirmed 2026-10-26):** converting an approved quote whose
+  product was archived since answers `409` before the basket is touched. **P-3b = A (owner, 2026-10-26):** the
+  operator's create and edit answer `409 PRODUCT_ARCHIVED` naming the archived products in
+  `details.productIds`, while a buyer's paths keep the absent product's `404 PRODUCT_NOT_FOUND`.
+- Q: (RFQ-c) How do the operator's quote-request product pickers show an archived product? → A: **RFQ-c = B
+  (owner, 2026-10-26)** — as the order screen's do: the quick search lists it disabled with the reason
+  "archived"; the product browser has no Archived tab and its *All* leaves archived products out (FR-115).
+- Q: (P-4) What does the product list's bulk bar offer on the Archived tab? → A: **P-4 = B (owner,
+  2026-10-26)** — **Restore** (primary, behind the existing confirmation), Bulk edit and Delete; Edit price is
+  not offered there (FR-053).
+- Q: (PAL-1) Is "Archived products" reachable from the command palette? → A: **PAL-1 = B (owner,
+  2026-10-26)** — yes, as an action of its own that opens a dedicated route, `/catalog/products/archived`,
+  the product list on its Archived tab (FR-116).
+- Q: (I1) Does Restore fire the completeness gate or show a gate message? → A: **I1 = B (owner,
+  2026-10-26)** — no: Restore stays ungated and shows no gate message, also in *refuse* mode (FR-019, FR-060).
+- Q: (MED-1) Do product feeds and comparisons follow a gallery image hidden in a channel? → A: **MED-1 = A
+  (owner, 2026-10-26)** — yes: a feed reads the gallery in its own channel and a comparison column in the
+  viewer's channel, so a hidden image reaches neither (FR-076).
+- Q: (SEO-1) Which channels does the SEO meta editor offer for a product? → A: **SEO-1 = A (owner,
+  2026-10-26)** — the product's member channels only (FR-075).
+- Q: (SEO stub) What becomes of the product editor's "Page title (preview)" input, which saved nothing? →
+  A: **A (owner, 2026-10-26)** — it is removed and replaced by a link to the SEO screen, which `seo`
+  contributes to the product editor's SEO tab (admin zone `product.editor.seo.after`), shown while `seo` is
+  on and the admin holds `catalog:write` (FR-075, Constitution XVII).
+- Q: (UX-1 … UX-4) Admin UI details. → A: **all A (owner, 2026-10-26)**. **UX-1:** in the scope overview, a
+  reset of a text value and the deletion of an orphaned override ask for confirmation in a dialog; channel
+  values sit in a "Whole channel" column and language values in an "Every channel" row (FR-041). **UX-2:**
+  while gallery edits are staged, adding or removing an image waits for Save (FR-076). **UX-3:** one
+  vocabulary across the overview, the URL-keys panel, the scope controls and bulk edit — "Use inherited" /
+  "Użyj dziedziczonego" and "No longer applies" / "Nie obowiązuje już" (FR-012, FR-043). **UX-4:** the SEO
+  screen opens on a product from `?entityType=product&entityId=<id>`, which the product editor's link uses
+  (FR-075).
+- Q: (G-1) Does the API-key upsert (`PUT /api/v1/catalog/products/by-sku/:sku`) go through the completeness
+  gate? → A: **G-1 = A (owner, 2026-10-26)** — no: like imports and PIM synchronisation, it is exempt
+  (FR-061).
+- Q: (G-2) How does the single-product status write report completeness warnings? → A: **G-2 = A (owner,
+  2026-10-26)** — `PATCH /api/v1/admin/catalog/products/:id` answers `{ data, warnings }`, and the editor
+  shows the warnings in place of "Saved." (FR-060).
+- Q: (F-1) With `seo` off, does a request for one of a product's **other current keys** in L (its language
+  or global key where a (C, L) override exists, or another channel's override) still redirect to its (C, L)
+  URL? → A: **F-1 = A (owner, 2026-10-26)** — yes. Those are current keys, resolved by `catalog`, and
+  FR-071 applies whatever `seo`'s state; only the redirecting keys of FR-072 are `seo`'s and answer
+  not-found while it is off (FR-071, FR-111).
 
 ### Session 2026-10-27
 
@@ -280,6 +335,29 @@ It replaces the 2026-10-21 Q1 answer and extends N1.
   behaviour changes — the archived product's 410 narrowed to callers who could otherwise see it, and an
   archived product refused at basket add. Intended, or defects? → A: **intended (owner, 2026-10-27)** —
   both are recorded as `plan.md` *Intended behaviour changes* 7 and 8 (FR-005, FR-110).
+- Q: (SEC-1) External order intake (`POST /api/v1/external/orders`) answers an unknown SKU, or one outside
+  the key's channel, with the per-line `422` (`SKU_NOT_IN_ASSORTMENT`), and an existing product that is not
+  available there with `404 PRODUCT_NOT_FOUND`. Is that difference an acceptable oracle? → A: **SEC-1 = A
+  (owner, 2026-10-27)** — yes, W5-b stands as decided. The key is bound to one organization and one channel
+  (the client's own integration), and SKUs are generally public; the `404` is what a product hidden from
+  that organization has answered since feature 155 (FR-004; `contracts/consumers.md` row 23).
+- Q: (SEC-2) Does a comparison's **owner** keep seeing the details of a product they can no longer see for
+  an **audience** reason (a channel audience override, or their organization leaving the channel's
+  allow-list)? → A: **SEC-2 = A (owner, 2026-10-27)** — no. Such a column shows as `(removed product)` for
+  the owner too. The owner keeps the history column, marked unavailable, only for lifecycle reasons: the
+  product is off at the scope, archived, outside its publication window, or not a member of the channel
+  (FR-002, FR-004; refines CMP-1; `contracts/consumers.md` row 12).
+- Q: (R2, QA) The edge case said concurrent edits at one scope are "last write wins". What did ship? → A:
+  **recorded as built (2026-10-27)** — scope writes on one product are serialised by a row lock on the
+  product, so each write applies to the state the previous one left and is audited with that true
+  before-state; the later write's value stands. A residual race the lock cannot order (two first writes
+  creating the same override row) answers `409 VERSION_CONFLICT` ("reload and try again") and writes
+  nothing; in a bulk edit that product is reported failed with the reason `concurrent_modification` and the
+  others proceed (edge case *Concurrent edits*).
+- Q: (L7, QA) US4 said an operator jumps from an overview cell to the field. Is that built? → A: **not
+  built; deferred (2026-10-27)**. The overview shows each cell's sources, resets and orphans; a field is
+  edited on the editor's own tabs (Scopes, Details, Attributes, SEO, Media). US4's story text says what was
+  built; a cell-to-field link is a follow-up (*Out of Scope*).
 
 ## Current state (origin/master cde5563ea)
 
@@ -504,8 +582,11 @@ channel.
 
 In the product editor an operator opens one overview showing channels × languages for the product. Each
 cell shows the effective status and marks every field overridden at that cell (and at the channel row and
-the language column), plus any orphaned override with a warning (FR-015). From a cell
-they jump to the field, or reset any override to inherited.
+the language column), plus any orphaned override with a warning (FR-015). From the overview they
+"use inherited" for any channel or channel × language override, or delete an orphaned one; the fields
+themselves are edited on the editor's own tabs. *(Amended 2026-10-27, L7: the story first said the
+operator jumps from a cell to the field; that link is not built and is deferred — Out of Scope. The
+overview does not reset a product's own per-language text, OV-1.)*
 
 **Why this priority**: The main UX improvement over Magento's per-field "Use Default Value" checkbox;
 without it, operators cannot see why a product is or is not live somewhere.
@@ -517,8 +598,10 @@ cell's markers and effective values; reset one and assert the cell and the store
 
 1. **Given** overrides at C×L, C and L, **When** the operator opens the overview, **Then** each cell names
    the overridden fields and where the effective value comes from (this cell, channel, language, global).
-2. **Given** a cell with an override, **When** the operator chooses "reset to inherited" for one field,
-   **Then** only that override is removed and the cell shows the inherited value.
+2. **Given** a cell with a channel or channel × language override, **When** the operator chooses "Use
+   inherited" for one field (a text value after confirming in a dialog, UX-1), **Then** only that override
+   is removed and the cell shows the inherited value. A product's own text in a language has no reset in
+   the overview (OV-1).
 3. **Given** the operator lacks the product-edit permission, **Then** the overview is read-only.
 4. **Given** a product that is a member of no channel, **Then** the overview says so and offers only the
    global and language scopes.
@@ -757,7 +840,12 @@ the minimum and the return eligibility.
   Archiving is the separate Archive action (FR-019).
 - **A request still carrying `draft` or the legacy `archived`** (admin API, bulk status, import file, admin
   list filter): refused with a validation error; there is no alias (FR-112).
-- **Concurrent edits** at the same scope by two operators: last write wins, each audited.
+- **Concurrent edits** at the same scope by two operators: writes on one product are serialised (a row
+  lock on the product), so each applies to the state the previous one left and is audited with that
+  before-state — the later write's value stands. A residual race the lock cannot order (two first writes
+  creating the same override row) answers `409 VERSION_CONFLICT` ("reload and try again") and writes
+  nothing; a bulk edit reports that product failed with the reason `concurrent_modification` and changes
+  the others (Session 2026-10-27, R2).
 
 ## Requirements *(mandatory)*
 
@@ -803,7 +891,15 @@ the minimum and the return eligibility.
   MUST refuse every line whose product is not effectively available (FR-001) at the quote request's channel
   and language, with an answer that does not reveal the product's existence beyond what FR-005 allows. A
   quote request created by an **operator** in the admin MUST accept such a line and show a warning naming
-  it.
+  it. *(An archived product is the exception, FR-115.)*
+- **FR-115** *(numbered after FR-114; added in Session 2026-10-26, P-3)*: A quote request MUST NOT hold an
+  archived product, on any path: a buyer's create, draft edit and resubmit (and so every conversion into a
+  quote request) MUST refuse it with the answer an absent product gets (`404 PRODUCT_NOT_FOUND`, FR-018); an
+  operator's create and edit MUST refuse it with `409 PRODUCT_ARCHIVED` naming the archived products in
+  `details.productIds` and write nothing (P-3b); converting an approved quote whose product was archived
+  since MUST answer `409` before the basket is touched (P-3a). The operator's product pickers MUST list an
+  archived product disabled with the reason "archived" in the quick search and leave it out of the
+  browser's *All* (RFQ-c). Price lists are unchanged: an archived product may still be priced.
 - **FR-019** *(numbered after FR-018; added in Session 2026-10-25, Q1-a)*: Archiving MUST be a separate,
   **global, product-wide** action, offered as **Archive** and **Restore**, and never a status value or a
   per-scope state.
@@ -928,7 +1024,8 @@ the minimum and the return eligibility.
   the channel and language levels, marking per cell the overridden fields, the effective status, any
   orphaned override (FR-015) and every value the completeness gate would report missing at that cell
   (FR-060) — so that a product made live by a change that does not fire the gate shows what it lacks — and
-  offering "reset to inherited" per field per cell.
+  offering "Use inherited" per field per cell for sales channel and channel × language overrides only, not
+  for a product's own text in a language (Session 2026-10-26, OV-1, UX-1, UX-3).
 - **FR-042**: The overview and scope controls MUST be read-only for an operator without the product-edit
   permission, and MUST be reachable from the product editor and discoverable in the command palette
   (Constitution XVI) as part of the product editor.
@@ -947,6 +1044,13 @@ the minimum and the return eligibility.
   product and reversible as a whole. A bulk status value — global or scoped — MUST be `active`, `inactive`
   or, for a scope, "inherit"; a bulk status change MUST NOT archive or restore, and a bulk request carrying
   `draft` or `archived` MUST be refused with a validation error (FR-112).
+- **FR-114** *(numbered after FR-113; added in Session 2026-10-26, P-1)*: The admin assistant MUST offer
+  Archive and Restore as tools of their own, `catalog.archive_product` and `catalog.restore_product`, gated
+  by `catalog:write`, planned with a preview and run only after the operator confirms. Each product MUST run
+  the same audited Archive / Restore Command as the admin screens (FR-019), with the confirming admin as
+  actor; a selection larger than the assistant's inline limit MUST run as the bulk Archive / Restore of
+  FR-053. The status tool `catalog.set_product_status` MUST NOT archive or restore, and the assistant's
+  product search MUST include archived products and say which are archived.
 
 #### Completeness gate
 
@@ -975,7 +1079,8 @@ the minimum and the return eligibility.
   and does not become available (FR-019) (coordinator, 2026-10-25).
 - **FR-061**: The gate MUST apply equally to single status edits, bulk status edits and changes of the
   global switch that turn on scopes without overrides, MUST NOT apply to the non-status changes listed in
-  FR-060, and MUST NOT apply to imports and PIM synchronisation (A-6, confirmed in clarify 2026-10-21). In *refuse* mode a bulk edit MUST change the products that pass and skip and report
+  FR-060, and MUST NOT apply to imports, PIM synchronisation (A-6, confirmed in clarify 2026-10-21) or the
+  API-key upsert `PUT /api/v1/catalog/products/by-sku/:sku` (Session 2026-10-26, G-1). In *refuse* mode a bulk edit MUST change the products that pass and skip and report
   per product those that fail, as FR-051 does for invalid scopes.
 
 #### URL key and redirects
@@ -1131,9 +1236,16 @@ the minimum and the return eligibility.
   archived: a product that is `inactive` and not archived MUST be listed like any other product, and the
   list MUST keep hiding archived products by default with the existing way to include them; "Archived" is
   a filter of its own, based on `archivedAt` (Session 2026-10-25, O-2).
+- **FR-116** *(numbered after FR-115; added in Session 2026-10-26, PAL-1)*: The Archived filter MUST have
+  an admin route of its own, `/catalog/products/archived` (`catalog:read`), which opens the product list on
+  its Archived tab and to which a reload and the browser's Back return, and a command-palette action
+  "Archived products" opening it, found by English and Polish keywords ("archived", "archiwum")
+  (Constitution XVI).
 - **FR-111**: When `seo` is off, redirects and SEO overrides MUST NOT be served and their data MUST persist;
   scoped catalogue data MUST persist across any
-  module being turned off and on (Constitution XVII). While `seo` is off the product editor MUST show no
+  module being turned off and on (Constitution XVII). "Redirects" are the redirecting keys of FR-072; a
+  request for one of a product's other **current** keys in L (FR-071) MUST still redirect to its (C, L)
+  URL while `seo` is off (Session 2026-10-26, F-1). While `seo` is off the product editor MUST show no
   redirect list. Redirect data persists in the catalogue and keeps reserving keys, and the takeover
   confirmation still appears and names the product losing the redirect (clarify 2026-10-22, Q-C; US7 #10).
   Archive and Restore (FR-019) belong to `catalog`, which is not deactivatable, so they have no off state of
@@ -1284,6 +1396,8 @@ as O-6, were answered by the owner on 2026-10-25 (all option A) and are recorded
 - Per-deployment overlays for any of this (Constitution XV).
 - A language prefix in the storefront product path (`/en/p/<key>`) — issue #396 (clarify 2026-10-22, Q-B);
   this feature emits `?lang=<L>` instead (FR-071).
+- A link from a scope-overview cell to the field it marks; the overview names the field and its source,
+  and the field is edited on the editor's own tab (Session 2026-10-27, L7) — a possible follow-up.
 - A generic one-click undo of a single Command; single scoped writes are restored from their audit
   before-state (FR-081; clarify 2026-10-22, Q-D) — a possible future issue.
 
