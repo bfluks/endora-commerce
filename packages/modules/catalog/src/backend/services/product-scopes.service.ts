@@ -561,7 +561,7 @@ export async function restoreScopedStatus(
   if (languageCode !== null && status !== null) {
     const channel = await em.findOne(SalesChannel, { id: scope.channelId });
     const requested = languageCode;
-    languageCode = channel?.languages.find((code) => sameLanguage(code, requested)) ?? languageCode;
+    languageCode = (channel ? toScopeChannel(channel).languages : []).find((code) => sameLanguage(code, requested)) ?? languageCode;
   }
   writeScopedStatus(em, await loadScopeRows(em, [productId]), productId, { channelId: scope.channelId, languageCode }, status);
 }
@@ -705,7 +705,7 @@ export class ProductScopesService {
       data.channels.push({
         channelId: channel.id,
         isMember,
-        languages: [...channel.languages],
+        languages: [...toScopeChannel(channel).languages],
         status: record.status,
         window: record.window === null ? null : windowProjection(record.window, 'plain'),
         audience:
@@ -727,7 +727,7 @@ export class ProductScopesService {
           .map((r) => ({
             languageCode: r.languageCode,
             status: r.status,
-            orphaned: !isMember || !channel.languages.includes(r.languageCode),
+            orphaned: !isMember || !toScopeChannel(channel).languages.includes(r.languageCode),
           })),
         orphaned: !isMember,
       });
@@ -819,7 +819,7 @@ export class ProductScopesService {
             globalWindow: { from: product.publishFrom ?? null, until: product.publishUntil ?? null },
             channelRows: channelRows.map(toChannelRecord),
             languageRows: languageRows.map(toLanguageRecord),
-            memberChannels: new Map(members.map((channel) => [channel.id, [...channel.languages]])),
+            memberChannels: new Map(members.map((channel) => [channel.id, toScopeChannel(channel).languages])),
           },
           request,
         );

@@ -37,6 +37,8 @@ const availableEverywhere = {
   filterAvailable: async (ids: readonly string[]) => new Set(ids),
   // Feature 163 (FR-100) — no channel rule here: each record's own minimum stands.
   effectiveOrderRules: async () => new Map<string, { minOrderQuantity: number | null; returnable: boolean }>(),
+  // Feature 163 (SEC-2) — consulted only for an id `filterAvailable` dropped, and it drops none here.
+  describeChannelAvailability: async () => new Map(),
 };
 
 
