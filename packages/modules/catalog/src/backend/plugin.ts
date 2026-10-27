@@ -446,6 +446,8 @@ export function catalogModule(options: CatalogModuleOptions) {
     if (options.reindexSearchIndexes) {
       const queue = bulkOperationService;
       adminService.setSearchReindexEnqueuer(async ({ actorAdminUserId }) => {
+        // Exempt from the known-requester rule by design (S-L3): a reindex writes no
+        // product, and the flip that enqueues it may have no admin behind it.
         await queue.create({
           type: BULK_OPERATION_TYPES.SEARCH_REINDEX,
           requestedByAdminUserId:

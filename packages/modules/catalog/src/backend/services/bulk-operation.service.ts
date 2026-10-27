@@ -48,8 +48,16 @@ import { readScopedStatuses, restoreScopedStatus, type StatusScope } from './pro
  *   - `list()` / `get()` back the "Bulk actions" admin page.
  */
 
-/** The requester the bulk-update route records when it resolved no admin (`routes.admin.ts`). */
+/**
+ * The requester a caller writes when it resolved no admin. Only a `search_reindex`
+ * operation may carry it (`plugin.ts`'s enqueuer); a product write is refused (S-L3).
+ */
 const NO_REQUESTER = '00000000-0000-0000-0000-000000000000';
+
+/** Whether `id` names an admin at all — neither empty nor {@link NO_REQUESTER} (S-L3). */
+function isKnownRequester(id: string | null | undefined): id is string {
+  return typeof id === 'string' && id.length > 0 && id !== NO_REQUESTER;
+}
 
 /** Per-product outcomes are capped on the row so a huge run can't bloat it. */
 const MAX_PERSISTED_RESULTS = 1000;
@@ -221,9 +229,20 @@ export class BulkOperationService {
     // status / progress counters); the actual product mutations are audited by
     // updateProduct, or by the Archive / Restore Commands for `fields.archived`.
     // The operation record itself is not a domain-audit target.
+    const type = input.type ?? 'product_bulk_update';
+    // Final security review S-L3 — a product write runs acting for its requester
+    // (S-W2) and is re-checked against them at worker start (S-3); with no known
+    // requester neither can answer, and the run would execute as the system. So it
+    // is refused here, before a row exists. `search_reindex` is exempt by design: it
+    // writes no product (it rebuilds the search indexes from catalog's own rows), and
+    // it is enqueued by the attribute `searchable` flip, which may have no admin
+    // behind it (`plugin.ts`).
+    if (type !== BULK_OPERATION_TYPES.SEARCH_REINDEX && !isKnownRequester(input.requestedByAdminUserId)) {
+      throw new Error('A product bulk operation needs a known requester; none was resolved for this request.');
+    }
     const em = this.emFactory();
     const op = new BulkOperation();
-    op.type = input.type ?? 'product_bulk_update';
+    op.type = type;
     op.status = 'pending';
     op.requestedByAdminUserId = input.requestedByAdminUserId;
     op.total = input.payload.productIds.length;
@@ -390,13 +409,10 @@ export class BulkOperationService {
       // Feature 163 (S-W2) — every per-product Command (Archive / Restore, a scope
       // write) runs acting for the admin who queued the operation, so its audit row
       // names them as the inline path's does; the id is the one the route recorded
-      // server-side at `create()`. A run nobody is recorded as requesting stays system.
+      // server-side at `create()`. A run with no known requester never gets here: the
+      // re-check below fails it (S-L3).
       await this.#assertRequesterMayWrite(op.requestedByAdminUserId);
-      const actingFor = <T>(fn: () => Promise<T>): Promise<T> =>
-        op.requestedByAdminUserId && op.requestedByAdminUserId !== NO_REQUESTER
-          ? withSystemScopeActingFor(op.requestedByAdminUserId, `catalog bulk operation ${id} for its requester`, fn)
-          : fn();
-      const result = await actingFor(() => this.bulkUpdateService.bulkUpdate(
+      const result = await withSystemScopeActingFor(op.requestedByAdminUserId, `catalog bulk operation ${id} for its requester`, () => this.bulkUpdateService.bulkUpdate(
         req,
         { actorAdminUserId: op.requestedByAdminUserId },
         {
@@ -542,12 +558,20 @@ export class BulkOperationService {
    * Checkpoint F (S-3) — the requester recorded at `create()` may have been
    * deactivated or lost `catalog:write` while the operation waited in the queue.
    * Throws (the caller marks the operation failed) unless they are still allowed; a
-   * permission check that cannot answer throws too. A run nobody is recorded as
-   * requesting stays a system run.
+   * permission check that cannot answer throws too.
+   *
+   * Final security review S-L3 — a run nobody is recorded as requesting (an empty id
+   * or the all-zero sentinel, which `create()` now refuses but a row queued before
+   * that may still carry) fails here too, with or without a checker: it used to run
+   * as the system. A composition with no checker wired (some tests) skips only the
+   * permission half; production composes `admin_roles`' `permissionService`.
    */
   async #assertRequesterMayWrite(requesterId: string | null): Promise<void> {
+    if (!isKnownRequester(requesterId)) {
+      throw new Error('This operation records no known requester, so it cannot run on anybody’s authority.');
+    }
     const checker = this.deps.permissionChecker;
-    if (!checker || !requesterId || requesterId === NO_REQUESTER) return;
+    if (!checker) return;
     const allowed =
       (await checker.isActiveAdministrator(requesterId)) &&
       (await checker.hasPermission(requesterId, 'catalog:write'));
