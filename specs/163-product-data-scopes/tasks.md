@@ -386,7 +386,8 @@ audited with a restorable before-state (no single-write undo, Q-D → A), evente
 - [x] T064 [S1] Search: `localizedNames.<L>` in documents + `attributesToSearchOn` (FR-017 b on the Meilisearch path) — `search-indexer.ts`, `search-query.service.ts`
   - `localizedNames` per live language (#384 walk over the channel's overrides, storefront baseline pick) in documents, `localizedNames` searchable; query `attributesToSearchOn: [localizedNames.<L>, name, sku, description, searchableOptions, attributes.<searchable>]`, retried without it on `invalid_search_attributes_to_search_on` (an index not reindexed yet). [PG] assertion added to `integration/search/scoped-availability.test.ts`.
 - [x] T065 [S1] Benchmark: a scoped variant of `backend/test/perf/catalog-list.bench.ts` and `backend/test/perf/catalog/listing-filtered-page.bench.ts` (20% of products with C and C×L rows, windows, audience overrides, effective-name sort) and record before/after in the PR; **> 10% regression stops the block** and goes back to the architect (R1 fallback) — `backend/test/perf/catalog/listing-scoped-availability.bench.ts`
-  - Written, **not run** (needs Postgres → ci-pg): `backend/test/perf/catalog/listing-scoped-availability.bench.ts` — same corpus unscoped vs 20 % scoped (channel rows, windows, audience, C×L, name overrides), 5 scenarios incl. `sort=name` 2nd page, median of `PERF_REPEATS`, fails over `PERF_MAX_REGRESSION` (0.10). The code before/after half: run `listing-filtered-page.bench.ts` and `catalog-list.bench.ts` on `origin/master` and this branch on one runner. Gate unevaluated.
+  - Written as `backend/test/perf/catalog/listing-scoped-availability.bench.ts` — same corpus unscoped vs 20 % scoped (channel rows, windows, audience, C×L, name overrides), 5 scenarios incl. `sort=name` 2nd page, median of `PERF_REPEATS`, fails over `PERF_MAX_REGRESSION` (0.10). The code before/after half: run `listing-filtered-page.bench.ts` and `catalog-list.bench.ts` on `origin/master` and this branch on one runner.
+  - **Run** on the fork ci-pg with `PERF_RUN=true` on the rebased tip `ff9f135cc` (run 40503071234), scoped ÷ unscoped: default ordering first page ×0.911, second page ×0.962; `sort=name` first page ×1.035, second page ×1.028; free text ×0.999 — every scenario inside the 10 % budget, **gate passed** (SC-004). `catalog-list.bench.ts` p95 20.9 ms (budget 50 ms). The coordinator adds two more runs.
 - [x] T066 [S1] Release note entry: name sort order (D6), reindex per channel (R21) — `.changeset/163-…` bodies of the touched packages
   - Release notes in `.changeset/163-search-sitemap-feeds-scoped-availability.md` (reindex per channel, name sort order, old name cursors) and `163-catalog-product-scopes.md` (D6).
 
@@ -1606,6 +1607,16 @@ checkpoint F fix round (see the Phase 22 notes).
     at placement). Rows 15 and 25 refuse nothing (they pick a value) and row 10 has no backend seam — the file
     header names where each is asserted, and a last case fails if a row 1–26 has neither an entry nor a reason.
     Rows 7–8 assert the documents' projection; the index filter itself is `integration/search/…` (Meilisearch).
+    **Corrected in the final fix round (C-m1)** — the ARCHIVED arm is asserted, byte-equal to the absent answer or as
+    an absence, on rows 1, 2, 4, 5, 6, 7–8, 9, 14 (a basket line archived before placement) and every seam through
+    `expectSingleNotFound` (12 add, 13, 16 buyer, 17 save, 21, 22); row 3 asserts the archived product's own `410`;
+    row 26 is archived-only (buyer create 404, operator create 409). Elsewhere: row 11's archived exclusion is
+    `integration/product_feeds/generation.test.ts`; row 18 reports `product_archived` by design
+    (`quick_order/…/import-pipeline.test.ts`); row 26's draft edit, resubmit, operator edit and approved-quote
+    conversion are `integration/quote_requests/archived-product.test.ts`. **Not asserted for an archived product
+    anywhere**: row 20 (reorder of a line archived since — placement refuses it through row 14's seam), row 23
+    (external intake, pending owner decision S-M2) and row 24 (the bulk-price probe's reason). Rows 15 and 25 stay
+    waived (they pick a value, refuse nothing).
   - *T146* — a case in `scoped-availability-matrix.test.ts`: `CATALOG_SEARCH_BACKEND=meilisearch` (the harness
     pins Postgres), `withModuleOff('search', 'deactivated', …)`, then `x-search-backend: postgres` and the same
     P/Q/off/archived sets and facet counts at all four (C, L) pairs. *T146a* — **no change** expected: the route's
@@ -1692,6 +1703,34 @@ checkpoint F fix round (see the Phase 22 notes).
   rules card); *Q-M7* the PDP alone passes `langOverride` (both call sites); *Q-L10* UX-3 vocabulary asserted in the
   URL keys panel, scope editor and bulk dialog — which found the scope editor's outcome "N override(s) reset" (now
   "… removed, the inherited value applies").
+- 2026-10-27 (S1, final fix round (backend)): three code fixes from the final reviews and owner decision SEC-2; no new
+  product defect was exposed by the added tests (those that are [PG] have not run yet).
+  *S-L3* (fix, red first — `bulk-operation-requester.test.ts` 4 red → 9 green): a product write bulk operation with
+  no known requester (empty or the all-zero sentinel) is refused at `create()`, the bulk-update route answers 401
+  instead of recording the sentinel, and a queued row carrying it fails at worker start with or without a permission
+  checker; `search_reindex` stays exempt (it writes no product; commented at `create()` and the plugin's enqueuer).
+  `integration/catalog/bulk-operation-consumer.test.ts` used the sentinel on product writes — given a real id.
+  *S-L1a* (fix, red first — `comparison-recipient-view.test.ts`): a recipient's `(removed product)` column carries a
+  fresh random UUID per view, never the product id; the owner keeps the id (`DELETE /me/products/:productId`).
+  *SEC-2 = A* (fix, red first, same file 4 red → 8 green): the owner's column of a product the channel's effective
+  audience no longer admits them to collapses to `(removed product)` like a recipient's, counted nowhere — classified
+  through `describeChannelAvailability` over the owner's unavailable columns (a non-member is absent from that answer
+  and stays lifecycle). Applies to `/me` (all four writes), `/me/pdf` and the share link read by its owner; the
+  operator's audit view (`administrator`) keeps every column, as its comment intends. *C-n1*: `buyerViewerOf` and
+  `languageTagOf` are one module, `comparisons/src/backend/buyer-viewer.ts`. *C-m1*: archived arm in the SC-007 sweep,
+  T145 note corrected above. *Q-H1*: T065 records the bench run. Tests added, all [PG] and **unrun locally** (no
+  Postgres here; written against existing fixtures, red state not observed): *Q-M1* attribute filters and facet counts
+  over a channel override; *Q-M2* a compared value at (C, L); *Q-M3* the order line keeps its packaging-unit name after
+  a rename; *Q-M4* US3 #1–#3 over HTTP (anonymous, X, Y × B2B override, B2C inherit; listing and PDP); *Q-M6* derived
+  global key on create and duplicate; *Q-L1* the sweep's scheduler (every 5 min) and the platform-off arm
+  (`startPublicationWindowSweep` gained an optional `queuePrefix`, the expiry sweep's shape); *Q-L2* status import never
+  archives nor restores; *Q-L3* channel delete cascades (URL keys and SEO rows deleted; media tables' `on delete
+  cascade` read from `pg_constraint`); *Q-L6* the owner's PDF equals `/me` and the audit view keeps the CMP-1 column;
+  SEC-2 contract cases in `contract/comparisons/share-unavailable-columns.test.ts`. *Q-M5* service half
+  (`product-scopes.service.test.ts`, runnable): passed on first run — characterisation, no defect. Checks:
+  `tsc -p test/tsconfig.json`, eslint, `check:fixture-substitution`, `check:shared-table-wipes`,
+  `check:harness-teardown`, `serial-test-files.test.ts`; typecheck + lint of mod-catalog and mod-comparisons; unit
+  suites of mod-comparisons (60) and the touched catalog tests; backend `unit/comparisons`.
 
 **Verification**: as listed in T151–T154.
 
