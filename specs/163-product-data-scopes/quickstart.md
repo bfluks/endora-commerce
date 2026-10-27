@@ -29,7 +29,7 @@ both, with a Polish and an English name and **no German name**. Run one `search_
    request containing P → refused; as an operator create a quote request for a B2C customer → accepted with
    a warning naming P.
 6. Storefront language on the product page (L-1): give P the German key `bohrmaschine` (URL keys panel, §7).
-   With the `lang` cookie set to `pl`, open `/p/bohrmaschine?lang=de` in B2B → the German page (`?lang`
+   With the `lang` cookie set to `pl`, open `/p/bohrmaschine?lang=de-DE` in B2B → the German page (`?lang`
    names an active language and beats the cookie). Open `/p/bohrmaschine?lang=xx` → `?lang` is ignored, the
    cookie decides (Polish) and the German key answers not-found. After both, the cookie still says `pl`:
    only the header language switcher rewrites it.
@@ -130,7 +130,8 @@ Give P the Polish key `wiertarka-udarowa` and English `impact-drill`; B2B × Eng
 - Comparisons (CMP-1, SEC-2): compare P and another product as a B2C buyer, share the link, then switch P
   off in B2C × Polish. The recipient (another B2C buyer, Polish) sees P's column as **(removed product)** —
   no name, SKU, price or image; you, the owner, still see P's details marked unavailable. Restrict P's B2C
-  audience to an organization you are not in → you see the `(removed product)` column too.
+  audience to an organization you are not in → you see the `(removed product)` column too
+  (SEC-2; testable once S1's SEC-2 change is on the branch).
 - Attachments hidden in B2C; packaging unit "karton"/"carton" in the basket per language; placed order
   keeps the name. A basket line added by a caller that names the channel itself (an operator surface,
   `CartWritePort.addItem` with `salesChannelId` = B2C) snapshots the unit's name in B2C's default language,
