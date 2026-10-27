@@ -563,7 +563,9 @@ is switched on.
 product's own sales channels, then one of that channel's languages or the whole channel (**Load**
 reads it again). Leaving a scope with unsaved changes asks first, and **Use inherited** asks before
 it removes the override at exactly the scope shown. The product editor's SEO tab links to this
-screen with the product already selected (`/seo?entityType=product&entityId=<id>`).
+screen with the product already selected (`/seo?entityType=product&entityId=<id>`). The link is this
+module's contribution to the product editor's admin zone `product.editor.seo.after`, so it is shown
+only while `seo` is switched on and the admin holds `catalog:write`.
 
 **Every change is audited.** Saving an override is one `seo_meta_override.upsert` entry in the
 audit log, removing one a `seo_meta_override.delete` entry, each with the whole override before

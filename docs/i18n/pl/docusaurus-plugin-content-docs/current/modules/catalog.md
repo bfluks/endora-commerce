@@ -100,9 +100,18 @@ niczego nie zmienia — bez wpisu audytu i bez zdarzenia.
   `archived=only` pokazuje tylko je, a `archived=include` pokazuje je obok pozostałych. Licznik
   i filtr `inactive` obejmują produkty wyłączone, ale niezarchiwizowane.
   Na liście produktów karta **Zarchiwizowane** ma własny adres, `/catalog/products/archived`,
-  więc przycisk Wstecz przeglądarki i odświeżenie strony do niej wracają. Przy zaznaczeniu jej
+  więc przycisk Wstecz przeglądarki i odświeżenie strony do niej wracają, a paleta poleceń
+  (⌘K / CTRL+K) otwiera ją jako **Zarchiwizowane produkty** — wystarczy wpisać „archiwum” lub
+  „archived”. Przy zaznaczeniu jej
   pasek oferuje Przywróć, Edycję zbiorczą i Usuń; **Edytuj cenę** jest widoczne na pozostałych
   kartach, ale nieaktywne, bo ceny ustawia się w cennikach.
+- **Z asystenta AI panelu.** Narzędzia asystenta `catalog.archive_product` i
+  `catalog.restore_product` (`catalog:write`) archiwizują i przywracają produkty po
+  zatwierdzeniu pokazanego planu — tą samą akcją i z tym samym wpisem audytu, z Tobą jako
+  wykonawcą; większe zaznaczenia działają jako opisana wyżej operacja zbiorcza. Narzędzie
+  statusu, `catalog.set_product_status`, tylko włącza i wyłącza produkty, nigdy ich nie
+  archiwizuje ani nie przywraca, a wyszukiwanie produktów asystenta pokazuje także
+  zarchiwizowane i oznacza je.
 
 ### Status dla kanału i języka, zbiorczo
 
@@ -343,6 +352,9 @@ w całości; ścisłe schematy to `CATALOG_WEBHOOK_EVENT_SCHEMAS` w `@endora-com
 - **Listy w poszczególnych kanałach sprzedaży** — usługa zapytań dostaje kontekst kanału sprzedaży,
   a każda pokazywana cena jest wyceniana dla tego kanału; nowe ograniczenia (np. katalogi dla
   segmentów klientów) dodaje się przez kompozycję w `catalog-query.service.ts`.
+- **Strefy edytora produktu** — edytor montuje strefy panelu, do których dokładają się inne
+  moduły; `product.editor.seo.after`, na końcu karty SEO (właściwości: `productId`), to miejsce,
+  w którym moduł SEO umieszcza link do edytora metatagów, dzięki czemu katalog go nie wymienia.
 - **Unikalność sluga** — slug jest domyślnie unikalny we wszystkich kanałach sprzedaży; jeśli kolizje
   między językami staną się problemem, nadpisz mechanizm tworzenia slugów w
   `catalog-admin.service.ts`.
