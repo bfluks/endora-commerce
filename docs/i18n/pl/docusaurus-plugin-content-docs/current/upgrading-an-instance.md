@@ -3298,7 +3298,7 @@ linki do wersji językowych z pola `paths` odpowiedzi, a na stronie produktu par
 linku ma pierwszeństwo przed ciasteczkiem języka. Przenieś storefront z tego wydania, aby linki strony
 produktu korzystały z kluczy URL per język.
 
-Ten wpis został napisany 2026-10-27 na podstawie gałęzi specyfikacji 163
+Ten wpis został napisany 2026-10-27 na podstawie gałęzi specyfikacji `163-product-data-scopes`
 (`feat/163-product-data-scopes`).
 
 ## Instancja niespójna od początku

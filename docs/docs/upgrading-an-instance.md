@@ -3148,7 +3148,7 @@ alternate-language links from the response's `paths`, and lets the link's `?lang
 language cookie on the product page. Bring the release's storefront over, so that the product
 page's links follow the per-language URL keys.
 
-This entry was written on 2026-10-27 against the branch of spec 163 (`feat/163-product-data-scopes`).
+This entry was written on 2026-10-27 against the branch of spec `163-product-data-scopes` (`feat/163-product-data-scopes`).
 
 ## An instance that is mixed from the start
 
