@@ -99,11 +99,18 @@ describe('productIdForKey', () => {
     await expect(productIdForKey('impact-drill', ctx)).rejects.toBeInstanceOf(NotFoundSignal);
   });
 
-  it('lets any other failure through (a 410 is the error page, as before)', async () => {
-    const gone = new StorefrontApiError(410, 'PRODUCT_ARCHIVED', 'Product is archived.');
-    catalogApi.resolveProductKey.mockRejectedValue(gone);
+  it('answers not-found for an archived product’s 410, never the error page (T155, B4)', async () => {
+    catalogApi.resolveProductKey.mockRejectedValue(new StorefrontApiError(410, 'PRODUCT_ARCHIVED', 'Product is archived.'));
 
-    await expect(productIdForKey('old-drill', ctx)).rejects.toBe(gone);
+    await expect(productIdForKey('old-drill', ctx)).rejects.toBeInstanceOf(NotFoundSignal);
+    expect(navigation.notFound).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets any other failure through to the error page', async () => {
+    const failure = new StorefrontApiError(500, 'INTERNAL', 'Something went wrong.');
+    catalogApi.resolveProductKey.mockRejectedValue(failure);
+
+    await expect(productIdForKey('drill', ctx)).rejects.toBe(failure);
     expect(navigation.notFound).not.toHaveBeenCalled();
   });
 });
@@ -200,5 +207,23 @@ describe('only the product page passes the `?lang` override to the server contex
     };
     walk(root);
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * T155 finding §1.5 (B3) — with `?lang=` the product page is written in the
+ * override's language while the root layout, which cannot read the query and
+ * by L-1 must not take the override, stamps `<html lang>` in the cookie's or the
+ * header's. The page marks its own content's language instead (WCAG 2.2 SC 3.1.2,
+ * Language of Parts): its outermost element carries `lang={locale}`, the
+ * language the page resolved with the override.
+ */
+describe('the product page marks the language its content is written in (T155, B3)', () => {
+  const page = readFileSync(resolve(import.meta.dirname, '../../app/(catalog)/p/[slug]/page.tsx'), 'utf8');
+
+  it('its outermost element carries the resolved locale as `lang`', () => {
+    const body = page.slice(page.search(/export default async function ProductPage\(/));
+    const outermost = body.slice(body.indexOf('return (')).match(/return \(\s*<div([^>]*)>/);
+    expect(outermost?.[1]).toContain('lang={locale}');
   });
 });

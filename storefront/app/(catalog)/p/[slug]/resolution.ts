@@ -19,8 +19,11 @@ import { StorefrontApiError, type RequestContext } from '../../../../lib/api/cli
 /**
  * The id of the product `key` names here. A redirect key answers a permanent
  * redirect to the backend's path; a key of no product, or of a product this
- * request may not see, answers the page's not-found. Anything else (an archived
- * product's `410`, a backend failure) is the error page, as before.
+ * request may not see, answers the page's not-found. So does an archived
+ * product's `410 PRODUCT_ARCHIVED` (T155 finding B4): rethrown, it rendered the
+ * error page as an HTTP 500; the shopper is shown the ordinary not-found page,
+ * with a 404 status — the App Router page has no way to answer 410 itself.
+ * Anything else (a backend failure) is the error page.
  *
  * `permanentRedirect` and `notFound` throw: neither may be called inside a
  * `try` that would catch it. The 308 is not shared-cacheable: the page reads the
@@ -32,7 +35,7 @@ export async function productIdForKey(key: string, ctx: RequestContext): Promise
   try {
     resolution = await resolveProductKey(key, ctx);
   } catch (err) {
-    if (err instanceof StorefrontApiError && err.status === 404) notFound();
+    if (err instanceof StorefrontApiError && (err.status === 404 || err.status === 410)) notFound();
     throw err;
   }
   if (resolution.kind === 'redirect') {
