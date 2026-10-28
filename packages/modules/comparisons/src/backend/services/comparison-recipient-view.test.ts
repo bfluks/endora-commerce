@@ -44,7 +44,7 @@ function service(offInChannel: OffInChannel = { visibility: 'public', allowedOrg
         ? [ON, OFF].map((productId, position) => ({ comparisonId: 'cmp-1', productId, position, addedAt: new Date(position) }))
         : [],
     findOne: async (entity: unknown) =>
-      entity === SalesChannel ? { id: CHANNEL, defaultCurrency: 'PLN', isPublic: true, defaultLanguage: 'en-US' } : null,
+      entity === SalesChannel ? { id: CHANNEL, defaultCurrency: 'PLN', defaultLanguage: 'en-US' } : null,
   };
   const catalogProducts = {
     findByIds: async () => [product(ON, 'ON-SKU'), product(OFF, 'OFF-SKU')],

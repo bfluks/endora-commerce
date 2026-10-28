@@ -43,8 +43,8 @@ describe('catalogProductScopeWritePort (spec 163, T120)', () => {
     const id = randomUUID();
     await sql(
       `insert into sales_channels (id, code, name, default_language, languages, currencies, default_currency,
-                                   active, is_public, created_at, updated_at)
-       values (?, ?, ?::jsonb, 'pl-PL', '["pl-PL","en-US"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, true, now(), now())`,
+                                   active, created_at, updated_at)
+       values (?, ?, ?::jsonb, 'pl-PL', '["pl-PL","en-US"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, now(), now())`,
       [id, `sw163-${run}-${label}`, JSON.stringify({ 'en-US': `163 scope write ${label}` })],
     );
     return id;

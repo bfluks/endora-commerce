@@ -53,8 +53,8 @@ describe('Attachments and packaging units per scope (spec 163, T135)', () => {
     const code = `ap163-${run}-${label}`;
     await sql(
       `insert into sales_channels (id, code, name, default_language, languages, currencies, default_currency,
-                                   active, is_public, created_at, updated_at)
-       values (?, ?, ?::jsonb, 'en-US', '["en-US","pl-PL"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, true, now(), now())`,
+                                   active, created_at, updated_at)
+       values (?, ?, ?::jsonb, 'en-US', '["en-US","pl-PL"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, now(), now())`,
       [id, code, JSON.stringify({ 'en-US': `163 attachments ${label}` })],
     );
     const channel = { id, code };

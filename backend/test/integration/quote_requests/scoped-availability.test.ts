@@ -136,8 +136,8 @@ describe('163 — a quote line honours a language switched off at (channel, lang
     h = await setupBackendServer();
     await sql(
       `insert into sales_channels (id, code, name, default_language, languages, currencies, default_currency,
-                                   active, is_public, created_at, updated_at)
-       values (?, ?, ?::jsonb, 'pl-PL', '["pl-PL","de-DE"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, true, now(), now())`,
+                                   active, created_at, updated_at)
+       values (?, ?, ?::jsonb, 'pl-PL', '["pl-PL","de-DE"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, now(), now())`,
       [channelId, channelCode, JSON.stringify({ 'en-US': '163 RFQ German off' })],
     );
     // Feature 154 — the signed-in buyer shops here only if its Organization is assigned.

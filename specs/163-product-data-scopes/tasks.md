@@ -1860,6 +1860,16 @@ checkpoint F fix round (see the Phase 22 notes).
   audience (`organization_restricted`), which 163's rule covers. The tip equals the previous tip plus #497's
   diff. Regeneration moved nothing.
 
+- 2026-10-28 (S1, sixth Phase 25 rebase): onto `origin/master` with #492 (the sales channel `isPublic` flag retired
+  into the display-mode chain, column dropped); backup `backup/163-pre-rebase4-20261028` = `a533040c4`. Conflicts:
+  the search-hydration test fixtures (master's "resolves nothing" pricing port beside our availability port), the
+  listing's card reads (our `#listingCardReadsFor(em, page, ctx)`, master's removal of the `isPublic` gate), the
+  upgrading page EN + PL (both 0.109.0 entries kept, master's first) and the Polish catalog / upgrading caches
+  (re-pinned from the merged pages at each stop). After the replay, 163's tests still named the dropped column:
+  twelve [PG] files inserted `sales_channels.is_public` and three unit fixtures set `isPublic` — removed; one search
+  unit fixture needed the now-required pricing port. No 163 product code read `isPublic`; anonymous access (154) and
+  `toScopeChannel` never did.
+
 **Verification**: as listed in T151–T154.
 
 ---

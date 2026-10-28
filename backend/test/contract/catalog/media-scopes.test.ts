@@ -53,8 +53,8 @@ describe('Gallery per channel, alt text per language (spec 163, T130)', () => {
     const code = `ms163-${run}-${label}`;
     await sql(
       `insert into sales_channels (id, code, name, default_language, languages, currencies, default_currency,
-                                   active, is_public, created_at, updated_at)
-       values (?, ?, ?::jsonb, 'en-US', '["en-US","pl-PL"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, true, now(), now())`,
+                                   active, created_at, updated_at)
+       values (?, ?, ?::jsonb, 'en-US', '["en-US","pl-PL"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, now(), now())`,
       [id, code, JSON.stringify({ 'en-US': `163 media ${label}` })],
     );
     const channel = { id, code };

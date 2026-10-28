@@ -4,6 +4,7 @@ import {
   type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CatalogProductUrlKeyReadPort,
+  type ListingPriceDetailPort,
 } from '@endora-commerce/contracts';
 import { SearchQueryService, type ResolvedSearchChannel } from './search-query.service.js';
 
@@ -23,7 +24,7 @@ import { SearchQueryService, type ResolvedSearchChannel } from './search-query.s
 const CHANNEL: ResolvedSearchChannel = {
   id: '00000000-0000-4000-8000-0000000000c1',
   code: 'pl_retail',
-  isPublic: false,
+ 
   defaultCurrency: 'PLN',
   defaultLanguage: 'pl-PL',
   languages: ['pl-PL', 'de-DE'],
@@ -84,7 +85,16 @@ function serviceWith(options: {
   };
   const urlKeys: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'> = { effectiveKeys };
   return {
-    service: new SearchQueryService(port, undefined, {}, undefined, undefined, availability, urlKeys),
+    // The channel's values are this file's subject, not prices: the pricing port resolves nothing.
+    service: new SearchQueryService(
+      port,
+      undefined,
+      {},
+      { resolveListingPriceDetails: async () => new Map() } as unknown as ListingPriceDetailPort,
+      undefined,
+      availability,
+      urlKeys,
+    ),
     effectiveKeys,
   };
 }

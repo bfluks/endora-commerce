@@ -323,7 +323,7 @@ describe('comparisons — a column carries the product’s values in the reader�
     const service = new ComparisonService(
       fakeEm({
         ComparisonProduct: [{ productId: 'prod-1', position: 0, addedAt: new Date('2026-02-01T00:00:00.000Z') }],
-        SalesChannel: { id: 'channel-1', defaultCurrency: 'PLN', defaultLanguage: 'de-DE', isPublic: false },
+        SalesChannel: { id: 'channel-1', defaultCurrency: 'PLN', defaultLanguage: 'de-DE' },
       }),
       new ComparableAttributeProjection(),
       new ShareTokenGenerator(),

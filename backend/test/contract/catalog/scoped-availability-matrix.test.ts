@@ -72,8 +72,8 @@ describe('163 — scoped availability on every catalogue read [contract]', () =>
     const code = `s163-${RUN}-${label}`;
     await sql(
       `insert into sales_channels (id, code, name, default_language, languages, currencies, default_currency,
-                                   active, is_public, created_at, updated_at)
-       values (?, ?, ?::jsonb, 'pl-PL', '["pl-PL","en-US"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, true, now(), now())`,
+                                   active, created_at, updated_at)
+       values (?, ?, ?::jsonb, 'pl-PL', '["pl-PL","en-US"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, now(), now())`,
       [id, code, JSON.stringify({ 'en-US': `163 matrix ${label}` })],
     );
     // Feature 154 — the signed-in buyer shops here only if its Organization is assigned.

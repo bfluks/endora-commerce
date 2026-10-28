@@ -128,9 +128,9 @@ describe('GET /api/v1/catalog/sitemap.xml', () => {
     const productId = randomUUID();
     await conn.execute(
       `insert into sales_channels (id, code, name, default_language, languages, currencies, default_currency,
-                                   active, is_public, created_at, updated_at)
+                                   active, created_at, updated_at)
        values (?, ?, '{"en-US":"163 sitemap"}'::jsonb, 'en-US', '["en-US","pl-PL"]'::jsonb, '["PLN"]'::jsonb, 'PLN',
-               true, true, now(), now())`,
+               true, now(), now())`,
       [channelId, code],
     );
     await conn.execute(
