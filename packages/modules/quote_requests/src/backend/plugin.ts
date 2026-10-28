@@ -220,6 +220,7 @@ export function quoteRequestsModule(options: QuoteRequestsModuleOptions): {
 
   const adminService = new RfqAdminService({
     emFactory: options.emFactory,
+    channelMembership: options.channelMembership,
     events: options.eventBus as RfqEventBus,
     rfqService,
     eventService,

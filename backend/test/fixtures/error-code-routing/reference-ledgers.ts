@@ -985,6 +985,15 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'product\'s units, by id or by name and base quantity. The noun is the packaging unit, ' +
       '`catalog`\'s row (D-121 T1); the raiser is `quote_requests` on create and draft edit.',
   },
+  RFQ_SALES_CHANNEL_NOT_ALLOWED: {
+    to: 'quote_requests',
+    reason:
+      'Minted by feature 163 (`specs/163-product-data-scopes/`, security review M1) for an ' +
+      'operator\'s quote request on a customer\'s behalf that names a sales channel which is not one ' +
+      'of the Organization\'s active channels. The noun is the quote request\'s channel, ' +
+      '`quote_requests`\' own column, and the one raise site is its admin create. ' +
+      '`SALES_CHANNEL_NOT_PERMITTED` is not reused: its sentence speaks to a signed-in buyer.',
+  },
   SCOPE_INVALID: {
     to: 'catalog',
     reason:

@@ -228,7 +228,7 @@ describe('163 — a quote line honours a language switched off at (channel, lang
     expect(body.warnings).toEqual([{ productId: channelOffId, code: 'PRODUCT_UNAVAILABLE_IN_SCOPE' }]);
   });
 
-  it('refuses an operator’s request naming an unknown channel with 404', async () => {
+  it('refuses an operator’s request naming a channel that is not one of the Organization’s active channels (security M1)', async () => {
     const res = await h.app.inject({
       method: 'POST',
       url: '/api/v1/admin/quote-requests',
@@ -240,7 +240,7 @@ describe('163 — a quote line honours a language switched off at (channel, lang
         items: [{ productId, quantity: 1, agreedUnitPrice: 10 }],
       },
     });
-    expect(res.statusCode, res.body).toBe(404);
-    expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.NOT_FOUND);
+    expect(res.statusCode, res.body).toBe(422);
+    expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.RFQ_SALES_CHANNEL_NOT_ALLOWED);
   });
 });
