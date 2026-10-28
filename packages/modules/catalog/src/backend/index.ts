@@ -1305,17 +1305,25 @@ export function registerModule(ctx: ModuleContext): void {
    * (`ProductPageRevalidation`); `ctx.subscribe` stops it with the module.
    */
   ctx.subscribe('product.updated.v1', (payload) => {
-    cradle().catalogProductPageRevalidation.productChanged((payload as { productId: string }).productId);
+    const productId = productIdOf(payload);
+    if (productId) cradle().catalogProductPageRevalidation.productChanged(productId);
   });
   ctx.subscribe('product.archived.v1', (payload) => {
-    cradle().catalogProductPageRevalidation.productChanged((payload as { productId: string }).productId);
+    const productId = productIdOf(payload);
+    if (productId) cradle().catalogProductPageRevalidation.productChanged(productId);
   });
-  ctx.subscribe('product.deleted.v1', () => {
-    cradle().catalogProductPageRevalidation.productRemoved();
+  ctx.subscribe('product.deleted.v1', (payload) => {
+    const productId = productIdOf(payload);
+    if (!productId) return;
+    const former = (payload as { formerUrlKeys?: unknown }).formerUrlKeys;
+    const formerKeys = Array.isArray(former) ? former.filter((key): key is string => typeof key === 'string') : [];
+    cradle().catalogProductPageRevalidation.productRemoved(productId, formerKeys);
   });
   ctx.subscribe('sales_channels.membership_changed', (payload) => {
-    const change = payload as { entityType: string; entityId: string };
-    if (change.entityType === 'product') cradle().catalogProductPageRevalidation.productChanged(change.entityId);
+    const change = payload as { entityType?: unknown; entityId?: unknown };
+    if (change.entityType === 'product' && typeof change.entityId === 'string') {
+      cradle().catalogProductPageRevalidation.productChanged(change.entityId);
+    }
   });
 
   ctx.routes(async (app) => {
@@ -1454,3 +1462,9 @@ export const salesChannelBridges: ReadonlyArray<{
   { entityType: 'product', table: 'sales_channel_products', entityIdColumn: 'product_id' },
   { entityType: 'category', table: 'sales_channel_categories', entityIdColumn: 'category_id' },
 ];
+
+/** An event payload's `productId`, when it is a string (security review L1). */
+function productIdOf(payload: unknown): string | null {
+  const productId = (payload as { productId?: unknown } | null)?.productId;
+  return typeof productId === 'string' ? productId : null;
+}
