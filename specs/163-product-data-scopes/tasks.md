@@ -1849,6 +1849,17 @@ checkpoint F fix round (see the Phase 22 notes).
   `lineNames(…, languageTag)`; `quick_order` uses `firstLanguageTag`; the `lang` test says why it reads source.
   `shopping_lists` now owns a co-located test run (`vitest.config.ts`, generated `test` script).
 
+- 2026-10-28 (S1, fifth Phase 25 rebase): onto `origin/master` `9559e60c3` (#497, `302e5ce52`: every price-walk
+  cursor sealed by the platform's `cursorSeal`); backup `backup/163-pre-rebase3-20261028` = `2e7956f85`. Conflicts:
+  `CatalogCradle` (master's `cursorSeal` beside our `processRunsWorkers`), `#priceCursor` (master's
+  `#openCursor` with our `ctx` parameter for the effective-name keyset), the `CatalogQueryService` constructor
+  (`log`, then master's `cursorSeal`, then our `seoProductMeta` — both call sites follow), the plugin's kernel
+  import, and the Polish catalog cache at each replayed stop (its `content` set to the merged materialised page,
+  `sourceHash` recomputed from the English body). #497 adds no visibility rule of its own: it seals the position
+  the scan stops at, and the price walks still cut by 163's `filterAvailable`; its [PG] corpus hides products by
+  audience (`organization_restricted`), which 163's rule covers. The tip equals the previous tip plus #497's
+  diff. Regeneration moved nothing.
+
 **Verification**: as listed in T151–T154.
 
 ---
