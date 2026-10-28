@@ -30,6 +30,7 @@ import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 import { HttpError } from '@endora-commerce/platform/http';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
+import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { orgConstraintFor } from '@endora-commerce/platform/tenancy';
 import type {
   QuoteRequestAdminSearchQuery,
@@ -898,11 +899,14 @@ export class RfqAdminService {
    * product is not available to the Organization at the request's channel, in
    * the channel's default language (N2), now. Accepted regardless: this is a
    * warning for the operator, never a refusal (the exemption of
-   * {@link createOnBehalf} stands). Empty outside a request, where there is no
-   * channel to ask about (FR-007).
+   * {@link createOnBehalf} stands). The channel is the one the body names, else
+   * the admin request's own; empty when there is neither (FR-007).
    */
-  async onBehalfWarnings(body: Pick<AdminCreateQuoteRequest, 'organizationId' | 'items'>): Promise<AdminQuoteRequestWarning[]> {
-    const channelId = raisedOnChannelId();
+  async onBehalfWarnings(
+    body: Pick<AdminCreateQuoteRequest, 'organizationId' | 'items' | 'salesChannelId'>,
+  ): Promise<AdminQuoteRequestWarning[]> {
+    // The channel the operator named (T155 §1.5c), else the admin request's own.
+    const channelId = body.salesChannelId ?? raisedOnChannelId();
     if (channelId === null) return [];
     const productIds = Array.from(new Set(body.items.map((it) => it.productId)));
     if (productIds.length === 0) return [];
@@ -944,6 +948,13 @@ export class RfqAdminService {
       );
     }
 
+    // Feature 163 (T155 §1.5c) — the channel the operator names is the one the
+    // request is raised on. Exactly that channel: a stale id is refused, never
+    // replaced by another (the admin order create's rule, feature 145 R-7).
+    if (body.salesChannelId !== undefined && !(await em.findOne(SalesChannel, { id: body.salesChannelId }))) {
+      throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Sales channel not found.');
+    }
+
     // **Neither scoping axis is applied to these lines, and that is the
     // decision rather than the gap.** `RfqService.createForCustomer` filters by
     // `isProductVisibleTo` (issue #227) and by the request's channel assortment
@@ -976,11 +987,11 @@ export class RfqAdminService {
       ...(businessId ? { businessId } : {}),
       organizationId: body.organizationId,
       customerAccountId: body.customerAccountId,
-      // The channel the admin's own request resolved to. Admin paths take the
-      // resolver's step-4 fallback unless the SPA sends `X-Sales-Channel`, so
-      // this is the system default until it does — which is the honest answer
-      // for "where was this raised", not a channel this module picked.
-      salesChannelId: raisedOnChannelId(),
+      // The channel the operator named (feature 163, T155 §1.5c); else the one
+      // the admin's own request resolved to — the resolver's step-4 fallback,
+      // the system default — which is the honest answer for "where was this
+      // raised", not a channel this module picked.
+      salesChannelId: body.salesChannelId ?? raisedOnChannelId(),
       createdByAdminUserId: ctx.adminUserId,
       assignedAdminUserId: ctx.adminUserId,
       status: 'Created from admin' satisfies QuoteRequestStatus,
