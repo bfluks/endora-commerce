@@ -1152,6 +1152,26 @@ removed; every line on screen is sent. The running total counts the lines that
 have both a valid quantity and a price. A customer without an organization
 still shows the existing warning, since a quote request needs one.
 
+**The sales channel the request is raised on** is chosen under the customer,
+among the active sales channels of the customer's organization. When the
+organization has exactly one, it is preselected; when it has several, choose one —
+**Create quote request** stays disabled until you do. The channel is sent as
+`salesChannelId`: the request is stored on it, its line names are taken in that
+channel's default language, and its availability is judged there. The agreed
+prices are prefilled on that channel too, and choosing another channel clears
+every price not typed by hand and resolves it again. An unknown
+channel id is refused with `404 NOT_FOUND`. Without the field — and on this
+screen when the organization's channels cannot be read, for instance without
+`customers:read` — the request is raised on the channel the admin request
+itself resolves to, the system default.
+
+When a line's product is not available to the customer on that channel —
+switched off there, outside its publication window or outside its audience —
+the request is still created and the answer names the line in `warnings` with
+`PRODUCT_UNAVAILABLE_IN_SCOPE`. The screen then stays open and lists those
+products under **Quote request created with warnings**, and **Open the quote
+request** goes on to it; the request cannot be sent a second time from there.
+
 ## Panels on the quote request screen
 
 The admin zone `quote_request.detail.after` is mounted once at the end of a
