@@ -30,7 +30,7 @@ import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 import { HttpError } from '@endora-commerce/platform/http';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
-import { SalesChannel } from '@endora-commerce/platform/kernel';
+import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { orgConstraintFor } from '@endora-commerce/platform/tenancy';
 import type {
   QuoteRequestAdminSearchQuery,
@@ -140,6 +140,11 @@ export interface RfqAdminServiceDeps {
    * operator's lines only to warn: `createOnBehalf` accepts them either way.
    */
   catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveNames'>;
+  /**
+   * Feature 163 (security review M1) — the kernel's membership port: the channels an
+   * Organization is assigned to, which an operator's on-behalf request may be raised on.
+   */
+  channelMembership: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>;
   customerAccounts: CustomerAccountReadPort;
   organizations: OrganizationDetailsPort;
   adminUsers: AdminUserReadPort;
@@ -948,11 +953,20 @@ export class RfqAdminService {
       );
     }
 
-    // Feature 163 (T155 §1.5c) — the channel the operator names is the one the
-    // request is raised on. Exactly that channel: a stale id is refused, never
-    // replaced by another (the admin order create's rule, feature 145 R-7).
-    if (body.salesChannelId !== undefined && !(await em.findOne(SalesChannel, { id: body.salesChannelId }))) {
-      throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Sales channel not found.');
+    // Feature 163 (T155 §1.5c, security review M1) — the channel the operator names
+    // is the one the request is raised on, and it must be one of the Organization's
+    // active channels: the ones its members may shop on, and the set the create
+    // screen offers. Exactly that channel — a stale, foreign or inactive id is
+    // refused, never replaced by another.
+    if (body.salesChannelId !== undefined) {
+      const channels = await this.deps.channelMembership.listChannelsForEntity('organization', body.organizationId);
+      if (!channels.some((c) => c.id === body.salesChannelId && c.active)) {
+        throw new HttpError(
+          422,
+          ERROR_CODES.RFQ_SALES_CHANNEL_NOT_ALLOWED,
+          "This sales channel is not one of the organization's active sales channels.",
+        );
+      }
     }
 
     // **Neither scoping axis is applied to these lines, and that is the

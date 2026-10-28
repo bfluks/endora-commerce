@@ -1159,8 +1159,10 @@ organization has exactly one, it is preselected; when it has several, choose one
 `salesChannelId`: the request is stored on it, its line names are taken in that
 channel's default language, and its availability is judged there. The agreed
 prices are prefilled on that channel too, and choosing another channel clears
-every price not typed by hand and resolves it again. An unknown
-channel id is refused with `404 NOT_FOUND`. Without the field — and on this
+every price not typed by hand and resolves it again. A channel that is not
+one of the organization's active sales channels — unknown, assigned only to
+other organizations, or inactive — is refused with
+`422 RFQ_SALES_CHANNEL_NOT_ALLOWED` before anything is written. Without the field — and on this
 screen when the organization's channels cannot be read, for instance without
 `customers:read` — the request is raised on the channel the admin request
 itself resolves to, the system default.

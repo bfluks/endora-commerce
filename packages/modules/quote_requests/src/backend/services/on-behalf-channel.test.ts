@@ -42,16 +42,26 @@ const body = (extra: Record<string, unknown> = {}) =>
     ...extra,
   }) as never;
 
+const OTHER = '00000000-0000-4000-8000-0000000000d2';
+const INACTIVE = '00000000-0000-4000-8000-0000000000d3';
+/** The Organization's channels, as the kernel membership port answers them. */
+const ORG_CHANNELS = [
+  { id: B2C, active: true },
+  { id: INACTIVE, active: false },
+];
+
 function service(em: Record<string, unknown>, filterAvailable = vi.fn(async () => new Set<string>())) {
   const generateBusinessId = vi.fn(async () => null);
+  const listChannelsForEntity = vi.fn(async () => ORG_CHANNELS);
   const svc = new RfqAdminService({
+    channelMembership: { listChannelsForEntity },
     emFactory: () => em,
     customerAccounts: { findById: async () => ({ id: CUSTOMER_ID, organizationId: ORG_ID }) },
     catalogProducts: { findByIds: async () => [record] },
     catalogAvailability: { filterAvailable },
     rfqService: { generateBusinessId },
   } as never);
-  return { svc, generateBusinessId, filterAvailable };
+  return { svc, generateBusinessId, filterAvailable, listChannelsForEntity };
 }
 
 describe('163 — the channel an operator raises a quote request on', () => {
@@ -76,14 +86,18 @@ describe('163 — the channel an operator raises a quote request on', () => {
     expect(create.mock.calls[0]?.[1]).toMatchObject({ salesChannelId: B2C });
   });
 
-  it('refuses an unknown channel with 404 before anything is numbered or created', async () => {
+  it.each([
+    ['unknown, or not one of the Organization’s channels', OTHER],
+    ['one of the Organization’s channels, but inactive', INACTIVE],
+  ])('refuses a channel that is %s, before anything is numbered or created (security M1)', async (_what, channelId) => {
     const create = vi.fn();
-    const { svc, generateBusinessId } = service({ findOne: vi.fn(async () => null), create });
-    const caught = (await svc.createOnBehalf(ADMIN, body({ salesChannelId: B2C })).then(
+    const { svc, generateBusinessId, listChannelsForEntity } = service({ create });
+    const caught = (await svc.createOnBehalf(ADMIN, body({ salesChannelId: channelId })).then(
       () => null,
       (error: unknown) => error,
     )) as { statusCode?: number; code?: string } | null;
-    expect(caught).toMatchObject({ statusCode: 404, code: ERROR_CODES.NOT_FOUND });
+    expect(caught).toMatchObject({ statusCode: 422, code: ERROR_CODES.RFQ_SALES_CHANNEL_NOT_ALLOWED });
+    expect(listChannelsForEntity).toHaveBeenCalledWith('organization', ORG_ID);
     expect(generateBusinessId).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
   });
