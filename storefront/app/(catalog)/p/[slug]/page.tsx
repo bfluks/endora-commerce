@@ -283,8 +283,11 @@ export default async function ProductPage({
     });
   }
 
+  // T155 (B3) — `?lang=` writes this page in the override's language, which the
+  // root layout's `<html lang>` does not know (L-1: the override is this page's
+  // alone), so the page marks its own content's language (WCAG 3.1.2).
   return (
-    <div className="mx-auto max-w-[1360px] px-[24px] pt-[18px] pb-[64px] max-md:pb-[96px]">
+    <div lang={locale} className="mx-auto max-w-[1360px] px-[24px] pt-[18px] pb-[64px] max-md:pb-[96px]">
       {/* Feature 049 — GA4 view_item (no-op unless Enhanced Ecommerce is on). */}
       <ViewItemTracker
         item={{
