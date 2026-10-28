@@ -14,6 +14,7 @@ import {
   customFieldValuesSchema,
   customerAddOrderCommentRequestSchema,
   ERROR_CODES,
+  firstLanguageTag,
   isCustomFieldFilterUnavailableFailure,
   isCustomFieldValidationFailure,
   OrganizationCannotTransactError,
@@ -1443,10 +1444,17 @@ export async function registerOrderRoutes(
       const ctx = resolveCustomerContext(request);
       await orderService.getById(request.params.id, ctx); // authorize ownership
       // Feature 155 — the buyer's clone: no actor, so a minimum refuses it (US4 #5a).
-      const result = await deps.orderCloneToQuoteService.clone(request.params.id, {
-        customerAccountId: ctx.customerAccountId,
-        organizationId: ctx.organizationId,
-      });
+      // Feature 163 — its lines are judged at the request's channel and scope language.
+      const languageTag = firstLanguageTag(request.headers['accept-language']);
+      const result = await deps.orderCloneToQuoteService.clone(
+        request.params.id,
+        { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId },
+        {
+          language: await request.responseLanguage(),
+          ...(languageTag ? { languageTag } : {}),
+          salesChannelId: getResolvedChannel(request).id,
+        },
+      );
       return { data: result };
     },
   );
