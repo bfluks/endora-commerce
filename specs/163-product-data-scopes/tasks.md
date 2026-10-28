@@ -1820,6 +1820,21 @@ checkpoint F fix round (see the Phase 22 notes).
   read: no consumers.md row moves. Regeneration moved nothing. Green: `pnpm -r typecheck`, mod-catalog (31 files),
   mod-price-lists (32), contracts (82), catalog lint, the catalog-touching checks, `release-intent` (0 violations).
 
+- 2026-10-28 (S1, T155 CACHE-1 = A, B4 = keep not-found): *CACHE-1* — a product switched off in B2C kept answering
+  200 on `/p/<key>` for minutes: Next's Data Cache stores only a `200` (`patch-fetch.js`: `res.status === 200`),
+  so the time-based revalidation's `404` never replaces the warmed entry, and nothing told the storefront.
+  `catalog` now subscribes to `product.updated.v1`, `product.archived.v1`, `product.deleted.v1` and a product's
+  `sales_channels.membership_changed` (`ctx.subscribe`, off with the module) and, through the category path's
+  `StorefrontRevalidator`, drops the product's per-key tags — id, slug, URL keys, former keys — coalesced per
+  event-loop turn (`ProductPageRevalidation`); a deletion drops the shared `catalog:product`. Best-effort: a failed
+  key read or call is logged. The tag vocabulary moved to contracts (`CATALOG_PRODUCT_STOREFRONT_CACHE_TAGS`) and
+  the storefront's `productCacheTags` reads it. The fetch layer cannot drop the entry itself: it only ever sees
+  the stale `200` (the failing revalidation is Next's background fetch), and `revalidateTag` throws during a
+  render in Next 15. Red: `product-page-revalidation.test.ts` (module missing → 7 green). Listings
+  (`catalog:products`) are left to their 60 s window — always a `200`, so they heal on their own.
+  *B4 residual* — the read by id after the resolve (`productById` in `resolution.ts`) answers not-found for a `404`
+  or `410` too (red: 4 new cases in `pdp-redirect.test.ts`).
+
 **Verification**: as listed in T151–T154.
 
 ---
