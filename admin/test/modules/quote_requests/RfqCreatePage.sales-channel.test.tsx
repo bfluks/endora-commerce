@@ -1,0 +1,208 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
+import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+
+/**
+ * Feature 163 (FR-018, T155 finding §1.5c) — the operator names the sales
+ * channel a quote request is raised on. The choices are the customer's
+ * Organization's channels; one is preselected when it is the only one, else the
+ * operator must choose. The channel is sent as `salesChannelId`, and the lines
+ * the answer warns about (`PRODUCT_UNAVAILABLE_IN_SCOPE`) are named before the
+ * operator leaves the screen. When the Organization's channels cannot be read,
+ * nothing is chosen and the request is what it always was.
+ */
+
+const getSpy = vi.fn();
+const postSpy = vi.fn();
+/** The quote-request creations posted (the price explanation posts too, feature 160). */
+const creates = () => postSpy.mock.calls.filter(([path]) => path === '/api/v1/admin/quote-requests');
+const navigateSpy = vi.fn();
+
+vi.mock('@endora-commerce/admin-kit/lib', async () => {
+  const actual = await vi.importActual<typeof import('@endora-commerce/admin-kit/lib')>(
+    '@endora-commerce/admin-kit/lib',
+  );
+  return {
+    ...actual,
+    apiClient: {
+      get: (...a: unknown[]) => getSpy(...a),
+      post: (...a: unknown[]) => postSpy(...a),
+      put: vi.fn(),
+      patch: vi.fn(),
+      delete: vi.fn(),
+    },
+  };
+});
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return { ...actual, useNavigate: () => navigateSpy };
+});
+
+const { RfqCreatePage } = await import(
+  '../../../../packages/modules/quote_requests/src/admin/pages/RfqCreatePage'
+);
+
+const ORGANIZATION_ID = '00000000-0000-4000-8000-0000000000a1';
+const CUSTOMER = {
+  id: 'cust-1',
+  email: 'jan@acme.test',
+  firstName: 'Jan',
+  lastName: 'Kowalski',
+  organizationId: ORGANIZATION_ID,
+  organizationName: 'Acme',
+};
+const PRODUCT = { id: 'prod-1', sku: 'SKU-1', slug: 'p1', status: 'active', type: 'simple', name: { 'en-US': 'Widget' } };
+
+const BUNDLE = passthroughBundle('core', [
+  'rfqCreate.submit',
+  'rfqCreate.back',
+  'common.action.back',
+  'rfqCreate.items.quickSearch',
+  'rfqCreate.field.agreedUnitPrice',
+  'rfqCreate.field.salesChannel',
+  'rfqCreate.warnings.title',
+  'rfqCreate.warnings.open',
+]);
+
+const B2B = '00000000-0000-4000-8000-0000000000c1';
+const B2C = '00000000-0000-4000-8000-0000000000c2';
+const OPTIONS = [
+  { id: B2B, code: 'b2b', name: { 'en-US': 'Wholesale' }, active: true, systemDefault: true },
+  { id: B2C, code: 'b2c', name: { 'en-US': 'Retail' }, active: true, systemDefault: false },
+];
+let assigned: string[] | null = [B2C];
+
+beforeEach(() => {
+  assigned = [B2C];
+  getSpy.mockReset();
+  postSpy.mockReset();
+  navigateSpy.mockReset();
+  getSpy.mockImplementation((path: string) => {
+    if (path === '/api/v1/admin/customers/cust-1') return Promise.resolve({ data: CUSTOMER });
+    if (path.startsWith('/api/v1/admin/customers')) return Promise.resolve({ data: [CUSTOMER] });
+    if (path.startsWith('/api/v1/admin/catalog/products')) return Promise.resolve({ data: [PRODUCT] });
+    if (path === `/api/v1/admin/organizations/${ORGANIZATION_ID}/sales-channels`) {
+      return assigned === null
+        ? Promise.reject(new Error('forbidden'))
+        : Promise.resolve({ data: { organizationId: ORGANIZATION_ID, assignedSalesChannelIds: assigned, options: OPTIONS } });
+    }
+    return Promise.resolve({ data: [] });
+  });
+  postSpy.mockImplementation((path: string) =>
+    Promise.resolve(
+      path === '/api/v1/admin/price-books/resolve'
+        ? { data: [{ key: 'line', price: { amount: '10.00', currency: 'PLN', source: 'base' } }] }
+        : { data: { id: 'new-rfq-1' } },
+    ),
+  );
+});
+
+async function pick(comboLabel: string, optionLabel: string): Promise<void> {
+  await userEvent.click(screen.getByLabelText(comboLabel));
+  await userEvent.click(await screen.findByRole('option', { name: new RegExp(optionLabel) }));
+}
+
+function renderPage(params: Record<string, string> = {}): void {
+  const query = new URLSearchParams(params).toString();
+  renderWithI18n(
+    withSession(
+      <MemoryRouter initialEntries={[`/quote-requests/new${query ? `?${query}` : ''}`]}>
+        <RfqCreatePage />
+      </MemoryRouter>,
+      {
+        session: adminSession({ permissions: ['*'] }),
+        presence: modulePresence({ present: ['quote_requests'] }),
+      },
+    ),
+    BUNDLE,
+  );
+}
+
+/** One priced line, added through the quick search (feature 145), then submit. */
+async function addLineAndSubmit(): Promise<void> {
+  const quick = screen.getByRole('combobox', { name: 'rfqCreate.items.quickSearch' });
+  await userEvent.type(quick, 'Wid');
+  await userEvent.click(await screen.findByRole('option', { name: /Widget/ }));
+  await waitFor(() =>
+    expect(screen.getByRole('spinbutton', { name: 'rfqCreate.field.agreedUnitPrice Widget' })).toHaveValue(10),
+  );
+  const submit = screen.getByText('rfqCreate.submit');
+  await waitFor(() => expect(submit).not.toBeDisabled());
+  await userEvent.click(submit);
+}
+
+async function addLine(): Promise<void> {
+  const quick = screen.getByRole('combobox', { name: 'rfqCreate.items.quickSearch' });
+  await userEvent.type(quick, 'Wid');
+  await userEvent.click(await screen.findByRole('option', { name: /Widget/ }));
+  await waitFor(() =>
+    expect(screen.getByRole('spinbutton', { name: 'rfqCreate.field.agreedUnitPrice Widget' })).toHaveValue(10),
+  );
+}
+
+const openForCustomer = (): void => renderPage({ customerAccountId: 'cust-1', organizationId: ORGANIZATION_ID });
+
+describe('RfqCreatePage — the sales channel', () => {
+  it('preselects the Organization’s only channel and sends it', async () => {
+    openForCustomer();
+    await waitFor(() => expect(screen.getByLabelText('rfqCreate.field.salesChannel')).toHaveValue('Retail'));
+    await addLineAndSubmit();
+    expect(creates()[0]?.[1]).toMatchObject({ salesChannelId: B2C });
+  });
+
+  it('prefills the agreed prices on the chosen channel', async () => {
+    openForCustomer();
+    await waitFor(() => expect(screen.getByLabelText('rfqCreate.field.salesChannel')).toHaveValue('Retail'));
+    await addLine();
+    const resolves = postSpy.mock.calls.filter(([path]) => path === '/api/v1/admin/price-books/resolve');
+    expect(resolves.at(-1)?.[1]).toMatchObject({ salesChannelId: B2C });
+  });
+
+  it('asks the operator to choose when the Organization shops on several channels', async () => {
+    assigned = [B2B, B2C];
+    openForCustomer();
+    await waitFor(() => expect(screen.getByLabelText('rfqCreate.field.salesChannel')).toHaveValue(''));
+    await addLine();
+    const submit = screen.getByText('rfqCreate.submit');
+    expect(submit).toBeDisabled();
+    await pick('rfqCreate.field.salesChannel', 'Wholesale');
+    await waitFor(() => expect(submit).not.toBeDisabled());
+    await userEvent.click(submit);
+    await waitFor(() => expect(creates()).toHaveLength(1));
+    expect(creates()[0]?.[1]).toMatchObject({ salesChannelId: B2B });
+  });
+
+  it('names the lines unavailable on the channel before leaving the screen', async () => {
+    postSpy.mockImplementation((path: string) =>
+      Promise.resolve(
+        path === '/api/v1/admin/price-books/resolve'
+          ? { data: [{ key: 'line', price: { amount: '10.00', currency: 'PLN', source: 'base' } }] }
+          : { data: { id: 'new-rfq-1' }, warnings: [{ productId: 'prod-1', code: 'PRODUCT_UNAVAILABLE_IN_SCOPE' }] },
+      ),
+    );
+    openForCustomer();
+    await waitFor(() => expect(screen.getByLabelText('rfqCreate.field.salesChannel')).toHaveValue('Retail'));
+    await addLineAndSubmit();
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('rfqCreate.warnings.title');
+    expect(alert).toHaveTextContent('Widget');
+    expect(navigateSpy).not.toHaveBeenCalled();
+    // The request exists: it cannot be sent a second time.
+    expect(screen.queryByText('rfqCreate.submit')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'rfqCreate.warnings.open' }));
+    expect(navigateSpy).toHaveBeenCalledWith('/quote-requests/new-rfq-1');
+  });
+
+  it('sends no channel when the Organization’s channels cannot be read', async () => {
+    assigned = null;
+    openForCustomer();
+    await waitFor(() => expect(screen.getByLabelText('customerAccountId')).toHaveValue('Jan Kowalski'));
+    await addLineAndSubmit();
+    expect(creates()[0]?.[1]).not.toHaveProperty('salesChannelId');
+    expect(screen.queryByLabelText('rfqCreate.field.salesChannel')).toBeNull();
+  });
+});
