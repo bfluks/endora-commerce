@@ -627,6 +627,14 @@ export const adminCreateQuoteRequestSchema = z
     items: z.array(adminCreateQuoteRequestLineSchema).min(1),
     expiresInDays: z.number().int().nonnegative().optional(),
     /**
+     * Feature 163 (FR-018) — the sales channel the operator raises the request on:
+     * the channel it is stored on, its lines' names are snapshotted at (in that
+     * channel's default language, N2) and its `warnings` speak about. An unknown id is
+     * refused with `404 NOT_FOUND`. Absent: the channel the admin request itself
+     * resolved, as before.
+     */
+    salesChannelId: uuidSchema.optional(),
+    /**
      * Where the request is being created from — opaque to `quote_requests`,
      * which validates its shape and hands it on with `rfq.created_by_admin.v1`.
      * Not stored and not returned.

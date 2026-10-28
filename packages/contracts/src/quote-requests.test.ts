@@ -817,3 +817,20 @@ describe('feature 162 — the custom-field-carry-skipped history event', () => {
     ).toBe(false);
   });
 });
+
+describe('163 — the operator names the channel an on-behalf quote request is raised on (T155 §1.5c)', () => {
+  const base = {
+    organizationId: ID(1),
+    customerAccountId: ID(2),
+    items: [{ productId: ID(3), quantity: 1, agreedUnitPrice: 1 }],
+  };
+
+  it('carries an optional `salesChannelId`, kept as sent', () => {
+    expect(adminCreateQuoteRequestSchema.parse({ ...base, salesChannelId: ID(4) }).salesChannelId).toBe(ID(4));
+    expect(adminCreateQuoteRequestSchema.parse(base)).not.toHaveProperty('salesChannelId');
+  });
+
+  it('refuses a channel that is not an id', () => {
+    expect(adminCreateQuoteRequestSchema.safeParse({ ...base, salesChannelId: 'b2c' }).success).toBe(false);
+  });
+});
