@@ -255,20 +255,20 @@ export class RfqService {
 
   /**
    * Feature 163 (FR-017 d, N2) — the names a quote line snapshots: the effective
-   * name `catalog` answers at `channelId` in the request's language (`language`
-   * resolved against the channel), or at the channel's default language for an
-   * operator (`language` `null`). Empty without a channel; the caller keeps its
-   * baseline pick then.
+   * name `catalog` answers at `channelId` in the request's scope language
+   * (`languageTag` resolved against the channel), or at the channel's default
+   * language for an operator (`languageTag` `null`). Empty without a channel; the
+   * caller keeps its baseline pick then.
    */
   async lineNames(
     products: readonly CatalogProductRecord[],
     channelId: string | null,
-    language: string | null | undefined,
+    languageTag: string | null | undefined,
   ): Promise<Map<string, string>> {
     if (channelId === null || products.length === 0) return new Map();
     return this.deps.catalogAvailability.effectiveNames(
       products.map((p) => p.id),
-      { channelId, languageCode: language === null ? null : raisedInScopeLanguage(language, channelId) },
+      { channelId, languageCode: languageTag === null ? null : raisedInScopeLanguage(languageTag, channelId) },
     );
   }
 

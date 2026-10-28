@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
+  firstLanguageTag,
   quickOrderBuildRequestSchema,
   quickOrderImportRequestSchema,
   quickOrderSearchQuerySchema,
@@ -93,7 +94,7 @@ export async function registerQuickOrderRoutes(
         // Feature 155 — the buyer's build: no actor, so a quote request is
         // judged by the buyer's rules (FR-012). Feature 163 — its quote lines'
         // scope language is the request's tag, not the message language.
-        { language: await request.responseLanguage(), languageTag: firstAcceptLanguage(request) },
+        { language: await request.responseLanguage(), languageTag: firstLanguageTag(request.headers['accept-language']) },
       );
       return { data: result };
     },
@@ -132,7 +133,7 @@ export async function registerQuickOrderRoutes(
       organizationId: resolveCustomerContext(request).organizationId,
       // Feature 163 — the request's language; `catalog` resolves it against
       // the channel's own languages, so a product off in it is not a hit.
-      languageCode: firstAcceptLanguage(request),
+      languageCode: firstLanguageTag(request.headers['accept-language']),
     });
 
     return {
@@ -147,12 +148,4 @@ export async function registerQuickOrderRoutes(
       })),
     };
   });
-}
-
-/** The first `Accept-Language` tag, or `undefined` — a language preference, never trusted for anything else. */
-function firstAcceptLanguage(request: FastifyRequest): string | undefined {
-  const header = request.headers['accept-language'];
-  if (typeof header !== 'string') return undefined;
-  const first = header.split(',')[0]?.split(';')[0]?.trim();
-  return first === '' ? undefined : first;
 }

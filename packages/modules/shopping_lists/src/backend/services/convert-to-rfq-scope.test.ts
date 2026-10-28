@@ -17,7 +17,7 @@ vi.mock('@endora-commerce/platform/kernel', async (importOriginal) => ({
 }));
 
 const { ShoppingListService } = await import(
-  '../../../../packages/modules/shopping_lists/src/backend/services/shopping-list-service.js'
+  './shopping-list-service.js'
 );
 
 /**
