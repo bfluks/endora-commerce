@@ -43,7 +43,7 @@ const catalogApi = vi.hoisted(() => ({
 }));
 vi.mock('../../lib/api/catalog', () => catalogApi);
 
-const { productIdForKey, alternateLanguages, requestedLanguage } = await import('../../app/(catalog)/p/[slug]/resolution');
+const { productIdForKey, productById, alternateLanguages, requestedLanguage } = await import('../../app/(catalog)/p/[slug]/resolution');
 
 const ctx = { salesChannelCode: 'b2b', locale: 'pl-PL' };
 
@@ -115,6 +115,26 @@ describe('productIdForKey', () => {
   });
 });
 
+describe('productById (T155, B4)', () => {
+  it('answers the product read by id', async () => {
+    const product = { id: 'p-1' };
+    catalogApi.getProductBySlug.mockResolvedValue(product);
+    await expect(productById('p-1', ctx)).resolves.toBe(product);
+    expect(catalogApi.getProductBySlug).toHaveBeenCalledWith('p-1', ctx);
+  });
+
+  it.each([404, 410])('answers not-found for a %i (gone between the resolve and the read)', async (status) => {
+    catalogApi.getProductBySlug.mockRejectedValue(new StorefrontApiError(status, 'PRODUCT_NOT_FOUND', 'Product not found.'));
+    await expect(productById('p-1', ctx)).rejects.toBeInstanceOf(NotFoundSignal);
+  });
+
+  it('lets any other failure through to the error page', async () => {
+    const failure = new StorefrontApiError(500, 'INTERNAL', 'Something went wrong.');
+    catalogApi.getProductBySlug.mockRejectedValue(failure);
+    await expect(productById('p-1', ctx)).rejects.toBe(failure);
+  });
+});
+
 describe('alternateLanguages', () => {
   it('maps each alternate the backend sent to its language, verbatim', () => {
     expect(
@@ -151,7 +171,7 @@ describe('the product page composes no product URL of its own', () => {
   it('resolves the key before reading, in the page and in its metadata', () => {
     expect(page).toMatch(/productIdForKey\(slug, ctx\)/);
     expect(page).toMatch(/resolveProductKey\(slug, anonymous\)/);
-    expect(page).toMatch(/getProductBySlug\(productId, ctx\)/);
+    expect(page).toMatch(/productById\(productId, ctx\)/);
     expect(page).toMatch(/canonical: product\.paths\.canonical/);
   });
 

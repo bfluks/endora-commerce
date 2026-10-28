@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { notFound, redirect } from 'next/navigation';
+import { redirect } from 'next/navigation';
 import {
   type AddToCartResult,
   nextAddToCartToken,
@@ -51,10 +51,10 @@ import {
   placeOneClickOrder,
 } from '../../../../lib/api/quick-order';
 import { getServerContext } from '../../../../lib/server-context';
-import { alternateLanguages, productIdForKey, requestedLanguage } from './resolution';
+import { alternateLanguages, productById, productIdForKey, requestedLanguage } from './resolution';
 import { tForLocale } from '../../../../lib/i18n/messages';
 import { cartActionFailure } from '../../../../lib/cart-action-failure';
-import { StorefrontApiError, withoutViewer } from '../../../../lib/api/client';
+import { withoutViewer } from '../../../../lib/api/client';
 import { publicApiBaseUrl } from '../../../../lib/env.mjs';
 
 interface PageProps {
@@ -140,13 +140,7 @@ export default async function ProductPage({
   // Feature 163 — which product the key names here, or the permanent redirect to
   // where it moved (FR-071, FR-072); then the product, read by id.
   const productId = await productIdForKey(slug, ctx);
-  let product;
-  try {
-    product = await getProductBySlug(productId, ctx);
-  } catch (err) {
-    if (err instanceof StorefrontApiError && err.status === 404) notFound();
-    throw err;
-  }
+  const product = await productById(productId, ctx);
 
   const primaryCategory = product.categories[0];
   const rfqSettings = await getStorefrontQuoteRequestSettings();
