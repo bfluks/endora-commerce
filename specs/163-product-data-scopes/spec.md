@@ -188,7 +188,8 @@ It replaces the 2026-10-21 Q1 answer and extends N1.
 - Q: (Q1-a) What becomes of archiving, which today is the global `inactive`? → A: A **separate, global,
   product-wide action, "Archive" / "Restore"**, that keeps today's effects: Archive sets `archivedAt` and
   emits `product.archived.v1` once per transition; the product page answers "gone" (410) under the rules
-  already in this spec (only to a caller who could otherwise see it, else not-found); Restore clears
+  already in this spec — the backend's product read and key resolve answer `410`, and the storefront's page
+  renders that as its not-found page (HTTP 404; owner decision B4, 2026-10-28) (only to a caller who could otherwise see it, else not-found); Restore clears
   `archivedAt`. `inactive` at **any** scope, global included, means plain "off" (not-found) and never
   archives. Archived state is independent of status (FR-010, FR-019, FR-005).
 - Q: (Q1-b) What happens to existing `draft` values? → A: A migration converts every `draft` to
@@ -879,7 +880,10 @@ the minimum and the return eligibility.
   status is read as `active`, while every channel and channel × language status override, membership, the
   channel's languages, the publication window and the audience still apply — so products archived by
   today's global `inactive` (Q1-c, O-4) keep answering "gone" where they did (Session 2026-10-25, O-3). An `inactive` product that is not archived answers not-found at every
-  scope; this also closes the gap noted in *Current state*, where a `draft` member product is reachable by
+  scope. "Gone" is the API's answer — `410 PRODUCT_ARCHIVED` from the product read and the key resolve; the
+  storefront's product page shows its ordinary not-found page for it (HTTP 404), as for a product that does
+  not exist (owner decision B4, 2026-10-28: an App Router page cannot answer 410 without a per-request
+  middleware round trip); this also closes the gap noted in *Current state*, where a `draft` member product is reachable by
   its URL (D-1 is moot, Session 2026-10-25). Note: product handles stored by CMS product blocks (global slugs) MUST keep resolving — the product lookup
   `GET :idOrSlug` answers an id, then a current key at (C, L), then the global slug, and never a redirect.
   It is an API handle, not a storefront URL, so FR-071 does not govern it (`research.md` R28).

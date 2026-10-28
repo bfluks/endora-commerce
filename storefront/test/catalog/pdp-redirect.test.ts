@@ -241,6 +241,9 @@ describe('only the product page passes the `?lang` override to the server contex
 describe('the product page marks the language its content is written in (T155, B3)', () => {
   const page = readFileSync(resolve(import.meta.dirname, '../../app/(catalog)/p/[slug]/page.tsx'), 'utf8');
 
+  // Source-level, as the rest of this file: rendering `ProductPage` means standing up
+  // every read it makes (resolve, product, stock, price, quote settings, one-click, the
+  // session) for one attribute, and the page's own suites already read its source.
   it('its outermost element carries the resolved locale as `lang`', () => {
     const body = page.slice(page.search(/export default async function ProductPage\(/));
     const outermost = body.slice(body.indexOf('return (')).match(/return \(\s*<div([^>]*)>/);
