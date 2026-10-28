@@ -1894,6 +1894,7 @@
   "rfqCreate.field.product": "Produkt",
   "rfqCreate.field.quantity": "Ilość",
   "rfqCreate.field.salesChannel": "Kanał sprzedaży",
+  "rfqCreate.gate.missingChannel": "Wybierz kanał sprzedaży, aby utworzyć zapytanie ofertowe.",
   "rfqCreate.hint.salesChannel": "Zapytanie ofertowe powstaje w tym kanale: obowiązują jego ceny, dostępność produktów i nazwy produktów.",
   "rfqCreate.items.browse": "Dodaj produkty do zapytania ofertowego",
   "rfqCreate.items.empty": "Brak pozycji. Przeglądaj produkty lub użyj szybkiego wyszukiwania, aby je dodać.",

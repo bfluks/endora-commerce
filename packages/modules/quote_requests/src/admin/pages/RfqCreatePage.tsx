@@ -864,6 +864,11 @@ export function RfqCreatePage(): ReactNode {
         </Alert>
       ) : null}
 
+      {!channelChosen && !created ? (
+        // The disabled action says why (the order create screen's gate hint).
+        <p className="mb-2 text-right text-sm text-muted-foreground">{t('rfqCreate.gate.missingChannel')}</p>
+      ) : null}
+
       <div className="flex justify-end">
         {created ? (
           <Button onClick={(): void => leaveFor(created.id)}>{t('rfqCreate.warnings.open')}</Button>
