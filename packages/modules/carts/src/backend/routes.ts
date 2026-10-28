@@ -664,7 +664,10 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
           isOrgAdmin: false,
         },
         body.note,
-        { language: await request.responseLanguage() },
+        {
+          language: await request.responseLanguage(),
+          ...(actor.languageTag !== undefined ? { languageTag: actor.languageTag } : {}),
+        },
       );
       return {
         data: {

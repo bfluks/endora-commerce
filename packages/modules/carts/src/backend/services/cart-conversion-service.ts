@@ -95,8 +95,12 @@ export class CartConversionService {
     cart: Cart,
     ctx: RfqCustomerContext,
     note?: string,
-    /** The language a refusal names a product in (feature 155, D3/D4). */
-    options: { language?: string } = {},
+    /**
+     * The language a refusal names a product in (feature 155, D3/D4), and the
+     * request's language tag the lines' scope language is resolved from
+     * (feature 163, `CreateForCustomerOptions.languageTag`).
+     */
+    options: { language?: string; languageTag?: string } = {},
   ): Promise<ConvertToQrResult> {
     // command-coverage-ignore: the durable write is the RFQ (RfqService
     // .createForCustomer, audited as quote_request.create); this only marks the
@@ -146,7 +150,9 @@ export class CartConversionService {
         // per base piece, the basis every quote price is compared on (T12).
         lineReferencePrices: items.map((it) => ({ amount: it.unitPrice, currency: it.currency })),
         ...(options.language ? { language: options.language } : {}),
-        // Feature 163 — the lines are asked about at the basket's channel.
+        // Feature 163 — the lines are asked about at the basket's channel, in
+        // the request's scope language (the basket's own `basketScopeLanguage`).
+        ...(options.languageTag ? { languageTag: options.languageTag } : {}),
         ...(cart.salesChannelId ? { salesChannelId: cart.salesChannelId } : {}),
       },
     );
