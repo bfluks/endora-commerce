@@ -1764,6 +1764,52 @@ checkpoint F fix round (see the Phase 22 notes).
   The four bundles both sides touched and auto-merged (`_i18n`, `blog`, en + pl) and the catalog pair parse with no
   duplicate key; no test of ours compares a whole product card strictly, so master's new `summary` field breaks none.
 
+- 2026-10-28 (S1, third Phase 25 rebase): rebased with `--signoff` onto `origin/master` `0ea36c814` (176 commits:
+  #485 / #489 Polish and English error placeholders written as sentences, with `check:error-translations` P5
+  refusing the shape; #493 each package's `dist` cleaned before compiling; #483 `manifests:generate` reconciling
+  `backend/package.json`; #487 the custom-field definition form; #488 admin tests on node 26 `localStorage`; the
+  migration-class registry naming its missing entry; and `specs/163-projects-and-tasks/` — `projects`, `tasks`,
+  CRM references, admin preferences); backup ref `backup/163-pre-rebase-20261028` = `c46eb1774`. Two conflicts:
+  the `AGENTS.md` appendix's Recent Changes (`feat/163-product-data-scopes`, `164-admin-user-preferences`,
+  `163-projects-and-tasks` — the newest three) and the catalog `i18n/{en,pl}.json` at T156e: master's sentences
+  for `PRODUCT_NOT_FOUND` kept, ours for `PRODUCT_ARCHIVED` ("Product is archived." / "Produkt jest
+  zarchiwizowany." — master had rewritten the old "inactive" wording); `check:error-translations` reports
+  `placeholder=0 sameAsEnglish=0`, so every code of this feature is a sentence in both languages.
+  **Master's product reads**: none in `catalog`, `carts`, `orders`, `quote_requests`, `search`, `seo`,
+  `comparisons`, `shopping_lists`, `quick_order`, `product_feeds`, `import_export` or the storefront (only
+  `package.json` / bundle lines there). The new readers are the record references of `projects`, `tasks` and
+  `crm` (`[[product:<uuid>]]` names through `CatalogProductReadPort.findByIds`, gated on `catalog:read`) —
+  operator surfaces with no storefront route, so no availability rule applies (consumers.md unchanged).
+  `composer:generate`, `manifests:generate` and `pnpm install --lockfile-only` moved nothing — no regenerate
+  commit; `--frozen-lockfile` clean.
+- 2026-10-28 (S1, T155 findings fixed): four defects from the manual walk, each red first.
+  *B1 (§1.5b)* — a buyer's quote line was judged at the **message** language: the customer routes passed
+  `responseLanguage()` (which falls back to a bundle language — `de-DE` answers in Polish) as the scope tag, so a
+  product off at (B2C, de-DE) was quoted while the basket refused it. `CreateForCustomerOptions.languageTag`
+  (contracts) now carries the first `Accept-Language` tag; `RfqService.createForCustomer` / `patchDraft` /
+  `resubmit` resolve the scope language, line names and unit names from it (absent: the channel default), and
+  `language` stays the message language. Passed by the three customer routes, the basket's conversion
+  (`actor.languageTag`) and the buyer's quick-order build. Red: `rfq-scope-language.test.ts` (2 red → green),
+  `quick-order-build-service.test.ts` (1 red → green). Left at the channel default, as before and as their own
+  seams already judge: the shopping-list conversion (its partition asks at `languageCode: null`) and the order
+  clone to a quote. [PG] `integration/quote_requests/scoped-availability.test.ts` (German-off: RFQ 404 equal to
+  the absent product's, basket 404, Polish 201) — unrun here.
+  *B2 (§1.5c)* — `adminCreateQuoteRequestSchema.salesChannelId` (optional; unknown id `404 NOT_FOUND`):
+  `createOnBehalf` stores it and `onBehalfWarnings` asks at it. *Create quote request* shows a **Sales channel**
+  selector under the customer from `GET /admin/organizations/:id/sales-channels` (the Organization's active
+  channels; the only one preselected, else a choice is required; no selector and no field when the read fails),
+  prefills agreed prices on that channel, and on a `warnings` answer stays on the screen naming the products with
+  **Open the quote request**. Red: contracts `quote-requests.test.ts` (2), `on-behalf-channel.test.ts` (3),
+  admin `RfqCreatePage.sales-channel.test.tsx` (4 + 1). Docs EN + PL, Polish cache re-pinned. [PG] cases in the
+  same `scoped-availability.test.ts`.
+  *B3* — the root layout cannot take `?lang=` (layouts get no `searchParams`, and L-1 / Q-M7 keep the override
+  the product page's alone, pinned by `pdp-redirect.test.ts`); the product page marks its own content instead,
+  `lang={locale}` on its outermost element (WCAG 3.1.2).
+  *B4* — an archived product's PDP answered HTTP 500: `productIdForKey` rethrew the resolve's `410`. It now
+  answers not-found (404) like an unknown key; quickstart §5a reworded. A true 410 page is not cheap in the App
+  Router (a page can only `notFound()` / redirect; a 410 needs the middleware to ask the resolve per `/p/`
+  document) — not built, left to the owner.
+
 **Verification**: as listed in T151–T154.
 
 ---
