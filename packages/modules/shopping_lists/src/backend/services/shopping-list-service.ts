@@ -408,13 +408,17 @@ export class ShoppingListService {
     ctx: CustomerContext,
     listId: string,
     itemIds: string[] | undefined,
-    /** The language a refusal names a product in (feature 155, D3/D4). */
-    options: { language?: string } = {},
+    /**
+     * The language a refusal names a product in (feature 155, D3/D4); the
+     * request's language tag and channel, which the lines are judged at (feature
+     * 163 — `CreateForCustomerOptions.languageTag`, the rule of every buyer seam).
+     */
+    options: { language?: string; languageTag?: string; salesChannelId?: string } = {},
   ): Promise<ConvertToRfqResult> {
     const em = this.emFactory();
     const list = await this.#owned(em, ctx, listId);
     const items = await this.#selectItems(em, list.id, itemIds);
-    const { skipped, kept } = await this.#partitionByProductStatus(items, ctx);
+    const { skipped, kept } = await this.#partitionByProductStatus(items, ctx, options.languageTag);
 
     let rfqId: string | null = null;
     let added = 0;
@@ -429,7 +433,11 @@ export class ShoppingListService {
             ...(item.note ? { lineNote: item.note } : {}),
           })),
         },
-        options.language ? { language: options.language } : undefined,
+        {
+          ...(options.language ? { language: options.language } : {}),
+          ...(options.languageTag ? { languageTag: options.languageTag } : {}),
+          ...(options.salesChannelId ? { salesChannelId: options.salesChannelId } : {}),
+        },
       );
       rfqId = rfq.id;
       added = kept.length;
@@ -482,6 +490,8 @@ export class ShoppingListService {
   async #partitionByProductStatus(
     items: ShoppingListItem[],
     ctx: CustomerContext,
+    /** Feature 163 — the request's language tag; absent, the channel's default language. */
+    languageTag?: string,
   ): Promise<{ kept: ShoppingListItem[]; skipped: ConversionSkip[] }> {
     if (items.length === 0) return { kept: [], skipped: [] };
     const productIds = Array.from(new Set(items.map((i) => i.productId)));
@@ -491,14 +501,15 @@ export class ShoppingListService {
     // Feature 163 — on a request channel, whatever else makes a member line
     // unacquirable there now (switched off, outside its window, outside the
     // audience) is `product_not_found`, the answer an out-of-channel line gets.
-    // The channel's default language: a conversion carries no request tag.
+    // The scope language the request's tag resolves to on that channel, as every
+    // buyer seam asks; the channel's default language when the caller has no tag.
     const channel = currentSalesChannel();
     const availableHere =
       channel === null
         ? null
         : await this.#requireAvailability().filterAvailable(productIds, {
             channelId: channel.id,
-            languageCode: null,
+            languageCode: languageTag === undefined ? null : scopeLanguageOf(channel, languageTag),
             audience: { organizationId: ctx.organizationId, authenticated: true },
           });
     const skipped: ConversionSkip[] = [];

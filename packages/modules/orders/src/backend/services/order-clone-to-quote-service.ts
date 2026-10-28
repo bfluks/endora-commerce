@@ -23,6 +23,14 @@ interface CloneContext {
  */
 export interface CloneOptions {
   actor?: 'operator';
+  /**
+   * Feature 163 — the buyer's request: the language a refusal names a product in,
+   * its language tag and its channel, which the lines are judged at
+   * (`CreateForCustomerOptions`). Never set for the operator.
+   */
+  language?: string;
+  languageTag?: string;
+  salesChannelId?: string;
 }
 
 /**
@@ -72,7 +80,13 @@ export class OrderCloneToQuoteService {
         isOrgAdmin: ctx.isOrgAdmin ?? true,
       },
       input,
-      options.actor === 'operator' ? { minimums: 'warn' } : undefined,
+      options.actor === 'operator'
+        ? { minimums: 'warn' }
+        : {
+            ...(options.language ? { language: options.language } : {}),
+            ...(options.languageTag ? { languageTag: options.languageTag } : {}),
+            ...(options.salesChannelId ? { salesChannelId: options.salesChannelId } : {}),
+          },
     );
     return { quoteRequestId: created.id };
   }
