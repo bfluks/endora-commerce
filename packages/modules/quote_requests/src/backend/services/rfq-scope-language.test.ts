@@ -9,6 +9,14 @@ vi.mock('@endora-commerce/platform/kernel', async (importOriginal) => ({
   currentSalesChannel: () => channelState.current,
 }));
 
+vi.mock('./line-order.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./line-order.js')>()),
+  loadArrangedQuoteLines: async () => ({
+    lines: [{ productId: '00000000-0000-4000-8000-0000000000a2', quantity: 1, variantId: null }],
+    groups: [],
+  }),
+}));
+
 const { RfqService } = await import('./rfq-service.js');
 
 /**
@@ -33,9 +41,26 @@ function serviceAskingAt(): { service: InstanceType<typeof RfqService>; filterAv
   // Nothing is available, so the write stops at the product 404 before any
   // collaborator past the availability question is reached.
   const filterAvailable = vi.fn(async () => new Set<string>());
+  // The draft a buyer edits or resubmits: theirs, Pending, untouched by an operator.
+  const em = {
+    findOne: async () => ({
+      id: 'rfq-1',
+      status: 'Pending',
+      organizationId: ORG_ID,
+      customerAccountId: CUSTOMER_ID,
+      awaitingCustomerRevisionAcceptance: false,
+      version: 1,
+      salesChannelId: B2C,
+    }),
+    count: async () => 0,
+    find: async () => [],
+  };
   const service = new RfqService({
-    emFactory: () => ({}),
-    negotiationPolicy: { assertProposalsAllowed: async () => undefined },
+    emFactory: () => em,
+    negotiationPolicy: {
+      assertProposalsAllowed: async () => undefined,
+      precheckProposalsAllowed: async () => undefined,
+    },
     catalogProducts: {
       findByIds: async (ids: readonly string[]) =>
         ids.map((id) => ({
@@ -92,5 +117,27 @@ describe('163 — a buyer’s quote line is asked about at the request’s scope
       }),
     );
     expect(filterAvailable).toHaveBeenCalledWith([PRODUCT_ID], expect.objectContaining({ languageCode: 'de-DE' }));
+  });
+
+  it('a draft edit asks at the request tag resolved against the channel (code review m5)', async () => {
+    const { service, filterAvailable } = serviceAskingAt();
+    const code = await refusalOf(
+      service.patchDraft('rfq-1', ctx, { items: [{ productId: PRODUCT_ID, quantity: 2 }] } as never, null, {
+        language: 'pl',
+        languageTag: 'de-DE',
+        salesChannelId: B2C,
+      }),
+    );
+    expect(code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
+    expect(filterAvailable).toHaveBeenCalledWith([PRODUCT_ID], expect.objectContaining({ channelId: B2C, languageCode: 'de-DE' }));
+  });
+
+  it('a resubmit asks at the request tag resolved against the channel (code review m5)', async () => {
+    const { service, filterAvailable } = serviceAskingAt();
+    const code = await refusalOf(
+      service.resubmit('rfq-1', ctx, {} as never, { language: 'pl', languageTag: 'de-DE', salesChannelId: B2C }),
+    );
+    expect(code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
+    expect(filterAvailable).toHaveBeenCalledWith([PRODUCT_ID], expect.objectContaining({ channelId: B2C, languageCode: 'de-DE' }));
   });
 });

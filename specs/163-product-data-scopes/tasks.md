@@ -1835,6 +1835,20 @@ checkpoint F fix round (see the Phase 22 notes).
   *B4 residual* — the read by id after the resolve (`productById` in `resolution.ts`) answers not-found for a `404`
   or `410` too (red: 4 new cases in `pdp-redirect.test.ts`).
 
+- 2026-10-28 (S1, review fix round on `820689abe..d0bbcad93`, code review + security review): each new test seen
+  red first (the `patchDraft` / `resubmit` cases by mutating the fixed call sites back). *Must 1–2* — the
+  shopping-list conversion (partition and `createForCustomer`) and the buyer's order clone now take the request's
+  language tag and channel, like every other buyer quote seam; the operator's clone keeps `minimums: 'warn'` and
+  no tag. *Must 3 (security M1)* — `createOnBehalf` accepts only one of the Organization's active channels
+  (`SalesChannelMembershipPort.listChannelsForEntity`), else `422 RFQ_SALES_CHANNEL_NOT_ALLOWED` (new code, en/pl,
+  manifest, routing ledger); admin order create still checks existence only (not changed, by decision).
+  *Must 4 (security M2)* — `StorefrontRevalidator` has a 5 s timeout and logs a non-2xx answer without the secret;
+  `ProductPageRevalidation` debounces 150 ms (≤ 1 s), caps a batch at 500 products (past it the shared tag once),
+  keeps one call in flight, drops a deleted product by its keys (`product.deleted.v1.formerUrlKeys`) and checks
+  payloads for a string `productId`. *Should 5–8* — spec.md (archived PDP = not-found page, the API's 410);
+  `lineNames(…, languageTag)`; `quick_order` uses `firstLanguageTag`; the `lang` test says why it reads source.
+  `shopping_lists` now owns a co-located test run (`vitest.config.ts`, generated `test` script).
+
 **Verification**: as listed in T151–T154.
 
 ---
