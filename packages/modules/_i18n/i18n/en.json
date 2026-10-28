@@ -1893,6 +1893,7 @@
   "rfqCreate.field.product": "Product",
   "rfqCreate.field.quantity": "Qty",
   "rfqCreate.field.salesChannel": "Sales channel",
+  "rfqCreate.gate.missingChannel": "Choose a sales channel to create the quote request.",
   "rfqCreate.hint.salesChannel": "The quote request is raised on this channel: its prices, product availability and product names apply.",
   "rfqCreate.items.browse": "Add products to the quote request",
   "rfqCreate.items.empty": "No lines yet. Browse products or use the quick search to add them.",
