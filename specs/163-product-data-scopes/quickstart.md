@@ -64,14 +64,15 @@ reported (each row names the product and links to its Scopes tab); Bulk actions 
 
 ## 5a. Archive / Restore (FR-019, FR-053, FR-113–FR-116)
 
-- Editor → **Archive** P → confirm. Storefront: `/p/wiertarka` answers 410 in B2B and B2C wherever P was
-  available; the editor still shows P's status as `active` at every scope. P has left the product list's
+- Editor → **Archive** P → confirm. Storefront: `/p/wiertarka` shows the not-found page (HTTP 404; the backend's resolve answers
+  `410 PRODUCT_ARCHIVED`, which the storefront renders as not-found — T155 finding B4) in B2B and B2C
+  wherever P was available; the editor still shows P's status as `active` at every scope. P has left the product list's
   default view and appears under *Archived*. Audit log: one `product.archive` entry with `archivedAt`
   before / after.
 - Set P's global status to `inactive` and back to `active` → P stays archived (setting `active` never
   restores). **Restore** → P is back wherever its status allows, without any gate message even with the gate
   on **refuse** (§6).
-- Archive again, then switch P off in B2C (C override `inactive`): B2C answers not-found, B2B "gone".
+- Archive again, then switch P off in B2C (C override `inactive`): B2C answers not-found, B2B "gone" at the API (`410`) and the not-found page on the storefront.
 - Bulk: select several products → **Archive** → per-product result; *Undo* on the Bulk actions page brings
   them back; a product already archived is reported as unchanged.
 - Command palette (⌘K / CTRL+K): type "archived" or "archiwum" → **Archived products** opens
