@@ -98,6 +98,7 @@ import { CatalogAdminService } from './services/catalog-admin.service.js';
 import { CatalogBulkImportService } from './services/catalog-bulk-import.service.js';
 import { ProductAvailabilityService } from './services/product-availability.service.js';
 import { ProductUrlKeyReadService } from './services/url-key-resolution.service.js';
+import { ProductPageRevalidation } from './services/product-page-revalidation.js';
 import { ProductScopesService } from './services/product-scopes.service.js';
 import { UrlKeyService } from './services/url-key.service.js';
 import {
@@ -319,6 +320,7 @@ export interface CatalogCradle {
   readonly bundleService: BundleService;
   readonly packagingUnitService: PackagingUnitService;
   readonly catalogCategoryRevalidator: StorefrontRevalidator;
+  readonly catalogProductPageRevalidation: ProductPageRevalidation;
   readonly catalog: ReturnType<typeof catalogModule>;
 }
 
@@ -585,6 +587,32 @@ export function registerModule(ctx: ModuleContext): void {
           new StorefrontRevalidator({
             baseUrl: process.env['STOREFRONT_BASE_URL'],
             secret: process.env['REVALIDATE_SECRET'],
+          }),
+      )
+      .singleton(),
+
+    /**
+     * Feature 163 (T155 finding CACHE-1) — drops a product's cached storefront
+     * product-page reads after an availability-changing write (subscriptions
+     * below). Rides the category revalidator: the same storefront endpoint, and
+     * the plugin hands it `app.log`.
+     */
+    catalogProductPageRevalidation: ctx
+      .asFunction(
+        ({ emFactory, catalogCategoryRevalidator }: Pick<CatalogCradle, 'emFactory' | 'catalogCategoryRevalidator'>) =>
+          new ProductPageRevalidation({
+            revalidator: catalogCategoryRevalidator,
+            keysOf: async (productIds) => {
+              const em = emFactory();
+              const ids = [...productIds];
+              const [products, keys, redirects] = await Promise.all([
+                em.find(Product, { id: { $in: ids } }, { fields: ['slug'] }),
+                em.find(ProductUrlKey, { productId: { $in: ids } }, { fields: ['key'] }),
+                em.find(ProductUrlRedirect, { productId: { $in: ids } }, { fields: ['key'] }),
+              ]);
+              return [...products.map((p) => p.slug), ...keys.map((k) => k.key), ...redirects.map((r) => r.key)];
+            },
+            log: { warn: (obj, msg) => ctx.log.warn(obj as object, msg) },
           }),
       )
       .singleton(),
@@ -1256,6 +1284,30 @@ export function registerModule(ctx: ModuleContext): void {
    */
   ctx.subscribe('category.content.updated.v1', () => {
     void cradle().catalogCategoryRevalidator.revalidate(['catalog:categories']);
+  });
+
+  /**
+   * Feature 163 (T155 finding CACHE-1) — a product's storefront page follows its
+   * availability at once. Every committed write that can change whether or where a
+   * product is available announces `product.updated.v1` (status at any scope, window,
+   * audience, URL keys, restore, the bulk and import paths, the window sweep) or
+   * `product.archived.v1`; channel membership is the kernel's
+   * `sales_channels.membership_changed`. Next keeps only a `200`, so without this a
+   * product switched off went on showing. Coalesced and best-effort
+   * (`ProductPageRevalidation`); `ctx.subscribe` stops it with the module.
+   */
+  ctx.subscribe('product.updated.v1', (payload) => {
+    cradle().catalogProductPageRevalidation.productChanged((payload as { productId: string }).productId);
+  });
+  ctx.subscribe('product.archived.v1', (payload) => {
+    cradle().catalogProductPageRevalidation.productChanged((payload as { productId: string }).productId);
+  });
+  ctx.subscribe('product.deleted.v1', () => {
+    cradle().catalogProductPageRevalidation.productRemoved();
+  });
+  ctx.subscribe('sales_channels.membership_changed', (payload) => {
+    const change = payload as { entityType: string; entityId: string };
+    if (change.entityType === 'product') cradle().catalogProductPageRevalidation.productChanged(change.entityId);
   });
 
   ctx.routes(async (app) => {
