@@ -64,6 +64,7 @@ const BUNDLE = passthroughBundle('core', [
   'rfqCreate.items.quickSearch',
   'rfqCreate.field.agreedUnitPrice',
   'rfqCreate.field.salesChannel',
+  'rfqCreate.gate.missingChannel',
   'rfqCreate.warnings.title',
   'rfqCreate.warnings.open',
 ]);
@@ -169,8 +170,11 @@ describe('RfqCreatePage — the sales channel', () => {
     await addLine();
     const submit = screen.getByText('rfqCreate.submit');
     expect(submit).toBeDisabled();
+    // The disabled action says why (the order create screen's gate hint).
+    expect(screen.getByText('rfqCreate.gate.missingChannel')).toBeInTheDocument();
     await pick('rfqCreate.field.salesChannel', 'Wholesale');
     await waitFor(() => expect(submit).not.toBeDisabled());
+    expect(screen.queryByText('rfqCreate.gate.missingChannel')).toBeNull();
     await userEvent.click(submit);
     await waitFor(() => expect(creates()).toHaveLength(1));
     expect(creates()[0]?.[1]).toMatchObject({ salesChannelId: B2B });
