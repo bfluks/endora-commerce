@@ -1810,6 +1810,16 @@ checkpoint F fix round (see the Phase 22 notes).
   Router (a page can only `notFound()` / redirect; a 410 needs the middleware to ask the resolve per `/p/`
   document) — not built, left to the owner.
 
+- 2026-10-28 (S1, fourth Phase 25 rebase): onto `origin/master` `cab10b250` (11 commits: #491 display mode `none`
+  withholds every amount, sales-channel identity writes through the Command Bus, palette word matching); backup
+  `backup/163-pre-rebase2-20261028` = `8569358d5`. One conflict, the import list of
+  `catalog-org-price-decorator.ts` (master's `LinePriceResult` and `shown()` beside our
+  `CatalogProductAvailabilityPort`); the file is ours plus master's hunks exactly. Master's new
+  `catalog-org-price-decorator.withheld.test.ts` built the decorator without 163's `availability` dependency —
+  given one answering every product available. #491 changes which amounts are shown, not which products are
+  read: no consumers.md row moves. Regeneration moved nothing. Green: `pnpm -r typecheck`, mod-catalog (31 files),
+  mod-price-lists (32), contracts (82), catalog lint, the catalog-touching checks, `release-intent` (0 violations).
+
 **Verification**: as listed in T151–T154.
 
 ---
