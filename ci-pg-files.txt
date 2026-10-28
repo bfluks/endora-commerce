@@ -125,3 +125,10 @@ test/perf/catalog/listing-filtered-page.bench.ts
 test/perf/catalog/listing-scoped-availability.bench.ts
 test/unit/_i18n/registered-bundles-shape.test.ts
 test/unit/_i18n/translation-proof.test.ts
+test/integration/catalog/price-sort-withheld.test.ts
+test/integration/price_lists/worked-examples/display-mode-withheld.test.ts
+test/integration/search/display-mode-withheld-in-search.test.ts
+test/integration/price_lists/price-surface-targeted-refresh.test.ts
+test/integration/sales_channels/admin-default-undeletable.test.ts
+test/integration/sales_channels/dictionary-boundary.test.ts
+test/contract/sales_channels/admin-crud-lifecycle.contract.test.ts
