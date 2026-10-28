@@ -46,4 +46,37 @@ describe('StorefrontRevalidator', () => {
     await new StorefrontRevalidator({ baseUrl: 'http://x', secret: 's', fetchFn }).revalidate([]);
     expect(fetchFn).not.toHaveBeenCalled();
   });
+
+  it('logs a non-2xx answer as a failure, naming the status and never the secret (security M2)', async () => {
+    const warn = vi.fn();
+    const fetchFn = vi.fn(async () => new Response('{"error":"unauthorized"}', { status: 401 }));
+    await expect(
+      new StorefrontRevalidator({
+        baseUrl: 'http://x',
+        secret: 'sekret',
+        fetchFn: fetchFn as unknown as typeof fetch,
+        logger: { warn },
+      }).revalidate(['ga:config']),
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [obj, msg] = warn.mock.calls[0]!;
+    expect(obj).toMatchObject({ status: 401 });
+    expect(JSON.stringify([obj, msg])).not.toContain('sekret');
+  });
+
+  it('bounds the call with a timeout signal, and logs a transport failure', async () => {
+    const warn = vi.fn();
+    type FetchArgs = Parameters<typeof fetch>;
+    const fetchFn = vi.fn(async (_u: FetchArgs[0], _i?: FetchArgs[1]) => {
+      throw new Error('aborted');
+    });
+    await new StorefrontRevalidator({
+      baseUrl: 'http://x',
+      secret: 's',
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logger: { warn },
+    }).revalidate(['ga:config']);
+    expect(fetchFn.mock.calls[0]![1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
 });

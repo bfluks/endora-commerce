@@ -28,7 +28,11 @@ export interface CatalogEvents extends Record<string, EventBase> {
   'product.created.v1': EventBase & { productId: string; sku: string };
   'product.updated.v1': EventBase & { productId: string; changedFields: string[] };
   'product.archived.v1': EventBase & { productId: string };
-  'product.deleted.v1': EventBase & { productId: string };
+  /**
+   * `formerUrlKeys` (feature 163, T155 CACHE-1) — the redirect keys the deletion
+   * removed, so a subscriber dropping the product's cached pages can still name them.
+   */
+  'product.deleted.v1': EventBase & { productId: string; formerUrlKeys?: string[] };
   'attribute.updated.v1': EventBase & {
     attributeKey: string;
     isSearchable: boolean;
@@ -1338,7 +1342,7 @@ export class CatalogAdminService {
     await this.#runCommand(this.#deleteProductCommand(id));
   }
 
-  #deleteProductCommand(id: string): Command<{ id: string }> {
+  #deleteProductCommand(id: string): Command<{ id: string; formerUrlKeys: string[] }> {
     return {
       action: 'product.delete',
       objectType: 'product',
@@ -1365,7 +1369,7 @@ export class CatalogAdminService {
         product.deletedAt = new Date();
         await em.flush();
         return {
-          result: { id: product.id },
+          result: { id: product.id, formerUrlKeys: urlRedirects.map((row) => row.key) },
           before: { ...stateBefore, urlRedirects },
           after: {
             ...stateBefore,
@@ -1379,6 +1383,7 @@ export class CatalogAdminService {
           eventId: randomUUID(),
           occurredAt: new Date().toISOString(),
           productId: result.id,
+          formerUrlKeys: result.formerUrlKeys,
         },
       }),
     };
