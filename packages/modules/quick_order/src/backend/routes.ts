@@ -91,8 +91,9 @@ export async function registerQuickOrderRoutes(
           })),
         },
         // Feature 155 — the buyer's build: no actor, so a quote request is
-        // judged by the buyer's rules (FR-012).
-        { language: await request.responseLanguage() },
+        // judged by the buyer's rules (FR-012). Feature 163 — its quote lines'
+        // scope language is the request's tag, not the message language.
+        { language: await request.responseLanguage(), languageTag: firstAcceptLanguage(request) },
       );
       return { data: result };
     },
