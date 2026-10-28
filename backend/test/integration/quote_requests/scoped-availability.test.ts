@@ -13,7 +13,12 @@ import {
   minimumFixtureRun,
   type MinimumProductFixture,
 } from '../../helpers/order-minimum-fixture.js';
-import { clearProductScopes, errorBodyOf, setChannelStatus } from '../../helpers/product-scope-fixture.js';
+import {
+  clearProductScopes,
+  errorBodyOf,
+  setChannelStatus,
+  setLanguageStatus,
+} from '../../helpers/product-scope-fixture.js';
 
 /**
  * Feature 163, Phase 6 (T040) — quote-request lines and scoped availability
@@ -104,5 +109,138 @@ describe('163 — quote request lines honour scoped availability [integration]',
     });
     expect(res.statusCode, res.body).toBe(201);
     expect(res.json()).not.toHaveProperty('warnings');
+  });
+});
+
+/**
+ * T155 finding §1.5b — the scope language of a buyer's quote line is the
+ * request's language tag resolved against the channel, as the basket's is,
+ * never the language the response's messages fall back to. A channel speaking
+ * `pl-PL` and `de-DE` (the message bundles carry `en` and `pl`, so a `de-DE`
+ * request is answered in Polish) and a product switched off at (C, de-DE) only.
+ */
+describe('163 — a quote line honours a language switched off at (channel, language) [integration]', () => {
+  let h: BackendServerHandle;
+  const RUN = minimumFixtureRun();
+  const channelId = randomUUID();
+  const channelCode = `s163-rfq-de-${RUN}`;
+  const productId = randomUUID();
+  /** Switched off at C itself — what an operator's warning names at C's default language. */
+  const channelOffId = randomUUID();
+
+  async function sql(query: string, params: unknown[] = []): Promise<void> {
+    await h.em().getConnection().execute(query, params);
+  }
+
+  beforeAll(async () => {
+    h = await setupBackendServer();
+    await sql(
+      `insert into sales_channels (id, code, name, default_language, languages, currencies, default_currency,
+                                   active, is_public, created_at, updated_at)
+       values (?, ?, ?::jsonb, 'pl-PL', '["pl-PL","de-DE"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, true, now(), now())`,
+      [channelId, channelCode, JSON.stringify({ 'en-US': '163 RFQ German off' })],
+    );
+    // Feature 154 — the signed-in buyer shops here only if its Organization is assigned.
+    await sql(
+      `insert into sales_channel_organizations (sales_channel_id, organization_id) values (?, ?) on conflict do nothing`,
+      [channelId, TEST_ORGANIZATION_ID],
+    );
+    const sku = `S163-RFQ-DE-${RUN}`;
+    await sql(
+      `insert into products (id, sku, slug, type, status, name, description, attribute_values, visibility,
+                             allowed_organization_ids, created_at, updated_at)
+       values (?, ?, ?, 'simple', 'active', ?::jsonb, '{}'::jsonb, '{}'::jsonb, 'public', '[]'::jsonb, now(), now())`,
+      [productId, sku, sku.toLowerCase(), JSON.stringify({ 'pl-PL': 'Niemiecki wył', 'en-US': 'German off' })],
+    );
+    await sql(`insert into sales_channel_products (sales_channel_id, product_id) values (?, ?)`, [channelId, productId]);
+    await setLanguageStatus(h.em(), productId, channelId, 'de-DE', 'inactive');
+    await sql(
+      `insert into products (id, sku, slug, type, status, name, description, attribute_values, visibility,
+                             allowed_organization_ids, created_at, updated_at)
+       values (?, ?, ?, 'simple', 'active', ?::jsonb, '{}'::jsonb, '{}'::jsonb, 'public', '[]'::jsonb, now(), now())`,
+      [channelOffId, `${sku}-C`, `${sku.toLowerCase()}-c`, JSON.stringify({ 'pl-PL': 'Kanał wył', 'en-US': 'Channel off' })],
+    );
+    await sql(`insert into sales_channel_products (sales_channel_id, product_id) values (?, ?)`, [channelId, channelOffId]);
+    await setChannelStatus(h.em(), channelOffId, [channelId], 'inactive');
+  });
+
+  afterAll(async () => {
+    if (!h) return;
+    await clearProductScopes(h.em(), [productId, channelOffId]);
+    await sql(`delete from quote_requests where sales_channel_id = ?`, [channelId]);
+    await sql(`delete from carts where sales_channel_id = ?`, [channelId]);
+    await sql(`delete from sales_channel_products where product_id in (?, ?)`, [productId, channelOffId]);
+    await sql(`delete from products where id in (?, ?)`, [productId, channelOffId]);
+    await sql(`delete from sales_channel_organizations where sales_channel_id = ?`, [channelId]);
+    await sql(`delete from sales_channels where id = ?`, [channelId]);
+    await teardownBackendServer(h);
+  });
+
+  const create = (language: string, items: Array<{ productId: string; quantity: number }>) =>
+    h.app.inject({
+      method: 'POST',
+      url: '/api/v1/quote-requests',
+      cookies: CUSTOMER,
+      headers: { 'x-sales-channel': channelCode, 'accept-language': language },
+      payload: { items },
+    });
+
+  it('refuses the line in German with the absent product’s 404, as the basket does', async () => {
+    const absent = await create('de-DE', [{ productId: randomUUID(), quantity: 1 }]);
+    expect(absent.statusCode, absent.body).toBe(404);
+    const refused = await create('de-DE', [{ productId, quantity: 1 }]);
+    expect(refused.statusCode, refused.body).toBe(404);
+    expect(errorBodyOf(refused)).toEqual(errorBodyOf(absent));
+
+    const basket = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/cart/items',
+      cookies: CUSTOMER,
+      headers: { 'x-sales-channel': channelCode, 'accept-language': 'de-DE' },
+      payload: { productId, quantity: 1 },
+    });
+    expect(basket.statusCode, basket.body).toBe(404);
+  });
+
+  it('accepts the same line in Polish, where the product is on', async () => {
+    const res = await create('pl-PL', [{ productId, quantity: 1 }]);
+    expect(res.statusCode, res.body).toBe(201);
+  });
+
+  it('raises an operator’s request on the channel the body names, and warns about the line off there (T155 §1.5c)', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/quote-requests',
+      cookies: ADMIN,
+      payload: {
+        organizationId: TEST_ORGANIZATION_ID,
+        customerAccountId: TEST_CUSTOMER_ID,
+        salesChannelId: channelId,
+        items: [
+          { productId, quantity: 1, agreedUnitPrice: 10 },
+          { productId: channelOffId, quantity: 1, agreedUnitPrice: 10 },
+        ],
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    const body = res.json() as { data: { salesChannelId?: string | null }; warnings?: unknown };
+    expect(body.data.salesChannelId).toBe(channelId);
+    expect(body.warnings).toEqual([{ productId: channelOffId, code: 'PRODUCT_UNAVAILABLE_IN_SCOPE' }]);
+  });
+
+  it('refuses an operator’s request naming an unknown channel with 404', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/quote-requests',
+      cookies: ADMIN,
+      payload: {
+        organizationId: TEST_ORGANIZATION_ID,
+        customerAccountId: TEST_CUSTOMER_ID,
+        salesChannelId: randomUUID(),
+        items: [{ productId, quantity: 1, agreedUnitPrice: 10 }],
+      },
+    });
+    expect(res.statusCode, res.body).toBe(404);
+    expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.NOT_FOUND);
   });
 });
