@@ -1,6 +1,6 @@
 import { notFound, permanentRedirect } from 'next/navigation';
-import type { ProductPagePaths } from '@endora-commerce/contracts';
-import { resolveProductKey } from '../../../../lib/api/catalog';
+import type { ProductDetail, ProductPagePaths } from '@endora-commerce/contracts';
+import { getProductBySlug, resolveProductKey } from '../../../../lib/api/catalog';
 import { StorefrontApiError, type RequestContext } from '../../../../lib/api/client';
 
 /**
@@ -46,6 +46,20 @@ export async function productIdForKey(key: string, ctx: RequestContext): Promise
     permanentRedirect(resolution.path);
   }
   return resolution.productId;
+}
+
+/**
+ * The product `productIdForKey` named, read by id. A product that became unavailable
+ * or was archived between the two reads (`404` / `410`) answers the page's not-found,
+ * as the resolve does (T155 finding B4); anything else is the error page.
+ */
+export async function productById(productId: string, ctx: RequestContext): Promise<ProductDetail> {
+  try {
+    return await getProductBySlug(productId, ctx);
+  } catch (err) {
+    if (err instanceof StorefrontApiError && (err.status === 404 || err.status === 410)) notFound();
+    throw err;
+  }
 }
 
 /** `/p/<one segment>`, optionally with a query — never `//…`, a scheme or a backslash. */
