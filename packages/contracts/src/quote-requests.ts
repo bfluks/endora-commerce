@@ -1026,9 +1026,18 @@ export interface CreateForCustomerOptions {
   /**
    * Feature 155 (D3/D4) — the language a refusal names a product in: the language the
    * caller's response is answered in (`request.responseLanguage()`). Absent, the record's
-   * own fallback chain.
+   * own fallback chain. A message language only: it never decides which (channel,
+   * language) a line is asked about — that is `languageTag`'s.
    */
   language?: string;
+  /**
+   * Feature 163 — the buyer request's language tag (the first `Accept-Language` tag,
+   * `firstLanguageTag`), which the scope language L of every line is resolved from
+   * against the channel's own languages (`scopeLanguageOf`), as the basket's is. Absent:
+   * the channel's default language. Distinct from `language`, which falls back to a
+   * bundle language the channel may switch a product off in. In-process only.
+   */
+  languageTag?: string;
   /**
    * Feature 163 — the sales channel the buyer's route resolved, named explicitly so
    * a buyer's lines are always asked about at a channel (`catalogProductAvailabilityPort`)

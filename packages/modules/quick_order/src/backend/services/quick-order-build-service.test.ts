@@ -163,6 +163,17 @@ describe('QuickOrderBuildService — target quote_request', () => {
     expect(result).toEqual({ target: 'quote_request', quoteRequestId: 'rfq-1', quoteRequestBusinessId: 'RFQ-1' });
     expect(result).not.toHaveProperty('rejected');
   });
+
+  it('forwards the request’s language tag for the lines’ scope language beside the message language (163, T155 §1.5b)', async () => {
+    const { service, createForCustomer } = doubles();
+    await service.build(
+      { ...BUYER, salesChannelId: 'channel-1' },
+      { target: 'quote_request', items: ITEMS },
+      { language: 'pl', languageTag: 'de-DE' },
+    );
+    const call = createForCustomer.mock.calls[0] as unknown[];
+    expect(call[2]).toEqual({ language: 'pl', languageTag: 'de-DE', salesChannelId: 'channel-1' });
+  });
 });
 
 describe('QuickOrderBuildService — the item bound (FR-038)', () => {

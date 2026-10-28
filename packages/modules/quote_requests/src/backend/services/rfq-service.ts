@@ -285,7 +285,10 @@ export class RfqService {
   async #resolvePackaging(
     lines: readonly CreateQuoteRequestLine[],
     productById: ReadonlyMap<string, CatalogProductRecord>,
+    /** The language a refusal names a product in (feature 155, D3/D4). */
     language: string | undefined,
+    /** Feature 163 — the request's language tag, the unit name's scope language is resolved from. */
+    languageTag: string | undefined,
     /**
      * Feature 163 (FR-079, T138) — the channel the line names are asked at
      * (`lineNames`'s), so the unit name is snapshotted in the same scope
@@ -302,7 +305,7 @@ export class RfqService {
       lines,
       units,
       // No channel: no scope language, the global name (as `lineNames` asks nothing then).
-      channelId === null ? null : raisedInScopeLanguage(language, channelId),
+      channelId === null ? null : raisedInScopeLanguage(languageTag, channelId),
     );
     if (mismatches.length > 0) {
       const causes = mismatches.filter((m) => m.cause !== undefined);
@@ -474,7 +477,7 @@ export class RfqService {
     const productById = await this.#acquirableProductsById(
       input.items.map((it) => it.productId),
       ctx,
-      options.language,
+      options.languageTag,
       options.salesChannelId,
     );
     if (productById.size !== new Set(input.items.map((it) => it.productId)).size) {
@@ -494,6 +497,7 @@ export class RfqService {
       input.items,
       productById,
       options.language,
+      options.languageTag,
       salesChannelId,
     );
     const resolvedLines = input.items.map((line, index) => withResolvedPackaging(line, packaging[index]!));
@@ -533,7 +537,7 @@ export class RfqService {
     await em.persistAndFlush(rfq);
 
     const items: QuoteRequestItem[] = [];
-    const lineNames = await this.lineNames([...productById.values()], salesChannelId, options.language);
+    const lineNames = await this.lineNames([...productById.values()], salesChannelId, options.languageTag);
     for (const [index, lineInput] of input.items.entries()) {
       const product = productById.get(lineInput.productId)!;
       const unit = packaging[index]!;
@@ -620,9 +624,11 @@ export class RfqService {
     expectedVersion: number | null,
     /**
      * The language a refusal names a product in (feature 155, D3/D4); the
-     * channel the buyer's route resolved (feature 163).
+     * channel the buyer's route resolved and the request's language tag, which
+     * the lines' scope language is resolved from (feature 163,
+     * `CreateForCustomerOptions.languageTag`).
      */
-    options: { language?: string | undefined; salesChannelId?: string | undefined } = {},
+    options: { language?: string | undefined; languageTag?: string | undefined; salesChannelId?: string | undefined } = {},
   ): Promise<RfqDto> {
     const em = this.deps.emFactory();
     const rfq = await this.findVisibleForCustomer(em, rfqId, ctx);
@@ -654,7 +660,7 @@ export class RfqService {
       const productById = await this.#acquirableProductsById(
         body.items.map((it) => it.productId),
         ctx,
-        options.language,
+        options.languageTag,
         options.salesChannelId,
       );
       if (productById.size !== new Set(body.items.map((it) => it.productId)).size) {
@@ -673,6 +679,7 @@ export class RfqService {
         body.items,
         productById,
         options.language,
+        options.languageTag,
         rfq.salesChannelId ?? null,
       );
       const resolvedLines = body.items.map((line, index) => withResolvedPackaging(line, packaging[index]!));
@@ -716,7 +723,7 @@ export class RfqService {
       const lineNames = await this.lineNames(
         [...productById.values()],
         rfq.salesChannelId ?? null,
-        options.language,
+        options.languageTag,
       );
       // Feature 159 (R-13, FR-025) — a customer body carries no grouping: a
       // paired line keeps its group, a new line is ungrouped, no group changes;
@@ -836,9 +843,11 @@ export class RfqService {
     body: ResubmitQuoteRequest,
     /**
      * The language a refusal names a product in (feature 155, D3/D4); the
-     * channel the buyer's route resolved (feature 163).
+     * channel the buyer's route resolved and the request's language tag, which
+     * the lines' scope language is resolved from (feature 163,
+     * `CreateForCustomerOptions.languageTag`).
      */
-    options: { language?: string | undefined; salesChannelId?: string | undefined } = {},
+    options: { language?: string | undefined; languageTag?: string | undefined; salesChannelId?: string | undefined } = {},
   ): Promise<RfqDto> {
     const em = this.deps.emFactory();
     const sourceRfq = await this.findVisibleForCustomer(em, rfqId, ctx);
@@ -863,7 +872,7 @@ export class RfqService {
     const acquirable = await this.#acquirableProductsById(
       Array.from(new Set(sourceItems.map((it) => it.productId))),
       ctx,
-      options.language,
+      options.languageTag,
       options.salesChannelId,
     );
     if (sourceItems.some((it) => !acquirable.has(it.productId))) {
