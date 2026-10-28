@@ -45,6 +45,8 @@ describe('CatalogOrgPriceDecorator — display mode `none` withholds the amount 
       channelMembership: {
         filterEntityIdsInChannel: async (_channel: string, _type: string, ids: readonly string[]) => [...ids],
       } as never,
+      // Feature 163 (W5) — every product is available here: this suite is about display modes.
+      availability: { filterAvailable: async (ids: readonly string[]) => new Set(ids) } as never,
     });
   }
 
