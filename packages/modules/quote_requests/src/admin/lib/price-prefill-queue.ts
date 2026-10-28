@@ -32,6 +32,8 @@ export interface PricePrefillRequest {
   quantity: number;
   customerId: string;
   organizationId: string;
+  /** Feature 163 — the channel the request is raised on; absent, the resolver's default. */
+  salesChannelId?: string | undefined;
 }
 
 export interface PricePrefillQueueOptions {

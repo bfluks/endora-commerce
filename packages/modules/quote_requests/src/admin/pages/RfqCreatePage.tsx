@@ -5,6 +5,7 @@ import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
 import {
   Alert,
   AlertDescription,
+  AlertTitle,
   Button,
   Card,
   CardContent,
@@ -34,7 +35,13 @@ import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { createPricePrefillQueue, type PricePrefillQueue } from '../lib/price-prefill-queue';
 import { SectionSummary, sectionTotals, useQuoteLineGroupLabels, useSectionSummaryText } from '../line-groups.js';
 import { quoteNet } from '../quote-totals.js';
-import { lineAmountHalfUp, unitPriceDisplayText } from '@endora-commerce/contracts';
+import {
+  lineAmountHalfUp,
+  unitPriceDisplayText,
+  type AdminQuoteRequestWarning,
+  type OrganizationSalesChannelOption,
+  type OrganizationSalesChannelsResponse,
+} from '@endora-commerce/contracts';
 
 /**
  * Admin "create a Quote Request on behalf of a customer" (feature 008 US4).
@@ -114,6 +121,29 @@ function readOpenedWith(params: URLSearchParams): OpenedWith {
     // A path of this application only: never a scheme, a host or `//`.
     returnTo: /^\/(?![/\\])/.test(returnTo) ? returnTo : null,
   };
+}
+
+/**
+ * Feature 163 (FR-018, T155 §1.5c) — the channels an operator may raise the
+ * customer's request on: the Organization's own active channels, or every
+ * active channel when none of its own is active. The preselection is the only
+ * choice when there is one, else the system default when the Organization has
+ * no active channel of its own, else none — the operator chooses.
+ */
+function channelChoices(
+  assignment: Pick<OrganizationSalesChannelsResponse['data'], 'assignedSalesChannelIds' | 'options'>,
+): { options: OrganizationSalesChannelOption[]; preselected: string } {
+  const active = assignment.options.filter((c) => c.active);
+  const assigned = new Set(assignment.assignedSalesChannelIds);
+  const own = active.filter((c) => assigned.has(c.id));
+  const options = own.length > 0 ? own : active;
+  const preselected =
+    options.length === 1 ? options[0]!.id : own.length === 0 ? (options.find((c) => c.systemDefault)?.id ?? '') : '';
+  return { options, preselected };
+}
+
+function channelLabel(c: OrganizationSalesChannelOption): string {
+  return c.name['en-US'] ?? Object.values(c.name)[0] ?? c.code;
 }
 
 function customerLabel(c: AdminCustomerListItem): string {
@@ -273,6 +303,40 @@ export function RfqCreatePage(): ReactNode {
       alive = false;
     };
   }, [openedWith.customerAccountId]);
+
+  // Feature 163 (T155 §1.5c) — the channel the request is raised on, chosen
+  // among the customer's Organization's channels. `null` options: they could
+  // not be read (no `customers:read`, the module off), and the request is sent
+  // without a channel, raised where the admin request resolves, as before.
+  const [channelOptions, setChannelOptions] = useState<OrganizationSalesChannelOption[] | null>(null);
+  const [salesChannelId, setSalesChannelId] = useState('');
+  const channelRef = useRef(salesChannelId);
+  useEffect(() => {
+    channelRef.current = salesChannelId;
+  });
+  const organizationId = customer?.organizationId ?? '';
+  useEffect(() => {
+    setChannelOptions(null);
+    setSalesChannelId('');
+    if (!organizationId) return undefined;
+    let alive = true;
+    void apiClient
+      .get<OrganizationSalesChannelsResponse>(`/api/v1/admin/organizations/${organizationId}/sales-channels`)
+      .then((res) => {
+        if (!alive || !Array.isArray(res.data?.options)) return;
+        const { options, preselected } = channelChoices(res.data);
+        setChannelOptions(options);
+        setSalesChannelId(preselected);
+      })
+      .catch(() => {
+        // Left without a selector; the request is raised where it always was.
+      });
+    return (): void => {
+      alive = false;
+    };
+  }, [organizationId]);
+  // After a create the answer warned about: the request exists, the operator reads the warning.
+  const [created, setCreated] = useState<{ id: string; warnings: AdminQuoteRequestWarning[] } | null>(null);
   const [lines, setLines] = useState<LineRow[]>([]);
   const [browserOpen, setBrowserOpen] = useState(false);
   // Feature 159 — the new quote's groups, and where the browser's products go:
@@ -312,6 +376,7 @@ export function RfqCreatePage(): ReactNode {
         const res = await apiClient.post<{ data: Array<{ price: { amount: string } | null }> }>(
           '/api/v1/admin/price-books/resolve',
           {
+            ...(q.salesChannelId ? { salesChannelId: q.salesChannelId } : {}),
             buyer: { organizationId: q.organizationId, customerAccountId: q.customerId },
             lines: [{ key: 'line', productId: q.productId, quantity: q.quantity }],
           },
@@ -358,6 +423,8 @@ export function RfqCreatePage(): ReactNode {
         quantity,
         customerId: cust.id,
         organizationId: cust.organizationId,
+        // Feature 163 — priced on the channel the request is raised on.
+        salesChannelId: channelRef.current || undefined,
       });
       markResolving(row.key, true);
     },
@@ -367,6 +434,7 @@ export function RfqCreatePage(): ReactNode {
   // A customer change (including the one the page was opened with) clears every
   // price not typed by hand and asks again for the new customer — a previous
   // customer's price never stays on as if it were this one's (research R-11).
+  // A channel change does the same (feature 163): a price answers one channel.
   const linesRef = useRef(lines);
   useEffect(() => {
     linesRef.current = lines;
@@ -374,7 +442,7 @@ export function RfqCreatePage(): ReactNode {
   const pricedForRef = useRef<string | null>(null);
   useEffect(() => {
     // Identity and organization, not the object: re-reading the same customer is no change.
-    const key = `${customer?.id ?? ''}:${customer?.organizationId ?? ''}`;
+    const key = `${customer?.id ?? ''}:${customer?.organizationId ?? ''}:${salesChannelId}`;
     if (pricedForRef.current === key) return;
     pricedForRef.current = key;
     setLines((prev) =>
@@ -385,7 +453,7 @@ export function RfqCreatePage(): ReactNode {
         : prev,
     );
     for (const row of linesRef.current) prefill(row, customer);
-  }, [customer, prefill]);
+  }, [customer, salesChannelId, prefill]);
 
   /**
    * Append products as lines, in the order given — a product already a line
@@ -462,7 +530,8 @@ export function RfqCreatePage(): ReactNode {
   );
   // Feature 159 — every group needs a name before the request can be created.
   const groupsNamed = groups.every((group) => group.name.trim() !== '');
-  const canSubmit = hasOrg && lines.length > 0 && allLinesComplete && groupsNamed && !busy;
+  const channelChosen = channelOptions === null || salesChannelId !== '';
+  const canSubmit = hasOrg && lines.length > 0 && allLinesComplete && groupsNamed && channelChosen && !busy && !created;
   // In display order: each group's lines, then the ungrouped ones.
   const knownGroups = new Set(groups.map((group) => group.key));
   const orderedLines = [
@@ -470,15 +539,25 @@ export function RfqCreatePage(): ReactNode {
     ...parsedLines.filter((l) => l.row.groupKey === null || !knownGroups.has(l.row.groupKey)),
   ];
 
+  /** Where the screen goes once the request exists. */
+  const leaveFor = (id: string): void => {
+    if (openedWith.returnTo) {
+      navigate(openedWith.returnTo, { state: { createdDocument: { id } } });
+    } else {
+      navigate(`/quote-requests/${id}`);
+    }
+  };
+
   const submit = async (): Promise<void> => {
-    if (!customer?.organizationId || !allLinesComplete || !groupsNamed) return;
+    if (!customer?.organizationId || !allLinesComplete || !groupsNamed || !channelChosen || created) return;
     setBusy(true);
     setError(null);
     try {
       const trimmedExpiry = expiresInDays.trim();
-      const res = await apiClient.post<{ data: { id: string } }>('/api/v1/admin/quote-requests', {
+      const res = await apiClient.post<{ data: { id: string }; warnings?: AdminQuoteRequestWarning[] }>('/api/v1/admin/quote-requests', {
         organizationId: customer.organizationId,
         customerAccountId: customer.id,
+        ...(channelOptions !== null && salesChannelId !== '' ? { salesChannelId } : {}),
         ...(headerNote.trim() ? { headerNote: headerNote.trim() } : {}),
         ...(trimmedExpiry !== '' ? { expiresInDays: Number(trimmedExpiry) } : {}),
         // Sent only when there is a group: a request without one is unchanged.
@@ -493,10 +572,12 @@ export function RfqCreatePage(): ReactNode {
         })),
         ...(openedWith.origin ? { origin: openedWith.origin } : {}),
       });
-      if (openedWith.returnTo) {
-        navigate(openedWith.returnTo, { state: { createdDocument: { id: res.data.id } } });
+      // Feature 163 (FR-018) — accepted, but some lines are not available to
+      // the customer on the chosen channel: named here before the operator leaves.
+      if (res.warnings && res.warnings.length > 0) {
+        setCreated({ id: res.data.id, warnings: res.warnings });
       } else {
-        navigate(`/quote-requests/${res.data.id}`);
+        leaveFor(res.data.id);
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.envelope.error.message : t('rfqCreate.error'));
@@ -539,6 +620,21 @@ export function RfqCreatePage(): ReactNode {
             <Alert variant="destructive">
               <AlertDescription>{t('rfqCreate.noOrgWarning')}</AlertDescription>
             </Alert>
+          ) : null}
+          {channelOptions !== null ? (
+            <div className="space-y-1 pt-2">
+              <Label htmlFor="salesChannelId">{t('rfqCreate.field.salesChannel')}</Label>
+              <Combobox<string>
+                id="salesChannelId"
+                ariaLabel={t('rfqCreate.field.salesChannel')}
+                options={channelOptions.map((c) => ({ value: c.id, label: channelLabel(c), description: c.code }))}
+                value={salesChannelId === '' ? null : salesChannelId}
+                onChange={(next): void => setSalesChannelId(next ?? '')}
+                placeholder={t('rfqCreate.placeholder.salesChannel')}
+                emptyMessage={t('rfqCreate.empty.salesChannels')}
+              />
+              <p className="text-xs text-muted-foreground">{t('rfqCreate.hint.salesChannel')}</p>
+            </div>
           ) : null}
         </CardContent>
       </Card>
@@ -752,10 +848,30 @@ export function RfqCreatePage(): ReactNode {
         </CardContent>
       </Card>
 
+      {created ? (
+        <Alert variant="warning" className="mb-4">
+          <AlertTitle>{t('rfqCreate.warnings.title')}</AlertTitle>
+          <AlertDescription>
+            <p>{t('rfqCreate.warnings.description')}</p>
+            <ul className="mt-2 list-disc pl-5">
+              {created.warnings.map((warning) => (
+                <li key={warning.productId}>
+                  {lines.find((row) => row.productId === warning.productId)?.name ?? warning.productId}
+                </li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       <div className="flex justify-end">
-        <Button disabled={!canSubmit} onClick={(): void => void submit()}>
-          {busy ? t('rfqCreate.submitting') : t('rfqCreate.submit')}
-        </Button>
+        {created ? (
+          <Button onClick={(): void => leaveFor(created.id)}>{t('rfqCreate.warnings.open')}</Button>
+        ) : (
+          <Button disabled={!canSubmit} onClick={(): void => void submit()}>
+            {busy ? t('rfqCreate.submitting') : t('rfqCreate.submit')}
+          </Button>
+        )}
       </div>
     </div>
   );

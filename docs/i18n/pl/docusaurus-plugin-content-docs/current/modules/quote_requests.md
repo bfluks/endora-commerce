@@ -1045,6 +1045,23 @@ jest każda pozycja widoczna na ekranie. Suma bieżąca liczy pozycje, które ma
 cenę. Klient bez organizacji nadal wywołuje dotychczasowe ostrzeżenie, bo zapytanie ofertowe jej
 wymaga.
 
+**Kanał sprzedaży, w którym powstaje zapytanie,** wybiera się pod klientem, spośród aktywnych
+kanałów sprzedaży organizacji klienta. Gdy organizacja ma dokładnie jeden, jest on wybrany z góry;
+gdy ma kilka, wybierz jeden — do tego czasu **Utwórz zapytanie ofertowe** pozostaje nieaktywne.
+Kanał jest wysyłany jako `salesChannelId`: zapytanie jest w nim zapisywane, nazwy pozycji są brane
+w domyślnym języku tego kanału, a dostępność produktów jest oceniana właśnie tam. W tym kanale
+podpowiadane są też uzgodnione ceny, a wybór innego kanału czyści każdą cenę, która nie została
+wpisana ręcznie, i wyznacza ją ponownie. Nieznany
+identyfikator kanału jest odrzucany z `404 NOT_FOUND`. Bez tego pola — a na tym ekranie także wtedy,
+gdy nie da się odczytać kanałów organizacji, na przykład bez `customers:read` — zapytanie powstaje
+w kanale, który rozpoznało samo żądanie panelu administracyjnego, czyli w kanale domyślnym systemu.
+
+Gdy produkt z pozycji nie jest dostępny dla klienta w tym kanale — jest w nim wyłączony, poza oknem
+publikacji albo poza swoją grupą odbiorców — zapytanie i tak powstaje, a odpowiedź wymienia tę
+pozycję w `warnings` z kodem `PRODUCT_UNAVAILABLE_IN_SCOPE`. Ekran pozostaje wtedy otwarty i
+wymienia te produkty pod nagłówkiem **Zapytanie ofertowe utworzone z ostrzeżeniami**, a **Otwórz
+zapytanie ofertowe** przechodzi do niego; z tego miejsca zapytania nie da się wysłać drugi raz.
+
 ## Panele na ekranie zapytania ofertowego
 
 Strefa panelu administracyjnego `quote_request.detail.after` jest osadzona raz, na końcu ekranu
