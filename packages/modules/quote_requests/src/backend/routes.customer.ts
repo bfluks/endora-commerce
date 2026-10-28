@@ -11,6 +11,7 @@ import {
   rejectRevisionSchema,
   resubmitQuoteRequestSchema,
   ERROR_CODES,
+  firstLanguageTag,
   OrganizationCannotTransactError,
   type Actor,
 } from '@endora-commerce/contracts';
@@ -157,6 +158,7 @@ export async function registerQuoteRequestsCustomerRoutes(
       // Feature 163 — the channel this request resolved, named explicitly.
       const rfq = await rfqService.createForCustomer(ctx, body, {
         language: await request.responseLanguage(),
+        ...scopeLanguageTagOf(request),
         salesChannelId: getResolvedChannel(request).id,
       });
       setEtag(reply, rfq.version);
@@ -184,6 +186,7 @@ export async function registerQuoteRequestsCustomerRoutes(
       const expectedVersion = parseIfMatch(request);
       const rfq = await rfqService.patchDraft(request.params.id, ctx, body, expectedVersion, {
         language: await request.responseLanguage(),
+        ...scopeLanguageTagOf(request),
         salesChannelId: getResolvedChannel(request).id,
       });
       setEtag(reply, rfq.version);
@@ -253,6 +256,7 @@ export async function registerQuoteRequestsCustomerRoutes(
       const body = resubmitQuoteRequestSchema.parse(request.body ?? {});
       const rfq = await rfqService.resubmit(request.params.id, ctx, body, {
         language: await request.responseLanguage(),
+        ...scopeLanguageTagOf(request),
         salesChannelId: getResolvedChannel(request).id,
       });
       setEtag(reply, rfq.version);
@@ -260,4 +264,15 @@ export async function registerQuoteRequestsCustomerRoutes(
       return { data: rfq };
     },
   );
+}
+
+/**
+ * Feature 163 — the request's first `Accept-Language` tag, as `{ languageTag }`
+ * when present: the lines' scope language is it resolved against the channel,
+ * as the basket's is. Never `responseLanguage()`, which falls back to a bundle
+ * language (T155 finding §1.5b).
+ */
+function scopeLanguageTagOf(request: FastifyRequest): { languageTag?: string } {
+  const tag = firstLanguageTag(request.headers['accept-language']);
+  return tag ? { languageTag: tag } : {};
 }
