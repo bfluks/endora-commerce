@@ -1051,8 +1051,9 @@ gdy ma kilka, wybierz jeden — do tego czasu **Utwórz zapytanie ofertowe** poz
 Kanał jest wysyłany jako `salesChannelId`: zapytanie jest w nim zapisywane, nazwy pozycji są brane
 w domyślnym języku tego kanału, a dostępność produktów jest oceniana właśnie tam. W tym kanale
 podpowiadane są też uzgodnione ceny, a wybór innego kanału czyści każdą cenę, która nie została
-wpisana ręcznie, i wyznacza ją ponownie. Nieznany
-identyfikator kanału jest odrzucany z `404 NOT_FOUND`. Bez tego pola — a na tym ekranie także wtedy,
+wpisana ręcznie, i wyznacza ją ponownie. Kanał, który nie należy do aktywnych kanałów sprzedaży
+organizacji — nieznany, przypisany tylko innym organizacjom albo nieaktywny — jest odrzucany z
+`422 RFQ_SALES_CHANNEL_NOT_ALLOWED`, zanim cokolwiek zostanie zapisane. Bez tego pola — a na tym ekranie także wtedy,
 gdy nie da się odczytać kanałów organizacji, na przykład bez `customers:read` — zapytanie powstaje
 w kanale, który rozpoznało samo żądanie panelu administracyjnego, czyli w kanale domyślnym systemu.
 

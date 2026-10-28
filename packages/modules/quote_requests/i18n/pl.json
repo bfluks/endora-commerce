@@ -12,6 +12,7 @@
   "errors.QUOTE_INCOMPLETE": "To zapytanie ofertowe zawiera pozycję bez uzgodnionej ceny. Sprzedawca musi wycenić każdą pozycję, zanim zapytanie będzie można zaakceptować, zatwierdzić lub zamówić.",
   "errors.QUOTE_VALIDITY_ENDED": "Zaakceptowana oferta straciła ważność — termin jej ważności upłynął. Przed złożeniem zamówienia poproś opiekuna handlowego o nową ofertę.",
   "errors.RFQ_SAVED_VIEW_NAME_TAKEN": "Masz już zapisany widok o tej nazwie na liście zapytań ofertowych. Wybierz inną nazwę.",
+  "errors.RFQ_SALES_CHANNEL_NOT_ALLOWED": "Ten kanał sprzedaży nie należy do aktywnych kanałów sprzedaży organizacji. Wybierz jeden z nich.",
   "nav.quoteRequests.label": "Zapytania ofertowe",
   "negotiation.title": "Negocjacja cen w zapytaniach ofertowych",
   "negotiation.organization.label": "Członkowie mogą proponować ceny",
