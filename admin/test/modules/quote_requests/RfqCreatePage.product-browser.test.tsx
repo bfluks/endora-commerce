@@ -599,15 +599,16 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     await waitFor(() => expect(priceInput('Widget 01')).toHaveValue(20));
     expect(priceInput('Widget 02')).toHaveValue(15);
     expect(priceInput('Widget 03')).toHaveValue(null);
-    // Which products were re-resolved, not how often: the price is asked again once
-    // the new customer's channel is read and preselected (feature 163).
-    const resolvedFor = (customerAccountId: string) =>
-      Array.from(new Set(resolveCalls().filter((c) => c.customerAccountId === customerAccountId).map((c) => c.productId))).sort();
-    expect(resolvedFor('cust-2')).toEqual(['a01', 'a03']);
+    // Once per line not typed by hand, on the new customer's channel once it is
+    // read — never first without a channel (feature 163, owner decision 2026-10-29 "A").
+    expect(resolveCalls().filter((c) => c.customerAccountId === 'cust-2').map((c) => c.productId).sort()).toEqual([
+      'a01',
+      'a03',
+    ]);
 
     // A customer for whom nothing resolves: the previous customer's price does not survive.
     await chooseCustomer(user, 'Ewa Zielinska');
-    await waitFor(() => expect(resolvedFor('cust-3')).toEqual(['a01', 'a03']));
+    await waitFor(() => expect(resolveCalls().filter((c) => c.customerAccountId === 'cust-3')).toHaveLength(2));
     await waitFor(() => expect(priceInput('Widget 01')).toHaveValue(null));
     expect(priceInput('Widget 02')).toHaveValue(15);
     expect(within(lineRow('Widget 01')).getByText(tr('rfqCreate.line.priceMissing'))).toBeInTheDocument();

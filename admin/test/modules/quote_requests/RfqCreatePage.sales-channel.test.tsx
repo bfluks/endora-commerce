@@ -155,6 +155,25 @@ async function addLine(): Promise<void> {
   );
 }
 
+/** The price-prefill questions asked so far. */
+const resolves = () => postSpy.mock.calls.filter(([path]) => path === '/api/v1/admin/price-books/resolve');
+
+/**
+ * One line added while no channel is settled: it stays unpriced, and no price is
+ * asked without a channel (owner decision 2026-10-29 "A" — a channel-less
+ * request is never sent, so a channel-less price would answer nothing).
+ */
+async function addUnpricedLine(): Promise<void> {
+  const quick = screen.getByRole('combobox', { name: 'rfqCreate.items.quickSearch' });
+  await userEvent.type(quick, 'Wid');
+  await userEvent.click(await screen.findByRole('option', { name: /Widget/ }));
+  const price = await screen.findByRole('spinbutton', { name: 'rfqCreate.field.agreedUnitPrice Widget' });
+  expect(price).toHaveValue(null);
+  expect(resolves()).toHaveLength(0);
+}
+
+const priceOfWidget = () => screen.getByRole('spinbutton', { name: 'rfqCreate.field.agreedUnitPrice Widget' });
+
 const openForCustomer = (): void => renderPage({ customerAccountId: 'cust-1', organizationId: ORGANIZATION_ID });
 
 describe('RfqCreatePage — the sales channel', () => {
@@ -177,12 +196,14 @@ describe('RfqCreatePage — the sales channel', () => {
     assigned = [B2B, B2C];
     openForCustomer();
     await waitFor(() => expect(screen.getByLabelText('rfqCreate.field.salesChannel')).toHaveValue(''));
-    await addLine();
+    await addUnpricedLine();
     const submit = screen.getByText('rfqCreate.submit');
     expect(submit).toBeDisabled();
     // The disabled action says why (the order create screen's gate hint).
     expect(screen.getByText('rfqCreate.gate.missingChannel')).toBeInTheDocument();
     await pick('rfqCreate.field.salesChannel', 'Wholesale');
+    await waitFor(() => expect(priceOfWidget()).toHaveValue(10));
+    expect(resolves().every(([, body]) => (body as { salesChannelId?: string }).salesChannelId === B2B)).toBe(true);
     await waitFor(() => expect(submit).not.toBeDisabled());
     expect(screen.queryByText('rfqCreate.gate.missingChannel')).toBeNull();
     await userEvent.click(submit);
@@ -233,7 +254,7 @@ describe('RfqCreatePage — the sales channel', () => {
       expect(screen.queryByLabelText('rfqCreate.field.salesChannel')).toBeNull();
       // Nothing to choose: the generic "choose a channel" hint would be wrong.
       expect(screen.queryByText('rfqCreate.gate.missingChannel')).toBeNull();
-      await addLine();
+      await addUnpricedLine();
       const submit = screen.getByText('rfqCreate.submit');
       expect(submit).toBeDisabled();
       await userEvent.click(submit);
@@ -257,13 +278,17 @@ describe('RfqCreatePage — the sales channel', () => {
     );
     openForCustomer();
     await waitFor(() => expect(screen.getByLabelText('customerAccountId')).toHaveValue('Jan Kowalski'));
-    await addLine();
+    await addUnpricedLine();
     const submit = screen.getByText('rfqCreate.submit');
     expect(submit).toBeDisabled();
     await userEvent.click(submit);
     expect(creates()).toHaveLength(0);
     answer({ data: { organizationId: ORGANIZATION_ID, assignedSalesChannelIds: [B2C], options: OPTIONS } });
     await waitFor(() => expect(screen.getByLabelText('rfqCreate.field.salesChannel')).toHaveValue('Retail'));
+    await waitFor(() => expect(priceOfWidget()).toHaveValue(10));
+    // Asked once, on the channel — never first without one.
+    expect(resolves()).toHaveLength(1);
+    expect(resolves()[0]?.[1]).toMatchObject({ salesChannelId: B2C });
     await waitFor(() => expect(submit).not.toBeDisabled());
     await userEvent.click(submit);
     await waitFor(() => expect(creates()).toHaveLength(1));
@@ -280,16 +305,31 @@ describe('RfqCreatePage — the sales channel', () => {
     expect(screen.queryByLabelText('rfqCreate.field.salesChannel')).toBeNull();
     // Nothing to choose yet: the generic "choose a channel" hint would be wrong.
     expect(screen.queryByText('rfqCreate.gate.missingChannel')).toBeNull();
-    await addLine();
+    await addUnpricedLine();
     const submit = screen.getByText('rfqCreate.submit');
     expect(submit).toBeDisabled();
     await userEvent.click(submit);
     expect(creates()).toHaveLength(0);
 
-    assigned = [B2C];
-    await userEvent.click(screen.getByRole('button', { name: 'common.action.retry' }));
+    // The retry is held open: the alert stays and its button goes inert meanwhile.
+    let answer: (value: unknown) => void = () => undefined;
+    const pending = new Promise((resolve) => {
+      answer = resolve;
+    });
+    const read = getSpy.getMockImplementation()!;
+    getSpy.mockImplementation((path: string) =>
+      path === `/api/v1/admin/organizations/${ORGANIZATION_ID}/sales-channels` ? pending : read(path),
+    );
+    const retry = screen.getByRole('button', { name: 'common.action.retry' });
+    await userEvent.click(retry);
+    await waitFor(() => expect(retry).toBeDisabled());
+    expect(screen.getByText('rfqCreate.channelsLoadError')).toBeInTheDocument();
+    expect(submit).toBeDisabled();
+
+    answer({ data: { organizationId: ORGANIZATION_ID, assignedSalesChannelIds: [B2C], options: OPTIONS } });
     await waitFor(() => expect(screen.getByLabelText('rfqCreate.field.salesChannel')).toHaveValue('Retail'));
     expect(screen.queryByText('rfqCreate.channelsLoadError')).toBeNull();
+    await waitFor(() => expect(priceOfWidget()).toHaveValue(10));
     await waitFor(() => expect(submit).not.toBeDisabled());
     await userEvent.click(submit);
     await waitFor(() => expect(creates()).toHaveLength(1));

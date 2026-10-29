@@ -311,24 +311,35 @@ export function RfqCreatePage(): ReactNode {
   // Organization has no active channel, and nothing is sent. While they are
   // being read nothing can be sent either: until the answer is in, the screen
   // cannot tell an Organization whose channels it will offer from one it cannot.
-  // When they cannot be read (no `customers:read`, a network failure) the screen
-  // says so with a retry and nothing is sent: the server checks the channel even
-  // when none is named (owner decision 2026-10-29 "A"), so a blind request would
-  // only be refused, or land on a channel nobody chose.
+  // When the read fails or is refused (a network error, a server error) the
+  // screen says so with a retry and nothing is sent: the server checks the
+  // channel even when none is named (owner decision 2026-10-29 "A"), so a blind
+  // request would only be refused, or land on a channel nobody chose. The alert
+  // stays while a retry is in flight, its button inert.
   const [channelOptions, setChannelOptions] = useState<OrganizationSalesChannelOption[] | null>(null);
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [channelsFailed, setChannelsFailed] = useState(false);
   const [channelsAttempt, setChannelsAttempt] = useState(0);
   const [salesChannelId, setSalesChannelId] = useState('');
-  const channelRef = useRef(salesChannelId);
-  useEffect(() => {
-    channelRef.current = salesChannelId;
-  });
+  // The Organization the options and the choice were read for: until the new
+  // customer's channels are in, the previous customer's channel is no channel.
+  const [channelsFor, setChannelsFor] = useState('');
   const organizationId = customer?.organizationId ?? '';
+  const chosenChannelId = organizationId !== '' && channelsFor === organizationId ? salesChannelId : '';
+  const channelRef = useRef(chosenChannelId);
   useEffect(() => {
+    channelRef.current = chosenChannelId;
+  });
+  const channelsReadFor = useRef('');
+  useEffect(() => {
+    // A retry keeps the failure on screen until it is answered; a new Organization starts afresh.
+    if (channelsReadFor.current !== organizationId) {
+      channelsReadFor.current = organizationId;
+      setChannelsFailed(false);
+    }
     setChannelOptions(null);
     setSalesChannelId('');
-    setChannelsFailed(false);
+    setChannelsFor('');
     setChannelsLoading(Boolean(organizationId));
     if (!organizationId) return undefined;
     let alive = true;
@@ -341,8 +352,10 @@ export function RfqCreatePage(): ReactNode {
           return;
         }
         const { options, preselected } = channelChoices(res.data);
+        setChannelsFailed(false);
         setChannelOptions(options);
         setSalesChannelId(preselected);
+        setChannelsFor(organizationId);
       })
       .catch(() => {
         if (alive) setChannelsFailed(true);
@@ -431,7 +444,9 @@ export function RfqCreatePage(): ReactNode {
       const queue = queueRef.current;
       if (!queue) return;
       const quantity = parsePositiveInt(row.quantityInput);
-      if (row.priceSource === 'manual' || quantity === null || !cust?.organizationId) {
+      // No channel settled yet, no price: a request is never sent without one
+      // (owner decision 2026-10-29 "A"), so a channel-less price would answer nothing.
+      if (row.priceSource === 'manual' || quantity === null || !cust?.organizationId || channelRef.current === '') {
         queue.forget(row.key);
         markResolving(row.key, false);
         return;
@@ -443,7 +458,7 @@ export function RfqCreatePage(): ReactNode {
         customerId: cust.id,
         organizationId: cust.organizationId,
         // Feature 163 — priced on the channel the request is raised on.
-        salesChannelId: channelRef.current || undefined,
+        salesChannelId: channelRef.current,
       });
       markResolving(row.key, true);
     },
@@ -461,7 +476,7 @@ export function RfqCreatePage(): ReactNode {
   const pricedForRef = useRef<string | null>(null);
   useEffect(() => {
     // Identity and organization, not the object: re-reading the same customer is no change.
-    const key = `${customer?.id ?? ''}:${customer?.organizationId ?? ''}:${salesChannelId}`;
+    const key = `${customer?.id ?? ''}:${customer?.organizationId ?? ''}:${chosenChannelId}`;
     if (pricedForRef.current === key) return;
     pricedForRef.current = key;
     setLines((prev) =>
@@ -472,7 +487,7 @@ export function RfqCreatePage(): ReactNode {
         : prev,
     );
     for (const row of linesRef.current) prefill(row, customer);
-  }, [customer, salesChannelId, prefill]);
+  }, [customer, chosenChannelId, prefill]);
 
   /**
    * Append products as lines, in the order given — a product already a line
@@ -549,7 +564,7 @@ export function RfqCreatePage(): ReactNode {
   );
   // Feature 159 — every group needs a name before the request can be created.
   const groupsNamed = groups.every((group) => group.name.trim() !== '');
-  const channelChosen = !channelsLoading && !channelsFailed && channelOptions !== null && salesChannelId !== '';
+  const channelChosen = !channelsLoading && !channelsFailed && channelOptions !== null && chosenChannelId !== '';
   const canSubmit = hasOrg && lines.length > 0 && allLinesComplete && groupsNamed && channelChosen && !busy && !created;
   // In display order: each group's lines, then the ungrouped ones.
   const knownGroups = new Set(groups.map((group) => group.key));
@@ -576,7 +591,7 @@ export function RfqCreatePage(): ReactNode {
       const res = await apiClient.post<{ data: { id: string }; warnings?: AdminQuoteRequestWarning[] }>('/api/v1/admin/quote-requests', {
         organizationId: customer.organizationId,
         customerAccountId: customer.id,
-        salesChannelId,
+        salesChannelId: chosenChannelId,
         ...(headerNote.trim() ? { headerNote: headerNote.trim() } : {}),
         ...(trimmedExpiry !== '' ? { expiresInDays: Number(trimmedExpiry) } : {}),
         // Sent only when there is a group: a request without one is unchanged.
