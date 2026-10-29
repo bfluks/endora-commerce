@@ -16,6 +16,7 @@ import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { ADMIN_COOKIES, TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { ensureAdminWithRole } from '../../helpers/admin-search-fixtures.js';
 import { ensureSalesChannel } from '../../helpers/sales-channel-fixtures.js';
+import { bindOrganizationToDefaultChannel } from '../../helpers/sales-channel-access.js';
 import { withModuleOff } from '../../helpers/off-state.js';
 import { withSystemScope } from '../../../src/tenancy/escape-hatch.js';
 import {
@@ -166,6 +167,10 @@ describe('quote request PDF — admin routes Q1–Q3 (spec 153)', () => {
       foreignQuote = account.id;
     });
     // `foreignQuote` held the account id above; raise the foreign quote now.
+    // The admin request below names no channel, so it is raised on the system
+    // default, which `createOnBehalf` accepts only for an Organization assigned
+    // to it (feature 163, owner decision 2026-10-29 "A").
+    await bindOrganizationToDefaultChannel(h, foreignOrg);
     foreignQuote = await raise(foreignOrg, foreignQuote);
   }, 90_000);
 

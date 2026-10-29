@@ -24,6 +24,14 @@ const ARCHIVED_ID = '00000000-0000-4000-8000-0000000000a1';
 const LIVE_ID = '00000000-0000-4000-8000-0000000000a2';
 const ORG_ID = '00000000-0000-4000-8000-0000000000b1';
 const CUSTOMER_ID = '00000000-0000-4000-8000-0000000000c1';
+/**
+ * The channel the operator's requests below are raised on, one of the
+ * Organization's active channels: outside a request scope there is no resolved
+ * channel, and `createOnBehalf` refuses a request with none (owner decision
+ * 2026-10-29 "A") before it reaches the products.
+ */
+const CHANNEL_ID = '00000000-0000-4000-8000-0000000000d1';
+const channelMembership = { listChannelsForEntity: async () => [{ id: CHANNEL_ID, active: true }] };
 
 function record(id: string, archivedAt: Date | null) {
   return {
@@ -58,6 +66,7 @@ describe('163 P-3 — a quote request refuses an archived product', () => {
     const create = vi.fn();
     const generateBusinessId = vi.fn();
     const service = new RfqAdminService({
+      channelMembership,
       emFactory: () => ({ create, persistAndFlush: vi.fn() }),
       customerAccounts: { findById: async () => ({ id: CUSTOMER_ID, organizationId: ORG_ID }) },
       catalogProducts: { findByIds },
@@ -70,6 +79,7 @@ describe('163 P-3 — a quote request refuses an archived product', () => {
         {
           organizationId: ORG_ID,
           customerAccountId: CUSTOMER_ID,
+          salesChannelId: CHANNEL_ID,
           items: [
             { productId: LIVE_ID, quantity: 1 },
             { productId: ARCHIVED_ID, quantity: 1 },
@@ -85,6 +95,7 @@ describe('163 P-3 — a quote request refuses an archived product', () => {
   it('the operator’s create still answers 404 PRODUCT_NOT_FOUND for an id that does not exist', async () => {
     const generateBusinessId = vi.fn();
     const service = new RfqAdminService({
+      channelMembership,
       emFactory: () => ({}),
       customerAccounts: { findById: async () => ({ id: CUSTOMER_ID, organizationId: ORG_ID }) },
       catalogProducts: { findByIds: async () => [] },
@@ -93,7 +104,7 @@ describe('163 P-3 — a quote request refuses an archived product', () => {
     const refusal = await refusalOf(
       service.createOnBehalf(
         { adminUserId: 'admin-1', isPlatformAdmin: true, roleLabel: 'Platform administrator' },
-        { organizationId: ORG_ID, customerAccountId: CUSTOMER_ID, items: [{ productId: ARCHIVED_ID, quantity: 1 }] } as never,
+        { organizationId: ORG_ID, customerAccountId: CUSTOMER_ID, salesChannelId: CHANNEL_ID, items: [{ productId: ARCHIVED_ID, quantity: 1 }] } as never,
       ),
     );
     expect(refusal).toEqual({ statusCode: 404, code: ERROR_CODES.PRODUCT_NOT_FOUND });
@@ -107,6 +118,7 @@ describe('163 P-3 — a quote request refuses an archived product', () => {
       throw new Error('reached the write');
     });
     const service = new RfqAdminService({
+      channelMembership,
       emFactory: () => ({}),
       customerAccounts: { findById: async () => ({ id: CUSTOMER_ID, organizationId: ORG_ID }) },
       catalogProducts: { findByIds },
@@ -115,7 +127,7 @@ describe('163 P-3 — a quote request refuses an archived product', () => {
     await expect(
       service.createOnBehalf(
         { adminUserId: 'admin-1', isPlatformAdmin: true, roleLabel: 'Platform administrator' },
-        { organizationId: ORG_ID, customerAccountId: CUSTOMER_ID, items: [{ productId: LIVE_ID, quantity: 1 }] } as never,
+        { organizationId: ORG_ID, customerAccountId: CUSTOMER_ID, salesChannelId: CHANNEL_ID, items: [{ productId: LIVE_ID, quantity: 1 }] } as never,
       ),
     ).rejects.toThrow('reached the write');
   });

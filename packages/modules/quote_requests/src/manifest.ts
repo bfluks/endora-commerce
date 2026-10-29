@@ -328,8 +328,9 @@ export const manifest = defineModuleManifest({
     { code: 'RFQ_NOT_QUOTED' },
     { code: 'RFQ_PRICE_PROPOSAL_NOT_ALLOWED' },
     { code: 'RFQ_SAVED_VIEW_NAME_TAKEN' },
-    // Feature 163 (security review M1) — an operator's on-behalf request on a channel
-    // that is not one of the Organization's active channels. Minted by this feature;
+    // Feature 163 (security review M1) — an operator's on-behalf request on a channel,
+    // named or resolved (owner decision 2026-10-29 "A"), that is not one of the
+    // Organization's active channels. Minted by this feature;
     // owner and reason in `MINTED_ERROR_CODES`.
     { code: 'RFQ_SALES_CHANNEL_NOT_ALLOWED' },
     // Feature 153 (owner answer Q4) — sending the quote PDF by e-mail. Minted

@@ -142,7 +142,8 @@ export interface RfqAdminServiceDeps {
   catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveNames'>;
   /**
    * Feature 163 (security review M1) — the kernel's membership port: the channels an
-   * Organization is assigned to, which an operator's on-behalf request may be raised on.
+   * Organization is assigned to, which an operator's on-behalf request may be raised on —
+   * the channel it names, or the one the admin request resolved when it names none.
    */
   channelMembership: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>;
   customerAccounts: CustomerAccountReadPort;
@@ -953,20 +954,28 @@ export class RfqAdminService {
       );
     }
 
-    // Feature 163 (T155 §1.5c, security review M1) — the channel the operator names
-    // is the one the request is raised on, and it must be one of the Organization's
-    // active channels: the ones its members may shop on, and the set the create
-    // screen offers. Exactly that channel — a stale, foreign or inactive id is
-    // refused, never replaced by another.
-    if (body.salesChannelId !== undefined) {
-      const channels = await this.deps.channelMembership.listChannelsForEntity('organization', body.organizationId);
-      if (!channels.some((c) => c.id === body.salesChannelId && c.active)) {
-        throw new HttpError(
-          422,
-          ERROR_CODES.RFQ_SALES_CHANNEL_NOT_ALLOWED,
-          "This sales channel is not one of the organization's active sales channels.",
-        );
-      }
+    // Feature 163 (T155 §1.5c, security review M1, owner decision 2026-10-29 "A")
+    // — the request is raised on the channel the operator names, else on the one
+    // the admin's own request resolved (the resolver's step-4 system default, or
+    // `X-Sales-Channel`), and **either way** that channel must be one of the
+    // Organization's active channels: the ones its members may shop on, and the
+    // set the create screen offers. The server is the sole enforcer, so omitting
+    // the id is not a way around the check. Exactly that channel — a stale,
+    // foreign or inactive id is refused, never replaced by another. No channel at
+    // all (no request scope: a CLI or in-process caller) is refused as well:
+    // there is no "no-channel" quote request (Constitution XII), and on the HTTP
+    // route the resolver always answers one.
+    const channelId = body.salesChannelId ?? raisedOnChannelId();
+    const channels =
+      channelId === null
+        ? []
+        : await this.deps.channelMembership.listChannelsForEntity('organization', body.organizationId);
+    if (channelId === null || !channels.some((c) => c.id === channelId && c.active)) {
+      throw new HttpError(
+        422,
+        ERROR_CODES.RFQ_SALES_CHANNEL_NOT_ALLOWED,
+        "This sales channel is not one of the organization's active sales channels.",
+      );
     }
 
     // **Neither scoping axis is applied to these lines, and that is the
@@ -984,7 +993,8 @@ export class RfqAdminService {
     // `quick_order`'s `'unrestricted'` import arm says of itself.
     //
     // The channel this quote *is* raised on is recorded below and is the
-    // honest answer to "where did this come from", not a filter.
+    // honest answer to "where did this come from", not a filter of its lines
+    // (the channel itself is checked above; the lines on it are not).
     //
     // **One exception, by owner decisions P-3 = A and P-3b = A (feature 163,
     // 2026-10-26)**: an archived product is refused here as it is on the
@@ -1001,11 +1011,11 @@ export class RfqAdminService {
       ...(businessId ? { businessId } : {}),
       organizationId: body.organizationId,
       customerAccountId: body.customerAccountId,
-      // The channel the operator named (feature 163, T155 §1.5c); else the one
-      // the admin's own request resolved to — the resolver's step-4 fallback,
-      // the system default — which is the honest answer for "where was this
-      // raised", not a channel this module picked.
-      salesChannelId: body.salesChannelId ?? raisedOnChannelId(),
+      // The channel checked above: the one the operator named (feature 163,
+      // T155 §1.5c), else the one the admin's own request resolved to — the
+      // resolver's step-4 fallback, the system default — which is the honest
+      // answer for "where was this raised", not a channel this module picked.
+      salesChannelId: channelId,
       createdByAdminUserId: ctx.adminUserId,
       assignedAdminUserId: ctx.adminUserId,
       status: 'Created from admin' satisfies QuoteRequestStatus,

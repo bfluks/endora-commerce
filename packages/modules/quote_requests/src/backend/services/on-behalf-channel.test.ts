@@ -1,6 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ERROR_CODES } from '@endora-commerce/contracts';
-import { RfqAdminService } from './rfq-admin-service.js';
+
+/** The channel the admin request resolved, as the kernel's request scope answers it. */
+const channelState: { current: { id: string } | null } = { current: null };
+vi.mock('@endora-commerce/platform/kernel', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@endora-commerce/platform/kernel')>()),
+  currentSalesChannel: () => channelState.current,
+}));
+
+const { RfqAdminService } = await import('./rfq-admin-service.js');
 
 /**
  * Feature 163 (FR-018, T155 finding §1.5c) — an operator creating a quote
@@ -11,8 +19,14 @@ import { RfqAdminService } from './rfq-admin-service.js';
  * off in B2C was never named. An unknown channel is refused before anything is
  * numbered or written.
  *
- * Service-free: outside a request scope there is no resolved channel, so every
- * answer below comes from the body's `salesChannelId`.
+ * Owner decision 2026-10-29 "A" — the server is the sole enforcer: the channel
+ * the request lands on, named or not, must be one of the Organization's active
+ * channels. With no `salesChannelId` the request falls back to the channel the
+ * admin request resolved (the system default, or `X-Sales-Channel`), and that
+ * fallback is checked exactly as a named one is; with no channel at all (no
+ * request scope) there is nothing to raise the request on, and it is refused.
+ *
+ * Service-free: the resolved channel is the mocked request-scope slot above.
  */
 
 const ORG_ID = '00000000-0000-4000-8000-0000000000b1';
@@ -65,6 +79,10 @@ function service(em: Record<string, unknown>, filterAvailable = vi.fn(async () =
 }
 
 describe('163 — the channel an operator raises a quote request on', () => {
+  beforeEach(() => {
+    channelState.current = null;
+  });
+
   it('warns about the lines unavailable at the channel the body names', async () => {
     const { svc, filterAvailable } = service({});
     const warnings = await svc.onBehalfWarnings(body({ salesChannelId: B2C }));
@@ -100,5 +118,68 @@ describe('163 — the channel an operator raises a quote request on', () => {
     expect(listChannelsForEntity).toHaveBeenCalledWith('organization', ORG_ID);
     expect(generateBusinessId).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
+  });
+
+  /** The refusal `createOnBehalf` answers, or `null` when it reached the write. */
+  async function outcomeOf(svc: InstanceType<typeof RfqAdminService>, b: never) {
+    return (await svc.createOnBehalf(ADMIN, b).then(
+      () => null,
+      (error: unknown) => error,
+    )) as { statusCode?: number; code?: string; message?: string } | null;
+  }
+
+  it.each([
+    ['the system default, not one of the Organization’s channels', OTHER],
+    ['one of the Organization’s channels, but inactive', INACTIVE],
+  ])(
+    'refuses an omitted channel whose resolved fallback is %s (owner decision 2026-10-29 A)',
+    async (_what, resolved) => {
+      channelState.current = { id: resolved };
+      const create = vi.fn();
+      const { svc, generateBusinessId, listChannelsForEntity } = service({ create });
+      const caught = await outcomeOf(svc, body());
+      expect(caught).toMatchObject({ statusCode: 422, code: ERROR_CODES.RFQ_SALES_CHANNEL_NOT_ALLOWED });
+      expect(listChannelsForEntity).toHaveBeenCalledWith('organization', ORG_ID);
+      expect(generateBusinessId).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('stores an omitted channel’s resolved fallback when it is one of the Organization’s active channels', async () => {
+    channelState.current = { id: B2C };
+    const create = vi.fn((_entity: unknown, data: Record<string, unknown>) => data);
+    const em = {
+      create,
+      persistAndFlush: vi.fn(async () => {
+        throw new Error('reached the write');
+      }),
+    };
+    const { svc, listChannelsForEntity } = service(em);
+    await expect(svc.createOnBehalf(ADMIN, body())).rejects.toThrow('reached the write');
+    expect(listChannelsForEntity).toHaveBeenCalledWith('organization', ORG_ID);
+    expect(create.mock.calls[0]?.[1]).toMatchObject({ salesChannelId: B2C });
+  });
+
+  it('refuses a request with no channel at all — none named and none resolved (Constitution XII)', async () => {
+    const create = vi.fn();
+    const { svc, generateBusinessId } = service({ create });
+    const caught = await outcomeOf(svc, body());
+    expect(caught).toMatchObject({ statusCode: 422, code: ERROR_CODES.RFQ_SALES_CHANNEL_NOT_ALLOWED });
+    expect(generateBusinessId).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('checks the named channel, not the resolved one, when the body names one', async () => {
+    channelState.current = { id: OTHER };
+    const create = vi.fn((_entity: unknown, data: Record<string, unknown>) => data);
+    const em = {
+      create,
+      persistAndFlush: vi.fn(async () => {
+        throw new Error('reached the write');
+      }),
+    };
+    const { svc } = service(em);
+    await expect(svc.createOnBehalf(ADMIN, body({ salesChannelId: B2C }))).rejects.toThrow('reached the write');
+    expect(create.mock.calls[0]?.[1]).toMatchObject({ salesChannelId: B2C });
   });
 });

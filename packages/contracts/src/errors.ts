@@ -120,9 +120,10 @@ export const ERROR_CODES = {
   // holds a view on the quote request list whose name differs only by case or
   // surrounding spaces.
   RFQ_SAVED_VIEW_NAME_TAKEN: 'RFQ_SAVED_VIEW_NAME_TAKEN',
-  // Feature 163 (security review M1) — 422: an operator named a sales channel for a
-  // quote request on a customer's behalf that is not one of the Organization's
-  // active channels.
+  // Feature 163 (security review M1) — 422: the sales channel of an operator's
+  // quote request on a customer's behalf — the one named, or the one the admin
+  // request resolved when none is named (owner decision 2026-10-29 "A") — is not
+  // one of the Organization's active channels.
   RFQ_SALES_CHANNEL_NOT_ALLOWED: 'RFQ_SALES_CHANNEL_NOT_ALLOWED',
   QUOTE_INCOMPLETE: 'QUOTE_INCOMPLETE',
   QUOTE_VALIDITY_ENDED: 'QUOTE_VALIDITY_ENDED',

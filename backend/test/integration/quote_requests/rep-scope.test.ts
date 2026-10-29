@@ -6,6 +6,7 @@ import {
 } from '../../helpers/test-server.js';
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { ADMIN_COOKIES } from '../../helpers/test-actors.js';
+import { bindOrganizationToDefaultChannel } from '../../helpers/sales-channel-access.js';
 import {
   AdminRole,
   AdminUser,
@@ -127,6 +128,12 @@ describe('146 — sales representative scope [integration]', () => {
       expect(res.statusCode, res.body).toBe(201);
       return (res.json() as { data: { id: string } }).data.id;
     };
+    // `raise` names no channel, so each request is raised on the system default,
+    // which `createOnBehalf` accepts only for an Organization assigned to it
+    // (feature 163, owner decision 2026-10-29 "A").
+    for (const organizationId of [orgOwnId, orgForeign, orgUnassigned]) {
+      await bindOrganizationToDefaultChannel(h, organizationId);
+    }
     rfqOwn = await raise(orgOwnId, accountOwn);
     rfqForeign = await raise(orgForeign, accountForeign);
     rfqUnassigned = await raise(orgUnassigned, accountUnassigned);

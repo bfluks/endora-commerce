@@ -989,8 +989,9 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
     to: 'quote_requests',
     reason:
       'Minted by feature 163 (`specs/163-product-data-scopes/`, security review M1) for an ' +
-      'operator\'s quote request on a customer\'s behalf that names a sales channel which is not one ' +
-      'of the Organization\'s active channels. The noun is the quote request\'s channel, ' +
+      'operator\'s quote request on a customer\'s behalf whose sales channel — the one it names, or ' +
+      'the one the admin request resolved when it names none (owner decision 2026-10-29 "A") — is not ' +
+      'one of the Organization\'s active channels. The noun is the quote request\'s channel, ' +
       '`quote_requests`\' own column, and the one raise site is its admin create. ' +
       '`SALES_CHANNEL_NOT_PERMITTED` is not reused: its sentence speaks to a signed-in buyer.',
   },

@@ -629,9 +629,11 @@ export const adminCreateQuoteRequestSchema = z
     /**
      * Feature 163 (FR-018) — the sales channel the operator raises the request on:
      * the channel it is stored on, its lines' names are snapshotted at (in that
-     * channel's default language, N2) and its `warnings` speak about. An unknown id is
-     * refused with `404 NOT_FOUND`. Absent: the channel the admin request itself
-     * resolved, as before.
+     * channel's default language, N2) and its `warnings` speak about. Absent: the
+     * channel the admin request itself resolved. Either way the channel must be one
+     * of the Organization's active channels, else `422 RFQ_SALES_CHANNEL_NOT_ALLOWED`
+     * before anything is written (owner decision 2026-10-29 "A": the server is the
+     * sole enforcer, so omitting the id does not skip the check).
      */
     salesChannelId: uuidSchema.optional(),
     /**
