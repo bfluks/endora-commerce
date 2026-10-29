@@ -176,6 +176,20 @@ describe('ProductPageRevalidation', () => {
     expect(tagsOf(revalidate)).toEqual([tag(P1)]);
   });
 
+  it('never holds the process open: the debounce timer is unref’d', async () => {
+    vi.useRealTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    try {
+      const { revalidation } = rig();
+      revalidation.productChanged(P1);
+      const handle = setTimeoutSpy.mock.results.at(-1)?.value as NodeJS.Timeout;
+      expect(handle.hasRef()).toBe(false);
+      clearTimeout(handle);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it('reads nothing and asks nothing while the storefront revalidator is not configured', async () => {
     const revalidate = vi.fn();
     const keysOf = vi.fn();

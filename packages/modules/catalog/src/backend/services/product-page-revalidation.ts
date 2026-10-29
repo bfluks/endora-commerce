@@ -93,6 +93,8 @@ export class ProductPageRevalidation {
     if (this.#timer) clearTimeout(this.#timer);
     const wait = Math.min(REVALIDATION_DEBOUNCE_MS, this.#firstPendingAt + REVALIDATION_MAX_WAIT_MS - now);
     this.#timer = setTimeout(() => this.#flush(), Math.max(0, wait));
+    // Best-effort: a pending batch never keeps the process alive on shutdown.
+    this.#timer.unref?.();
   }
 
   #flush(): void {
