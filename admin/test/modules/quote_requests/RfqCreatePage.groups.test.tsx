@@ -7,6 +7,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+import { ORGANIZATION_CHANNEL_ID, organizationSalesChannelsAnswer } from '../../helpers/organization-sales-channels';
 
 /**
  * Feature 159, T032 — the create-quote-request screen groups its lines
@@ -103,6 +104,8 @@ beforeEach(() => {
   postSpy.mockReset();
   navigateSpy.mockReset();
   getSpy.mockImplementation((path: string) => {
+    const channels = organizationSalesChannelsAnswer(path);
+    if (channels) return channels;
     if (path === '/api/v1/admin/customers/cust-1') return Promise.resolve({ data: CUSTOMER });
     if (path.startsWith('/api/v1/admin/customers')) return Promise.resolve({ data: [CUSTOMER] });
     if (path.startsWith('/api/v1/admin/catalog/products')) {
@@ -252,6 +255,7 @@ describe('RfqCreatePage — groups (T032)', () => {
     expect(creates()[0]![1]).toEqual({
       organizationId: ORGANIZATION_ID,
       customerAccountId: 'cust-1',
+      salesChannelId: ORGANIZATION_CHANNEL_ID,
       items: [{ productId: 'prod-1', quantity: 1, agreedUnitPrice: 10 }],
     });
   });

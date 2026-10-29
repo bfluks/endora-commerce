@@ -1883,6 +1883,7 @@
   "rfq.list.statusFilter.pending": "Oczekujące",
   "rfq.list.title": "Zapytania ofertowe",
   "rfqCreate.back": "Powrót do zapytań ofertowych",
+  "rfqCreate.channelsLoadError": "Nie udało się wczytać kanałów sprzedaży organizacji tego klienta, więc nie można jeszcze utworzyć zapytania ofertowego. Spróbuj ponownie.",
   "rfqCreate.description": "Utwórz zapytanie ofertowe w imieniu klienta",
   "rfqCreate.empty.customers": "Brak pasujących klientów",
   "rfqCreate.empty.salesChannels": "Brak kanałów sprzedaży",

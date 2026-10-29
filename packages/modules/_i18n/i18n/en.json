@@ -1883,6 +1883,7 @@
   "rfq.list.statusFilter.pending": "Pending",
   "rfq.list.title": "Quote Requests",
   "rfqCreate.back": "Back to quote requests",
+  "rfqCreate.channelsLoadError": "This customer's organization's sales channels could not be loaded, so the quote request cannot be raised yet. Try again.",
   "rfqCreate.description": "Create a quote request on behalf of a customer",
   "rfqCreate.empty.customers": "No matching customers",
   "rfqCreate.empty.salesChannels": "No sales channels",

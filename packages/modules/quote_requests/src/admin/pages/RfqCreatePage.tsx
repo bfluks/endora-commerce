@@ -307,15 +307,18 @@ export function RfqCreatePage(): ReactNode {
   }, [openedWith.customerAccountId]);
 
   // Feature 163 (T155 §1.5c) — the channel the request is raised on, chosen
-  // among the customer's Organization's active channels. `null` options: they
-  // could not be read (no `customers:read`, the module off), and the request is
-  // sent without a channel, raised where the admin request resolves, as before.
-  // Empty options: the Organization has no active channel, and nothing is sent.
-  // While they are being read nothing can be sent either: until the answer is in,
-  // the screen cannot tell an Organization whose channels it will offer from one
-  // whose channels cannot be read.
+  // among the customer's Organization's active channels. Empty options: the
+  // Organization has no active channel, and nothing is sent. While they are
+  // being read nothing can be sent either: until the answer is in, the screen
+  // cannot tell an Organization whose channels it will offer from one it cannot.
+  // When they cannot be read (no `customers:read`, a network failure) the screen
+  // says so with a retry and nothing is sent: the server checks the channel even
+  // when none is named (owner decision 2026-10-29 "A"), so a blind request would
+  // only be refused, or land on a channel nobody chose.
   const [channelOptions, setChannelOptions] = useState<OrganizationSalesChannelOption[] | null>(null);
   const [channelsLoading, setChannelsLoading] = useState(false);
+  const [channelsFailed, setChannelsFailed] = useState(false);
+  const [channelsAttempt, setChannelsAttempt] = useState(0);
   const [salesChannelId, setSalesChannelId] = useState('');
   const channelRef = useRef(salesChannelId);
   useEffect(() => {
@@ -325,19 +328,24 @@ export function RfqCreatePage(): ReactNode {
   useEffect(() => {
     setChannelOptions(null);
     setSalesChannelId('');
+    setChannelsFailed(false);
     setChannelsLoading(Boolean(organizationId));
     if (!organizationId) return undefined;
     let alive = true;
     void apiClient
       .get<OrganizationSalesChannelsResponse>(`/api/v1/admin/organizations/${organizationId}/sales-channels`)
       .then((res) => {
-        if (!alive || !Array.isArray(res.data?.options)) return;
+        if (!alive) return;
+        if (!Array.isArray(res.data?.options)) {
+          setChannelsFailed(true);
+          return;
+        }
         const { options, preselected } = channelChoices(res.data);
         setChannelOptions(options);
         setSalesChannelId(preselected);
       })
       .catch(() => {
-        // Left without a selector; the request is raised where it always was.
+        if (alive) setChannelsFailed(true);
       })
       .finally(() => {
         if (alive) setChannelsLoading(false);
@@ -345,7 +353,7 @@ export function RfqCreatePage(): ReactNode {
     return (): void => {
       alive = false;
     };
-  }, [organizationId]);
+  }, [organizationId, channelsAttempt]);
   // After a create the answer warned about: the request exists, the operator reads the warning.
   const [created, setCreated] = useState<{ id: string; warnings: AdminQuoteRequestWarning[] } | null>(null);
   const [lines, setLines] = useState<LineRow[]>([]);
@@ -541,7 +549,7 @@ export function RfqCreatePage(): ReactNode {
   );
   // Feature 159 — every group needs a name before the request can be created.
   const groupsNamed = groups.every((group) => group.name.trim() !== '');
-  const channelChosen = !channelsLoading && (channelOptions === null || salesChannelId !== '');
+  const channelChosen = !channelsLoading && !channelsFailed && channelOptions !== null && salesChannelId !== '';
   const canSubmit = hasOrg && lines.length > 0 && allLinesComplete && groupsNamed && channelChosen && !busy && !created;
   // In display order: each group's lines, then the ungrouped ones.
   const knownGroups = new Set(groups.map((group) => group.key));
@@ -568,7 +576,7 @@ export function RfqCreatePage(): ReactNode {
       const res = await apiClient.post<{ data: { id: string }; warnings?: AdminQuoteRequestWarning[] }>('/api/v1/admin/quote-requests', {
         organizationId: customer.organizationId,
         customerAccountId: customer.id,
-        ...(channelOptions !== null && salesChannelId !== '' ? { salesChannelId } : {}),
+        salesChannelId,
         ...(headerNote.trim() ? { headerNote: headerNote.trim() } : {}),
         ...(trimmedExpiry !== '' ? { expiresInDays: Number(trimmedExpiry) } : {}),
         // Sent only when there is a group: a request without one is unchanged.
@@ -632,7 +640,23 @@ export function RfqCreatePage(): ReactNode {
               <AlertDescription>{t('rfqCreate.noOrgWarning')}</AlertDescription>
             </Alert>
           ) : null}
-          {channelOptions !== null && channelOptions.length === 0 ? (
+          {channelsFailed ? (
+            // Not read, so nothing to offer and nothing sent: said, with a way back.
+            <Alert variant="destructive">
+              <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+                <span>{t('rfqCreate.channelsLoadError')}</span>
+                <Button
+                  className="min-h-11 sm:min-h-8"
+                  variant="outline"
+                  size="sm"
+                  disabled={channelsLoading}
+                  onClick={(): void => setChannelsAttempt((n) => n + 1)}
+                >
+                  {t('common.action.retry')}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : channelOptions !== null && channelOptions.length === 0 ? (
             // Nothing the API would accept (security review M1): said, never papered over.
             <Alert variant="destructive">
               <AlertDescription>{t('rfqCreate.noChannelWarning')}</AlertDescription>

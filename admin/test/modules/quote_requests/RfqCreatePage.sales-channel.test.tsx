@@ -15,7 +15,8 @@ import { adminSession, modulePresence, withSession } from '../../helpers/render-
  * nothing can be sent. The channel is sent as `salesChannelId`, and the lines
  * the answer warns about (`PRODUCT_UNAVAILABLE_IN_SCOPE`) are named before the
  * operator leaves the screen. When the Organization's channels cannot be read,
- * nothing is chosen and the request is what it always was.
+ * the screen says so with a retry and nothing can be sent: the server checks
+ * the channel even when none is named (owner decision 2026-10-29 "A").
  */
 
 const getSpy = vi.fn();
@@ -69,6 +70,8 @@ const BUNDLE = passthroughBundle('core', [
   'rfqCreate.field.salesChannel',
   'rfqCreate.gate.missingChannel',
   'rfqCreate.noChannelWarning',
+  'rfqCreate.channelsLoadError',
+  'common.action.retry',
   'rfqCreate.warnings.title',
   'rfqCreate.warnings.open',
 ]);
@@ -267,12 +270,29 @@ describe('RfqCreatePage — the sales channel', () => {
     expect(creates()[0]?.[1]).toMatchObject({ salesChannelId: B2C });
   });
 
-  it('sends no channel when the Organization’s channels cannot be read', async () => {
+  it('says the channels cannot be read, keeps Create disabled and offers a retry that recovers', async () => {
+    // Owner decision 2026-10-29 "A": the server checks the channel either way, so
+    // a request sent without one is refused unless the system default happens to
+    // be the Organization's — the screen does not send one blind.
     assigned = null;
     openForCustomer();
-    await waitFor(() => expect(screen.getByLabelText('customerAccountId')).toHaveValue('Jan Kowalski'));
-    await addLineAndSubmit();
-    expect(creates()[0]?.[1]).not.toHaveProperty('salesChannelId');
+    expect(await screen.findByText('rfqCreate.channelsLoadError')).toBeInTheDocument();
     expect(screen.queryByLabelText('rfqCreate.field.salesChannel')).toBeNull();
+    // Nothing to choose yet: the generic "choose a channel" hint would be wrong.
+    expect(screen.queryByText('rfqCreate.gate.missingChannel')).toBeNull();
+    await addLine();
+    const submit = screen.getByText('rfqCreate.submit');
+    expect(submit).toBeDisabled();
+    await userEvent.click(submit);
+    expect(creates()).toHaveLength(0);
+
+    assigned = [B2C];
+    await userEvent.click(screen.getByRole('button', { name: 'common.action.retry' }));
+    await waitFor(() => expect(screen.getByLabelText('rfqCreate.field.salesChannel')).toHaveValue('Retail'));
+    expect(screen.queryByText('rfqCreate.channelsLoadError')).toBeNull();
+    await waitFor(() => expect(submit).not.toBeDisabled());
+    await userEvent.click(submit);
+    await waitFor(() => expect(creates()).toHaveLength(1));
+    expect(creates()[0]?.[1]).toMatchObject({ salesChannelId: B2C });
   });
 });

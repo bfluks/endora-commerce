@@ -10,6 +10,7 @@ import { MemoryRouter } from 'react-router-dom';
 import type { Bundle } from '../../../../packages/admin-shell/src/i18n/types';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+import { ORGANIZATION_CHANNEL_ID, organizationSalesChannelsAnswer } from '../../helpers/organization-sales-channels';
 
 /**
  * Feature 145, User Story 3 (FR-030…FR-036, research R-11): on **Create quote
@@ -225,6 +226,8 @@ beforeEach(() => {
   catalogPageSize = 20;
   vi.spyOn(kitClient, 'patch').mockResolvedValue({ data: ADMIN_PREFERENCES_DEFAULTS });
   getSpy.mockImplementation((path: string) => {
+    const channels = organizationSalesChannelsAnswer(path);
+    if (channels) return channels;
     const one = CUSTOMERS.find((c) => path === `/api/v1/admin/customers/${c.id}`);
     if (one) return Promise.resolve({ data: one });
     if (path.startsWith('/api/v1/admin/customers')) return Promise.resolve({ data: CUSTOMERS });
@@ -522,6 +525,7 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     expect(postSpy).toHaveBeenCalledWith('/api/v1/admin/quote-requests', {
       organizationId: ORG_1,
       customerAccountId: 'cust-1',
+      salesChannelId: ORGANIZATION_CHANNEL_ID,
       items: [
         { productId: 'a01', quantity: 2, agreedUnitPrice: 10 },
         { productId: 'a02', quantity: 1, agreedUnitPrice: 10 },
@@ -595,14 +599,15 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     await waitFor(() => expect(priceInput('Widget 01')).toHaveValue(20));
     expect(priceInput('Widget 02')).toHaveValue(15);
     expect(priceInput('Widget 03')).toHaveValue(null);
-    expect(resolveCalls().filter((c) => c.customerAccountId === 'cust-2').map((c) => c.productId).sort()).toEqual([
-      'a01',
-      'a03',
-    ]);
+    // Which products were re-resolved, not how often: the price is asked again once
+    // the new customer's channel is read and preselected (feature 163).
+    const resolvedFor = (customerAccountId: string) =>
+      Array.from(new Set(resolveCalls().filter((c) => c.customerAccountId === customerAccountId).map((c) => c.productId))).sort();
+    expect(resolvedFor('cust-2')).toEqual(['a01', 'a03']);
 
     // A customer for whom nothing resolves: the previous customer's price does not survive.
     await chooseCustomer(user, 'Ewa Zielinska');
-    await waitFor(() => expect(resolveCalls().filter((c) => c.customerAccountId === 'cust-3')).toHaveLength(2));
+    await waitFor(() => expect(resolvedFor('cust-3')).toEqual(['a01', 'a03']));
     await waitFor(() => expect(priceInput('Widget 01')).toHaveValue(null));
     expect(priceInput('Widget 02')).toHaveValue(15);
     expect(within(lineRow('Widget 01')).getByText(tr('rfqCreate.line.priceMissing'))).toBeInTheDocument();
