@@ -22,7 +22,9 @@ import {
   type ComboboxOption,
 } from '@endora-commerce/admin-kit/ui';
 import {
+  adminLanguageToLocale,
   LineGroupsEditor,
+  pickCategoryDisplayName,
   ProductBrowserDialog,
   ProductBrowserTrigger,
   ProductPicker,
@@ -31,7 +33,7 @@ import {
   type ProductBrowserItem,
   type ProductBrowserRules,
 } from '@endora-commerce/admin-kit/components';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { createPricePrefillQueue, type PricePrefillQueue } from '../lib/price-prefill-queue';
 import { SectionSummary, sectionTotals, useQuoteLineGroupLabels, useSectionSummaryText } from '../line-groups.js';
 import { quoteNet } from '../quote-totals.js';
@@ -124,26 +126,25 @@ function readOpenedWith(params: URLSearchParams): OpenedWith {
 }
 
 /**
- * Feature 163 (FR-018, T155 §1.5c) — the channels an operator may raise the
- * customer's request on: the Organization's own active channels, or every
- * active channel when none of its own is active. The preselection is the only
- * choice when there is one, else the system default when the Organization has
- * no active channel of its own, else none — the operator chooses.
+ * Feature 163 (FR-018, T155 §1.5c, security review M1) — the channels an
+ * operator may raise the customer's request on: exactly the set the API accepts
+ * (`createOnBehalf` refuses anything else with `422 RFQ_SALES_CHANNEL_NOT_ALLOWED`),
+ * the Organization's own active channels. Never another active channel, nor the
+ * system default: an Organization with no active channel of its own gets an
+ * empty list, and the screen says so and sends nothing. The preselection is the
+ * only choice when there is one, else none — the operator chooses.
  */
 function channelChoices(
   assignment: Pick<OrganizationSalesChannelsResponse['data'], 'assignedSalesChannelIds' | 'options'>,
 ): { options: OrganizationSalesChannelOption[]; preselected: string } {
-  const active = assignment.options.filter((c) => c.active);
   const assigned = new Set(assignment.assignedSalesChannelIds);
-  const own = active.filter((c) => assigned.has(c.id));
-  const options = own.length > 0 ? own : active;
-  const preselected =
-    options.length === 1 ? options[0]!.id : own.length === 0 ? (options.find((c) => c.systemDefault)?.id ?? '') : '';
-  return { options, preselected };
+  const options = assignment.options.filter((c) => c.active && assigned.has(c.id));
+  return { options, preselected: options.length === 1 ? options[0]!.id : '' };
 }
 
-function channelLabel(c: OrganizationSalesChannelOption): string {
-  return c.name['en-US'] ?? Object.values(c.name)[0] ?? c.code;
+/** The channel's name in the admin language, picked as every admin surface picks a name map. */
+function channelLabel(c: OrganizationSalesChannelOption, locale: string): string {
+  return pickCategoryDisplayName(c.name, c.code, locale);
 }
 
 function customerLabel(c: AdminCustomerListItem): string {
@@ -276,6 +277,7 @@ function productLine(item: ProductBrowserItem, groupKey: string | null, key: str
 
 export function RfqCreatePage(): ReactNode {
   const t = useTranslation('core');
+  const locale = adminLanguageToLocale(useTranslationContext().language);
   const tGroups = useTranslation('quote_requests');
   const groupLabels = useQuoteLineGroupLabels();
   const summaryText = useSectionSummaryText();
@@ -305,9 +307,10 @@ export function RfqCreatePage(): ReactNode {
   }, [openedWith.customerAccountId]);
 
   // Feature 163 (T155 §1.5c) — the channel the request is raised on, chosen
-  // among the customer's Organization's channels. `null` options: they could
-  // not be read (no `customers:read`, the module off), and the request is sent
-  // without a channel, raised where the admin request resolves, as before.
+  // among the customer's Organization's active channels. `null` options: they
+  // could not be read (no `customers:read`, the module off), and the request is
+  // sent without a channel, raised where the admin request resolves, as before.
+  // Empty options: the Organization has no active channel, and nothing is sent.
   const [channelOptions, setChannelOptions] = useState<OrganizationSalesChannelOption[] | null>(null);
   const [salesChannelId, setSalesChannelId] = useState('');
   const channelRef = useRef(salesChannelId);
@@ -621,13 +624,18 @@ export function RfqCreatePage(): ReactNode {
               <AlertDescription>{t('rfqCreate.noOrgWarning')}</AlertDescription>
             </Alert>
           ) : null}
-          {channelOptions !== null ? (
+          {channelOptions !== null && channelOptions.length === 0 ? (
+            // Nothing the API would accept (security review M1): said, never papered over.
+            <Alert variant="destructive">
+              <AlertDescription>{t('rfqCreate.noChannelWarning')}</AlertDescription>
+            </Alert>
+          ) : channelOptions !== null ? (
             <div className="space-y-1 pt-2">
               <Label htmlFor="salesChannelId">{t('rfqCreate.field.salesChannel')}</Label>
               <Combobox<string>
                 id="salesChannelId"
                 ariaLabel={t('rfqCreate.field.salesChannel')}
-                options={channelOptions.map((c) => ({ value: c.id, label: channelLabel(c), description: c.code }))}
+                options={channelOptions.map((c) => ({ value: c.id, label: channelLabel(c, locale), description: c.code }))}
                 value={salesChannelId === '' ? null : salesChannelId}
                 onChange={(next): void => setSalesChannelId(next ?? '')}
                 placeholder={t('rfqCreate.placeholder.salesChannel')}
@@ -864,7 +872,7 @@ export function RfqCreatePage(): ReactNode {
         </Alert>
       ) : null}
 
-      {!channelChosen && !created ? (
+      {!channelChosen && !created && channelOptions !== null && channelOptions.length > 0 ? (
         // The disabled action says why (the order create screen's gate hint).
         <p className="mb-2 text-right text-sm text-muted-foreground">{t('rfqCreate.gate.missingChannel')}</p>
       ) : null}

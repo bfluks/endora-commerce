@@ -1902,6 +1902,7 @@
   "rfqCreate.line.priceMissing": "Enter an agreed unit price of 0 or more",
   "rfqCreate.line.quantityInvalid": "Enter a whole number of 1 or more",
   "rfqCreate.loading": "Loading…",
+  "rfqCreate.noChannelWarning": "This customer's organization has no active sales channel, so a quote request cannot be raised for it. Assign the organization to an active sales channel first.",
   "rfqCreate.noOrgWarning": "This customer is not attached to an organization. Quote requests require an organization.",
   "rfqCreate.placeholder.customer": "Search by name or email…",
   "rfqCreate.placeholder.expiresInDays": "No expiry",

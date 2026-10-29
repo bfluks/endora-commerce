@@ -1902,6 +1902,7 @@
   "rfqCreate.line.priceMissing": "Podaj uzgodnioną cenę jednostkową równą 0 lub większą",
   "rfqCreate.line.quantityInvalid": "Podaj liczbę całkowitą równą 1 lub większą",
   "rfqCreate.loading": "Ładowanie…",
+  "rfqCreate.noChannelWarning": "Organizacja tego klienta nie ma aktywnego kanału sprzedaży, więc nie można utworzyć dla niej zapytania ofertowego. Najpierw przypisz organizację do aktywnego kanału sprzedaży.",
   "rfqCreate.noOrgWarning": "Ten klient nie jest przypisany do organizacji. Zapytania ofertowe wymagają organizacji.",
   "rfqCreate.placeholder.customer": "Szukaj po nazwie lub e-mailu…",
   "rfqCreate.placeholder.expiresInDays": "Bez wygaśnięcia",

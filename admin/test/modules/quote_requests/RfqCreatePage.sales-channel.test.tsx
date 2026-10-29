@@ -2,14 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
+import { render } from '@testing-library/react';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/TranslationProvider';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
 
 /**
  * Feature 163 (FR-018, T155 finding §1.5c) — the operator names the sales
- * channel a quote request is raised on. The choices are the customer's
- * Organization's channels; one is preselected when it is the only one, else the
- * operator must choose. The channel is sent as `salesChannelId`, and the lines
+ * channel a quote request is raised on. The choices are exactly what the API
+ * accepts (security review M1, `422 RFQ_SALES_CHANNEL_NOT_ALLOWED`): the
+ * customer's Organization's own active channels — never another active channel,
+ * nor the system default, when it has none. One is preselected when it is the
+ * only one, else the operator must choose; with none, the screen says so and
+ * nothing can be sent. The channel is sent as `salesChannelId`, and the lines
  * the answer warns about (`PRODUCT_UNAVAILABLE_IN_SCOPE`) are named before the
  * operator leaves the screen. When the Organization's channels cannot be read,
  * nothing is chosen and the request is what it always was.
@@ -65,15 +70,18 @@ const BUNDLE = passthroughBundle('core', [
   'rfqCreate.field.agreedUnitPrice',
   'rfqCreate.field.salesChannel',
   'rfqCreate.gate.missingChannel',
+  'rfqCreate.noChannelWarning',
   'rfqCreate.warnings.title',
   'rfqCreate.warnings.open',
 ]);
 
 const B2B = '00000000-0000-4000-8000-0000000000c1';
 const B2C = '00000000-0000-4000-8000-0000000000c2';
+const INACTIVE = '00000000-0000-4000-8000-0000000000c3';
 const OPTIONS = [
   { id: B2B, code: 'b2b', name: { 'en-US': 'Wholesale' }, active: true, systemDefault: true },
-  { id: B2C, code: 'b2c', name: { 'en-US': 'Retail' }, active: true, systemDefault: false },
+  { id: B2C, code: 'b2c', name: { 'en-US': 'Retail', 'pl-PL': 'Detal' }, active: true, systemDefault: false },
+  { id: INACTIVE, code: 'old', name: { 'en-US': 'Outlet' }, active: false, systemDefault: false },
 ];
 let assigned: string[] | null = [B2C];
 
@@ -107,20 +115,21 @@ async function pick(comboLabel: string, optionLabel: string): Promise<void> {
   await userEvent.click(await screen.findByRole('option', { name: new RegExp(optionLabel) }));
 }
 
-function renderPage(params: Record<string, string> = {}): void {
+function page(params: Record<string, string>) {
   const query = new URLSearchParams(params).toString();
-  renderWithI18n(
-    withSession(
-      <MemoryRouter initialEntries={[`/quote-requests/new${query ? `?${query}` : ''}`]}>
-        <RfqCreatePage />
-      </MemoryRouter>,
-      {
-        session: adminSession({ permissions: ['*'] }),
-        presence: modulePresence({ present: ['quote_requests'] }),
-      },
-    ),
-    BUNDLE,
+  return withSession(
+    <MemoryRouter initialEntries={[`/quote-requests/new${query ? `?${query}` : ''}`]}>
+      <RfqCreatePage />
+    </MemoryRouter>,
+    {
+      session: adminSession({ permissions: ['*'] }),
+      presence: modulePresence({ present: ['quote_requests'] }),
+    },
   );
+}
+
+function renderPage(params: Record<string, string> = {}): void {
+  renderWithI18n(page(params), BUNDLE);
 }
 
 /** One priced line, added through the quick search (feature 145), then submit. */
@@ -199,6 +208,45 @@ describe('RfqCreatePage — the sales channel', () => {
     expect(screen.queryByText('rfqCreate.submit')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'rfqCreate.warnings.open' }));
     expect(navigateSpy).toHaveBeenCalledWith('/quote-requests/new-rfq-1');
+  });
+
+  it('offers only the Organization’s active channels: never an inactive one of its own', async () => {
+    assigned = [INACTIVE, B2C];
+    openForCustomer();
+    await waitFor(() => expect(screen.getByLabelText('rfqCreate.field.salesChannel')).toHaveValue('Retail'));
+    await userEvent.click(screen.getByLabelText('rfqCreate.field.salesChannel'));
+    const offered = (await screen.findAllByRole('option')).map((o) => o.textContent ?? '');
+    expect(offered.some((label) => label.includes('Retail'))).toBe(true);
+    expect(offered.some((label) => label.includes('Outlet') || label.includes('Wholesale'))).toBe(false);
+  });
+
+  it.each([
+    ['no channel at all', [] as string[]],
+    ['only an inactive channel', [INACTIVE]],
+  ])(
+    'says so, offers nothing and sends nothing when the Organization has %s — not even the system default',
+    async (_what, channels) => {
+      assigned = channels;
+      openForCustomer();
+      expect(await screen.findByText('rfqCreate.noChannelWarning')).toBeInTheDocument();
+      expect(screen.queryByLabelText('rfqCreate.field.salesChannel')).toBeNull();
+      // Nothing to choose: the generic "choose a channel" hint would be wrong.
+      expect(screen.queryByText('rfqCreate.gate.missingChannel')).toBeNull();
+      await addLine();
+      const submit = screen.getByText('rfqCreate.submit');
+      expect(submit).toBeDisabled();
+      await userEvent.click(submit);
+      expect(creates()).toHaveLength(0);
+    },
+  );
+
+  it('names the channel in the admin language', async () => {
+    render(
+      <TranslationProvider language="pl" initialBundle={BUNDLE} initialFallbackBundle={BUNDLE}>
+        {page({ customerAccountId: 'cust-1', organizationId: ORGANIZATION_ID })}
+      </TranslationProvider>,
+    );
+    await waitFor(() => expect(screen.getByLabelText('rfqCreate.field.salesChannel')).toHaveValue('Detal'));
   });
 
   it('sends no channel when the Organization’s channels cannot be read', async () => {
