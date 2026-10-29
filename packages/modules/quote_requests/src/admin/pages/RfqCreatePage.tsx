@@ -311,7 +311,11 @@ export function RfqCreatePage(): ReactNode {
   // could not be read (no `customers:read`, the module off), and the request is
   // sent without a channel, raised where the admin request resolves, as before.
   // Empty options: the Organization has no active channel, and nothing is sent.
+  // While they are being read nothing can be sent either: until the answer is in,
+  // the screen cannot tell an Organization whose channels it will offer from one
+  // whose channels cannot be read.
   const [channelOptions, setChannelOptions] = useState<OrganizationSalesChannelOption[] | null>(null);
+  const [channelsLoading, setChannelsLoading] = useState(false);
   const [salesChannelId, setSalesChannelId] = useState('');
   const channelRef = useRef(salesChannelId);
   useEffect(() => {
@@ -321,6 +325,7 @@ export function RfqCreatePage(): ReactNode {
   useEffect(() => {
     setChannelOptions(null);
     setSalesChannelId('');
+    setChannelsLoading(Boolean(organizationId));
     if (!organizationId) return undefined;
     let alive = true;
     void apiClient
@@ -333,6 +338,9 @@ export function RfqCreatePage(): ReactNode {
       })
       .catch(() => {
         // Left without a selector; the request is raised where it always was.
+      })
+      .finally(() => {
+        if (alive) setChannelsLoading(false);
       });
     return (): void => {
       alive = false;
@@ -533,7 +541,7 @@ export function RfqCreatePage(): ReactNode {
   );
   // Feature 159 — every group needs a name before the request can be created.
   const groupsNamed = groups.every((group) => group.name.trim() !== '');
-  const channelChosen = channelOptions === null || salesChannelId !== '';
+  const channelChosen = !channelsLoading && (channelOptions === null || salesChannelId !== '');
   const canSubmit = hasOrg && lines.length > 0 && allLinesComplete && groupsNamed && channelChosen && !busy && !created;
   // In display order: each group's lines, then the ungrouped ones.
   const knownGroups = new Set(groups.map((group) => group.key));
@@ -872,7 +880,7 @@ export function RfqCreatePage(): ReactNode {
         </Alert>
       ) : null}
 
-      {!channelChosen && !created && channelOptions !== null && channelOptions.length > 0 ? (
+      {!channelChosen && !created && (channelOptions?.length ?? 0) > 0 ? (
         // The disabled action says why (the order create screen's gate hint).
         <p className="mb-2 text-right text-sm text-muted-foreground">{t('rfqCreate.gate.missingChannel')}</p>
       ) : null}

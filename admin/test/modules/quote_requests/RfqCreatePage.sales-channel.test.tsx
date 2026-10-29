@@ -2,9 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { render } from '@testing-library/react';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
-import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/TranslationProvider';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
 
 /**
@@ -128,8 +126,8 @@ function page(params: Record<string, string>) {
   );
 }
 
-function renderPage(params: Record<string, string> = {}): void {
-  renderWithI18n(page(params), BUNDLE);
+function renderPage(params: Record<string, string> = {}, language: 'en' | 'pl' = 'en'): void {
+  renderWithI18n(page(params), BUNDLE, { language });
 }
 
 /** One priced line, added through the quick search (feature 145), then submit. */
@@ -241,12 +239,32 @@ describe('RfqCreatePage — the sales channel', () => {
   );
 
   it('names the channel in the admin language', async () => {
-    render(
-      <TranslationProvider language="pl" initialBundle={BUNDLE} initialFallbackBundle={BUNDLE}>
-        {page({ customerAccountId: 'cust-1', organizationId: ORGANIZATION_ID })}
-      </TranslationProvider>,
-    );
+    renderPage({ customerAccountId: 'cust-1', organizationId: ORGANIZATION_ID }, 'pl');
     await waitFor(() => expect(screen.getByLabelText('rfqCreate.field.salesChannel')).toHaveValue('Detal'));
+  });
+
+  it('keeps Create disabled while the Organization’s channels are still being read', async () => {
+    let answer: (value: unknown) => void = () => undefined;
+    const pending = new Promise((resolve) => {
+      answer = resolve;
+    });
+    const read = getSpy.getMockImplementation()!;
+    getSpy.mockImplementation((path: string) =>
+      path === `/api/v1/admin/organizations/${ORGANIZATION_ID}/sales-channels` ? pending : read(path),
+    );
+    openForCustomer();
+    await waitFor(() => expect(screen.getByLabelText('customerAccountId')).toHaveValue('Jan Kowalski'));
+    await addLine();
+    const submit = screen.getByText('rfqCreate.submit');
+    expect(submit).toBeDisabled();
+    await userEvent.click(submit);
+    expect(creates()).toHaveLength(0);
+    answer({ data: { organizationId: ORGANIZATION_ID, assignedSalesChannelIds: [B2C], options: OPTIONS } });
+    await waitFor(() => expect(screen.getByLabelText('rfqCreate.field.salesChannel')).toHaveValue('Retail'));
+    await waitFor(() => expect(submit).not.toBeDisabled());
+    await userEvent.click(submit);
+    await waitFor(() => expect(creates()).toHaveLength(1));
+    expect(creates()[0]?.[1]).toMatchObject({ salesChannelId: B2C });
   });
 
   it('sends no channel when the Organization’s channels cannot be read', async () => {
