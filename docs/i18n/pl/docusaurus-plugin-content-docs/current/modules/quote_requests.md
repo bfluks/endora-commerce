@@ -1048,6 +1048,8 @@ wymaga.
 **Kanał sprzedaży, w którym powstaje zapytanie,** wybiera się pod klientem, spośród aktywnych
 kanałów sprzedaży organizacji klienta. Gdy organizacja ma dokładnie jeden, jest on wybrany z góry;
 gdy ma kilka, wybierz jeden — do tego czasu **Utwórz zapytanie ofertowe** pozostaje nieaktywne.
+Gdy organizacja nie ma żadnego aktywnego kanału sprzedaży, ekran to komunikuje, a **Utwórz
+zapytanie ofertowe** pozostaje nieaktywne, dopóki organizacja nie zostanie przypisana do jednego z nich.
 Kanał jest wysyłany jako `salesChannelId`: zapytanie jest w nim zapisywane, nazwy pozycji są brane
 w domyślnym języku tego kanału, a dostępność produktów jest oceniana właśnie tam. W tym kanale
 podpowiadane są też uzgodnione ceny, a wybór innego kanału czyści każdą cenę, która nie została

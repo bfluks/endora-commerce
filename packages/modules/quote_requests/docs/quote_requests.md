@@ -1155,7 +1155,9 @@ still shows the existing warning, since a quote request needs one.
 **The sales channel the request is raised on** is chosen under the customer,
 among the active sales channels of the customer's organization. When the
 organization has exactly one, it is preselected; when it has several, choose one —
-**Create quote request** stays disabled until you do. The channel is sent as
+**Create quote request** stays disabled until you do. When the organization has no
+active sales channel, the screen says so and **Create quote request** stays disabled
+until the organization is assigned to one. The channel is sent as
 `salesChannelId`: the request is stored on it, its line names are taken in that
 channel's default language, and its availability is judged there. The agreed
 prices are prefilled on that channel too, and choosing another channel clears
