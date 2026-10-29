@@ -1059,9 +1059,11 @@ systemu, chyba że żądanie wskazuje inny nagłówkiem `X-Sales-Channel`. W obu
 sprawdza kanał: kanał, który nie należy do aktywnych kanałów sprzedaży organizacji — nieznany,
 przypisany tylko innym organizacjom albo nieaktywny — jest odrzucany z
 `422 RFQ_SALES_CHANNEL_NOT_ALLOWED`, zanim cokolwiek zostanie zapisane, także wtedy, gdy nie wybrano
-żadnego kanału, a kanał zastępczy do nich nie należy. Gdy nie da się odczytać kanałów organizacji,
-na przykład bez `customers:read` albo po błędzie sieci, ekran to komunikuje i pokazuje przycisk
-**Ponów**, a **Utwórz zapytanie ofertowe** pozostaje nieaktywne, dopóki kanały nie zostaną odczytane.
+żadnego kanału, a kanał zastępczy do nich nie należy. Gdy nie da się odczytać kanałów organizacji —
+odczyt się nie powiedzie albo zostanie odrzucony, na przykład przy błędzie sieci — ekran to
+komunikuje i pokazuje przycisk **Ponów**, a **Utwórz zapytanie ofertowe** pozostaje nieaktywne,
+dopóki kanały nie zostaną odczytane; w trakcie ponawiania przycisk jest nieaktywny. Uzgodnione ceny
+są podpowiadane dopiero wtedy, gdy kanał jest już ustalony.
 
 Gdy produkt z pozycji nie jest dostępny dla klienta w tym kanale — jest w nim wyłączony, poza oknem
 publikacji albo poza swoją grupą odbiorców — zapytanie i tak powstaje, a odpowiedź wymienia tę

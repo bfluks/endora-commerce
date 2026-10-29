@@ -1881,6 +1881,11 @@ checkpoint F fix round (see the Phase 22 notes).
   `RfqCreatePage.sales-channel.test.tsx`; the screen's other tests answer the channel read). Contract JSDoc, error
   comment, manifest, routing ledger, `contracts/error-codes.md`, the changeset and the module page (EN + PL, cache
   re-pinned) follow.
+- 2026-10-29 (S1, code review of the "A" round): the alert stays and Retry is inert while a retry runs; no price is
+  asked before a channel is settled for the current customer's Organization (one resolve per line per customer
+  switch, asserted again); `createOnBehalf` and `onBehalfWarnings` share `onBehalfChannelId`; the no-channel arm has
+  its own sentence (`errors.RFQ_SALES_CHANNEL_NOT_ALLOWED.no_channel`, `details.code`); the changeset leads with the
+  BREAKING 201 → 422; the page no longer blames `customers:read` for a failed read.
 
 **Verification**: as listed in T151–T154.
 

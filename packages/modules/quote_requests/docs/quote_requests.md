@@ -1168,10 +1168,11 @@ way the server checks the channel: one that is not one of the organization's
 active sales channels — unknown, assigned only to other organizations, or
 inactive — is refused with `422 RFQ_SALES_CHANNEL_NOT_ALLOWED` before anything
 is written, also when no channel was chosen and the fallback is not one of
-them. When the organization's channels cannot be read, for instance without
-`customers:read` or after a network failure, the screen says so with a
-**Retry** button and **Create quote request** stays disabled until they have
-been read.
+them. When the organization's channels cannot be read — the read fails or is
+refused, for instance on a network error — the screen says so with a **Retry**
+button, and **Create quote request** stays disabled until they have been read;
+while a retry is under way the button is inactive. Agreed prices are prefilled
+only once a channel is settled.
 
 When a line's product is not available to the customer on that channel —
 switched off there, outside its publication window or outside its audience —

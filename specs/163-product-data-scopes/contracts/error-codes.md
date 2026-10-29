@@ -12,7 +12,7 @@ output with its Polish module-reference refresh (the rule 155's `contracts/error
 | `URL_KEY_TAKEN` | catalog | 409 | key writes (FR-070) | `{ conflicts: [{ languageCode, key, heldByProductId, heldByProductName }] }` |
 | `URL_KEY_REDIRECT_TAKEOVER_REQUIRED` | catalog | 409 | key writes meeting another product's redirect (FR-072) | `{ takeovers: [{ languageCode, key, losingProductId, losingProductName }] }` |
 | `URL_REDIRECT_NOT_FOUND` | catalog | 404 | redirect delete | `{ redirectId }` |
-| `RFQ_SALES_CHANNEL_NOT_ALLOWED` | quote_requests | 422 | operator's create on a customer's behalf whose channel is not one of the Organization's active channels (security review M1) — the named `salesChannelId`, or, when none is named, the channel the admin request resolved, or no channel at all (owner decision 2026-10-29 "A") | none |
+| `RFQ_SALES_CHANNEL_NOT_ALLOWED` | quote_requests | 422 | operator's create on a customer's behalf whose channel is not one of the Organization's active channels (security review M1) — the named `salesChannelId`, or, when none is named, the channel the admin request resolved, or no channel at all (owner decision 2026-10-29 "A") | none; `{ code: 'no_channel' }` when there is no channel at all |
 
 Non-error message codes (no envelope): quote-request operator warning `PRODUCT_UNAVAILABLE_IN_SCOPE`
 (FR-018), bulk result reasons `scope_invalid`, `completeness_gate`, scope warnings `completeness`,
