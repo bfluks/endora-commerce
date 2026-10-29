@@ -1869,6 +1869,18 @@ checkpoint F fix round (see the Phase 22 notes).
   twelve [PG] files inserted `sales_channels.is_public` and three unit fixtures set `isPublic` — removed; one search
   unit fixture needed the now-required pricing port. No 163 product code read `isPublic`; anonymous access (154) and
   `toScopeChannel` never did.
+- 2026-10-29 (S1, owner decision "A" on the security review's follow-up: the server is the sole enforcer):
+  `createOnBehalf` resolves `body.salesChannelId ?? raisedOnChannelId()` first and checks **that** channel against
+  the Organization's active channels, so an omitted id no longer skips the `422 RFQ_SALES_CHANNEL_NOT_ALLOWED` check;
+  no channel at all (no request scope) is refused the same way (Constitution XII) — red first in
+  `on-behalf-channel.test.ts` (omitted id with the default unassigned / inactive → 422, assigned → stored on it,
+  none → 422); `archived-product-lines.test.ts` now names an assigned channel. Three [PG] fixtures whose ad-hoc
+  Organization had no channel are bound to the default (`pdf-export`, `history`, `rep-scope`). The create screen no
+  longer sends a channel-less request when the Organization's channels cannot be read: it shows
+  `rfqCreate.channelsLoadError` with **Retry** and keeps Create disabled (red first in
+  `RfqCreatePage.sales-channel.test.tsx`; the screen's other tests answer the channel read). Contract JSDoc, error
+  comment, manifest, routing ledger, `contracts/error-codes.md`, the changeset and the module page (EN + PL, cache
+  re-pinned) follow.
 
 **Verification**: as listed in T151–T154.
 

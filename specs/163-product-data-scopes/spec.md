@@ -895,7 +895,13 @@ the minimum and the return eligibility.
   MUST refuse every line whose product is not effectively available (FR-001) at the quote request's channel
   and language, with an answer that does not reveal the product's existence beyond what FR-005 allows. A
   quote request created by an **operator** in the admin MUST accept such a line and show a warning naming
-  it. *(An archived product is the exception, FR-115.)*
+  it. *(An archived product is the exception, FR-115.)* The channel of an operator's quote request MUST be
+  one of the Organization's active channels, else `422 RFQ_SALES_CHANNEL_NOT_ALLOWED` before anything is
+  written (security review M1) — the channel the operator names, **and, when none is named, the channel the
+  admin request resolved** (the system default, or `X-Sales-Channel`); a request with no channel at all is
+  refused the same way (owner decision 2026-10-29 "A": the server is the sole enforcer, so omitting the id
+  is no way around the check). The create screen sends nothing while the Organization's channels are
+  unread or cannot be read, and offers a retry for the latter.
 - **FR-115** *(numbered after FR-114; added in Session 2026-10-26, P-3)*: A quote request MUST NOT hold an
   archived product, on any path: a buyer's create, draft edit and resubmit (and so every conversion into a
   quote request) MUST refuse it with the answer an absent product gets (`404 PRODUCT_NOT_FOUND`, FR-018); an

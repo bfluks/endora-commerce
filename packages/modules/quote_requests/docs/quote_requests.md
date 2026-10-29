@@ -1161,13 +1161,17 @@ until the organization is assigned to one. The channel is sent as
 `salesChannelId`: the request is stored on it, its line names are taken in that
 channel's default language, and its availability is judged there. The agreed
 prices are prefilled on that channel too, and choosing another channel clears
-every price not typed by hand and resolves it again. A channel that is not
-one of the organization's active sales channels — unknown, assigned only to
-other organizations, or inactive — is refused with
-`422 RFQ_SALES_CHANNEL_NOT_ALLOWED` before anything is written. Without the field — and on this
-screen when the organization's channels cannot be read, for instance without
-`customers:read` — the request is raised on the channel the admin request
-itself resolves to, the system default.
+every price not typed by hand and resolves it again. Without the field the
+request is raised on the channel the admin request itself resolves to — the
+system default, unless the request names another with `X-Sales-Channel`. Either
+way the server checks the channel: one that is not one of the organization's
+active sales channels — unknown, assigned only to other organizations, or
+inactive — is refused with `422 RFQ_SALES_CHANNEL_NOT_ALLOWED` before anything
+is written, also when no channel was chosen and the fallback is not one of
+them. When the organization's channels cannot be read, for instance without
+`customers:read` or after a network failure, the screen says so with a
+**Retry** button and **Create quote request** stays disabled until they have
+been read.
 
 When a line's product is not available to the customer on that channel —
 switched off there, outside its publication window or outside its audience —

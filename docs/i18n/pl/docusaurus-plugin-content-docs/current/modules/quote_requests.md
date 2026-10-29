@@ -1053,11 +1053,15 @@ zapytanie ofertowe** pozostaje nieaktywne, dopóki organizacja nie zostanie przy
 Kanał jest wysyłany jako `salesChannelId`: zapytanie jest w nim zapisywane, nazwy pozycji są brane
 w domyślnym języku tego kanału, a dostępność produktów jest oceniana właśnie tam. W tym kanale
 podpowiadane są też uzgodnione ceny, a wybór innego kanału czyści każdą cenę, która nie została
-wpisana ręcznie, i wyznacza ją ponownie. Kanał, który nie należy do aktywnych kanałów sprzedaży
-organizacji — nieznany, przypisany tylko innym organizacjom albo nieaktywny — jest odrzucany z
-`422 RFQ_SALES_CHANNEL_NOT_ALLOWED`, zanim cokolwiek zostanie zapisane. Bez tego pola — a na tym ekranie także wtedy,
-gdy nie da się odczytać kanałów organizacji, na przykład bez `customers:read` — zapytanie powstaje
-w kanale, który rozpoznało samo żądanie panelu administracyjnego, czyli w kanale domyślnym systemu.
+wpisana ręcznie, i wyznacza ją ponownie. Bez tego pola zapytanie
+powstaje w kanale, który rozpoznało samo żądanie panelu administracyjnego — w kanale domyślnym
+systemu, chyba że żądanie wskazuje inny nagłówkiem `X-Sales-Channel`. W obu przypadkach serwer
+sprawdza kanał: kanał, który nie należy do aktywnych kanałów sprzedaży organizacji — nieznany,
+przypisany tylko innym organizacjom albo nieaktywny — jest odrzucany z
+`422 RFQ_SALES_CHANNEL_NOT_ALLOWED`, zanim cokolwiek zostanie zapisane, także wtedy, gdy nie wybrano
+żadnego kanału, a kanał zastępczy do nich nie należy. Gdy nie da się odczytać kanałów organizacji,
+na przykład bez `customers:read` albo po błędzie sieci, ekran to komunikuje i pokazuje przycisk
+**Ponów**, a **Utwórz zapytanie ofertowe** pozostaje nieaktywne, dopóki kanały nie zostaną odczytane.
 
 Gdy produkt z pozycji nie jest dostępny dla klienta w tym kanale — jest w nim wyłączony, poza oknem
 publikacji albo poza swoją grupą odbiorców — zapytanie i tak powstaje, a odpowiedź wymienia tę
