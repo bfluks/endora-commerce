@@ -90,6 +90,13 @@ describe('163 — the channel an operator raises a quote request on', () => {
     expect(warnings).toEqual([{ productId: PRODUCT_ID, code: 'PRODUCT_UNAVAILABLE_IN_SCOPE' }]);
   });
 
+  it('warns about the lines unavailable at the resolved channel when the body names none', async () => {
+    channelState.current = { id: B2C };
+    const { svc, filterAvailable } = service({});
+    await svc.onBehalfWarnings(body());
+    expect(filterAvailable).toHaveBeenCalledWith([PRODUCT_ID], expect.objectContaining({ channelId: B2C }));
+  });
+
   it('stores the request on the channel the body names', async () => {
     const create = vi.fn((_entity: unknown, data: Record<string, unknown>) => data);
     const em = {
@@ -125,7 +132,7 @@ describe('163 — the channel an operator raises a quote request on', () => {
     return (await svc.createOnBehalf(ADMIN, b).then(
       () => null,
       (error: unknown) => error,
-    )) as { statusCode?: number; code?: string; message?: string } | null;
+    )) as { statusCode?: number; code?: string; message?: string; details?: unknown } | null;
   }
 
   it.each([
@@ -162,9 +169,16 @@ describe('163 — the channel an operator raises a quote request on', () => {
 
   it('refuses a request with no channel at all — none named and none resolved (Constitution XII)', async () => {
     const create = vi.fn();
-    const { svc, generateBusinessId } = service({ create });
+    const { svc, generateBusinessId, listChannelsForEntity } = service({ create });
     const caught = await outcomeOf(svc, body());
-    expect(caught).toMatchObject({ statusCode: 422, code: ERROR_CODES.RFQ_SALES_CHANNEL_NOT_ALLOWED });
+    // Same code, its own sentence: there is no channel to call foreign.
+    expect(caught).toMatchObject({
+      statusCode: 422,
+      code: ERROR_CODES.RFQ_SALES_CHANNEL_NOT_ALLOWED,
+      message: 'No sales channel to raise this quote request on: name salesChannelId.',
+      details: { code: 'no_channel' },
+    });
+    expect(listChannelsForEntity).not.toHaveBeenCalled();
     expect(generateBusinessId).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
   });

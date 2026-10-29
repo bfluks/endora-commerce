@@ -905,14 +905,14 @@ export class RfqAdminService {
    * product is not available to the Organization at the request's channel, in
    * the channel's default language (N2), now. Accepted regardless: this is a
    * warning for the operator, never a refusal (the exemption of
-   * {@link createOnBehalf} stands). The channel is the one the body names, else
-   * the admin request's own; empty when there is neither (FR-007).
+   * {@link createOnBehalf} stands). The channel is {@link onBehalfChannelId}'s,
+   * the one `createOnBehalf` checked and stored; a request with no channel was
+   * refused there, so the `[]` below only answers a direct caller (FR-007).
    */
   async onBehalfWarnings(
     body: Pick<AdminCreateQuoteRequest, 'organizationId' | 'items' | 'salesChannelId'>,
   ): Promise<AdminQuoteRequestWarning[]> {
-    // The channel the operator named (T155 §1.5c), else the admin request's own.
-    const channelId = body.salesChannelId ?? raisedOnChannelId();
+    const channelId = this.onBehalfChannelId(body);
     if (channelId === null) return [];
     const productIds = Array.from(new Set(body.items.map((it) => it.productId)));
     if (productIds.length === 0) return [];
@@ -925,6 +925,17 @@ export class RfqAdminService {
     return productIds
       .filter((productId) => !available.has(productId))
       .map((productId) => ({ productId, code: 'PRODUCT_UNAVAILABLE_IN_SCOPE' as const }));
+  }
+
+  /**
+   * Feature 163 (T155 §1.5c, owner decision 2026-10-29 "A") — the channel an
+   * operator's on-behalf request is raised on: the one the body names, else the
+   * one the admin request resolved (the resolver's step-4 system default, or
+   * `X-Sales-Channel`); `null` outside a request scope. One answer for the check,
+   * the stored row and the warnings, so they cannot speak about two channels.
+   */
+  private onBehalfChannelId(body: Pick<AdminCreateQuoteRequest, 'salesChannelId'>): string | null {
+    return body.salesChannelId ?? raisedOnChannelId();
   }
 
   async createOnBehalf(
@@ -965,12 +976,17 @@ export class RfqAdminService {
     // all (no request scope: a CLI or in-process caller) is refused as well:
     // there is no "no-channel" quote request (Constitution XII), and on the HTTP
     // route the resolver always answers one.
-    const channelId = body.salesChannelId ?? raisedOnChannelId();
-    const channels =
-      channelId === null
-        ? []
-        : await this.deps.channelMembership.listChannelsForEntity('organization', body.organizationId);
-    if (channelId === null || !channels.some((c) => c.id === channelId && c.active)) {
+    const channelId = this.onBehalfChannelId(body);
+    if (channelId === null) {
+      throw new HttpError(
+        422,
+        ERROR_CODES.RFQ_SALES_CHANNEL_NOT_ALLOWED,
+        'No sales channel to raise this quote request on: name salesChannelId.',
+        { code: 'no_channel' },
+      );
+    }
+    const channels = await this.deps.channelMembership.listChannelsForEntity('organization', body.organizationId);
+    if (!channels.some((c) => c.id === channelId && c.active)) {
       throw new HttpError(
         422,
         ERROR_CODES.RFQ_SALES_CHANNEL_NOT_ALLOWED,
