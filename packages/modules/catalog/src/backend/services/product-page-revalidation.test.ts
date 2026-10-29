@@ -179,13 +179,14 @@ describe('ProductPageRevalidation', () => {
   it('never holds the process open: the debounce timer is unref’d', async () => {
     vi.useRealTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    let handle: NodeJS.Timeout | undefined;
     try {
       const { revalidation } = rig();
       revalidation.productChanged(P1);
-      const handle = setTimeoutSpy.mock.results.at(-1)?.value as NodeJS.Timeout;
+      handle = setTimeoutSpy.mock.results.at(-1)?.value as NodeJS.Timeout;
       expect(handle.hasRef()).toBe(false);
-      clearTimeout(handle);
     } finally {
+      clearTimeout(handle);
       setTimeoutSpy.mockRestore();
     }
   });

@@ -377,13 +377,14 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     const product = await createProduct();
     await storeWebhookSubscription(h, CATALOG_WEBHOOK_EVENT_TYPES);
     capture.clear();
-    // Scoped to this product: a late emission from an earlier case's product
-    // (the one above delays its commit by a second) may land in the window
-    // below and is not this write's (ci-pg/163-final11 went red on exactly that).
-    const emitted: string[] = [];
+    // Every emission is recorded with its product, and only this product's are
+    // asserted on: a late emission from an earlier case's product (the one above
+    // delays its commit by a second) may land in the window below and is not this
+    // write's (ci-pg/163-final11 went red on exactly that). A red names the product.
+    const emitted: Array<{ eventType: string; productId: string | undefined }> = [];
     const offs = [PRODUCT_UPDATED, PRODUCT_ARCHIVED].map((eventType) =>
       h.eventBus.on(eventType as never, (payload: unknown) => {
-        if ((payload as { productId?: string }).productId === product.id) emitted.push(eventType);
+        emitted.push({ eventType, productId: (payload as { productId?: string }).productId });
       }),
     );
     try {
@@ -394,7 +395,7 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     } finally {
       offs.forEach((off) => off());
     }
-    expect(emitted).toEqual([]);
+    expect(emitted.filter((event) => event.productId === product.id)).toEqual([]);
     expect(jobsFor(product.id)).toEqual([]);
     expect((await readProduct(product.id))?.status).not.toBe('inactive');
   });
@@ -452,7 +453,17 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     expect(updated.result.statusCode, updated.result.body).toBeGreaterThanOrEqual(400);
     expect(updated.seen.filter((payload) => payload['productId'] === other.id)).toEqual([]);
 
-    expect(capture.jobs).toEqual([]);
+    // Scoped to the two refused writes, so a late job of an earlier case's product
+    // cannot land here. The refused create has no product of its own: it would be
+    // a product.created.v1 carrying the colliding SKU under an id other than the
+    // product that already holds it.
+    expect(jobsFor(other.id)).toEqual([]);
+    expect(
+      capture.jobs.filter((job) => {
+        const payload = job.payload as { productId?: string; sku?: string };
+        return job.eventType === PRODUCT_CREATED && payload.sku === existing.sku && payload.productId !== existing.id;
+      }),
+    ).toEqual([]);
   });
 
   it('every offered event the module emits parses under its strict schema', async () => {
@@ -491,7 +502,7 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
       capture.clear();
       await withModuleOff('webhooks', axis, async () => {
         await patchProduct(product.id, { name: { 'en-US': 'While webhooks is off' } });
-        expect(capture.jobs).toEqual([]);
+        expect(jobsFor(product.id)).toEqual([]);
       });
       // Not delivered later either: what was emitted meanwhile is gone.
       expect(jobsFor(product.id)).toEqual([]);
