@@ -42,16 +42,18 @@ const CTX = {
 
 const ITEMS = [{ id: 'p1', name: 'Widget', slug: 'widget' }] as never;
 
-function enricherWith(resolveEngine: SuggestionPriceResolverPort['resolveEngine']) {
+function enricherWith(
+  resolveListingPriceDetails: SuggestionPriceResolverPort['resolveListingPriceDetails'],
+) {
   return createSuggestionPricingEnricher({
     catalogProducts,
     organizations,
-    pricingService: { resolveEngine },
+    pricingService: { resolveListingPriceDetails },
   });
 }
 
 describe('suggestion pricing enricher', () => {
-  it('degrades a hit to the plain summary when the pricing engine refuses it', async () => {
+  it('degrades the hits to the plain summaries when the pricing engine refuses them', async () => {
     const enrich = enricherWith(async () => {
       throw new Error('no bracket for this quantity');
     });

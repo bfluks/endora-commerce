@@ -40,6 +40,8 @@ export interface GallerySwitcherItem {
   position: number;
   labels: GalleryLabel[];
   asset: { id: string; kind: string; url: string };
+  /** Feature 163 (FR-077) — the image's own alt text at the request's language; absent / `null` = `alt`. */
+  altText?: string | null | undefined;
 }
 
 function PlayGlyph({ className }: { className?: string }): ReactNode {
@@ -66,6 +68,8 @@ export function GallerySwitcher(rawProps: {
   // public API origin, otherwise the browser resolves them against the
   // storefront origin and every image/video 404s. Normalise once here so every
   // render site (main view, thumbnails, lightbox, `data-active-src`) is covered.
+  const altOf = (item: GallerySwitcherItem): string =>
+    item.altText && item.altText.trim() !== '' ? item.altText : rawProps.alt;
   const props = {
     ...rawProps,
     gallery: rawProps.gallery.map((g) => ({
@@ -193,13 +197,13 @@ export function GallerySwitcher(rawProps: {
                     controls
                     playsInline
                     preload="metadata"
-                    aria-label={props.alt}
+                    aria-label={altOf(item)}
                   />
                 ) : (
                   <img
                     className="h-full w-full rounded-md object-contain"
                     src={item.asset.url}
-                    alt={props.alt}
+                    alt={altOf(item)}
                     loading={i === safeIndex ? 'eager' : 'lazy'}
                   />
                 )}
@@ -287,7 +291,7 @@ export function GallerySwitcher(rawProps: {
                   <img
                     className="h-full w-full object-contain"
                     src={item.asset.url}
-                    alt={props.alt}
+                    alt={altOf(item)}
                     loading="lazy"
                   />
                 )}
@@ -329,7 +333,7 @@ export function GallerySwitcher(rawProps: {
                     // the whole image is visible and centred on screen.
                     <img
                       src={item.asset.url}
-                      alt={props.alt}
+                      alt={altOf(item)}
                       onClick={(e) => e.stopPropagation()}
                       className="max-h-[88vh] max-w-[92vw] rounded-md object-contain"
                     />

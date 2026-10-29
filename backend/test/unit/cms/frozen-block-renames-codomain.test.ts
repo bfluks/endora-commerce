@@ -47,6 +47,19 @@ const DECLARED_OUTSIDE_THIS_REPOSITORY: ReadonlyMap<
   ['ksef.InvoiceSection', { moduleId: 'ksef', packageName: '@endora-commerce/mod-ksef' }],
 ]);
 
+/**
+ * Codomain values whose block was **removed** from the platform, by the feature
+ * that removed it. The map keeps the entry byte for byte (its digest is pinned
+ * and applied migrations read it); stored content under the name degrades to
+ * the missing-block placeholder rather than being migrated. Written and
+ * reviewed like {@link DECLARED_OUTSIDE_THIS_REPOSITORY}, and held below to be a
+ * value of the map that no registered module declares.
+ */
+const REMOVED_FROM_THE_PLATFORM: ReadonlyMap<string, string> = new Map([
+  // Folded into the Carousel (`cms.ContentSlider` with `cms.CarouselImage` slides), FR-041a.
+  ['cms.ImageSlider', 'specs/163-page-builder-marketing-pages/'],
+]);
+
 describe('FROZEN_BLOCK_RENAMES — the codomain', () => {
   const everyDeclared = new Set(
     REGISTERED_MANIFESTS.flatMap((entry) =>
@@ -75,6 +88,19 @@ describe('FROZEN_BLOCK_RENAMES — the codomain', () => {
     ['quote_requests.QuoteParties', 'specs/153-quote-request-pdf-template/'],
     ['quote_requests.QuoteNotes', 'specs/153-quote-request-pdf-template/'],
     ['quote_requests.QuoteDetails', 'specs/153-quote-request-pdf-template/'],
+    ['cms.Section', 'specs/163-page-builder-marketing-pages/'],
+    ['cms.SectionGroup', 'specs/163-page-builder-marketing-pages/'],
+    ['cms.MediaText', 'specs/163-page-builder-marketing-pages/'],
+    ['cms.BackgroundPanel', 'specs/163-page-builder-marketing-pages/'],
+    ['cms.CtaCard', 'specs/163-page-builder-marketing-pages/'],
+    ['cms.Statement', 'specs/163-page-builder-marketing-pages/'],
+    ['cms.CarouselImage', 'specs/163-page-builder-marketing-pages/'],
+    ['cms.CarouselSplit', 'specs/163-page-builder-marketing-pages/'],
+    ['cms.LinkTile', 'specs/163-page-builder-marketing-pages/'],
+    ['cms.DownloadTile', 'specs/163-page-builder-marketing-pages/'],
+    ['cms.LinkList', 'specs/163-page-builder-marketing-pages/'],
+    ['blog.LatestPosts', 'specs/163-page-builder-marketing-pages/'],
+    ['newsletter.Signup', 'specs/163-page-builder-marketing-pages/'],
   ]);
   const declared = new Set([...everyDeclared].filter((name) => !BORN_NAMESPACED.has(name)));
 
@@ -90,9 +116,11 @@ describe('FROZEN_BLOCK_RENAMES — the codomain', () => {
 
   it('read a registry with declarations in it', () => {
     // (d) Derived, not a literal: the map's closed domain, less the values whose
-    // declarant is recorded as outside this repository.
+    // declarant is recorded as outside this repository and those removed.
     expect(declared.size).toBe(
-      Object.keys(FROZEN_BLOCK_RENAMES).length - DECLARED_OUTSIDE_THIS_REPOSITORY.size,
+      Object.keys(FROZEN_BLOCK_RENAMES).length -
+        DECLARED_OUTSIDE_THIS_REPOSITORY.size -
+        REMOVED_FROM_THE_PLATFORM.size,
     );
   });
 
@@ -103,6 +131,7 @@ describe('FROZEN_BLOCK_RENAMES — the codomain', () => {
     for (const [bare, namespaced] of Object.entries(FROZEN_BLOCK_RENAMES)) {
       const here = declared.has(namespaced);
       const outside = DECLARED_OUTSIDE_THIS_REPOSITORY.has(namespaced);
+      if (REMOVED_FROM_THE_PLATFORM.has(namespaced)) continue;
       if (!here && !outside) neither.push(`${bare} -> ${namespaced}`);
       if (here && outside) both.push(`${bare} -> ${namespaced}`);
     }
@@ -116,6 +145,15 @@ describe('FROZEN_BLOCK_RENAMES — the codomain', () => {
     for (const [name, declarant] of DECLARED_OUTSIDE_THIS_REPOSITORY) {
       expect(codomain.has(name), `${name} is not a value of the map`).toBe(true);
       expect(name.split('.')[0], `${name}'s owner segment`).toBe(declarant.moduleId);
+    }
+  });
+
+  it('records as removed only values of the map that no registered module declares', () => {
+    const codomain = new Set(Object.values(FROZEN_BLOCK_RENAMES));
+    for (const name of REMOVED_FROM_THE_PLATFORM.keys()) {
+      expect(codomain.has(name), `${name} is a value of the map`).toBe(true);
+      expect(everyDeclared.has(name), `${name} is declared again`).toBe(false);
+      expect(DECLARED_OUTSIDE_THIS_REPOSITORY.has(name), `${name} is also recorded as declared outside`).toBe(false);
     }
   });
 

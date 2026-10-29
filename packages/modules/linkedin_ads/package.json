@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-linkedin-ads",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "sideEffects": false,
   "description": "LinkedIn Ads integration: per-sales-channel Insight Tag, consent-gated tracking, configurable conversion mappings, and optional server-side reporting through the Conversions API.",
@@ -47,7 +47,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
+    "build": "node ../../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.ui.json --noEmit",
     "lint": "eslint src"
   },

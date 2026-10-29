@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import type { ReactElement, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import type { SalesChannelDetail } from '@endora-commerce/contracts';
 import { TranslationProvider } from '../../../../packages/admin-shell/src/i18n/TranslationProvider';
 import type { Bundle } from '../../../../packages/admin-shell/src/i18n/types';
@@ -117,6 +118,7 @@ function channel(overrides: Partial<SalesChannelDetail> = {}): SalesChannelDetai
     code: 'pl_retail',
     name: { 'en-US': 'PL retail' },
     active: true,
+    anonymousAccess: true,
     systemDefault: false,
     defaultLanguage: 'pl-PL',
     defaultCurrency: 'PLN',
@@ -144,7 +146,8 @@ async function renderForm(
   const language = props.language ?? 'en';
   const wrapper = ({ children }: { children: ReactNode }): ReactElement => (
     <TranslationProvider language={language} initialBundle={bundle(language)}>
-      <>{children}</>
+      {/* The form links to *Pricing settings* (issue #492). */}
+      <MemoryRouter>{children}</MemoryRouter>
     </TranslationProvider>
   );
   const { container } = render(
@@ -458,6 +461,7 @@ describe('the submitted value', () => {
         currencies: ['PLN', 'EUR'],
         defaultCurrency: 'PLN',
         active: true,
+        anonymousAccess: true,
       },
     ]);
   });
@@ -488,13 +492,15 @@ describe('the Dictionary request', () => {
     const submitted: FormValue[] = [];
     render(
       <TranslationProvider language="en" initialBundle={bundle('en')}>
-        <ChannelIdentityForm
-          mode="edit"
-          initial={channel()}
-          onSubmit={(value: FormValue) => {
-            submitted.push(value);
-          }}
-        />
+        <MemoryRouter>
+          <ChannelIdentityForm
+            mode="edit"
+            initial={channel()}
+            onSubmit={(value: FormValue) => {
+              submitted.push(value);
+            }}
+          />
+        </MemoryRouter>
       </TranslationProvider>,
     );
     expect(field('sc-languages').getAttribute('aria-busy')).toBe('true');

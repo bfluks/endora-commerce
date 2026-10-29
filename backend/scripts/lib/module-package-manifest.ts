@@ -1111,9 +1111,12 @@ export interface RenderedPackageManifest {
 export interface ManifestRenderRun {
   readonly rendered: readonly RenderedPackageManifest[];
   /**
-   * Application manifests this run **reconciled** — today exactly one, the
-   * admin's dependency on the module packages whose `./admin` layer the
-   * generated registry imports by bare specifier.
+   * Application manifests this run **reconciled** — today two: the admin's
+   * dependency on the module packages whose `./admin` layer the generated
+   * registry imports by bare specifier, and the backend's dependency on every
+   * module package, whose manifests the generated manifest index imports the
+   * same way (issue #445). The backend's is present only when the run was
+   * handed that index, because the index is how the backend is found.
    *
    * Kept apart from {@link ManifestRenderRun.rendered} because every floor and
    * every coverage number on that array is a statement about *module packages*:
@@ -1546,6 +1549,11 @@ export function renderModulePackageManifests(
   // `exports` maps above came from, so a module that grows or drops the layer
   // moves both artefacts in one regeneration and neither can go stale under the
   // other.
+  //
+  // And the backend's dependency on every module package (issue #445), on the
+  // same terms: the manifest index imports each one's root by bare specifier.
+  // It is located through the index this run was handed, so a run with no
+  // index has no backend to reconcile — the real command always passes one.
   const applicationRendered = [
     renderAdminApplicationManifest({
       repoRoot,
@@ -1553,6 +1561,16 @@ export function renderModulePackageManifests(
       modulePackageNames,
       contributingPackageNames,
     }),
+    ...(manifestIndexPath === undefined
+      ? []
+      : [
+          renderBackendApplicationManifest({
+            repoRoot,
+            fs: countingFs,
+            manifestIndexPath,
+            modulePackageNames,
+          }),
+        ]),
   ];
 
   return {
@@ -2224,7 +2242,14 @@ export function renderManifest(input: RenderInput): string {
   )
     ? ' && tsc -p tsconfig.ui.json'
     : '';
+  // `tsc` deletes nothing, so without a clean the output of a deleted source
+  // outlives it in a git-ignored `dist` every runtime reads (issue #443). It
+  // runs once, first: the UI compile writes into the same directory. The
+  // flags are the emit layout again, and the script refuses a layout whose
+  // `outDir` is the package itself or overlaps its sources.
+  const clean = `node ${input.repoRootPrefix}/scripts/clean-package-dist.mjs ${emitFlags} && `;
   const build =
+    clean +
     (input.layers.assets.length === 0
       ? 'tsc -p tsconfig.build.json'
       : `tsc -p tsconfig.build.json && node ${input.repoRootPrefix}/scripts/copy-package-assets.mjs ` +
@@ -2443,29 +2468,135 @@ export function renderAdminApplicationManifest(input: {
   readonly contributingPackageNames: ReadonlySet<string>;
 }): RenderedPackageManifest {
   const members = workspaceMembers(input.repoRoot, input.fs);
-  const memberNames = new Set(members.map((member) => member.name));
   const { member } = findAliasMember(members, (path) => input.fs.readText(path));
-  const manifestPath = join(member.dir, 'package.json');
+  return reconcileModuleDependencies({
+    fs: input.fs,
+    member,
+    memberNames: new Set(members.map((entry) => entry.name)),
+    modulePackageNames: input.modulePackageNames,
+    wanted: input.contributingPackageNames,
+    unreadable:
+      `It is the manifest whose dependencies make the bare specifiers in the generated admin ` +
+      `registry resolvable; without it a module's admin layer is registered and unreachable.`,
+    noDependencies:
+      `The admin registry's entries are resolved through it, so there is nowhere to record ` +
+      `the modules this application composes.`,
+  });
+}
+
+/**
+ * The backend application's `package.json`, with its module-package
+ * dependencies reconciled against every module package this run derived
+ * (issue #445).
+ *
+ * ## Why every module package, and not a layer-dependent subset
+ *
+ * The generated manifest index imports **every** core module's manifest by a
+ * bare specifier — the package root, which every module package publishes
+ * whatever other layers it ships — and the composition registry imports its
+ * `./backend` and `./migrations` layers the same way. A bare specifier resolves
+ * only through a declared dependency, so a module package the backend does not
+ * declare is a registry entry that dies on `ERR_MODULE_NOT_FOUND` at the first
+ * process that loads it, `overlay:check` first. Until this reconciliation the
+ * entry was added by hand by every new module, which is the shared,
+ * hand-edited file {@link renderAdminApplicationManifest} exists to retire one
+ * application over.
+ *
+ * The population is this run's own identities rather than the names the
+ * committed index registers, because the index is `composer:generate`'s output
+ * and that command runs **after** this one: a module scaffolded a moment ago is
+ * in the first set and not yet in the second, and it is the one the edge is
+ * for. The `manifest-index` coverage on this command's `read:` line already
+ * holds the two sets against each other.
+ *
+ * ## Which application, and how it is found
+ *
+ * The workspace member whose directory holds the generated manifest index —
+ * the file whose specifiers have to resolve. Not a member named `backend`: a
+ * name is a convention and the index's location is the live fact
+ * (`lib/module-roots.ts` already locates it, and is the one derivation of it).
+ * An index under no member is a refusal.
+ *
+ * ## What it is allowed to touch
+ *
+ * Exactly what the admin's reconciliation touches: this repository's own module
+ * packages inside `dependencies`, plus `workspace:` edges to members that have
+ * gone. Every other key, and the order of every other key, is the file's own.
+ */
+export function renderBackendApplicationManifest(input: {
+  readonly repoRoot: string;
+  readonly fs: ManifestFs;
+  /** Absolute path of the generated manifest index the application owns. */
+  readonly manifestIndexPath: string;
+  /** Every module package this run derived, by npm name. */
+  readonly modulePackageNames: ReadonlySet<string>;
+}): RenderedPackageManifest {
+  const members = workspaceMembers(input.repoRoot, input.fs);
+  const owners = members
+    .filter((entry) => input.manifestIndexPath.startsWith(`${entry.dir}${sep}`))
+    .sort((left, right) => right.dir.length - left.dir.length);
+  const member = owners[0];
+  if (member === undefined) {
+    throw new ModulePackageManifestError(
+      `${input.manifestIndexPath} sits under no workspace member, so there is no application ` +
+        `manifest whose dependencies make its bare specifiers resolvable.`,
+    );
+  }
+  return reconcileModuleDependencies({
+    fs: input.fs,
+    member,
+    memberNames: new Set(members.map((entry) => entry.name)),
+    modulePackageNames: input.modulePackageNames,
+    wanted: input.modulePackageNames,
+    unreadable:
+      `It is the manifest whose dependencies make the bare specifiers in the generated ` +
+      `manifest index resolvable; without it every module is registered and unreachable.`,
+    noDependencies:
+      `The generated manifest index's entries are resolved through it, so there is nowhere ` +
+      `to record the modules this application composes.`,
+  });
+}
+
+/**
+ * One application's `dependencies`, reconciled against the module packages it
+ * composes — the edit {@link renderAdminApplicationManifest} and
+ * {@link renderBackendApplicationManifest} share.
+ *
+ * A wanted module is inserted at its ASCII position among the keys already
+ * there, a module package this run found and the application no longer wants
+ * is removed, and so is a `workspace:` edge to a member that has gone. Nothing
+ * else moves.
+ *
+ * Ours is answered from the identities this run derived, never from a `mod-`
+ * prefix test: the prefix is a naming convention (§6), and a third-party
+ * package that happened to follow it would be silently deleted here.
+ */
+function reconcileModuleDependencies(input: {
+  readonly fs: ManifestFs;
+  readonly member: WorkspaceMember;
+  readonly memberNames: ReadonlySet<string>;
+  readonly modulePackageNames: ReadonlySet<string>;
+  readonly wanted: ReadonlySet<string>;
+  /** Why the manifest matters, for the refusal when it cannot be read. */
+  readonly unreadable: string;
+  /** Why the `dependencies` object matters, for the refusal when it is absent. */
+  readonly noDependencies: string;
+}): RenderedPackageManifest {
+  const manifestPath = join(input.member.dir, 'package.json');
   const text = input.fs.readText(manifestPath);
   if (text === null) {
-    throw new ModulePackageManifestError(
-      `${manifestPath} could not be read. It is the manifest whose dependencies make the ` +
-        `bare specifiers in the generated admin registry resolvable; without it a module's ` +
-        `admin layer is registered and unreachable.`,
-    );
+    throw new ModulePackageManifestError(`${manifestPath} could not be read. ${input.unreadable}`);
   }
   const manifest = JSON.parse(text) as Record<string, unknown>;
   const declared = manifest['dependencies'];
   if (typeof declared !== 'object' || declared === null || Array.isArray(declared)) {
     throw new ModulePackageManifestError(
-      `${manifestPath} declares no \`dependencies\` object. The admin registry's entries are ` +
-        `resolved through it, so there is nowhere to record the modules this application ` +
-        `composes.`,
+      `${manifestPath} declares no \`dependencies\` object. ${input.noDependencies}`,
     );
   }
   const kept = Object.entries(declared as Record<string, unknown>).filter(
     ([name, range]) => {
-      if (input.contributingPackageNames.has(name)) return true;
+      if (input.wanted.has(name)) return true;
       if (input.modulePackageNames.has(name)) return false;
       // A `workspace:` range naming no current member is an edge to a package
       // that has **gone** — a module deleted, renamed or moved out of the
@@ -2475,13 +2606,15 @@ export function renderAdminApplicationManifest(input: {
       // has to exist, because the "is it one of ours" question above is
       // answered from the packages this run **found**, and a deleted one is
       // exactly the package it cannot find.
-      return !(typeof range === 'string' && range.startsWith('workspace:') && !memberNames.has(name));
+      return !(
+        typeof range === 'string' &&
+        range.startsWith('workspace:') &&
+        !input.memberNames.has(name)
+      );
     },
   );
   const present = new Set(kept.map(([name]) => name));
-  const missing = [...input.contributingPackageNames]
-    .filter((name) => !present.has(name))
-    .sort(byAscii);
+  const missing = [...input.wanted].filter((name) => !present.has(name)).sort(byAscii);
 
   const reconciled: Array<[string, unknown]> = [];
   let cursor = 0;
@@ -2498,7 +2631,7 @@ export function renderAdminApplicationManifest(input: {
 
   manifest['dependencies'] = Object.fromEntries(reconciled);
   return {
-    packageName: typeof manifest['name'] === 'string' ? manifest['name'] : member.name,
+    packageName: typeof manifest['name'] === 'string' ? manifest['name'] : input.member.name,
     moduleId: null,
     outputPath: manifestPath,
     content: `${JSON.stringify(manifest, null, 2)}\n`,

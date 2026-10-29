@@ -60,6 +60,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 
 | Action | Opens | Permission |
 | --- | --- | --- |
+| `new-organization` | `/organizations/new` | `customers:manage` |
 | `open-organizations` | `/organizations` | `customers:read` |
 
 ## Settings

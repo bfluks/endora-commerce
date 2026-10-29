@@ -42,7 +42,7 @@ revision additionally pin `expectedRevisionNumber`.
 | `PATCH /api/v1/quote-requests/:id` | customer | Edit a Pending RFQ that the internal side has not yet revised — see *Customer draft edits*. |
 | `POST /api/v1/quote-requests/:id/accept-revision` | customer | Accept the seller's latest revision (also covers `Created from admin`). Needs an offer from the seller with every line priced — see *Agreed prices*. |
 | `POST /api/v1/quote-requests/:id/reject-revision` | customer | Reject the latest revision with optional reason. |
-| `POST /api/v1/quote-requests/:id/resubmit` | customer | Clone an old Quote Request into a new Pending one at the customer's current price list. |
+| `POST /api/v1/quote-requests/:id/resubmit` | customer | Clone an old Quote Request into a new Pending one at the customer's current prices. |
 | `POST /api/v1/quote-requests/:id/convert-to-order` | customer | Seed the customer's cart from an Approved RFQ at the agreed unit prices and return the checkout URL. |
 | `GET /api/v1/admin/quote-requests` | admin | List, scoped by sales-rep assignment + filterable by status / organization. |
 | `GET /api/v1/admin/quote-requests/:id` | admin | Detail with full actor identity in the event log, and per line the reference price and the customer's proposal — see *Reference price*. |
@@ -50,6 +50,7 @@ revision additionally pin `expectedRevisionNumber`.
 | `POST /api/v1/admin/quote-requests` | admin | Create on customer's behalf → status `Created from admin`. |
 | `PATCH /api/v1/admin/quote-requests/:id` | admin | Modify a Pending or Created from admin RFQ → triggers customer re-acceptance. |
 | `POST /api/v1/admin/quote-requests/:id/approve` | admin | Approve a Pending RFQ whose every line has an agreed unit price. |
+| `POST /api/v1/admin/quote-requests/:id/prepare-customer-basket` | admin | Seed the basket of the customer who owns an Approved RFQ at the agreed unit prices, replacing what it held, for that customer to check out. The basket is the one of the channel the request was raised on. The same rules as the customer's own conversion; audited as `quote_request.prepare_customer_basket`. |
 | `POST /api/v1/admin/quote-requests/:id/cancel` | admin | Cancel with optional reason. |
 | `POST /api/v1/admin/quote-requests/:id/assign` | admin | Set `assignedAdminUserId` (informational). |
 | `GET`, `POST /api/v1/admin/quote-requests/list-views`; `PATCH`, `DELETE …/list-views/:id` | admin | Saved views on the quote request list — see *Saved views*. |
@@ -100,6 +101,14 @@ What this means in practice:
 - The rules are about a **missing** price. An agreed unit price of exactly
   `0` that an operator entered — a free sample line — is an agreed price like
   any other, and such a request can be accepted, approved and ordered.
+- **A unit price has up to four decimal places.** An agreed or a desired unit
+  price may be typed as `0.0125`; a fifth place is refused with
+  `400 UNIT_PRICE_PRECISION_EXCEEDED` (*A unit price may have at most four
+  decimal places.*), never rounded. The price is stored as typed
+  (`numeric(14,4)`), reaches the basket and the order unrounded, and only a
+  line's value — the unit price × the quantity — is rounded to two places,
+  once: 0.0125 for 10 000 pieces is 125.00. The screens and the PDF show a
+  unit price with its significant places, up to four.
 - `reject-revision` is not affected: a customer can still withdraw a request
   the seller has not answered yet.
 - A request that reached `Approved` with an unpriced line before these rules
@@ -115,8 +124,11 @@ what the seller compares the customer's proposal with.
 
 - **Net, per base unit.** The price is the net unit price of one base piece —
   the unit every line quantity is counted in — whatever packaging unit the
-  customer chose. The customer's price lists, the quantity bracket and an
-  active sale price apply.
+  customer chose. It is what the price books charge this customer for the
+  line's product, variant and quantity — the base price, a catalogue price for
+  everyone on the channel, the customer's organization or customer-group price,
+  and a sale when it is lower (see the `price_lists` module's page) — in the
+  request's currency when it names one, else in the channel's default currency.
 - **Resolved on the server, for the request's owner, on the request's sales
   channel.** The owner is the customer account that raised the request and its
   organization — also when an organization administrator edits a colleague's
@@ -132,6 +144,14 @@ what the seller compares the customer's proposal with.
 - **A cart is its own reference.** A request converted from a cart stores each
   cart line's unit price as that line's reference price. It does **not** record
   it as the customer's proposal: such lines carry no proposed price.
+
+For developers: the stored reference is resolved through `price_lists`'
+`buyerLinePricePort` (`BuyerLinePricePort.resolveForBuyer` in
+`@endora-commerce/contracts`), which prices every line of a request in batches
+through the same resolution as the cart; the port performs no authority check,
+so this module passes the request's owner it has already authorised. The admin
+screens' *current price* comes from `POST /api/v1/admin/price-books/resolve`,
+gated by `price_lists:read`.
 
 The admin detail shows, per line, the reference price, the customer's proposed
 unit price, their difference as a signed amount and a percentage of the
@@ -186,9 +206,21 @@ English and Polish:
   added (with quantity and agreed price) and removed, quantity, agreed price,
   the customer's proposed price, line note, header note and validity date, each
   as old → new. Lines are named by product and variant. Packaging-unit and
-  custom-field changes are not listed. A revision with no listed change reads
-  *offer re-sent without changes*. A reason or note given with a cancellation,
+  custom-field changes are not listed. Changes to the line groups are listed
+  too — *group added*, *group removed*, *group renamed* (from → to), a line
+  *moved* from one group to another (*Ungrouped* standing for no group), and
+  *order changed* when lines or groups were only reordered — see *Line groups*.
+  A revision with no listed change reads *offer re-sent without changes*. A reason or note given with a cancellation,
   rejection or approval is shown.
+- **Values not carried from a sales opportunity.** When a request created from
+  a sales opportunity could not take some of the opportunity's custom-field
+  values (see *Custom fields*), the history holds one entry by *System*,
+  *Custom field values not carried from a sales opportunity*, naming the
+  opportunity by its number and listing each skipped field — by the name of the
+  opportunity's field, as it read when it was skipped — with the reason. It shows no value, and anybody who
+  can open the request reads it. The entry is **admin-only**: the customer's view
+  of the request never shows it. Values that were carried are not an entry of
+  their own.
 - **Bounded.** The history reads the **most recent 100 events**. When older
   events exist, the reply carries `truncated: true` and the tab says that older
   entries are not shown.
@@ -215,6 +247,177 @@ stored reference price, unless the seller changed them. The stored reference
 price stays even when the seller changes the line's quantity: a seller's
 revision never resolves it again. A line the seller adds carries the variant
 and note chosen and no packaging unit.
+
+## Line groups
+
+An operator can sort a quote's lines into **named groups** — *Ground floor*,
+*First floor*, *Options* — so that a long offer reads the way the customer
+thinks about the job. Groups are **presentation only**: they change no price,
+discount, quantity or total, and a grouped quote totals exactly what the same
+lines total ungrouped.
+
+**Where.** The **Modify** tab of a quote and the **Create quote request**
+screen, while the quote's lines can be edited — *Created from admin* and
+*Pending*. In every other state the grouping is shown read-only, and a write
+that sends one is refused like any other line edit (`409 RFQ_NOT_QUOTED`). No
+new permission is involved: grouping needs `rfqs:handle` and the quote's
+organisation in the representative's reach, as editing its lines does.
+
+**What an operator can do.**
+
+- **Add group** creates a group and puts the focus in its name. A name is
+  trimmed and holds 1 to 120 characters; two groups may share a name. A quote
+  holds at most **50** groups — *Add group* is then disabled and says so. An
+  empty name reads *Enter a group name.* and blocks the save.
+- **Rename** a group in its name field; **delete** it with its delete button.
+  Deleting a group never deletes a line: its lines move to the **Ungrouped**
+  section, in their order.
+- **Move a line** to another group, or to a chosen place in its own, by
+  dragging its handle, from the keyboard — focus the handle, press Space or
+  Enter, move with the arrow keys (past a group's last line the line enters the
+  next section), Space or Enter to drop, Escape to cancel — or with the line's
+  **Move to group** menu, which needs no dragging. Every move is announced to
+  screen readers.
+- **Reorder groups** by dragging, from the keyboard, or with the *Move group
+  up* / *Move group down* buttons. **Ungrouped** is always last and cannot be
+  moved, renamed or deleted.
+- A product added with a group's own **Add product** joins that group; any
+  other added line joins *Ungrouped*.
+- A group emptied of its lines **stays** until it is deleted, shown as an empty
+  drop area (*Drag lines here or use Move to group.*). Empty groups are never
+  shown to the customer, printed or carried to an order.
+- **One product on several lines.** The same product may sit on several lines —
+  in different groups, or twice in one: *5 pieces in Hall A, 3 in Hall B*. On
+  the *Modify* tab, **Split line** (the button beside *Move to group*, on a line
+  of quantity 2 or more) asks for the quantity to move to a new line (from 1 to
+  the line's quantity minus 1) and the new line's group — the line's own by
+  default — and adds a line of the same product, variant, packaging unit, agreed
+  price and customer's proposal, reducing the original. On *Create quote
+  request* a product already on the request can simply be added again.
+
+**Summaries.** Every section shows its item count and its net, VAT and gross,
+by the same rule the quote's own totals use, and its discount against the list
+price where the screen shows list prices. They are recomputed as lines are
+edited and moved. The create screen shows no VAT, so its sections show the
+item count and the net.
+
+**Saving.** The grouping is saved by the button that saves the lines — **Save
+revision** or **Create** — in the same write, under the same concurrency check,
+and recorded in that write's audit entry (`quote_request.modify` or
+`quote_request.create_on_behalf`, with the groups' names and line counts
+before and after). **A save that changes only the grouping is a revision like
+any other**: the customer is notified and asked to accept it. The **History**
+tab lists the grouping changes of each revision (see *History*).
+
+**What the customer sees.** The storefront quote shows each group that holds a
+line as a headed section, in order, with its lines and its summary, then the
+lines without a group under **Other items**; a quote with no group looks
+exactly as before. The customer cannot create, rename, delete or reorder a
+group, and no customer request accepts a grouping. The comparison with the last
+revision the customer saw says, in one entry, that *the arrangement of the
+lines changed*, and names nothing else. Each line is compared with its own: for
+a product on several lines, an entry names the group of the line it is about —
+*Bolt (Hall B): quantity 3 → 2* — and the admin *History* does the same. Accepting and rejecting a revision work
+as before: the grouping is never a reason to refuse an acceptance.
+
+**What keeps a line's group.** A customer's own draft edit keeps every line it
+keeps in its group. An API client that saves a quote's lines without sending
+`groups` keeps every line it keeps in its group and puts new lines in
+*Ungrouped*. Where a line carries no id, it is matched to a stored line of the
+same product by its group first, then by its quantity, then by position — so
+removing one of two lines of a product keeps the other in its group. A **resubmission** starts ungrouped: it is a new request, re-priced,
+for the representative to group again. **Convert to order** fills the basket
+in the quote's order, and the order placed from it keeps the groups — see the
+Orders module's page.
+
+**The PDF** prints the groups — see *Quote PDF*.
+
+**API.** `PATCH /api/v1/admin/quote-requests/:id` and
+`POST /api/v1/admin/quote-requests` accept an optional `groups` list — the
+whole grouping, in display order, each `{ key, id?, name }` (`id` keeps an
+existing group, a group without one is created, a stored group left out is
+deleted) — and per line an optional `groupKey` (`null` = ungrouped); lines are
+sent in display order. `groups` without `items` answers `400`; an `id` that is
+not a group of this quote answers `422 VALIDATION_FAILED`. A new line split off
+a stored one carries `splitFromId` (the stored line's id): it then keeps that
+line's packaging unit, customer's proposal, note and reference price; a
+`splitFromId` that names no line of this quote is ignored. Every reply carries
+`itemGroups` (`{ id, name, position }`) and, per line, `groupId` and
+`position`, with lines in display order — the admin reply lists empty groups
+too, the customer reply only the groups that hold a line. The published read
+port `quoteRequestReadPort.listItems` answers each line's `group` and
+`position`, in display order.
+
+## Order minimums and packaging units
+
+Quote requests apply the catalogue's minimum order quantities — the product's
+minimum in pieces and each packaging unit's minimum in units, counted over every
+line of the product in the request (the Catalog module's page defines both).
+**The rule follows who is writing, not the route.**
+
+**Packaging units are named by id.** A customer's line (create, draft edit,
+cart → quote request) may carry `packagingUnitId`. It must be a current unit of
+the line's product; the server stores that unit's catalogue name and base
+quantity and ignores any name or base quantity the line also sent. A line that
+sends a packaging name and base quantity without an id is accepted only when
+both match one of the product's units. Anything else is refused whole with
+`422 PACKAGING_UNIT_MISMATCH`, nothing written; `details.lines[]` gives each
+failing line's `index` and a `reason`. Every failure of an id — unknown,
+deleted, or another product's unit — has the same reason, `unknown_unit`, so
+the answer reveals nothing about other products; a name has `name_unknown` or
+`base_quantity_mismatch`. This also refuses a draft edit that sends back a
+line whose stored packaging label no longer matches a catalogue unit.
+`packagingUnitId` is returned on the admin and the customer read, and an
+administrator's revision keeps it on the lines it keeps.
+
+**A customer's write is refused below a minimum.** Create
+(`POST /api/v1/quote-requests` — directly, from the cart, from quick order,
+from a shopping list or by cloning one of their orders), draft edit
+(`PATCH /api/v1/quote-requests/:id`) and resubmit
+(`POST /api/v1/quote-requests/:id/resubmit`) answer
+`422 PRODUCT_BELOW_MINIMUM_QUANTITY` or
+`422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]` for every
+offending line, and write nothing; the sentence and the product names are in
+the language the response is answered in (the request's `Accept-Language`,
+q-weights honoured, otherwise the channel's default language). The order of
+checks: a product the customer
+may not see or the channel does not publish is refused as unknown first, so
+nothing about it is disclosed; then packaging, then minimums — all before any
+reference price is resolved.
+
+- **Draft edit.** A line the customer left unchanged — same product, variant,
+  packaging and quantity as a stored line — is not refused, even below its
+  minimum; its pieces still count toward the product's total when another line
+  of that product is checked. A line names its packaging unit by the unit's id,
+  so a unit renamed in the catalogue since the line was stored is still the
+  same unit, and the line stays unchanged (and keeps its stored reference
+  price).
+- **Resubmit** is judged as a new request, with no exemption, in pieces (it
+  carries no packaging). A request whose product no longer exists is refused
+  with `404`.
+- **Accepting or rejecting a revision** is never refused for minimums.
+
+**An administrator's write is never refused for a minimum.** Create on behalf,
+**Modify** (including negotiated quantities), cloning an order to a quote
+request from the admin and the admin's quick-order build to a quote request
+write below-minimum lines. The admin read (`GET /api/v1/admin/quote-requests/:id`)
+gives each such line a `minimumWarning` (`{ kind, minimum, packagingUnitName? }`),
+judged over the request's current lines, and the quote request screen shows it
+as a *Below minimum* badge on the line, on **Overview** and in **Modify**. The
+warning informs and blocks nothing; it never reaches the customer's read.
+The admin's clone-to-quote and quick-order build still validate packaging.
+
+**Ordering the accepted quote keeps its quantities.**
+`convert-to-order` fills the basket at the agreed quantities without checking
+minimums; in the basket each line seeded from the quote is exempt while its
+quantity equals the quote's, and checkout honours that only while this request
+is still valid (the Carts and Orders modules' pages). With this module switched
+off nothing can vouch for the quote, so such a basket loses its exemptions at
+checkout.
+
+Migration `20261018T122118_quote_requests_item_packaging_unit_id.ts` adds
+`quote_request_items.packaging_unit_id` (nullable, no foreign key — the unit's
+name and base quantity stay snapshotted on the line).
 
 ## Price negotiation lock
 
@@ -299,6 +502,61 @@ quote-request route — the detail, the history and every action. (Earlier relea
 A customer with the `org_admin` role on their own organization sees
 every Quote Request in the organization, not just their own.
 
+## Custom fields
+
+Quote requests take custom fields, defined on **Custom Fields**. They follow this module: while
+`quote_requests` is switched off its fields are not listed there, cannot be created or edited and
+are not offered by the definitions API; the fields, their options and the stored values are kept
+and come back unchanged when the module is switched on again.
+
+### Values carried into and out of a request
+
+A quote request field can carry its value on, and an opportunity field can carry its value into a
+quote request — set per field with **Carry value to …** on **Custom Fields**, whose page has the
+rules (same key, compatible type and options, the audience rule). Only an empty field is filled,
+and only once:
+
+- **Into the order** placed from an accepted request, at placement — see the Orders module's page.
+- **Into a sales opportunity** the CRM module opens for the request, or that an order placed from
+  the request joins — see the CRM module's page.
+- **From a sales opportunity**, into a request an administrator creates with **Create quote
+  request** on the opportunity's *Links* tab. The values arrive once the CRM module has linked the
+  request to the opportunity, in a change attributed to the **system** (`quote_request.custom_fields.carry`
+  in the audit log); the request's creation stays attributed to the administrator. A value that
+  cannot be carried is skipped and named in the request's *History* (see *History*), and the
+  request is created all the same. A request linked to an opportunity by hand receives nothing, and
+  neither does a request a customer cloned from an order.
+
+  **The version moves right after the create.** A carry that fills a field is a change to the
+  request like any other and raises its `version`, and it runs just after the create request has
+  answered. A client that edits the new request with the version the create response returned is
+  therefore refused with `409 VERSION_CONFLICT` once values have been carried: read the request
+  again and send the version it reports now. A carry that fills nothing leaves the version alone.
+  The carry holds the request's row while it reads and writes it, so it never overwrites an
+  administrator's edit made at the same moment.
+
+While this module is switched off nothing is carried into or out of a quote request, and nothing is
+replayed when it returns. For integrators: the stored event is of type
+`custom-field-carry-skipped`; on `GET /api/v1/admin/quote-requests/:id/history` it is an entry of
+`kind` `custom_field_carry_skipped` whose `customFieldCarry` holds `source` (`entityType:
+"opportunity"`, `recordId`, `reference`) and `skipped` (`key`, `reason`, `label`).
+
+### Custom-field filters on the list
+
+A quote request field whose **Use as list filter** option is on is offered as a filter on the
+quote request list, labelled in your language: the text it contains, a number or date range, yes
+or no, or one or more options. A request without a value for the field never matches. The filter
+is applied by the server, so it narrows the whole list — the total and every page — not only the
+requests already loaded; status, search, sorting and paging keep working beside it. Each filter is
+shown as a removable chip, is kept in the page address and in saved views, and returns the list to
+its first page when it changes.
+
+If the address names a filter that is no longer available, the list says so by the field's name
+and offers **Remove this filter**. A saved view holding such a filter drops it on load, with a
+notice naming it. API callers send the filters as `customFieldFilters` on
+`GET /api/v1/admin/quote-requests` and read the offered fields from
+`GET /api/v1/admin/quote-requests/custom-field-filters` (`rfqs:handle`). An inverted range (`min` above `max`, `from` after `to`) or an operator that does not apply to the field's type answers `400` `VALIDATION_FAILED`.
+
 ## Saved views
 
 A saved view is a named setup of the quote request list — its filters, sort and
@@ -310,13 +568,14 @@ The quote request list's toolbar carries a **Saved views** selector, whose
 first entry is **— Select a view —**, and two buttons beside it: **Save view**
 and **Delete view**.
 
-- **What a view remembers.** Six things: the **Visibility** scope, the
-  organization, the status selection, the search text, the sort and the
-  visible columns. Choosing a view replaces all six with the view's values,
-  discards anything you had changed and not saved, and goes back to the first
-  page. A status or column the list no longer knows is dropped; a view with no
-  columns shows the default ones; a view with no usable scope opens on your own
-  default scope.
+- **What a view remembers.** Seven things: the **Visibility** scope, the
+  organization, the status selection, the search text, the custom-field
+  filters, the sort and the visible columns. Choosing a view replaces all seven
+  with the view's values, discards anything you had changed and not saved, and
+  goes back to the first page. A status or column the list no longer knows is
+  dropped; a custom-field filter that is no longer available is dropped with a
+  notice naming it; a view with no columns shows the default ones; a view with
+  no usable scope opens on your own default scope.
 - **A view never widens what you can see.** It stores filter values, never
   results. After you load a view, the list is read with *your* permissions and
   *your* organizations, whoever saved it. *My organizations* means the
@@ -501,6 +760,17 @@ list price and discount % (both only when a line is discounted), price after
 discount, VAT rate, net and gross, the line note under its line, and the
 totals, in English and Polish.
 
+**Groups on the PDF.** A grouped quote prints each group that holds a line as
+a heading row — its name and item count — then its lines, then a subtotal row
+for each of the table's totals computed over the group; the lines without a
+group follow under **Other items** (*Pozostałe pozycje*), then the quote's
+totals as before. Positions run 1…n across the groups. The built-in layout and
+every template saved before groups existed print them with no change; a
+template can print the quote flat or group it by a field instead (the Line
+items table's *Grouping* setting, on the Document templates page). A quote with
+no group prints exactly as before. While **Document templates** is switched
+off there is no PDF, as above, and the grouping on every screen is unaffected.
+
 **Sending.** *Send PDF to customer* preselects the requesting customer's e-mail
 address. The representative may remove it and add other addresses — any
 well-formed address, at most **5**, duplicates merged — and an optional personal
@@ -669,6 +939,14 @@ place, so the export falls back to the default and says so. Writing it moves
 `pdf-sent` records each delivered *Send PDF to customer*; it is shown on the
 admin History only.
 
+`quote_request_item_groups` holds a quote's line groups — `name` and
+`position` per group, deleted with the quote request. `quote_request_items`
+carries each line's `group_id` (`null` = ungrouped; deleting a group sets it to
+`null`) and its `position` within its section. Each revision's line snapshot
+also records the line's group and position, so the history and the customer's
+comparison describe the grouping as the customer was shown it. A quote created
+before groups existed reads as ungrouped, its lines in their original order.
+
 `quote_request_list_saved_views` holds the list's saved views (see *Saved
 views*). It is platform-global, not organization-scoped: it stores filter
 values, never quote requests, and is not removed when the module is switched
@@ -725,6 +1003,29 @@ rows stay `queued`. They are the record a delivery worker would work from. The
 one e-mail this module does send is the explicit *Send PDF to customer* (see
 *Quote PDF*), delivered while the representative waits and recorded on the
 quote's History.
+
+## Archived products are never quote lines
+
+A product archived with the Catalog module's **Archive** action cannot be put
+on a quote request by any path; restore it first. What each path answers:
+
+- **A customer** — creating a request, editing a draft and resubmitting it,
+  and so converting a basket, a quick-order list or a shopping list into a
+  request, or cloning an order into one — gets `404 PRODUCT_NOT_FOUND`,
+  exactly what a product that does not exist gets, so nothing about the
+  product is disclosed.
+- **An operator** — `POST /api/v1/admin/quote-requests` (create on a
+  customer's behalf) and `PATCH /api/v1/admin/quote-requests/:id` (modify) —
+  gets `409 PRODUCT_ARCHIVED` ("Product is archived."), with the archived
+  products' ids in `details.productIds`, and nothing is written. A product id
+  that does not exist still answers `404 PRODUCT_NOT_FOUND`. A line that is
+  unavailable for any other reason — switched off in the request's sales
+  channel or language, outside its publication window or its audience — is
+  still accepted there with the `PRODUCT_UNAVAILABLE_IN_SCOPE` warning.
+- **Converting an approved quote** whose product was archived after approval
+  answers `409` before the customer's basket is touched.
+
+Price lists are not affected: an archived product can still be priced.
 
 ## Conversion to order
 
@@ -816,20 +1117,22 @@ products in two ways:
   **Active** tab: the catalogue in pages, with status tabs and their counts, a
   type filter and a search by SKU, slug or name. The selection survives page,
   page-size and filter changes, and **Add N** adds every ticked product as a
-  line of quantity 1 — at most 200 in one step. Draft and inactive products
-  may be added; grouped and bundle parents are listed with their reason and
-  cannot be ticked; a product already on the request is marked as already
-  added.
+  line of quantity 1 — at most 200 in one step. Inactive products may be
+  added. Archived products are not offered: the browser has no Archived tab
+  and its **All** tab leaves them out. Grouped and bundle parents are listed
+  with their reason and cannot be ticked. A product already on the request can be added again, as a
+  line of its own — for instance to put it in a second group.
 - **Quick add by name or SKU**, beside it, appends one product under the same
-  rules.
+  rules. An archived product is listed in its results, disabled, with the
+  reason *archived*, as on the order create screen.
 
 Both are disabled, each with a hint, for an operator without `catalog:read`.
 
 Each line shows the product's name and SKU, an editable whole-number quantity,
 an editable agreed unit price and a remove action.
 
-**The agreed unit price is prefilled from the customer's price lists**, through
-`GET /api/v1/admin/products/:id/resolved-price` for the chosen customer and the
+**The agreed unit price is prefilled from the customer's current price**, through
+`POST /api/v1/admin/price-books/resolve` for the chosen customer and the
 line's quantity, with at most four requests in flight. A price is prefilled
 only once a customer with an organization is chosen — lines added before that
 are prefilled then — and an answer is applied only while it still matches the
@@ -848,6 +1151,35 @@ marked, and **Create quote request** stays disabled until it is fixed or
 removed; every line on screen is sent. The running total counts the lines that
 have both a valid quantity and a price. A customer without an organization
 still shows the existing warning, since a quote request needs one.
+
+**The sales channel the request is raised on** is chosen under the customer,
+among the active sales channels of the customer's organization. When the
+organization has exactly one, it is preselected; when it has several, choose one —
+**Create quote request** stays disabled until you do. When the organization has no
+active sales channel, the screen says so and **Create quote request** stays disabled
+until the organization is assigned to one. The channel is sent as
+`salesChannelId`: the request is stored on it, its line names are taken in that
+channel's default language, and its availability is judged there. The agreed
+prices are prefilled on that channel too, and choosing another channel clears
+every price not typed by hand and resolves it again. Without the field the
+request is raised on the channel the admin request itself resolves to — the
+system default, unless the request names another with `X-Sales-Channel`. Either
+way the server checks the channel: one that is not one of the organization's
+active sales channels — unknown, assigned only to other organizations, or
+inactive — is refused with `422 RFQ_SALES_CHANNEL_NOT_ALLOWED` before anything
+is written, also when no channel was chosen and the fallback is not one of
+them. When the organization's channels cannot be read — the read fails or is
+refused, for instance on a network error — the screen says so with a **Retry**
+button, and **Create quote request** stays disabled until they have been read;
+while a retry is under way the button is inactive. Agreed prices are prefilled
+only once a channel is settled.
+
+When a line's product is not available to the customer on that channel —
+switched off there, outside its publication window or outside its audience —
+the request is still created and the answer names the line in `warnings` with
+`PRODUCT_UNAVAILABLE_IN_SCOPE`. The screen then stays open and lists those
+products under **Quote request created with warnings**, and **Open the quote
+request** goes on to it; the request cannot be sent a second time from there.
 
 ## Panels on the quote request screen
 

@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/page-builder-core",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "description": "Shared Page Builder primitives — responsive props, context filtering, and component definition helpers for CMS, email, and invoice builders.",
   "license": "MIT",
@@ -70,7 +70,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src",
     "test": "vitest run"

@@ -1,7 +1,6 @@
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { verifyCustomerMfa } from '../../../../lib/api/auth';
-import { StorefrontApiError } from '../../../../lib/api/client';
 import {
   clearMfaChallengeCookie,
   getMfaChallengeCookie,
@@ -9,6 +8,12 @@ import {
 } from '../../../../lib/session';
 import { Hook } from '../../../../components/Hook';
 import { MfaCodeForm } from '../../../../components/MfaCodeForm';
+import { getServerContext } from '../../../../lib/server-context';
+import {
+  CHANNEL_NOT_PERMITTED_ERROR,
+  signInErrorMessage,
+  signInErrorParam,
+} from '../../../../lib/auth/sign-in-errors';
 import type { Metadata } from 'next';
 
 /**
@@ -36,10 +41,13 @@ export default async function MfaPage({
     redirect(`/login?next=${encodeURIComponent(nextPath)}`);
   }
 
+  const { locale } = await getServerContext();
+  const error = signInErrorMessage(params.error, locale);
+
   return (
     <>
       <Hook code="login.top" />
-      <MfaCodeForm action={verifyAction} next={nextPath} error={params.error} />
+      <MfaCodeForm action={verifyAction} next={nextPath} error={error} />
       <Hook code="login.bottom" />
     </>
   );
@@ -58,8 +66,14 @@ async function verifyAction(formData: FormData): Promise<void> {
   try {
     result = await verifyCustomerMfa({ challengeId, code });
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError ? err.detail : 'Verification failed. Please try again.';
+    const message = signInErrorParam(err, 'Verification failed. Please try again.');
+    if (message === CHANNEL_NOT_PERMITTED_ERROR) {
+      // `specs/154-sales-channel-access/` — the account may not use this store.
+      // Another code would not change that, so the challenge is dropped and the
+      // buyer is shown the refusal on the sign-in page, as the password step does.
+      await clearMfaChallengeCookie();
+      redirect(`/login?error=${message}&next=${encodeURIComponent(next)}`);
+    }
     redirect(`/login/mfa?error=${encodeURIComponent(message)}&next=${encodeURIComponent(next)}`);
   }
   if (!result.sessionCookieValue) {

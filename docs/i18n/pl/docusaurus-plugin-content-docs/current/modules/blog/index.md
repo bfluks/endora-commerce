@@ -35,8 +35,19 @@ uporządkowane listy powiązanych wpisów i powiązanych produktów.
                                                               blog_post_related_products → catalog.products
 ```
 
-Cały schemat znajduje się w `20260506T081055_blog_init.ts` (jedenaście nowych tabel, wszystkie z przedrostkiem
-`blog_*`) i nigdy nie zmienia istniejących tabel.
+Schemat znajduje się w `20260506T081055_blog_init.ts` (jedenaście nowych tabel, wszystkie z przedrostkiem
+`blog_*`) i nigdy nie zmienia istniejących tabel. Migracja
+`20261023T063013_blog_post_main_image.ts` dodaje `blog_posts.main_image_asset_id`
+(opcjonalne, z odwołaniem do `assets`).
+
+## Obraz główny
+
+Wpis ma opcjonalny **Obraz główny**, wybierany z biblioteki zasobów w edytorze
+wpisu. Jest pokazywany na kartach wpisów — na stronie głównej bloga, w listach
+kategorii i tagów oraz w bloku najnowszych wpisów Page Buildera. API panelu
+przekazuje go jako `mainImageAssetId` (tworzenie, zmiana i szczegóły), a karty
+w storefroncie jako `mainImageUrl`: publiczny adres zasobu albo `null`, gdy
+wpis nie ma obrazu lub zasób nie jest publiczny.
 
 ## Adresy i trasy
 
@@ -106,7 +117,7 @@ Operacje usuwające dane blokuje pięć zabezpieczeń:
 2. **Usunięcie kategorii, do której należą wpisy** → 409 `BLOG_CATEGORY_IN_USE`.
 3. **Usunięcie kategorii, która ma kategorie podrzędne** → 409 `BLOG_CATEGORY_HAS_CHILDREN`.
 4. **Usunięcie kategorii `Default` utworzonej przy instalacji** → 409 `BLOG_CATEGORY_PROTECTED`.
-5. **Usunięcie miękkie pliku z biblioteki osadzonego w treści wpisu lub opisie kategorii** →
+5. **Usunięcie miękkie pliku z biblioteki osadzonego w treści wpisu lub opisie kategorii albo użytego jako obraz główny wpisu** →
    409 `ASSET_REFERENCED` (deskryptory zarejestrowane w
    [rejestrze odwołań biblioteki mediów](../assets-library/index.md#asset-reference-registry)).
 
@@ -152,25 +163,34 @@ kolejnych uruchomieniach i odświeża tylko kanoniczną listę uprawnień, gdy s
 | GET    | `/api/v1/blog/by-channel`             | `BlogIndexResponse` — najnowsze wpisy i kategorie pierwszego poziomu |
 | GET    | `/api/v1/blog/by-slug?slug=…`         | `BlogBySlugResponse` w postaci unii rozłącznej (kategoria / wpis)     |
 | GET    | `/api/v1/blog/tag-by-code?code=…`     | `BlogTagByCodeResponse` — stronicowane wpisy z danym tagiem       |
+| GET    | `/api/v1/blog/posts?limit=…&categorySlug=…` | `{ data: BlogPostCard[] }` — najnowsze opublikowane wpisy, od najnowszego |
 
-Wszystkie trzy:
+`/posts` zasila blok najnowszych wpisów. `limit` to 1–24 (domyślnie 6); większa
+wartość daje `400`. Nieznany `categorySlug` daje pustą listę zamiast 404, więc
+blok, którego kategorię usunięto, po prostu nic nie pokazuje. Kanał z
+`blog.enabled = false` także zwraca pustą listę. Każda karta zawiera
+`mainImageUrl`, `primaryCategoryName` (etykietę kategorii) i `url`
+(`/<blog-prefix>/<slug>`).
+
+Wszystkie cztery:
 
 - odczytują wyznaczony kanał i język z nagłówków żądania (`x-sales-channel`, `x-blog-language` /
   `accept-language`);
 - odczytują ustawienia `blog.*` z usługi ustawień uwzględniającej kanał;
 - zwracają `404 BLOG_DISABLED` (albo `BLOG_POST_NOT_FOUND` / `BLOG_TAG_NOT_FOUND`), gdy w danym
-  zakresie nie ma pasującej treści;
+  zakresie nie ma pasującej treści — z wyjątkiem `/posts`, które zwraca pustą listę;
 - korzystają z pamięci podręcznej w Redis przez [`BlogCacheService`](#cache-strategy).
 
 ## Strategia pamięci podręcznej {#cache-strategy}
 
-Klucze mają przedrostek `blog:v1:<channelCode>:<language>:` i cztery postacie:
+Klucze mają przedrostek `blog:v1:<channelCode>:<language>:` i pięć postaci:
 
 ```
 blog:v1:<channel>:<language>:index
 blog:v1:<channel>:<language>:category:<slug>:p<page>
 blog:v1:<channel>:<language>:post:<slug>
 blog:v1:<channel>:<language>:tag:<code>:p<page>
+blog:v1:<channel>:<language>:list:<categorySlug|*>:n<limit>
 ```
 
 TTL: 5 minut (tak samo jak w pamięci podręcznej modułu CMS).
@@ -185,6 +205,51 @@ Unieważnianie:
 Dokładniejsze `invalidatePost(channelCode, slug)` i podobne metody są już dostępne w klasie pamięci
 podręcznej na potrzeby przyszłego, wybiórczego unieważniania (w v1 czyszczenie całości jest
 poprawne, bo zapisów jest mało).
+
+## Blok Page Buildera: najnowsze wpisy
+
+Moduł bloga deklaruje jeden blok Page Buildera, `blog.LatestPosts` (sekcja
+palety *Treść*, etykieta **Najnowsze wpisy**), który pokazuje najnowsze
+opublikowane wpisy kanału sprzedaży strony w jej języku:
+
+| Opcja | Znaczenie |
+| --- | --- |
+| Nagłówek | Opcjonalny tytuł, tekst wstępu i przycisk nad wpisami. |
+| Liczba wpisów | Ile wpisów, 1–12 (domyślnie 6). Na karcie **Data**. |
+| Kategoria | Tylko wpisy z tej kategorii; puste oznacza wszystkie. Na karcie **Data**, wybierana spośród kategorii bloga (blok nadal zapisuje slug kategorii, więc blok zapisany wcześniej się nie zmienia). |
+| Układ | Karuzela (z opcjami karuzeli: liczba slajdów w widoku dla każdego progu, odstęp, efekt, strzałki i kropki) albo siatka (liczba kolumn dla każdego progu). |
+| Etykieta „czytaj więcej” | Tekst linku na każdej karcie. |
+
+Każda karta pokazuje obraz główny (2:1), kategorię główną, tytuł i link
+„czytaj więcej”.
+
+**Wygląd karty i nagłówka.** Każda z tych opcji jest domyślnie nieustawiona, co
+zachowuje opisaną wyżej kartę; opcje oznaczone *dla każdego progu* ustawia się
+na karcie **Responsywność**, a próg bez wartości pokazuje wartość domyślną.
+
+| Opcja | Znaczenie |
+| --- | --- |
+| Tło karty | Kolor marki albo wartość szesnastkowa pod całą kartą; bez ustawienia — tło sekcji. |
+| Zaokrąglone narożniki | Narożniki karty: brak, małe, średnie (domyślnie, 8 px) albo duże. |
+| Odstęp wewnątrz karty | Odstęp wokół obrazu i tekstu karty, krok odstępów albo Własny (px) — *dla każdego progu*. |
+| Odstęp wokół tekstu | Odstęp nad tekstem pod obrazem i po jego bokach — *dla każdego progu*; bez ustawienia 16 px nad tekstem i nic po bokach. |
+| Proporcje obrazu | Proporcje ramki obrazu, gotowe albo Własne (`w:h`) — *dla każdego progu*. |
+| Powiększenie po najechaniu | Obraz lekko się powiększa, gdy karta jest wskazana kursorem lub ma fokus (nie przy ograniczonym ruchu). |
+| Etykieta kategorii | Wypełniona (domyślnie), obrys albo ukryta. |
+| Rozmiar / grubość tytułu karty | Rozmiar z typografii albo Własny (px) i grubość — *dla każdego progu*. |
+| Ikona / wyrównanie / grubość linku „czytaj więcej” | Strzałka albo plus za etykietą, link na początku albo na końcu karty i jego grubość. |
+| Rozmiar / kolor wprowadzenia | Rozmiar (*dla każdego progu*) i kolor tekstu wstępu w nagłówku. |
+| Położenie przycisku nagłówka | Pod wprowadzeniem (domyślnie), na końcu nagłówka (na wysokości wprowadzenia) albo za wpisami i ich przyciskami nawigacji — *dla każdego progu*. |
+| Szerokość przycisku nagłówka | Dopasowana do etykiety albo pełna szerokość — *dla każdego progu*. | Wpisy są odczytywane po stronie serwera przez
+`GET /api/v1/blog/posts`, więc są w HTML strony. Gdy wpisów nie ma, klienci
+nic nie widzą, a podgląd w edytorze pokazuje „No posts”. Jak każdy blok
+sekcji, na najwyższym poziomie strony ma ustawienia sekcji (kotwicę, schemat
+kolorów, tło, odstępy, szerokość). Teksty nagłówka i linku „czytaj więcej”
+można tłumaczyć akcją **Przetłumacz** w Page Builderze.
+
+Gdy moduł bloga jest wyłączony, blok nie jest oferowany w palecie, zapisany blok
+nic nie wyświetla, `/api/v1/blog/posts` nie odpowiada, a storefront nie pyta o
+wpisy.
 
 ## Zależności od innych modułów
 

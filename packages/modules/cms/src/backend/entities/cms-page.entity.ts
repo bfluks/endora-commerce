@@ -29,7 +29,11 @@ export class CmsPage {
     | 'metaKeywords'
     | 'content'
     | 'languages'
-    | 'version';
+    | 'version'
+    | 'parentPageId'
+    | 'breadcrumbsVisible'
+    | 'breadcrumbsScheme'
+    | 'shareImageAssetId';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -104,4 +108,26 @@ export class CmsPage {
 
   @Property({ type: 'integer' })
   version: number = 1;
+
+  // ── Feature 163 fields (data-model §1.1) ────────────────────────────
+
+  /**
+   * The breadcrumb parent. It shapes the trail only — never the URL (FR-030).
+   * The database clears it when the parent is deleted (`on delete set null`);
+   * the `cms_page.update` Command refuses a self-parent, a cycle and a chain
+   * deeper than eight.
+   */
+  @Property({ type: 'uuid', nullable: true })
+  @Index({ name: 'cms_pages_parent_page_id_idx' })
+  parentPageId?: string | null;
+
+  @Property({ type: 'boolean' })
+  breadcrumbsVisible: boolean = true;
+
+  @Property({ type: 'text' })
+  breadcrumbsScheme: 'light' | 'muted' | 'dark' = 'light';
+
+  /** An `assets_library` asset id — not a foreign key; see the migration. */
+  @Property({ type: 'uuid', nullable: true })
+  shareImageAssetId?: string | null;
 }

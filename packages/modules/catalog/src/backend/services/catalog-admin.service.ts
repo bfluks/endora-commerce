@@ -1,8 +1,11 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { randomUUID } from 'crypto';
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 import {
   ERROR_CODES,
+  isOrderMinimumEligibleType,
+  isValidOrderMinimum,
+  PRICE_FIELDS_REFUSED_ON_PRODUCTS,
   // Aliased: the private method below keeps the name, so the shared function
   // needs one the class body cannot shadow.
   slugify as slugifyText,
@@ -12,7 +15,12 @@ import {
   type CreateVariantRequest,
   type UpdateAttributeRequest,
   type UpdateProductRequest,
+  type ProductArchivedMode,
+  type ProductStatus,
+  type ScopeCompletenessGateMode,
+  type ScopeWarning,
   type UpdateVariantRequest,
+  uuidSchema,
 } from '@endora-commerce/contracts';
 import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 
@@ -20,7 +28,11 @@ export interface CatalogEvents extends Record<string, EventBase> {
   'product.created.v1': EventBase & { productId: string; sku: string };
   'product.updated.v1': EventBase & { productId: string; changedFields: string[] };
   'product.archived.v1': EventBase & { productId: string };
-  'product.deleted.v1': EventBase & { productId: string };
+  /**
+   * `formerUrlKeys` (feature 163, T155 CACHE-1) — the redirect keys the deletion
+   * removed, so a subscriber dropping the product's cached pages can still name them.
+   */
+  'product.deleted.v1': EventBase & { productId: string; formerUrlKeys?: string[] };
   'attribute.updated.v1': EventBase & {
     attributeKey: string;
     isSearchable: boolean;
@@ -29,6 +41,14 @@ export interface CatalogEvents extends Record<string, EventBase> {
 }
 
 export type CatalogEventBus = EventBus<CatalogEvents>;
+
+/** Feature 163 (R30.4) — the admin product list's tab badges. */
+export interface ProductListCounts {
+  all: number;
+  active: number;
+  inactive: number;
+  archived: number;
+}
 
 /**
  * How a duplicate inherits the source's per-warehouse low-stock thresholds
@@ -54,7 +74,14 @@ export type CatalogWarehouseThresholdCopy = (input: {
 import { HttpError } from '@endora-commerce/platform/http';
 import { Category } from '../entities/category.entity.js';
 import { Product } from '../entities/product.entity.js';
+import { ProductUrlRedirect } from '../entities/product-url-redirect.entity.js';
+import { isUrlKeyFree, lockUrlKeys } from './url-key.service.js';
 import { ProductVariant } from '../entities/product-variant.entity.js';
+import { ProductChannelScope } from '../entities/product-channel-scope.entity.js';
+import { ProductChannelLanguageScope } from '../entities/product-channel-language-scope.entity.js';
+import { globalScopeFields } from './product-availability.service.js';
+import { toChannelRecord, toLanguageRecord } from './product-scopes.service.js';
+import type { ScopeCompletenessGate } from './scope-completeness.js';
 import {
   assertVirtualDownloadFields,
   ProductTypeValidationError,
@@ -88,6 +115,13 @@ import {
 // re-exports keep the long-standing import site (routes, tests) stable.
 export { dbToApiAttributeType, resolveAttributeApiType } from './attribute-type-mapping.js';
 
+
+/**
+ * How many free-looking slug candidates `allocateUniqueSlug` locks at once (Phase 16
+ * review): enough that a concurrent writer winning one does not fail the allocation.
+ */
+const SLUG_CANDIDATE_LOCKS = 3;
+
 /*
  * `CatalogCustomFieldsPort` used to stand here — this module's own widening of
  * `custom_fields`' apply seam with one extra method, `getById`. T053(b)
@@ -110,17 +144,23 @@ export { dbToApiAttributeType, resolveAttributeApiType } from './attribute-type-
 export type AdminAuditContext = CatalogAdminAuditContext;
 
 /**
- * Virtual attribute-value keys that are NOT bound to any AttributeSet but are
- * legitimately stored under `product.attributeValues`. `defaultPrice` / `price`
- * are the per-product base price the Details tab edits and the PriceList engine
- * reads (see `default-price-list-migration.ts`). They must never be rejected by
- * `assertAttributeValueKeysAllowed`, otherwise every save that carries a price
- * (i.e. nearly all of them) fails with ATTRIBUTE_VALUE_REJECTED.
+ * Feature 160 (FR-043) — a product has no price of its own: a price is a row of
+ * a price book (D-287 §5.8). The old *default price* keys of `attributeValues`
+ * are refused on every write rather than stored where nothing reads them, with
+ * a code that says where prices are set. Exported for the routes, which refuse
+ * the same names at the top level of an old client's body.
  */
-const VIRTUAL_ATTRIBUTE_VALUE_KEYS: ReadonlySet<string> = new Set([
-  'defaultPrice',
-  'price',
-]);
+export function refusePriceFields(fields: Readonly<Record<string, unknown>> | undefined, pathPrefix = ''): void {
+  if (!fields) return;
+  const named = PRICE_FIELDS_REFUSED_ON_PRODUCTS.filter((key) => Object.prototype.hasOwnProperty.call(fields, key));
+  if (named.length === 0) return;
+  throw new HttpError(
+    400,
+    ERROR_CODES.PRICE_SET_IN_PRICE_BOOKS,
+    'Prices are set in price books, not on the product.',
+    named.map((key) => ({ path: `${pathPrefix}${key}`, issue: 'prices are set in price books' })),
+  );
+}
 
 /**
  * Feature 068 — the width of `products.sku` / `product_variants.sku` and the
@@ -134,6 +174,23 @@ const SKU_MAX_LENGTH = 255;
  * Every mutation emits a typed event on the shared bus so the search indexer
  * (T067) and webhook bridge (Phase 2 T037) can react.
  */
+
+/**
+ * Feature 163 (FR-060) — an operator's write asking for the completeness gate: the
+ * mode read once for the request, and where to put the warnings of `warn`. Absent, the
+ * write is not gated (imports, connectors, the API-key upsert — A-6).
+ */
+export interface ProductUpdateGate {
+  completeness?: ScopeCompletenessGateMode | undefined;
+  /** Receives the `completeness` warnings in `warn` mode. */
+  warnings?: ScopeWarning[];
+  /**
+   * Feature 163 (S-W3) — the API key an integration wrote through, recorded in the
+   * audit entry's after-state (the entry has no API-key column; the Command derives
+   * its actor from the ambient context, whose admin id is `null` for a key).
+   */
+  apiKeyId?: string | null | undefined;
+}
 
 export class CatalogAdminService {
   constructor(
@@ -173,7 +230,19 @@ export class CatalogAdminService {
      * is the module's declared degrade rather than a failure.
      */
     private readonly copyWarehouseThresholds?: CatalogWarehouseThresholdCopy,
+    /**
+     * Feature 163 (FR-060, FR-061) — the completeness gate for an operator's change of
+     * the global status. Composed into the admin routes' instance only; it runs only
+     * when a call passes a mode ({@link ProductUpdateGate}), so the integration ports
+     * and the API-key upsert, which never do, are never gated (A-6).
+     */
+    private readonly completenessGate?: ScopeCompletenessGate,
   ) {}
+
+  /** The gate's mode for an operator's write, read once per request; `undefined` where no gate is composed. */
+  async completenessMode(): Promise<ScopeCompletenessGateMode | undefined> {
+    return this.completenessGate?.mode();
+  }
 
   #requireAttributeRead(): CatalogAttributeReadService {
     if (!this.attributeRead) {
@@ -265,6 +334,7 @@ export class CatalogAdminService {
     req: CreateProductRequest,
     _auditCtx?: AdminAuditContext,
   ): Promise<Product> {
+    refusePriceFields(req.attributeValues as Record<string, unknown> | undefined, 'attributeValues.');
     // Feature 002 (T047): cross-field validation for virtual download
     // fields. Zod's .refine() catches most cases at the boundary; the
     // service-level guard is the belt-and-braces backstop for any
@@ -281,6 +351,9 @@ export class CatalogAdminService {
       }
       throw err;
     }
+    // Feature 155 (FR-001, D5) — the range and the type rule hold for every
+    // caller, not only for the ones a route schema stands in front of.
+    assertOrderMinimumAllowed(req.type, req.minOrderQuantity);
 
     // The id is allocated up front so the Command can name its audit target
     // before the row exists (same shape as `duplicateProduct`).
@@ -322,7 +395,8 @@ export class CatalogAdminService {
           sku: req.sku,
           slug,
           type: req.type,
-          status: req.status ?? 'draft',
+          // Feature 163 (Q1-d) — a product starts switched off.
+          status: req.status ?? 'inactive',
           name: req.name,
           description: req.description,
           stockMode: req.stockMode ?? null,
@@ -337,6 +411,9 @@ export class CatalogAdminService {
             ? { downloadAssetId: req.downloadAssetId }
             : {}),
           ...(req.downloadUrl !== undefined ? { downloadUrl: req.downloadUrl } : {}),
+          // Feature 155 (FR-001, FR-003) — the order rules, when the request names them.
+          ...(req.minOrderQuantity !== undefined ? { minOrderQuantity: req.minOrderQuantity } : {}),
+          ...(req.returnable !== undefined ? { returnable: req.returnable } : {}),
         });
         // Feature 002 (T023): the keys in `attributeValues` MUST belong to
         // the Product's AttributeSet. The entity defaults `attributeSetId`
@@ -369,6 +446,8 @@ export class CatalogAdminService {
             visibility: product.visibility,
             stockMode: product.stockMode,
             categoryIds,
+            minOrderQuantity: product.minOrderQuantity ?? null,
+            returnable: product.returnable,
           },
         };
       },
@@ -388,9 +467,10 @@ export class CatalogAdminService {
     id: string,
     req: UpdateProductRequest,
     auditCtx?: AdminAuditContext,
+    gate?: ProductUpdateGate,
   ): Promise<Product> {
     const em = this.emFactory();
-    const r = await this.#applyProductUpdate(em, id, req);
+    const r = await this.#applyProductUpdate(em, id, req, gate);
     await em.flush();
     if (this.auditLog && auditCtx) {
       await this.auditLog.record({
@@ -408,45 +488,45 @@ export class CatalogAdminService {
         ...(auditCtx.requestId !== undefined ? { requestId: auditCtx.requestId } : {}),
       });
     }
-    const announceUpdated = (): void =>
-      this.events.emit('product.updated.v1', {
-        eventId: randomUUID(),
-        occurredAt: new Date().toISOString(),
-        productId: r.product.id,
-        changedFields: r.changedFields,
-      });
-    if (r.archived) {
-      // Two announcements of one write, in one event scope: outside a scope the
-      // bus starts each emit's subscribers at once and waits for none, so the
-      // two ran side by side and a subscriber could be handed
-      // `product.archived.v1` first. A scope dispatches in order and waits, so
-      // every subscriber sees "updated, then archived" — the order the audited
-      // path already had — and the search indexer's removal has finished
-      // before this returns, which is what keeps a reactivation that follows
-      // from being undone by a removal still on its way.
-      await this.events.run(async () => {
-        announceUpdated();
-        this.#emitArchived(r.product.id);
-      });
-    } else {
-      announceUpdated();
-    }
+    // Feature 163 (FR-010) — a status write never archives, so this write has
+    // one announcement; `product.archived.v1` belongs to the Archive action.
+    this.events.emit('product.updated.v1', {
+      eventId: randomUUID(),
+      occurredAt: new Date().toISOString(),
+      productId: r.product.id,
+      changedFields: r.changedFields,
+    });
     return r.product;
   }
 
+  /** The completeness gate for `product`'s global status going to `status` (FR-060). */
+  async #gateGlobalStatus(
+    em: EntityManager,
+    product: Product,
+    status: ProductStatus,
+    mode: ScopeCompletenessGateMode,
+  ): Promise<ScopeWarning[]> {
+    const gate = this.completenessGate!;
+    const [channelRows, languageRows, channels] = await Promise.all([
+      em.find(ProductChannelScope, { productId: product.id }),
+      em.find(ProductChannelLanguageScope, { productId: product.id }),
+      gate.memberChannels(product.id),
+    ]);
+    const before = {
+      global: globalScopeFields(product),
+      channelRows: channelRows.map(toChannelRecord),
+      languageRows: languageRows.map(toLanguageRecord),
+    };
+    const after = { ...before, global: { ...before.global, status } };
+    return gate.enforce(em, product, before, after, channels, mode);
+  }
+
   /**
-   * `product.archived.v1` — the product's status moved to `inactive`.
-   *
-   * Emitted by the update paths themselves, after the write has committed and
-   * after the `product.updated.v1` of the same write, inside an event scope
-   * the path opens — see the two call sites for why. It used to be emitted
-   * only by `archiveProduct`, which nothing calls: archiving has been "update
-   * with `status: 'inactive'`" since feature 022, so the event the search
-   * indexer subscribes to and outbound webhooks are offered was announced by
-   * no path an operator, an importer or a PIM sync can take.
-   *
-   * Once per transition: a product that is already inactive is not archived
-   * again by a further edit, nor by a write naming the same status.
+   * `product.archived.v1` — the product was archived by the Archive action
+   * (feature 163, FR-019). Emitted by {@link archiveProduct} alone, after the
+   * write has committed and after its `product.updated.v1` `['archivedAt']`,
+   * inside the event scope that method opens. Once per transition: archiving an
+   * archived product announces nothing.
    */
   #emitArchived(productId: string): void {
     this.events.emit('product.archived.v1', {
@@ -461,44 +541,24 @@ export class CatalogAdminService {
    * Command Bus (one audit row + the event on commit, none on rollback). Falls
    * back to the legacy `updateProduct` when no bus is injected (bus-less tests).
    */
-  async updateProductAudited(id: string, req: UpdateProductRequest): Promise<Product> {
-    if (!this.commandBus) return this.updateProduct(id, req);
-    const commandBus = this.commandBus;
-    const outcome = { archived: false };
-    // A Command declares one event, and archiving is a second announcement of
-    // the same write. The Command Bus opens its own event scope, which ends —
-    // dispatching `product.updated.v1` and waiting for its subscribers — once
-    // the write has committed; `product.archived.v1` is emitted after that,
-    // into the scope opened here, so it is dispatched second and waited for as
-    // well. Emitted outside any scope it was started and not waited for: this
-    // method returned while the search indexer's removal was still on its way,
-    // and a reactivation that followed could be undone by it.
-    return this.events.run(async () => {
-      const product = await commandBus.run(this.#updateProductCommand(id, req, outcome));
-      if (outcome.archived) this.#emitArchived(product.id);
-      return product;
-    });
+  async updateProductAudited(id: string, req: UpdateProductRequest, gate?: ProductUpdateGate): Promise<Product> {
+    if (!this.commandBus) return this.updateProduct(id, req, undefined, gate);
+    return this.commandBus.run(this.#updateProductCommand(id, req, gate));
   }
 
-  #updateProductCommand(
-    id: string,
-    req: UpdateProductRequest,
-    /** Written by `run`: whether this write moved the product to `inactive`. */
-    outcome: { archived: boolean },
-  ): Command<Product> {
+  #updateProductCommand(id: string, req: UpdateProductRequest, gate?: ProductUpdateGate): Command<Product> {
     let changedFields: string[] = [];
     return {
       action: 'product.update',
       objectType: 'product',
       objectId: id,
       run: async ({ em }) => {
-        const r = await this.#applyProductUpdate(em, id, req);
+        const r = await this.#applyProductUpdate(em, id, req, gate);
         changedFields = r.changedFields;
-        outcome.archived = r.archived;
         return {
           result: r.product,
           before: r.stateBefore,
-          after: { ...r.stateAfter, changedFields },
+          after: { ...r.stateAfter, changedFields, ...(gate?.apiKeyId ? { apiKeyId: gate.apiKeyId } : {}) },
         };
       },
       event: (product) => ({
@@ -521,18 +581,20 @@ export class CatalogAdminService {
     em: EntityManager,
     id: string,
     req: UpdateProductRequest,
+    gate?: ProductUpdateGate,
   ): Promise<{
     product: Product;
     stateBefore: Record<string, unknown>;
     stateAfter: Record<string, unknown>;
     changedFields: string[];
-    /** Whether this write moved the status to `inactive` from another one. */
-    archived: boolean;
   }> {
+    refusePriceFields(req.attributeValues as Record<string, unknown> | undefined, 'attributeValues.');
     const product = await em.findOne(Product, { id });
     if (!product) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
+    // Feature 155 (FR-001, D5) — refused before anything on the row changes.
+    assertOrderMinimumAllowed(product.type, req.minOrderQuantity);
     const stateBefore: Record<string, unknown> = {
       sku: product.sku,
       name: { ...product.name },
@@ -543,9 +605,15 @@ export class CatalogAdminService {
       archivedAt: product.archivedAt ?? null,
       attributeValues: { ...product.attributeValues },
       allowedOrganizationIds: [...product.allowedOrganizationIds],
+      // Feature 155 (FR-005) — always present, so a row records the value
+      // whether or not this write touched it.
+      minOrderQuantity: product.minOrderQuantity ?? null,
+      returnable: product.returnable,
+      // Feature 163 (FR-023) — the global publication window.
+      publishFrom: product.publishFrom?.toISOString() ?? null,
+      publishUntil: product.publishUntil?.toISOString() ?? null,
     };
     const changedFields: string[] = [];
-    let archived = false;
     // Feature 012 / FR-016 — SKU is mutable. Refused with 400 sku_in_use
     // when the new SKU collides with another product. The internal UUID
     // (product.id) is the canonical reference; snapshot tables keep the
@@ -588,16 +656,19 @@ export class CatalogAdminService {
     if (req.description) { product.description = req.description; changedFields.push('description'); }
     if (req.stockMode !== undefined) { product.stockMode = req.stockMode; changedFields.push('stockMode'); }
     if (req.visibility) { product.visibility = req.visibility; changedFields.push('visibility'); }
-    // Feature 022 / 032 — status field. Cross-field rule: transitioning to
-    // `inactive` sets archivedAt; transitioning away clears it.
+    // Feature 022 — status field. Feature 163 (FR-010, FR-019, O-5): a status
+    // write never sets or clears `archivedAt` — `inactive` is plain off and
+    // `active` does not restore. Archiving is the Archive / Restore action.
     if (req.status !== undefined && req.status !== product.status) {
-      product.status = req.status;
-      if (req.status === 'inactive') {
-        product.archivedAt = new Date();
-        archived = true;
-      } else {
-        product.archivedAt = null;
+      // Feature 163 (FR-060, US6 #3) — a change of the global switch runs the
+      // completeness gate over every pair it turns on, before the row changes: in
+      // `refuse` one failing pair refuses the whole write (N3). It reads status
+      // only, so an archived product set `active` is gated too.
+      if (gate?.completeness && this.completenessGate) {
+        const warnings = await this.#gateGlobalStatus(em, product, req.status, gate.completeness);
+        gate.warnings?.push(...warnings);
       }
+      product.status = req.status;
       changedFields.push('status');
     }
     // Feature 002 (T034) — attribute_set_id swap. Persist BEFORE
@@ -676,6 +747,48 @@ export class CatalogAdminService {
       product.fulfilmentStrategyWarehouseOrder = req.fulfilmentStrategyWarehouseOrder;
       changedFields.push('fulfilmentStrategyWarehouseOrder');
     }
+    // Feature 155 (FR-001, FR-003, D5) — the pieces minimum and the returnable flag.
+    if (req.minOrderQuantity !== undefined) {
+      product.minOrderQuantity = req.minOrderQuantity;
+      changedFields.push('minOrderQuantity');
+    }
+    if (req.returnable !== undefined) {
+      product.returnable = req.returnable;
+      changedFields.push('returnable');
+    }
+    // Feature 163 (FR-023) — the global publication window, written as a pair:
+    // an omitted bound keeps its stored value, and the pair that results must
+    // start before it ends. It never touches a channel's window (FR-013).
+    if (req.publishFrom !== undefined || req.publishUntil !== undefined) {
+      const from =
+        req.publishFrom === undefined
+          ? (product.publishFrom ?? null)
+          : req.publishFrom === null
+            ? null
+            : new Date(req.publishFrom);
+      const until =
+        req.publishUntil === undefined
+          ? (product.publishUntil ?? null)
+          : req.publishUntil === null
+            ? null
+            : new Date(req.publishUntil);
+      if (from !== null && until !== null && from.getTime() >= until.getTime()) {
+        throw new HttpError(
+          422,
+          ERROR_CODES.VALIDATION_FAILED,
+          'The publication window must start before it ends.',
+          { field: 'window' },
+        );
+      }
+      if (
+        (from?.getTime() ?? null) !== (product.publishFrom?.getTime() ?? null) ||
+        (until?.getTime() ?? null) !== (product.publishUntil?.getTime() ?? null)
+      ) {
+        product.publishFrom = from;
+        product.publishUntil = until;
+        changedFields.push('publicationWindow');
+      }
+    }
     const stateAfter: Record<string, unknown> = {
       name: { ...product.name },
       description: { ...product.description },
@@ -685,8 +798,12 @@ export class CatalogAdminService {
       archivedAt: product.archivedAt ?? null,
       attributeValues: { ...product.attributeValues },
       allowedOrganizationIds: [...product.allowedOrganizationIds],
+      minOrderQuantity: product.minOrderQuantity ?? null,
+      returnable: product.returnable,
+      publishFrom: product.publishFrom?.toISOString() ?? null,
+      publishUntil: product.publishUntil?.toISOString() ?? null,
     };
-    return { product, stateBefore, stateAfter, changedFields, archived };
+    return { product, stateBefore, stateAfter, changedFields };
   }
 
   /**
@@ -751,8 +868,9 @@ export class CatalogAdminService {
    *
    * The duplicated row gets a fresh UUID; the SKU is derived from the
    * source by appending `-copy`, then `-copy-2`, `-copy-3`, … until a
-   * free slot is found. Status is reset to `'draft'` and `archivedAt`
-   * is cleared so the operator can review before publishing.
+   * free slot is found. Status is reset to `'inactive'` and `archivedAt`
+   * is cleared (feature 163, Q1-d) so the operator can review before
+   * switching it on — also when the source is archived and `active`.
    *
    * Variants have their own globally-unique SKUs; each is suffixed in
    * the same way against the variant SKU space.
@@ -775,10 +893,13 @@ export class CatalogAdminService {
     if (this.commandBus) {
       return this.commandBus.run({ action, objectType, objectId, run: ({ em }) => write(em) });
     }
-    const em = this.emFactory();
-    const w = await write(em);
-    await em.flush();
-    return w.result;
+    // Unaudited without a Command Bus, but still one transaction: the URL-key
+    // advisory locks a write takes (`allocateUniqueSlug`) hold only inside one.
+    return this.emFactory().transactional(async (em) => {
+      const w = await write(em);
+      await em.flush();
+      return w.result;
+    });
   }
 
   async duplicateProduct(id: string): Promise<Product> {
@@ -788,20 +909,22 @@ export class CatalogAdminService {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
 
-    const newSku = await this.allocateCopySku(em, source.sku);
-    const newSlug = await this.allocateCopySlug(em, source.slug);
-
     // The dup product row + its audit are co-transactional; the bridge copies
     // run AFTER on this em (matches the pre-054 two-step) — the dup FK target
     // exists once committed, and a partially-copied dup is no worse than today.
     const dupId = randomUUID();
     const dup = await this.#auditedWrite('product.duplicate', 'product', dupId, async (cem) => {
+      // Inside the Command's transaction (Phase 16 review): the slug's URL-key lock is
+      // a transaction lock, so on a bare em it was released before the insert.
+      const newSku = await this.allocateCopySku(cem, source.sku);
+      const newSlug = await this.allocateCopySlug(cem, source.slug);
       const created = cem.create(Product, {
         id: dupId,
         sku: newSku,
         slug: newSlug,
       type: source.type,
-      status: 'draft',
+      status: 'inactive',
+      archivedAt: null,
       name: this.suffixCopyNames(source.name),
       description: { ...source.description },
       stockMode: source.stockMode ?? null,
@@ -985,7 +1108,6 @@ export class CatalogAdminService {
           parentProductId: dup.id,
           sku: variantSku,
           variantAttributeValues: { ...v.variantAttributeValues },
-          ...(v.priceOverride != null ? { priceOverride: v.priceOverride } : {}),
           ...(v.stockLevel != null ? { stockLevel: v.stockLevel } : {}),
         });
         em.persist(newVariant);
@@ -1044,13 +1166,33 @@ export class CatalogAdminService {
    * Feature 068 — used by the create path as well as the duplication path; a
    * name collision on create used to reach the database and be reported as a
    * SKU conflict.
+   *
+   * Feature 163 (A-11) — a new product's slug is its key in every language, so
+   * "free" means free as a URL key: no product's global key, and no live
+   * product's current or redirecting key in any language.
+   *
+   * Must run inside the caller's transaction (the Command's): the decisive check is
+   * made under the candidates' URL-key locks, which are transaction locks. The first
+   * {@link SLUG_CANDIDATE_LOCKS} candidates that look free without a lock are locked
+   * together, **once and in sorted order** — the order every key writer locks in, so
+   * the two cannot deadlock — and re-checked under the locks in index order; the first
+   * still free wins. A held lock is never released before the transaction ends, so
+   * locking candidates one at a time after a lost race would acquire them out of
+   * sorted order (`root-10` sorts before `root-9`). Losing every candidate of the set
+   * to concurrent writers is refused like an exhausted search.
    */
   private async allocateUniqueSlug(em: EntityManager, source: string): Promise<string> {
     const root = this.slugify(source);
-    for (let i = 0; i < 1000; i += 1) {
+    const probes: string[] = [];
+    for (let i = 0; i < 1000 && probes.length < SLUG_CANDIDATE_LOCKS; i += 1) {
       const candidate = i === 0 ? root : this.slugify(`${root}-${i + 1}`);
-      const hit = await em.findOne(Product, { slug: candidate });
-      if (!hit) return candidate;
+      if (!probes.includes(candidate) && (await isUrlKeyFree(em, candidate))) probes.push(candidate);
+    }
+    if (probes.length > 0) {
+      await lockUrlKeys(em, probes);
+      for (const candidate of probes) {
+        if (await isUrlKeyFree(em, candidate)) return candidate;
+      }
     }
     throw new HttpError(
       409,
@@ -1077,12 +1219,87 @@ export class CatalogAdminService {
   }
 
   /**
-   * @deprecated Use `updateProduct` with `status: 'inactive'` instead — it is
-   * what this method does, and it is the update that emits
-   * `product.archived.v1` when the status actually moves.
+   * Feature 163 (FR-019, research R30.3) — Archive one product: the `product.archive`
+   * Command sets `archivedAt` and touches no status at any scope, and no
+   * completeness gate runs. Announces `product.updated.v1` `['archivedAt']`, then
+   * `product.archived.v1`, both after commit and in that order (one event scope,
+   * dispatched in order and waited for — the search indexer's removal has finished
+   * before this returns). Archiving an archived product is a no-op: no audit row,
+   * no event, `changed: false`.
+   *
+   * 404 `PRODUCT_NOT_FOUND` for an unknown, soft-deleted or non-UUID id.
    */
-  async archiveProduct(id: string, auditCtx?: AdminAuditContext): Promise<void> {
-    await this.updateProduct(id, { status: 'inactive' }, auditCtx);
+  async archiveProduct(id: string): Promise<{ product: Product; changed: boolean }> {
+    return this.#setArchived(id, true);
+  }
+
+  /**
+   * Feature 163 (FR-019) — Restore one product: the `product.restore` Command clears
+   * `archivedAt`, announces `product.updated.v1` `['archivedAt']`, and leaves the
+   * status where it is (an `inactive` product stays off). No-op on a product that is
+   * not archived.
+   */
+  async restoreProduct(id: string): Promise<{ product: Product; changed: boolean }> {
+    return this.#setArchived(id, false);
+  }
+
+  async #setArchived(id: string, archive: boolean): Promise<{ product: Product; changed: boolean }> {
+    // A non-UUID id would reach PostgreSQL as an invalid `uuid` literal.
+    if (!uuidSchema.safeParse(id).success) {
+      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    }
+    const outcome = { changed: false };
+    // The Command declares `product.updated.v1`; the Command Bus dispatches it
+    // when its own scope ends, after commit. `product.archived.v1` is emitted
+    // after that, into the scope opened here, so it is dispatched second.
+    return this.events.run(async () => {
+      const product = await this.#runCommand(this.#archiveCommand(id, archive, outcome));
+      if (outcome.changed && archive) this.#emitArchived(product.id);
+      return { product, changed: outcome.changed };
+    });
+  }
+
+  #archiveCommand(id: string, archive: boolean, outcome: { changed: boolean }): Command<Product> {
+    return {
+      action: archive ? 'product.archive' : 'product.restore',
+      objectType: 'product',
+      objectId: id,
+      run: async ({ em }) => {
+        // Checkpoint C code review (C-W1) — the row lock serialises a single and a bulk
+        // Archive of one product: the second reads the first's `archivedAt` and is the
+        // no-op, so the transition is audited and announced once.
+        const product = await em.findOne(Product, { id, deletedAt: null }, { lockMode: LockMode.PESSIMISTIC_WRITE });
+        if (!product) {
+          throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+        }
+        const before = product.archivedAt ?? null;
+        if ((before !== null) === archive) {
+          outcome.changed = false;
+          return { result: product, skipAudit: true };
+        }
+        product.archivedAt = archive ? new Date() : null;
+        em.persist(product);
+        await em.flush();
+        outcome.changed = true;
+        return {
+          result: product,
+          before: { archivedAt: before?.toISOString() ?? null },
+          after: { archivedAt: product.archivedAt?.toISOString() ?? null },
+        };
+      },
+      event: (product) =>
+        outcome.changed
+          ? {
+              eventName: 'product.updated.v1',
+              payload: {
+                eventId: randomUUID(),
+                occurredAt: new Date().toISOString(),
+                productId: product.id,
+                changedFields: ['archivedAt'],
+              },
+            }
+          : undefined,
+    };
   }
 
   async assertProductDeletable(em: EntityManager, productId: string): Promise<void> {
@@ -1125,7 +1342,7 @@ export class CatalogAdminService {
     await this.#runCommand(this.#deleteProductCommand(id));
   }
 
-  #deleteProductCommand(id: string): Command<{ id: string }> {
+  #deleteProductCommand(id: string): Command<{ id: string; formerUrlKeys: string[] }> {
     return {
       action: 'product.delete',
       objectType: 'product',
@@ -1142,11 +1359,18 @@ export class CatalogAdminService {
           name: { ...product.name },
           deletedAt: product.deletedAt ?? null,
         };
+        // Feature 163 (FR-072) — a deleted product's old URL keys stop redirecting.
+        const urlRedirects = (await em.find(ProductUrlRedirect, { productId: id })).map((row) => ({
+          id: row.id,
+          languageCode: row.languageCode ?? null,
+          key: row.key,
+        }));
+        if (urlRedirects.length > 0) await em.nativeDelete(ProductUrlRedirect, { productId: id });
         product.deletedAt = new Date();
         await em.flush();
         return {
-          result: { id: product.id },
-          before: stateBefore,
+          result: { id: product.id, formerUrlKeys: urlRedirects.map((row) => row.key) },
+          before: { ...stateBefore, urlRedirects },
           after: {
             ...stateBefore,
             deletedAt: product.deletedAt?.toISOString() ?? null,
@@ -1159,6 +1383,7 @@ export class CatalogAdminService {
           eventId: randomUUID(),
           occurredAt: new Date().toISOString(),
           productId: result.id,
+          formerUrlKeys: result.formerUrlKeys,
         },
       }),
     };
@@ -1252,8 +1477,12 @@ export class CatalogAdminService {
 
   async listProducts(
     options: {
-      includeArchived?: boolean;
-      status?: 'active' | 'draft' | 'inactive';
+      /**
+       * Feature 163 (FR-113, R30.4) — which archived products are listed, on
+       * `archived_at` and independently of the status. Default `exclude`.
+       */
+      archived?: ProductArchivedMode;
+      status?: ProductStatus;
       type?: 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
       q?: string;
       /** When set, restrict to products in this category or any descendant. */
@@ -1266,21 +1495,19 @@ export class CatalogAdminService {
     page: number;
     pageSize: number;
     total: number;
-    counts: { all: number; active: number; draft: number; inactive: number };
+    counts: ProductListCounts;
   }> {
     const em = this.emFactory();
     const page = Math.max(0, options.page ?? 0);
     const pageSize = Math.min(Math.max(1, options.pageSize ?? 20), 500);
+    const archivedMode = options.archived ?? 'exclude';
 
-    // `status` overrides `includeArchived` — if the caller explicitly asks for
-    // a specific status (including `inactive`), we honour it; otherwise the
-    // legacy `includeArchived` flag controls whether inactive rows appear.
+    // Feature 163 (R30.4) — the status and the archived mode are two independent
+    // filters: `status` reads the status column, `archived` reads `archived_at`.
     const where: Record<string, unknown> = { deletedAt: null };
-    if (options.status) {
-      where['status'] = options.status;
-    } else if (!options.includeArchived) {
-      where['status'] = { $ne: 'inactive' };
-    }
+    if (options.status) where['status'] = options.status;
+    if (archivedMode === 'exclude') where['archivedAt'] = null;
+    else if (archivedMode === 'only') where['archivedAt'] = { $ne: null };
     if (options.type) {
       where['type'] = options.type;
     }
@@ -1289,22 +1516,7 @@ export class CatalogAdminService {
       ? await this.productIdsInCategoryTree(em, options.categorySlug.trim())
       : null;
     if (categoryProductIds && categoryProductIds.size === 0) {
-      // `em.execute`, not `em.getKnex()`: a knex handle takes its own pooled
-      // connection, so the status badges would be counted from outside a
-      // transaction the caller holds open while `em.find` above answers from
-      // inside it — one screen, two views of `products` (issue #207).
-      const countRowsEmpty = (await em.execute(
-        `select status, count(*) as count from products where deleted_at is null group by status`,
-      )) as Array<{ status: string; count: string | number }>;
-      const countsEmpty = { all: 0, active: 0, draft: 0, inactive: 0 };
-      for (const row of countRowsEmpty) {
-        const n = Number(row.count) || 0;
-        countsEmpty.all += n;
-        if (row.status === 'active') countsEmpty.active = n;
-        else if (row.status === 'draft') countsEmpty.draft = n;
-        else if (row.status === 'inactive') countsEmpty.inactive = n;
-      }
-      return { items: [], page, pageSize, total: 0, counts: countsEmpty };
+      return { items: [], page, pageSize, total: 0, counts: await this.#productListCounts(em) };
     }
     if (categoryProductIds) {
       where['id'] = { $in: [...categoryProductIds] };
@@ -1319,7 +1531,8 @@ export class CatalogAdminService {
       const baseQuery = knex('products').where((qb) => {
         qb.whereNull('deleted_at');
         if (options.status) qb.where('status', options.status);
-        else if (!options.includeArchived) qb.whereNot('status', 'inactive');
+        if (archivedMode === 'exclude') qb.whereNull('archived_at');
+        else if (archivedMode === 'only') qb.whereNotNull('archived_at');
         if (options.type) qb.where('type', options.type);
         if (categoryProductIds) qb.whereIn('id', [...categoryProductIds]);
         if (trimmedQ) {
@@ -1365,24 +1578,38 @@ export class CatalogAdminService {
       });
     }
 
-    // Counts are computed across the *full* product set (including archived)
-    // so the admin's status tabs always have honest badges, regardless of
-    // which tab is currently active.
-    // `em.execute`, not `em.getKnex()` — same reason as the empty-category
-    // branch above.
-    const countRows = (await em.execute(
-      `select status, count(*) as count from products where deleted_at is null group by status`,
-    )) as Array<{ status: string; count: string | number }>;
-    const counts = { all: 0, active: 0, draft: 0, inactive: 0 };
-    for (const row of countRows) {
-      const n = Number(row.count) || 0;
-      counts.all += n;
-      if (row.status === 'active') counts.active = n;
-      else if (row.status === 'draft') counts.draft = n;
-      else if (row.status === 'inactive') counts.inactive = n;
-    }
+    return { items, page, pageSize, total, counts: await this.#productListCounts(em) };
+  }
 
-    return { items, page, pageSize, total, counts };
+  /**
+   * The admin list's tab badges, across the *full* product set whatever tab is
+   * active, so they stay honest (feature 163, R30.4): `all`, `active` and
+   * `inactive` over non-archived, non-deleted rows; `archived` over archived,
+   * non-deleted rows of either status.
+   *
+   * `em.execute`, not `em.getKnex()`: a knex handle takes its own pooled
+   * connection, so the badges would be counted from outside a transaction the
+   * caller holds open while the page above answers from inside it — one screen,
+   * two views of `products` (issue #207).
+   */
+  async #productListCounts(em: EntityManager): Promise<ProductListCounts> {
+    const rows = (await em.execute(
+      `select status, (archived_at is not null) as archived, count(*) as count
+         from products where deleted_at is null
+        group by status, (archived_at is not null)`,
+    )) as Array<{ status: string; archived: boolean; count: string | number }>;
+    const counts: ProductListCounts = { all: 0, active: 0, inactive: 0, archived: 0 };
+    for (const row of rows) {
+      const n = Number(row.count) || 0;
+      if (row.archived) {
+        counts.archived += n;
+        continue;
+      }
+      counts.all += n;
+      if (row.status === 'active') counts.active += n;
+      else if (row.status === 'inactive') counts.inactive += n;
+    }
+    return counts;
   }
 
   /**
@@ -1391,8 +1618,9 @@ export class CatalogAdminService {
    */
   async resolveProductIds(
     options: {
-      includeArchived?: boolean;
-      status?: 'active' | 'draft' | 'inactive';
+      /** Feature 163 (R30.4) — as {@link listProducts}; the route's default is `include`. */
+      archived?: ProductArchivedMode;
+      status?: ProductStatus;
       type?: 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
       q?: string;
     } = {},
@@ -1401,16 +1629,17 @@ export class CatalogAdminService {
     const em = this.emFactory();
     const trimmedQ = options.q?.trim();
     const knex = em.getKnex();
+    const archivedMode = options.archived ?? 'exclude';
 
     const applyListFilters = (qb: ReturnType<typeof knex>): ReturnType<typeof knex> => {
-      // Mirror listProducts: soft-deleted rows are never selectable, and the
-      // withdrawn status is `inactive` (feature 032 renamed `archived`).
+      // Mirror listProducts: soft-deleted rows are never selectable; the status
+      // and the archived mode are independent filters (feature 163, R30.4).
       qb.whereNull('deleted_at');
       if (options.status) {
         qb.where('status', options.status);
-      } else if (!options.includeArchived) {
-        qb.whereNot('status', 'inactive');
       }
+      if (archivedMode === 'exclude') qb.whereNull('archived_at');
+      else if (archivedMode === 'only') qb.whereNotNull('archived_at');
       if (options.type) {
         qb.where('type', options.type);
       }
@@ -1736,6 +1965,16 @@ export class CatalogAdminService {
 
   // ===== Feature 002 (T054 backend prereq) — Variants CRUD =================
 
+  /**
+   * Every variant of a product, by SKU — the admin's view (feature 161): no
+   * channel, status or audience filter, unlike the storefront's product read.
+   * A deleted or unknown product is `404`.
+   */
+  async listVariants(parentProductId: string): Promise<ProductVariant[]> {
+    const product = await this.getProductById(parentProductId);
+    return this.emFactory().find(ProductVariant, { parentProductId: product.id }, { orderBy: { sku: 'asc' } });
+  }
+
   async createVariant(
     parentProductId: string,
     req: CreateVariantRequest,
@@ -1772,9 +2011,6 @@ export class CatalogAdminService {
         parentProductId,
         sku: req.sku,
         variantAttributeValues: req.variantAttributeValues,
-        ...(req.priceOverride !== undefined
-          ? { priceOverride: String(req.priceOverride) }
-          : {}),
         ...(req.stockLevel !== undefined ? { stockLevel: req.stockLevel } : {}),
       });
       try {
@@ -1817,14 +2053,10 @@ export class CatalogAdminService {
       const before = {
         sku: v.sku,
         variantAttributeValues: { ...v.variantAttributeValues },
-        priceOverride: v.priceOverride,
         stockLevel: v.stockLevel,
       };
       if (req.variantAttributeValues !== undefined) {
         v.variantAttributeValues = req.variantAttributeValues;
-      }
-      if (req.priceOverride !== undefined) {
-        v.priceOverride = String(req.priceOverride);
       }
       if (req.stockLevel !== undefined) {
         v.stockLevel = req.stockLevel;
@@ -1832,7 +2064,7 @@ export class CatalogAdminService {
       return {
         result: v,
         before,
-        after: { sku: v.sku, priceOverride: v.priceOverride, stockLevel: v.stockLevel },
+        after: { sku: v.sku, stockLevel: v.stockLevel },
       };
     });
     this.events.emit('product.updated.v1', {
@@ -1916,8 +2148,7 @@ export class CatalogAdminService {
     const rejected = keys.filter(
       (k) =>
         !allowed.has(k) &&
-        !existingKeys.has(k) &&
-        !VIRTUAL_ATTRIBUTE_VALUE_KEYS.has(k),
+        !existingKeys.has(k),
     );
     if (rejected.length > 0) {
       throw new HttpError(
@@ -2073,5 +2304,32 @@ export class CatalogAdminService {
   private anyValue(blob: Record<string, string>): string {
     const key = Object.keys(blob)[0];
     return key ? (blob[key] ?? '') : '';
+  }
+}
+
+/**
+ * Feature 155 (FR-001, threat F5, D5) — a pieces minimum is an integer in
+ * 1…1 000 000 and only a `simple` or `configurable` product may carry one;
+ * `null` (clear) and an absent key are always allowed. Refused
+ * `422 VALIDATION_FAILED` with `details.field`, the answer an in-process caller
+ * gets where no route schema stood in front of it.
+ */
+function assertOrderMinimumAllowed(type: string, value: number | null | undefined): void {
+  if (value === undefined || value === null) return;
+  if (!isValidOrderMinimum(value)) {
+    throw new HttpError(
+      422,
+      ERROR_CODES.VALIDATION_FAILED,
+      'The minimum order quantity must be a whole number from 1 to 1000000.',
+      { field: 'minOrderQuantity' },
+    );
+  }
+  if (!isOrderMinimumEligibleType(type)) {
+    throw new HttpError(
+      422,
+      ERROR_CODES.VALIDATION_FAILED,
+      `A minimum order quantity applies to simple or configurable products only; got "${type}".`,
+      { field: 'minOrderQuantity' },
+    );
   }
 }

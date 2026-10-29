@@ -92,6 +92,8 @@ const SUBJECTS: readonly Subject[] = [
     actions: [
       'new-page',
       'open-blocks',
+      // Feature 163 — the brand screen, `/cms/brand`.
+      'open-cms-brand',
       'open-hooks',
       'open-page-builder-translation-settings',
       'open-pages',
@@ -100,7 +102,14 @@ const SUBJECTS: readonly Subject[] = [
     axis: 'deactivated',
     admin: cmsAdmin,
   },
-  { module: 'blog', actions: ['new-post'], axis: 'deactivated', admin: blogAdmin },
+  // Issue #510 (Principle XVI): the three screens the sidebar lists gained the
+  // actions that open them, beside the create form's.
+  {
+    module: 'blog',
+    actions: ['new-post', 'open-blog-categories', 'open-blog-posts', 'open-blog-tags'],
+    axis: 'deactivated',
+    admin: blogAdmin,
+  },
 ];
 
 /**

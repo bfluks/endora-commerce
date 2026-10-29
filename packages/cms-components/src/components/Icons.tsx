@@ -3,6 +3,7 @@
 import { type ComponentConfig, type PuckComponent } from '@puckeditor/core';
 import {
   createColorField,
+  PB_RESPONSIVE_METADATA,
   resolveTextAlignForTier,
   responsiveTextAlignClass,
   textAlignDataAttrs,
@@ -19,6 +20,10 @@ import {
 } from '../fields/shared-fields.js';
 import { createIconPickerField } from './IconPickerField.js';
 import { resolveCmsIcon } from './icon-catalog.js';
+import { iconColorProps } from '../utils/color-value.js';
+import { BUTTON_SPEC_OBJECT_FIELDS } from './Button.js';
+import { useCmsRenderAssets, useCmsRenderMediaBaseUrl } from './render-context.js';
+import { blockLink, blockLinkTarget, carriedBlockLink } from '../utils/link-href.js';
 
 function IconsBody({
   props,
@@ -29,23 +34,27 @@ function IconsBody({
   tier: 'mobile' | 'tablet' | 'desktop' | null;
   editing: boolean;
 }): React.ReactElement {
-  const { name, size = 32, color = '#15202b', strokeWidth = 2, align, href, linkTarget, ...box } =
+  const { name, size = 32, color = '#15202b', strokeWidth = 2, align, href, linkTarget, link: storedLink, ...box } =
     props;
   const Icon = resolveCmsIcon(name);
   const alignAttrs = textAlignDataAttrs(align, 'left');
+  const assets = useCmsRenderAssets();
+  const mediaBaseUrl = useCmsRenderMediaBaseUrl();
+  // R17 (T212): any kind of link; a URL stored before (`href`, `linkTarget`) renders as it always did.
+  const link = blockLinkTarget(blockLink(storedLink, href, linkTarget), { assets, ...(mediaBaseUrl !== undefined ? { mediaBaseUrl } : {}) });
 
   const iconNode = Icon ? (
-    <Icon size={size} color={color} strokeWidth={strokeWidth} aria-hidden={!href} />
+    <Icon size={size} {...iconColorProps(color)} strokeWidth={strokeWidth} aria-hidden={!link} />
   ) : editing ? (
     <span className="cmsc:text-sm cmsc:text-[#64748b]">Select an icon</span>
   ) : null;
 
   const content =
-    href && Icon ? (
+    link && Icon ? (
       <a
-        href={href}
-        target={linkTarget ?? '_self'}
-        rel={linkTarget === '_blank' ? 'noreferrer' : undefined}
+        href={link.href}
+        target={link.target ?? '_self'}
+        rel={link.target === '_blank' ? 'noreferrer' : undefined}
         className="cmsc:inline-flex"
         aria-label={name}
       >
@@ -81,24 +90,19 @@ const iconsConfig: ComponentConfig<IconsProps> = {
   fields: {
     name: createIconPickerField('Icon'),
     size: { type: 'number', label: 'Size (px)', min: 12, max: 128, step: 2 },
-    color: createColorField({ label: 'Color' }),
+    color: createColorField({ label: 'Color', inherit: true }),
     strokeWidth: { type: 'number', label: 'Stroke width', min: 1, max: 3, step: 0.25 },
+    // R17 (T212): the shared link (the admin gives it the page, product, category and file pickers).
+    link: { ...BUTTON_SPEC_OBJECT_FIELDS.link, label: 'Link (optional)' },
+    // R17 (T206): per breakpoint.
     align: {
       type: 'select',
       label: 'Align',
+      metadata: PB_RESPONSIVE_METADATA,
       options: [
         { label: 'Left', value: 'left' },
         { label: 'Center', value: 'center' },
         { label: 'Right', value: 'right' },
-      ],
-    },
-    href: { type: 'text', label: 'Link URL (optional)' },
-    linkTarget: {
-      type: 'select',
-      label: 'Link target',
-      options: [
-        { label: 'Same tab', value: '_self' },
-        { label: 'New tab', value: '_blank' },
       ],
     },
     margin: BOX_MARGIN_FIELD,
@@ -108,12 +112,16 @@ const iconsConfig: ComponentConfig<IconsProps> = {
   defaultProps: {
     name: 'star',
     size: 32,
-    color: '#15202b',
+    // R17 (T216): a new icon follows the section's text colour.
+    color: 'currentColor',
     strokeWidth: 2,
     align: 'left',
-    href: '',
-    linkTarget: '_self',
     ...DEFAULT_BOX_PROPS,
+  },
+  // R17 (T212): a URL stored before is carried into `link` when the icon is opened (the render is the same).
+  resolveData: ({ props }) => {
+    const carried = carriedBlockLink(props);
+    return { props: carried ? ({ ...props, ...carried } as unknown as typeof props) : props };
   },
   render: (props) =>
     props.puck?.isEditing ? <IconsEditingRender {...props} /> : <IconsPublishedRender {...props} />,

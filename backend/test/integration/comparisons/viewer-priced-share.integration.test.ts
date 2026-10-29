@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Organization, PriceListPriceBracket, PriceListProduct } from '../../helpers/package-entities.js';
+import { Organization } from '../../helpers/package-entities.js';
+import { seedBasePriceSql, seedPriceBookSql } from '../../helpers/price-book-sql.js';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -10,12 +11,7 @@ import { CUSTOMER_COOKIES } from '../../helpers/test-actors.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Product } from '../../helpers/package-entities.js';
 import { CustomerAccount } from '../../helpers/package-entities.js';
-import { PriceListService } from '../../../../packages/modules/price_lists/src/backend/services/price-list-service.js';
-import {
-  DefaultPriceListMigrator,
-  DEFAULT_PRICE_LIST_ID,
-} from '../../../../packages/modules/price_lists/src/backend/services/default-price-list-migration.js';
-import { neighbourReadPorts } from '../../helpers/price-list-neighbour-ports.js';
+import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
 
 /**
  * A share token grants the comparison, never what is in it.
@@ -203,6 +199,11 @@ async function seedBuyers(h: BackendServerHandle): Promise<void> {
   }
   // Flushed on its own: the accounts below carry a foreign key to these rows.
   await em.flush();
+  // Feature 154 — every buyer shops on the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(
+    em,
+    buyers.map(([orgId]) => orgId),
+  );
 
   for (const [orgId, customerId, email, cookie] of buyers) {
     em.create(CustomerAccount, {
@@ -258,8 +259,8 @@ async function seedRestrictedProduct(h: BackendServerHandle): Promise<string> {
 }
 
 /**
- * One product on three lists: the platform default (what the channel quotes)
- * and one per organisation. Distinct amounts, so a view priced for the wrong
+ * One product in three books: the base book (what the channel quotes) and one
+ * per organisation. Distinct amounts, so a view priced for the wrong
  * buyer names the buyer it was priced for.
  */
 async function seedPriceLists(h: BackendServerHandle): Promise<void> {
@@ -267,30 +268,17 @@ async function seedPriceLists(h: BackendServerHandle): Promise<void> {
   // would be a claim about the platform, and the two amounts below are only
   // meaningful against whatever else the platform is already serving.
   const em = h.em();
-  await em.nativeDelete(PriceListPriceBracket, { productId: SEED_PRODUCT_101_ID });
-  await em.nativeDelete(PriceListProduct, { productId: SEED_PRODUCT_101_ID });
-  await new DefaultPriceListMigrator(h.em).seedDefault();
-  const svc = new PriceListService(h.em, undefined, undefined, undefined, neighbourReadPorts(h.em));
-
-  await svc.addProduct(DEFAULT_PRICE_LIST_ID, SEED_PRODUCT_101_ID);
-  await svc.replaceBrackets(DEFAULT_PRICE_LIST_ID, SEED_PRODUCT_101_ID, {
-    PLN: [{ minQuantity: 1, maxQuantity: null, amount: CHANNEL_AMOUNT.toFixed(2) }],
-  });
+  await seedBasePriceSql(em, SEED_PRODUCT_101_ID, CHANNEL_AMOUNT.toFixed(2));
 
   for (const [orgId, amount] of [
     [OWNER_ORG_ID, OWNER_AMOUNT],
     [RECIPIENT_ORG_ID, RECIPIENT_AMOUNT],
   ] as const) {
-    const list = await svc.create({
+    await seedPriceBookSql(em, {
       name: `Negotiated ${orgId.slice(-4)}`,
-      type: 'base',
-      applicationRule: { kind: 'criterion', type: 'organization', values: [orgId] },
+      audience: { organizations: [orgId] },
+      rows: [{ productId: SEED_PRODUCT_101_ID, fixed: amount.toFixed(2) }],
     });
-    await svc.addProduct(list.id, SEED_PRODUCT_101_ID);
-    await svc.replaceBrackets(list.id, SEED_PRODUCT_101_ID, {
-      PLN: [{ minQuantity: 1, maxQuantity: null, amount: amount.toFixed(2) }],
-    });
-    await svc.activate(list.id);
   }
 }
 

@@ -4,23 +4,41 @@ import type { ReactNode } from 'react';
 import { listProducts, getCategoryTree } from '../lib/api/catalog';
 import { getCmsPageBySlug } from '../lib/api/cms';
 import { getHomepageConfig } from '../lib/api/homepage';
-import { getResolvedPricesBulk, type ResolvedPrice } from '../lib/api/pricing';
 import { getServerContext } from '../lib/server-context';
 import { ProductCard } from '../components/ProductCard';
 import { CmsPageRenderer } from '../components/CmsPageRenderer';
 import { HomeMobileStrip } from '../components/mobile/HomeMobileStrip';
 import { Hook } from '../components/Hook';
 import { OrganizationJsonLd } from '../components/seo/OrganizationJsonLd';
+import { cmsSocialMetadata } from '../lib/seo/cms-share-metadata';
+import { cmsRenderLocation, type PageSearchParams } from '../lib/page-builder/render-location';
 import { seo } from './seo';
 
 /**
  * Indexable (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010/FR-012). The
  * canonical is the route pattern itself; `metadataBase` in the root layout
  * turns it into an absolute URL.
+ *
+ * Feature 163 (FR-033, FR-034): a CMS-backed home page carries the same title,
+ * description and sharing card as that page has at its own route, at `/`. The
+ * page read is the one the component below makes, deduplicated by Next's
+ * fetch cache.
  */
-export const metadata: Metadata = {
-  alternates: { canonical: seo.route },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const { ctx } = await getServerContext();
+  const { cmsPageSlug } = await getHomepageConfig(ctx);
+  const cmsPage = cmsPageSlug ? await getCmsPageBySlug(cmsPageSlug, ctx).catch(() => null) : null;
+  if (!cmsPage) return { alternates: { canonical: seo.route } };
+  const social = cmsSocialMetadata(cmsPage, seo.route);
+  return {
+    title: social.title,
+    description: cmsPage.meta.description ?? undefined,
+    keywords: cmsPage.meta.keywords ?? undefined,
+    alternates: { canonical: seo.route },
+    openGraph: social.openGraph,
+    twitter: social.twitter,
+  };
+}
 
 interface CatTile {
   href: string;
@@ -35,8 +53,12 @@ interface CatTile {
  * → "Home page CMS page"), that page is rendered here. Otherwise we fall back
  * to the built-in Industria-themed landing page below.
  */
-export default async function HomePage(): Promise<ReactNode> {
-  const { ctx, locale } = await getServerContext();
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams?: Promise<PageSearchParams>;
+}): Promise<ReactNode> {
+  const { ctx, locale, modules } = await getServerContext();
 
   // Operator-selected CMS home page takes precedence when it resolves to a
   // published page; any miss (unset, unpublished, deleted) falls through to
@@ -51,7 +73,12 @@ export default async function HomePage(): Promise<ReactNode> {
       return (
         <>
           <OrganizationJsonLd ctx={ctx} />
-          <CmsPageRenderer page={cmsPage} ctx={ctx} />
+          <CmsPageRenderer
+            page={cmsPage}
+            ctx={ctx}
+            modules={modules}
+            location={cmsRenderLocation('/', (await searchParams) ?? {})}
+          />
         </>
       );
     }
@@ -67,15 +94,10 @@ export default async function HomePage(): Promise<ReactNode> {
     })),
   ]);
 
-  // Resolve settings-driven prices for the bestseller cards so their net/gross
-  // presentation matches the PDP and cart. Without a `resolved` payload the
-  // card falls back to a hardcoded "net + gross" pair that ignores the display
-  // setting (the inconsistency this section otherwise showed).
-  const bestsellerPrices: Map<string, ResolvedPrice> = products.data.length > 0
-    ? await getResolvedPricesBulk(products.data.map((p) => p.id), {}, ctx).catch(
-        () => new Map<string, ResolvedPrice>(),
-      )
-    : new Map<string, ResolvedPrice>();
+  // The bestseller cards' settings-driven prices, so their net/gross
+  // presentation matches the PDP and cart. They come with the listing itself —
+  // `resolvedPrice`, from the resolution that priced `price` (D-287 P0) — where
+  // this page used to fan out one `resolved-price` request per card.
 
   const categoryTiles: CatTile[] = tree.length > 0
     ? tree.slice(0, 6).map((c) => ({
@@ -290,7 +312,12 @@ export default async function HomePage(): Promise<ReactNode> {
           <ul className="m-0 grid list-none grid-cols-4 gap-[16px] p-0 max-[1100px]:grid-cols-2">
             {products.data.map((p) => (
               <li key={p.id}>
-                <ProductCard product={p} locale={locale} resolved={bestsellerPrices.get(p.id) ?? null} />
+                <ProductCard
+                  product={p}
+                  locale={locale}
+                  resolved={p.resolvedPrice ?? null}
+                  salesChannelCode={ctx.salesChannelCode}
+                />
               </li>
             ))}
           </ul>

@@ -191,13 +191,6 @@ export function PageBuilderActionBar({
     return nestedSliderId ? resolveCarouselId('cms.ContentSlider', nestedSliderId) : null;
   })();
 
-  const imageSliderId =
-    target?.type === 'cms.ImageSlider'
-      ? resolveCarouselId('cms.ImageSlider', target.id)
-      : selectedItem?.type === 'cms.ImageSlider' && typeof selectedItem.props.id === 'string'
-        ? resolveCarouselId('cms.ImageSlider', selectedItem.props.id)
-        : null;
-
   const productSliderId =
     target?.type === 'catalog.ProductSlider'
       ? resolveCarouselId('catalog.ProductSlider', target.id)
@@ -212,12 +205,9 @@ export function PageBuilderActionBar({
         {label ? <ActionBar.Label label={label} /> : null}
         {showRowExtras ? <RowActionBarExtras rowId={rowId!} /> : null}
       </ActionBar.Group>
-      {contentSliderId || imageSliderId || productSliderId ? (
+      {contentSliderId || productSliderId ? (
         <ActionBar.Group>
           {contentSliderId ? <ContentSliderActionBarExtras sliderId={contentSliderId} /> : null}
-          {imageSliderId ? (
-            <SliderPreviewActionBarExtras carouselId={imageSliderId} type="cms.ImageSlider" />
-          ) : null}
           {productSliderId ? (
             <SliderPreviewActionBarExtras carouselId={productSliderId} type="catalog.ProductSlider" />
           ) : null}

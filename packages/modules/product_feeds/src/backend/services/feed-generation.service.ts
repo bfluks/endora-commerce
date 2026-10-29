@@ -1,13 +1,16 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import type {
-  CatalogCategoryReadPort,
-  CatalogCategoryRecord,
-  CatalogGalleryPort,
-  CatalogProductReadPort,
-  CatalogProductRecord,
-  CatalogProductVariantRecord,
-  FeedRunFailureCode,
-  FeedRunTrigger,
+import {
+  grossAmountHalfUp,
+  type CatalogCategoryReadPort,
+  type CatalogCategoryRecord,
+  type CatalogGalleryPort,
+  type CatalogProductReadPort,
+  type CatalogProductRecord,
+  type CatalogProductVariantRecord,
+  type FeedRunFailureCode,
+  type FeedRunTrigger,
+  type PinnedPriceBookPublishability,
+  type PinnedPriceBookUnpublishableReason,
 } from '@endora-commerce/contracts';
 import { withSystemScope } from '@endora-commerce/platform/tenancy';
 import { rethrowIfModuleDisabled, SalesChannel } from '@endora-commerce/platform/kernel';
@@ -65,6 +68,10 @@ import type { AnyFeedSerializer, FeedItemField } from './serializers/serializer.
  *  - **Publication is one pointer flip, after the object is complete**
  *    (FR-035). A failed, empty or over-threshold run never touches
  *    `published_artefact_id`, so the previously published file keeps serving.
+ *    The one run that clears it is a **withdrawal** (feature 160, FR-029,
+ *    owner ruling 2026-10-23): a feed whose pinned price book does not apply
+ *    at generation time must not keep serving a file of prices that no longer
+ *    apply, and that is not a failure.
  */
 
 /** Hydration batch. 500 keeps peak memory at O(batch × fields) with room to spare. */
@@ -72,20 +79,47 @@ const HYDRATE_BATCH_SIZE = 500;
 
 const STOREFRONT_URL_SETTING = 'sales_channels.storefront_url';
 
-/** Resolves a product's unit price from a specific price list (FR-020, verbatim). */
+/**
+ * The unit prices a pinned price book gives a batch of products (FR-020, and
+ * feature 160's FR-029: the book's rows over the channel's catalogue price),
+ * as the decimal strings `price_lists` answers with. Unpriced products are
+ * absent.
+ */
 export type NamedListPriceResolver = (input: {
   priceListId: string;
-  productId: string;
+  productIds: readonly string[];
   currencyCode: string;
-}) => Promise<number | null>;
+  salesChannelId: string;
+}) => Promise<Map<string, string>>;
 
-/** Resolves the anonymous channel price — organization-less, the storefront's own path. */
+/**
+ * The anonymous channel price of a batch of products — organization-less, the
+ * storefront's own path — in one batched resolution (feature 160: it was one
+ * resolution per product). Unpriced products are absent.
+ */
 export type AnonymousPriceResolver = (input: {
-  product: CatalogProductRecord;
-  variantId: string | null;
+  products: readonly CatalogProductRecord[];
   salesChannel: { id: string; defaultCurrency: string };
   currencyCode: string;
-}) => Promise<{ amount: number; isSale: boolean } | null>;
+}) => Promise<Map<string, { amount: string; isSale: boolean }>>;
+
+/**
+ * Whether the price book a feed is pinned to publishes prices now, and why not
+ * — `pricingService.namedListPublishability` (feature 160, FR-029, owner ruling
+ * 2026-10-23). `price_lists` is a binding dependency, so this fails closed.
+ */
+export type PinnedPriceBookPublishabilityResolver = (input: {
+  priceListId: string;
+  currencyCode: string;
+  salesChannelId: string;
+}) => Promise<PinnedPriceBookPublishability>;
+
+/**
+ * Told after a run has withdrawn the feed's published file, so the cached
+ * public answer for its token is dropped rather than outliving the pointer by
+ * the cache's TTL. Optional, like the other post-run ports.
+ */
+export type PublicationWithdrawnPort = (feedId: string) => Promise<unknown>;
 
 /** Percentage VAT rate for a country, or null when no rule and no default matched. */
 export type TaxRateResolver = (input: {
@@ -185,6 +219,10 @@ export interface FeedGenerationDeps {
   resolver: ItemFieldResolverPort;
   settings: FeedSettingsReader;
   resolveNamedListPrice: NamedListPriceResolver;
+  /** Asked once per run of a pinned feed, before the catalogue is walked. */
+  pinnedPriceBookPublishability: PinnedPriceBookPublishabilityResolver;
+  /** After a withdrawal, never on any other branch. */
+  onPublicationWithdrawn?: PublicationWithdrawnPort;
   resolveAnonymousPrice: AnonymousPriceResolver;
   resolveTaxRate: TaxRateResolver;
   resolveAvailability: AvailabilityResolver;
@@ -435,6 +473,25 @@ export class FeedGenerationService {
       // `FeedRunReaperService` already owns exactly this case — a `running` run
       // whose heartbeat stopped.
       rethrowIfModuleDisabled(err);
+      // Feature 160 (FR-029), owner ruling 2026-10-23 — not a failure: the
+      // pinned book does not apply, so the file of its prices is withdrawn and
+      // the URL answers as for a feed never generated. No notification (the
+      // feed page carries the warning), no retention, no delivery.
+      if (err instanceof PinnedPriceBookNotApplicableError) {
+        const withdrawn = await this.deps.runs.finish({
+          feedId,
+          runId,
+          status: 'withdrawn',
+          counters,
+          withdrawalReason: err.reason,
+          artefactId: null,
+          startedAtMs,
+        });
+        // Best effort: the run is finished, and a cache that cannot be dropped
+        // expires on its own TTL.
+        await this.deps.onPublicationWithdrawn?.(feedId)?.catch(() => undefined);
+        return withdrawn;
+      }
       if (err instanceof ChannelUnavailableError) {
         failureCode = 'channel_unavailable';
         failureDetail = err.message;
@@ -522,6 +579,20 @@ export class FeedGenerationService {
       .map((f) => f.outputName);
     if (storefrontOrigin.trim() === '' && originDependentRequired.length > 0) {
       throw new StorefrontUrlUnconfiguredError(channel.code, originDependentRequired);
+    }
+
+    // Feature 160 (FR-029), owner ruling 2026-10-23 — a pinned book that does
+    // not apply now withdraws the published file. Asked after the
+    // configuration checks above, so a misconfigured feed still reports the
+    // failure it is and keeps its last good file (FR-035), and before the
+    // catalogue is walked, so a withdrawal costs one statement.
+    if (feed.priceListId) {
+      const publishability = await this.deps.pinnedPriceBookPublishability({
+        priceListId: feed.priceListId,
+        currencyCode: feed.currencyCode,
+        salesChannelId: channel.id,
+      });
+      if (!publishability.publishable) throw new PinnedPriceBookNotApplicableError(publishability.reason);
     }
 
     const languages = await this.deps.listActiveLanguages();
@@ -616,6 +687,8 @@ export class FeedGenerationService {
     const em = this.deps.emFactory();
     const idPages = this.deps.selection.iterateProductIds({
       salesChannelId: prepared.salesChannelId,
+      // Feature 163 — the feed's language decides availability (FR-001).
+      languageCode: prepared.feed.languageCode,
       selectionRule: prepared.feed.selectionRule,
       // A price criterion resolves against exactly the prices this run emits
       // (FR-025, FR-028) — same currency, same list, or none of it happens.
@@ -719,7 +792,9 @@ export class FeedGenerationService {
     // catalogue. The edge binds, exactly as the two reads above it do: a feed
     // assembled out of a module the platform is not serving is worse than a run
     // that stops and records why.
-    const galleryRows = await this.deps.catalogGallery.listForProducts(productIds);
+    // Feature 163 (FR-076, owner decision MED-1 = A) — the gallery as the feed's channel
+    // shows it: an image hidden there never reaches the feed.
+    const galleryRows = await this.deps.catalogGallery.listForProducts(productIds, salesChannelId);
     const publicUrls = await this.deps.resolvePublicImageUrls([
       ...new Set(galleryRows.map((r) => r.assetId)),
     ]);
@@ -736,6 +811,9 @@ export class FeedGenerationService {
       list.push(variant);
       variantsByProduct.set(variant.parentProductId, list);
     }
+
+    // Feature 160 — the batch's prices in one resolution, not one per product.
+    const netByProduct = await this.netPrices(products, prepared);
 
     const out: FeedItemSource[] = [];
     for (const product of products) {
@@ -760,7 +838,7 @@ export class FeedGenerationService {
         .map((r) => publicUrls.get(r.assetId))
         .filter((url): url is string => typeof url === 'string');
       const privateImageCount = productGallery.length - images.length;
-      const price = await this.resolvePrice(product, null, prepared);
+      const price = await this.priceOf(product, netByProduct.get(product.id) ?? null, prepared);
       const stock = availability.get(product.id) ?? null;
 
       const base: Omit<FeedItemSource, 'variantId' | 'sku' | 'groupingId'> = {
@@ -822,38 +900,43 @@ export class FeedGenerationService {
     return best;
   }
 
-  private async resolvePrice(
+  /**
+   * The net unit price of every product of a batch: the pinned book verbatim,
+   * else the channel's — decimal strings, rounded only by the decimal helpers
+   * (review 2, finding 1 of release 0.108.0).
+   */
+  private async netPrices(
+    products: readonly CatalogProductRecord[],
+    prepared: FeedItemHydrationScope,
+  ): Promise<Map<string, string>> {
+    const currencyCode = prepared.context.currencyCode;
+    if (prepared.context.priceListId) {
+      // A named list is used verbatim (FR-020) — no buyer is resolved, so the
+      // operator gets exactly the prices they pointed at.
+      return this.deps.resolveNamedListPrice({
+        priceListId: prepared.context.priceListId,
+        productIds: products.map((p) => p.id),
+        currencyCode,
+        salesChannelId: prepared.salesChannelId,
+      });
+    }
+    const resolved = await this.deps.resolveAnonymousPrice({
+      products,
+      salesChannel: { id: prepared.salesChannelId, defaultCurrency: prepared.channelDefaultCurrency },
+      currencyCode,
+    });
+    return new Map([...resolved].map(([id, price]) => [id, price.amount]));
+  }
+
+  private async priceOf(
     product: CatalogProductRecord,
-    variantId: string | null,
+    net: string | null,
     prepared: FeedItemHydrationScope,
   ): Promise<FeedItemPrice | null> {
-    const currencyCode = prepared.context.currencyCode;
-    let net: number | null = null;
-
-    if (prepared.context.priceListId) {
-      // A named list is used verbatim (FR-020) — no rule evaluation, so the
-      // operator gets exactly the prices they pointed at.
-      net = await this.deps.resolveNamedListPrice({
-        priceListId: prepared.context.priceListId,
-        productId: product.id,
-        currencyCode,
-      });
-    } else {
-      const resolved = await this.deps.resolveAnonymousPrice({
-        product,
-        variantId,
-        salesChannel: {
-          id: prepared.salesChannelId,
-          defaultCurrency: prepared.channelDefaultCurrency,
-        },
-        currencyCode,
-      });
-      net = resolved ? resolved.amount : null;
-    }
     if (net === null) return null;
 
     if (prepared.context.pricePresentation === 'net') {
-      return { net, gross: net, taxResolved: true };
+      return { net, gross: net, taxResolved: true, taxRatePercent: null };
     }
     const country = prepared.context.taxCountry;
     const rate = country
@@ -862,9 +945,19 @@ export class FeedGenerationService {
     if (rate === null) {
       // Never a silent zero-VAT price on a gross feed (R12) — the resolver
       // raises `zero_tax_rate_on_gross_feed` from this flag.
-      return { net, gross: net, taxResolved: false };
+      return { net, gross: net, taxResolved: false, taxRatePercent: null };
     }
-    return { net, gross: round2(net * (1 + rate / 100)), taxResolved: true };
+    // The exact decimal product, rounded half-up — never on doubles, where
+    // 29.50 × 1.23 is 36.28499… (review 2, finding 2; worked examples §10.16).
+    return { net, gross: grossAmountHalfUp(net, rate), taxResolved: true, taxRatePercent: rate };
+  }
+}
+
+/** The pinned price book does not apply now — a withdrawal, not a failure. */
+class PinnedPriceBookNotApplicableError extends Error {
+  constructor(public readonly reason: PinnedPriceBookUnpublishableReason) {
+    super(`The pinned price book does not apply now (${reason}).`);
+    this.name = 'PinnedPriceBookNotApplicableError';
   }
 }
 
@@ -969,6 +1062,3 @@ function pickChannelName(channel: SalesChannel, languageCode: string): string {
   return pickLocalizedName(channel.name ?? {}, languageCode) || channel.code;
 }
 
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
-}

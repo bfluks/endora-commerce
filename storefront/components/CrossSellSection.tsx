@@ -62,7 +62,7 @@ export function CrossSellSection(props: {
               </span>
               {link.product.price ? (
                 <span className="font-mono text-[12px] font-medium text-accent">
-                  {formatMoney(link.product.price.amount, link.product.price.currency, props.locale)}
+                  {formatMoney(link.product.price.amount, link.product.price.currency, props.locale, { unitPrice: true })}
                 </span>
               ) : null}
             </a>

@@ -3,7 +3,8 @@
  *
  * Mirrors `apiGet` but for POST/PATCH/DELETE. The wrapper:
  *   - threads the active Sales Channel + locale through every request via
- *     the same headers as `apiGet`.
+ *     the same headers as `apiGet` — the caller's channel, or the request's
+ *     stamped one when it passed none (`activeChannelHeaders`).
  *   - forwards the caller's `b2b_session` cookie so authenticated mutations
  *     reach the backend with the right identity.
  *   - returns parsed JSON plus the raw `Set-Cookie` header so server actions
@@ -15,6 +16,7 @@
 import type { RequestContext } from './client';
 import { StorefrontApiError } from './client';
 import { backendBaseUrl } from '../env.mjs';
+import { activeChannelHeaders } from './channel-headers';
 
 /**
  * The backend's origin, read per call.
@@ -81,7 +83,7 @@ export interface MutateResult<T> {
 export async function apiMutate<T>(opts: MutateOptions): Promise<MutateResult<T>> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
-  if (opts.ctx?.salesChannelCode) headers['X-Sales-Channel'] = opts.ctx.salesChannelCode;
+  Object.assign(headers, await activeChannelHeaders(opts.ctx));
   if (opts.ctx?.locale) headers['Accept-Language'] = opts.ctx.locale;
   if (opts.rawCookieHeader) {
     headers['Cookie'] = opts.rawCookieHeader;
@@ -127,8 +129,8 @@ export async function apiGetAuthed<T>(opts: {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     Cookie: `b2b_session=${opts.sessionCookie}`,
+    ...(await activeChannelHeaders(opts.ctx)),
   };
-  if (opts.ctx?.salesChannelCode) headers['X-Sales-Channel'] = opts.ctx.salesChannelCode;
   if (opts.ctx?.locale) headers['Accept-Language'] = opts.ctx.locale;
 
   const response = await fetch(`${backendBaseUrl()}${opts.path}`, {

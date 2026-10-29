@@ -55,7 +55,7 @@ describe('InventoryProductThresholdWritePort — the per-warehouse threshold cop
       sku: `W185-${suffix}`,
       slug: `w185-${suffix.toLowerCase()}`,
       type: 'simple',
-      status: 'draft',
+      status: 'inactive',
       name: { en: `W185 ${suffix}` },
       description: { en: 'fixture' },
       visibility: 'public',

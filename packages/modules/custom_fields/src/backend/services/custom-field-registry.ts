@@ -1,4 +1,5 @@
 import type { SupportedEntityType } from '@endora-commerce/contracts';
+import { effectiveState } from '@endora-commerce/platform/kernel';
 
 /**
  * Supported-entity registry (feature 055, FR-001/FR-006).
@@ -45,14 +46,44 @@ export interface SupportedEntityMeta {
    * declares no owner is always offered.
    */
   readonly ownerModuleId?: string;
+  /**
+   * Optional list-filter marker (feature 157). When present, definitions of
+   * this entity type may be marked as filters of the type's admin list; on any
+   * other type the option is refused. Generic, like the markers above: the
+   * core asks only whether the type offers the option, never which list uses
+   * it.
+   */
+  readonly listFilter?: true;
+  /**
+   * Optional carry marker (feature 162). The entity types definitions of this
+   * type may carry their values to, when a record of such a type is created
+   * from, or joins, a record of this type. A definition's `carryTo` may name
+   * only these; on any other type the option is refused. Generic, like the
+   * markers above: the core asks only whether a pair is listed, never which
+   * hosts make the conversion.
+   */
+  readonly carryTargets?: readonly SupportedEntityType[];
 }
 
 export const SUPPORTED_ENTITIES: Record<SupportedEntityType, SupportedEntityMeta> = {
   category: { labelKey: 'customFields.entity.category', orgOwned: false },
-  order: { labelKey: 'customFields.entity.order', orgOwned: true },
+  order: {
+    labelKey: 'customFields.entity.order',
+    orgOwned: true,
+    listFilter: true,
+    carryTargets: ['opportunity'],
+  },
   organization: { labelKey: 'customFields.entity.organization', orgOwned: false },
   customer: { labelKey: 'customFields.entity.customer', orgOwned: true },
-  quote_request: { labelKey: 'customFields.entity.quoteRequest', orgOwned: true },
+  // Feature 157 — a Quote Request belongs to `quote_requests`, and its
+  // definitions follow that module's presence as an Opportunity's follow `crm`.
+  quote_request: {
+    labelKey: 'customFields.entity.quoteRequest',
+    orgOwned: true,
+    ownerModuleId: 'quote_requests',
+    listFilter: true,
+    carryTargets: ['order', 'opportunity'],
+  },
   product: {
     labelKey: 'customFields.entity.product',
     // Definitions are platform-global; product rows are catalog data, not org-tenant rows.
@@ -63,7 +94,21 @@ export const SUPPORTED_ENTITIES: Record<SupportedEntityType, SupportedEntityMeta
       route: '/catalog/attributes',
     },
   },
-  opportunity: { labelKey: 'customFields.entity.opportunity', orgOwned: true, ownerModuleId: 'crm' },
+  opportunity: {
+    labelKey: 'customFields.entity.opportunity',
+    orgOwned: true,
+    ownerModuleId: 'crm',
+    listFilter: true,
+    carryTargets: ['quote_request', 'order'],
+  },
+  // Feature 163 — a Project belongs to `projects`, and its definitions follow
+  // that module's presence. No carry targets: nothing is created from a Project.
+  project: {
+    labelKey: 'customFields.entity.project',
+    orgOwned: true,
+    ownerModuleId: 'projects',
+    listFilter: true,
+  },
 };
 
 /** All registered entity-type codes. */
@@ -72,4 +117,27 @@ export const SUPPORTED_ENTITY_TYPES = Object.keys(SUPPORTED_ENTITIES) as Support
 /** True when `value` is a registered, live entity type. Definitions for unlisted types are inert. */
 export function isSupportedEntityType(value: string): value is SupportedEntityType {
   return Object.prototype.hasOwnProperty.call(SUPPORTED_ENTITIES, value);
+}
+
+/**
+ * Whether an entity type is served: when its registry entry names an owner
+ * module, only while that module is effectively present (feature 143). A type
+ * that is not served is not offered, its definitions are neither answered nor
+ * changed, and no list filters on it (Constitution XVII). A type that names no
+ * owner — or that the registry does not hold — is not this rule's to refuse.
+ * Generic: the one question asked is whether the named module is present.
+ */
+export function isEntityTypeServed(entityType: string): boolean {
+  const owner = isSupportedEntityType(entityType) ? SUPPORTED_ENTITIES[entityType].ownerModuleId : undefined;
+  return !owner || effectiveState.isPresent(owner);
+}
+
+/** The entity types definitions of `entityType` may carry their values to (feature 162). */
+export function carryTargetsOf(entityType: string): readonly SupportedEntityType[] {
+  return isSupportedEntityType(entityType) ? (SUPPORTED_ENTITIES[entityType].carryTargets ?? []) : [];
+}
+
+/** Whether definitions of `entityType` may be marked as list filters (feature 157). */
+export function offersListFilter(entityType: string): boolean {
+  return isSupportedEntityType(entityType) && SUPPORTED_ENTITIES[entityType].listFilter === true;
 }

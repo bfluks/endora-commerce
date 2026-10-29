@@ -74,7 +74,6 @@ describe('PromotionService — the gates its optional arguments used to skip (is
       defaultCurrency: 'PLN',
       languages: ['en-US'],
       currencies: ['PLN'],
-      isPublic: false,
       active: true,
       systemDefault: false,
       version: 1,

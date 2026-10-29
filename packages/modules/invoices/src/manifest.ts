@@ -199,6 +199,24 @@ export const manifest = defineModuleManifest({
       reason:
         'InvoiceService.issue holds pending only when the ledger module is present and numbering is vendor.',
     },
+    {
+      moduleId: 'payments',
+      name: 'paymentReadPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        "An issued invoice records as paid the order's stored total when the order is paid, and nothing otherwise.",
+      reason:
+        'InvoiceService.issue records as paid what was captured for the order (issue #417), which the payments module knows.',
+    },
+    {
+      moduleId: 'returns',
+      name: 'returnRefundReadPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'An issued invoice deducts from what was paid only the refunds the payments module recorded; a return refunded by hand or credited to the credit limit is not deducted.',
+      reason:
+        'InvoiceService.issue deducts the refunds a settled return made outside payments (issue #428), which the returns module records.',
+    },
   ],
   settings: invoicesSettingsManifest,
   i18n: { bundlesDir: 'i18n' },
@@ -223,11 +241,13 @@ export const manifest = defineModuleManifest({
     { code: 'invoices:write', label: 'Issue/correct invoices and configure invoicing' },
   ],
   /**
-   * The three error codes this module owns — feature 090 Phase 3
+   * The error codes this module owns — feature 090 Phase 3
    * (`specs/090-module-owned-error-codes/contracts/error-code-declaration.md`
    * §1.1). This is where each sentence is looked up from: `errors.<CODE>` in this
-   * module's own `i18n/{en,pl}.json`, which already holds all three in both
-   * languages.
+   * module's own `i18n/{en,pl}.json`, which holds all of them in both
+   * languages. The first three came from the routing capture described below;
+   * `INVOICE_ORDER_REFUNDED` was minted later (issue #417) and is recorded in
+   * `MINTED_ERROR_CODES` instead.
    *
    * The list is answer-preserving, not a judgement (§6.2 and §6.5): it is exactly
    * what the prefix chain in `@endora-commerce/mod-i18n` routes here today,
@@ -274,10 +294,12 @@ export const manifest = defineModuleManifest({
    *   and lose the other.
    * - `INVOICE_NOT_READY` — neither raise site passes `details` at all, so it
    *   carries no token.
+   * - `INVOICE_ORDER_REFUNDED` — `invoice-service.ts` raises it without
+   *   `details`, so it carries no token.
    *
-   * The bundle holds a sentence for all four and for no fifth, and
+   * The bundle holds a sentence for each of these keys and for no other, and
    * `backend/test/unit/invoices/error-sentences.test.ts` enumerates the same
-   * seven keys by hand. Both agree with the raise sites; neither is the
+   * eight keys by hand. Both agree with the raise sites; neither is the
    * authority, because a token nobody has written a sentence for is still a token
    * (`specs/090-module-owned-error-codes/migration-runbook.md` §5).
    */
@@ -288,6 +310,10 @@ export const manifest = defineModuleManifest({
       code: 'INVOICE_NUMBER_PATTERN_COLLIDES',
       tokens: ['no_sequence_token', 'other_channel'],
     },
+    // Minted by issue #417 (owner ruling of 2026-10-24): `invoice-service.ts`
+    // refuses to invoice an order refunded in full before it was invoiced. No
+    // `details`, so no token.
+    { code: 'INVOICE_ORDER_REFUNDED' },
   ],
   actions: [
     {

@@ -2,14 +2,18 @@ import {
   DOCUMENT_POSITION_FIELD,
   ITEMS_TABLE_LIMITS,
   documentFieldPathRe,
+  documentSectionTexts,
   documentValueHasValue,
   evaluateDocumentCondition,
   formatDocumentValue,
+  isValidSectionPartition,
+  itemsTableGroupingMode,
   resolveDocumentAlign,
   sumDocumentValues,
   type DocumentAlign,
   type DocumentFieldDefinition,
   type DocumentItem,
+  type DocumentItemSection,
   type DocumentRenderContext,
   type DocumentValue,
   type DocumentValueFormat,
@@ -38,7 +42,17 @@ import { bool, color, num, str, type Props } from './props.js';
  * A line and its detail row are not kept together across a page break: pdfmake
  * keeps one row unbroken, not two, and the `pageBreakBefore` hook that could do
  * it re-lays the whole document per node. That is a SHOULD of the contract and
- * is verified by eye in the quickstart, not promised here.
+ * is verified by eye in the quickstart, not promised here. A section's heading
+ * row (feature 159) is in the same position — it can close a page with the
+ * section's first line opening the next — and stays a documented limitation for
+ * the same reason (`specs/159-quote-request-item-groups/research.md` N-28).
+ *
+ * **Sections** (feature 159, `specs/159-quote-request-item-groups/contracts/document-sections.md`
+ * §3): with the grouping setting on *Document's groups* — which is what `null`
+ * and an absent setting mean — and a document holding at least one group, each
+ * section prints a heading row, its rows and the table's own totals rows over
+ * the section's totals. A document without a group, a partition the table
+ * cannot use, *No grouping* and grouping *by field* print exactly as 153 did.
  */
 
 export interface ItemsTableInput {
@@ -47,6 +61,8 @@ export interface ItemsTableInput {
   /** The collection's items, already numbered (`numberItems`). */
   readonly items: readonly DocumentItem[];
   readonly summary: Readonly<Record<string, DocumentValue>>;
+  /** Feature 159 — the collection's sections, when the document type declares them. */
+  readonly sections?: readonly DocumentItemSection[];
   readonly language: string;
   readonly context: DocumentRenderContext;
   readonly interpolate: (text: string) => string;
@@ -198,8 +214,23 @@ export function renderItemsTable(input: ItemsTableInput): Record<string, unknown
   if (columns.length === 0 || items.length === 0) {
     stack.push(emptyNode);
   } else {
+    const sections = printedSections(props['grouping'], input.sections, items.length);
     stack.push(
-      buildTable({ columns, items, byPath, props, language, interpolate, context, fontSize, headerBackground, borderColor, stripedRows, stripeColor }),
+      buildTable({
+        columns,
+        items,
+        byPath,
+        props,
+        language,
+        interpolate,
+        context,
+        fontSize,
+        headerBackground,
+        borderColor,
+        stripedRows,
+        stripeColor,
+        ...(sections ? { sections, summaryByPath } : {}),
+      }),
     );
   }
 
@@ -207,6 +238,27 @@ export function renderItemsTable(input: ItemsTableInput): Record<string, unknown
   if (totals) stack.push(totals);
 
   return { stack, margin: [0, 0, 0, marginBottom] };
+}
+
+/**
+ * The sections this table prints, or `null` to print as 153 did: the setting
+ * is *Document's groups*, the type declared sections, at least one is a group,
+ * and the partition covers the lines (contract §1, §3).
+ */
+function printedSections(
+  grouping: unknown,
+  sections: readonly DocumentItemSection[] | undefined,
+  itemCount: number,
+): { readonly list: readonly DocumentItemSection[]; readonly otherItemsLabel: string; readonly showItemCount: boolean } | null {
+  if (itemsTableGroupingMode(grouping) !== 'sections') return null;
+  if (!sections || !sections.some((section) => section.kind === 'group')) return null;
+  if (!isValidSectionPartition(sections, itemCount)) return null;
+  const options = record(grouping) ?? {};
+  return {
+    list: sections,
+    otherItemsLabel: str(options, 'otherItemsLabel', ''),
+    showItemCount: bool(options, 'showItemCount', true),
+  };
 }
 
 interface TableInput {
@@ -222,6 +274,8 @@ interface TableInput {
   readonly borderColor: string;
   readonly stripedRows: boolean;
   readonly stripeColor: string | undefined;
+  readonly sections?: NonNullable<ReturnType<typeof printedSections>>;
+  readonly summaryByPath?: ReadonlyMap<string, DocumentFieldDefinition>;
 }
 
 function buildTable(t: TableInput): Record<string, unknown> {
@@ -295,8 +349,31 @@ function buildTable(t: TableInput): Record<string, unknown> {
 
   const body: Cell[][] = [header];
   const grouping = record(t.props['grouping']);
-  const groupField = grouping ? fieldOf(grouping['field']) : '';
-  if (grouping && groupField) {
+  const groupField = grouping && itemsTableGroupingMode(grouping) === 'field' ? fieldOf(grouping['field']) : '';
+  if (t.sections) {
+    const texts = documentSectionTexts(t.language);
+    const otherItems = t.interpolate(t.sections.otherItemsLabel);
+    for (const section of t.sections.list) {
+      const name = section.kind === 'group' ? (section.label ?? '') : otherItems.trim() !== '' ? otherItems : texts.otherItems;
+      body.push([
+        {
+          text: t.sections.showItemCount ? `${name} · ${texts.itemCount(section.itemIndexes.length)}` : name,
+          colSpan: n,
+          bold: true,
+          ...(t.headerBackground ? { fillColor: t.headerBackground } : {}),
+        },
+        ...spanned(n - 1),
+      ]);
+      for (const index of section.itemIndexes) body.push(...itemRows(t.items[index]!));
+      for (const row of totalsRows(t.props['totals'], section.summary, t.summaryByPath ?? new Map(), t.language, t.interpolate)) {
+        body.push(
+          n >= 2
+            ? [{ text: row.label, colSpan: n - 1, alignment: 'right' }, ...spanned(n - 2), { text: row.value, alignment: 'right' }]
+            : [{ text: [row.label, row.value].filter((part) => part !== '').join(' '), alignment: 'right' }],
+        );
+      }
+    }
+  } else if (grouping && groupField) {
     const emptyLabel = str(grouping, 'emptyLabel', '');
     const subtotalField = fieldOf(grouping['subtotalField']);
     const subtotalLabel = t.interpolate(str(grouping, 'subtotalLabel', ''));
@@ -356,16 +433,19 @@ function buildTable(t: TableInput): Record<string, unknown> {
   };
 }
 
-function buildTotals(
+/**
+ * The totals rows whose rule holds over `summary` — the document's totals, or
+ * one section's (feature 159): same labels, same rules, same formatting.
+ */
+function totalsRows(
   raw: unknown,
   summary: Readonly<Record<string, DocumentValue>>,
   byPath: ReadonlyMap<string, DocumentFieldDefinition>,
   language: string,
   interpolate: (text: string) => string,
-  borderColor: string,
-): Record<string, unknown> | null {
-  if (!Array.isArray(raw)) return null;
-  const rows: Cell[][] = [];
+): { label: string; value: string; emphasis: boolean }[] {
+  if (!Array.isArray(raw)) return [];
+  const rows: { label: string; value: string; emphasis: boolean }[] = [];
   for (const candidate of raw.slice(0, ITEMS_TABLE_LIMITS.maxTotals)) {
     const entry = record(candidate);
     if (!entry) continue;
@@ -377,14 +457,27 @@ function buildTotals(
       continue;
     }
     const label = typeof entry['label'] === 'string' && entry['label'].trim() !== '' ? interpolate(entry['label']) : (field?.label ?? '');
-    const emphasis = bool(entry, 'emphasis', false);
+    rows.push({ label, value: formatDocumentValue(value, field?.defaultFormat ?? {}, language), emphasis: bool(entry, 'emphasis', false) });
+  }
+  return rows;
+}
+
+function buildTotals(
+  raw: unknown,
+  summary: Readonly<Record<string, DocumentValue>>,
+  byPath: ReadonlyMap<string, DocumentFieldDefinition>,
+  language: string,
+  interpolate: (text: string) => string,
+  borderColor: string,
+): Record<string, unknown> | null {
+  const rows: Cell[][] = totalsRows(raw, summary, byPath, language, interpolate).map(({ label, value, emphasis }) => {
     const cell = (text: string, alignment: DocumentAlign): Cell => ({
       text,
       alignment,
       ...(emphasis ? { bold: true, border: [false, true, false, false] } : { border: [false, false, false, false] }),
     });
-    rows.push([cell(label, 'right'), cell(formatDocumentValue(value, field?.defaultFormat ?? {}, language), 'right')]);
-  }
+    return [cell(label, 'right'), cell(value, 'right')];
+  });
   if (rows.length === 0) return null;
   return {
     unbreakable: true,

@@ -1,11 +1,13 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
+  AdminUserReadPort,
   AssetReadPort,
   AssetsLibraryPort,
   ObjectStoragePort,
 } from '@endora-commerce/contracts';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
-import { resolvePublicApiBaseUrl } from '@endora-commerce/platform/kernel';
+import type { CommandBus } from '@endora-commerce/platform/commands';
+import { lazyPort, resolvePublicApiBaseUrl } from '@endora-commerce/platform/kernel';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import { assetsLibraryModule } from './plugin.js';
@@ -13,6 +15,10 @@ import { AssetReadService } from './services/asset-read-port.js';
 import { ObjectStorageAdapter } from './services/storage/object-storage-port.js';
 import { AssetFolder } from './entities/asset-folder.entity.js';
 import { Asset } from './entities/asset.entity.js';
+import { AssetObjectCleanup } from './entities/asset-object-cleanup.entity.js';
+import { AssetPermalinkRelease } from './entities/asset-permalink-release.entity.js';
+import { startAssetRetentionSweep } from './workers/retention-sweep-worker.js';
+import type { Redis } from 'ioredis';
 
 /**
  * `assets_library` — the module whose permission gate defaulted to open
@@ -48,14 +54,19 @@ type AssetsLibraryResult = ReturnType<typeof assetsLibraryModule>;
 export interface AssetsLibraryCradle {
   readonly emFactory: () => EntityManager;
   readonly auditLogService: AuditPort;
+  readonly commandBus: CommandBus;
   readonly requireAdmin: RequireAdminFactory;
   readonly assetsLibrary: AssetsLibraryResult;
+  /** Whether this process consumes queues (a `BACKEND_ROLE=worker` process does). */
+  readonly processRunsWorkers: boolean;
+  /** The connection module queues are built on, when the composition offers one. */
+  readonly moduleQueueRedis: Redis | undefined;
 }
 
 export function registerModule(ctx: ModuleContext): void {
   ctx.di.register({
     assetsLibrary: ctx
-      .asFunction(({ emFactory, auditLogService }: AssetsLibraryCradle) =>
+      .asFunction(({ emFactory, auditLogService, commandBus }: AssetsLibraryCradle) =>
         assetsLibraryModule({
           emFactory,
           // D-223 — this module resolves the deployment's public API origin
@@ -74,6 +85,13 @@ export function registerModule(ctx: ModuleContext): void {
           requireAdmin: (permission) => async (req, reply) =>
             ctx.cradle<AssetsLibraryCradle>().requireAdmin(permission)(req, reply),
           auditLog: auditLogService,
+          commandBus,
+          logError: (message, context) => ctx.log.error(context, message),
+          // Who replaced an asset's previous version (feature 156, research
+          // R-14). Resolved per call, so a later `admin_users` composition is
+          // seen; the manifest declares the edge.
+          adminUserReadPort: lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort'),
+          log: ctx.log,
         }),
       )
       .singleton(),
@@ -177,7 +195,11 @@ export function registerModule(ctx: ModuleContext): void {
           // The registry is read per call, never captured: it is rebuilt when
           // the active-backend setting changes, and a URL built by yesterday's
           // adapter points at a bucket this deployment no longer writes to.
-          new AssetReadService(emFactory, () => assetsLibrary.handle.adapters),
+          new AssetReadService(
+            emFactory,
+            () => assetsLibrary.handle.adapters,
+            () => assetsLibrary.handle.loadRetentionDays(),
+          ),
       )
       .singleton(),
   );
@@ -200,7 +222,25 @@ export function registerModule(ctx: ModuleContext): void {
   );
 
   ctx.routes(async (app) => {
-    await ctx.cradle<AssetsLibraryCradle>().assetsLibrary.plugin(app);
+    const cradle = ctx.cradle<AssetsLibraryCradle>();
+    await cradle.assetsLibrary.plugin(app);
+
+    // The clock of the retention sweep (specs/156-asset-stable-url/): a Job
+    // Scheduler and its consumer. Until this call nothing ran the hard-delete
+    // worker at all — see `workers/retention-sweep-worker.ts`. `ctx.worker`
+    // stops the consumer with the module. Built only where the host says this
+    // process consumes queues and offers a connection; the shared test server
+    // says neither, and drives `sweep()` directly.
+    await startAssetRetentionSweep({
+      processRunsWorkers: cradle.processRunsWorkers,
+      moduleQueueRedis: cradle.moduleQueueRedis,
+      sweeper: cradle.assetsLibrary.handle.sweeper,
+      log: ctx.log,
+      attach: (worker) => ctx.worker(worker, { logger: app.log }),
+      onClose: (close) => {
+        app.addHook('onClose', close);
+      },
+    });
   });
 }
 
@@ -218,4 +258,6 @@ export function registerModule(ctx: ModuleContext): void {
 export const entities = [
   AssetFolder,
   Asset,
+  AssetPermalinkRelease,
+  AssetObjectCleanup,
 ];

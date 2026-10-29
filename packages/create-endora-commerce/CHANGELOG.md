@@ -1,5 +1,17 @@
 # create-endora-commerce
 
+## 0.108.0
+
+### Patch Changes
+
+- @endora-commerce/cli@0.108.0
+
+## 0.107.0
+
+### Patch Changes
+
+- @endora-commerce/cli@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

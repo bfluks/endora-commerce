@@ -17,6 +17,10 @@ The Sales Channels module is the platform's stable handle for "where the sale ha
 
 - **Membership** — the M:N relationship between a channel and a channel-scoped entity. Nine entity types are tracked: `product`, `category`, `payment-method`, `delivery-method`, `organization`, `tax`, `customer`, `promotion`, `cms-page`. (`inventory-location` is reserved for when the inventory module introduces that table.)
 
+- **Open to anonymous visitors** — a per-channel flag (`anonymousAccess`, on by default). When it is off, the store serves signed-in customers only. Whether anonymous visitors see *prices* on an open store is not a channel flag: it is the pricing display mode for anonymous visitors (`pricing.unauthenticated_display_mode`), which can be set for one channel — `none` hides prices until sign-in. The channel's former `isPublic` flag, which hid prices from signed-in customers as well, was retired in its favour.
+
+- **Customer access** — the Organizations a channel serves (the `organization` membership) are the channels that Organization's members may sign in to and shop in. No assignment means no access.
+
 - **Attribution** — the M:1 relationship for Orders and Quote Requests. Each row is bound to exactly one channel at placement, and the binding is immutable for audit purposes.
 
 - **At-least-one-channel invariant** — every channel-scoped entity is bound to at least one channel at all times. Removing the last membership of an entity is refused unless the caller passes `fallbackToDefault=true`, in which case the entity is rebound to the system default in the same transaction.
@@ -34,6 +38,26 @@ If a step matches a code that doesn't exist or whose channel is `active=false`, 
 
 Every response carries `X-Sales-Channel: <resolvedCode>` so HTTP caches can `Vary` on it.
 
+## Who may use a channel
+
+Once a request is resolved to a channel, one rule decides whether the caller may use it:
+
+| Caller | Accepted when | Otherwise |
+|---|---|---|
+| Anonymous visitor | the channel is open to anonymous visitors | `403 SALES_CHANNEL_SIGN_IN_REQUIRED` |
+| Signed-in customer (also when an administrator is acting as the customer) | the channel is assigned to the customer's Organization | `403 SALES_CHANNEL_NOT_PERMITTED` |
+| Administrator, API key | always — admin paths are not storefront calls, and an API key is already bound to its channel | — |
+
+The refusal names the channel in `details.channelCode`, and the response still carries `X-Sales-Channel`, so a client can tell which store refused it. An unknown or inactive channel is refused first, as before.
+
+A few routes stay reachable on every active channel, because their caller is not a shopper of the store or has to reach them to become one: sign-in, sign-out, password reset, e-mail verification, business registration, invitations, the channel identity reads, language configuration, the robots policy, product feeds and the newsletter links in e-mails. Individual (B2C) self-registration is not one of them: it signs the new account in at once, so on a store closed to anonymous visitors it is refused.
+
+A sign-in is checked against the same rule after the password (or the external identity provider) has confirmed the account and before a session is created, so a customer whose Organization may not use the store is told so on the sign-in form and is not signed in. The storefront shows the three outcomes as a sign-in page with a notice, a sign-in form error, and a "No access to this store" screen listing the stores the account can use.
+
+Assignments are kept in the channel's `organization` membership and are managed on the Organization's page in the admin. A change applies at once on the server that made it and on every server within 30 seconds. A new Organization gets the channel of the store it registered on; one created in the admin gets the channels chosen on its create form; any other creation path gets the system default. Accepting an invitation changes no assignment.
+
+When this rule was introduced, every existing Organization was assigned the system-default channel and every channel it already had orders on, so existing customers kept their access.
+
 ## Storefront theme
 
 A channel's `themeCode` selects which set of design tokens the storefront renders in — colour, typography, spacing, corner radius, elevation. It is chosen from a list on the channel's identity form, and the list holds the themes the storefront actually implements; a channel that names none renders in the default theme.
@@ -44,7 +68,15 @@ The storefront reads it through the public channel endpoint:
 GET /api/v1/storefront/sales-channel
 ```
 
-which returns the **resolved** channel for the request — code, display name, language and currency scopes, `themeCode` and `logoUrl` — and no admin-only field (`id`, `active`, `systemDefault`, `version`). The storefront applies the theme server-side, on the first render, so the first HTML a buyer's browser parses already carries the channel's brand.
+which returns the **resolved** channel for the request — code, display name, language and currency scopes, `themeCode`, `logoUrl` and `anonymousAccess` — and no admin-only field (`id`, `active`, `systemDefault`, `version`). It answers on every active channel, including one closed to anonymous visitors.
+
+A second read answers for the viewer rather than for the store:
+
+```text
+GET /api/v1/storefront/sales-channel/access
+```
+
+It returns whether the caller may use this channel and why not (`sign_in_required` or `not_permitted`), and — for a signed-in customer — the active channels their Organization may use, each with its name and, when the channel's **Storefront URL** setting is filled in, its address. It is never cached (`Cache-Control: private, no-store`). The storefront applies the theme server-side, on the first render, so the first HTML a buyer's browser parses already carries the channel's brand.
 
 The theme changes how the storefront looks, not what it is made of: every channel renders the same pages with the same components. A per-channel page *template* is a larger question, and is deliberately not answered here.
 

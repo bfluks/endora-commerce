@@ -342,6 +342,8 @@ describe('AppShell — permission gates the palette and the sidebar alike (issue
     expect(hrefs).toContain('/orders');
     expect(hrefs).toContain('/comparisons');
     expect(hrefs).toContain('/organizations');
+    // Feature 161 — the price-lists entry opens the price-book list again
+    // (feature 160 had pointed it at the display-mode page meanwhile).
     expect(hrefs).toContain('/price-lists');
     // `/price-lists`' palette row went the other of batch 13's two ways:
     // `price_lists` declared no action at all, so `open-price-lists` arrives in

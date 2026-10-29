@@ -7,10 +7,15 @@ import { isModuleDisabled } from './module-absence';
  *
  * The resolved-price endpoint returns the per-customer Base + (optional) Sale
  * price for a single product, along with the resolved display mode and the
- * currently-applicable quantity bracket. A bulk variant is exposed as a
- * convenience wrapper that fans out to the singular endpoint in parallel —
- * the backend's batch route is documented in `pricing-resolution.contract.md`
- * but is not yet implemented; the wrapper keeps the call-sites stable.
+ * currently-applicable quantity bracket.
+ *
+ * **Catalogue surfaces do not call it** (D-287 P0). A catalogue read already
+ * resolves every product it returns, and since D-287 P0 it carries the base /
+ * sale / display-mode split from that same resolution as
+ * `ProductSummary.resolvedPrice` ({@link PriceDisplay}). The product page used
+ * to call this endpoint beside the product detail — the product resolved twice
+ * per view — and the home page fanned out one call per bestseller card. Both
+ * now read `resolvedPrice`, and the fan-out wrapper is gone.
  *
  * Backend caches the per-tuple result for 60 s; the singular endpoint also
  * uses Next's revalidate window so warm cache hits stay cheap on repeat
@@ -31,7 +36,8 @@ export interface PricingMoney {
 }
 
 export interface ResolvedPrice {
-  baseListId: string;
+  /** `null` when no price book prices the product for the buyer (unpriced, FR-018). */
+  baseListId: string | null;
   basePrice: PricingMoney | null;
   saleListId: string | null;
   salePrice: PricingMoney | null;
@@ -41,7 +47,24 @@ export interface ResolvedPrice {
     minQuantity: number;
     maxQuantity: number | null;
   } | null;
+  /** Feature 160 — which tier priced the charged line. */
+  source?: 'base' | 'catalogue' | 'buyer' | 'sale' | null;
+  /** Feature 160 — the buyer price a charged sale undercut. */
+  compareAt?: string | null;
+  /**
+   * Feature 161 (G9) — the catalogue price beside a lower buyer price ("list
+   * price / your price"); present only while `pricing.show_list_price` is on
+   * and it is above the price charged.
+   */
+  listPrice?: PricingMoney | undefined;
 }
+
+/**
+ * What a price block renders: the base / sale split and the display mode. A
+ * `ResolvedPrice` is one, and so is the catalogue's `ProductSummary.resolvedPrice`
+ * (D-287 P0), which is what the product page and the product cards read.
+ */
+export type PriceDisplay = Pick<ResolvedPrice, 'basePrice' | 'salePrice' | 'displayMode' | 'listPrice'>;
 
 /**
  * The pricing module is not present — issue #124.
@@ -105,35 +128,6 @@ export async function getResolvedPrice(
     // further is a separate question from module presence.
     return null;
   }
-}
-
-/**
- * Bulk fetch — keeps the call-site shape the contract describes even though
- * the backend batch endpoint isn't implemented yet. Resolves to a Map keyed
- * by productId; missing entries are absent from the Map. Fans out at most
- * `concurrency` calls in flight at once to avoid overrunning the backend.
- */
-export async function getResolvedPricesBulk(
-  productIds: readonly string[],
-  query: ResolvePriceQuery = {},
-  ctx?: RequestContext,
-  concurrency = 8,
-): Promise<Map<string, ResolvedPrice>> {
-  const out = new Map<string, ResolvedPrice>();
-  const queue = [...productIds];
-  async function worker(): Promise<void> {
-    while (queue.length > 0) {
-      const id = queue.shift();
-      if (!id) return;
-      const resolved = await getResolvedPrice(id, query, ctx);
-      // An absence contributes no entry, exactly as "no price" does: the bulk
-      // map is a lookup of prices that exist, and the caller's own absence
-      // handling belongs on the surface, not in a Map miss.
-      if (resolved && resolved !== PRICING_UNAVAILABLE) out.set(id, resolved);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, productIds.length) }, worker));
-  return out;
 }
 
 export interface ProductDisplayMode {

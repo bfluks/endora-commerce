@@ -1,14 +1,16 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
-import type { OpportunityDetail } from '@endora-commerce/contracts';
+import { useId, type ReactNode } from 'react';
+import { ReferenceText } from '@endora-commerce/admin-kit/components';
 import { useAuth } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { InlineEdit } from '../../../components/InlineEdit.js';
 import { OpportunityCustomFields } from '../../../components/OpportunityCustomFields.js';
-import { OpportunityEditForm } from '../../../components/OpportunityEditForm.js';
-import { ReferenceText } from '../../../components/ReferenceText.js';
+import { ReferenceField } from '../../../components/ReferenceField.js';
+import { useOrderStatusLabel } from '../../../lib/references.js';
+import { useOpportunityUpdate } from '../../../lib/use-opportunity-update.js';
 import type { OpportunityTabProps } from '../tabs.js';
 
-/** The edit form's first field — where the keyboard goes when the form opens. */
-const EDIT_TITLE_FIELD_ID = 'crm-edit-title';
+/** The description's limit — `opportunityCreateShape.description` in `@endora-commerce/contracts`. */
+const DESCRIPTION_MAX_LENGTH = 20_000;
 
 /**
  * The *Overview* tab of an Opportunity: what the deal is about — its
@@ -19,67 +21,68 @@ const EDIT_TITLE_FIELD_ID = 'crm-edit-title';
  * sidebar; the status is the page's stage bar; the linked documents are the
  * Links tab. What is left here is the prose, which wants the wide column.
  *
- * **The edit form opens here**, in place of the description, when the page's
- * header asks for it: the form edits the title and the description together
- * with the sidebar's facts, and it needs the room.
+ * **Each is edited where it is shown** (`specs/158-crm-opportunity-inline-editing/`,
+ * FR-002): the description in the formatted field, in place of the text, with
+ * its own *Save* (or Ctrl/Cmd + Enter) and *Cancel*; the custom fields in
+ * their own panel, as before.
  */
 export function OverviewTab(props: OpportunityTabProps): ReactNode {
-  const { opportunity, onChange, editing, onEditingChange } = props;
+  const { opportunity, onChange } = props;
   const t = useTranslation('crm');
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('crm:write');
   const descriptionHeadingId = useId();
-  /** Spoken once an edit is saved; the screen itself is the visible confirmation. */
-  const [editNotice, setEditNotice] = useState('');
-
-  // The form was opened by a button in the header, a long way from here: the
-  // keyboard follows it.
-  useEffect(() => {
-    if (!editing) return;
-    setEditNotice('');
-    document.getElementById(EDIT_TITLE_FIELD_ID)?.focus();
-  }, [editing]);
-
-  const onEdited = (next: OpportunityDetail): void => {
-    onEditingChange(false);
-    if (next !== opportunity) {
-      onChange(next);
-      setEditNotice(t('opportunity.edit.saved'));
-    }
-  };
+  const update = useOpportunityUpdate(opportunity, onChange);
+  const stored = opportunity.description ?? '';
+  const orderStatusLabel = useOrderStatusLabel(props.orderStatuses);
 
   return (
     <div className="divide-y divide-border [&>*]:py-6 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
-      {editing && canWrite ? (
-        <section>
-          <OpportunityEditForm
-            opportunity={opportunity}
-            onSaved={onEdited}
-            onReloaded={onChange}
-            onCancel={(): void => onEditingChange(false)}
-          />
-        </section>
-      ) : (
-        <section aria-labelledby={descriptionHeadingId} className="space-y-3">
-          <h2 id={descriptionHeadingId} className="text-sm font-semibold tracking-tight">
-            {t('opportunity.field.description')}
-          </h2>
-          <p role="status" className="sr-only">
-            {editNotice}
-          </p>
-          {opportunity.description ? (
-            <div className="max-w-prose whitespace-pre-wrap break-words text-sm">
-              <ReferenceText text={opportunity.description} references={opportunity.references} />
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              {canWrite
-                ? t('opportunity.description.empty')
-                : t('opportunity.description.emptyReadOnly')}
-            </p>
+      <section aria-labelledby={descriptionHeadingId} className="space-y-3">
+        <h2 id={descriptionHeadingId} className="text-sm font-semibold tracking-tight">
+          {t('opportunity.field.description')}
+        </h2>
+        <InlineEdit<string>
+          label={t('opportunity.field.description')}
+          labelVisible={false}
+          canEdit={canWrite}
+          display={
+            stored ? (
+              <div className="max-w-prose">
+                <ReferenceText
+                  text={stored}
+                  references={opportunity.references}
+                  orderStatusLabel={orderStatusLabel}
+                />
+              </div>
+            ) : (
+              <p className="text-muted-foreground">
+                {canWrite ? t('opportunity.description.empty') : t('opportunity.description.emptyReadOnly')}
+              </p>
+            )
+          }
+          initial={(): string => stored}
+          unchanged={(draft): boolean => draft.trim() === stored.trim()}
+          save={(draft): Promise<void> =>
+            update({ description: draft.trim() === '' ? null : draft.trim() })
+          }
+          editor={({ id, draft, setDraft, busy, errorId, submit }): ReactNode => (
+            <ReferenceField
+              id={id}
+              rows={6}
+              value={draft}
+              maxLength={DESCRIPTION_MAX_LENGTH}
+              organizationId={opportunity.organization.id}
+              opportunityId={opportunity.id}
+              references={opportunity.references}
+              disabled={busy}
+              {...(errorId ? { 'aria-invalid': true, 'aria-describedby': errorId } : {})}
+              onValueChange={setDraft}
+              onSubmitShortcut={submit}
+            />
           )}
-        </section>
-      )}
+        />
+      </section>
 
       <OpportunityCustomFields opportunity={opportunity} canWrite={canWrite} onChange={onChange} />
     </div>

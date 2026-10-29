@@ -1,5 +1,201 @@
 # @endora-commerce/mod-mfa
 
+## 0.108.0
+
+### Patch Changes
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- ac24f80: The customer sign-ins `mfa` completes follow the sales-channel assignment of the customer's
+  Organization, decided on the channel the sign-in was begun on:
+
+  - the federated sign-in callback sends a customer whose Organization may not use the channel the
+    sign-in was started on back to `<storefront>/login?error=sales_channel_not_permitted`, before a
+    second factor is started or a session issued;
+  - `POST /api/v1/auth/customer/mfa/verify` and
+    `POST /api/v1/auth/customer/mfa/setup-ticket/complete` answer 403 `SALES_CHANNEL_NOT_PERMITTED`
+    and issue no session when the assignment was removed after the password step; the set-up is not
+    activated.
+
+  A federated sign-in that creates an account does so for the channel the sign-in was started on:
+  the new personal Organization holds exactly that channel. On a channel closed to anonymous visitors
+  it creates nothing — no account, no Organization, no session — as individual self-registration is
+  refused there, and redirects to `<storefront>/login?error=sales_channel_sign_in_required`. An
+  existing account signing in through a provider on such a channel is decided by the assignment rule
+  as before. `SocialIdentityDeps.autoCreateCustomer` receives `{ salesChannelId }` as its second
+  argument, and `SocialIdentityService.signInCustomer` takes the sign-in's channel.
+
+  `MfaModuleOptions` gains a required `customerChannelAccess`, built from `customerAccountReadPort`
+  and the kernel's `salesChannelAccessPort` and `salesChannelResolutionPort` by the module's own
+  composition.
+
+- d121135: A wrong confirmation on the signed-in 2FA self-service routes answers `403`, not `401`, so the Admin UI no longer signs the administrator out over a typo. This covers `POST …/activate` (confirming setup), `POST …/disable` and `POST …/recovery-codes/regenerate`, under both `/api/v1/admin/account/mfa` and `/api/v1/account/mfa`. The Admin UI treats every `401` as an expired session; with `403` it shows the error on the security screen and the session stays.
+
+  - A wrong code answers `403 MFA_INVALID_CODE` (was `401`).
+  - A wrong password on `…/disable` answers `403 CURRENT_PASSWORD_INVALID` — "The current password is incorrect." — as the profile screen does since #215. It was `401 INVALID_CREDENTIALS`, whose sentence is the sign-in form's "invalid email or password".
+
+  **API clients:** a client that branched on `401` for these refusals now receives `403`. The refusals before a session exists — the login challenge and enrolment during sign-in — keep their `401`. The authentication throttle is unchanged: the sixth attempt still answers `429`.
+
+### Patch Changes
+
+- 248a9df: Routes a visitor reaches before signing in, or that arrive with no storefront channel, declare
+  `salesChannelAccess: 'open'` and stay reachable when an operator closes a sales channel to
+  anonymous visitors: administrator sign-in and sign-out, second-factor verification and set-up
+  tickets and federated sign-in (both surfaces), `GET /api/v1/i18n/config`, the dictionary reads the
+  registration form uses, the crawler policy, product-feed downloads by token, and the newsletter
+  confirmation, unsubscribe and tracking links.
+- 1525d86: Customer sign-in, the customer second factor and password-reset requests are now limited per
+  account, the way administrator sign-in already was.
+
+  - `@endora-commerce/platform/kernel` publishes `AuthenticationAttemptThrottle`, the attempt
+    counter administrator sign-in used, with the profile types an owner of accounts builds one
+    over (`AttemptThrottleProfile`, `AttemptPolicy`, `AttemptCounterStore`, `ThrottledAttempt`,
+    `ThrottledCheckResult`, `ThrottledCredentialState`) and `ADDRESS_POLICY`, `ACCOUNT_POLICY`,
+    `ABANDONED_AFTER_SECONDS`, `DEFAULT_STORE_DEADLINE_MS`, `addressOrigin`. `admin_users`' own
+    throttle is now a profile over it; its keys, cookie values, codes and audit rows are unchanged.
+  - `@endora-commerce/contracts` adds `CustomerAuthenticationThrottlePort` (container name
+    `customerAuthenticationThrottlePort`, owner `customer_accounts`) with
+    `CustomerAuthenticationAttempt`, `CustomerAuthenticationCheckResult`,
+    `CustomerAuthenticationOrigin` and `CustomerAuthenticationFactor`; the error codes
+    `CUSTOMER_AUTHENTICATION_THROTTLED` (429, with `Retry-After`) and
+    `CUSTOMER_AUTHENTICATION_UNAVAILABLE` (503); the cookie name
+    `CUSTOMER_KNOWN_DEVICE_COOKIE_NAME` (`b2b_customer_device`) and its lifetime. Optional
+    additions: `CustomerLoginInput.knownDevice`, `CustomerLoginResult.knownDevice`, and a second
+    `context` argument on `CustomerPasswordResetPort.requestReset`.
+  - `customer_accounts` counts wrong passwords per folded e-mail address (50 in 30 minutes from a
+    device the account has not signed in on, 10 from a known one), and password-reset requests per
+    address (5 an hour). There is no per-address counter: the storefront signs shoppers in from its
+    own server. A completed sign-in sets the signed `b2b_customer_device` cookie, and an attempt
+    carrying it is held to that device's own budget. Asking for a new reset link retires the
+    earlier unused ones.
+  - `mfa` checks customer second-factor codes inside the customer throttle (20 in 30 minutes,
+    10 from a known device) and sets the customer known-device cookie when a customer sign-in
+    completes there.
+  - `organizations` reads and sets the customer known-device cookie on
+    `POST /api/v1/auth/customer/login` and reads it on `POST /api/v1/auth/password-reset/request`.
+
+- 0472475: Two changes that keep a stored protection from being dropped as a side effect of another change.
+
+  - **`mfa` is not switched off while administrators are required to use a second factor.** `POST /api/v1/admin/modules/mfa/activation` with `{ active: false }` answers `409 MFA_DEACTIVATION_BLOCKED` (`details.setting: 'mfa.admin.totp_enforced'`) while that setting is on, and changes nothing. Turn the requirement off first; the switch-off then goes through as before, and switching `mfa` back on is never refused. `mfa` publishes the answer as `mfaDeactivationGuardPort` (`MfaDeactivationGuardPort` in `@endora-commerce/contracts`).
+  - **A stored credential secret is not carried over to a changed endpoint.** `PUT /api/v1/admin/credentials/:code` that changes a field saying where the record's secrets are sent — an LLM `baseUrl`, an SMTP `host` — answers `422 CREDENTIAL_SECRET_REENTRY_REQUIRED` (`details.fields` lists the secret keys) unless every stored secret is re-entered in the same request. The admin form marks those secret fields as soon as the endpoint is edited. `FieldDefinition` gains an optional `endpoint` flag (defaulting to `true` for `format: 'url'` fields) and `@endora-commerce/contracts` exports `isCredentialEndpointField`; a module registering its own configuration type gets the rule for its URL fields without a change, and declares `endpoint: true` on a host field that is not a URL.
+
+- 30c61d9: Federated sign-in (Google, Microsoft) on `/api/v1/auth/{customer,admin}/oauth/:provider/{start,callback}` now follows the same rules as the password sign-in.
+
+  - **The sign-in completes only in the browser that began it.** `start` sets a short-lived, httpOnly, `SameSite=Lax` cookie (`b2b_oauth_binding`, scoped to `/api/v1/auth/<surface>/oauth`, ten minutes) and stores its digest with the transaction; `callback` refuses a request that does not present it — with the existing "This sign-in attempt has expired." redirect — and clears it. A callback from another browser no longer uses up the transaction.
+  - **A second factor applies.** After the provider identity resolves to an account, the callback asks `MfaLoginPort.beginLogin` exactly as the password sign-ins do. An account with an active authenticator is not signed in by the callback: a customer is sent to the storefront's `/login/mfa` with the pending challenge in the `b2b_mfa_challenge` cookie, an administrator to the Admin UI with `#mfa-challenge=<id>`; both complete through the existing `…/mfa/verify` endpoints. An account under an enforced two-factor policy that has not enrolled yet is sent back to the sign-in screen, which owns the forced setup. Only an account with no second factor and no enforced policy is signed in directly, as before.
+  - **A blocked customer account is refused** with the sentence the password sign-in answers — "This account has been blocked. Please contact support." — before any provider link is recorded.
+
+  `SocialIdentityDeps.resolveCustomerByEmail` and `autoCreateCustomer` may answer `organizationId` (used for an organisation's enforced policy) and `blocked`; `SocialSignInResult` gains `organizationId` and the `blocked` reason.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

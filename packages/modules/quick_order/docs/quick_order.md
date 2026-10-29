@@ -26,15 +26,51 @@ normalized to the same row model and validated against the catalog:
 - The response partitions rows into `recognized` + `rejected` (each with a
   per-row reason: `sku_missing`, `quantity_invalid`, `product_not_found`,
   `product_archived`, `malformed_row`, `variant_not_resolved`,
-  `variant_ambiguous`, `row_limit_exceeded`) plus a `summary`.
+  `variant_ambiguous`, `row_limit_exceeded`, `below_minimum`) plus a `summary`.
+  `product_archived` means the product is archived (the catalogue's Archive
+  action), whatever its status; a product that is merely switched off for the
+  buyer's channel answers `product_not_found`, like any product the buyer cannot
+  order there.
 - Duplicate SKUs are merged (quantities summed); rows beyond
-  `quick_order.import_max_rows` are rejected.
+  `quick_order.import_max_rows` are rejected. The setting is clamped to
+  **1–10 000** whatever its stored value.
 
 `POST /api/v1/quick-order/build` turns the confirmed recognized rows into a
-**Cart** (`CartService`) or a **Quote Request** (`RfqService`), priced under the
-buyer's / organization's current price list. The admin twins
+**Cart** (`CartService`) or a **Quote Request** (`RfqService`), priced at the
+buyer's current prices from the price books — the basket's own pricing for a
+cart, the quote request's reference prices for a request. The admin twins
 (`/api/v1/admin/quick-order/import` + `/build`, guarded by `orders:write`)
 build on behalf of a chosen customer via `onBehalfOf`.
+
+**Order minimums in the file.** The preview judges each product's minimum in
+pieces on the product's **total across the whole file** — duplicate rows
+merged, then every variant of the product summed — never together with the
+buyer's cart, so the preview's verdict and the build's may differ. Rows
+rejected for another reason count toward no total.
+
+- On the **buyer's** import, every row of a product whose file total is below
+  its minimum is rejected with `below_minimum`, the `minimum` and the
+  `productTotal` the verdict used.
+- On the **operator's** import (admin route) such a row stays in `recognized`
+  with `warning: { reason: 'below_minimum', minimum, productTotal }`, and the
+  summary counts it in `warningCount`. The on-behalf screen badges the row and
+  still builds it — into a quote request as is, into a cart subject to the
+  cart's check.
+
+**The build.** A build of more than **200** items is refused whole with
+`422 VALIDATION_FAILED`, `details: { code: 'too_many_items', maximum: 200 }`,
+before anything else, for both targets and for buyer and operator alike.
+
+- Target `cart` adds the items as one batch judged together with the cart: the
+  lines that meet their minimums are added, the others are listed in
+  `rejected[]` (`reason: 'below_minimum'`, the `kind`, the `minimum`, and
+  `packagingUnitName` for a packaging-unit minimum). A product the customer
+  may not see, or that the channel does not publish, fails the build as an
+  unknown product before anything is added.
+- Target `quote_request` is one quote request, not a batch: a buyer's build is
+  refused below a minimum like any customer quote request, an operator's build
+  is written with the lines flagged for the sales team (the Quote Requests
+  module's page).
 
 `.xlsx` parsing uses **`exceljs`** (backend-only, isolated to
 `excel-importer.ts`); only the first worksheet is read.
@@ -72,17 +108,28 @@ lines and respecting the `orders.reorder_enabled` setting.
 When `quick_order.one_click_buy_enabled` is on for the buyer's sales channel
 **and** the buyer has all four eligible defaults, the product page shows a
 "Buy in one click" button. It skips Cart and Checkout: the order is placed from
-the defaults (`clear cart → add product → OrderService.placeOrder`) and the
-buyer is routed by the payment `nextAction` (gateway redirect, or the order /
-success page when no payment step is required). Same validations as a normal
-order (org active, minimum value, credit limit, stock).
+the defaults and the buyer is routed by the payment `nextAction` (gateway
+redirect, or the order / success page when no payment step is required).
+
+The product becomes the buyer's whole basket through the cart's `addItems`
+with `replaceExisting: true` and `onBelowMinimum: 'throw'`, then
+`OrderService.placeOrder` places it. `addItems` empties the basket only once
+nothing is left to refuse the line for, so a line refused before the write —
+below its minimum order quantity, without a price, or quote-only — leaves the
+basket exactly as it was. A refusal at placement, after the line was written
+(stock, the organization, a payment or delivery method), leaves the basket
+holding that one one-click line.
+
+Same validations as a normal order (org active, minimum value, credit limit,
+stock, minimum order quantity). For a `simple` or `configurable` product with
+a minimum order quantity, one click orders that minimum instead of 1.
 
 ## Settings
 
 | Code | Type | Default | Scope |
 |------|------|---------|-------|
 | `quick_order.one_click_buy_enabled` | boolean | `false` | per sales channel |
-| `quick_order.import_max_rows` | number | `2000` | global |
+| `quick_order.import_max_rows` | number | `2000` (clamped to 1–10 000) | global |
 
 ## Data
 

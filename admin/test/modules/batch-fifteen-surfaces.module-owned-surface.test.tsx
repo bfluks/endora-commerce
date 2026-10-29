@@ -217,6 +217,9 @@ const SUBJECTS: readonly Subject[] = [
       // the static declaration is written before the parametric one it used to
       // hide behind.
       ['/catalog/products/new', 'catalog:write'],
+      // The roster on its Archived tab (feature 163, owner PAL-1 → B), the palette's
+      // "Archived products" target; the same screen and code as the index.
+      ['/catalog/products/archived', 'catalog:read'],
       ['/catalog/products/:id', 'catalog:read'],
       ['/catalog/categories', 'catalog:read'],
       // The category page content screen, added after this batch: a detail
@@ -256,6 +259,7 @@ const SUBJECTS: readonly Subject[] = [
       ['catalog/src/admin/pages/ProductEditor.tsx', 'product.editor.pricing.before', 1],
       ['catalog/src/admin/pages/ProductEditor.tsx', 'product.editor.pricing.after', 1],
       ['catalog/src/admin/pages/ProductEditor.tsx', 'product.editor.channels', 1],
+      ['catalog/src/admin/pages/ProductEditor.tsx', 'product.editor.seo.after', 1],
       ['catalog/src/admin/components/ProductAttributesTab.tsx', 'product.editor.field.after', 1],
       ['catalog/src/admin/pages/CategoriesTree.tsx', 'category.editor.after', 1],
     ],

@@ -27,8 +27,9 @@ interface UpsellStripProps {
 
 export function UpsellStrip({ upsells, locale, strings }: UpsellStripProps): ReactNode {
   if (upsells.length === 0) return null;
+  // A unit price: its significant places, up to four (owner ruling of 2026-10-25).
   const formatMoney = (m: { amount: number; currency: string }): string =>
-    formatMoneyObject(m, locale);
+    formatMoneyObject(m, locale, { unitPrice: true });
   return (
     <section className="mt-[28px]" aria-label={strings.heading}>
       <div className="mb-3 flex items-end justify-between">

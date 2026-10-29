@@ -172,7 +172,6 @@ describe.skipIf(!shouldRun)('catalog visibleAttributes — p95 latency', () => {
     const resolvedChannel = {
       id: def.id,
       code: def.code,
-      isPublic: def.isPublic,
       defaultCurrency: def.defaultCurrency,
       defaultLanguage: def.defaultLanguage,
     };

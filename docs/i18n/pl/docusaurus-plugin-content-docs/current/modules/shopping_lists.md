@@ -35,14 +35,20 @@ brakująca tablica oznacza „przenieś wszystkie pozycje z listy”.
 
 `ShoppingListService` dzieli wskazane pozycje według statusu produktu, do którego się odwołują:
 
-- produkty `active` trafiają do koszyka lub zapytania ofertowego przez istniejące
-  `CartService.addItem` / `RfqService.addItem`, dzięki czemu łączenie pozycji w koszyku i
-  podnoszenie wersji szkicu zapytania odbywa się w jednym miejscu;
+- produkty `active` trafiają do koszyka jedną partią przez `addItems` koszyka (ocenianą razem z
+  koszykiem, więc obowiązują minimalne ilości zamówienia), a do zapytania ofertowego przez
+  `RfqService.createForCustomer`, które stosuje sprawdzenie minimum dla zapisów klienta;
 - produkty `archived` (albo pozycje, których produkt już nie istnieje) są zgłaszane w `skipped[]`
   z jednym z powodów:
   - `product_archived`
   - `product_not_found`
   - `variant_unavailable`
+  - `below_minimum` (tylko koszyk) — łączna ilość produktu w koszyku po zamianie pozostałaby poniżej
+    minimalnej ilości zamówienia; pominięcie niesie `minimum`, którego pozycja nie osiągnęła.
+
+Produkt, którego kupujący nie może już zobaczyć albo którego kanał nie publikuje, jest pomijany
+jako `product_not_found` — dokładnie tak jak usunięty produkt, bez nazwy i bez minimum. Każda inna
+pozycja jest nadal dodawana; zamiana nie jest wycofywana.
 
 Odpowiedź HTTP to zawsze `200 OK` z `{ added, skipped }`, aby interfejs mógł pokazać przyjazny
 komunikat zamiast traktować częściowy wynik jako błąd.

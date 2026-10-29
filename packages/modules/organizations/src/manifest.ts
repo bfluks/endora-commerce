@@ -372,6 +372,18 @@ export const manifest = defineModuleManifest({
       keywords: ['org', 'orgs', 'customer', 'organization', 'organizacja', 'klient'],
       weight: 220,
     },
+    // Feature 154 — the deep link to *New organization*, gated on the code its
+    // route and its write enforce.
+    {
+      id: 'new-organization',
+      labelKey: 'actions.newOrganization.label',
+      descriptionKey: 'actions.newOrganization.description',
+      icon: 'Building2',
+      targetRoute: '/organizations/new',
+      requiredPermission: 'customers:manage',
+      keywords: ['organization', 'new', 'create', 'organizacja', 'nowa', 'firma'],
+      weight: 210,
+    },
   ],
   // Feature 047 — admin-editable transactional emails owned by this module.
   transactionalEmails: [

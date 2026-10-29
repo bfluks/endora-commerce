@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { adminPreferencesSchema } from './admin-preferences.js';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
 
 /**
@@ -53,6 +54,12 @@ export const adminMeResponseSchema = z.object({
   role: adminRoleSchema.nullable(),
   permissions: z.array(z.string()),
   idleLogoutMinutes: z.number().positive().nullable(),
+  /**
+   * The signed-in admin's own preferences (feature 164, FR-016). `null` when the
+   * server could not read them; the Admin UI then opens with the defaults and
+   * saves nothing (FR-018).
+   */
+  preferences: adminPreferencesSchema.nullable(),
 });
 export type AdminMeResponse = z.infer<typeof adminMeResponseSchema>;
 

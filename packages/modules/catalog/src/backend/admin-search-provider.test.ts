@@ -92,7 +92,7 @@ describe('catalog admin search providers — mapping', () => {
   it('maps a product to its screen, named in the admin language, with SKU, type and status', async () => {
     const translate = vi.fn(async (key: string, language: string) => `${language}:${key}`);
     const search = vi.fn(async () => ({
-      rows: [{ id: 'p1', sku: 'CHAIR-RED', name: { 'en-US': 'Red chair', 'pl-PL': 'Czerwone krzesło' }, type: 'simple', status: 'draft' }],
+      rows: [{ id: 'p1', sku: 'CHAIR-RED', name: { 'en-US': 'Red chair', 'pl-PL': 'Czerwone krzesło' }, type: 'simple', status: 'inactive' }],
       hasMore: false,
     }));
     const provider = createProductAdminSearchProvider({ search, translate });
@@ -103,7 +103,7 @@ describe('catalog admin search providers — mapping', () => {
         id: 'p1',
         title: 'Czerwone krzesło',
         subtitle: 'CHAIR-RED · simple',
-        status: { code: 'draft', label: 'pl:adminSearch.product.status.draft' },
+        status: { code: 'inactive', label: 'pl:adminSearch.product.status.inactive' },
         targetRoute: '/catalog/products/p1',
       },
     ]);

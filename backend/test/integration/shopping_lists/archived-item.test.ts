@@ -54,7 +54,8 @@ describe('Archived product on shopping list — skipped on conversion', () => {
     //    but we want a deterministic state for the conversion check).
     const em = h.em();
     const archived = await em.findOneOrFail(Product, { id: SEED_PRODUCT_102_ID });
-    archived.status = 'inactive';
+    // Spec 163 (FR-019) — archived is `archivedAt`; the status is not one.
+    archived.archivedAt = new Date();
     await em.flush();
 
     // 3. Convert to cart — the archived row is skipped + reported.
@@ -79,7 +80,7 @@ describe('Archived product on shopping list — skipped on conversion', () => {
     expect(result.skipped[0]?.reason).toBe('product_archived');
 
     // 4. Restore for following tests in the same suite.
-    archived.status = 'active';
+    archived.archivedAt = null;
     await em.flush();
   });
 });

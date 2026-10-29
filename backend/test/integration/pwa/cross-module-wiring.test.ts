@@ -139,8 +139,16 @@ describe('pwa — the cross-module ports, composed', () => {
     // can see that. `assets_library` decides the origin; `pwa` passes the
     // answer through untouched, which is why nothing here reads an environment
     // variable of its own.
+    // specs/156-asset-stable-url/ T065 (deliberate, R-20): the embed form
+    // carries the asset's content version.
+    const [asset] = await h
+      .em()
+      .getConnection()
+      .execute<Array<{ content_version: string }>>('select content_version from assets where id = ?', [
+        rendition!.assetId,
+      ]);
     expect(redirect.headers['location']).toBe(
-      `${resolvePublicApiBaseUrl()}/assets/file/${rendition!.assetId}`,
+      `${resolvePublicApiBaseUrl()}/assets/file/${rendition!.assetId}?v=${asset!.content_version}`,
     );
   });
 

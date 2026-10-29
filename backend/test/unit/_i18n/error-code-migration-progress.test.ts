@@ -119,6 +119,14 @@ const MIGRATED_MODULES: readonly string[] = [
   // exist when the prefix chain was deleted, so the frozen capture holds none of
   // its codes and `MINTED_ERROR_CODES` is what accounts for them.
   'crm',
+  // Minted with the module (`specs/163-projects-and-tasks/`): its three
+  // `TASK_*` codes were created after the chain was deleted, so
+  // `MINTED_ERROR_CODES` accounts for them.
+  'tasks',
+  // Minted with the module (`specs/163-projects-and-tasks/`): its `PROJECT_*`
+  // codes were created after the chain was deleted, so `MINTED_ERROR_CODES`
+  // accounts for each in the change that first raises it.
+  'projects',
   // The remaining six receiving modules of Tier A (MR 3), on exactly the terms
   // the MR 2 note below states: the capture says `core` for all seventeen of
   // their codes, so `capture ⊕ rehomed` is what makes these entries answerable,
@@ -131,6 +139,10 @@ const MIGRATED_MODULES: readonly string[] = [
   // `DOCUMENT_*` codes were created after the chain was deleted, so
   // `MINTED_ERROR_CODES` accounts for them.
   'document_templates',
+  // Minted with the module (issue #379): its two `ADMIN_FEEDBACK_*` codes were
+  // created after the chain was deleted, so `MINTED_ERROR_CODES` accounts for
+  // them.
+  'admin_feedback',
   // Tier B, MR 4 — the first batch of the sweep whose receivers all already ship
   // an i18n bundle, and the first that deletes from one. `catalog`, `orders` and
   // `mfa` were on this roster from Phase 3 and simply grow; `customer_accounts`,
@@ -203,6 +215,11 @@ const MIGRATED_MODULES: readonly string[] = [
   'promotions',
   'prompt_actions',
   'quote_requests',
+  // Minted (`specs/155-catalog-order-constraints/`): `RETURN_LINE_NOT_RETURNABLE`
+  // is this module's first code and was created after the chain was deleted, so
+  // the frozen capture holds none and `MINTED_ERROR_CODES` is what accounts for
+  // it.
+  'returns',
   'sales_channels',
   'search',
   // Minted (`specs/144-seo-search-engine-robots/`): `SEO_CRAWLER_TEXT_TOO_LARGE`

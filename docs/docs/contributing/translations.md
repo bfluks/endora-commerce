@@ -35,6 +35,15 @@ first and only propose a glossary edit if the term genuinely does not fit.
 | sales channels          | kanały sprzedaży            | plural                                              |
 | price list              | cennik                      |                                                     |
 | price lists             | cenniki                     | plural                                              |
+| price book              | cennik                      | the D-287 model's price list; same Polish word      |
+| base price              | cena bazowa                 | a product's price in the base book of a currency    |
+| catalogue price         | cena katalogowa             | also "list price" beside the buyer's price          |
+| buyer price             | cena kupującego             |                                                     |
+| sale price              | cena promocyjna             | a sale book's price                                 |
+| price precedence        | kolejność cen               | the order of the twelve buyer cells                 |
+| price explainer         | wyjaśnienie ceny            | the admin screen                                    |
+| quantity tier           | próg ilościowy              |                                                     |
+| audience (price book)   | odbiorcy                    | who a price book's prices are for                   |
 | quote request           | zapytanie ofertowe          | the "RFQ" concept                                  |
 | quote requests          | zapytania ofertowe          | plural                                              |
 | order                   | zamówienie                  |                                                     |
@@ -79,6 +88,10 @@ first and only propose a glossary edit if the term genuinely does not fit.
 | saved view              | zapisany widok              | a named list setup; plural "zapisane widoki"        |
 | shared (saved view)     | udostępniony                | not "współdzielony"                                |
 | credit limit            | limit kredytowy             |                                                     |
+| minimum order quantity  | minimalna ilość zamówienia  | "Minimum" alone once the context is clear           |
+| packaging unit          | jednostka opakowania        |                                                     |
+| returnable              | podlega zwrotowi            | negated: "niepodlegający zwrotowi"                  |
+| bulk edit               | edycja masowa               | button: "Edycja masowa"                             |
 | asset                   | zasób                       | generic file/image asset                            |
 | integration             | integracja                  |                                                     |
 | webhook                 | webhook                     | proper noun; remains untranslated                   |

@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import type {
   OpportunityDetail as OpportunityDetailData,
   OpportunityTransitionResult,
@@ -26,6 +26,7 @@ import {
   PageHeader,
 } from '@endora-commerce/admin-kit/ui';
 import { useAppLanguage, useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { AdminZone } from '@endora-commerce/admin-kit/zones';
 import { crmApi, type OrderStatusOption } from '../api.js';
 import { salesChannelLabel } from '../components/LookupPickers.js';
 import { ModalDialog } from '@endora-commerce/admin-kit/components';
@@ -33,8 +34,8 @@ import { PropagationOutcomes } from '../components/PropagationOutcomes.js';
 import { StageBar } from '../components/StageBar.js';
 import { errorMessage } from '../lib/labels.js';
 import { OpportunitySidebar } from './opportunity-detail/OpportunitySidebar.js';
+import { OpportunityTitle } from './opportunity-detail/OpportunityTitle.js';
 import {
-  DEFAULT_TAB_ID,
   ITEM_COUNT_LABEL_KEY,
   OPPORTUNITY_TABS,
   searchForTab,
@@ -59,7 +60,9 @@ function MetaSeparator(): ReactNode {
  * Top to bottom, the way the eye asks its questions:
  *
  * 1. **the header** — what it is called, its status, and one quiet line of who
- *    it is for and who holds it; *Edit* and *Delete* on the right;
+ *    it is for and who holds it; *Delete* on the right. The title is edited
+ *    where it is read, as every other field of the screen is
+ *    (`specs/158-crm-opportunity-inline-editing/`) — there is no edit form;
  * 2. **two columns**, from the header down. On the left: the stage bar — where
  *    it is in the workflow and where it may go — then what became of the linked
  *    Orders after a move, then the tabs (declared as data in
@@ -99,7 +102,6 @@ export function OpportunityDetail(): ReactNode {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
   const [orderStatuses, setOrderStatuses] = useState<OrderStatusOption[]>([]);
   const [salesChannelName, setSalesChannelName] = useState<string | null>(null);
   /** Outcomes of the moves and retries made during this visit, newest move first. */
@@ -112,8 +114,6 @@ export function OpportunityDetail(): ReactNode {
     (tabId: string): void => {
       // The tab is a view of the same page: it replaces the entry instead of
       // adding one, and keeps the navigation state a create screen handed over.
-      // The edit form lives on the default tab; leaving it closes the form.
-      if (tabId !== DEFAULT_TAB_ID) setEditing(false);
       setSearchParams((previous) => searchForTab(previous, tabId), {
         replace: true,
         state: location.state as unknown,
@@ -155,7 +155,6 @@ export function OpportunityDetail(): ReactNode {
     // What was said about one Opportunity is not said about the next.
     setRecent([]);
     setOutcomesShown(false);
-    setEditing(false);
     void reload();
   }, [reload]);
 
@@ -304,17 +303,17 @@ export function OpportunityDetail(): ReactNode {
 
   return (
     <>
-      <PageHeader
+      <OpportunityTitle
         // A title is the operator's and may be one long word: it wraps inside
         // the header instead of pushing the page sideways.
         className="[&>div:first-child]:min-w-0 [&_h1]:flex-wrap"
-        title={
-          <>
-            <span className="min-w-0 [overflow-wrap:anywhere]">{opportunity.title}</span>
-            <Badge className="shrink-0 font-medium" style={statusBadgeStyle(opportunity.status.color)}>
-              {opportunity.status.name}
-            </Badge>
-          </>
+        opportunity={opportunity}
+        canWrite={canWrite}
+        onChange={setOpportunity}
+        beside={
+          <Badge className="shrink-0 font-medium" style={statusBadgeStyle(opportunity.status.color)}>
+            {opportunity.status.name}
+          </Badge>
         }
         description={
           <>
@@ -333,37 +332,18 @@ export function OpportunityDetail(): ReactNode {
         }
         back={back}
         actions={
-          canWrite || canDelete ? (
-            <>
-              {canWrite && !editing ? (
-                <Button
-                  variant="outline"
-                  className="min-h-11 sm:min-h-9"
-                  onClick={(): void => {
-                    selectTab(DEFAULT_TAB_ID);
-                    setEditing(true);
-                  }}
-                >
-                  <Pencil aria-hidden="true" className="size-4" />
-                  {t('opportunity.edit.open')}
-                </Button>
-              ) : null}
-              {canDelete ? (
-                <Button
-                  variant="outline"
-                  // Kept a step away from Edit: the one that cannot be undone
-                  // is not the neighbour of the one pressed every day.
-                  className="ml-2 min-h-11 text-destructive hover:text-destructive sm:min-h-9"
-                  onClick={(): void => {
-                    setDeleteError(null);
-                    setConfirmingDelete(true);
-                  }}
-                >
-                  <Trash2 aria-hidden="true" className="size-4" />
-                  {t('opportunity.delete.open')}
-                </Button>
-              ) : null}
-            </>
+          canDelete ? (
+            <Button
+              variant="outline"
+              className="min-h-11 text-destructive hover:text-destructive sm:min-h-9"
+              onClick={(): void => {
+                setDeleteError(null);
+                setConfirmingDelete(true);
+              }}
+            >
+              <Trash2 aria-hidden="true" className="size-4" />
+              {t('opportunity.delete.open')}
+            </Button>
           ) : undefined
         }
       />
@@ -533,8 +513,6 @@ export function OpportunityDetail(): ReactNode {
                   onChange={setOpportunity}
                   reload={reload}
                   orderStatuses={orderStatuses}
-                  editing={editing}
-                  onEditingChange={setEditing}
                 />
               ) : null}
             </Suspense>
@@ -542,6 +520,13 @@ export function OpportunityDetail(): ReactNode {
         </Card>
 
       </div>
+
+      {/*
+        Panels other modules add about this Opportunity as a whole. The zone
+        brings no chrome and renders nothing when empty; `crm` names no
+        contributor.
+      */}
+      <AdminZone name="opportunity.detail.after" props={{ opportunityId: id }} />
     </>
   );
 }

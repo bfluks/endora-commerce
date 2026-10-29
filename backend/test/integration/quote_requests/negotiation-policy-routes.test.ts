@@ -18,6 +18,7 @@ import {
   QuoteRequestOrgPolicy,
 } from '../../helpers/package-entities.js';
 import { setEscapeHatchAuditSink, withSystemScope } from '../../../src/tenancy/escape-hatch.js';
+import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
 
 /**
  * Feature 146, Phase 10b (T064) — the admin controls and the storefront read of
@@ -148,6 +149,8 @@ describe('146 — price-negotiation admin and storefront routes [integration]', 
       orgA = a.id;
       orgB = b.id;
       orgC = c.id;
+      // Feature 154 — the three tenants shop on the stores the harness seeds.
+      await bindOrganizationsToFixtureChannelsSql(em, [orgA, orgB, orgC]);
 
       const account = (organizationId: string, label: string) =>
         em.create(CustomerAccount, {

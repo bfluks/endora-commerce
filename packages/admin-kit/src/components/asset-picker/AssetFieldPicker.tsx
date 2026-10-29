@@ -29,12 +29,19 @@ import { fetchAssetDetail } from './assets-api.js';
 export interface AssetFieldPickerProps {
   value: string;
   onChange: (assetId: string) => void;
-  acceptMimePrefix?: 'image/' | 'video/';
+  acceptMimePrefix?: 'image/' | 'video/' | 'font/';
   allowUpload?: boolean;
   disabled?: boolean;
   id?: string;
   placeholder?: string;
   ariaLabel?: string;
+  /**
+   * Translated button copy, for a consumer that has its own bundle (feature
+   * 163). Each defaults to today's English, so an existing caller is unchanged.
+   */
+  chooseLabel?: string;
+  changeLabel?: string;
+  clearLabel?: string;
 }
 
 export function AssetFieldPicker(props: AssetFieldPickerProps): ReactNode {
@@ -96,7 +103,7 @@ export function AssetFieldPicker(props: AssetFieldPickerProps): ReactNode {
               onChange('');
               setLabel(null);
             }}
-            aria-label="Clear asset"
+            aria-label={props.clearLabel ?? 'Clear asset'}
           >
             <X className="size-4" aria-hidden="true" />
           </Button>
@@ -108,7 +115,7 @@ export function AssetFieldPicker(props: AssetFieldPickerProps): ReactNode {
           disabled={props.disabled ?? false}
           onClick={(): void => setOpen((v) => !v)}
         >
-          {value ? 'Change' : 'Choose'}
+          {value ? (props.changeLabel ?? 'Change') : (props.chooseLabel ?? 'Choose')}
         </Button>
       </div>
     </div>

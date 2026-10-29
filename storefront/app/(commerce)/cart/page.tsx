@@ -15,7 +15,6 @@ import {
   saveCartItemToShoppingList,
   type CartCookieJar,
   type CartItem,
-  type CartSummary,
 } from '../../../lib/api/cart';
 import { listShoppingLists } from '../../../lib/api/shopping-lists';
 import { getServerContext } from '../../../lib/server-context';
@@ -33,10 +32,21 @@ import { CartCouponInput } from '../../../components/CartCouponInput';
 import { CartConvertButtons } from '../../../components/CartConvertButtons';
 import { CartDroppedLinesBanner } from '../../../components/CartDroppedLinesBanner';
 import { CartApprovalBanner } from '../../../components/CartApprovalBanner';
+import { CartPrimaryCta } from '../../../components/CartPrimaryCta';
 import { getMe } from '../../../lib/api/account';
 import { getProductDisplayMode, PRICING_UNAVAILABLE } from '../../../lib/api/pricing';
-import type { DisplayMode } from '@endora-commerce/contracts';
+import { lineAmountHalfUp, type DisplayMode } from '@endora-commerce/contracts';
 import type { Metadata } from 'next';
+import {
+  cartBlocksCheckout,
+  cartLineDisplayName,
+  cartLineEditError,
+  cartLineEditErrorHref,
+  parseCartQuantityEdit,
+} from '../../../lib/cartMinimum';
+import { droppedBelowMinimumReason } from '../../../lib/batchReport';
+import { tForLocale } from '../../../lib/i18n/messages';
+import { cartActionFailure } from '../../../lib/cart-action-failure';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -63,6 +73,10 @@ export default async function CartPage({
 }: {
   searchParams: Promise<{
     error?: string;
+    /** U4 — the line whose quantity edit `error` refuses; the sentence renders beside it. */
+    errorItem?: string;
+    /** U4 — what the buyer typed into that line, kept in its field. */
+    typed?: string;
     couponError?: string;
     couponShortfall?: string;
     couponShortfallCurrency?: string;
@@ -186,6 +200,7 @@ export default async function CartPage({
           policyOn={requiresApproval}
           rejectedReason={null}
           submitForApprovalAction={submitForApprovalAction}
+          linesBlockedNote={cartBlocksCheckout(cart) ? tForLocale(locale)('cart.approvalBlocked') : null}
           strings={strings.approvalBanner}
         />
       ) : null}
@@ -207,12 +222,13 @@ export default async function CartPage({
             productId: d.productId,
             productName: d.productName,
             reason: d.reason,
+            minimum: d.minimum,
           }))}
           strings={strings.dropped}
         />
       ) : null}
 
-      {params.error ? (
+      {params.error && !cart.items.some((it) => cartLineEditError(params, it.id) !== null) ? (
         <div className="mb-3 rounded-md border border-[#fecaca] bg-[#fef2f2] px-[14px] py-[10px] text-[13px] text-[#b91c1c]" role="alert">
           {params.error}
         </div>
@@ -231,12 +247,13 @@ export default async function CartPage({
             {cart.items.map((it) => (
               <CartLine
                 key={it.id}
-                line={toViewModel(it)}
+                line={toViewModel(it, locale)}
                 updateAction={updateAction}
                 removeAction={removeAction}
                 saveToListAction={saveToListAction}
                 locale={locale}
                 displayMode={displayMode}
+                editError={cartLineEditError(params, it.id)}
                 strings={strings.line}
               />
             ))}
@@ -301,13 +318,16 @@ export default async function CartPage({
           />
 
           <div className="mt-4">
-            <PrimaryCtaButton
+            <CartPrimaryCta
               cta={primaryCta}
               authenticated={me !== null}
               submitForApprovalNeeded={submitForApprovalNeeded}
               canTransact={canTransact}
               moderationMessage={me?.organization?.moderationMessage ?? null}
               submitAction={submitForApprovalAction}
+              linesBlockCheckout={cartBlocksCheckout(cart)}
+              linesBlockedNote={tForLocale(locale)('cart.checkoutBlocked')}
+              approvalBlockedNote={tForLocale(locale)('cart.approvalBlocked')}
               strings={strings.cta}
             />
           </div>
@@ -351,7 +371,7 @@ function Breadcrumbs({
 }
 
 /** Maps a CartItem to the view-model the CartLine component expects. */
-function toViewModel(it: CartItem): CartLineViewModel {
+function toViewModel(it: CartItem, locale: string): CartLineViewModel {
   return {
     id: it.id,
     productId: it.productId,
@@ -359,96 +379,24 @@ function toViewModel(it: CartItem): CartLineViewModel {
     // Backend resolves `productName` from Product.name against the
     // request's Accept-Language. Feature 043 — prefer `displayName`, which
     // already appends the packaging-unit name (e.g. "… (Paleta)"). When
-    // unknown (race with a deleted product) fall back to SKU then productId.
-    productName: it.displayName || it.productName || it.productSku || it.productId,
+    // unknown (a deleted product, FR-037) fall back to the SKU, then to a
+    // sentence — never to the raw product id.
+    productName: cartLineDisplayName(it, locale),
     sku: it.productSku ?? null,
     productSlug: it.productSlug ?? null,
     quantity: it.quantity,
     unitPrice: it.unitPrice,
     lineTotal: it.lineTotal ?? {
-      amount: it.unitPrice.amount * it.quantity,
+      amount: Number(lineAmountHalfUp(it.unitPrice.amount, it.quantity)),
       currency: it.unitPrice.currency,
     },
     ...(it.unavailable !== undefined ? { unavailable: it.unavailable } : {}),
     ...(it.unavailableReason !== undefined ? { unavailableReason: it.unavailableReason } : {}),
+    // Feature 155 — the input floor and the server's below-minimum verdict.
+    packagingUnitName: it.packagingUnitName ?? null,
+    minOrderQuantity: it.minOrderQuantity ?? null,
+    belowMinimum: it.belowMinimum ?? null,
   };
-}
-
-/**
- * Renders the page's primary CTA. Source of truth is the backend's
- * `cart.primaryCta` field; the fallback covers anonymous carts (the
- * backend can't compute primaryCta without an org context). Feature
- * 027 T096.
- */
-function PrimaryCtaButton({
-  cta,
-  authenticated,
-  submitForApprovalNeeded,
-  canTransact,
-  moderationMessage,
-  submitAction,
-  strings,
-}: {
-  cta: NonNullable<CartSummary['primaryCta']>;
-  /** Whether the buyer has a valid customer session (resolved `/me`). */
-  authenticated: boolean;
-  submitForApprovalNeeded: boolean;
-  canTransact: boolean;
-  moderationMessage: string | null;
-  submitAction: (formData: FormData) => Promise<void>;
-  strings: {
-    checkout: string;
-    submitForApproval: string;
-    awaitingApproval: string;
-    blockedByOrganization: string;
-  };
-}): ReactNode {
-  if (!canTransact || cta === 'blocked_by_organization') {
-    return (
-      <button
-        type="button"
-        className="btn btn--dark btn--lg btn--block"
-        disabled
-        aria-disabled
-        title={moderationMessage ?? strings.blockedByOrganization}
-        style={{ opacity: 0.55, cursor: 'not-allowed' }}
-      >
-        {strings.blockedByOrganization}
-      </button>
-    );
-  }
-  if (cta === 'awaiting_approval') {
-    return (
-      <button
-        type="button"
-        className="btn btn--ghost btn--lg btn--block"
-        disabled
-        aria-disabled
-      >
-        {strings.awaitingApproval}
-      </button>
-    );
-  }
-  if (submitForApprovalNeeded || cta === 'submit_for_approval') {
-    return (
-      <form action={submitAction}>
-        <button type="submit" className="btn btn--dark btn--lg btn--block">
-          {strings.submitForApproval}
-        </button>
-      </form>
-    );
-  }
-  // cta === 'checkout'. /checkout requires a valid customer session, so when
-  // the buyer isn't authenticated (no session, or a stale/expired session that
-  // `/me` rejected) route them through login first — preserving the cart and
-  // returning to checkout via `?next` — instead of letting /checkout bounce
-  // them to login unexpectedly.
-  const checkoutHref = authenticated ? '/checkout' : '/login?next=/checkout';
-  return (
-    <Link href={checkoutHref} className="btn btn--dark btn--lg btn--block">
-      {strings.checkout} →
-    </Link>
-  );
 }
 
 async function readJar(): Promise<CartCookieJar> {
@@ -463,15 +411,26 @@ async function readJar(): Promise<CartCookieJar> {
 async function updateAction(formData: FormData): Promise<void> {
   'use server';
   const itemId = (formData.get('itemId') as string) ?? '';
-  const quantity = Number(formData.get('quantity') ?? '0');
-  if (!Number.isFinite(quantity) || quantity < 1) redirect('/cart?error=invalid-quantity');
+  // A stepper button posts `step`; the typed input and the one-step fix post `quantity`.
+  const step = formData.get('step');
+  const typed = formData.get('quantity');
+  const edit = parseCartQuantityEdit({
+    step: typeof step === 'string' ? step : null,
+    quantity: typeof typed === 'string' ? typed : null,
+  });
+  const typedValue = step === null && typeof typed === 'string' ? typed : null;
+  // The backend words its refusal (the minimum sentence) in the language it is asked in.
+  const { locale, ctx } = await getServerContext();
+  const t = tForLocale(locale);
+  if (edit.kind === 'invalid') redirect(cartLineEditErrorHref(itemId, t('cart.line.quantityInvalid'), typedValue));
   try {
-    const result = await updateCartItem(await readJar(), itemId, quantity);
+    // `quantity: 0` removes the line (FR-007, contract §2), whatever its minimum.
+    const quantity = edit.kind === 'remove' ? 0 : edit.quantity;
+    const result = await updateCartItem(await readJar(), itemId, quantity, ctx);
     if (result.newAnonCookie) await setAnonCartCookie(result.newAnonCookie);
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not update item.';
-    redirect(`/cart?error=${encodeURIComponent(message)}`);
+    const message = err instanceof StorefrontApiError ? err.detail : t('cart.line.updateFailed');
+    redirect(cartLineEditErrorHref(itemId, message, typedValue));
   }
   redirect('/cart');
 }
@@ -479,12 +438,13 @@ async function updateAction(formData: FormData): Promise<void> {
 async function removeAction(formData: FormData): Promise<void> {
   'use server';
   const itemId = (formData.get('itemId') as string) ?? '';
+  const { locale, ctx } = await getServerContext();
   try {
-    const result = await removeCartItem(await readJar(), itemId);
+    const result = await removeCartItem(await readJar(), itemId, ctx);
     if (result.newAnonCookie) await setAnonCartCookie(result.newAnonCookie);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not remove item.';
+      err instanceof StorefrontApiError ? err.detail : tForLocale(locale)('cart.line.removeFailed');
     redirect(`/cart?error=${encodeURIComponent(message)}`);
   }
   redirect('/cart');
@@ -512,7 +472,7 @@ async function saveToListAction(formData: FormData): Promise<void> {
     redirect(`/cart?listAdded=${encodeURIComponent(target.name)}`);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not save line to list.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not save line to list.';
     redirect(`/cart?error=${encodeURIComponent(message)}`);
   }
 }
@@ -533,7 +493,7 @@ async function applyCouponAction(formData: FormData): Promise<void> {
     }
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not apply coupon.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not apply coupon.';
     redirect(`/cart?error=${encodeURIComponent(message)}`);
   }
   redirect('/cart');
@@ -558,7 +518,7 @@ async function convertToQrAction(formData: FormData): Promise<void> {
   } catch (err) {
     const message =
       err instanceof StorefrontApiError
-        ? err.message
+        ? err.detail
         : 'Could not convert cart to a quote request.';
     redirect(`/cart?error=${encodeURIComponent(message)}`);
   }
@@ -566,13 +526,15 @@ async function convertToQrAction(formData: FormData): Promise<void> {
 
 async function submitForApprovalAction(): Promise<void> {
   'use server';
+  // `ctx` carries the storefront's language: without it the backend worded its refusal
+  // in its own default, whatever language the page was in (U4).
+  const { locale, ctx } = await getServerContext();
   try {
-    await submitCartForApproval(await readJar());
+    await submitCartForApproval(await readJar(), ctx);
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError
-        ? err.message
-        : 'Could not submit cart for approval.';
+    // A refusal the backend worded (FR-039's minimum refusal, in the request's
+    // language) passes through; anything else is the catalogue's sentence.
+    const message = cartActionFailure(err, locale, 'cart.submitForApprovalFailed');
     redirect(`/cart?error=${encodeURIComponent(message)}`);
   }
   redirect('/cart');
@@ -637,7 +599,7 @@ function STRINGS(locale: string): {
         grossSuffix: 'brutto',
         unavailable: {
           out_of_stock: 'Brak na stanie.',
-          not_purchasable: 'Niedostępny.',
+          not_purchasable: 'Produkt nie jest już dostępny.',
           no_price_in_customer_list: 'Brak ceny dla Twojego konta.',
         },
       },
@@ -685,6 +647,7 @@ function STRINGS(locale: string): {
         reasonOutOfStock: 'brak na stanie',
         reasonNoPriceInCustomerList: 'brak ceny dla Twojego konta',
         reasonRemovedByConversion: 'pominięto podczas konwersji',
+        reasonBelowMinimum: (minimum: number | undefined) => droppedBelowMinimumReason(minimum, locale),
       },
       approvalBanner: {
         pending: 'Twój koszyk oczekuje na akceptację administratora organizacji.',
@@ -788,6 +751,7 @@ function STRINGS(locale: string): {
       reasonOutOfStock: 'out of stock',
       reasonNoPriceInCustomerList: 'no price available',
       reasonRemovedByConversion: 'skipped during conversion',
+      reasonBelowMinimum: (minimum: number | undefined) => droppedBelowMinimumReason(minimum, locale),
     },
     approvalBanner: {
       pending: 'Your cart is awaiting approval by an organization administrator.',

@@ -384,10 +384,10 @@ export const HARDCODED_STRINGS_BASELINE: Readonly<Record<string, number>> = {
   // same four strings in the same component are read at the path they now sit
   // at. The count is unmoved, which is what says nothing was translated.
   'packages/admin-shell/src/components/LoginPage.tsx': 4,
-  // Feature 091's P4c published the asset cluster, so this file's one finding
-  // ("Clear asset") is the kit's now. The count is unmoved: the same string in
-  // the same component, under the path the walk reads it at.
-  'packages/admin-kit/src/components/asset-picker/AssetFieldPicker.tsx': 1,
+  // Feature 091's P4c published the asset cluster into the kit; its one
+  // finding, AssetFieldPicker's `aria-label="Clear asset"`, became feature
+  // 163's translatable `clearLabel` prop (English stays only as its default
+  // for callers with no bundle), and the entry went with it.
   'packages/admin-kit/src/components/rule-builder/RuleBuilder.tsx': 6,
   'packages/admin-kit/src/ui/color-picker.tsx': 1,
   // Feature 091's P5b published the shared page-builder chrome and the e-mail
@@ -405,17 +405,22 @@ export const HARDCODED_STRINGS_BASELINE: Readonly<Record<string, number>> = {
   'packages/page-builder-admin/src/email/EmailRichTextField.tsx': 1,
   'packages/page-builder-admin/src/email/EmailRowLayoutPicker.tsx': 2,
   'packages/page-builder-admin/src/email/EmailVariablesProvider.tsx': 4,
-  'packages/page-builder-admin/src/chrome/AssetPickers.tsx': 5,
+  // Feature 163, R17 (T201): the picker's Change / Select / Clear selection and
+  // the source's two options read the `core` bundle; lowered from 5.
+  'packages/page-builder-admin/src/chrome/AssetPickers.tsx': 2,
   'packages/page-builder-admin/src/chrome/CatalogPickers.tsx': 13,
   // Feature 091, Phase 4 batch 16 — re-keyed, not raised and not dropped:
-  // `cms` took its admin surface into its package and these three files went
-  // with it. Every count is unmoved; the same strings in the same components,
-  // under the paths the walk reads them at now. This baseline is a ledger
-  // *about* the files it names rather than one of them, so the merge request
-  // that moves a file is structurally the one that cannot see the entry go
-  // stale — the shape the six entries above record for P5b, and the reason both
-  // halves are corrected here rather than one of them going red later.
-  'packages/modules/cms/src/admin/components/ButtonLinkFields.tsx': 4,
+  // `cms` took its admin surface into its package and these files went with
+  // it. Every count is unmoved; the same strings in the same components, under
+  // the paths the walk reads them at now. This baseline is a ledger *about* the
+  // files it names rather than one of them, so the merge request that moves a
+  // file is structurally the one that cannot see the entry go stale — the shape
+  // the six entries above record for P5b, and the reason both halves are
+  // corrected here rather than one of them going red later.
+  //
+  // Feature 163, T016 — drained, not re-keyed: the button link picker's file
+  // (4 findings) was deleted, and its successor, `page-builder-admin`'s
+  // `LinkField.tsx`, reads every string from the `core` bundle.
   'packages/modules/cms/src/admin/components/ComponentDragHandle.tsx': 1,
   'packages/modules/cms/src/admin/components/RowLayoutPicker.tsx': 2,
   // Feature 091, Phase 4 batch 12 — re-keyed, not dropped: `invoices` took its
@@ -482,21 +487,6 @@ export const HARDCODED_STRINGS_BASELINE: Readonly<Record<string, number>> = {
   // operator chose. Translating them is a screen's worth of keys and belongs to
   // whoever repairs this screen, not to a batch whose subject is where the file
   // lives.
-  // Feature 091, Phase 4, the plan's batch 9 — the same four findings under a
-  // new key. `custom_fields`' definition screen moved into its module's
-  // package; the ratchet is two-way and keyed by path, so both halves fired in
-  // one run, a regression at the new key and a drain at the old one. The debt
-  // is untouched and is real: `Label (EN)`, `Options (comma-separated)`, its
-  // `gold, silver` placeholder and the `Add field` button are the create form's
-  // English-only half, beside a screen whose other six strings do resolve
-  // through this module's own bundle. Translating them is one form's worth of
-  // keys and belongs to whoever repairs the form, not to a batch whose subject
-  // is where the file lives.
-  //
-  // `assets_library` moved in the same batch and gets no entry, because its
-  // four files carry no finding — the library screen, its folder tree and its
-  // detail drawer render every sentence through `useTranslation`.
-  'packages/modules/custom_fields/src/admin/pages/CustomFieldsPage.tsx': 4,
   // Feature 091, Phase 4 batch 10 — three entries **re-keyed**, not raised and
   // not dropped: the same 17, 22 and 1 findings at new addresses, which the
   // two-way ratchet reported in one run as three regressions at the new keys

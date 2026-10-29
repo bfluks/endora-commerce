@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractRootContent } from './outline-data.js';
+import { collectChildItems, extractRootContent } from './outline-data.js';
 
 describe('extractRootContent', () => {
   it('reads content array from puck data', () => {
@@ -35,5 +35,27 @@ describe('extractRootContent', () => {
     expect(extractRootContent(null)).toEqual([]);
     expect(extractRootContent({ content: 'nope' })).toEqual([]);
     expect(extractRootContent({ content: { type: 'cms.Row', props: { id: 'x' } } })).toEqual([]);
+  });
+});
+
+describe('collectChildItems', () => {
+  it('lists a Row column\'s blocks through its `content` slot', () => {
+    const children = collectChildItems({
+      content: [{ type: 'cms.Column', props: { id: 'c1', content: [] } }],
+    });
+    expect(children.map((child) => child.props.id)).toEqual(['c1']);
+  });
+
+  // Feature 163 (research R-13): a Tabs or Accordion panel is an array-item
+  // slot named `panel`, so the outline reaches the blocks inside a panel.
+  it('lists the blocks of an array-item slot whatever its name', () => {
+    const children = collectChildItems({
+      items: [
+        { title: 'One', panel: [{ type: 'cms.MediaText', props: { id: 'm1' } }] },
+        { title: 'Two', content: [{ type: 'cms.Text', props: { id: 't1' } }] },
+        { title: 'Three', buttons: [{ label: 'Go', style: 'primary' }] },
+      ],
+    });
+    expect(children.map((child) => child.props.id)).toEqual(['m1', 't1']);
   });
 });

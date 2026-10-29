@@ -12,8 +12,21 @@ export const ORDERS_READ_PERMISSION = 'orders:read';
  */
 export const QUOTE_REQUESTS_READ_PERMISSION = 'rfqs:handle';
 
+/**
+ * The permission `tasks` gates its admin reads with — what "may read a Task"
+ * means for a reference to one (`specs/163-projects-and-tasks/` FR-044).
+ */
+export const TASKS_READ_PERMISSION = 'tasks:read';
+
 /** The permission `catalog` gates its admin product reads with. */
 export const CATALOG_READ_PERMISSION = 'catalog:read';
+
+/**
+ * The permission `custom_fields` gates its definitions and values with — what
+ * an Opportunity's history asks before it serves custom-field values
+ * (feature 162, owner ruling P2 = a).
+ */
+export const CUSTOM_FIELDS_READ_PERMISSION = 'custom_fields:read';
 
 /** Whether whoever is behind the request may read what one other module owns. */
 export type OwnerReadCheck = () => Promise<boolean>;
@@ -26,6 +39,10 @@ export interface OwnerReadChecks {
   quoteRequests: OwnerReadCheck;
   /** `catalog:read` — a Product's name. */
   products: OwnerReadCheck;
+  /** `tasks:read` — a Task's number and title. */
+  tasks: OwnerReadCheck;
+  /** `custom_fields:read` — an Opportunity's custom-field values in its history. */
+  customFields: OwnerReadCheck;
 }
 
 /**
@@ -33,8 +50,9 @@ export interface OwnerReadChecks {
  * `crm:read` is not a permission to read it
  * (`specs/143-crm-sales-opportunities/research.md` N-R3, N-R13): the number,
  * status and total of an Order are rendered only for a caller who also holds
- * `orders:read`, those of a Quote Request for one who holds `rfqs:handle`, and
- * a Product's name for one who holds `catalog:read`. Anybody else sees that a
+ * `orders:read`, those of a Quote Request for one who holds `rfqs:handle`, a
+ * Task's for one who holds `tasks:read`, and a Product's name for one who holds
+ * `catalog:read`. Anybody else sees that a
  * document is linked, or that something is mentioned, and no more. The system —
  * a subscriber, a worker — is nobody's session and is not narrowed.
  *
@@ -75,5 +93,7 @@ export function createOwnerReadChecks(permissions: PermissionReadPort): OwnerRea
     orders: createOwnerReadCheck(permissions, ORDERS_READ_PERMISSION),
     quoteRequests: createOwnerReadCheck(permissions, QUOTE_REQUESTS_READ_PERMISSION),
     products: createOwnerReadCheck(permissions, CATALOG_READ_PERMISSION),
+    tasks: createOwnerReadCheck(permissions, TASKS_READ_PERMISSION),
+    customFields: createOwnerReadCheck(permissions, CUSTOM_FIELDS_READ_PERMISSION),
   };
 }

@@ -19,6 +19,36 @@ import {
   BOX_PADDING_FIELD,
   DEFAULT_BOX_PROPS,
 } from '../fields/shared-fields.js';
+import { BUTTON_SPEC_OBJECT_FIELDS } from './Button.js';
+import { useCmsRenderAssets, useCmsRenderMediaBaseUrl } from './render-context.js';
+import { blockLink, blockLinkTarget, type LinkHrefEnv } from '../utils/link-href.js';
+
+/** R17 (T220): the most markers a map takes; the list shows each by its label or position. */
+const MAX_MARKERS = 50;
+
+/** A marker summarised in the list: its label, else its position. */
+function markerSummary(item: { label?: unknown; lat?: unknown; lng?: unknown } | undefined, index?: number): string {
+  const label = typeof item?.label === 'string' ? item.label.trim() : '';
+  if (label) return label;
+  if (typeof item?.lat === 'number' && typeof item?.lng === 'number') return `${item.lat}, ${item.lng}`;
+  return `${(index ?? 0) + 1}`;
+}
+
+/**
+ * R17 (T212): a marker's popup — its label, and its link (any kind; a URL
+ * stored before is a URL link) wrapping it, built as DOM nodes, never HTML.
+ */
+export function markerPopup(marker: { label?: string; link?: unknown }, env: LinkHrefEnv): HTMLElement | string {
+  const label = marker.label ?? '';
+  const link = blockLinkTarget(blockLink(marker.link, undefined), env);
+  if (!link || typeof document === 'undefined') return label;
+  const anchor = document.createElement('a');
+  anchor.href = link.href;
+  if (link.target) anchor.target = link.target;
+  if (link.target === '_blank') anchor.rel = 'noopener noreferrer';
+  anchor.textContent = label || link.href;
+  return anchor;
+}
 
 function ensureLeafletCss(): void {
   if (typeof document === 'undefined') return;
@@ -58,6 +88,11 @@ function LeafletMap({
   markers: MapProps['markers'];
   height: number;
 }): React.ReactElement {
+  const assets = useCmsRenderAssets();
+  const mediaBaseUrl = useCmsRenderMediaBaseUrl();
+  // Read by the map's effect without re-creating the map when the render context changes.
+  const linkEnv = useRef<LinkHrefEnv>({});
+  linkEnv.current = { assets, ...(mediaBaseUrl !== undefined ? { mediaBaseUrl } : {}) };
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<LeafletMapHandle | null>(null);
 
@@ -96,7 +131,7 @@ function LeafletMap({
               weight: 2,
             })
             .addTo(map)
-            .bindPopup(m.label ?? '');
+            .bindPopup(markerPopup(m, linkEnv.current) as never);
         }
 
         const invalidate = (): void => {
@@ -219,13 +254,16 @@ const MAP_FIELDS = {
   markers: {
     type: 'array' as const,
     label: 'Markers',
+    max: MAX_MARKERS,
+    getItemSummary: markerSummary,
     arrayFields: {
+      label: { type: 'text' as const, label: 'Label' },
       lat: { type: 'number' as const, label: 'Latitude' },
       lng: { type: 'number' as const, label: 'Longitude' },
-      label: { type: 'text' as const, label: 'Label' },
-      link: { type: 'text' as const, label: 'Link URL' },
+      // R17 (T212): the shared link (the admin gives it the page, product, category and file pickers).
+      link: { ...BUTTON_SPEC_OBJECT_FIELDS.link, label: 'Link (optional)' },
     },
-    defaultItemProps: { lat: 52.23, lng: 21.01, label: '', link: '' },
+    defaultItemProps: { lat: 52.23, lng: 21.01, label: '' },
   },
   margin: BOX_MARGIN_FIELD,
   padding: BOX_PADDING_FIELD,
@@ -245,10 +283,18 @@ const mapConfig: ComponentConfig<MapProps> = {
     markers: [],
     ...DEFAULT_BOX_PROPS,
   },
-  resolveFields: (data) => {
-    if (data.props.provider === 'google') return MAP_FIELDS;
-    const { googleApiKey: _key, ...rest } = MAP_FIELDS;
-    return rest;
+  // Filters the host's field set, so the admin's link picker survives.
+  resolveFields: (data, params) => {
+    const fields = { ...((params?.fields as typeof MAP_FIELDS | undefined) ?? MAP_FIELDS) } as Record<string, unknown>;
+    if (data.props.provider !== 'google') delete fields['googleApiKey'];
+    return fields as typeof MAP_FIELDS;
+  },
+  // R17 (T212): a marker's URL stored before is carried into its link when the map is opened.
+  resolveData: ({ props }) => {
+    const markers = props.markers ?? [];
+    if (!markers.some((marker) => typeof marker?.link === 'string')) return { props };
+    const carried = markers.map((marker) => (typeof marker?.link === 'string' ? { ...marker, link: blockLink(marker.link, undefined) } : marker));
+    return { props: { ...props, markers: carried } as never };
   },
   render: (props) =>
     props.puck?.isEditing ? <MapEditingRender {...props} /> : <MapPublishedRender {...props} />,

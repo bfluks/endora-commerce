@@ -8,7 +8,6 @@ import {
   Checkbox,
   Input,
   Label,
-  Textarea,
 } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { crmCalendarApi } from '../calendar-api.js';
@@ -27,6 +26,7 @@ import {
   type EventFormValues,
 } from '../lib/calendar/event-form.js';
 import { errorMessage } from '../lib/labels.js';
+import { ReferenceField } from './ReferenceField.js';
 import { ModalDialog } from '@endora-commerce/admin-kit/components';
 
 const NAME_MAX_LENGTH = 200;
@@ -252,12 +252,15 @@ export function EventDialog(props: EventDialogProps): ReactNode {
 
         <div className="space-y-1">
           <Label htmlFor={`${fieldId}-description`}>{t('events.field.description')}</Label>
-          <Textarea
+          {/* Formatted text without references: an Event's description is not indexed for them. */}
+          <ReferenceField
             id={`${fieldId}-description`}
             rows={3}
             value={values.description}
             maxLength={DESCRIPTION_MAX_LENGTH}
-            onChange={(changed): void => change({ description: changed.target.value })}
+            organizationId={null}
+            mentions={false}
+            onValueChange={(description): void => change({ description })}
           />
         </div>
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ApiError, apiClient } from '../../lib/api-client.js';
+import { ApiError, apiClient } from '../../lib/index.js';
 import { Combobox, type ComboboxOption } from '../../ui/combobox.js';
 
 /**

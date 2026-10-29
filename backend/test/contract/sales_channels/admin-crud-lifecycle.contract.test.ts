@@ -5,7 +5,7 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { SalesChannel } from '@endora-commerce/platform/kernel';
+import { AuditLogEntry, SalesChannel } from '@endora-commerce/platform/kernel';
 
 /**
  * T029-T033 — Admin HTTP contract for the Sales Channels module.
@@ -443,6 +443,127 @@ describe('admin sales-channels CRUD + lifecycle (T029-T033)', () => {
       cookies: adminCookie,
     });
     expect(detail.statusCode).toBe(404);
+  });
+
+  // -- Feature 154: open to anonymous visitors -----------------------------
+
+  it('POST without anonymousAccess creates an open channel; the flag is on list and detail', async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/sales-channels',
+      cookies: adminCookie,
+      payload: {
+        code: 'serwis-open',
+        name: { 'en-US': 'Open' },
+        languages: ['en-US'],
+        defaultLanguage: 'en-US',
+        currencies: ['PLN'],
+        defaultCurrency: 'PLN',
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect((created.json() as Record<string, unknown>)['anonymousAccess']).toBe(true);
+
+    const closed = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/sales-channels',
+      cookies: adminCookie,
+      payload: {
+        code: 'serwis-closed',
+        name: { 'en-US': 'Closed' },
+        languages: ['en-US'],
+        defaultLanguage: 'en-US',
+        currencies: ['PLN'],
+        defaultCurrency: 'PLN',
+        anonymousAccess: false,
+      },
+    });
+    expect((closed.json() as Record<string, unknown>)['anonymousAccess']).toBe(false);
+
+    const list = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/sales-channels',
+      cookies: adminCookie,
+    });
+    const items = (list.json() as { items: Array<{ code: string; anonymousAccess: boolean }> })
+      .items;
+    expect(items.find((c) => c.code === 'serwis-closed')?.anonymousAccess).toBe(false);
+    expect(items.find((c) => c.code === 'default')?.anonymousAccess).toBe(true);
+  });
+
+  it('PATCH anonymousAccess is audited before/after, bumps version, honours the version and reaches resolution', async () => {
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/sales-channels',
+      cookies: adminCookie,
+      payload: {
+        code: 'serwis-flag',
+        name: { 'en-US': 'Flag' },
+        languages: ['en-US'],
+        defaultLanguage: 'en-US',
+        currencies: ['PLN'],
+        defaultCurrency: 'PLN',
+      },
+    });
+    // Warm the channel cache so the change has something to invalidate.
+    const warm = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/storefront/sales-channel',
+      headers: { 'x-sales-channel': 'serwis-flag' },
+    });
+    expect((warm.json() as { data: { anonymousAccess: boolean } }).data.anonymousAccess).toBe(true);
+
+    const r = await h.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/sales-channels/serwis-flag',
+      cookies: adminCookie,
+      payload: { expectedVersion: 1, anonymousAccess: false },
+    });
+    expect(r.statusCode).toBe(200);
+    const body = r.json() as Record<string, unknown>;
+    expect(body['anonymousAccess']).toBe(false);
+    expect(body['version']).toBe(2);
+
+    const stale = await h.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/sales-channels/serwis-flag',
+      cookies: adminCookie,
+      payload: { expectedVersion: 1, anonymousAccess: true },
+    });
+    expect(stale.statusCode).toBe(412);
+
+    const entry = await h.em().findOne(
+      AuditLogEntry,
+      {
+        objectType: 'sales_channel',
+        objectId: body['id'] as string,
+        action: 'sales_channel.identity.changed',
+      },
+      { orderBy: { actedAt: 'desc' } },
+    );
+    // A Command Bus row (Principle XIII): the snapshots are the row's own
+    // before/after columns, and the actor is the signed-in administrator.
+    expect(entry?.actorAdminUserId).toBeTruthy();
+    expect(entry?.stateBefore).toMatchObject({ anonymousAccess: true, version: 1 });
+    expect(entry?.stateAfter).toMatchObject({ anonymousAccess: false, version: 2 });
+
+    const identity = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/storefront/sales-channel',
+      headers: { 'x-sales-channel': 'serwis-flag' },
+    });
+    expect((identity.json() as { data: { anonymousAccess: boolean } }).data.anonymousAccess).toBe(
+      false,
+    );
+    const refused = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/catalog/products',
+      headers: { 'x-sales-channel': 'serwis-flag' },
+    });
+    expect(refused.statusCode).toBe(403);
+    expect((refused.json() as { error: { code: string } }).error.code).toBe(
+      ERROR_CODES.SALES_CHANNEL_SIGN_IN_REQUIRED,
+    );
   });
 
   // -- Auth gate ------------------------------------------------------------

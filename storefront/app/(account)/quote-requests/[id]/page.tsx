@@ -17,6 +17,9 @@ import { formatMoney } from '../../../../lib/i18n/money';
 import { rfqValidity, rfqValidityGate } from '../../../../lib/quote-requests/validity';
 import { RfqValidityMeta } from '../../../../components/rfq/RfqValidityMeta';
 import { RfqDetailActions } from '../../../../components/rfq/RfqDetailActions';
+import { lineAmountHalfUp, unitPriceDisplayText } from '@endora-commerce/contracts';
+import { GroupedLineRows, quoteSectionTotals } from '../../../../components/line-groups/GroupedLineRows';
+import { describeRfqDiff } from '../../../../lib/quote-requests/describe-diff';
 import type { Metadata } from 'next';
 
 /**
@@ -88,17 +91,16 @@ export default async function QuoteRequestDetailPage({
     validity,
   });
 
-  const total = rfq.items.every((it) => it.agreedUnitPrice !== null)
-    ? rfq.items.reduce((s, it) => s + (it.agreedUnitPrice ?? 0) * it.quantity, 0)
-    : rfq.items.every((it) => it.desiredUnitPrice !== null)
-      ? rfq.items.reduce((s, it) => s + (it.desiredUnitPrice ?? 0) * it.quantity, 0)
-      : null;
   const currency = rfq.items[0]?.lineCurrency ?? 'PLN';
   // Quote prices are net; surface VAT + gross. `rfq.taxRate` is the flat rate
-  // resolved server-side from the organization's VAT status + tax rules.
+  // resolved server-side from the organization's VAT status + tax rules. The
+  // section rule, for the whole quote: agreed prices on every line, else desired
+  // prices on every line, VAT on the net total — exact (issue #417).
   const taxRate = rfq.taxRate ?? 0;
-  const taxTotal = total !== null ? total * taxRate : null;
-  const grossTotal = total !== null && taxTotal !== null ? total + taxTotal : null;
+  const totals = quoteSectionTotals(rfq.items, taxRate);
+  const total = totals.net;
+  const taxTotal = totals.vat;
+  const grossTotal = totals.gross;
   const fmt = (n: number): string => formatMoney(n, currency);
 
   return (
@@ -172,7 +174,7 @@ export default async function QuoteRequestDetailPage({
       ) : null}
 
       {rfq.awaitingCustomerRevisionAcceptance && rfq.comparisonAgainstLastSeen ? (
-        <ComparisonBlock comparison={rfq.comparisonAgainstLastSeen} />
+        <ComparisonBlock comparison={rfq.comparisonAgainstLastSeen} locale={locale} />
       ) : null}
 
       <div
@@ -195,28 +197,42 @@ export default async function QuoteRequestDetailPage({
             </tr>
           </thead>
           <tbody>
-            {rfq.items.map((it) => {
-              const lineTotal =
-                it.agreedUnitPrice !== null
-                  ? it.agreedUnitPrice * it.quantity
-                  : it.desiredUnitPrice !== null
-                    ? it.desiredUnitPrice * it.quantity
-                    : null;
-              return (
-                <tr key={it.id}>
-                  <td>
-                    <strong>{it.productName}</strong>
-                    {it.lineNote ? <div className="muted" style={{ fontSize: 11 }}>{it.lineNote}</div> : null}
-                  </td>
-                  <td>{it.quantity}</td>
-                  <td>{it.desiredUnitPrice !== null ? it.desiredUnitPrice.toFixed(2) : '—'}</td>
-                  <td>{it.agreedUnitPrice !== null ? it.agreedUnitPrice.toFixed(2) : '—'}</td>
-                  <td style={{ fontWeight: 600 }}>
-                    {lineTotal !== null ? formatMoney(lineTotal, it.lineCurrency) : '—'}
-                  </td>
-                </tr>
-              );
-            })}
+            {/*
+              Feature 159 — the groups the representative arranged, each headed
+              and summarised by this page's own totals rule; a quote with no
+              group renders exactly these rows.
+            */}
+            <GroupedLineRows
+              groups={rfq.itemGroups ?? []}
+              lines={rfq.items}
+              columnCount={5}
+              locale={locale}
+              currency={currency}
+              taxRate={taxRate}
+              renderRow={(it) => {
+                const lineTotal =
+                  it.agreedUnitPrice !== null
+                    ? Number(lineAmountHalfUp(it.agreedUnitPrice, it.quantity))
+                    : it.desiredUnitPrice !== null
+                      ? Number(lineAmountHalfUp(it.desiredUnitPrice, it.quantity))
+                      : null;
+                return (
+                  <tr key={it.id}>
+                    <td>
+                      <strong>{it.productName}</strong>
+                      {it.lineNote ? <div className="muted" style={{ fontSize: 11 }}>{it.lineNote}</div> : null}
+                    </td>
+                    <td>{it.quantity}</td>
+                    {/* Unit prices: their significant places, up to four (owner ruling of 2026-10-25). */}
+                    <td>{it.desiredUnitPrice !== null ? unitPriceDisplayText(it.desiredUnitPrice) : '—'}</td>
+                    <td>{it.agreedUnitPrice !== null ? unitPriceDisplayText(it.agreedUnitPrice) : '—'}</td>
+                    <td style={{ fontWeight: 600 }}>
+                      {lineTotal !== null ? formatMoney(lineTotal, it.lineCurrency) : '—'}
+                    </td>
+                  </tr>
+                );
+              }}
+            />
           </tbody>
           {total !== null ? (
             <tfoot>
@@ -305,8 +321,10 @@ export default async function QuoteRequestDetailPage({
 
 function ComparisonBlock({
   comparison,
+  locale,
 }: {
   comparison: NonNullable<RfqDetail['comparisonAgainstLastSeen']>;
+  locale: string;
 }): ReactNode {
   if (comparison.diff.length === 0) return null;
   return (
@@ -324,26 +342,11 @@ function ComparisonBlock({
       </strong>
       <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
         {comparison.diff.map((d, i) => (
-          <li key={i}>{describeDiff(d)}</li>
+          <li key={i}>{describeRfqDiff(d, locale)}</li>
         ))}
       </ul>
     </div>
   );
-}
-
-function describeDiff(d: NonNullable<RfqDetail['comparisonAgainstLastSeen']>['diff'][number]): string {
-  switch (d.kind) {
-    case 'header_note':
-      return `Uwagi: „${d.before ?? '—'}” → „${d.after ?? '—'}”`;
-    case 'line_added':
-      return `Dodano: ${d.productName} × ${d.quantity}${d.agreedUnitPrice !== null ? ` po ${d.agreedUnitPrice.toFixed(2)}` : ''}`;
-    case 'line_removed':
-      return `Usunięto: ${d.productName}`;
-    case 'line_quantity':
-      return `${d.productName}: ilość ${d.before} → ${d.after}`;
-    case 'line_agreed_unit_price':
-      return `${d.productName}: cena ${d.before !== null ? d.before.toFixed(2) : '—'} → ${d.after !== null ? d.after.toFixed(2) : '—'}`;
-  }
 }
 
 function describeEvent(t: string): string {
@@ -398,7 +401,7 @@ async function acceptAction(formData: FormData): Promise<void> {
   try {
     await acceptRevision(session, rfqId, expectedRevisionNumber);
   } catch (err) {
-    const msg = err instanceof StorefrontApiError ? err.message : 'Nie udało się zaakceptować zmian.';
+    const msg = err instanceof StorefrontApiError ? err.detail : 'Nie udało się zaakceptować zmian.';
     redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(msg)}`);
   }
   redirect(`/quote-requests/${rfqId}`);
@@ -414,7 +417,7 @@ async function rejectAction(formData: FormData): Promise<void> {
   try {
     await rejectRevision(session, rfqId, expectedRevisionNumber, reason || undefined);
   } catch (err) {
-    const msg = err instanceof StorefrontApiError ? err.message : 'Nie udało się odrzucić zmian.';
+    const msg = err instanceof StorefrontApiError ? err.detail : 'Nie udało się odrzucić zmian.';
     redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(msg)}`);
   }
   redirect(`/quote-requests/${rfqId}`);
@@ -430,7 +433,7 @@ async function convertAction(formData: FormData): Promise<void> {
     redirect(checkoutUrl);
   } catch (err) {
     if (err instanceof StorefrontApiError) {
-      redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(err.message)}`);
+      redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(err.detail)}`);
     }
     throw err;
   }
@@ -445,7 +448,7 @@ async function resubmitAction(formData: FormData): Promise<void> {
     const created = await resubmitRfq(session, rfqId);
     redirect(`/quote-requests/${created.id}`);
   } catch (err) {
-    const msg = err instanceof StorefrontApiError ? err.message : 'Nie udało się złożyć ponownie.';
+    const msg = err instanceof StorefrontApiError ? err.detail : 'Nie udało się złożyć ponownie.';
     redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(msg)}`);
   }
 }

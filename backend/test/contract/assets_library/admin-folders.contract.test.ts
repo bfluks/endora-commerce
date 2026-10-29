@@ -1,4 +1,5 @@
-import { AssetFolder } from '../../helpers/package-entities.js';
+import { Asset, AssetFolder } from '../../helpers/package-entities.js';
+import { overrideAssetSetting } from '../../helpers/crm-attachment-upload.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -177,5 +178,123 @@ describe('admin folder CRUD (T053)', () => {
     const childRow = await fresh.findOne(AssetFolder, { id: child });
     expect(childRow).toBeTruthy();
     expect(childRow!.parentId ?? null).toBeNull();
+  });
+
+  // specs/156-asset-stable-url/ owner ruling S4 — the folder delete confirmation
+  // names how many files in the subtree have a permalink: live ones, any depth.
+  it('counts the permalinked, non-deleted assets of a folder subtree', async () => {
+    const stamp = Date.now();
+    const create = async (parentId: string | null, name: string) => {
+      const r = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/assets/folders',
+        cookies: adminCookie,
+        payload: { parentId, name },
+      });
+      return (r.json() as { data: { id: string } }).data.id;
+    };
+    const parent = await create(null, `as156-count-${stamp}`);
+    const child = await create(parent, `as156-count-leaf-${stamp}`);
+    const grandchild = await create(child, `as156-count-deep-${stamp}`);
+    const sibling = await create(null, `as156-count-other-${stamp}`);
+    const em = h.em();
+    const forge = (folderId: string, permalink: string | null, deleted = false) =>
+      em.create(Asset, {
+        kind: 'pdf',
+        filename: 'as156-count.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: '0',
+        storageUrl: 'https://example.com/as156-count.pdf',
+        storageLocator: 'https://example.com/as156-count.pdf',
+        storageBackend: 'legacy',
+        visibility: 'public',
+        folderId,
+        permalink,
+        ...(deleted ? { deletedAt: new Date() } : {}),
+      });
+    const rows = [
+      forge(parent, `as156-${stamp}/direct.pdf`),
+      forge(parent, null),
+      forge(grandchild, `as156-${stamp}/deep.pdf`),
+      forge(child, `as156-${stamp}/deleted.pdf`, true),
+      forge(sibling, `as156-${stamp}/elsewhere.pdf`),
+    ];
+    await em.flush();
+    try {
+      const count = async (folderId: string) => {
+        const r = await h.app.inject({
+          method: 'GET',
+          url: `/api/v1/admin/assets/folders/${folderId}/permalink-count`,
+          cookies: adminCookie,
+        });
+        expect(r.statusCode, r.body).toBe(200);
+        return (r.json() as { data: { permalinkedAssets: number } }).data.permalinkedAssets;
+      };
+      expect(await count(parent)).toBe(2);
+      expect(await count(child)).toBe(1);
+      expect(await count(sibling)).toBe(1);
+      const missing = await h.app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/assets/folders/0b8f3c1e-2d4a-4b6c-8e9f-000000000000/permalink-count',
+        cookies: adminCookie,
+      });
+      expect(missing.statusCode).toBe(404);
+    } finally {
+      await h.em().fork().nativeDelete(Asset, { id: { $in: rows.map((r) => r.id) } });
+    }
+  });
+
+  // specs/156-asset-stable-url/ T042 — a recursive delete gives every asset in
+  // the subtree the same window (SC-007).
+  it('gives every asset in a recursively deleted subtree the same deletion time and window', async () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const create = async (parentId: string | null, name: string) => {
+      const r = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/assets/folders',
+        cookies: adminCookie,
+        payload: { parentId, name },
+      });
+      return (r.json() as { data: { id: string } }).data.id;
+    };
+    const parent = await create(null, `as156-tree-${Date.now()}`);
+    const child = await create(parent, `as156-leaf-${Date.now()}`);
+    const em = h.em();
+    const forge = (folderId: string) =>
+      em.create(Asset, {
+        kind: 'image',
+        filename: 'as156-tree.png',
+        mimeType: 'image/png',
+        sizeBytes: '0',
+        storageUrl: 'https://example.com/as156-tree.png',
+        storageLocator: 'https://example.com/as156-tree.png',
+        storageBackend: 'legacy',
+        visibility: 'public',
+        folderId,
+      });
+    const direct = forge(parent);
+    const nested = forge(child);
+    await em.flush();
+    const restore = await overrideAssetSetting(h, 'assets.soft_delete_retention_days', 7);
+    try {
+      const del = await h.app.inject({
+        method: 'DELETE',
+        url: `/api/v1/admin/assets/folders/${parent}`,
+        cookies: adminCookie,
+        payload: { ifNonEmpty: 'deleteRecursively' },
+      });
+      expect(del.statusCode, del.body).toBe(200);
+      const fresh = h.em().fork({ clear: true });
+      const rows = await fresh.find(Asset, { id: { $in: [direct.id, nested.id] } });
+      expect(rows).toHaveLength(2);
+      const [a, b] = rows;
+      expect(a!.deletedAt?.toISOString()).toBe(b!.deletedAt?.toISOString());
+      for (const row of rows) {
+        expect(row.purgeAfterAt!.getTime() - row.deletedAt!.getTime()).toBe(7 * DAY_MS);
+      }
+    } finally {
+      await restore();
+      await h.em().nativeDelete(Asset, { id: { $in: [direct.id, nested.id] } });
+    }
   });
 });

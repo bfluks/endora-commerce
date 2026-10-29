@@ -1,5 +1,156 @@
 # @endora-commerce/mod-returns
 
+## 0.108.0
+
+### Minor Changes
+
+- 0bd5a2b: Returns honour the per-line returnable flag recorded at purchase; complaints stay unrestricted.
+
+  - **Behaviour change for API clients.** `GET /api/v1/orders/:orderId/returnable` gives each line `returnable` and, when it may not be returned, `notReturnableReason: 'product_not_returnable'`. **`eligible: false` with the new reason `no_returnable_lines` still allows a complaint** — `eligible` answers for `return`-kind cases only.
+  - `POST /api/v1/returns` with `kind: 'return'` naming a line recorded as not returnable is refused with `422 RETURN_LINE_NOT_RETURNABLE` (`details.productName`, `orderItemIds[]`, `lines[]`). Complaints are never restricted.
+  - **Behaviour change — a complaint on a non-returnable line refunds nothing by default.** A `complaint` line recorded as not returnable at purchase is stored with `approvedRefundAmount` `0`; its `defaultRefundAmount` stays the amount paid (the settlement cap). The admin settlement form now pre-fills each line from its stored approved amount rather than from the amount paid, and the case view marks such a line **Not returnable at purchase** (`mod-i18n` `core` key `returns.detail.notReturnableAtPurchase`, English and Polish). The case detail's items carry `returnableAtPurchase`, read through `OrderReturnContextPort`.
+  - **Duplicate order lines in one request are summed** per order line, for both kinds, and checked against the remaining quantity (`qty_exceeds_returnable`). An unknown line is reported before any quantity error.
+  - Lines of orders placed before this release carry no recorded value and count as returnable. **FR-034: products default to not returnable, so lines of orders placed after the upgrade are not returnable until their products are marked** in the catalogue (Bulk edit → Returnable); orders placed before the upgrade are unaffected.
+  - New bundle sentence `errors.RETURN_LINE_NOT_RETURNABLE` in English and Polish.
+
+- 357a13d: A return's default refunds are cumulative over the order's live cases (issue #417, review of PR #423). For each group of what the order charged — a VAT rate of an order placed under the per-rate method, a line of an order placed before it — a case refunds the group's amount for everything returned so far, this case included, minus what earlier returns already refunded in it; capped at what remains of the order's stored products total. No sequence of returns refunds more than was paid (two returns of 1 × 1.07 at 23 % refund 1.32 + 1.31 = 2.63, not 2.64), and a return that completes the order refunds exactly what it charged. Only returnable lines enter the rule; a non-returnable complaint line gets its own amount as the cap an operator may approve up to. What was paid is read from the order's stored figures (`OrderReturnContext.vatMethod`, `productsPaidTotal`, each line's stored `lineTotal`), never recomputed. `defaultRefunds` is replaced by `caseDefaultRefunds`.
+- cabb2a0: Return refunds account for the order-level discount, include complaints, and are created one at a time per order (issue #417, review of PR #423).
+
+  - **The discount**: an order takes its discount off the gross, so a return refunds the goods less the share of the discount they carried — shared over the order's rate groups (lines, for an order placed before 0.108.0) by their amounts, and carried in proportion to what came back. A full return of an order that captured 83.00 for 100.00 net + 23.00 VAT − 50.00 discount + 10.00 delivery refunds 73.00, where it refunded 123.00. Each line records the discount its default refund carries (new column `return_case_items.default_discount_amount`, migration `Migration20261024T174052ReturnsCaseItemDiscount`, default 0), and the settlement passes it to the correction in proportion to the amount approved (new `carriedDiscount`).
+  - **Complaints**: a complaint on a line that was not returnable enters the same cumulative accounting and the same cap, so a return and a complaint can no longer refund more than was paid (0.08 against 0.07). `caseDefaultRefunds` answers `{ refund, discount }` per line and takes the order's `discountTotal`.
+  - **The target**: a case that completes the order — every unit of every line back, returned or complained about — refunds exactly what remains of the stored products total (subtotal + tax − discount); for an order placed before 0.108.0 that may be a cent off the sum of its stored line totals, and the money charged decides. The correction credits exactly that refund.
+  - **Concurrency**: creating a case takes a transaction-scoped advisory lock keyed by the order and reads the order's earlier cases once, inside that transaction, so two cases created at once no longer both see none (three simultaneous returns of the last unit created three cases).
+
+- a4a677b: A return case's default refunds follow the one VAT method (owner ruling of 2026-10-24, issue #417; new `defaultRefunds`): the returned nets — net unit price × returned quantity — with VAT per rate on their sum, rounded once, and each line its net plus its share. A full return refunds exactly what the invoice charged for those lines (9.05 × 3 at 8 % is 29.32, where the paid unit gross × 3 was 29.31); a partial return applies the same rule to the returned quantity. `defaultRefundForQuantity` is removed.
+
+### Patch Changes
+
+- 7a9678c: Refund amounts are computed in exact decimal arithmetic (issue #417). An approved amount is rounded half-up on its decimal digits (new `approvedAmount`) before it is capped, summed and stored: a typed 1.005 was the refund 1.00. `exceedsCap` compares the amount at the two places it would be stored at, so 100.005 against a 100.00 cap is refused, where the half-cent tolerance on doubles let it through; `defaultRefundForQuantity` and `sumApproved` are exact. A return delivery method's `returnCost` is stored half-up.
+- cb35881: A settlement refunds and corrects one set of lines, and the settlements of one order run one at a time (issue #417, review of PR #423).
+
+  - **`@endora-commerce/mod-returns`**: the settlement's total covers every line of the case — a line the request leaves out counts at its stored `approvedRefundAmount`, as the correction already did — so a request naming one of two discounted lines no longer refunds 113.00 while its correction credits 246.00 of goods (46.00 VAT) less 20.00 of discount. A settlement takes the same per-order advisory lock as case creation, on a connection of its own, so two cases of one order settled at once no longer both read the same earlier corrections (2 × 0.03 at 23 % credited 0.02 VAT of the 0.01 invoiced). One that waits more than 15 seconds answers `409` (`details.code: settlement_in_progress`) with nothing moved.
+  - **`@endora-commerce/mod-invoices`**: `correctionAmounts` credits the goods at `amount + discount` and the discount back only when the correction credits exactly what its lines add up to; any other total is credited as goods in line order, with no discount line.
+
+- a4cd906: A correction that cannot be made never follows money that moved (issue #417, review of PR #423).
+
+  - `CorrectiveInvoicePort` gains `validateCorrection(input)` (`@endora-commerce/contracts`): it refuses, writing nothing, what `createCorrection` would refuse for the same input. `invoices` implements both from one preparation step.
+  - The returns settlement builds its correction once and validates it **before** the refund or the credit top-up; a refusal leaves the case in `received` with nothing moved. With `invoices` switched off, a settlement asking for a correction is refused before the credit, where it used to credit first and refuse after.
+  - A cancelled correction no longer counts against the cap or the cumulative nets of later corrections.
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+  - @endora-commerce/email-components@0.108.0
+
+## 0.107.0
+
+### Patch Changes
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [ad55813]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+  - @endora-commerce/email-components@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

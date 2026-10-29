@@ -24,6 +24,7 @@ The list page shows every channel registered on the platform. The system-default
    - **Default language** — a searchable select offering only the languages selected above. Removing the language that is the current default empties this field: the form says so and cannot be saved until you choose a default again — it never picks one for you.
    - **Currencies** / **Default currency** — the same two controls over the Dictionary's currencies, with the same rule for the default.
    - **Active** *(default `true`)*.
+   - **Open to anonymous visitors** *(default on)* — see [Opening and closing a store to anonymous visitors](#anonymous-access).
 3. **Create channel.** The system refuses if the code is already in use, or if any language / currency code is unknown.
 
 ## Editing an existing channel
@@ -31,6 +32,36 @@ The list page shows every channel registered on the platform. The system-default
 1. Click a channel's `code` in the list.
 2. The edit page loads its identity. Make changes; click **Save changes**.
 3. If another administrator changed the same channel between your load and save, the save returns a 412 conflict banner with the current version. Refresh the page to pull the latest state and re-apply your changes.
+
+## Opening and closing a store to anonymous visitors {#anonymous-access}
+
+The **Open to anonymous visitors** checkbox on the channel form decides who may use the channel's storefront:
+
+- **On** (the default, and how every channel worked before the option existed) — anyone may browse the store; signed-in customers may use it when their Organization is assigned to the channel.
+- **Off** — the store serves signed-in customers only. A visitor who is not signed in is taken to the sign-in page from every page of the store, with a notice that the store is available to signed-in business customers; nothing of the catalogue, prices or content is served to them. Business registration stays available on the sign-in page, and an Organization registered there is assigned this channel. Individual (B2C) self-registration is not offered on a closed store.
+
+The list of channels marks a closed channel with a **Sign-in required** badge.
+
+Whether anonymous visitors see **prices** is a separate setting, and it is not on this form: the
+*unauthenticated display mode* (`pricing.unauthenticated_display_mode`). The hint under the
+checkbox links to *Pricing settings*, where it is set for every channel; the *Settings* screen sets
+it for one channel. *None* hides prices until sign-in. A product or category display-mode override
+takes precedence over it, for anonymous visitors too. Signed-in customers see prices according to
+their own display mode. Channels used to carry a price-visibility flag of their own, which also hid
+prices from signed-in customers; it was retired, and every channel that had it off was given
+*None* for anonymous visitors, so they still see no prices there.
+
+One thing to keep in mind when closing a store:
+
+- **Moderation decides who gets in by registering.** An Organization registered on a closed store is assigned that store's channel. With automatic moderation it is active at once, so anyone who registers a business there gets access; with manual moderation nobody gets in until an operator approves the Organization.
+
+## Deciding which customers may use a store
+
+A signed-in customer may use a store only when their Organization is assigned to the store's channel. Assignments are made on the Organization's page, in its **Sales channels** panel (see the Organizations module documentation); an Organization must keep at least one channel. A customer whose Organization is not assigned is refused at sign-in with *"This account does not have access to this store."* and, if the assignment is removed while they are signed in, sees a *No access to this store* screen listing the stores they can use.
+
+That list links each store when the channel's **Storefront URL** setting is filled in; otherwise it shows the store's name only.
+
+When this rule was introduced, every existing Organization was assigned the system-default channel and every channel it already had orders on, so no existing customer lost access to a store they had bought in.
 
 ## Deactivating a channel
 
@@ -68,7 +99,14 @@ To run two storefronts on the same backend (e.g. `serwisA.com` and `serwisB.com`
 SALES_CHANNEL_HOST_MAP=serwisA.com=channel-a,serwisB.com=channel-b
 ```
 
-Each storefront request resolves to its host's channel automatically; no header is needed. Each storefront then sees only the products / customers / prices that belong to its channel.
+The host in the map is the one the **backend** is called on, so give each storefront its own address for the backend (its `BACKEND_BASE_URL` and `NEXT_PUBLIC_API_BASE_URL`) and map that address; each storefront's calls then resolve to its channel and no header is needed. Alternatively, put a reverse proxy in front of each storefront that sets the `X-Sales-Channel` header. Whichever way the channel is resolved, the storefront then names it on every call it makes to the backend, including the calls its pages make from the browser.
+
+On each storefront:
+
+- **products, categories, prices and promotions** are the ones bound to its channel;
+- **anonymous visitors** are served only when the channel is open to anonymous visitors;
+- **signed-in customers** are served only when their Organization is assigned to the channel;
+- **baskets** belong to the store they were filled in: a customer who shops on two stores has a basket on each, priced by that store.
 
 ## What admins cannot do
 

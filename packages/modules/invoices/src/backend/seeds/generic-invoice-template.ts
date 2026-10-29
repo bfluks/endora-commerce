@@ -124,10 +124,15 @@ function genericTree() {
           amountInWordsItalics: true,
           showPaid: true,
           showAmountDue: true,
+          showOverpayment: true,
           showGross: true,
           showAmountInWords: true,
           labelPaid: 'Paid',
           labelAmountDue: 'Amount due',
+          // Empty on purpose (issue #428): the row is labelled in the language
+          // the amounts are written in — Polish on a Polish invoice —
+          // unless a template sets its own label.
+          labelOverpayment: '',
           labelGross: 'Total',
           labelInWords: 'In words',
           marginTop: 0,

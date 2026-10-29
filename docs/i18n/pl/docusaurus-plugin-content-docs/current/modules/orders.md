@@ -52,9 +52,8 @@ wybrany kanał nie sprzedaje, jest odrzucany odpowiedzią `404 PRODUCT_NOT_FOUND
 a produkt, który sprzedaje, jest przyjmowany, nawet jeśli kanał domyślny go nie
 sprzedaje. Tworzenie zamówienia w panelu przyjmuje natomiast kanał, który istnieje,
 ale jest wyłączony — sklep odrzuca taki kanał odpowiedzią `422`
-`order_sales_channel_mismatch` — a produkt spoza asortymentu wybranego kanału jest
-odrzucany dopiero po wyczyszczeniu koszyka klienta, więc koszyk ten nie zostaje
-przywrócony.
+`order_sales_channel_mismatch`. Produkt spoza asortymentu wybranego kanału jest
+odrzucany, zanim koszyk klienta zostanie naruszony, więc koszyk pozostaje bez zmian.
 
 Z kanału zamówienia odczytywane są:
 
@@ -309,10 +308,14 @@ modułu.
 ## Encje
 
 `Order`, `OrderItem`, `Payment`, `OrderStatus`, `OrderStatusTransition`, `OrderTransitionEffect`,
-`OrderComment`, `OrderListSavedView` oraz kolumna `organizations.order_confirmation_emails` (właściciel:
+`OrderComment`, `OrderListSavedView`, `OrderItemGroup` (grupy pozycji zamówienia — zob. *Grupy
+pozycji*) oraz kolumna `organizations.order_confirmation_emails` (właściciel:
 `organizations`, odczyt przez port). `OrderItem` zapisuje kopię produktu, wariantu, ceny
 jednostkowej i stawki podatku z chwili złożenia zamówienia, aby historyczne zamówienia nie zmieniały
-się po zmianach cen i katalogu.
+się po zmianach cen i katalogu. Kopiuje też `price_source` pozycji koszyka — `agreed`, `base`,
+`catalogue`, `buyer` albo `sale`, czyli krok wyceny w cennikach (albo uzgodnienie z oferty), który
+ustalił cenę — do `order_items.price_source`; kolumna jest przechowywana na potrzeby raportowania i
+przyszłej reguły promocji i nie wchodzi do odpowiedzi API zamówień.
 
 ## Emitowane zdarzenia
 
@@ -358,6 +361,8 @@ złożenie zamówienia niczego nie ogłasza.
   `…/bulk/print-invoices`.
 - **Komentarze** — `…/:id/comments` dla administratora i klienta, z flagą widoczności dla klienta i
   powiadomieniem; zablokowane w zamówieniach o statusie końcowym.
+  Platforma zapisuje tu też wewnętrzne **notatki systemowe** o wartościach pól niestandardowych,
+  których nie przeniesiono do zamówienia — zob. *Notatka systemowa* niżej.
 - **Ponowne zamówienie** — `…/:id/reorder` odtwarza koszyk (zależnie od ustawienia
   `orders.reorder_enabled`); **kopia jako zapytanie ofertowe** — `…/:id/clone-to-quote`.
 
@@ -376,8 +381,9 @@ od razu pokazuje sekcję **Pozycje**.
   zakładce **Aktywne**: katalog podzielony na strony, z zakładkami statusów i ich licznikami,
   filtrem typu i wyszukiwaniem po SKU, slugu lub nazwie. Zaznaczenie przetrwa zmianę strony,
   rozmiaru strony i filtrów, a **Dodaj N** dodaje każdy zaznaczony produkt jako pozycję o ilości 1
-  — najwyżej 200 naraz. Produkty nadrzędne typu grouped i bundle, produkty robocze i nieaktywne
-  oraz produkty, które już są w zamówieniu, są widoczne z powodem i nie da się ich zaznaczyć.
+  — najwyżej 200 naraz. Produkty nadrzędne typu grouped i bundle oraz produkty robocze i nieaktywne
+  są widoczne z powodem i nie da się ich zaznaczyć. Produkt, który już jest w zamówieniu, można
+  dodać ponownie: staje się osobną pozycją (na przykład w innej grupie).
 - **Szybkie dodawanie po nazwie lub SKU**, obok, dopisuje jeden produkt według tych samych zasad.
 
 Bez uprawnienia `catalog:read` obie te opcje są nieaktywne i każda pokazuje podpowiedź.
@@ -398,13 +404,102 @@ jeden kod — pierwszy pasujący, w tej kolejności — i pokazuje jeden powód:
 | `PRODUCT_NOT_VISIBLE_TO_CUSTOMER` | *Klient nie widzi tego produktu* | Widoczność produktu albo jego lista dozwolonych organizacji wyklucza organizację klienta: zmień je przy produkcie w katalogu, wybierz innego klienta albo usuń pozycję. |
 | `PRODUCT_NOT_IN_SALES_CHANNEL` | *Poza asortymentem tego kanału sprzedaży* | Wybierz kanał sprzedaży, którego asortyment zawiera produkt, dodaj produkt do asortymentu tego kanału albo usuń pozycję. |
 | `QUOTE_ONLY` | *Brak ceny* | Cena produktu dla tego klienta jest dostępna tylko w ofercie: usuń pozycję albo utwórz zapytanie ofertowe. |
+| `UNPRICED` | *Brak ceny* | Żaden cennik nie wycenia produktu dla tego klienta, kanału i waluty — nie ma nawet ceny bazowej: ustaw cenę bazową, usuń pozycję albo utwórz zapytanie ofertowe. |
+| `BELOW_MINIMUM_QUANTITY` | *Poniżej minimum N szt.* | Łączna ilość produktu w zamówieniu jest poniżej jego minimalnej ilości zamówienia: zwiększ ilość albo usuń pozycję. |
 
-Kod, którego ekran nie zna, też jest pokazywany jako *Brak ceny*. Pozostałe pozycje zachowują
+`BELOW_MINIMUM_QUANTITY` niesie `minimum` i jest oceniany tylko na pozycjach, które przeszły
+sprawdzenia powyżej, z sumowaniem pozycji każdego produktu. Pozycje są wyceniane z cenników dokładnie
+tak, jak wyceniłby je koszyk klienta — jednym zbiorczym wywołaniem dla wszystkich pozycji, przy
+ilości i wariancie każdej z nich — więc utworzone zamówienie ma ceny pokazane w podglądzie. Kod, którego ekran nie zna, też jest pokazywany jako *Brak ceny*. Pozostałe pozycje zachowują
 ceny, a podsumowanie liczy tylko wycenione. Wycena sprawdza asortyment dokładnie tego kanału
 sprzedaży, który wskazuje żądanie; `salesChannelId`, który nie wskazuje żadnego kanału, jest
 odrzucany z `404 NOT_FOUND`, a ekran pokazuje *Nie udało się przeliczyć cen*, nie oznaczając żadnej
 pozycji. Produkt usunięty miękko jest wyceniany jak dotąd. Utworzone zamówienie zawiera dokładnie
-pozycje i ilości widoczne na ekranie, w niezmienionym kształcie żądania `POST /api/v1/admin/orders`.
+pozycje i ilości widoczne na ekranie, w treści żądania `POST /api/v1/admin/orders`.
+
+**Najwyżej 200 pozycji.** `POST /api/v1/admin/orders` i `POST /api/v1/admin/orders/preview` w
+pierwszym kroku odrzucają więcej niż 200 pozycji, z kodem `422 VALIDATION_FAILED` i `details: {
+code: 'too_many_items', maximum: 200 }`, zanim oceniona zostanie którakolwiek pozycja. Tworzenie
+zamówienia odrzuca też żądanie, w którym łączna ilość produktu jest poniżej jego minimum, z błędem
+minimum i `details.lines[]` kluczowanym `index` pozycji.
+
+**Grupy pozycji.** Pozycje na ekranie można podzielić na nazwane grupy — *Dodaj grupę*, zmiana
+nazwy, usunięcie, przeciąganie, klawiatura i menu *Przenieś do grupy* przy każdej pozycji, dokładnie
+tak jak w zakładce *Modyfikacja* zapytania ofertowego; *Dodaj produkt* danej grupy dodaje do tej
+grupy, każde inne dodanie — do sekcji *Bez grupy*. Każda grupa pokazuje liczbę pozycji oraz wartość
+netto, VAT i brutto obok bieżącego podsumowania cen; w tym celu wycena zwraca dla każdej wycenionej
+pozycji `taxRate` (ułamek, `0.23`, z tego samego źródła co suma podatku w podsumowaniu; brak go przy
+pozycji, której nie da się wycenić), a VAT grupy to suma netto × stawka po jej pozycjach.
+Przeniesienie pozycji między grupami nie wycenia zamówienia ponownie. Każda grupa musi mieć nazwę,
+zanim przycisk **Utwórz zamówienie** stanie się aktywny. Co zamówienie zachowuje, opisuje sekcja
+*Grupy pozycji* niżej.
+
+**Podziel pozycję.** Pozycja o ilości 2 lub większej ma obok *Przenieś do grupy* przycisk *Podziel
+pozycję*. Pyta on o ilość do przeniesienia na nową pozycję (od 1 do ilości pozycji minus 1) i o grupę
+nowej pozycji — domyślnie tę samą — po czym dodaje pozycję tego samego produktu z tą ilością,
+zmniejszając pierwotną. Tak jeden produkt trafia do dwóch grup: na przykład 5 sztuk do *Hali A* i 3
+do *Hali B*. Każda pozycja jest wyceniana według własnej ilości.
+
+## Wartości pól niestandardowych przeniesione do zamówienia
+
+Zamówienie może otrzymać wartości pól niestandardowych z rekordu, z którego powstało — dla każdego
+pola z włączoną opcją **Przenoś wartość do: Zamówienie** (ustawianą na ekranie **Pola
+niestandardowe**; reguły — ten sam klucz, zgodny typ i opcje, zasada widoczności — opisuje strona
+tamtego modułu). Wypełniane jest tylko puste pole zamówienia i tylko raz.
+
+- **Z zapytania ofertowego, przy składaniu zamówienia.** Gdy klient składa zamówienie z koszyka
+  wypełnionego zamówieniem zaakceptowanego zapytania ofertowego, a zamówienie zapisuje to zapytanie
+  (decydują te same reguły co dotąd: zapytanie nadal zatwierdzone, niewykorzystane przez inne
+  zamówienie, z organizacji klienta, co najmniej jedna uzgodniona pozycja nadal w koszyku), wartości
+  zapytania — w stanie z tej chwili — są zapisywane razem z samym zamówieniem. Są częścią jego
+  utworzenia, a nie późniejszą edycją. Nic nie jest przenoszone, gdy zamówienie nie zapisuje
+  zapytania ofertowego albo gdy moduł zapytań ofertowych jest wyłączony.
+- **Z szansy sprzedażowej.** Zamówienie, które administrator tworzy z szansy sprzedażowej (**Utwórz
+  zamówienie** na jej karcie *Powiązania*), otrzymuje wartości szansy, gdy moduł CRM powiąże je z tą
+  szansą — w osobnej zmianie przypisanej **systemowi**; utworzenie zamówienia pozostaje przypisane
+  administratorowi. Zamówienie powiązane z szansą ręcznie nie otrzymuje niczego.
+- **Nie w drugą stronę.** **Kopia jako zapytanie ofertowe** nie przenosi żadnej wartości.
+- **Nic nie kończy się błędem.** Wartość, której nie da się przenieść, jest pomijana, a zamówienie i
+  tak zostaje złożone lub powiązane.
+
+Przy zamówieniu złożonym w imieniu klienta wpis audytu `order.place_on_behalf` wymienia przeniesione
+klucze jako `carriedCustomFieldKeys`. Zamówienie złożone przez samego klienta, jak dotąd, nie tworzy
+wpisu audytu. Przeniesione wartości są w zamówieniu od początku, więc odczytują je subskrybenci
+`order.created.v1`.
+
+### Notatka systemowa
+
+Gdy wartość zostanie pominięta, karta **Komentarze** zamówienia zawiera jedną notatkę autorstwa
+**System** dla danego złożenia lub powiązania, oznaczoną jako *Wewnętrzny*: *Nie przeniesiono z
+zapytania ofertowego …:* lub *Nie przeniesiono z szansy sprzedażowej …:*, a pod spodem po jednej
+linii na każde pominięte pole — nazwa pola, z którego pochodzi, z chwili pominięcia, i powód (zamówienie nie ma pola o tym
+kluczu, pole ma inny typ, pole widoczne dla klientów miałoby dostać wartość pola wewnętrznego,
+wartość nie pasuje do pola). Może ją przeczytać każdy, kto może otworzyć zamówienie; nie pokazuje
+żadnej wartości.
+
+Notatka nigdy nie jest pokazywana klientowi — ani w sklepie, ani w endpoincie komentarzy klienta — i
+nie wysyła powiadomień. Nie ma autora: `systemNote` w odpowiedzi z komentarzami dla administratora
+(`GET /api/v1/admin/orders/:id/comments`) zawiera jej strukturę — `kind`
+(`custom_field_carry_skipped`), `source` (`entityType`, `recordId`, `reference`) i `skipped`
+(`key`, `reason`, `label`) — a `body` zawiera angielskie zdanie dla odbiorcy, który go nie tłumaczy.
+Każdy inny komentarz zwraca `systemNote: null`.
+
+## Filtry pól niestandardowych
+
+Pole niestandardowe zamówienia z włączoną opcją **Używaj jako filtra listy** (ustawianą na ekranie
+**Pola niestandardowe**) jest dostępne jako filtr wśród filtrów zaawansowanych listy zamówień,
+opisany w twoim języku: tekst, który zawiera, zakres liczb lub dat, tak lub nie albo jedna lub
+więcej opcji. Zamówienie bez wartości tego pola nigdy nie pasuje. Każdy filtr pola
+niestandardowego jest pokazany jako usuwalna etykieta obok pozostałych aktywnych filtrów, zawęża
+sumę i każdą stronę, a jego zmiana wraca do pierwszej strony listy. Filtry są w adresie strony,
+więc przefiltrowaną listę można dodać do zakładek lub udostępnić, a **eksport CSV** eksportuje te
+same zamówienia.
+
+Jeśli adres zawiera filtr, który nie jest już dostępny — jego opcję wyłączono albo pole usunięto —
+lista mówi o tym, podając nazwę pola, i oferuje **Usuń ten filtr**; eksport CSV nie jest dostępny,
+dopóki filtr nie zostanie usunięty. Wywołujący API przesyłają filtry jako `customFieldFilters` w
+`GET /api/v1/admin/orders` i `GET /api/v1/admin/orders/export`, a dostępne pola odczytują z
+`GET /api/v1/admin/orders/custom-field-filters` (`orders:read`). Odwrócony zakres (`min` większe niż `max`, `from` późniejsze niż `to`) lub operator niepasujący do typu pola daje `400` `VALIDATION_FAILED`.
 
 ## Zapisane widoki
 
@@ -418,7 +513,9 @@ Na pasku narzędzi listy zamówień jest lista wyboru **Zapisane widoki**, któr
 
 - **Co zapamiętuje widok.** Wszystkie filtry listy zamówień — status, status płatności, kanał
   sprzedaży, metodę płatności, metodę dostawy, zakres dat, wyszukiwany tekst, nazwy organizacji i
-  klienta oraz zakres kwoty — a także sortowanie i widoczne kolumny. Wybranie widoku zastępuje je
+  klienta, zakres kwoty oraz filtry pól niestandardowych — a także sortowanie i widoczne kolumny.
+  Filtr pola niestandardowego, który przy wczytaniu widoku nie jest już dostępny, zostaje pominięty
+  z komunikatem, który go nazywa, a reszta widoku się wczytuje. Wybranie widoku zastępuje je
   wszystkie wartościami z widoku: filtr, którego widok nie zawiera, zostaje wyczyszczony, to, co
   zmieniono i nie zapisano, przepada, a lista wraca na pierwszą stronę.
 - **Zapisywanie.** **Zapisz widok** otwiera jedno okno z polem **Nazwa** i polem wyboru
@@ -530,9 +627,117 @@ zapytania ofertowego.
 Gdy moduł zapytań ofertowych jest wyłączony, zamówienia są składane dokładnie tak jak dotąd i nie
 zapisują żadnego zapytania.
 
+## Grupy pozycji
+
+Zamówienie może pokazywać pozycje w **nazwanych grupach** — *Hala A*, *Hala B* — z pozycjami bez
+grupy pod nagłówkiem **Pozostałe pozycje**. Grupy służą wyłącznie prezentacji: nie zmieniają żadnej
+ceny, ilości ani sumy. Zamówienie otrzymuje je na jeden z dwóch sposobów i **nigdy ich później nie
+zmienia**: żaden ekran ani API nie edytuje grupowania złożonego zamówienia.
+
+**Z zaakceptowanego zapytania ofertowego.** Gdy przy składaniu zamówienia zostaje zapisane zapytanie
+ofertowe, z którego pochodzi koszyk (zob. poprzednią sekcję), zamówienie kopiuje grupy oferty w tej
+samej transakcji. Każda pozycja zamówienia jest dopasowywana do pozycji oferty: najpierw wszystkie
+pozycje z **tym samym produktem, wariantem, uzgodnioną ilością i uzgodnioną ceną jednostkową**, potem
+według produktu, wariantu i ceny, potem według produktu, wariantu i ilości, a na końcu wyłącznie
+według **produktu i wariantu**, przy czym każda pozycja oferty jest użyta raz. Dzięki temu produkt
+rozdzielony w ofercie na dwie grupy — 5 sztuk w jednej, 3 w drugiej, po tej samej cenie — zachowuje
+każdą pozycję w jej grupie. Dopasowana
+pozycja przejmuje grupę i miejsce pozycji oferty; pozycja, która do niczego nie pasuje — dodana do
+koszyka po zamianie albo zmieniona tak, że już nie pasuje — trafia do sekcji *Pozostałe pozycje*, za
+dopasowanymi. Grupa oferty, do której nie trafiła żadna pozycja, nie jest kopiowana. Gdy przy
+składaniu zamówienia zapytanie nie zostaje zapisane albo moduł zapytań ofertowych jest wyłączony,
+zamówienie jest składane bez grup, a poza tym dokładnie tak jak wcześniej. Późniejsza zmiana oferty
+nie rusza grup zamówienia.
+
+**Z ekranu tworzenia zamówienia.** Operator układa pozycje w grupy przed utworzeniem zamówienia (zob.
+*Ekran tworzenia zamówienia*); zamówienie powstaje z nimi w tej samej transakcji, a odrzucone
+utworzenie nie zapisuje żadnej grupy. Grupy bez pozycji nie są tworzone. **Jeden produkt może być w
+kilku pozycjach** — w dwóch różnych grupach albo dwa razy w jednej: każda pozycja żądania staje się
+osobną pozycją zamówienia, we własnej grupie, wycenioną według własnej ilości (minimalna ilość
+zamówienia produktu jest nadal oceniana na sumie jego pozycji). `POST /api/v1/admin/orders` przyjmuje opcjonalną listę `groups` (`{ key, name }`, w
+kolejności wyświetlania, najwyżej 50, nazwy od 1 do 120 znaków) i dla każdej pozycji opcjonalny
+`groupKey`. Grupowanie jest utrwalane we wpisie audytu `order.place_on_behalf` (nazwa i liczba
+pozycji każdej grupy); własne złożenie zamówienia przez kupującego, jak dotąd, nie trafia do audytu.
+
+**Gdzie są pokazywane.** Ekran zamówienia w panelu administracyjnym i strona zamówienia kupującego
+pokazują każdą grupę jako sekcję z nagłówkiem, pozycjami i podsumowaniem — liczba pozycji, netto,
+VAT i brutto, sumujące wiersze nad nim — a następnie *Pozostałe pozycje*. Zamówienie bez grup i
+każde zamówienie złożone, zanim powstały grupy, wygląda dokładnie tak jak wcześniej. Każda odpowiedź
+z zamówieniem — dla administratora, klienta i zewnętrznego API zamówień — zawiera `itemGroups`
+(`{ id, name, position }`) oraz dla każdej pozycji `groupId` i `position`, z pozycjami w kolejności
+wyświetlania; integracja, która je pomija, działa dalej.
+
+**Co nie przenosi grup.** Faktury, zwroty, ponowne zamówienie (wypełnia koszyk), *zamów ponownie
+jako zapytanie ofertowe*, koszyk i checkout, e-maile, webhooki i przyjmowanie zamówień przez
+zewnętrzne API. Nie ma PDF zamówienia.
+
+## Minimalne ilości zamówienia przy składaniu zamówienia
+
+Składanie zamówienia stosuje minimalne ilości zamówienia z katalogu do każdej pozycji koszyka —
+minimum produktu w sztukach i minimum każdej jednostki opakowania w jednostkach, liczone ze
+wszystkich pozycji produktu (oba definiuje strona modułu Catalog). To ostatnie słowo na każdej
+ścieżce, która kończy się zamówieniem: checkout, zakup jednym kliknięciem, ponowne zamówienie,
+koszyk wypełniony z zapytania ofertowego, tworzenie zamówienia w panelu administracyjnym i
+zewnętrzne API zamówień.
+
+- **Przed jakimkolwiek skutkiem ubocznym.** Sprawdzenie działa w transakcji składania zamówienia
+  zaraz po odczytaniu koszyka — przed sprawdzeniem wartości zamówienia i limitu kredytowego,
+  numerem zamówienia oraz jakąkolwiek rezerwacją stanu lub kredytu. Odmowa niczego nie zapisuje.
+- **Co odpowiada.** Pozycja, której rekord produktu zniknął → `404 PRODUCT_NOT_FOUND` z
+  `details.cartItemIds`. Pozycja poniżej minimum → `422 PRODUCT_BELOW_MINIMUM_QUANTITY` albo
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` z `details.lines[]`, po jednym wpisie na każdą
+  odrzuconą pozycję (`cartItemId`, `productId`, `productName`, `kind`, `minimum`,
+  `packagingUnitName`). Zdanie i nazwy produktów są w języku, w którym udzielana jest odpowiedź:
+  zapisanym języku administratora, w przeciwnym razie w języku z nagłówka `Accept-Language` żądania
+  (z uwzględnieniem wag q), a w ostateczności w domyślnym języku kanału.
+- **Podgląd checkoutu mówi to samo wcześniej.** `POST /api/v1/orders/preview-total` zwraca
+  `belowMinimumLines[]` — pozycje, które składanie zamówienia by odrzuciło, z tymi samymi
+  zwolnieniami; pozycja, której produkt zniknął, ma `kind: 'product_unavailable'` i nie ma nazwy
+  ani minimum. Storefront je wymienia i wyłącza **Place order**. Podgląd nie zakłada blokady, więc
+  przy wyścigu rozstrzyga składanie zamówienia.
+- **Koszyk wypełniony z zaakceptowanego zapytania ofertowego.** Moduł Carts zwalnia każdą pozycję
+  wypełnioną z zapytania, dopóki jej ilość równa się ilości z zapytania. Składanie zamówienia i
+  podgląd honorują to zwolnienie **tylko wtedy, gdy zapytanie ofertowe jest w tej chwili nadal
+  ważne**: istnieje, należy do organizacji kupującego, ma nadal status `Approved` — nie jest
+  anulowane ani wygasłe, a jego ważność się nie skończyła — żadne zamówienie go jeszcze nie
+  zapisuje, a koszyk wciąż zawiera co najmniej jedną jego pozycję w uzgodnionej cenie. W przeciwnym
+  razie każda pozycja jest oceniana jak każda inna. Sprawdzenie i jego blokada działają na początku
+  składania zamówienia, więc o zwolnieniu decyduje się, zanim cokolwiek zostanie zapisane. Gdy moduł
+  Quote Requests jest wyłączony, nic nie może potwierdzić zapytania i żadna pozycja nie jest
+  zwolniona.
+  Sprawdzenie podglądu jest też udostępnione jako `orderQuoteSourcePort`, o które pyta moduł Carts
+  przy przekazaniu koszyka do akceptacji, więc przekazanie ocenia pozycję wypełnioną z zapytania
+  tak jak podgląd; składanie zamówienia potwierdza zapytanie ponownie.
+- **Zewnętrzne API zamówień** (`POST /api/v1/external/orders`) i tworzenie zamówienia w panelu
+  budują koszyk z żądania i oceniają łączną ilość każdego produktu ze wszystkich pozycji żądania;
+  żądanie poniżej minimum jest odrzucane w całości, z `details.lines[]` kluczowanym `index`. Żądanie
+  jest oceniane samodzielnie — zastępowany koszyk nie liczy się do niczego — i odrzucane, **zanim**
+  koszyk klienta zostanie naruszony, więc odrzucone żądanie zostawia ten koszyk dokładnie takim,
+  jakim był. To samo dotyczy pozycji bez ceny albo sprzedawanej wyłącznie na zapytanie: jest
+  wyceniana, zanim koszyk zostanie zastąpiony. Żadne
+  z nich nie przenosi jednostki opakowania, więc działa tam tylko minimum w sztukach. **Oba
+  odrzucają więcej niż 200 pozycji** z kodem `422 VALIDATION_FAILED`,
+  `details.code = 'too_many_items'` — w zewnętrznym API jest to sprawdzane jako pierwsze, zanim
+  wymagany będzie nagłówek `Idempotency-Key`, i nie zostawia żadnego rekordu idempotencji.
+
+## Podleganie zwrotowi w chwili zakupu
+
+Każda pozycja zamówienia zapisuje, czy jej produkt podlegał zwrotowi w chwili złożenia zamówienia
+(`order_items.returnable_at_purchase`), na każdej ścieżce składania zamówienia. Późniejsze zmiany
+flagi **Podlega zwrotowi** produktu jej nie zmieniają. Pozycja, której rekordu produktu albo flagi
+nie dało się odczytać przy składaniu zamówienia, jest zapisywana jako **niepodlegająca zwrotowi**,
+nigdy pusta. Pozycje zamówień złożonych przed powstaniem tej kolumny mają `null`, co moduł Returns
+traktuje jako podleganie zwrotowi. Wartość trafia do modułu Returns przez `OrderReturnContextPort`
+(`returnableAtPurchase` na każdej pozycji); Returns nie odczytuje żadnej tabeli modułu Orders.
+Składanie zamówienia zapisuje ją niezależnie od tego, czy moduł Returns jest włączony.
+
+Migracja `20261016T082022_orders_order_item_returnable_at_purchase.ts` dodaje tę kolumnę
+(dopuszcza `null`).
+
 ## Ustawienia
 
-`orders.min_order_value` (liczba; dotyczy checkoutu i tworzenia zamówień w panelu),
+`orders.min_order_value` (liczba; dotyczy checkoutu i tworzenia zamówień w panelu; to kwota, więc
+ma najwyżej dwa miejsca po przecinku — więcej jest odrzucane z `400 AMOUNT_PRECISION_EXCEEDED`),
 `orders.reorder_enabled` (wartość logiczna), `orders.confirmation_recipients` (lista stringów) —
 wszystkie globalnie albo dla kanału sprzedaży. Do tego `order_confirmation_emails` dla każdej
 organizacji. E-mail z potwierdzeniem trafia do klienta, a w kopii do listy organizacji i listy z

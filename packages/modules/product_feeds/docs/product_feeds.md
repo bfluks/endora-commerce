@@ -28,7 +28,7 @@ A feed is four choices and nothing else at creation time:
 | **Language** | Which translation of names, descriptions and category paths is written. |
 | **Name** | What you will recognise it by. The public URL is derived from the feed, not the name. |
 
-Everything else — criteria, schedule, price presentation, price list, tax country — has a working
+Everything else — criteria, schedule, price presentation, price book, tax country — has a working
 default and is edited afterwards on the feed's **Settings** tab.
 
 ### Creating your first feed
@@ -93,8 +93,7 @@ fails its run naming each one, rather than publishing a file with holes.
 
 ### Narrowing a feed to part of the catalogue
 
-The **Criteria** region on the Settings tab is the same rule builder used by promotions and price
-lists. An empty rule means "every eligible product of this channel". A category criterion includes
+The **Criteria** region on the Settings tab is the same rule builder promotions use. An empty rule means "every eligible product of this channel". A category criterion includes
 the whole subtree.
 
 The panel shows a **live match count** as you edit. That number is computed from the same prices and
@@ -114,6 +113,85 @@ Two things a rule can never do:
 
 If a rule matches nothing, the run ends as `empty` and the **previously published file keeps
 serving**. The panel warns you about that before you save, not afterwards.
+
+### Prices in a feed
+
+A feed publishes the prices **anyone** would see on its sales channel — a feed is fetched by a
+provider, which is nobody's buyer, so no organization's or customer group's contract price ever
+reaches it. Each product is priced at quantity 1, in the feed's currency, by the price books
+(the `price_lists` module): its base price, or a catalogue price book for everyone on the channel,
+or a sale when it is lower. A product with no price in the feed's currency is skipped with
+`missing_price`. Feed items are products: a product with variants is published at the product's own
+price, not per variant.
+
+A price is written at two places. A gross feed — the default presentation — adds the tax rate of
+the feed's tax country to the net price and rounds the exact result half-up: 29.50 at 23 % is
+published as 36.29, the gross the storefront shows beside the same net price. A price with more
+than two decimal places is never rounded — see *A price below one cent* below.
+
+#### A price below one cent
+
+A price book holds up to four decimal places, so a screw can cost 0.0125 PLN. A feed cannot say
+that: Google Merchant Center takes at most two decimal places and rounds anything longer itself, so
+0.0125 PLN would reach the ad as 0.01 PLN while the product page shows 0,0125 PLN — a price mismatch,
+and Google disapproves products for it. So a feed **publishes such a product as a pack**:
+
+- the price is the price of **N pieces**, where N is the smallest of 10, 100, 1 000 and 10 000 that
+  makes it exact to the cent — 0.0125 PLN is published as 100 pieces at 1.25 PLN, 9.045 PLN as 10
+  pieces at 90.45 PLN. Nothing is rounded on the way;
+- a gross feed adds the tax to the pack's net price, as a basket line of that many pieces is
+  charged: 1.25 PLN at 23 % is published as 1.54 PLN;
+- the price and the price before discount of one product are of the same pack — the larger one
+  either of them needs;
+- the pack size goes in the template's **pack fields**. The Google Merchant Center template carries
+  three: `g:multipack` (N), and `g:unit_pricing_measure` and `g:unit_pricing_base_measure` (both
+  `100ct` for a pack of 100), so Google shows the unit price as *1,25 PLN / 100 ct* — the exact pack
+  price — rather than a rounded price per piece. A pack of 1 000 or 10 000, which only a price with
+  five or six decimal places needs, carries `g:multipack` alone: Google's unit-pricing base takes 1,
+  10 or 100 pieces;
+- every pack field is **empty, and so left out of the file**, for a product whose price has two
+  decimal places. Those products are published exactly as before.
+
+A template with no field bound to **Pack size (prices below one cent)** cannot say what such a price
+is the price of, so the product is **left out of that feed** and the run lists it under
+`sub_cent_price_without_pack_field`, naming the price and the pack it would need. That is the case
+for the Meta catalogue template and the three marketplace starting points, whose providers this
+version does not publish a multipack to, and for a copy of the Google template made before 0.109.0.
+To publish such products in a template of your own, add a field in the template editor with the
+source **Pack size (prices below one cent)** under *Price and stock* — and the two *pack as a count*
+sources, if the provider takes Google's unit-pricing fields. A price that would need a pack larger
+than 10 000 is left out with `sub_cent_price_beyond_pack_limit`; a price book's four places never
+need one.
+
+This applies to every feed; there is no setting for it. The storefront product page shows the price
+of one piece; Google's multipack rules ask the landing page to show the multipack's price too, so
+watch the Merchant Center diagnostics for products published this way.
+
+A feed can instead be **pinned to one price book** — the feed's `priceListId`, set through the
+admin API when the feed is created or updated (`POST /api/v1/admin/product-feeds`,
+`PATCH /api/v1/admin/product-feeds/:id`); the feed's screens show the warning below but have no
+control for it (issue #414). It then publishes that book's own lines — fixed prices, and percentages or
+adjustments taken off the catalogue price the channel would charge without that book — and **a
+product the book does not price is absent from the feed**. A base price book publishes its base prices. The pinned book publishes **only
+while it applies to anyone on the feed's channel at generation time**:
+
+- it is *Active* or *Scheduled*, and the run falls between its start and end dates;
+- it is assigned to the feed's sales channel, and the channel sells in the feed's currency (a base
+  price book needs no channel);
+- it is for everyone — a book for selected organizations or customer groups never publishes, for
+  the same reason an organization's price never reaches an unpinned feed;
+- it is in the feed's currency, and it still exists.
+
+While one of these does not hold, the feed's page shows a warning naming which, and the feed
+publishes no prices from the book. **When a run finds that the pinned book does not apply, it
+withdraws the feed's published file** instead of generating one: the run ends *Withdrawn*, with the
+reason on its page, and within a minute at most the feed's link answers as for a feed that has
+never been generated, until the book applies again and a later run publishes a new file. This is
+not a failed run — no failed-run notification is raised, nothing is delivered — and the last good
+file is deliberately not kept serving. The withdrawn file is not deleted: it can still be downloaded
+from the run that produced it, and the usual retention removes it after the next publish. While the
+feed's last run is the withdrawal, the feed's page says the file was withdrawn. The live match count of
+*Criteria* and the price-range criterion use the same prices the next run will publish.
 
 ### Category mapping (Google and Meta)
 
@@ -236,7 +314,7 @@ export of the full list.
 
 | Reason | What it means |
 | --- | --- |
-| `missing_price` | No price resolved for the feed's currency and price list. |
+| `missing_price` | A price field the template requires resolved empty — no price book prices the product on the feed's channel in the feed's currency, or the feed's pinned price book does not price it. The item was skipped. |
 | `missing_image` | The product has no publicly reachable image. |
 | `private_image_asset` | Images exist but are not public, so no stable URL could be published. |
 | `missing_required_field` | A field the provider requires resolved empty with no fallback — the item was skipped. |
@@ -245,8 +323,11 @@ export of the full list.
 | `unmapped_provider_category` | No category mapping applied; the field was omitted. |
 | `stale_provider_category_mapping` | The mapped node no longer exists in the installed revision. |
 | `zero_tax_rate_on_gross_feed` | A gross feed found no tax rule for its tax country. |
+| `sub_cent_price_without_pack_field` | The price has more than two decimal places, and the template has no pack-size field to publish it as the price of a pack. The item was skipped (*A price below one cent*). |
+| `sub_cent_price_beyond_pack_limit` | The price has so many decimal places that no pack of up to 10 000 pieces makes it exact to the cent. The item was skipped. |
 
-Failures are different from item problems: they end the run and publish nothing.
+Failures are different from item problems: they end the run and publish nothing, and the
+previously published file keeps serving.
 
 | Failure | Meaning |
 | --- | --- |
@@ -256,6 +337,11 @@ Failures are different from item problems: they end the run and publish nothing.
 | `skip_threshold_exceeded` | More than half the considered items were skipped, so a good file was not replaced by a bad one. |
 | `storage_unavailable` | The storage backend refused the file. |
 | `worker_lost` | The worker died mid-run; the claim was released and the partial file removed. |
+
+A run can also end **withdrawn**: the feed's pinned price book did not apply (*Prices in a feed*
+above), so the run removed the published file instead of producing one. It has no failure code;
+its reason is the pinned-book reason (`not_found`, `currency_mismatch`, `not_active`,
+`outside_schedule`, `not_on_channel`, `audience_restricted`), and it raises no notification.
 
 An administrator notification is raised when a run fails — **once per transition into failure**, not
 once per tick, so a feed that has been broken for a day does not fill the bell.
@@ -308,8 +394,8 @@ choice only changes the label on your screen.
 
 #### When delivery happens
 
-After a run **publishes successfully**, and only then. A failed run, an empty run, or a run skipped
-because the previous one was still going sends nothing — the file the partner already has is still
+After a run **publishes successfully**, and only then. A failed run, an empty run, a withdrawn run,
+or a run skipped because the previous one was still going sends nothing — the file the partner already has is still
 the current one, and re-sending it would announce a change that did not happen.
 
 If the upload fails, the run stays successful and the published link keeps working. The delivery is
@@ -383,7 +469,9 @@ Four properties this pipeline is responsible for:
 - **An item-level problem never aborts the run.** Skips and warnings are recorded per item; only a
   configuration failure ends the run.
 - **Publication is one pointer flip after the object is complete.** A failed, empty or
-  over-threshold run never touches `published_artefact_id`.
+  over-threshold run never touches `published_artefact_id`. The one run that clears it is a
+  `withdrawn` run — a pinned feed's whose price book does not apply (*Pricing* below) — which sets
+  the pointer to `null` in the same statement as its terminal status.
 - **Overlap is refused, not queued.** The claim is a conditional `UPDATE` on
   `product_feeds.current_run_id`; the loser records `skipped(already_running)`.
 
@@ -430,6 +518,57 @@ exact secrets in play and removes those strings, rather than guessing what a pas
 
 The test harness injects adapters that refuse every send, for the same reason it injects a taxonomy
 fetcher that cannot fetch: no test in this repository may upload a priced catalogue anywhere.
+
+### Pricing
+
+A run never reads another module's tables. An unpinned feed prices each batch through one
+`resolveLinePrices` call on `price_lists`' `pricingService` port, as a guest (`organization: null`,
+`customerGroupId: null`) on the feed's channel and currency, at quantity 1, without a variant. A
+pinned feed reads `namedListPrices({ priceListId, currencyCode, productIds, salesChannelId })` —
+the book's rows other than variant rows, at quantity 1, over the guest catalogue price of the
+channel resolved **without the pinned book**; a product the book does not price is absent from the
+answer (`services/named-list-price-resolver.ts`). The answer is empty while the book does not
+publish: `namedListPublishability({ priceListId, currencyCode, salesChannelId })` on the same
+`FeedPricingPort` (`plugin.ts`) says whether it does, and why not — a reason of
+`pinnedPriceBookUnpublishableReasonSchema` in `@endora-commerce/contracts` (`not_found`,
+`currency_mismatch`, `not_active`, `outside_schedule`, `not_on_channel`, `audience_restricted`),
+evaluated at the call, not by `price_lists`' status sweep. `ProductFeedService` asks it for every
+pinned feed it lists and puts the reason on the admin feed row as `pinnedPriceBookWarning` (`null`
+when unpinned or publishing), which the feed page shows as a warning (`feeds.pinnedBook.<reason>`
+in the module's `i18n/`). A run of a pinned feed asks `namedListPublishability` once, after the
+configuration checks (so a misconfigured feed still fails and keeps its last good file) and before
+the catalogue is walked. When the book does not apply, the run ends with status `withdrawn`
+(`feedRunStatusSchema`) and the reason in `withdrawalReason` (column
+`product_feed_runs.withdrawal_reason`), writes no artefact, and clears `published_artefact_id`, so
+the public URL answers `404` with the one not-available body, as for a feed never generated. It
+raises no failed-run notification and triggers no delivery. The earlier artefact is detached, not
+deleted — its row and bytes stay, downloadable from its own run, until the retention after the next
+publish purges them. The run drops the cached public answers for the feed that its own process
+wrote; the cache lives in Redis and is indexed by feed per process, so an entry another process
+wrote can serve the old file until its 60 s TTL expires (`services/feed-cache-invalidator.ts`). Neither path catches
+`MODULE_DISABLED`: with `price_lists` absent the run fails rather than publishing prices the platform
+is not serving.
+
+A sub-cent unit price (issue #430) is decided in the item field resolver, which stays pure:
+`services/feed-pack.ts`'s `feedPackQuantity(net)` answers the smallest power of ten N for which
+`net × N` has at most two decimal places — 1 for a price with two significant places, `null` past
+`MAX_FEED_PACK_QUANTITY` (10 000) — read from the decimal string, never a double.
+`resolveFeedItem` takes the largest N any price the template publishes needs (`price`,
+`sale_price`); with N > 1 it skips the item as `sub_cent_price_without_pack_field` unless the
+template binds a `pack_quantity` field, and as `sub_cent_price_beyond_pack_limit` when N is `null`.
+A price field then publishes `lineAmountHalfUp(net, N)` — exact by the choice of N — and on a gross
+feed `grossAmountHalfUp` of that at `FeedItemPrice.taxRatePercent`, the rate the hydrator computed
+the unit gross at (`null` on a net feed or when no tax rule matched, when the net is published).
+The three source kinds `pack_quantity`, `pack_unit_pricing_measure` and
+`pack_unit_pricing_base_measure` (`feedFieldSourceKindSchema`) answer `N`, `${N}ct` and `${N}ct`
+(the last two only for N ≤ 100), and an empty string — an omitted field — when N is 1, which is what
+keeps a two-place price's file byte-identical (`feed-two-place-output.test.ts` pins the files of all
+five shipped templates). Whether the template can state a pack is the **whole** template's answer:
+`ResolveFeedItemInput.templateFields` carries it when `fields` is one field, as in the editor
+preview. The predefined Google template binds the three to `g:multipack`,
+`g:unit_pricing_measure` and `g:unit_pricing_base_measure`; the boot reconciler never edits an
+installed system template, so migration `20261025T145041_product_feeds_google_template_pack_fields`
+adds them, after `g:sale_price`, to one installed before 0.109.0.
 
 ### Channel scoping
 

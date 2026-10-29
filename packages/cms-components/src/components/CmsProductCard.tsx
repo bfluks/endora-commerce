@@ -7,17 +7,26 @@ import {
   type BreakpointTier,
 } from '@endora-commerce/page-builder-core';
 import type { CmsProductSummary } from '../schema/catalog-types.js';
-import type { CmsProductCardProps } from '../schema/component-types.js';
-import { useCatalogBlockData } from '../hooks/use-catalog-block-data.js';
-import { productCardDataRequest } from '../utils/catalog-block-data.js';
+import { unitPriceFractionDigits } from '@endora-commerce/contracts';
+import type { CmsProductCardProps, ProductCardDivider, ProductCardTextLine } from '../schema/component-types.js';
+import { useBlockData } from '../hooks/use-block-data.js';
+import { colorValueToCss } from '../utils/color-value.js';
+import { productCardDataRequest } from '../utils/block-data.js';
 import { useBlockRenderEnvironment } from '@endora-commerce/page-builder-core/contributions';
 
+/**
+ * A product's price is a unit price: its significant places, up to four, at
+ * least two (owner ruling of 2026-10-25; `unitPriceFractionDigits`).
+ */
 function formatPrice(product: CmsProductSummary, locale: string): string | null {
   if (!product.price) return null;
+  const amount = product.price.amount;
   return new Intl.NumberFormat(locale, {
     style: 'currency',
     currency: product.price.currency,
-  }).format(product.price.amount);
+    minimumFractionDigits: 2,
+    maximumFractionDigits: Number.isFinite(amount) ? unitPriceFractionDigits(amount) : 2,
+  }).format(amount);
 }
 
 function mediaRatioClass(imageRatio: CmsProductCardProps['imageRatio']): string {
@@ -70,6 +79,11 @@ export function CmsProductCardView({
   cornerRadius,
   variant = 'default',
   ctaLabel,
+  textLine = 'default',
+  nameWeight,
+  imageBackground,
+  divider,
+  dividerColor,
   previewTier = 'desktop',
 }: {
   product: CmsProductSummary;
@@ -84,6 +98,16 @@ export function CmsProductCardView({
   cornerRadius?: CmsProductCardProps['cornerRadius'];
   variant?: CmsProductCardProps['variant'];
   ctaLabel?: string;
+  /** The line under the name (T135); `default` keeps the card style's own. */
+  textLine?: ProductCardTextLine;
+  /** The name's weight (T151, 300–800); unset keeps the card style's own. */
+  nameWeight?: number;
+  /** T168: the image box background (`#rrggbb` or `token:<role>`); unset keeps the card style's own. */
+  imageBackground?: string;
+  /** T168: a line under the card; unset or `none` draws none (today's). */
+  divider?: ProductCardDivider;
+  /** T168: the line's colour (`#rrggbb` or `token:<role>`); read only with a line. */
+  dividerColor?: string;
   previewTier?: BreakpointTier;
 }): React.ReactElement {
   // An explicit prop wins; otherwise the language the host renders this tree
@@ -105,15 +129,61 @@ export function CmsProductCardView({
     previewTier,
   );
 
+  // T135: the line under the name — the card style's own (`default`), the summary, the SKU or none.
+  const line: Exclude<ProductCardTextLine, 'default'> =
+    textLine === 'summary' || textLine === 'sku' || textLine === 'none' ? textLine : variant === 'showcase' ? 'summary' : 'sku';
+  const summaryText = line === 'summary' ? (product.summary?.trim() ?? '') : '';
+  const summaryLine = summaryText ? <p className="cmsc-pb-product-card__summary">{summaryText}</p> : null;
+  // Today's SKU switch still governs the default line.
+  const showSkuLine = line === 'sku' && (textLine === 'sku' || showSku) && Boolean(product.sku);
+  const skuLine = showSkuLine ? <span className="cmsc-pb-product-card__sku">{product.sku}</span> : null;
+  // T151: the name's weight, when the listing chose one.
+  const nameStyle = nameWeight !== undefined ? { style: { fontWeight: nameWeight } } : {};
+  // T168: the image box background and a line under the card; nothing chosen writes nothing.
+  const mediaBackground = colorValueToCss(imageBackground);
+  const mediaStyle: CSSProperties = mediaBackground ? { ...layout.media, background: mediaBackground } : layout.media;
+  const lined = divider === 'line';
+  const lineColor = lined ? colorValueToCss(dividerColor) : undefined;
+  const cardStyle = (lineColor ? { ...layout.card, '--pb-card-divider': lineColor } : layout.card) as CSSProperties;
+  const lineClass = lined ? ' cmsc-pb-product-card--divider' : '';
+
+  // Feature 163 (R-16, FR-027): the image on a neutral backdrop, the name, the
+  // summary and a "more" link — no price, SKU or stock.
+  if (variant === 'showcase') {
+    const href = `/p/${product.slug}`;
+    const moreLabel = ctaLabel?.trim() || 'More';
+    return (
+      <article className={`cmsc-pb-product-card cmsc-pb-product-card--showcase${lineClass}`} style={cardStyle}>
+        <a href={href} className={`cmsc-pb-product-card__media ${ratioClass}`} style={mediaStyle} tabIndex={-1} aria-hidden="true">
+          {product.primaryAssetUrl ? (
+            <img src={product.primaryAssetUrl} alt="" loading="lazy" style={layout.img} />
+          ) : (
+            <span className="cmsc-pb-product-card__placeholder" aria-hidden />
+          )}
+        </a>
+        <div className="cmsc-pb-product-card__body">
+          {skuLine}
+          <a href={href} className="cmsc-pb-product-card__name" {...nameStyle}>
+            {product.name}
+          </a>
+          {summaryLine}
+          <a href={href} className="cmsc-pb-product-card__more" aria-label={`${moreLabel}: ${product.name}`}>
+            {moreLabel}
+          </a>
+        </div>
+      </article>
+    );
+  }
+
   return (
     <article
-      className={`cmsc-pb-product-card cmsc-pb-product-card--${variant}`}
-      style={layout.card}
+      className={`cmsc-pb-product-card cmsc-pb-product-card--${variant}${lineClass}`}
+      style={cardStyle}
     >
       <a
         href={`/p/${product.slug}`}
         className={`cmsc-pb-product-card__media ${ratioClass}`}
-        style={layout.media}
+        style={mediaStyle}
       >
         {product.primaryAssetUrl ? (
           <img
@@ -127,10 +197,11 @@ export function CmsProductCardView({
         )}
       </a>
       <div className="cmsc-pb-product-card__body">
-        {showSku && product.sku ? <span className="cmsc-pb-product-card__sku">{product.sku}</span> : null}
-        <a href={`/p/${product.slug}`} className="cmsc-pb-product-card__name">
+        {skuLine}
+        <a href={`/p/${product.slug}`} className="cmsc-pb-product-card__name" {...nameStyle}>
           {product.name}
         </a>
+        {summaryLine}
         {showStock && product.stockLevel != null ? (
           <span className="cmsc-pb-product-card__stock">{String(product.stockLevel)}</span>
         ) : null}
@@ -151,7 +222,7 @@ export function CmsProductCardLoader(
   const { productSlug, editing = false, locale, previewTier, ...viewProps } = props;
   // Provided by the page's server render on the storefront; fetched from an effect only in
   // the editor preview, which is the one caller that ever sees `loading`.
-  const { loading, data } = useCatalogBlockData<CmsProductSummary[]>(productCardDataRequest({ productSlug }));
+  const { loading, data } = useBlockData<CmsProductSummary[]>(productCardDataRequest({ productSlug }));
   const product = data?.[0] ?? null;
 
   if (!productSlug) {

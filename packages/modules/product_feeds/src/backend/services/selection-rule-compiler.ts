@@ -100,8 +100,11 @@ export interface SelectionCandidate {
   updatedAt: Date;
   /** `null` = the inventory port could not say. Fail closed: no match. */
   inStock: boolean | null;
-  /** `null` = the pricing port could not say. Fail closed: no match. */
-  price: number | null;
+  /**
+   * The decimal string the pricing port answers; `null` = it could not say.
+   * Fail closed: no match.
+   */
+  price: string | null;
 }
 
 export interface CompiledSelection {
@@ -383,8 +386,10 @@ function matches(
     }
     case 'price':
       if (candidate.price === null) return false;
+      // A comparison, not a rounding: a `numeric(14,4)` amount has at most 14
+      // significant digits, so its double orders exactly as the decimal does.
       return compareNumber(
-        candidate.price,
+        Number(candidate.price),
         rule.op,
         rule.values.map((value) => (typeof value === 'number' ? value : Number(value))),
       );

@@ -50,7 +50,6 @@ describe('sales-channel cache invalidation happens at the write seam (D-93)', ()
         defaultCurrency: 'PLN',
         languages: ['en-US'],
         currencies: ['PLN'],
-        isPublic: true,
         active: true,
         systemDefault: false,
         version: 1,

@@ -76,7 +76,9 @@ interface Subject {
 const SUBJECTS: readonly Subject[] = [
   {
     module: 'price_lists',
-    actions: ['open-price-lists'],
+    // Feature 161 adds the editor's two other entry points (FR-029) and, by the
+    // coordinator's Checkpoint 10 ruling (Principle XVI), *Pricing settings*.
+    actions: ['new-price-book', 'open-price-explainer', 'open-price-lists', 'open-pricing-settings'],
     axis: 'platform-unavailable',
     admin: priceListsAdmin,
   },
@@ -88,7 +90,16 @@ const SUBJECTS: readonly Subject[] = [
   },
   {
     module: 'inventory',
-    actions: ['open-inventory'],
+    // `import-stock`, `open-low-stock`, `open-stock-notifications` and
+    // `open-warehouses` arrived with issue #516: the sidebar's remaining
+    // screens (Principle XVI).
+    actions: [
+      'import-stock',
+      'open-inventory',
+      'open-low-stock',
+      'open-stock-notifications',
+      'open-warehouses',
+    ],
     axis: 'deactivated',
     admin: inventoryAdmin,
   },
@@ -214,6 +225,8 @@ describe('batch 13 contributes no palette action while off (Constitution XVII it
       (entry) => entry.manifest.id === 'price_lists',
     )?.manifest;
     const action = (manifest?.actions ?? []).find((entry) => entry.id === 'open-price-lists');
+    // Feature 161 — the price-book list again; feature 160 had pointed it at
+    // the display-mode page while there was no list.
     expect(action?.targetRoute).toBe('/price-lists');
     expect(action?.requiredPermission).toBe('price_lists:read');
     for (const keyword of ['pricing', 'prices', 'price list', 'cennik']) {

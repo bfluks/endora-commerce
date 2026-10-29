@@ -1,5 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, toScopeChannel } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
@@ -31,10 +31,17 @@ import type {
  *                                       language slot).
  *   - `channel_not_assigned_to_product` — channel is not in the
  *                                       product's membership set.
- *   - `language_not_in_channel`      — language is not in the channel's
- *                                       SalesChannel.languages array.
+ *   - `language_not_in_channel`      — language is not one the channel
+ *                                       offers: its `languages` plus its
+ *                                       default (`toScopeChannel`, spec 163).
  *   - `value_invalid`                — value shape does not satisfy the
  *                                       attribute's valueType.
+ *
+ * A **delete** skips `attribute_unknown`, `attribute_not_channel_scoped`,
+ * `channel_not_assigned_to_product` and `language_not_in_channel`: those are
+ * the ways an override becomes orphaned after it was written, and an orphan
+ * can always be removed (feature 163, T071a, FR-015). It still runs inside
+ * the audited `product.overrides_apply` Command.
  */
 
 export type OverrideUpsertInput = {
@@ -160,7 +167,14 @@ export class ProductOverridesService {
     ): void => {
       const pathPrefix = `${kind === 'upsert' ? 'upserts' : 'deletes'}[${idx}]`;
       const attrRow = attrByKey.get(e.attributeKey);
-      if (!isSystemAttributeKey(e.attributeKey) && !attrRow) {
+      // Feature 163 (T071a, FR-015) — an override made invalid later (the product
+      // left the channel, the channel dropped the language, the attribute's scope
+      // was narrowed or the attribute removed) is retained and listed as orphaned,
+      // and removing it is always allowed: a delete skips the four scope checks
+      // below, as the scopes PATCH lets `null` through (`assertScopeValid`).
+      // Upserts keep every check.
+      const deleting = kind === 'delete';
+      if (!deleting && !isSystemAttributeKey(e.attributeKey) && !attrRow) {
         throw new HttpError(
           422,
           ERROR_CODES.VALIDATION_FAILED,
@@ -169,7 +183,7 @@ export class ProductOverridesService {
         );
       }
       const scope = getAttributeScope(e.attributeKey, attrRow ?? null);
-      if (!scope.channelScoped) {
+      if (!deleting && !scope.channelScoped) {
         throw new HttpError(
           422,
           ERROR_CODES.VALIDATION_FAILED,
@@ -185,7 +199,7 @@ export class ProductOverridesService {
           [{ path: `${pathPrefix}.languageCode`, issue: 'null' }],
         );
       }
-      if (!assignedChannelIds.has(e.channelId)) {
+      if (!deleting && !assignedChannelIds.has(e.channelId)) {
         throw new HttpError(
           422,
           ERROR_CODES.VALIDATION_FAILED,
@@ -194,8 +208,8 @@ export class ProductOverridesService {
         );
       }
       const channel = channelById.get(e.channelId);
-      if (e.languageCode !== null) {
-        if (!channel || !channel.languages.includes(e.languageCode)) {
+      if (!deleting && e.languageCode !== null) {
+        if (!channel || !toScopeChannel(channel).languages.includes(e.languageCode)) {
           throw new HttpError(
             422,
             ERROR_CODES.VALIDATION_FAILED,

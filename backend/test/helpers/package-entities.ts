@@ -74,6 +74,8 @@ import type { SearchPhraseRecord as SearchPhraseRecordRow } from '../../../packa
 import type { Tax as TaxRow } from '../../../packages/modules/taxes/src/backend/entities/tax.entity.js';
 import type { Asset as AssetRow } from '../../../packages/modules/assets_library/src/backend/entities/asset.entity.js';
 import type { AssetFolder as AssetFolderRow } from '../../../packages/modules/assets_library/src/backend/entities/asset-folder.entity.js';
+import type { AssetObjectCleanup as AssetObjectCleanupRow } from '../../../packages/modules/assets_library/src/backend/entities/asset-object-cleanup.entity.js';
+import type { AssetPermalinkRelease as AssetPermalinkReleaseRow } from '../../../packages/modules/assets_library/src/backend/entities/asset-permalink-release.entity.js';
 import type { Cart as CartRow } from '../../../packages/modules/carts/src/backend/entities/cart.entity.js';
 import type { CartItem as CartItemRow } from '../../../packages/modules/carts/src/backend/entities/cart-item.entity.js';
 import type { CartAuditEntry as CartAuditEntryRow } from '../../../packages/modules/carts/src/backend/entities/cart-audit-entry.entity.js';
@@ -120,8 +122,6 @@ import type { MegamenuBinding as MegamenuBindingRow } from '../../../packages/mo
 import type { Organization as OrganizationRow } from '../../../packages/modules/organizations/src/backend/entities/organization.entity.js';
 import type { OrganizationSalesRepAssignment as OrganizationSalesRepAssignmentRow } from '../../../packages/modules/organizations/src/backend/entities/organization-sales-rep-assignment.entity.js';
 import type { PriceList as PriceListRow } from '../../../packages/modules/price_lists/src/backend/entities/price-list.entity.js';
-import type { PriceListProduct as PriceListProductRow } from '../../../packages/modules/price_lists/src/backend/entities/price-list-product.entity.js';
-import type { PriceListPriceBracket as PriceListPriceBracketRow } from '../../../packages/modules/price_lists/src/backend/entities/price-list-price-bracket.entity.js';
 import type { PriceListMatrixEntry as PriceListMatrixEntryRow } from '../../../packages/modules/price_lists/src/backend/entities/price-list-matrix-entry.entity.js';
 import type { PriceDisplayModeOverride as PriceDisplayModeOverrideRow } from '../../../packages/modules/price_lists/src/backend/entities/price-display-mode-override.entity.js';
 import type { Order as OrderRow } from '../../../packages/modules/orders/src/backend/entities/order.entity.js';
@@ -147,6 +147,7 @@ import type { CrmOrderStatusMapping as CrmOrderStatusMappingRow } from '../../..
 import type { CrmStatusPropagation as CrmStatusPropagationRow } from '../../../packages/modules/crm/src/backend/entities/crm-status-propagation.entity.js';
 import type { CrmTag as CrmTagRow } from '../../../packages/modules/crm/src/backend/entities/crm-tag.entity.js';
 import type { CrmValueCountingStatus as CrmValueCountingStatusRow } from '../../../packages/modules/crm/src/backend/entities/crm-value-counting-status.entity.js';
+import type { Task as TaskRow } from '../../../packages/modules/tasks/src/backend/entities/task.entity.js';
 
 /**
  * How a test names a **module package's** entity class (D-168).
@@ -716,6 +717,16 @@ export const AssetFolder = classNamed<AssetFolderRow>(
   'assets_library',
   'AssetFolder',
 );
+export const AssetPermalinkRelease = classNamed<AssetPermalinkReleaseRow>(
+  installedModuleEntities,
+  'assets_library',
+  'AssetPermalinkRelease',
+);
+export const AssetObjectCleanup = classNamed<AssetObjectCleanupRow>(
+  installedModuleEntities,
+  'assets_library',
+  'AssetObjectCleanup',
+);
 export const Cart = classNamed<CartRow>(installedModuleEntities, 'carts', 'Cart');
 export const CartItem = classNamed<CartItemRow>(installedModuleEntities, 'carts', 'CartItem');
 export const CartAuditEntry = classNamed<CartAuditEntryRow>(
@@ -979,16 +990,6 @@ export const PriceList = classNamed<PriceListRow>(
   'price_lists',
   'PriceList',
 );
-export const PriceListProduct = classNamed<PriceListProductRow>(
-  installedModuleEntities,
-  'price_lists',
-  'PriceListProduct',
-);
-export const PriceListPriceBracket = classNamed<PriceListPriceBracketRow>(
-  installedModuleEntities,
-  'price_lists',
-  'PriceListPriceBracket',
-);
 export const PriceListMatrixEntry = classNamed<PriceListMatrixEntryRow>(
   installedModuleEntities,
   'price_lists',
@@ -1021,8 +1022,6 @@ export type MegamenuBinding = MegamenuBindingRow;
 export type Organization = OrganizationRow;
 export type OrganizationSalesRepAssignment = OrganizationSalesRepAssignmentRow;
 export type PriceList = PriceListRow;
-export type PriceListProduct = PriceListProductRow;
-export type PriceListPriceBracket = PriceListPriceBracketRow;
 export type PriceListMatrixEntry = PriceListMatrixEntryRow;
 export type PriceDisplayModeOverride = PriceDisplayModeOverrideRow;
 export type CustomerAccount = CustomerAccountRow;
@@ -1065,6 +1064,7 @@ export const CrmOrderStatusMapping = classNamed<CrmOrderStatusMappingRow>(instal
 export const CrmStatusPropagation = classNamed<CrmStatusPropagationRow>(installedModuleEntities, 'crm', 'CrmStatusPropagation');
 export const CrmTag = classNamed<CrmTagRow>(installedModuleEntities, 'crm', 'CrmTag');
 export const CrmValueCountingStatus = classNamed<CrmValueCountingStatusRow>(installedModuleEntities, 'crm', 'CrmValueCountingStatus');
+export const Task = classNamed<TaskRow>(installedModuleEntities, 'tasks', 'Task');
 export type CrmOpportunity = CrmOpportunityRow;
 export type CrmOpportunityAttachment = CrmOpportunityAttachmentRow;
 export type CrmOpportunityComment = CrmOpportunityCommentRow;
@@ -1081,3 +1081,4 @@ export type CrmOrderStatusMapping = CrmOrderStatusMappingRow;
 export type CrmStatusPropagation = CrmStatusPropagationRow;
 export type CrmTag = CrmTagRow;
 export type CrmValueCountingStatus = CrmValueCountingStatusRow;
+export type Task = TaskRow;

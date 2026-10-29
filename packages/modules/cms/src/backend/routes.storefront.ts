@@ -3,6 +3,7 @@ import { ERROR_CODES } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { getResolvedChannel } from '@endora-commerce/platform/kernel';
 import type { StorefrontResolver } from './services/storefront-resolver.js';
+import type { CmsBrandTokensService } from './services/brand-tokens-service.js';
 
 /**
  * The request's sales channel, resolved once by the canonical resolver
@@ -20,8 +21,28 @@ function resolvedChannel(request: FastifyRequest): {
 
 export async function registerCmsStorefrontRoutes(
   app: FastifyInstance,
-  deps: { storefrontResolver: StorefrontResolver },
+  deps: { storefrontResolver: StorefrontResolver; brandTokensService: CmsBrandTokensService },
 ): Promise<void> {
+  /**
+   * Feature 163 — the brand tokens every storefront page is styled from
+   * (`contracts/storefront-and-admin-api.md` §1, research R-3).
+   *
+   * The channel is the request's resolved one, which always resolves and falls
+   * back to the system default; its own set wins, then the global set, then
+   * the built-in defaults — so one channel's override is never served on
+   * another (Principle XII). Public and briefly cacheable: the storefront also
+   * keeps it in its Data Cache under `cms:brand`, revalidated on every write.
+   *
+   * Reachable whatever the sales-channel access rule decides (feature 154): a
+   * store closed to anonymous visitors still styles its sign-in page with its
+   * brand. Brand tokens are presentation, not data.
+   */
+  app.get('/api/v1/storefront/cms/brand-tokens', { config: { salesChannelAccess: 'open' } }, async (request, reply) => {
+    const tokens = await deps.brandTokensService.effective(resolvedChannel(request).id);
+    reply.header('cache-control', 'public, max-age=60');
+    return { data: tokens };
+  });
+
   app.get('/api/v1/cms/pages/by-slug', async (request) => {
     const query = (request.query ?? {}) as Record<string, string | undefined>;
     const slug = query['slug'];

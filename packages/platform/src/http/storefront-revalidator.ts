@@ -8,7 +8,16 @@
  * Best-effort: a failed call is logged and swallowed so a config/custom-event
  * write never fails because the storefront is unreachable. Disabled (no-op)
  * when the base URL or secret is not configured.
+ *
+ * A call is bounded by {@link REVALIDATE_TIMEOUT_MS}, and a non-2xx answer is a
+ * failure like a transport error (feature 163, security review M2): a `401` from a
+ * secret the two sides disagree on used to pass in silence, leaving every tagged
+ * entry stale. The log names the status and the tags, never the secret.
  */
+
+/** How long one revalidation call may take before it is abandoned. */
+const REVALIDATE_TIMEOUT_MS = 5_000;
+
 export interface StorefrontRevalidatorOptions {
   baseUrl: string | undefined;
   secret: string | undefined;
@@ -36,16 +45,23 @@ export class StorefrontRevalidator {
     if (!this.enabled || tags.length === 0) return;
     const fetchFn = this.options.fetchFn ?? globalThis.fetch;
     try {
-      await fetchFn(`${this.options.baseUrl}/api/revalidate`, {
+      const response = await fetchFn(`${this.options.baseUrl}/api/revalidate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-revalidate-secret': this.options.secret as string,
         },
         body: JSON.stringify({ tags }),
+        signal: AbortSignal.timeout(REVALIDATE_TIMEOUT_MS),
       });
+      if (!response.ok) {
+        this.logger?.warn(
+          { status: response.status, tags: tags.length },
+          '[storefront-revalidate] the storefront refused the revalidation',
+        );
+      }
     } catch (err) {
-      this.logger?.warn({ err }, '[storefront-revalidate] failed');
+      this.logger?.warn({ err, tags: tags.length }, '[storefront-revalidate] failed');
     }
   }
 }

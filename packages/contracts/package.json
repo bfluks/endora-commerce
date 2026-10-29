@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/contracts",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "description": "Source-of-truth Zod schemas shared across backend, storefront, admin (Principle V). The backend regenerates its live OpenAPI document from these at startup.",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src",
     "test": "vitest run"

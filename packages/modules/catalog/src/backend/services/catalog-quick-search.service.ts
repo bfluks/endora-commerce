@@ -1,11 +1,22 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import type {
-  CatalogAttributeReadPort,
-  CatalogQuickSearchField,
-  CatalogQuickSearchHit,
-  CatalogQuickSearchParams,
-  CatalogQuickSearchPort,
+import {
+  overrideLanguages,
+  resolveScopeLanguage,
+  type CatalogAttributeReadPort,
+  type CatalogQuickSearchField,
+  type CatalogQuickSearchHit,
+  type CatalogQuickSearchParams,
+  type CatalogQuickSearchPort,
 } from '@endora-commerce/contracts';
+import type {
+  SalesChannelMembershipPort,
+  SalesChannelResolutionPort,
+} from '@endora-commerce/platform/kernel';
+
+import { availabilityCondition } from './product-availability.sql.js';
+import { effectiveTextSql } from './effective-value.sql.js';
+import { toScopeChannel } from './product-availability.service.js';
+import { loadEffectiveKeys } from './url-key-resolution.service.js';
 
 /**
  * The buyer-facing quick-search read model (issue #174).
@@ -80,6 +91,14 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
   constructor(
     private readonly emFactory: () => EntityManager,
     private readonly attributeRead: CatalogAttributeReadPort,
+    /**
+     * Feature 163 — the kernel's membership accessor (Constitution XII) and
+     * the channel record whose languages the scope language L is resolved
+     * against. Availability is `availabilityCondition`, the same condition
+     * the listing is cut by.
+     */
+    private readonly membership: Pick<SalesChannelMembershipPort, 'entityIdsInChannelSubquery'>,
+    private readonly channels: Pick<SalesChannelResolutionPort, 'getById'>,
   ) {}
 
   async quickSearch(params: CatalogQuickSearchParams): Promise<CatalogQuickSearchHit[]> {
@@ -88,12 +107,17 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
 
     // The `quickSearchable` flag is this module's, and so is the JSONB the
     // values live in — which is the whole reason the predicate belongs here.
+    // FR-007 — an id no channel has matches nothing.
+    const record = await this.channels.getById(params.salesChannelId);
+    if (!record) return [];
+    const channel = toScopeChannel(record);
+
     const quickKeys = (await this.attributeRead.listByFlag('quickSearchable')).map((a) => a.key);
 
     const em = this.emFactory();
     const like = `%${needle}%`;
 
-    // One statement, joined to the channel bridge, so the scope cannot be
+    // One statement, scoped by the kernel's membership subquery, so the scope cannot be
     // forgotten by a later caller and the limit is applied *after* scoping —
     // narrowing a page that was already cut would silently shorten results.
     const attributeClause = quickKeys
@@ -101,56 +125,75 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
       .join(' or ');
     const attributeBindings = quickKeys.flatMap((key) => [key, like]);
 
+    // Feature 163 — membership (the kernel's subquery), effective status at
+    // (C, L), the window and the effective audience in one condition. The
+    // audience is the signed-in buyer's (see the file header):
+    // `{ organizationId, authenticated: true }`.
+    const languageCode = resolveScopeLanguage(channel, params.languageCode);
+    // FR-017 a — the Name the storefront shows at (C, L), matched and returned.
+    const effectiveName = effectiveTextSql(
+      'name',
+      { channelId: channel.id, languages: overrideLanguages(languageCode, channel.defaultLanguage) },
+      [languageCode, channel.defaultLanguage, 'en-US', 'en'],
+    );
+    const available = availabilityCondition(
+      {
+        channelId: channel.id,
+        languageCode,
+        channelLanguages: channel.languages,
+        audience: { organizationId: params.organizationId, authenticated: true },
+        now: new Date(),
+      },
+      this.membership,
+    );
+
     const rows = await em.execute<
       Array<{
         id: string;
         sku: string;
         slug: string;
         name: Record<string, string>;
+        effective_name: string;
         status: string;
         attribute_values: Record<string, unknown>;
       }>
     >(
-      `select p.id::text as id, p.sku, p.slug, p.name, p.status, p.attribute_values
+      `select p.id::text as id, p.sku, p.slug, p.name, ${effectiveName.sql('p')} as effective_name,
+              p.status, p.attribute_values
          from products p
-         join sales_channel_products scp on scp.product_id = p.id
-        where scp.sales_channel_id = ?
-          and p.status = 'active'
-          and p.deleted_at is null
-          and (
-            p.allowed_organization_ids @> ?::jsonb
-            or (
-              jsonb_array_length(p.allowed_organization_ids) = 0
-              and p.visibility <> 'organization_restricted'
-            )
-          )
+        where ${available.sql('p')}
           and (
             p.sku ILIKE ?
             or p.slug ILIKE ?
             or p.name::text ILIKE ?
+            or ${effectiveName.sql('p')} ILIKE ?
             ${attributeClause === '' ? '' : `or ${attributeClause}`}
           )
         order by p.sku asc
         limit ?`,
       [
-        params.salesChannelId,
-        // `@>` containment over the JSONB array, so the buyer's id has to be
-        // one of the elements rather than a substring of the serialised bag.
-        JSON.stringify([params.organizationId]),
+        ...effectiveName.params,
+        ...available.params,
         like,
         like,
+        like,
+        ...effectiveName.params,
         like,
         ...attributeBindings,
         params.limit,
       ],
     );
 
+    // Feature 163 (T113a, R28) — a hit links to its effective URL key at (C, L),
+    // the key the product page resolves there; the global key where it has none.
+    const keys = await loadEffectiveKeys(em, rows, { id: channel.id, languages: [languageCode] });
     const lowered = needle.toLowerCase();
     return rows.map((row) => ({
       productId: row.id,
       sku: row.sku,
-      slug: row.slug,
+      slug: keys.get(row.id)?.get(languageCode) ?? row.slug,
       name: row.name,
+      effectiveName: row.effective_name,
       status: row.status as CatalogQuickSearchHit['status'],
       matchedOn: matchedOnFor(row, lowered, quickKeys),
     }));
@@ -168,13 +211,21 @@ export class CatalogQuickSearchService implements CatalogQuickSearchPort {
  * surface, not a labelled one, and it was not labelled before either.
  */
 function matchedOnFor(
-  row: { sku: string; name: Record<string, string>; attribute_values: Record<string, unknown> },
+  row: {
+    sku: string;
+    name: Record<string, string>;
+    effective_name: string;
+    attribute_values: Record<string, unknown>;
+  },
   lowered: string,
   quickKeys: readonly string[],
 ): CatalogQuickSearchField[] {
   const matched: CatalogQuickSearchField[] = [];
   if (row.sku.toLowerCase().includes(lowered)) matched.push('sku');
-  if (Object.values(row.name).some((n) => String(n).toLowerCase().includes(lowered))) {
+  if (
+    row.effective_name.toLowerCase().includes(lowered) ||
+    Object.values(row.name).some((n) => String(n).toLowerCase().includes(lowered))
+  ) {
     matched.push('name');
   }
   if (

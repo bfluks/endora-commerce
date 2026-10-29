@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_VAT_RATE, grossFromNet } from '../../lib/i18n/money';
+import { DEFAULT_VAT_RATE, grossFromNet, moneyByMode } from '../../lib/i18n/money';
 
 /**
  * Issue #132 — one seam for every derived gross figure.
@@ -37,5 +37,31 @@ describe('grossFromNet', () => {
 
   it('keeps the deployment assumption in exactly one place', () => {
     expect(DEFAULT_VAT_RATE).toBe(0.23);
+  });
+});
+
+/**
+ * Review 2, finding 2 (release 0.108.0) — the gross the storefront shows beside
+ * a net price agrees with a gross feed's: the exact decimal product, rounded
+ * half-up to two places (`grossAmountHalfUp`; `specs/pricing/worked-examples.md`
+ * §10.16). `net * (1 + rate)` on doubles made 16.50 at 23 % the double
+ * 20.29499…, which `Intl.NumberFormat` showed as 20,29.
+ */
+describe('grossFromNet — the exact decimal product, half-up', () => {
+  it.each([
+    [29.5, 0.23, 36.29],
+    [4.3, 0.05, 4.52],
+    [31.5, 0.23, 38.75],
+    [16.5, 0.23, 20.3],
+    [24.5, 0.23, 30.14],
+    [10, 0.085, 10.85],
+  ])('%s at %s is %s', (net, rate, gross) => {
+    expect(grossFromNet(net, rate)).toBe(gross);
+  });
+
+  it('the gross shown is the gross a feed publishes', () => {
+    expect(moneyByMode({ amount: 16.5, currency: 'PLN' }, 'gross_only', 'pl-PL').primary).toBe(
+      new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' }).format(20.3),
+    );
   });
 });

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
 import { NewsletterTokenHelper } from '../../../../packages/modules/newsletter/src/backend/services/token.helper.js';
@@ -174,7 +175,14 @@ describe('newsletter campaign service (US2)', () => {
     });
 
     it('sends with the default sales channel\'s branding', async () => {
-      db.em().create(NewsletterSubscriber, { email: '1@x.test', status: 'active' });
+      // A campaign targeting `all` reaches every active subscriber in the
+      // database, and `setupTestDb` truncates nothing, so the audience also
+      // holds whatever subscribers another file left behind
+      // (`tenancy/scoped-empty-explains-itself.test.ts` seeds two). The
+      // assertion is therefore about the subscriber this test wrote, under an
+      // address nothing else can have, and not about the size of the audience.
+      const email = `branded-${randomUUID()}@x.test`;
+      db.em().create(NewsletterSubscriber, { email, status: 'active' });
       await db.em().flush();
       const c = await branded.create({ name: 'C', language: 'en-US', subject: 'Hi', content: textTree('Body'), targetType: 'all' });
       db.em().clear();
@@ -182,8 +190,11 @@ describe('newsletter campaign service (US2)', () => {
       const sent = await branded.send(c.id, c.version);
 
       expect(sent.status).toBe('sent');
-      expect(provider.sent.map((m) => m.to)).toEqual(['1@x.test']);
-      expect(branding.asked).toEqual([db.systemDefaultChannelId]);
+      expect(provider.sent.filter((m) => m.to === email)).toHaveLength(1);
+      // Branding is read once per recipient, so the count follows the audience;
+      // what this case is about is *which* channel every read was made for.
+      expect(branding.asked.length).toBeGreaterThan(0);
+      expect([...new Set(branding.asked)]).toEqual([db.systemDefaultChannelId]);
     });
   });
 });

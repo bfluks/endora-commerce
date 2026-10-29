@@ -5,24 +5,33 @@ import type { ComponentConfig, Config } from '@puckeditor/core';
 import { definePageBuilderComponent, ownerOf, withHideOn } from '@endora-commerce/page-builder-core';
 import { Accordion } from './components/Accordion.js';
 import { AnnouncementBar } from './components/AnnouncementBar.js';
+import { BackgroundPanel } from './components/BackgroundPanel.js';
 import { Button } from './components/Button.js';
+import { CarouselImage } from './components/CarouselImage.js';
+import { CarouselSplit } from './components/CarouselSplit.js';
 import { CategoryGrid } from './components/CategoryGrid.js';
 import { CategoryList } from './components/CategoryList.js';
 import { Column } from './components/Column.js';
 import { ContactFormEmbed } from './components/ContactFormEmbed.js';
 import { ContentSlider } from './components/ContentSlider.js';
+import { CtaCard } from './components/CtaCard.js';
+import { DownloadTile } from './components/DownloadTile.js';
 import { FeatureList } from './components/FeatureList.js';
 import { Heading } from './components/Heading.js';
 import { Hero } from './components/Hero.js';
 import { Icons } from './components/Icons.js';
 import { Image } from './components/Image.js';
-import { ImageSlider } from './components/ImageSlider.js';
 import { InsertBlock } from './components/InsertBlock.js';
 import { InsertTemplate } from './components/InsertTemplate.js';
+import { LatestPosts } from './components/LatestPosts.js';
+import { LinkList } from './components/LinkList.js';
+import { LinkTile } from './components/LinkTile.js';
 import { LogoStrip } from './components/LogoStrip.js';
 import { Map } from './components/Map.js';
+import { MediaText } from './components/MediaText.js';
 import { MissingComponentPlaceholder } from './components/MissingComponentPlaceholder.js';
 import { NewsletterSignup } from './components/NewsletterSignup.js';
+import { Signup as NewsletterSignupBlock } from './components/NewsletterSignupForm.js';
 import { ProductCard } from './components/ProductCard.js';
 import { ProductGrid } from './components/ProductGrid.js';
 import { ProductSlider } from './components/ProductSlider.js';
@@ -30,10 +39,13 @@ import { RawHtml } from './components/RawHtml.js';
 import { RawJs } from './components/RawJs.js';
 import { RichContent } from './components/RichContent.js';
 import { Row } from './components/Row.js';
+import { Section, SECTION_RESPONSIVE_FIELDS } from './components/SectionBlock.js';
+import { SectionGroup, SECTION_GROUP_RESPONSIVE_FIELDS } from './components/SectionGroupBlock.js';
 import { SimpleTable } from './components/SimpleTable.js';
 import { Slide } from './components/Slide.js';
 import { Social } from './components/Social.js';
 import { Spacer } from './components/Spacer.js';
+import { Statement } from './components/Statement.js';
 import { Stats } from './components/Stats.js';
 import { Tabs } from './components/Tabs.js';
 import { Testimonial } from './components/Testimonial.js';
@@ -42,12 +54,17 @@ import { Video } from './components/Video.js';
 
 export * from './components/Accordion.js';
 export * from './components/AnnouncementBar.js';
+export * from './components/BackgroundPanel.js';
 export * from './components/Button.js';
+export * from './components/CarouselImage.js';
+export * from './components/CarouselSplit.js';
 export * from './components/CategoryGrid.js';
 export * from './components/CategoryList.js';
 export * from './components/Column.js';
 export * from './components/ContactFormEmbed.js';
 export * from './components/ContentSlider.js';
+export * from './components/CtaCard.js';
+export * from './components/DownloadTile.js';
 export * from './components/FeatureList.js';
 export * from './components/Heading.js';
 export * from './components/Hero.js';
@@ -55,13 +72,17 @@ export * from './components/Icons.js';
 export * from './components/icon-catalog.js';
 export * from './components/IconPickerField.js';
 export * from './components/Image.js';
-export * from './components/ImageSlider.js';
 export * from './components/InsertBlock.js';
 export * from './components/InsertTemplate.js';
+export * from './components/LatestPosts.js';
+export * from './components/LinkList.js';
+export * from './components/LinkTile.js';
 export * from './components/LogoStrip.js';
 export * from './components/Map.js';
+export * from './components/MediaText.js';
 export * from './components/MissingComponentPlaceholder.js';
 export * from './components/NewsletterSignup.js';
+export * from './components/NewsletterSignupForm.js';
 export * from './components/ProductCard.js';
 export * from './components/ProductGrid.js';
 export * from './components/ProductSlider.js';
@@ -72,6 +93,7 @@ export { RichContentEditorField } from './components/RichContentEditorField.js';
 export {
   coerceRichContentProps,
   defaultRichContent,
+  emphasisMark,
   htmlFromTiptap,
   richContentExtensions,
   sanitizeRichHtml,
@@ -82,6 +104,7 @@ export * from './components/Slide.js';
 export * from './components/Social.js';
 export * from './components/social-networks.js';
 export * from './components/Spacer.js';
+export * from './components/Statement.js';
 export * from './components/Stats.js';
 export * from './components/Tabs.js';
 export * from './components/Testimonial.js';
@@ -93,7 +116,35 @@ export * from './components/catalog-preview-context.js';
 export * from './components/box-styles.js';
 export * from './schema/component-types.js';
 export * from './schema/catalog-types.js';
+export * from './schema/blog-types.js';
 export * from './utils/walk-asset-ids.js';
+// Feature 163 — the shared renderers of `ButtonSpec`, `ResponsiveImage`,
+// `InlineRichText` and `LinkValue` (research R-9 to R-11).
+export * from './components/ButtonView.js';
+export * from './components/InlineRich.js';
+export * from './components/Picture.js';
+export * from './components/Section.js';
+export * from './components/SectionBlock.js';
+export * from './components/SectionGroupBlock.js';
+export * from './hooks/use-breakpoint-video.js';
+// Restrained motion (feature 163, US10, research R-21): the entrance reveal and its word split.
+export * from './hooks/use-reveal.js';
+export * from './utils/split-words.js';
+export * from './utils/color-value.js';
+export * from './utils/link-href.js';
+export * from './utils/media-source.js';
+// Feature 163 — brand tokens as `--cmsb-*` CSS, for the storefront's
+// `<style id="cmsb">` and the admin preview iframe (research R-3, R-4).
+export {
+  brandTokensToCss,
+  type BrandCss,
+  type BrandCssOptions,
+  type BrandFontLink,
+} from './brand/brand-css.js';
+// Feature 163 — the inline rich-text field of short headings (research R-10).
+export { InlineRichTextEditor, inlineRichTextExtensions } from './components/InlineRichTextEditor.js';
+export type { InlineRichTextEditorProps } from './components/InlineRichTextEditor.js';
+export * from './fields/inline-rich-text-field.js';
 
 /**
  * The CMS renderer map — **the React half only**, keyed by namespaced block name
@@ -115,6 +166,18 @@ export * from './utils/walk-asset-ids.js';
  */
 export const defaultPageBuilderConfig: Config = {
   components: {
+    // Feature 163, plan § Owner ruling 2026-10-23: the one block carrying section settings, top level only.
+    'cms.Section': definePageBuilderComponent({
+      ...(Section as unknown as ComponentConfig),
+      contexts: ['cms'],
+      responsiveFields: [...SECTION_RESPONSIVE_FIELDS],
+    }),
+    // T158, plan § Owner ruling 2026-10-26: the container of Sections, top level only.
+    'cms.SectionGroup': definePageBuilderComponent({
+      ...(SectionGroup as unknown as ComponentConfig),
+      contexts: ['cms'],
+      responsiveFields: [...SECTION_GROUP_RESPONSIVE_FIELDS],
+    }),
     'cms.Row': definePageBuilderComponent({
       ...(Row as unknown as ComponentConfig),
       contexts: ['cms'],
@@ -134,32 +197,33 @@ export const defaultPageBuilderConfig: Config = {
     'cms.Column': definePageBuilderComponent({
       ...(Column as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['span', 'margin', 'padding', 'border'],
+      // T159: the column's order in the row per breakpoint; T165: its placement in the row's grid.
+      responsiveFields: ['span', 'stackOrder', 'rowSpan', 'columnStart', 'rowStart', 'margin', 'padding', 'border'],
     }),
     'cms.Text': definePageBuilderComponent({
       ...(Text as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['fontSize', 'fontWeight', 'textAlign', 'lineHeight', 'margin', 'padding', 'border'],
+      responsiveFields: ['fontSize', 'fontWeight', 'textAlign', 'lineHeight', 'textMaxWidth', 'textMaxWidthPx', 'margin', 'padding', 'border'],
     }),
     'cms.RichContent': definePageBuilderComponent({
       ...(withHideOn(RichContent as unknown as ComponentConfig) as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['margin', 'padding', 'border'],
+      responsiveFields: ['textMaxWidth', 'textMaxWidthPx', 'margin', 'padding', 'border'],
     }),
     'cms.Heading': definePageBuilderComponent({
       ...(Heading as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['fontSize', 'fontWeight', 'textAlign', 'lineHeight', 'margin', 'padding', 'border'],
+      responsiveFields: ['size', 'fontSize', 'fontWeight', 'align', 'lineHeight', 'margin', 'padding', 'border'],
     }),
     'cms.Button': definePageBuilderComponent({
       ...(Button as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['variant', 'margin', 'padding', 'border'],
+      responsiveFields: ['button', 'align', 'fullWidth', 'margin', 'padding', 'border'],
     }),
     'cms.Image': definePageBuilderComponent({
       ...(Image as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['widthMode', 'widthPx', 'align', 'margin', 'padding', 'border'],
+      responsiveFields: ['widthMode', 'widthPx', 'ratio', 'align', 'margin', 'padding', 'border'],
     }),
     'cms.Icons': definePageBuilderComponent({
       ...(Icons as unknown as ComponentConfig),
@@ -169,7 +233,7 @@ export const defaultPageBuilderConfig: Config = {
     'cms.Social': definePageBuilderComponent({
       ...(Social as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['align', 'margin', 'padding', 'border'],
+      responsiveFields: ['align', 'margin', 'padding', 'border', 'gap', 'gapPx'],
     }),
     'cms.Spacer': definePageBuilderComponent({
       ...(Spacer as unknown as ComponentConfig),
@@ -179,17 +243,73 @@ export const defaultPageBuilderConfig: Config = {
     'cms.FeatureList': definePageBuilderComponent({
       ...(FeatureList as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['columns', 'gap', 'margin', 'padding', 'border'],
+      responsiveFields: [
+        'headingSize',
+        'headingSizePx',
+        'headingMaxWidth',
+        'headingMaxWidthPx',
+        'columns',
+        'gap',
+        'gapPx',
+        'titleSize',
+        'titleSizePx',
+        'margin',
+        'padding',
+        'border',
+        'headingWeight',
+        'align',
+        'titleWeight',
+      ],
     }),
     'cms.Hero': definePageBuilderComponent({
       ...(Hero as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['minHeightPx', 'margin', 'padding', 'border'],
+      responsiveFields: [
+        'titleSize',
+        'titleSizePx',
+        'titleMaxWidth',
+        'titleMaxWidthPx',
+        'subheadingSize',
+        'subheadingSizePx',
+        'statementSize',
+        'statementSizePx',
+        'buttons',
+        'buttonsFullWidth',
+        'minHeight',
+        'minHeightPx',
+        'gaps',
+        'margin',
+        'padding',
+        'border',
+        'titleWeight',
+        'align',
+      ],
+    }),
+    // Feature 163 (T047) — the composition blocks of US3 (contracts/blocks.md).
+    'cms.MediaText': definePageBuilderComponent({
+      ...(MediaText as unknown as ComponentConfig),
+      contexts: ['cms'],
+      responsiveFields: ['headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'featureTitleSize', 'featureTitleSizePx', 'buttons', 'buttonsFullWidth', 'headingWeight', 'featureTitleWeight'],
+    }),
+    'cms.BackgroundPanel': definePageBuilderComponent({
+      ...(BackgroundPanel as unknown as ComponentConfig),
+      contexts: ['cms'],
+      responsiveFields: ['headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'buttons', 'buttonsFullWidth', 'minHeight', 'headingWeight'],
+    }),
+    'cms.CtaCard': definePageBuilderComponent({
+      ...(CtaCard as unknown as ComponentConfig),
+      contexts: ['cms'],
+      responsiveFields: ['headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'buttons', 'buttonsFullWidth', 'headingWeight'],
+    }),
+    'cms.Statement': definePageBuilderComponent({
+      ...(Statement as unknown as ComponentConfig),
+      contexts: ['cms'],
+      responsiveFields: ['headingSize', 'headingSizePx', 'textMaxWidth', 'textMaxWidthPx', 'headingWeight', 'align'],
     }),
     'cms.LogoStrip': definePageBuilderComponent({
       ...(LogoStrip as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['margin', 'padding', 'border'],
+      responsiveFields: ['margin', 'padding', 'border', 'align', 'gap', 'gapPx'],
     }),
     'cms.Testimonial': definePageBuilderComponent({
       ...(Testimonial as unknown as ComponentConfig),
@@ -199,7 +319,22 @@ export const defaultPageBuilderConfig: Config = {
     'cms.Stats': definePageBuilderComponent({
       ...(Stats as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['columns', 'margin', 'padding', 'border'],
+      responsiveFields: [
+        'headingSize',
+        'headingSizePx',
+        'headingMaxWidth',
+        'headingMaxWidthPx',
+        'columns',
+        'gap',
+        'gapPx',
+        'valueSize',
+        'valueSizePx',
+        'margin',
+        'padding',
+        'border',
+        'headingWeight',
+        'align',
+      ],
     }),
     'cms.AnnouncementBar': definePageBuilderComponent({
       ...(AnnouncementBar as unknown as ComponentConfig),
@@ -215,6 +350,12 @@ export const defaultPageBuilderConfig: Config = {
       contexts: ['cms'],
       responsiveFields: ['margin', 'padding', 'border'],
     }),
+    // Feature 163 (T076) — declared by the `newsletter` manifest, rendered from here (research R-17).
+    'newsletter.Signup': definePageBuilderComponent({
+      ...(NewsletterSignupBlock as unknown as ComponentConfig),
+      contexts: ['cms'],
+      responsiveFields: [],
+    }),
     'cms.ContactFormEmbed': definePageBuilderComponent({
       ...(ContactFormEmbed as unknown as ComponentConfig),
       contexts: ['cms'],
@@ -223,7 +364,7 @@ export const defaultPageBuilderConfig: Config = {
     'cms.Video': definePageBuilderComponent({
       ...(Video as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['maxWidth', 'align', 'margin', 'padding', 'border'],
+      responsiveFields: ['aspectRatio', 'maxWidth', 'align', 'margin', 'padding', 'border'],
     }),
     'cms.Map': definePageBuilderComponent({
       ...(Map as unknown as ComponentConfig),
@@ -238,12 +379,12 @@ export const defaultPageBuilderConfig: Config = {
     'catalog.ProductGrid': definePageBuilderComponent({
       ...(ProductGrid as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['columns', 'gap', 'view', 'margin', 'padding', 'border'],
+      responsiveFields: ['headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'columns', 'gap', 'view', 'margin', 'padding', 'border', 'equalItemHeight', 'gapPx', 'headingWeight'],
     }),
     'catalog.ProductSlider': definePageBuilderComponent({
       ...(ProductSlider as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['slidesPerView', 'gap', 'margin', 'padding', 'border'],
+      responsiveFields: ['headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'slidesPerView', 'gap', 'gapPx', 'controlsPlacement', 'controlsAlign', 'margin', 'padding', 'border', 'headingWeight'],
     }),
     'catalog.CategoryList': definePageBuilderComponent({
       ...(CategoryList as unknown as ComponentConfig),
@@ -253,32 +394,89 @@ export const defaultPageBuilderConfig: Config = {
     'catalog.CategoryGrid': definePageBuilderComponent({
       ...(CategoryGrid as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['columns', 'gap', 'margin', 'padding', 'border'],
+      responsiveFields: ['columns', 'gap', 'margin', 'padding', 'border', 'equalItemHeight', 'gapPx'],
     }),
+    // Feature 163 (T072) — rows of a title, a description and a button (FR-028).
+    'cms.LinkList': definePageBuilderComponent({
+      ...(LinkList as unknown as ComponentConfig),
+      contexts: ['cms'],
+      responsiveFields: ['headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'headingWeight'],
+    }),
+    // Feature 163 (T069) — declared by the `blog` manifest, rendered from here (research R-15).
+    'blog.LatestPosts': definePageBuilderComponent({
+      ...(LatestPosts as unknown as ComponentConfig),
+      contexts: ['cms'],
+      responsiveFields: [
+        'headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'columns', 'slidesPerView', 'gap', 'gapPx', 'controlsPlacement', 'controlsAlign',
+        // T189: the post card's look, the lead's size and the header button's place and width, per breakpoint.
+        'cardPadding', 'cardPaddingPx', 'cardTextPadding', 'cardTextPaddingPx', 'imageRatio', 'cardTitleSize', 'cardTitleSizePx', 'cardTitleWeight',
+        'leadSize', 'leadSizePx', 'headerButtonPlacement', 'headerButtonFullWidth',
+        'headingWeight',
+      ],
+    }),
+    // Feature 163 (T054) — the Carousel and its item blocks (research R-12).
     'cms.ContentSlider': definePageBuilderComponent({
       ...(ContentSlider as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['slidesPerView', 'gap', 'margin', 'padding', 'border'],
+      responsiveFields: [
+        'headingSize',
+        'headingSizePx',
+        'headingMaxWidth',
+        'headingMaxWidthPx',
+        'slidesPerView',
+        'gap',
+        'gapPx',
+        // Feature 163, T129–T130: the arrow placement and the grid's columns per breakpoint.
+        'controlsPlacement',
+        // Feature 163, T147: the alignment of the controls below the track.
+        'controlsAlign',
+        'columns',
+        'margin',
+        'padding',
+        'border',
+        'headingWeight',
+      ],
     }),
     'cms.Slide': definePageBuilderComponent({
       ...(Slide as unknown as ComponentConfig),
       contexts: ['cms'],
       responsiveFields: ['margin', 'padding', 'border'],
     }),
-    'cms.ImageSlider': definePageBuilderComponent({
-      ...(ImageSlider as unknown as ComponentConfig),
+    'cms.CarouselImage': definePageBuilderComponent({
+      ...(CarouselImage as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['slidesPerView', 'gap', 'margin', 'padding', 'border'],
+      // Feature 163, T144: the caption's size per breakpoint; T188: its weight.
+      responsiveFields: ['captionSize', 'captionSizePx', 'captionWeight'],
+    }),
+    'cms.CarouselSplit': definePageBuilderComponent({
+      ...(CarouselSplit as unknown as ComponentConfig),
+      contexts: ['cms'],
+      responsiveFields: ['buttons', 'buttonsFullWidth'],
+    }),
+    'cms.LinkTile': definePageBuilderComponent({
+      ...(LinkTile as unknown as ComponentConfig),
+      contexts: ['cms'],
+      // Feature 163, T130: the image ratio per breakpoint; T144: the title's and the label's size; T181: their resting colours; T188: their weights.
+      responsiveFields: ['ratio', 'titleSize', 'titleSizePx', 'titleWeight', 'titleColor', 'labelSize', 'labelSizePx', 'labelWeight', 'labelColor'],
+    }),
+    'cms.DownloadTile': definePageBuilderComponent({
+      ...(DownloadTile as unknown as ComponentConfig),
+      contexts: ['cms'],
     }),
     'cms.Tabs': definePageBuilderComponent({
       ...(Tabs as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['margin', 'padding', 'border'],
+      responsiveFields: ['tabSize', 'panelGap', 'panelGapPx', 'margin', 'padding', 'border', 'align'],
     }),
     'cms.Accordion': definePageBuilderComponent({
       ...(Accordion as unknown as ComponentConfig),
       contexts: ['cms'],
-      responsiveFields: ['margin', 'padding', 'border'],
+      // Feature 163, T175: the title padding; T182: the space above an open panel and between items;
+      // T185: the title weight; T186: the space below an open panel and after an open item.
+      responsiveFields: [
+        'titleSize', 'titleSizePx', 'titleWeight', 'titlePadding', 'titlePaddingPx', 'panelGap', 'panelGapPx', 'itemGap', 'itemGapPx',
+        'panelPaddingBottom', 'panelPaddingBottomPx', 'openItemGap', 'openItemGapPx', 'margin', 'padding', 'border',
+      ],
     }),
     'cms.RawHtml': definePageBuilderComponent({
       ...(RawHtml as unknown as ComponentConfig),
@@ -357,8 +555,10 @@ export function makeMissingComponentConfig(
  *
  * ## It takes names, not the document
  *
- * The caller walks the document with `countBlockNames`, which is the one
- * structural walk this repository has. That is not ceremony: a React caller
+ * The caller walks the document with `countComponentNames`, the structural
+ * walk of the components a document places (feature 163, T197: not
+ * `countBlockNames`, which also offers a rich text's TipTap nodes). That is
+ * not ceremony: a React caller
  * needs a **stable** memo key, and the set of names a document carries changes
  * far less often than the document does — a keystroke inside a text block moves
  * the document and not the names, and a merge keyed on the document would

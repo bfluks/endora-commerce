@@ -656,6 +656,8 @@ export const manifest = defineModuleManifest({
     { code: 'IDEMPOTENCY_KEY_REUSED' },
     { code: 'ORDER_NOT_CANCELLABLE' },
     { code: 'ORDER_NOT_FOUND' },
+    // Feature 154 — placement refuses a basket of another sales channel.
+    { code: 'ORDER_SALES_CHANNEL_MISMATCH' },
     { code: 'ORDER_SAVED_VIEW_NAME_TAKEN' },
   ],
   settings,
@@ -731,6 +733,19 @@ export const manifest = defineModuleManifest({
       requiredPermission: 'orders:read',
       keywords: ['orders', 'sales', 'zamówienia', 'sprzedaż'],
       weight: 220,
+    },
+    // Issue #516 (Principle XVI): the create form is a sidebar entry of its
+    // own, so the palette offers it too. `orders:write`, the code its route
+    // and the create `POST` enforce.
+    {
+      id: 'new-order',
+      labelKey: 'actions.newOrder.label',
+      descriptionKey: 'actions.newOrder.description',
+      icon: 'Plus',
+      targetRoute: '/orders/new',
+      requiredPermission: 'orders:write',
+      keywords: ['order', 'new', 'create', 'on behalf', 'zamówienie', 'nowe', 'utwórz'],
+      weight: 221,
     },
     {
       id: 'order-statuses',

@@ -1,7 +1,11 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ANONYMOUS_PRODUCT_AUDIENCE,
+  isInsideWindow,
   isProductVisibleTo,
+  productPath,
+  type CatalogProductAvailabilityPort,
+  type CatalogProductUrlKeyReadPort,
   type CatalogCategoryReadPort,
   type CatalogProductReadPort,
   type ChannelMemberEntityType,
@@ -83,6 +87,18 @@ export class SitemapGeneratorService {
     private readonly catalogProducts: CatalogProductReadPort,
     private readonly catalogCategories: CatalogCategoryReadPort,
     private readonly cmsPages: CmsPageReadPort,
+    /**
+     * Feature 163 — `catalog`'s availability projection for the channel: the
+     * languages each member is on in, its effective window and its effective
+     * audience. A sitemap lists what an anonymous crawler may open, now.
+     */
+    private readonly availability: Pick<CatalogProductAvailabilityPort, 'describeChannelAvailability'>,
+    /**
+     * Feature 163 (R28, FR-074) — `catalog`'s effective URL key per channel
+     * language: a product's URL in a language is its key there, not its global
+     * key (a key is valid only in its own language, K1).
+     */
+    private readonly urlKeys: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>,
     options: SitemapGeneratorOptions = {},
   ) {
     this.staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
@@ -117,27 +133,28 @@ export class SitemapGeneratorService {
     const baseUrl = await this.resolveStorefrontUrl(channel);
     const memberIds = await this.collectChannelMemberIds(channel.id);
 
-    // Each read keeps the filter and the ordering the SQL spelled. `liveOnly`
-    // and `activeOnly` are the port's names for the `deleted_at is null` and
-    // `status = 'active'` halves; `visibility`, `archivedAt`, `isActive` and
-    // `active` are columns on the records, so those predicates stay here — the
-    // same conditions, evaluated one layer up.
-    const products = (
-      await this.catalogProducts.findByIds([...memberIds.products], {
-        liveOnly: true,
-        activeOnly: true,
+    // Feature 163 — which members are available to an anonymous crawler in
+    // which channel language, now, is `catalog`'s answer
+    // (`describeChannelAvailability`): on in that language (archived and
+    // deleted products are on in none), inside the effective publication
+    // window at generation time, and admitted by the channel-effective
+    // audience rule for the anonymous audience (issue #227: a `public`
+    // product with an allow-list is not public). No status is tested here
+    // (FR-002), so `activeOnly` is gone from the read: a product off globally
+    // and on in this channel is listed. One URL per live language (FR-074).
+    const productIds = [...memberIds.products];
+    const generatedFor = new Date();
+    const availability = await this.availability.describeChannelAvailability(productIds, channel.id);
+    const products = (await this.catalogProducts.findByIds(productIds, { liveOnly: true }))
+      .filter((p) => {
+        const a = availability.get(p.id);
+        return (
+          a !== undefined &&
+          a.liveLanguages.length > 0 &&
+          isInsideWindow(a.window, generatedFor) &&
+          isProductVisibleTo(a.audience, ANONYMOUS_PRODUCT_AUDIENCE)
+        );
       })
-    )
-      // Issue #227 — `visibility === 'public'` was here, and it is not the
-      // whole answer: an operator can save `public` **with** a non-empty
-      // `allowed_organization_ids`, which restricts the row to the
-      // organisations it names whatever the visibility column says. A sitemap
-      // is read by crawlers, so the audience is the anonymous one, and
-      // `isProductVisibleTo` answers both columns for it — the `public` half
-      // unchanged, the allow-list half for the first time.
-      .filter(
-        (p) => isProductVisibleTo(p, ANONYMOUS_PRODUCT_AUDIENCE) && p.archivedAt === null,
-      )
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
 
     // Feature 068 — a deactivated category is not a customer-reachable URL, so
@@ -151,6 +168,11 @@ export class SitemapGeneratorService {
     const cmsPages = (await this.cmsPages.findByIds([...memberIds.cmsPages]))
       .filter((page) => page.status === 'published' && page.active)
       .sort((a, b) => a.slug.localeCompare(b.slug));
+
+    const keys = products.length === 0 ? new Map<string, Map<string, string>>() : await this.urlKeys.effectiveKeys(
+      products.map((p) => p.id),
+      channel.id,
+    );
 
     const urls: SitemapUrl[] = [];
     for (const c of categories) {
@@ -170,12 +192,18 @@ export class SitemapGeneratorService {
       });
     }
     for (const p of products) {
-      urls.push({
-        loc: `${baseUrl}/p/${p.slug}`,
-        lastmod: p.updatedAt,
-        changefreq: 'daily',
-        priority: 0.8,
-      });
+      // One URL per live language (FR-074), each on the product's effective key
+      // in that language; `productPath` is the one place a product URL is composed.
+      const productKeys = keys.get(p.id);
+      for (const languageCode of availability.get(p.id)?.liveLanguages ?? []) {
+        const key = productKeys?.get(languageCode) ?? p.slug;
+        urls.push({
+          loc: `${baseUrl}${productPath({ key, languageCode, channelDefaultLanguage: channel.defaultLanguage })}`,
+          lastmod: p.updatedAt,
+          changefreq: 'daily',
+          priority: 0.8,
+        });
+      }
     }
     const payload = renderSitemap(urls);
     const now = new Date();
@@ -197,6 +225,21 @@ export class SitemapGeneratorService {
     }
     await em.flush();
     return { payload, generatedAt: now };
+  }
+
+  /**
+   * Feature 163 (security review, carry 4) — a product's availability changed in
+   * a way a sitemap lists: its scoped status, its publication window (the window
+   * sweep announces each bound it crosses), its audience or its URL keys. Every
+   * channel's cached document is marked stale, so the next serve regenerates it
+   * instead of advertising — for up to the staleness window — a URL that no
+   * longer opens, or omitting one that just started to. Which channels the
+   * product is in is not asked: the regeneration is lazy and per channel.
+   */
+  async markAllStale(): Promise<void> {
+    // command-coverage-ignore: a derived cache's staleness stamp — no operator
+    // write, nothing to audit; the document is rebuilt from catalog's answer.
+    await this.emFactory().nativeUpdate(SitemapCache, {}, { generatedAt: new Date(0) });
   }
 
   async getStatusForChannel(salesChannelCode: string): Promise<SitemapStatus> {

@@ -1,3 +1,4 @@
+import { scopeLanguageOf } from '@endora-commerce/contracts';
 import { currentSalesChannel } from '@endora-commerce/platform/kernel';
 
 /**
@@ -23,4 +24,17 @@ import { currentSalesChannel } from '@endora-commerce/platform/kernel';
  */
 export function raisedOnChannelId(): string | null {
   return currentSalesChannel()?.id ?? null;
+}
+
+/**
+ * Feature 163 — the scope language L of a buyer's quote write on `channelId`:
+ * the request's language resolved against the channel's own languages (R7)
+ * when `channelId` is the request's channel, or `null` (the channel's default)
+ * outside a request or for another channel.
+ */
+export function raisedInScopeLanguage(languageTag: string | undefined, channelId?: string | null): string | null {
+  const channel = currentSalesChannel();
+  if (!channel) return null;
+  if (channelId !== undefined && channelId !== null && channelId !== channel.id) return null;
+  return scopeLanguageOf(channel, languageTag);
 }

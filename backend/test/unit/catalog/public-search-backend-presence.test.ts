@@ -7,7 +7,7 @@ import { effectiveState } from '../../../src/kernel/lifecycle/effective-state.js
 import { registryCache } from '../../../src/kernel/lifecycle/registry-cache.js';
 import { REGISTERED_MANIFESTS } from '../../../src/lifecycle/registered-manifests.js';
 import { registerCatalogPublicRoutes } from '../../../../packages/modules/catalog/src/backend/routes.public.js';
-import type { SearchListOutcome, SearchQueryPort } from '@endora-commerce/contracts';
+import type { ListingPriceOrderPort, SearchListOutcome, SearchQueryPort } from '@endora-commerce/contracts';
 import type { CatalogQueryService } from '../../../../packages/modules/catalog/src/backend/services/catalog-query.service.js';
 
 /**
@@ -49,7 +49,7 @@ const FAKE_CHANNEL = {
   code: 'default',
   name: { en: 'Default' },
   active: true,
-  isPublic: true,
+  anonymousAccess: true,
   systemDefault: true,
   defaultLanguage: 'en',
   defaultCurrency: 'PLN',
@@ -240,10 +240,10 @@ describe('catalog public listing — the Meilisearch read decides `search` prese
     });
   });
 
-  it('refuses the price controls on a channel that publishes no prices', async () => {
-    // FR-016's first condition, which needs no pricing port to decide: a
-    // non-public channel withholds prices wholesale, so there is nothing to
-    // order by.
+  it('refuses the price controls where the page shows no prices', async () => {
+    // FR-016: a page-level display mode of `none` — since issue #492 the only
+    // way a channel withholds prices; its former public flag is retired into
+    // `pricing.unauthenticated_display_mode`.
     const nonPublic = Fastify();
     nonPublic.addHook('onRequest', (_request, reply, done) => {
       void enterPlatformScope(
@@ -253,11 +253,12 @@ describe('catalog public listing — the Meilisearch read decides `search` prese
             reply.raw.once('close', resolve);
             done();
           }),
-        { channel: { ...FAKE_CHANNEL, isPublic: false }, container: createRootContainer() },
+        { channel: FAKE_CHANNEL, container: createRootContainer() },
       );
     });
     await registerCatalogPublicRoutes(nonPublic, {
       queryService: { listProducts: postgresListProducts } as unknown as CatalogQueryService,
+      listingPriceOrder: { pageDisplayMode: async () => 'none' } as unknown as ListingPriceOrderPort,
     });
     await nonPublic.ready();
     postgresListProducts.mockClear();

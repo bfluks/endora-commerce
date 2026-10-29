@@ -24,6 +24,7 @@ type PostRow = {
   status: BlogPostStatus;
   published_at: Date | string | null;
   description: string | null;
+  main_image_asset_id: string | null;
   meta_title: Record<string, string> | null;
   meta_description: Record<string, string> | null;
   meta_keywords: Record<string, string> | null;
@@ -177,16 +178,17 @@ export class BlogPostService {
 
       await tx.execute(
         `insert into blog_posts
-           (id, name, slug, active, status, published_at, description,
+           (id, name, slug, active, status, published_at, description, main_image_asset_id,
             meta_title, meta_description, meta_keywords, content,
             version, created_at, updated_at)
-           values (?, ?::jsonb, ?, ?, 'draft', null, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, 1, ?, ?)`,
+           values (?, ?::jsonb, ?, ?, 'draft', null, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, 1, ?, ?)`,
         [
           id,
           JSON.stringify(input.name),
           input.slug,
           input.active ?? true,
           input.description ?? null,
+          input.mainImageAssetId ?? null,
           input.metaTitle ? JSON.stringify(input.metaTitle) : null,
           input.metaDescription ? JSON.stringify(input.metaDescription) : null,
           input.metaKeywords ? JSON.stringify(input.metaKeywords) : null,
@@ -275,6 +277,10 @@ export class BlogPostService {
       if (input.description !== undefined) {
         sets.push('description = ?');
         params.push(input.description);
+      }
+      if (input.mainImageAssetId !== undefined) {
+        sets.push('main_image_asset_id = ?');
+        params.push(input.mainImageAssetId);
       }
       if (input.metaTitle !== undefined) {
         sets.push('meta_title = ?::jsonb');
@@ -630,6 +636,7 @@ export class BlogPostService {
       status: row.status,
       publishedAt: this.toIso(row.published_at),
       description: row.description,
+      mainImageAssetId: row.main_image_asset_id ?? null,
       metaTitle: row.meta_title,
       metaDescription: row.meta_description,
       metaKeywords: row.meta_keywords,
@@ -682,6 +689,7 @@ export class BlogPostService {
       active: row.active,
       publishedAt: this.toIso(row.published_at),
       description: row.description,
+      mainImageAssetId: row.main_image_asset_id ?? null,
       version: row.version,
       createdAt: this.toIsoNonNull(row.created_at),
       updatedAt: this.toIsoNonNull(row.updated_at),

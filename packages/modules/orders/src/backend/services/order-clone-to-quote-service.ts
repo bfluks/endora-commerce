@@ -6,12 +6,31 @@ import {
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { Order } from '../entities/order.entity.js';
-import { OrderItem } from '../entities/order-item.entity.js';
+import { loadArrangedOrderLines } from './order-line-order.js';
 
 interface CloneContext {
   customerAccountId: string;
   organizationId: string;
   isOrgAdmin?: boolean;
+}
+
+/**
+ * Feature 155 (FR-012, FR-030; `contracts/quote-requests-api.md` §3) — who is
+ * cloning. `actor: 'operator'` is set only by the admin route, as a literal
+ * (threat F10): never read from a request body or query. The request is then
+ * created with the minimums flagged on the admin read rather than refused.
+ * Absent = the buyer, whose clone is refused below a minimum (US4 #5a).
+ */
+export interface CloneOptions {
+  actor?: 'operator';
+  /**
+   * Feature 163 — the buyer's request: the language a refusal names a product in,
+   * its language tag and its channel, which the lines are judged at
+   * (`CreateForCustomerOptions`). Never set for the operator.
+   */
+  language?: string;
+  languageTag?: string;
+  salesChannelId?: string;
 }
 
 /**
@@ -27,7 +46,11 @@ export class OrderCloneToQuoteService {
     private readonly getRfqService: () => RfqCustomerPort | null,
   ) {}
 
-  async clone(orderId: string, ctx: CloneContext): Promise<{ quoteRequestId: string }> {
+  async clone(
+    orderId: string,
+    ctx: CloneContext,
+    options: CloneOptions = {},
+  ): Promise<{ quoteRequestId: string }> {
     const rfq = this.getRfqService();
     if (!rfq) {
       throw new HttpError(503, ERROR_CODES.VALIDATION_FAILED, 'Quote Requests module is not available.');
@@ -36,7 +59,8 @@ export class OrderCloneToQuoteService {
     const order = await em.findOne(Order, { id: orderId, organizationId: ctx.organizationId });
     if (!order) throw new HttpError(404, ERROR_CODES.ORDER_NOT_FOUND, 'Order not found.');
 
-    const items = await em.find(OrderItem, { orderId });
+    // Feature 159 — the lines in the order's display order.
+    const items = (await loadArrangedOrderLines(em, orderId)).lines;
     if (items.length === 0) {
       throw new HttpError(409, ERROR_CODES.VALIDATION_FAILED, 'Order has no line items to clone.');
     }
@@ -56,6 +80,13 @@ export class OrderCloneToQuoteService {
         isOrgAdmin: ctx.isOrgAdmin ?? true,
       },
       input,
+      options.actor === 'operator'
+        ? { minimums: 'warn' }
+        : {
+            ...(options.language ? { language: options.language } : {}),
+            ...(options.languageTag ? { languageTag: options.languageTag } : {}),
+            ...(options.salesChannelId ? { salesChannelId: options.salesChannelId } : {}),
+          },
     );
     return { quoteRequestId: created.id };
   }

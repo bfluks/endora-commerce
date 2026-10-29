@@ -19,8 +19,10 @@ import {
  * what every provider in the composed registry is held to.
  *
  * The table is the seven record types this feature ships, one row each, with
- * the GET route of the type's own admin list. A provider registered without a
- * row fails the first case, so a new record type arrives with its row:
+ * the GET route of the type's own admin list, and the record types later
+ * features contribute (`specs/163-projects-and-tasks/`: Projects and Tasks). A
+ * provider registered without a row fails the first case, so a new record type
+ * arrives with its row:
  *
  * | Entity type                    | List route (gate)                              | Route file                                              |
  * | ------------------------------ | ---------------------------------------------- | ------------------------------------------------------- |
@@ -31,6 +33,8 @@ import {
  * | `customers.customer`           | `/api/v1/admin/customers` (`customers:read`)   | `packages/modules/customers/src/backend/routes.admin.ts` |
  * | `catalog.product`              | `/api/v1/admin/catalog/products` (`catalog:read`) | `packages/modules/catalog/src/backend/routes.admin.ts` |
  * | `catalog.category`             | `/api/v1/admin/catalog/categories` (`catalog:read`) | `packages/modules/catalog/src/backend/routes.admin.ts` |
+ * | `projects.project`             | `/api/v1/admin/projects` (`projects:read`)     | `packages/modules/projects/src/backend/routes/routes.projects.ts` |
+ * | `tasks.task`                   | `/api/v1/admin/tasks` (`tasks:read`)           | `packages/modules/tasks/src/backend/routes/routes.tasks.ts` |
  *
  * The gate is measured, not read: an admin holding exactly the provider's
  * `requiredPermission` opens the list (and is offered the type), and one
@@ -44,6 +48,8 @@ const LIST_ROUTE: Readonly<Record<string, string>> = {
   'customers.customer': '/api/v1/admin/customers',
   'catalog.product': '/api/v1/admin/catalog/products',
   'catalog.category': '/api/v1/admin/catalog/categories',
+  'projects.project': '/api/v1/admin/projects',
+  'tasks.task': '/api/v1/admin/tasks',
 };
 
 describe('admin global search — provider conformance (spec 150, provider-contract §5)', () => {
@@ -84,7 +90,7 @@ describe('admin global search — provider conformance (spec 150, provider-contr
     );
   }
 
-  it('ships exactly the seven record types of the table, in the fixed group order (FR-003)', () => {
+  it('ships exactly the record types of the table, in the fixed group order (FR-003)', () => {
     expect(providers.map((p) => p.entityType)).toEqual([
       'orders.order',
       'quote_requests.quote_request',
@@ -93,6 +99,8 @@ describe('admin global search — provider conformance (spec 150, provider-contr
       'customers.customer',
       'catalog.product',
       'catalog.category',
+      'projects.project',
+      'tasks.task',
     ]);
   });
 

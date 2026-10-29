@@ -76,6 +76,7 @@ _Brak._
 
 | Akcja | Otwiera | Uprawnienie |
 | --- | --- | --- |
+| `new-order` | `/orders/new` | `orders:write` |
 | `open-orders` | `/orders` | `orders:read` |
 | `order-statuses` | `/orders/statuses` | `orders:read` |
 

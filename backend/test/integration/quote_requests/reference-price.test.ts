@@ -5,15 +5,13 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { seedBasePriceSql } from '../../helpers/price-book-sql.js';
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { QuoteRequestItem } from '../../helpers/package-entities.js';
 import { ensureSalesChannel } from '../../helpers/sales-channel-fixtures.js';
-import { PriceListService } from '../../../../packages/modules/price_lists/src/backend/services/price-list-service.js';
-import {
-  DefaultPriceListMigrator,
-  DEFAULT_PRICE_LIST_ID,
-} from '../../../../packages/modules/price_lists/src/backend/services/default-price-list-migration.js';
-import { neighbourReadPorts } from '../../helpers/price-list-neighbour-ports.js';
+import { seedPriceBookSql } from '../../helpers/price-book-sql.js';
+import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
+import { TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 
 /**
  * Feature 146, Phase 5 (T027) — the reference price is captured, server-side,
@@ -54,14 +52,11 @@ describe('146 — reference price captured at customer submission [integration]'
     // `setupBackendServer` has just emptied the price tables (`price_lists` is
     // a seeded table, truncated with cascade), so this block adds its lists
     // and wipes nothing (`check-shared-table-wipes`).
-    await new DefaultPriceListMigrator(h.em).seedDefault();
-    const lists = new PriceListService(h.em, undefined, undefined, undefined, neighbourReadPorts(h.em));
-    await lists.addProduct(DEFAULT_PRICE_LIST_ID, SEED_PRODUCT_101_ID);
-    await lists.replaceBrackets(DEFAULT_PRICE_LIST_ID, SEED_PRODUCT_101_ID, {
-      PLN: [{ minQuantity: 1, maxQuantity: null, amount: '130.0000' }],
-    });
+    await seedBasePriceSql(em, SEED_PRODUCT_101_ID, '130.0000');
 
     const channelA = await ensureSalesChannel(em, CHANNEL_A);
+    // Feature 154 — the buyer shops on channel A.
+    await addOrganizationChannels(h, TEST_ORGANIZATION_ID, [CHANNEL_A]);
     // A quote line is refused on a channel that does not publish its product (#259).
     await em
       .getConnection()
@@ -70,16 +65,14 @@ describe('146 — reference price captured at customer submission [integration]'
           `on conflict (sales_channel_id, product_id) do nothing`,
         [channelA.id, SEED_PRODUCT_101_ID],
       );
-    const channelList = await lists.create({
+    // Feature 160 — channel A's price is a book for everyone bound to channel A
+    // (the catalogue tier there), where it was a channel-rule list.
+    await seedPriceBookSql(em, {
       name: 'Feature 146 reference channel A',
-      type: 'base',
-      applicationRule: { kind: 'criterion', type: 'salesChannel', values: [channelA.id] },
+      audience: 'everyone',
+      channelIds: [channelA.id],
+      rows: [{ productId: SEED_PRODUCT_101_ID, fixed: '120.0000' }],
     });
-    await lists.addProduct(channelList.id, SEED_PRODUCT_101_ID);
-    await lists.replaceBrackets(channelList.id, SEED_PRODUCT_101_ID, {
-      PLN: [{ minQuantity: 1, maxQuantity: null, amount: '120.0000' }],
-    });
-    await lists.activate(channelList.id);
   });
 
   afterAll(async () => {
@@ -94,19 +87,19 @@ describe('146 — reference price captured at customer submission [integration]'
     );
     expect(res.statusCode, res.body).toBe(201);
     const [line] = await linesOf(idOf(res));
-    expect(line?.referenceUnitPrice).toBe('120.00');
+    expect(line?.referenceUnitPrice).toBe('120.0000');
     expect(line?.referenceCurrency).toBe('PLN');
     expect(line?.referenceCapturedAt).toBeInstanceOf(Date);
     expect(line!.referenceCapturedAt!.getTime()).toBeGreaterThanOrEqual(before - 1000);
     // The proposal is the customer's, untouched by the reference.
-    expect(line?.desiredUnitPrice).toBe('100.00');
+    expect(line?.desiredUnitPrice).toBe('100.0000');
   });
 
   it('a request on the system-default channel stores that channel’s price (130.00)', async () => {
     const res = await create({ items: [{ productId: SEED_PRODUCT_101_ID, quantity: 1 }] });
     expect(res.statusCode, res.body).toBe(201);
     const [line] = await linesOf(idOf(res));
-    expect(line?.referenceUnitPrice).toBe('130.00');
+    expect(line?.referenceUnitPrice).toBe('130.0000');
   });
 
   it('a resubmit resolves on its own channel, not the source request’s', async () => {
@@ -120,7 +113,7 @@ describe('146 — reference price captured at customer submission [integration]'
     });
     expect(resubmit.statusCode, resubmit.body).toBe(201);
     const [line] = await linesOf(idOf(resubmit));
-    expect(line?.referenceUnitPrice).toBe('130.00');
+    expect(line?.referenceUnitPrice).toBe('130.0000');
     expect(line?.referenceCurrency).toBe('PLN');
     expect(line?.desiredUnitPrice ?? null).toBeNull();
   });
@@ -135,7 +128,7 @@ describe('146 — reference price captured at customer submission [integration]'
     expect(res.statusCode, res.body).toBe(200);
     const { quoteRequestId } = (res.json() as { data: { quoteRequestId: string } }).data;
     const [line] = await linesOf(quoteRequestId);
-    expect(line?.referenceUnitPrice).toBe('130.00');
+    expect(line?.referenceUnitPrice).toBe('130.0000');
     expect(line?.referenceCurrency).toBe('PLN');
     expect(line?.desiredUnitPrice ?? null).toBeNull();
   });
@@ -163,7 +156,7 @@ describe('146 — reference price captured at customer submission [integration]'
       expect(line?.referenceUnitPrice ?? null).toBeNull();
       expect(line?.referenceCurrency ?? null).toBeNull();
       expect(line?.referenceCapturedAt ?? null).toBeNull();
-      expect(line?.desiredUnitPrice).toBe('90.00');
+      expect(line?.desiredUnitPrice).toBe('90.0000');
     } finally {
       h.container.register('buyerLinePricePort', original);
     }
@@ -189,7 +182,7 @@ describe('146 — reference price captured at customer submission [integration]'
     );
     expect(res.statusCode, res.body).toBe(201);
     const [line] = await linesOf(idOf(res));
-    expect(line?.referenceUnitPrice).toBe('120.00');
+    expect(line?.referenceUnitPrice).toBe('120.0000');
     expect(line?.referenceCurrency).toBe('PLN');
   });
 
@@ -214,7 +207,7 @@ describe('146 — reference price captured at customer submission [integration]'
     });
     expect(topLevel.statusCode, topLevel.body).toBe(400);
     const [kept] = await linesOf(id);
-    expect(kept?.referenceUnitPrice).toBe('120.00');
+    expect(kept?.referenceUnitPrice).toBe('120.0000');
 
     // Its line schema is the create line schema, which is not strict (M4): a
     // per-line key is stripped, so the edit goes through and the value sent is

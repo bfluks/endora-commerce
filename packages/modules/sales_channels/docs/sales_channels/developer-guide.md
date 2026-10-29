@@ -24,6 +24,49 @@ app.get('/api/v1/storefront/products', async () => {
 
 Outside the request lifecycle (background jobs, CLI scripts), resolve the `salesChannelResolutionPort` from the container and call `getByCode(code)` or `getSystemDefault()`; type it with `SalesChannelResolutionPort` from `@endora-commerce/platform/kernel`. The `SalesChannelResolverService` class behind it is not published.
 
+## Channel access: routes that must stay open
+
+Every non-admin `/api/v1/*` request is checked against the channel-access rule after its channel is resolved: an anonymous request is accepted only on a channel open to anonymous visitors (`403 SALES_CHANNEL_SIGN_IN_REQUIRED` otherwise), a customer request only on a channel assigned to the customer's Organization (`403 SALES_CHANNEL_NOT_PERMITTED` otherwise). Administrator and API-key requests are not checked. A route of yours is therefore refused on a closed store unless it says otherwise.
+
+A route whose caller is not a shopper of the store — or has to reach it to become one — declares that on the route:
+
+```ts
+app.post(
+  '/api/v1/payments/acme/notify',
+  { config: { salesChannelAccess: 'open' } },
+  async (request, reply) => {
+    // Still resolved to a channel, and still behind this route's own guards.
+  },
+);
+```
+
+**Declare it on every provider callback your module receives** — a payment gateway's notification, a carrier's status webhook, a return URL a provider redirects a browser to. Those requests arrive without a session and usually without a storefront channel, so they are anonymous requests on the system-default channel: the moment an operator closes that channel to anonymous visitors, an undeclared callback is refused with `403` and the provider's notifications stop arriving. The same applies to links in e-mails that must work for someone who is not signed in (confirmation, unsubscribe) and to anything a sign-in or registration form needs before the visitor has an account.
+
+Do not declare it on anything that shows or changes a store's catalogue, prices, basket or orders: those are exactly what the rule protects. Individual (B2C) self-registration is deliberately *not* open, because it signs the visitor in at once.
+
+`'open'` skips the access step only. The request is still resolved to a channel (an unknown or inactive channel is still refused), and the route's own guards — `requireCustomer`, `requireAdmin`, a signature check — still run. In this repository the set of open routes is held by `backend/test/contract/sales_channels/channel-access-open-routes.test.ts` against the ledger `backend/test/helpers/channel-access-open-routes.ts`, which gives a reason for each route; adding an open route means adding its ledger entry.
+
+### Checking the rule yourself
+
+A path that creates a customer session outside the shared sign-in routes must refuse before it creates one. Resolve the `salesChannelAccessPort` from the container, typed with `SalesChannelAccessPort` from `@endora-commerce/platform/kernel`:
+
+```ts
+const { salesChannelAccessPort } = ctx.cradle<YourCradle>();
+
+// Throws the 403 SALES_CHANNEL_NOT_PERMITTED refusal, with details.channelCode.
+await salesChannelAccessPort.assertCustomerMayUse(account.organizationId, channel.id);
+
+// Or read the decision, or the channels an Organization may use (cached).
+const decision = await salesChannelAccessPort.decide(actor, channel);
+const permitted = await salesChannelAccessPort.permittedChannelIds(organizationId);
+```
+
+The port is provided by the kernel; it needs no manifest dependency.
+
+### Where assignments live
+
+The assignment is the channel's `organization` membership — the `sales_channel_organizations` bridge — written only through `salesChannelMembershipPort`, which also drops the access cache for the Organization before it reports the change. The per-customer record (`sales_channel_customer_accounts`) takes no part in access: it stays registered as a bridge and is neither read nor written by the rule. Grant access by assigning the customer's Organization, never by writing a per-customer row.
+
 ## Adding a channel-scoped entity to your module
 
 Channel scoping has two layers:

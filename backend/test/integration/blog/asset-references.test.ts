@@ -77,6 +77,21 @@ describe('blog asset references (T017 — registry descriptors)', () => {
     expect(blogRefs[0]!.label).toContain('guides');
   });
 
+  it('surfaces a Post whose main_image_asset_id matches (feature 163)', async () => {
+    const conn = db.em().getConnection();
+    const postId = randomUUID();
+    await conn.execute(
+      `insert into blog_posts (id, slug, name, main_image_asset_id, version, created_at, updated_at)
+       values (?, 'launch-notes', '{"en-US":"Launch notes"}'::jsonb, ?, 1, now(), now())`,
+      [postId, ASSET_A],
+    );
+    const refs = await registry.findReferences(ASSET_A);
+    const postRefs = refs.filter((r) => r.kind === 'blog_post_main_image');
+    expect(postRefs).toHaveLength(1);
+    expect(postRefs[0]!.entityId).toBe(postId);
+    expect(postRefs[0]!.label).toContain('launch-notes');
+  });
+
   it('surfaces a Post whose content tree contains the asset id', async () => {
     const conn = db.em().getConnection();
     const postId = randomUUID();

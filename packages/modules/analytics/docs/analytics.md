@@ -58,6 +58,20 @@ queries an unbounded range.
 - `NoopForwarder` — otherwise. Ingest never blocks on a forwarder failure
   and the source events are durable in `analytics_events` regardless.
 
+## Reporting time zone
+
+The setting **Reporting time zone** (`analytics.reporting_time_zone`, in the
+*Analytics* section of the settings screen) is the calendar reports count days
+in: a report over a range of days takes each day from midnight to midnight in
+this zone. It is an IANA time-zone name such as `Europe/Warsaw`, or `UTC`, the
+default; a zone the runtime does not know is refused with `422`
+`VALIDATION_FAILED`. Projects analytics count in it today, and CRM is to follow.
+
+Other modules read it through the gated port `reportingTimeZonePort`
+(`ReportingTimeZonePort` in `@endora-commerce/contracts`, `timeZone()`), never by
+the setting's code. A reader declares the edge `degrades-without`, asks this
+module's presence first and counts in `UTC` while Analytics is switched off.
+
 ## Entities
 
 `AnalyticsEvent` — `type`, `occurredAt`, `recordedAt`, optional

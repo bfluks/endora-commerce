@@ -1,3 +1,5 @@
+import { resolveColorValue } from './brand-colors.js';
+
 export type BackgroundKind = 'none' | 'solid' | 'gradient' | 'image' | 'video';
 export type MediaSourceKind = 'url' | 'library';
 
@@ -50,13 +52,14 @@ export function backgroundToStyle(
   if (bg.kind === 'none') return { style: {} };
 
   if (bg.kind === 'solid') {
-    const color = bg.color && bg.color !== 'transparent' ? bg.color : undefined;
+    // A colour may be a brand token (feature 163, T040).
+    const color = bg.color && bg.color !== 'transparent' ? resolveColorValue(bg.color) : undefined;
     return color ? { style: { backgroundColor: color } } : { style: {} };
   }
 
   if (bg.kind === 'gradient') {
-    const from = bg.gradientFrom ?? '#ffffff';
-    const to = bg.gradientTo ?? '#000000';
+    const from = resolveColorValue(bg.gradientFrom) ?? '#ffffff';
+    const to = resolveColorValue(bg.gradientTo) ?? '#000000';
     const angle = bg.gradientAngle ?? 135;
     return {
       style: {

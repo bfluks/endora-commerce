@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   setupBackendServer,
@@ -117,6 +118,54 @@ describe('GET /api/v1/catalog/sitemap.xml', () => {
     // Restore for downstream tests.
     product.allowedOrganizationIds = [];
     await em.flush();
+  });
+
+  it('lists one URL per live language on the effective key there, `?lang` off the default (163 T112, FR-074)', async () => {
+    const run = randomUUID().slice(0, 8);
+    const conn = h.em().getConnection();
+    const channelId = randomUUID();
+    const code = `sm163-${run}`;
+    const productId = randomUUID();
+    await conn.execute(
+      `insert into sales_channels (id, code, name, default_language, languages, currencies, default_currency,
+                                   active, created_at, updated_at)
+       values (?, ?, '{"en-US":"163 sitemap"}'::jsonb, 'en-US', '["en-US","pl-PL"]'::jsonb, '["PLN"]'::jsonb, 'PLN',
+               true, now(), now())`,
+      [channelId, code],
+    );
+    await conn.execute(
+      `insert into products (id, sku, slug, type, status, name, description, visibility, allowed_organization_ids,
+                             created_at, updated_at)
+       values (?, ?, ?, 'simple', 'active', '{"en-US":"Sitemap drill"}'::jsonb, '{}'::jsonb, 'public', '[]'::jsonb,
+               now(), now())`,
+      [productId, `SM163-${run}`, `drill-${run}`],
+    );
+    await conn.execute(`insert into sales_channel_products (sales_channel_id, product_id) values (?, ?)`, [channelId, productId]);
+    try {
+      const keys = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/admin/catalog/products/${productId}/url-keys`,
+        cookies: { b2b_session: 'stub-admin-session' },
+        payload: { languageKeys: [{ languageCode: 'pl-PL', key: `wiertarka-${run}` }] },
+      });
+      expect(keys.statusCode, keys.body).toBe(200);
+      const regen = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/seo/sitemap/${code}/regenerate`,
+        cookies: { b2b_session: 'stub-admin-session' },
+        headers: { 'x-sales-channel': code },
+      });
+      expect(regen.statusCode, regen.body).toBe(200);
+      const res = await h.app.inject({ method: 'GET', url: '/api/v1/catalog/sitemap.xml', headers: { 'x-sales-channel': code } });
+      expect(res.body).toContain(`<loc>http://test.local/p/drill-${run}</loc>`);
+      expect(res.body).toContain(`<loc>http://test.local/p/wiertarka-${run}?lang=pl-PL</loc>`);
+      expect(res.body).not.toContain(`/p/drill-${run}?lang=pl-PL`);
+    } finally {
+      await conn.execute(`delete from sitemap_cache where key = ?`, [code]);
+      await conn.execute(`delete from sales_channel_products where product_id = ?`, [productId]);
+      await conn.execute(`delete from products where id = ?`, [productId]);
+      await conn.execute(`delete from sales_channels where id = ?`, [channelId]);
+    }
   });
 
   it('regenerate endpoint returns the new metadata', async () => {

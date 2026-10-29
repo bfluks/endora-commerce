@@ -1,5 +1,6 @@
 import {
   ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE,
+  evaluateOrderMinimums,
   isProductVisibleTo,
   type AdminOrderPreviewMessageCode,
   type CatalogProductRecord,
@@ -36,6 +37,48 @@ export function previewLineAvailability(input: {
 }
 
 /**
+ * Step 5 of the admin order preview's per-line decision (feature 155, FR-009,
+ * FR-035): `BELOW_MINIMUM_QUANTITY`, judged only over the lines that passed
+ * steps 1–4 — `null` marks a line that did not, and it counts toward no
+ * product's total. A product's total runs across all its lines (D1). Preview
+ * items carry no packaging unit, so only the pieces minimum is reachable.
+ *
+ * Answers the missed minimum by line index; an absent index has none.
+ */
+export function previewBelowMinimums(
+  lines: ReadonlyArray<{
+    product: Pick<CatalogProductRecord, 'id' | 'type' | 'minOrderQuantity'>;
+    quantity: number;
+  } | null>,
+): Map<number, number> {
+  const products = new Map<string, Pick<CatalogProductRecord, 'id' | 'type' | 'minOrderQuantity'>>();
+  const orderable = lines.flatMap((line, index) => {
+    if (line === null) return [];
+    products.set(line.product.id, line.product);
+    return [
+      {
+        key: String(index),
+        productId: line.product.id,
+        quantity: line.quantity,
+        packagingUnitId: null,
+        packagingUnitBaseQuantity: null,
+        exempt: false,
+      },
+    ];
+  });
+  const below = new Map<number, number>();
+  for (const violation of evaluateOrderMinimums(orderable, {
+    products: [...products.values()],
+    packagingUnits: [],
+  })) {
+    if (violation.kind === 'product_unavailable') continue;
+    const index = Number(violation.key);
+    if (!below.has(index)) below.set(index, violation.minimum);
+  }
+  return below;
+}
+
+/**
  * The {@link ProductAudience} of the customer the operator is previewing for.
  *
  * Not `productAudienceOf(request)`: the request's actor is the operator, and the
@@ -43,6 +86,6 @@ export function previewLineAvailability(input: {
  * customer is a signed-in buyer of that Organization — the same audience
  * `cartAudience` yields when the order is placed through the cart.
  */
-function customerAudience(organizationId: string): ProductAudience {
+export function customerAudience(organizationId: string): ProductAudience {
   return { organizationId, authenticated: true };
 }

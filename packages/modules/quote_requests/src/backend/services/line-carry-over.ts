@@ -11,12 +11,19 @@
  * is unit-tested on its own.
  */
 
+import { unitPriceHalfUp } from '@endora-commerce/contracts';
+
 /** The part of a stored line the pairing reads. */
 export interface CarryOverRow {
   id: string;
   productId: string;
   variantId?: string | null;
+  /** Feature 155 — the catalogue unit the line was stored with; `null` for older lines. */
+  packagingUnitId?: string | null;
   packagingUnitName?: string | null;
+  /** Feature 159 — the row's group (`null` = ungrouped); absent or `undefined` = not known. */
+  groupId?: string | null | undefined;
+  quantity?: number | undefined;
 }
 
 /**
@@ -32,7 +39,16 @@ export interface IncomingLineKey {
   id?: string | undefined;
   productId: string;
   variantId?: string | null | undefined;
+  /** Feature 155 — the catalogue unit the line resolved to; absent or `null` = none. */
+  packagingUnitId?: string | null | undefined;
   packagingUnitName?: string | null | undefined;
+  /**
+   * Feature 159 (research N-32) — the group the line is in (`null` =
+   * ungrouped); `undefined` says nothing, as a body without `groups` does.
+   */
+  groupId?: string | null | undefined;
+  /** Feature 159 — the line's quantity; `undefined` says nothing. */
+  quantity?: number | undefined;
 }
 
 /**
@@ -53,9 +69,17 @@ export interface LinePairing<E> {
 
 /**
  * Pair incoming lines with stored rows: by `id` (admin only), then by product
- * and variant with an equal packaging name, then by product and variant in
- * stored order (the R6 rule). Two variants of one product never pair with each
- * other. Each row pairs at most once.
+ * and variant with the same packaging unit id, then with an equal packaging
+ * name, then by product and variant in stored order (the R6 rule). Two variants
+ * of one product never pair with each other. Each row pairs at most once.
+ *
+ * Feature 159 (research N-32) — one product may sit on several lines, in
+ * different groups. Each of the passes after the id therefore prefers, among
+ * the rows it accepts, one of the line's own group and quantity, then of its
+ * group, then of its quantity, before stored order decides — each preference
+ * run over every line before the next, so a closer match is never taken by a
+ * line that would have settled for less. A line that says nothing of its group
+ * or quantity skips that preference.
  */
 export function pairLines<E extends CarryOverRow>(
   existing: readonly E[],
@@ -79,6 +103,32 @@ export function pairLines<E extends CarryOverRow>(
   const sameVariant = (row: E, line: IncomingLineKey): boolean =>
     (row.variantId ?? null) === variantOf(line);
 
+  // Feature 159 — the preferences inside each pass, strictest first.
+  const sameGroup = (row: E, line: IncomingLineKey): boolean | null =>
+    line.groupId === undefined || row.groupId === undefined ? null : (row.groupId ?? null) === (line.groupId ?? null);
+  const sameQuantity = (row: E, line: IncomingLineKey): boolean | null =>
+    line.quantity === undefined || row.quantity === undefined ? null : row.quantity === line.quantity;
+  const preferences: ReadonlyArray<(row: E, line: IncomingLineKey) => boolean | null> = [
+    (row, line) => {
+      const group = sameGroup(row, line);
+      const quantity = sameQuantity(row, line);
+      return group === null || quantity === null ? null : group && quantity;
+    },
+    sameGroup,
+    sameQuantity,
+    () => true,
+  ];
+
+  /** One pass: every line its preferred row first, then the next preference. */
+  const pass = (applies: (line: IncomingLineKey) => boolean, accept: (row: E, line: IncomingLineKey) => boolean): void => {
+    for (const prefer of preferences) {
+      incoming.forEach((line, lineIndex) => {
+        if (!applies(line)) return;
+        claim(lineIndex, (row) => accept(row, line) && prefer(row, line) === true);
+      });
+    }
+  };
+
   // 1. By id — admin only, and only for a row of the same product.
   if (mode === 'admin') {
     incoming.forEach((line, lineIndex) => {
@@ -87,31 +137,34 @@ export function pairLines<E extends CarryOverRow>(
     });
   }
 
-  // 2. Same product and variant, equal packaging name — run over every line
-  //    before any positional fallback, so an exact match is never stolen by an
-  //    earlier line that would have settled for position.
-  incoming.forEach((line, lineIndex) => {
-    if (line.packagingUnitName === undefined) return;
-    const packaging = line.packagingUnitName ?? null;
-    claim(
-      lineIndex,
-      (row) =>
-        row.productId === line.productId &&
-        sameVariant(row, line) &&
-        (row.packagingUnitName ?? null) === packaging,
-    );
-  });
+  // 2a. Same product and variant, the same packaging unit id (feature 155,
+  //     FR-031 (b)) — a unit renamed in the catalogue since the line was
+  //     stored is still the same unit. Both sides must carry an id.
+  pass(
+    (line) => (line.packagingUnitId ?? null) !== null,
+    (row, line) =>
+      row.productId === line.productId && sameVariant(row, line) && (row.packagingUnitId ?? null) === line.packagingUnitId,
+  );
+
+  // 2b. Same product and variant, equal packaging name — run over every line
+  //     before any positional fallback, so an exact match is never stolen by an
+  //     earlier line that would have settled for position.
+  pass(
+    (line) => line.packagingUnitName !== undefined,
+    (row, line) =>
+      row.productId === line.productId &&
+      sameVariant(row, line) &&
+      (row.packagingUnitName ?? null) === (line.packagingUnitName ?? null),
+  );
 
   // 3. Same product and variant, by stored order.
-  incoming.forEach((line, lineIndex) => {
-    claim(lineIndex, (row) => row.productId === line.productId && sameVariant(row, line));
-  });
+  pass(
+    () => true,
+    (row, line) => row.productId === line.productId && sameVariant(row, line),
+  );
 
   // 4. Admin, variant key absent: any variant of the product ("absent = keep").
-  incoming.forEach((line, lineIndex) => {
-    if (!wildcardVariant(line)) return;
-    claim(lineIndex, (row) => row.productId === line.productId);
-  });
+  pass(wildcardVariant, (row, line) => row.productId === line.productId);
 
   return { paired, removed: existing.filter((_, index) => !taken.has(index)) };
 }
@@ -126,7 +179,8 @@ export function carriedProposal(
   sent: number | undefined,
   paired: { desiredUnitPrice?: string | null } | null,
 ): string | null {
-  if (sent !== undefined) return sent.toFixed(2);
+  // At its four places, unrounded (owner ruling of 2026-10-25).
+  if (sent !== undefined) return unitPriceHalfUp(sent);
   return paired?.desiredUnitPrice ?? null;
 }
 
@@ -135,6 +189,8 @@ export interface ReferenceInputs {
   productId: string;
   variantId?: string | null | undefined;
   quantity: number;
+  /** Feature 155 — when both sides carry one, the unit's identity (its name may since have changed). */
+  packagingUnitId?: string | null | undefined;
   packagingUnitName?: string | null | undefined;
   packagingUnitBaseQuantity?: number | null | undefined;
 }
@@ -144,13 +200,24 @@ export interface ReferenceInputs {
  * variant, quantity and packaging unit are all unchanged — any of them can move
  * the price bracket (spec Assumption). A change of proposal or line note alone
  * keeps it.
+ *
+ * The packaging unit is the same unit when both sides carry the same unit id
+ * (feature 155, FR-031 (b) — a unit renamed in the catalogue is not a change
+ * the buyer made), otherwise when the names are equal; the base quantity must
+ * be equal either way.
  */
 export function referenceInputsUnchanged(stored: ReferenceInputs, next: ReferenceInputs): boolean {
+  const storedUnitId = stored.packagingUnitId ?? null;
+  const nextUnitId = next.packagingUnitId ?? null;
+  const sameUnit =
+    storedUnitId !== null && nextUnitId !== null
+      ? storedUnitId === nextUnitId
+      : (stored.packagingUnitName ?? null) === (next.packagingUnitName ?? null);
   return (
     stored.productId === next.productId &&
     (stored.variantId ?? null) === (next.variantId ?? null) &&
     stored.quantity === next.quantity &&
-    (stored.packagingUnitName ?? null) === (next.packagingUnitName ?? null) &&
+    sameUnit &&
     (stored.packagingUnitBaseQuantity ?? null) === (next.packagingUnitBaseQuantity ?? null)
   );
 }

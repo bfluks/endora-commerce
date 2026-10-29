@@ -33,7 +33,7 @@ const CHANNEL = {
   code: 'default',
   name: { en: 'Default' },
   active: true,
-  isPublic: true,
+  anonymousAccess: true,
   systemDefault: true,
   defaultLanguage: 'en',
   defaultCurrency: 'PLN',

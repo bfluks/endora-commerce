@@ -16,6 +16,7 @@ import {
 import { SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID } from '../../helpers/seed-catalog.js';
 
 import { STUB_CUSTOMER_PASSWORD } from '../../helpers/seed-organizations.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 
 
 /**
@@ -117,6 +118,9 @@ describe('POST /api/v1/auth/customer/login — cart-merge response field', () =>
       customerAccountId: TEST_CUSTOMER_RFQ_ID,
       organizationId: TEST_ORGANIZATION_ID,
       status: 'active',
+      // The sign-in request names no channel, so the basket merged into is the
+      // system default's (`specs/154-sales-channel-access/`).
+      salesChannelId: await systemDefaultSalesChannelId(em),
     });
     await em.persistAndFlush(custCart);
     em.persist(
@@ -166,6 +170,7 @@ describe('POST /api/v1/auth/customer/login — cart-merge response field', () =>
     const anon = em.create(Cart, {
       anonymousCartToken: anonToken,
       status: 'active',
+      salesChannelId: await systemDefaultSalesChannelId(em),
     });
     await em.persistAndFlush(anon);
 

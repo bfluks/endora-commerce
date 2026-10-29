@@ -131,6 +131,34 @@ const settings = defineModuleSettingsManifest({
       defaultValue: '',
     },
     {
+      // Feature 163 (FR-035) — `Organization.logo` in the storefront's
+      // structured data. The `_asset_id` suffix gives the generic Settings
+      // screen its asset picker.
+      code: 'shop.logo_asset_id',
+      name: 'Shop logo',
+      description:
+        'The logo search engines show for your organisation, published in the ' +
+        'storefront\'s structured data. Choose a public image from the Assets ' +
+        'Library. Leave empty to publish no logo.',
+      groupCode: 'shop',
+      valueType: 'string',
+      defaultValue: '',
+    },
+    {
+      // Feature 163 (FR-035) — `Organization.sameAs`. Each entry must be an
+      // https:// address; the module's own write validator refuses anything else.
+      code: 'shop.social_profiles',
+      name: 'Social profiles',
+      description:
+        'Addresses of your organisation\'s profiles on social networks and ' +
+        'other sites, one per entry, each a full https:// address. Published ' +
+        'in the storefront\'s structured data so search engines can link them ' +
+        'to your shop.',
+      groupCode: 'shop',
+      valueType: 'string_list',
+      defaultValue: [],
+    },
+    {
       // Speculation Rules (prerender/prefetch) hint emitted by the storefront
       // template for near-instant navigations.
       code: 'storefront.speculation_rules.enabled',
@@ -214,7 +242,12 @@ export const manifest = defineModuleManifest({
   // both of which `auth` owns. It closes no cycle (`auth` → `admin_roles` → ∅)
   // and shifts no migration order, because T018 moved this module's tables into
   // the kernel and it ships no migrations of its own.
-  dependencies: ['auth'],
+  //
+  // Feature 163 (FR-035) — `assets_library` is declared because shop info
+  // resolves `shop.logo_asset_id` through its `assetsLibraryPort`. It closes no
+  // cycle (`assets_library` → `auth`, `admin_users` → ∅ of this module), and
+  // both modules are `nonDeactivatable`, so no operator switch is affected.
+  dependencies: ['auth', 'assets_library'],
   settings,
   // Feature 074 (Constitution XVII), test C2 — functional base, and named by
   // ruling 1. The control that used to be here was one of the nineteen that
@@ -379,6 +412,29 @@ export const manifest = defineModuleManifest({
       requiredPermission: 'settings:read',
       keywords: ['settings', 'preferences', 'config', 'ustawienia'],
       weight: 250,
+    },
+    // Issue #516 (Principle XVI): the two other sidebar screens. Each declares
+    // the code its route enforces — `settings:read` for the group list,
+    // `settings:write` for the cache flush, whose only purpose is a write.
+    {
+      id: 'open-setting-groups',
+      labelKey: 'actions.openSettingGroups.label',
+      descriptionKey: 'actions.openSettingGroups.description',
+      icon: 'Settings',
+      targetRoute: '/settings/groups',
+      requiredPermission: 'settings:read',
+      keywords: ['settings', 'groups', 'sections', 'ustawienia', 'grupy'],
+      weight: 251,
+    },
+    {
+      id: 'clear-cache',
+      labelKey: 'actions.clearCache.label',
+      descriptionKey: 'actions.clearCache.description',
+      icon: 'Eraser',
+      targetRoute: '/settings/cache',
+      requiredPermission: 'settings:write',
+      keywords: ['cache', 'clear', 'flush', 'purge', 'wyczyść', 'pamięć'],
+      weight: 252,
     },
   ],
 });

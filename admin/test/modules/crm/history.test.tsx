@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -17,7 +18,12 @@ import {
   detail,
   en,
   renderCrm,
+  returningHere,
 } from './crm-fixtures';
+import crmEn from '../../../../packages/modules/crm/i18n/en.json';
+import crmPl from '../../../../packages/modules/crm/i18n/pl.json';
+import coreEn from '../../../../packages/modules/_i18n/i18n/en.json';
+import corePl from '../../../../packages/modules/_i18n/i18n/pl.json';
 
 /**
  * The *Change history* tab of an Opportunity
@@ -112,6 +118,20 @@ function entry(overrides: Partial<OpportunityHistoryEntry>): OpportunityHistoryE
   };
 }
 
+/**
+ * An entry as the server serves it to a reader without `custom_fields:read`
+ * (feature 162, owner ruling P2): `customFieldValues` left out of `before` and
+ * `after`, everything else — `customFieldCarry` included — as it was.
+ */
+function servedWithoutCustomFields(source: OpportunityHistoryEntry): OpportunityHistoryEntry {
+  const strip = (state: unknown): unknown => {
+    if (state === null || typeof state !== 'object' || Array.isArray(state)) return state;
+    const { customFieldValues: _hidden, ...rest } = state as Record<string, unknown>;
+    return rest;
+  };
+  return { ...source, before: strip(source.before) as never, after: strip(source.after) as never };
+}
+
 const FIRST_PAGE: OpportunityHistoryEntry[] = [
   entry({
     id: 'audit-5',
@@ -202,7 +222,7 @@ async function openHistory(
 }
 
 const item = (panel: HTMLElement, index: number): HTMLElement =>
-  within(within(panel).getByRole('list', { name: en('history.title') })).getAllByRole('listitem')[
+  within(within(panel).getByRole('list', { name: core('history.title') })).getAllByRole('listitem')[
     index
   ] as HTMLElement;
 
@@ -210,13 +230,13 @@ describe('the Change history tab', () => {
   it('is named as the owner named it, and reads the history with nothing but crm:read', async () => {
     expect(en('opportunity.tabs.history')).toBe('Change history');
     const panel = await openHistory();
-    await within(panel).findByRole('list', { name: en('history.title') });
+    await within(panel).findByRole('list', { name: core('history.title') });
     expect(getSpy).toHaveBeenCalledWith(`${HISTORY_PATH}?limit=50`);
   });
 
   it('labels each entry from auditLog.<action>, with who did it and when', async () => {
     const panel = await openHistory();
-    await within(panel).findByRole('list', { name: en('history.title') });
+    await within(panel).findByRole('list', { name: core('history.title') });
     const moved = item(panel, 1);
     expect(within(moved).getByRole('heading', { name: en('auditLog.crm.opportunity.transition') })).toBeInTheDocument();
     expect(within(moved).getByText('Anna Nowak')).toBeInTheDocument();
@@ -226,7 +246,7 @@ describe('the Change history tab', () => {
 
   it('shows a status change in the statuses` names, never their codes, with the reason', async () => {
     const panel = await openHistory();
-    await within(panel).findByRole('list', { name: en('history.title') });
+    await within(panel).findByRole('list', { name: core('history.title') });
     const moved = item(panel, 1);
     await within(moved).findByText('Qualified');
     expect(within(moved).getByText('New')).toBeInTheDocument();
@@ -238,14 +258,14 @@ describe('the Change history tab', () => {
 
   it('names the Order that moved the Opportunity, links to it, and says the system did it', async () => {
     const panel = await openHistory();
-    await within(panel).findByRole('list', { name: en('history.title') });
+    await within(panel).findByRole('list', { name: core('history.title') });
     const caused = item(panel, 0);
-    expect(within(caused).getByText(en('history.actor.system'))).toBeInTheDocument();
+    expect(within(caused).getByText(core('history.actor.system'))).toBeInTheDocument();
     await within(caused).findByText('Won');
     expect(caused).toHaveTextContent(en('history.cause.order'));
     expect(within(caused).getByRole('link', { name: /ORD-1001/ })).toHaveAttribute(
       'href',
-      `/orders/${ORDER_ID}`,
+      returningHere(`/orders/${ORDER_ID}`),
     );
     // The identifier itself is never on screen.
     expect(caused).not.toHaveTextContent(ORDER_ID);
@@ -253,7 +273,7 @@ describe('the Change history tab', () => {
 
   it('lists what an edit changed, as it was and as it is, and nothing that did not change', async () => {
     const panel = await openHistory();
-    await within(panel).findByRole('list', { name: en('history.title') });
+    await within(panel).findByRole('list', { name: core('history.title') });
     const edited = item(panel, 2);
     expect(within(edited).getByText(en('history.field.title'))).toBeInTheDocument();
     expect(within(edited).getByText('Fleet')).toBeInTheDocument();
@@ -265,11 +285,11 @@ describe('the Change history tab', () => {
 
   it('links a document it cannot name any more instead of printing its id', async () => {
     const panel = await openHistory();
-    await within(panel).findByRole('list', { name: en('history.title') });
+    await within(panel).findByRole('list', { name: core('history.title') });
     const linked = item(panel, 3);
     expect(within(linked).getByRole('link', { name: en('history.document.open.order') })).toHaveAttribute(
       'href',
-      `/orders/${UNLINKED_ORDER_ID}`,
+      returningHere(`/orders/${UNLINKED_ORDER_ID}`),
     );
     expect(linked).not.toHaveTextContent(UNLINKED_ORDER_ID);
     expect(linked).not.toHaveTextContent('l1');
@@ -277,17 +297,17 @@ describe('the Change history tab', () => {
 
   it('appends the next page under the ones already read, and says where the history ends', async () => {
     const panel = await openHistory();
-    await within(panel).findByRole('list', { name: en('history.title') });
-    await userEvent.click(within(panel).getByRole('button', { name: en('history.more') }));
+    await within(panel).findByRole('list', { name: core('history.title') });
+    await userEvent.click(within(panel).getByRole('button', { name: core('history.more') }));
     await waitFor(() => expect(getSpy).toHaveBeenCalledWith(`${HISTORY_PATH}?cursor=next-1&limit=50`));
     await waitFor(() =>
-      expect(within(within(panel).getByRole('list', { name: en('history.title') })).getAllByRole('listitem')).toHaveLength(5),
+      expect(within(within(panel).getByRole('list', { name: core('history.title') })).getAllByRole('listitem')).toHaveLength(5),
     );
     const created = item(panel, 4);
     expect(within(created).getByRole('heading', { name: en('auditLog.crm.opportunity.create') })).toBeInTheDocument();
     // An administrator who has since been deleted is said to be one, not left blank.
-    expect(within(created).getByText(en('history.actor.deleted'))).toBeInTheDocument();
-    expect(within(panel).queryByRole('button', { name: en('history.more') })).toBeNull();
+    expect(within(created).getByText(core('history.actor.deleted'))).toBeInTheDocument();
+    expect(within(panel).queryByRole('button', { name: core('history.more') })).toBeNull();
     expect(within(panel).getByText(en('history.end'))).toBeInTheDocument();
   });
 
@@ -295,13 +315,13 @@ describe('the Change history tab', () => {
   it('says that earlier changes exist when the history ends at its reach, instead of calling it whole', async () => {
     pages['next-1'] = { ...pages['next-1']!, truncated: true };
     const panel = await openHistory();
-    await within(panel).findByRole('list', { name: en('history.title') });
+    await within(panel).findByRole('list', { name: core('history.title') });
     // Not on a page that has a next one.
     expect(within(panel).queryByText(en('history.truncated'))).toBeNull();
-    await userEvent.click(within(panel).getByRole('button', { name: en('history.more') }));
+    await userEvent.click(within(panel).getByRole('button', { name: core('history.more') }));
     expect(await within(panel).findByText(en('history.truncated'))).toBeInTheDocument();
     expect(within(panel).queryByText(en('history.end'))).toBeNull();
-    expect(within(panel).queryByRole('button', { name: en('history.more') })).toBeNull();
+    expect(within(panel).queryByRole('button', { name: core('history.more') })).toBeNull();
   });
 
   it('says there is no history yet', async () => {
@@ -316,7 +336,7 @@ describe('the Change history tab', () => {
     expect(await within(panel).findByText('Boom.')).toBeInTheDocument();
     failHistory = false;
     await userEvent.click(within(panel).getByRole('button', { name: core('common.action.retry') }));
-    expect(await within(panel).findByRole('list', { name: en('history.title') })).toBeInTheDocument();
+    expect(await within(panel).findByRole('list', { name: core('history.title') })).toBeInTheDocument();
   });
 });
 
@@ -397,18 +417,71 @@ describe('the Change history tab, on what an entry carries', () => {
     expect(created).not.toHaveTextContent('trade_fair');
   });
 
-  it('falls back to the field code, never to JSON, for a reader who may not read the definitions', async () => {
-    only(CREATED);
+  it('shows no custom field row to a reader who may not read the fields, as the server serves the entry (P2)', async () => {
+    only(servedWithoutCustomFields(CREATED));
     const panel = await openHistory(['crm:read', 'orders:read']);
     const created = item(panel, 0);
-    const fields = row(created, en('history.field.customFieldValues'));
-    expect(within(fields).getAllByRole('listitem').map((line) => line.textContent)).toEqual([
-      'lead_source: trade_fair',
-      `key_account: ${en('customFields.value.yes')}`,
-      'retired_field: kept',
-    ]);
-    expect(created).not.toHaveTextContent('{');
+    expect(within(created).getByText(en('history.field.title'))).toBeInTheDocument();
+    expect(within(created).queryByText(en('history.field.customFieldValues'))).toBeNull();
+    // A creation still has its other fields to show: no placeholder.
+    expect(within(created).queryByText(en('history.customFieldValuesHidden'))).toBeNull();
     expect(getSpy).not.toHaveBeenCalledWith(DEFINITIONS_PATH);
+  });
+
+  it('keeps the values hidden client-side even if a server still sends them to that reader (P2)', async () => {
+    // Not what the server sends since P2 — the gate this screen holds on its own.
+    only(CREATED, FIELDS_EDITED);
+    const panel = await openHistory(['crm:read', 'orders:read']);
+    const [created, edited] = [item(panel, 0), item(panel, 1)];
+    for (const shown of [created, edited]) {
+      expect(within(shown).queryByText(en('history.field.customFieldValues'))).toBeNull();
+      expect(shown).not.toHaveTextContent(/trade_fair|referral|lead_source|retired_field/);
+    }
+    // An edit of values alone says so, rather than standing empty.
+    expect(within(edited).getByText(en('history.customFieldValuesHidden'))).toBeInTheDocument();
+    expect(getSpy).not.toHaveBeenCalledWith(DEFINITIONS_PATH);
+  });
+
+  it.each(['en', 'pl'] as const)(
+    'says custom field values changed for an edit of values alone, to a reader who may not read them (P2, %s)',
+    async (language) => {
+      only(servedWithoutCustomFields(FIELDS_EDITED));
+      const bundle = (language === 'pl' ? crmPl : crmEn) as Record<string, string>;
+      renderCrm(
+        <StrictMode>
+          <OpportunityDetail />
+        </StrictMode>,
+        {
+          path: `/crm/opportunities/${OPPORTUNITY_ID}`,
+          pattern: '/crm/opportunities/:id',
+          permissions: ['crm:read', 'orders:read'],
+          language,
+        },
+      );
+      await screen.findByRole('heading', { level: 1, name: /Fleet renewal/ });
+      await userEvent.click(screen.getByRole('tab', { name: bundle['opportunity.tabs.history']! }));
+      const panel = await screen.findByRole('tabpanel', { name: bundle['opportunity.tabs.history']! });
+      const list = await within(panel).findByRole('list', {
+        name: ((language === 'pl' ? corePl : coreEn) as Record<string, string>)['history.title']!,
+      });
+      const edited = within(list).getAllByRole('listitem')[0] as HTMLElement;
+      expect(within(edited).getByText(bundle['history.customFieldValuesHidden']!)).toBeInTheDocument();
+      expect(within(edited).queryByText(bundle['history.field.customFieldValues']!)).toBeNull();
+    },
+  );
+
+  it('shows the values, not the placeholder, to a reader who may read them', async () => {
+    only(FIELDS_EDITED);
+    const panel = await openHistory(READER);
+    const edited = item(panel, 0);
+    await within(row(edited, en('history.field.customFieldValues'))).findByText(/Lead source/);
+    expect(within(edited).queryByText(en('history.customFieldValuesHidden'))).toBeNull();
+  });
+
+  it('does not claim a values change for an edit that shows something else', async () => {
+    only(servedWithoutCustomFields(UNFORESEEN));
+    const panel = await openHistory(['crm:read', 'orders:read']);
+    expect(within(item(panel, 0)).queryByText(en('history.customFieldValuesHidden'))).toBeNull();
   });
 
   it('shows an edit of custom field values field by field, and only the fields that changed', async () => {
@@ -463,7 +536,7 @@ describe('the Change history tab, on what an entry carries', () => {
   it('shows no Order status row to a reader without orders:read', async () => {
     only(RETRIED, NOT_FOLLOWED);
     const panel = await openHistory(['crm:read']);
-    await within(panel).findByRole('list', { name: en('history.title') });
+    await within(panel).findByRole('list', { name: core('history.title') });
     for (const index of [0, 1]) {
       expect(within(item(panel, index)).queryByText(en('history.field.orderStatusCode'))).toBeNull();
     }
@@ -507,12 +580,31 @@ describe('the Change history tab, on what an entry carries', () => {
     const panel = await openHistory(READER);
     const changed = row(item(panel, 0), en('history.field.description'));
     expect(changed).toHaveTextContent('@Anna Nowak about');
-    expect(within(changed).getByRole('link', { name: /ORD-1001/ })).toHaveAttribute('href', `/orders/${ORDER_ID}`);
+    expect(within(changed).getByRole('link', { name: /ORD-1001/ })).toHaveAttribute(
+      'href',
+      returningHere(`/orders/${ORDER_ID}`),
+    );
     expect(changed).toHaveTextContent('@Piotr Zielony about');
-    expect(within(changed).getByText(en('references.unavailable.product'))).toBeInTheDocument();
+    expect(within(changed).getByText(core('references.unavailable.product'))).toBeInTheDocument();
     expect(changed).not.toHaveTextContent('[[');
     expect(changed).not.toHaveTextContent(ADMIN_ID);
     expect(changed).not.toHaveTextContent(hidden);
+  });
+
+  it('shows a formatted description by its words, without the formatting markers (specs/158-crm-opportunity-inline-editing/)', async () => {
+    only(
+      entry({
+        id: 'audit-f',
+        before: { description: 'Plain' },
+        after: { description: '**Bold** and _soft_\n- one' },
+        references: [],
+      }),
+    );
+    const panel = await openHistory(READER);
+    const changed = row(item(panel, 0), en('history.field.description'));
+    expect(changed).toHaveTextContent('Bold and soft');
+    expect(changed).toHaveTextContent('- one');
+    expect(changed).not.toHaveTextContent('**');
   });
 
   it('cuts a long description without cutting a mention in two', async () => {
@@ -542,6 +634,211 @@ describe('the Change history tab, on what an entry carries', () => {
     expect(other).toHaveTextContent('level: high');
     expect(changed).not.toHaveTextContent('riskProfile');
     expect(changed).not.toHaveTextContent('{');
+  });
+});
+
+/**
+ * Feature 162 (T049, US2-5, US2-6) — a creation or a join that could not carry
+ * every custom-field value into the Opportunity says so: from which kind of
+ * record, and a line per field with its reason
+ * (`specs/162-custom-fields-value-carry/contracts/admin-surfaces.md` §4).
+ *
+ * Owner ruling V3 (2026-10-21, T067): the field is named by the label stored
+ * with the skip — the reader's language, then the default label, then the key
+ * for an entry recorded before labels were stored — and the skip lines show to
+ * every reader of the Opportunity, while the values row keeps its own gate.
+ */
+describe('the Change history tab, on custom-field values not carried', () => {
+  const CREATED_WITH_SKIPS = entry({
+    id: 'audit-cc',
+    action: 'crm.opportunity.create',
+    actor: { kind: 'system', id: null, name: null },
+    before: null,
+    after: {
+      title: 'Fleet renewal',
+      customFieldValues: { lead_source: 'trade_fair' },
+      customFieldCarry: {
+        source: { entityType: 'quote_request', recordId: '00000000-0000-4000-8000-0000000000e7' },
+        carried: ['lead_source'],
+        skipped: [
+          // The source field's label, stored with the skip (V3); no Polish label.
+          { key: 'region', reason: 'value_type_mismatch', label: { labelDefault: 'Region', labels: { en: 'Region' } } },
+          // Recorded before labels were stored.
+          { key: 'gone_field', reason: 'target_missing' },
+        ],
+      },
+    },
+  });
+  const JOINED_WITH_SKIPS = entry({
+    id: 'audit-cj',
+    action: 'crm.opportunity.link_add',
+    actor: { kind: 'system', id: null, name: null },
+    before: null,
+    after: {
+      linkId: 'l9',
+      documentKind: 'order',
+      documentId: UNLINKED_ORDER_ID,
+      linkSource: 'auto',
+      customFieldCarry: {
+        source: { entityType: 'order', recordId: UNLINKED_ORDER_ID },
+        carried: [],
+        skipped: [
+          {
+            key: 'key_account',
+            reason: 'audience_mismatch',
+            label: { labelDefault: 'Key account', labels: { en: 'Key account', pl: 'Kluczowy klient' } },
+          },
+        ],
+      },
+    },
+  });
+  const CARRIED_ONLY = entry({
+    id: 'audit-co',
+    action: 'crm.opportunity.create',
+    before: null,
+    after: {
+      title: 'Fleet renewal',
+      customFieldValues: { lead_source: 'referral' },
+      customFieldCarry: {
+        source: { entityType: 'order', recordId: UNLINKED_ORDER_ID },
+        carried: ['lead_source'],
+        skipped: [],
+      },
+    },
+  });
+
+  const only = (...entries: OpportunityHistoryEntry[]): void => {
+    pages[''] = { data: entries, pagination: { cursor: null, hasMore: false, limit: 50 }, truncated: false };
+  };
+  const READER = ['crm:read', 'orders:read', 'custom_fields:read'];
+  const row = (entryItem: HTMLElement, label: string): HTMLElement =>
+    within(entryItem).getByText(label).parentElement as HTMLElement;
+  const line = (field: string, reason: string): string =>
+    en('history.customFieldCarry.line', { field, reason: en(`history.carryReason.${reason}`) });
+
+  it('says a creation could not carry some values, a line per field under its stored label, with the reason', async () => {
+    only(CREATED_WITH_SKIPS);
+    const panel = await openHistory(READER);
+    const created = item(panel, 0);
+    const carry = row(created, en('history.field.customFieldCarry'));
+    expect(within(carry).getByText(en('history.customFieldCarry.from.quote_request'))).toBeInTheDocument();
+    await within(carry).findByText(line('Region', 'value_type_mismatch'));
+    expect(within(carry).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      line('Region', 'value_type_mismatch'),
+      // A skip recorded without a label is shown under its key.
+      line('gone_field', 'target_missing'),
+    ]);
+    // What it did carry shows as the values themselves, not again here.
+    expect(within(row(created, en('history.field.customFieldValues'))).getByText(/Lead source/)).toBeInTheDocument();
+    expect(created).not.toHaveTextContent('customFieldCarry');
+    expect(created).not.toHaveTextContent('value_type_mismatch');
+    expect(created).not.toHaveTextContent('{');
+  });
+
+  it('words a skip reason it does not know by the generic sentence, never by its code', async () => {
+    only(
+      entry({
+        id: 'audit-cu',
+        action: 'crm.opportunity.create',
+        before: null,
+        after: {
+          title: 'Fleet renewal',
+          customFieldCarry: {
+            source: { entityType: 'quote_request', recordId: '00000000-0000-4000-8000-0000000000e8' },
+            carried: [],
+            // A reason a newer server may answer and this screen has no sentence for.
+            skipped: [{ key: 'region', reason: 'owner_unreachable', label: { labelDefault: 'Region', labels: {} } }],
+          },
+        },
+      }),
+    );
+    const panel = await openHistory(READER);
+    const carry = row(item(panel, 0), en('history.field.customFieldCarry'));
+    expect(await within(carry).findByText(en('history.customFieldCarry.line', { field: 'Region', reason: en('history.carryReasonUnknown') }))).toBeInTheDocument();
+    expect(carry).not.toHaveTextContent(/owner.unreachable/i);
+  });
+
+  it('says a join could not carry a value from the order', async () => {
+    only(JOINED_WITH_SKIPS);
+    const panel = await openHistory(READER);
+    const joined = item(panel, 0);
+    const carry = row(joined, en('history.field.customFieldCarry'));
+    expect(within(carry).getByText(en('history.customFieldCarry.from.order'))).toBeInTheDocument();
+    expect(await within(carry).findByText(line('Key account', 'audience_mismatch'))).toBeInTheDocument();
+  });
+
+  // V3 (T067) — this test asserted the lines were hidden without
+  // `custom_fields:read`; the ruling shows them to every reader of the record.
+  it('shows the field lines, under their stored labels, to a reader who may not read the fields', async () => {
+    only(servedWithoutCustomFields(CREATED_WITH_SKIPS));
+    const panel = await openHistory(['crm:read', 'orders:read']);
+    const created = item(panel, 0);
+    const carry = row(created, en('history.field.customFieldCarry'));
+    expect(within(carry).getByText(en('history.customFieldCarry.from.quote_request'))).toBeInTheDocument();
+    expect(within(carry).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      line('Region', 'value_type_mismatch'),
+      line('gone_field', 'target_missing'),
+    ]);
+    // The names come with the entry: no field definition is read for them.
+    expect(getSpy).not.toHaveBeenCalledWith(DEFINITIONS_PATH);
+  });
+
+  it('shows the skip lines without the values row to a reader who may not read the fields (V3, P2)', async () => {
+    only(servedWithoutCustomFields(CREATED_WITH_SKIPS));
+    const panel = await openHistory(['crm:read', 'orders:read']);
+    const created = item(panel, 0);
+    // The skip lines name the field by its stored label…
+    expect(within(row(created, en('history.field.customFieldCarry'))).getByText(line('Region', 'value_type_mismatch'))).toBeInTheDocument();
+    // …while the server sent no values, so there is no values row and no definition read.
+    expect(within(created).queryByText(en('history.field.customFieldValues'))).toBeNull();
+    expect(created).not.toHaveTextContent(/lead_source|trade_fair|Lead source|Trade fair/);
+    expect(getSpy).not.toHaveBeenCalledWith(DEFINITIONS_PATH);
+  });
+
+  it('names a skipped field in Polish, falling back to the default label, then to the key', async () => {
+    const pl = crmPl as Record<string, string>;
+    const plText = (key: string, params: Record<string, string> = {}): string =>
+      pl[key]!.replace(/\{(\w+)\}/g, (_m, name: string) => params[name] ?? '');
+    const plLine = (field: string, reason: string): string =>
+      plText('history.customFieldCarry.line', { field, reason: plText(`history.carryReason.${reason}`) });
+    only(servedWithoutCustomFields(CREATED_WITH_SKIPS), servedWithoutCustomFields(JOINED_WITH_SKIPS));
+    renderCrm(
+      <StrictMode>
+        <OpportunityDetail />
+      </StrictMode>,
+      {
+        path: `/crm/opportunities/${OPPORTUNITY_ID}`,
+        pattern: '/crm/opportunities/:id',
+        permissions: ['crm:read', 'orders:read'],
+        language: 'pl',
+      },
+    );
+    await screen.findByRole('heading', { level: 1, name: /Fleet renewal/ });
+    await userEvent.click(screen.getByRole('tab', { name: plText('opportunity.tabs.history') }));
+    const panel = await screen.findByRole('tabpanel', { name: plText('opportunity.tabs.history') });
+    const list = await within(panel).findByRole('list', {
+      name: (corePl as Record<string, string>)['history.title']!,
+    });
+    const [created, joined] = within(list).getAllByRole('listitem').filter((li) => li.parentElement === list);
+    const carryOf = (entryItem: HTMLElement): HTMLElement =>
+      within(entryItem).getByText(plText('history.field.customFieldCarry')).parentElement as HTMLElement;
+    expect(within(carryOf(created!)).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      // No Polish label stored: the default label.
+      plLine('Region', 'value_type_mismatch'),
+      // No label stored at all: the key.
+      plLine('gone_field', 'target_missing'),
+    ]);
+    expect(within(carryOf(joined!)).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      plLine('Kluczowy klient', 'audience_mismatch'),
+    ]);
+  });
+
+  it('says nothing about a carry that skipped nothing', async () => {
+    only(CARRIED_ONLY);
+    const panel = await openHistory(READER);
+    const created = item(panel, 0);
+    expect(within(created).queryByText(en('history.field.customFieldCarry'))).toBeNull();
+    expect(created).not.toHaveTextContent('customFieldCarry');
   });
 });
 

@@ -1,8 +1,8 @@
 {
-  "errors.COMPARISON_FULL": "Błąd: comparison full.",
-  "errors.COMPARISON_NOT_FOUND": "Błąd: comparison not found.",
-  "errors.COMPARISON_EMPTY": "Błąd: comparison empty.",
-  "errors.PDF_GENERATION_FAILED": "Błąd: pdf generation failed.",
+  "errors.COMPARISON_FULL": "Porównanie jest pełne. Usuń z niego produkt, aby dodać kolejny.",
+  "errors.COMPARISON_NOT_FOUND": "Nie znaleziono porównania.",
+  "errors.COMPARISON_EMPTY": "Porównanie jest puste, więc nie można go wyeksportować.",
+  "errors.PDF_GENERATION_FAILED": "Nie udało się wygenerować pliku PDF. Spróbuj ponownie później.",
   "error.load": "Nie udało się wczytać.",
   "common.loading": "Wczytywanie…",
   "list.page.title": "Porównania",

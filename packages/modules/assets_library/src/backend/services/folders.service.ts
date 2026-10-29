@@ -228,10 +228,20 @@ export class FoldersService {
     return { deletedFolderId: id };
   }
 
-  private async collectSubtreeAssetIds(
-    em: EntityManager,
-    rootId: string,
-  ): Promise<string[]> {
+  /**
+   * How many live assets in the folder's subtree, at any depth, have a
+   * permalink — named by the folder delete confirmation (owner ruling S4,
+   * specs/156-asset-stable-url/).
+   */
+  async countPermalinkedAssets(id: string): Promise<number> {
+    const em = this.emFactory();
+    const f = await em.findOne(AssetFolder, { id });
+    if (!f) throw new HttpError(404, ERROR_CODES.ASSET_FOLDER_NOT_FOUND, `Folder ${id} not found.`);
+    const folderIds = await this.collectSubtreeFolderIds(em, id);
+    return em.count(Asset, { folderId: { $in: folderIds }, deletedAt: null, permalink: { $ne: null } });
+  }
+
+  private async collectSubtreeFolderIds(em: EntityManager, rootId: string): Promise<string[]> {
     const folderIds: string[] = [rootId];
     const queue: string[] = [rootId];
     while (queue.length > 0) {
@@ -242,6 +252,14 @@ export class FoldersService {
         queue.push(c.id);
       }
     }
+    return folderIds;
+  }
+
+  private async collectSubtreeAssetIds(
+    em: EntityManager,
+    rootId: string,
+  ): Promise<string[]> {
+    const folderIds = await this.collectSubtreeFolderIds(em, rootId);
     const assets = await em.find(
       Asset,
       { folderId: { $in: folderIds }, deletedAt: null },

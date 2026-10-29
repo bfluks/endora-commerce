@@ -34,6 +34,21 @@ const SCHEDULED: TestOwnershipLedgerEntry = {
 };
 
 /**
+ * A queue test written after feature 106 (issue #416, review 2 of #424), which cannot be
+ * placed in the package yet for a reason of its own rather than having been left behind.
+ */
+const NEEDS_LIVE_REDIS: TestOwnershipLedgerEntry = {
+  scheduled: true,
+  reason:
+    'Single-owner queue test: it drives `price_lists`\' own producer and consumer through a ' +
+    'real BullMQ on a live Redis, because what it holds — a failed job no longer refuses the ' +
+    'next request under the fixed job id, and a failed pass is run again — is BullMQ\'s ' +
+    'behaviour, which a fake would only restate. A module package\'s suite has no Redis (its ' +
+    'Redis tests use fakes); the backend suite leases one per invocation.',
+  retiredBy: SCHEDULED.retiredBy,
+};
+
+/**
  * Eight entries stood here and are gone (**D-262** clause 1, 2026-09-21).
  *
  * They were not moved: the placement predicate took a third member. Each of them calls
@@ -44,4 +59,5 @@ const SCHEDULED: TestOwnershipLedgerEntry = {
  */
 export const entries: Readonly<Record<string, TestOwnershipLedgerEntry>> = {
   'backend/test/integration/kernel/decoration.test.ts': SCHEDULED,
+  'backend/test/integration/price_lists/price-surface-queue.test.ts': NEEDS_LIVE_REDIS,
 };

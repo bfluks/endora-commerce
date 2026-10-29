@@ -39,7 +39,7 @@ function entry(index: number, before: unknown, after: unknown): StubEntry {
   };
 }
 
-function build(entries: StubEntry[]) {
+function build(entries: StubEntry[], mayReadCustomFields: () => Promise<boolean> = async () => true) {
   const query = vi.fn(async (filter: { limit?: number }) =>
     // As the port does: newest first, never more than its cap.
     entries.slice(0, Math.min(filter.limit ?? 100, 500)),
@@ -55,6 +55,7 @@ function build(entries: StubEntry[]) {
     auditLog: { query } as never,
     adminUsers: { findByIds: async () => [] } as never,
     references: { resolveMany },
+    mayReadCustomFields,
   });
   return { service, query, resolveMany };
 }
@@ -150,5 +151,53 @@ describe('OpportunityHistoryService — references of an audited text', () => {
     const page = await service.list(OPPORTUNITY, { limit: 50 });
     expect(page.data[0]?.references).toEqual([]);
     expect(resolveMany.mock.calls[0]?.[0]).toEqual(['']);
+  });
+});
+
+/**
+ * Owner ruling P2 = a (`specs/162-custom-fields-value-carry/`, review fixes
+ * 2026-10-21): an Opportunity's custom-field values are served in its history
+ * only to a caller who may read custom fields; a carry's skip lines name a
+ * field and a reason, never a value, and stay.
+ */
+describe('OpportunityHistoryService — custom-field values and custom_fields:read', () => {
+  const carry = {
+    source: { entityType: 'order', recordId: 'o-1', reference: 'ORD-1' },
+    carried: ['lead_source'],
+    skipped: [{ key: 'seats', reason: 'target_missing', label: { labelDefault: 'Seats', labels: {} } }],
+  };
+  const entries = [
+    entry(0, { title: 'A', customFieldValues: { lead_source: 'fair' } }, {
+      title: 'B',
+      customFieldValues: { lead_source: 'web' },
+      customFieldCarry: carry,
+    }),
+    entry(1, null, { title: 'A', customFieldValues: { lead_source: 'fair' } }),
+    entry(2, null, { title: 'Untouched' }),
+  ];
+
+  it('strips customFieldValues from every before and after for a caller who may not read them, and keeps the rest', async () => {
+    const { service } = build(entries, async () => false);
+    const page = await service.list(OPPORTUNITY, { limit: 50 });
+    expect(page.data.map((item) => [item.before, item.after])).toEqual([
+      [{ title: 'A' }, { title: 'B', customFieldCarry: carry }],
+      [null, { title: 'A' }],
+      [null, { title: 'Untouched' }],
+    ]);
+  });
+
+  it('serves them unchanged to a caller who may', async () => {
+    const { service } = build(entries, async () => true);
+    const page = await service.list(OPPORTUNITY, { limit: 50 });
+    expect(page.data.map((item) => [item.before, item.after])).toEqual(
+      entries.map((item) => [item.stateBefore, item.stateAfter]),
+    );
+  });
+
+  it('asks once per page', async () => {
+    const check = vi.fn(async () => false);
+    const { service } = build(entries, check);
+    await service.list(OPPORTUNITY, { limit: 50 });
+    expect(check).toHaveBeenCalledTimes(1);
   });
 });

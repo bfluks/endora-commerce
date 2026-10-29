@@ -3,7 +3,6 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { loginCustomer } from '../../../lib/api/auth';
 import { beginMfaSetupTicket } from '../../../lib/api/mfa';
-import { StorefrontApiError } from '../../../lib/api/client';
 import {
   clearAnonCartCookie,
   setCartMergeFlash,
@@ -17,6 +16,9 @@ import { getServerContext } from '../../../lib/server-context';
 import { getFederatedSignInProviders } from '../../../lib/api/federated-sign-in';
 import type { Metadata } from 'next';
 import { backendBaseUrl } from '../../../lib/env.mjs';
+import { tForLocale } from '../../../lib/i18n/messages';
+import { signInErrorMessage, signInErrorParam } from '../../../lib/auth/sign-in-errors';
+import { SIGN_IN_REQUIRED_REASON } from '../../../lib/channel/closed-store';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -36,10 +38,9 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; next?: string }>;
+  searchParams: Promise<{ error?: string; next?: string; reason?: string }>;
 }): Promise<ReactNode> {
   const params = await searchParams;
-  const error = params.error;
   const nextPath = sanitiseNext(params.next);
 
   // Issue #193 — the federated block is decided **before the HTML is sent**, so
@@ -52,7 +53,15 @@ export default async function LoginPage({
   // hard-code a module list), and the provider list is the channel-scoped
   // "configured AND enabled" answer. Both settings default to `false`, so the
   // honest default rendering is nothing at all.
-  const { ctx, locale, modules } = await getServerContext();
+  const { ctx, locale, modules, anonymousAccess } = await getServerContext();
+  const t = tForLocale(locale);
+  // `specs/154-sales-channel-access/` — a refusal because this account may not
+  // use this store arrives as a stable code from the password step, the second
+  // factor and the federated callback alike, and is shown translated.
+  const error = signInErrorMessage(params.error, locale);
+  // The middleware sends an anonymous visitor of a store closed to them here.
+  // Shown only while the store is closed, so a stale link cannot claim it is.
+  const signInRequired = params.reason === SIGN_IN_REQUIRED_REASON && !anonymousAccess;
   const mfaPresent = modules.isPresent('mfa');
   const federatedProviders = mfaPresent
     ? await getFederatedSignInProviders(ctx)
@@ -64,7 +73,16 @@ export default async function LoginPage({
       <div className="b2b-auth">
         <h1>Sign in</h1>
         <p>Use your work email and password.</p>
-        {error ? <div className="b2b-auth__error">{error}</div> : null}
+        {signInRequired ? (
+          <p className="b2b-auth__notice" role="status">
+            {t('auth.login.signInRequired')}
+          </p>
+        ) : null}
+        {error ? (
+          <div className="b2b-auth__error" role="alert">
+            {error}
+          </div>
+        ) : null}
         <form action={loginAction} className="b2b-auth__form">
           <input type="hidden" name="next" value={nextPath} />
           <div className="b2b-auth__field">
@@ -92,6 +110,7 @@ export default async function LoginPage({
           locale={locale}
           modulePresent={mfaPresent}
           availableProviders={federatedProviders}
+          salesChannelCode={ctx.salesChannelCode}
         />
         <p className="b2b-auth__hint">
           Forgot your password? <Link href="/password-reset/request">Reset it</Link>.
@@ -118,8 +137,7 @@ async function loginAction(formData: FormData): Promise<void> {
   try {
     result = await loginCustomer({ email, password });
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError ? err.detail : 'Sign-in failed. Please try again.';
+    const message = signInErrorParam(err, 'Sign-in failed. Please try again.');
     redirect(`/login?error=${encodeURIComponent(message)}&next=${encodeURIComponent(next)}`);
   }
   // Feature 042 — two-step login. An account with active 2FA gets routed to the

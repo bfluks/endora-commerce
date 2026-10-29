@@ -29,6 +29,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 
 | Module | Binding | What it means |
 | --- | --- | --- |
+| `admin_users` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `auth` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 
 ## Permissions
@@ -40,7 +41,9 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 
 ## Command palette
 
-_None._
+| Action | Opens | Permission |
+| --- | --- | --- |
+| `open-assets-library` | `/assets-library` | `assets.read` |
 
 ## Settings
 

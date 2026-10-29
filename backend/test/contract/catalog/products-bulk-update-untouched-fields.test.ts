@@ -156,7 +156,7 @@ describe('Feature 022 — POST /products/bulk-update (untouched-field invariant)
 
     // Snapshot the known state.
     const before = await getProduct(id);
-    expect(before.status).toBe('draft');
+    expect(before.status).toBe('inactive');
     expect(before.visibility).toBe('logged_in_only');
     expect(before.attributeValues).toMatchObject({ color: 'red' });
     expect((await readChannelIdsForProduct(id)).sort()).toEqual([retail, b2bVip].sort());

@@ -12,7 +12,7 @@ import {
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
-import { TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { TEST_ADMIN_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { CrmOpportunityReference } from '../../helpers/package-entities.js';
 import {
   CRM_ADMIN,
@@ -22,6 +22,7 @@ import {
   seedCrmOrder,
   seedCrmOrganization,
   seedCrmSalesRep,
+  submitCrmQuoteRequest,
 } from '../../helpers/seed-crm.js';
 
 /**
@@ -77,6 +78,20 @@ describe('crm references to Products and Orders (US12)', () => {
     await teardownBackendServer(h);
   });
 
+  /**
+   * What an available Order reference says beyond its number
+   * (`specs/158-crm-opportunity-inline-editing/`, FR-012), for an Order as
+   * `seedCrmOrder` places it: its status, its total, when, and the billing
+   * recipient — the seed's billing address carries no company.
+   */
+  const orderFacts = (): unknown => ({
+    status: expect.any(String),
+    total: '123.00',
+    currency: 'PLN',
+    placedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    customerName: 'A',
+  });
+
   describe('in the description', () => {
     it('resolves a Product and an Order to named links, in the order they are mentioned', async () => {
       const order = await seedCrmOrder(h.em());
@@ -94,12 +109,51 @@ describe('crm references to Products and Orders (US12)', () => {
           label: expect.stringMatching(/\S/),
           url: `/catalog/products/${SEED_PRODUCT_101_ID}`,
         },
-        { type: 'order', id: order.id, available: true, label: order.businessId, url: `/orders/${order.id}` },
+        { type: 'order', id: order.id, available: true, label: order.businessId, url: `/orders/${order.id}`, order: orderFacts() },
       ]);
       expect(Object.values(PRODUCT_NAMES)).toContain(read.references[0]?.label);
       expect(await storedReferences(opportunity.id)).toEqual(
         [`description:-:order:${order.id}`, `description:-:product:${SEED_PRODUCT_101_ID}`].sort(),
       );
+    });
+
+    // `specs/163-projects-and-tasks/` FR-044, research R-14: the shared
+    // grammar's Quote Request and Task tokens are stored and resolved as the
+    // other three are — `references-documents.test.ts` holds the rest. The
+    // Opportunity is removed at the end, so no row of the two types outlives
+    // this case in the worker's database.
+    it('resolves a Quote Request and a Task token and stores a row for each', async () => {
+      const quote = await submitCrmQuoteRequest(h);
+      const taskId = randomUUID();
+      const taskNumber = `TSK-I${taskId.slice(0, 8)}`.toUpperCase();
+      await h.orm.em.getConnection().execute(
+        `insert into "tasks" ("id", "number", "title", "created_by_admin_user_id", "created_at", "updated_at")
+         values (?, ?, 'Interim', ?, now(), now())`,
+        [taskId, taskNumber, TEST_ADMIN_ID],
+      );
+      const description =
+        `See ${formatOpportunityReferenceToken('quote_request', quote.id)} ` +
+        `and ${formatOpportunityReferenceToken('task', taskId)}, with ${product}.`;
+      const opportunity = await createCrmOpportunity(h, { description });
+      try {
+        const read = await detail(opportunity.id);
+        expect(read.description).toBe(description);
+        expect(read.references).toEqual([
+          { type: 'quote_request', id: quote.id, available: true, label: quote.businessId, url: `/quote-requests/${quote.id}` },
+          { type: 'task', id: taskId, available: true, label: taskNumber, url: `/tasks/${taskId}` },
+          expect.objectContaining({ type: 'product', id: SEED_PRODUCT_101_ID, available: true }),
+        ]);
+        expect(await storedReferences(opportunity.id)).toEqual(
+          [
+            `description:-:product:${SEED_PRODUCT_101_ID}`,
+            `description:-:quote_request:${quote.id}`,
+            `description:-:task:${taskId}`,
+          ].sort(),
+        );
+      } finally {
+        await call('DELETE', `/opportunities/${opportunity.id}`);
+        await h.orm.em.getConnection().execute(`delete from "tasks" where "id" = ?`, [taskId]);
+      }
     });
 
     it('replaces the stored references of the description when it is saved again', async () => {
@@ -169,7 +223,7 @@ describe('crm references to Products and Orders (US12)', () => {
         const read = OpportunityDetailResponseSchema.parse(response.json()).data;
         expect(read.references).toEqual([
           { type: 'order', id: foreignOrder.id, available: false, label: null, url: null },
-          { type: 'order', id: ownOrder.id, available: true, label: ownOrder.businessId, url: `/orders/${ownOrder.id}` },
+          { type: 'order', id: ownOrder.id, available: true, label: ownOrder.businessId, url: `/orders/${ownOrder.id}`, order: orderFacts() },
         ]);
         expect(response.body).not.toContain(String(foreignOrder.businessId));
       } finally {
@@ -203,7 +257,7 @@ describe('crm references to Products and Orders (US12)', () => {
       expect(note.body).toBe(body);
       expect(note.references).toEqual([
         expect.objectContaining({ type: 'product', id: SEED_PRODUCT_101_ID, available: true }),
-        { type: 'order', id: order.id, available: true, label: order.businessId, url: `/orders/${order.id}` },
+        { type: 'order', id: order.id, available: true, label: order.businessId, url: `/orders/${order.id}`, order: orderFacts() },
       ]);
       expect(await storedReferences(opportunity.id)).toEqual(
         [`comment:${note.id}:order:${order.id}`, `comment:${note.id}:product:${SEED_PRODUCT_101_ID}`].sort(),

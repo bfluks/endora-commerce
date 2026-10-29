@@ -97,6 +97,11 @@ export const AdminNavSectionNameSchema = z.enum([
   // R-19): the CRM screens get a group of their own. The section is the
   // shell's, declared here and in `AppShell.tsx`; the `crm` module joins it.
   'crm',
+  // `specs/163-projects-and-tasks/` research R-16: Projects and Tasks get a
+  // group of their own, after CRM — they are not a sales or CRM sub-feature,
+  // and Tasks is meant for every module. The `projects` and `tasks` modules
+  // join it.
+  'work',
   'catalog',
   'inventory',
   'pricing',
@@ -263,6 +268,17 @@ export const AdminZoneNameSchema = z.enum([
    */
   'product.editor.channels',
   /**
+   * The end of the product editor's SEO tab, below `catalog`'s own URL keys.
+   *
+   * Mounted **once** per editor. Props: {@link ProductEditorZoneProps}.
+   *
+   * Feature 163 (owner decision "SEO stub = A"): `seo` contributes the link to its
+   * meta editor here, so `catalog` never names `seo` — gating its own link on
+   * `{ module: 'seo' }` was the `foreign-module-id` coupling this place retires.
+   * The product id travels so a contribution can address the product itself.
+   */
+  'product.editor.seo.after',
+  /**
    * Below the sales-channel editor's identity form.
    *
    * Mounted **once** per channel, and only for a channel that already exists —
@@ -359,6 +375,21 @@ export const AdminZoneNameSchema = z.enum([
    * `quote_requests` names no contributor and gains no edge.
    */
   'quote_request.detail.after',
+  /**
+   * The stack of panels an Opportunity's detail screen ends with.
+   *
+   * Mounted **once** per Opportunity, after the card that holds its tabs, on
+   * `order.detail.after`'s terms and for its reasons: every contribution
+   * renders its own card, the host puts no chrome around the zone, and an
+   * empty zone renders nothing at all, so the screen is identical to one
+   * without the member. Props: {@link OpportunityDetailZoneProps}, the
+   * Opportunity's id and nothing else (Z3).
+   *
+   * The first contributor is `projects`' Project panel
+   * (`specs/163-projects-and-tasks/contracts/admin-surfaces.md` §3); `crm`
+   * names no contributor and gains no edge.
+   */
+  'opportunity.detail.after',
   /**
    * The per-row action cell of the order detail's Delivery tab.
    *
@@ -512,6 +543,21 @@ export const AdminZoneNameSchema = z.enum([
    * contribution of that module, through the renderer's own presence filter.
    */
   'settings.setting.after',
+  /**
+   * The stack of panels a Task's detail screen ends with.
+   *
+   * Mounted **once** per Task, below the host's own cards, on
+   * `order.detail.after`'s terms and for its reasons: every contribution
+   * renders its own card, the host puts no chrome around the zone, and an
+   * empty zone renders nothing at all, so the screen is identical to one
+   * without the member. Props: {@link TaskDetailZoneProps}, the Task's id and
+   * nothing else (Z3).
+   *
+   * The first contributor is `projects`' Project panel
+   * (`specs/163-projects-and-tasks/contracts/admin-surfaces.md` §3); `tasks`
+   * names no contributor and gains no edge.
+   */
+  'task.detail.after',
 ])
 
 export type AdminZoneName = z.infer<typeof AdminZoneNameSchema>;
@@ -646,6 +692,26 @@ export interface OrderDetailZoneProps {
  */
 export interface QuoteRequestDetailZoneProps {
   readonly quoteRequestId: string;
+}
+
+/**
+ * A zone mounted once per Opportunity, at the end of its detail screen.
+ *
+ * The Opportunity's own id and nothing else: a contribution reads what it
+ * shows through routes of its own, and the host hands over none of its data.
+ */
+export interface OpportunityDetailZoneProps {
+  readonly opportunityId: string;
+}
+
+/**
+ * A zone mounted once per Task, at the end of its detail screen.
+ *
+ * The Task's own id and nothing else: a contribution reads what it shows
+ * through routes of its own, and the host hands over none of its data.
+ */
+export interface TaskDetailZoneProps {
+  readonly taskId: string;
 }
 
 /**
@@ -796,18 +862,21 @@ export interface AdminZonePropsMap extends Record<AdminZoneName, object> {
   // places in one editor that both carry a product id carry the same shape.
   'product.editor.pricing.after': ProductEditorZoneProps;
   'product.editor.channels': ProductEditorZoneProps;
+  'product.editor.seo.after': ProductEditorZoneProps;
   'sales_channel.editor.after': SalesChannelEditorZoneProps;
   'organization.detail.after': OrganizationDetailZoneProps;
   'customer.detail.after': CustomerDetailZoneProps;
   'order.detail.payment': OrderDetailZoneProps;
   'order.detail.after': OrderDetailZoneProps;
   'quote_request.detail.after': QuoteRequestDetailZoneProps;
+  'opportunity.detail.after': OpportunityDetailZoneProps;
   'order.shipment.row.actions': OrderShipmentRowZoneProps;
   'order.shipments.tab.actions': OrderShipmentsActionsZoneProps;
   'order.entry.tabs': OrderEntryTabsZoneProps;
   'ledger.section.tabs': LedgerSectionTabsZoneProps;
   'category.content.editor': CategoryContentEditorZoneProps;
   'settings.setting.after': SettingsSettingAfterZoneProps;
+  'task.detail.after': TaskDetailZoneProps;
 }
 
 /** The props of one zone, by name. */

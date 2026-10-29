@@ -88,6 +88,7 @@ export const blogPostSummarySchema = z.object({
   active: z.boolean(),
   publishedAt: isoDateTimeSchema.nullable(),
   description: z.string().nullable(),
+  mainImageAssetId: uuidSchema.nullable(),
   salesChannelIds: z.array(uuidSchema),
   languages: z.array(z.string()),
   categoryIds: z.array(uuidSchema),
@@ -122,6 +123,7 @@ export const createBlogPostRequestSchema = z.object({
   slug: blogSlugSchema,
   active: z.boolean().default(true),
   description: z.string().nullable().optional(),
+  mainImageAssetId: uuidSchema.nullable().optional(),
   salesChannelIds: z.array(uuidSchema).min(1),
   languages: z.array(z.string().min(2)).min(1),
   categoryIds: z.array(uuidSchema).default([]),
@@ -334,8 +336,41 @@ export const blogPostCardSchema = z.object({
   excerpt: z.string().nullable(),
   mainImageUrl: z.string().nullable(),
   primaryCategorySlug: blogSlugSchema.nullable(),
+  /**
+   * The primary category's name in the request language (feature 163), for the
+   * category chip on a post card. Optional so a card cached before it existed
+   * still parses.
+   */
+  primaryCategoryName: z.string().nullable().optional(),
 });
 export type BlogPostCard = z.infer<typeof blogPostCardSchema>;
+
+/** Most cards one `GET /api/v1/blog/posts` returns (feature 163, contract §3). */
+export const BLOG_POSTS_LIST_MAX_LIMIT = 24;
+/** Cards returned when the request names no `limit`. */
+export const BLOG_POSTS_LIST_DEFAULT_LIMIT = 6;
+
+/**
+ * `GET /api/v1/blog/posts` — the newest published posts of the resolved
+ * channel, optionally from one category (feature 163). An unknown category
+ * yields an empty list rather than a 404, so a stale block setting renders
+ * nothing.
+ */
+export const blogPostsListQuerySchema = z.object({
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(BLOG_POSTS_LIST_MAX_LIMIT)
+    .default(BLOG_POSTS_LIST_DEFAULT_LIMIT),
+  categorySlug: blogSlugSchema.optional(),
+});
+export type BlogPostsListQuery = z.infer<typeof blogPostsListQuerySchema>;
+
+export const blogPostsListResponseSchema = z.object({
+  data: z.array(blogPostCardSchema),
+});
+export type BlogPostsListResponse = z.infer<typeof blogPostsListResponseSchema>;
 
 export const blogProductCardSchema = z.object({
   id: uuidSchema,

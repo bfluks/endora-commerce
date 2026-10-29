@@ -42,7 +42,7 @@ export default async function VerifyPage({
     await verifyEmail(token);
     success = true;
   } catch (err) {
-    error = err instanceof StorefrontApiError ? err.message : 'Verification failed.';
+    error = err instanceof StorefrontApiError ? err.detail : 'Verification failed.';
   }
 
   return (

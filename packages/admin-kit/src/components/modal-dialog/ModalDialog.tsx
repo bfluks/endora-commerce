@@ -29,10 +29,39 @@ export interface ModalDialogProps {
    * dialog closes, so a ref still `null` at that moment falls back to the opener.
    */
   finalFocusRef?: RefObject<HTMLElement | null>;
+  /**
+   * The id of the element that describes the dialog — its warning or its
+   * question — set as the panel's `aria-describedby`, so a screen reader reads
+   * it with the title when focus enters the dialog. Left off when absent; pass
+   * it only while the element it names is rendered.
+   */
+  'aria-describedby'?: string;
+  /**
+   * The panel's width class, replacing the default `max-w-lg` — for a dialog that
+   * holds a form rather than a sentence (e.g. `max-w-2xl`).
+   */
+  widthClassName?: string;
+  /**
+   * Whether a press on the scrim closes the dialog (default `true`). A dialog
+   * holding unsaved input passes `false`, so a stray click does not discard it;
+   * Escape and its own buttons still close it.
+   */
+  dismissOnScrim?: boolean;
 }
 
 export function ModalDialog(props: ModalDialogProps): ReactNode {
-  const { title, onClose, children, footer, busy = false, initialFocusRef, finalFocusRef } = props;
+  const {
+    title,
+    onClose,
+    children,
+    footer,
+    busy = false,
+    initialFocusRef,
+    finalFocusRef,
+    'aria-describedby': describedBy,
+    widthClassName = 'max-w-lg',
+    dismissOnScrim = true,
+  } = props;
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   useFocusTrap(panelRef, true, { initialFocusRef, finalFocusRef });
@@ -49,7 +78,7 @@ export function ModalDialog(props: ModalDialogProps): ReactNode {
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       onMouseDown={(event): void => {
-        if (event.target === event.currentTarget && !busy) onClose();
+        if (event.target === event.currentTarget && !busy && dismissOnScrim) onClose();
       }}
     >
       <div
@@ -57,8 +86,9 @@ export function ModalDialog(props: ModalDialogProps): ReactNode {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        aria-describedby={describedBy}
         aria-busy={busy}
-        className="max-h-full w-full max-w-lg overflow-y-auto rounded-lg bg-background p-6 shadow-lg"
+        className={`max-h-full w-full ${widthClassName} overflow-y-auto rounded-lg bg-background p-6 shadow-lg`}
       >
         <h2 id={titleId} className="mb-4 text-lg font-semibold">
           {title}

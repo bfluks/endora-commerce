@@ -50,6 +50,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 | Akcja | Otwiera | Uprawnienie |
 | --- | --- | --- |
 | `new-promotion` | `/promotions/new` | `promotions:write` |
+| `open-promotion-rules` | `/promotion-rules` | `promotions:read` |
 | `open-promotions` | `/promotions` | `promotions:read` |
 
 ## Ustawienia

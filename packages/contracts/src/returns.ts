@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
+import { twoDecimalAmount } from './money-input.js';
 
 /**
  * Returns & Complaints (Refunds, RMA) — feature 046.
@@ -103,6 +104,15 @@ export const returnCaseItemSchema = z.object({
   inspectionOutcome: inspectionOutcomeSchema.nullable(),
   defaultRefundAmount: z.number().finite(),
   approvedRefundAmount: z.number().finite(),
+  /**
+   * Feature 155 (owner ruling R1) — whether the order line was returnable when
+   * it was bought, as recorded at placement (`OrderReturnContextLine`); `null`
+   * for a line placed before the record existed (treated as returnable) or one
+   * the order no longer lists. A complaint line recorded `false` starts with an
+   * approved refund of 0 and is marked in the admin case view. Optional on the
+   * wire, so an older producer still parses.
+   */
+  returnableAtPurchase: z.boolean().nullable().optional(),
 });
 export type ReturnCaseItemDto = z.infer<typeof returnCaseItemSchema>;
 
@@ -192,11 +202,24 @@ export const returnableLineSchema = z.object({
   remainingReturnableQty: z.number().int().nonnegative(),
   paidUnitAmount: z.number().finite(),
   currency: z.string().length(3),
+  /**
+   * Feature 155 — may this line be included in a `return` case? (complaints are never
+   * restricted). From the value recorded at placement; a line placed before the feature
+   * is returnable (FR-025).
+   */
+  returnable: z.boolean(),
+  notReturnableReason: z.enum(['product_not_returnable']).optional(),
 });
 
 export const returnableResponseSchema = z.object({
+  /**
+   * `false` = no `return`-kind case can be opened. With `reason: 'no_returnable_lines'`
+   * (feature 155) a `complaint` is still accepted.
+   */
   eligible: z.boolean(),
-  reason: z.enum(['order_not_completing', 'window_passed', 'fully_returned']).optional(),
+  reason: z
+    .enum(['order_not_completing', 'window_passed', 'fully_returned', 'no_returnable_lines'])
+    .optional(),
   freeReturnEligible: z.boolean(),
   lines: z.array(returnableLineSchema),
 });
@@ -284,9 +307,21 @@ export const settlementRequestSchema = z.object({
     .array(
       z.object({
         returnCaseItemId: uuidSchema,
-        approvedRefundAmount: z.number().finite().nonnegative(),
+        approvedRefundAmount: twoDecimalAmount(z.number().finite().nonnegative()),
       }),
     )
+    // A case line named twice is refused before anything moves (issue #417,
+    // review of PR #423): the refund would sum both entries and the correction
+    // keep one, refusing only after the gateway had refunded.
+    .superRefine((lines, ctx) => {
+      const seen = new Set<string>();
+      lines.forEach((line, index) => {
+        if (seen.has(line.returnCaseItemId)) {
+          ctx.addIssue({ code: 'custom', path: [index, 'returnCaseItemId'], message: 'duplicate_line' });
+        }
+        seen.add(line.returnCaseItemId);
+      });
+    })
     .default([]),
   refundPaymentMethodId: uuidSchema.optional(),
   createCorrectiveInvoice: z.boolean().optional(),
@@ -346,13 +381,13 @@ export type ReturnDeliveryMethodDto = z.infer<typeof returnDeliveryMethodSchema>
 
 export const returnDeliveryMethodCreateSchema = z.object({
   deliveryMethodId: uuidSchema,
-  returnCost: z.number().finite().nonnegative(),
+  returnCost: twoDecimalAmount(z.number().finite().nonnegative()),
   currency: z.string().length(3),
   isActive: z.boolean().optional(),
 });
 
 export const returnDeliveryMethodUpdateSchema = z.object({
-  returnCost: z.number().finite().nonnegative().optional(),
+  returnCost: twoDecimalAmount(z.number().finite().nonnegative()).optional(),
   currency: z.string().length(3).optional(),
   isActive: z.boolean().optional(),
 });
@@ -534,6 +569,34 @@ export interface PaymentRefundPort {
   refund(input: PaymentRefundInput): Promise<PaymentRefundResult>;
 }
 
+/**
+ * One money-moving resolution a settled return case recorded for an order
+ * (issue #428): a refund (`resolutionType: 'refund'`) or a credit-limit top-up
+ * (`'credit'`), its two-place amount, and whether it was issued.
+ */
+export interface OrderReturnRefund {
+  resolutionType: 'refund' | 'credit';
+  /** A two-place decimal string, as stored. */
+  amount: string;
+  settlementState: 'issued' | 'pending_manual' | 'failed';
+}
+
+/**
+ * Container name: `returnRefundReadPort`. Owner: `returns`.
+ *
+ * What the order's settled return cases refunded, so a reader that states what
+ * was paid for an order — the invoice — can count a refund that never passed
+ * through `payments`: a manual bank transfer for an order paid offline, or a
+ * credit-limit top-up. A gateway order's refunds also appear here, and the
+ * reader is the one that knows `payments` reports those (issue #428).
+ *
+ * **Owner off:** the seam fails closed — resolving this port throws
+ * `ModuleDisabledError`. A reader that may degrade decides presence first.
+ */
+export interface ReturnRefundReadPort {
+  listForOrder(orderId: string): Promise<OrderReturnRefund[]>;
+}
+
 // --- the other three consumer-declared seams ---------------------------------
 //
 // The same move as `PaymentRefundPort` above, and for the same reason: this
@@ -582,10 +645,24 @@ export interface OrderReturnContextLine {
   productId: string;
   name: string;
   purchasedQty: number;
-  /** Amount paid per unit, including its proportional tax. */
+  /** The line's stored gross over its quantity, at four places — informational. */
   paidUnitAmount: number;
-  /** Amount paid for the whole purchased line, including tax. */
+  /**
+   * The line's gross as the order stored it (`lineTotal`), never recomputed
+   * (issue #417): what an order placed before 0.108.0 charged for the line, and
+   * the line's own rounding of its gross for one placed after.
+   */
   paidLineAmount: number;
+  /** The line's net unit price, as stored (a two-place decimal string). */
+  unitNetPrice: string;
+  /** The line's VAT rate as a fraction, as stored (`0.2300`). */
+  taxRate: string;
+  /**
+   * Feature 155 (FR-016a) — the product's returnable flag recorded when the order was placed.
+   * `null`: the order was placed before the flag was recorded. `orders` reports the fact; the
+   * policy for `null` (returnable, FR-025) is `returns`'.
+   */
+  returnableAtPurchase: boolean | null;
 }
 
 export interface OrderReturnContext {
@@ -595,6 +672,21 @@ export interface OrderReturnContext {
   currency: string;
   /** When the order entered its fulfilment-completing status; null if it has not. */
   completingStatusEnteredAt: Date | null;
+  /**
+   * The VAT method the order was placed under (issue #417): `per_rate` — VAT
+   * per rate on the sum of the nets — from 0.108.0; `null` before, when the
+   * stored totals followed the rule of their day. Decides how a return groups
+   * what was paid.
+   */
+  vatMethod: 'per_rate' | null;
+  /**
+   * What the order charged for its products, as stored: subtotal + tax total −
+   * discount total (two places). The discount is taken off the gross without tax
+   * of its own; delivery and the payment surcharge are not products.
+   */
+  productsPaidTotal: string;
+  /** The order-level discount, as stored (two places) — the part of it a return carries is credited back as a discount. */
+  discountTotal: string;
   lines: OrderReturnContextLine[];
 }
 
@@ -627,6 +719,13 @@ export interface CorrectiveInvoiceLine {
   quantity: number;
   /** Credited amount for this line, gross (as paid, including its tax). */
   amount: number;
+  /**
+   * The part of the order-level discount `amount` carries (issue #417). The
+   * invoice charged the goods in full and the discount on a 0 % line, so the
+   * correction credits the goods at `amount + discount` and the discount back on
+   * a 0 % line; it still totals `amount`. Absent: no discount.
+   */
+  discount?: number;
 }
 
 export interface CorrectiveInvoiceInput {
@@ -686,4 +785,10 @@ export type CorrectiveInvoiceResult = CorrectiveInvoiceIssued | CorrectiveInvoic
  */
 export interface CorrectiveInvoicePort {
   createCorrection(input: CorrectiveInvoiceInput): Promise<CorrectiveInvoiceResult>;
+  /**
+   * Refuse, writing nothing, what `createCorrection` would refuse for the same
+   * input (issue #417): a settlement asks before it moves any money, so a
+   * correction that cannot be made never follows a refund that was made.
+   */
+  validateCorrection(input: CorrectiveInvoiceInput): Promise<void>;
 }

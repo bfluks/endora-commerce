@@ -112,6 +112,12 @@ export class ImportExportService {
 
   async exportToCsv(entity: string): Promise<string> {
     const adapter = this.adapterFor(entity);
+    // An adapter whose columns depend on the data (feature 163 — one scoped-status
+    // column per sales channel and language) answers the whole table.
+    if (adapter.exportTable) {
+      const table = await adapter.exportTable();
+      return serializeCsv([table.header, ...table.rows]);
+    }
     const rows = await adapter.exportRows();
     return serializeCsv([Array.from(adapter.exportHeader), ...rows]);
   }
@@ -153,6 +159,14 @@ export class ImportExportService {
           ERROR_CODES.VALIDATION_FAILED,
           `Missing required header column: ${required}`,
         );
+      }
+    }
+
+    for (const refused of adapter.refusedHeader ?? []) {
+      if (rawHeader.includes(refused.column)) {
+        throw new HttpError(400, refused.code, refused.message, [
+          { path: refused.column, issue: 'this column is not accepted' },
+        ]);
       }
     }
 

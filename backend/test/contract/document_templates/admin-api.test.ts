@@ -146,6 +146,11 @@ describe('document templates — admin API (spec 152)', () => {
       expect(lines!.sampleItems).toHaveLength(5);
       expect(lines!.sampleItems[0]!.values['row.number']).toEqual({ kind: 'number', value: 1 });
       expect(lines!.sampleSummary['netTotal']).toMatchObject({ kind: 'money', currency: 'PLN' });
+      // Feature 159 (contract document-sections.md §4) — the sample's groups, so the canvas shows sections.
+      expect(lines!.sampleSections.map((section) => section.kind)).toEqual(['group', 'group', 'ungrouped']);
+      expect(lines!.sampleSections.flatMap((section) => section.itemIndexes)).toEqual([0, 1, 2, 3, 4]);
+      expect(lines!.sampleSections[0]!.label).toBeTruthy();
+      expect(lines!.sampleSections[0]!.summary['netTotal']).toMatchObject({ kind: 'money', currency: 'PLN' });
       const comparison = documentTypeDetailSchema.parse(
         ((await h.app.inject({ method: 'GET', url: `${BASE}/types/comparisons.comparison`, cookies: ADMIN })).json() as { data: unknown }).data,
       );

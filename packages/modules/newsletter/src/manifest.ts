@@ -52,6 +52,24 @@ export const newsletterSettingsManifest = defineModuleSettingsManifest({
       defaultValue: '',
     },
     {
+      code: NEWSLETTER_SETTING_CODES.TRACKING_OPENS_ENABLED,
+      name: 'Track campaign opens',
+      description:
+        'Adds an invisible 1×1 image to every campaign e-mail, so the campaign statistics can count who opened it. Opens are recorded per recipient. When off, campaign e-mails carry no image and no opens are counted. Off by default. Automation e-mails are never tracked.',
+      groupCode: 'newsletter',
+      valueType: 'boolean',
+      defaultValue: false,
+    },
+    {
+      code: NEWSLETTER_SETTING_CODES.TRACKING_CLICKS_ENABLED,
+      name: 'Track campaign link clicks',
+      description:
+        'Sends the links in every campaign e-mail through a redirect on this platform, so the campaign statistics can count clicks per recipient and per link. When off, links lead straight to their destination and no clicks are counted. Off by default. Automation e-mails are never tracked.',
+      groupCode: 'newsletter',
+      valueType: 'boolean',
+      defaultValue: false,
+    },
+    {
       code: NEWSLETTER_SETTING_CODES.SENDER_FROM_EMAIL,
       name: 'Sender email',
       description: 'Verified From address for newsletter mail.',
@@ -152,6 +170,49 @@ export const manifest = defineModuleManifest({
   errorCodes: [{ code: 'ALREADY_SUBSCRIBED' }],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
+  /**
+   * Feature 163 (US7, FR-029, research R-17) — the sign-up block that
+   * subscribes through this module. Declared here, by the module whose data it
+   * writes, as `blog` declares `blog.LatestPosts`; its React code is
+   * `@endora-commerce/cms-components`' `NewsletterSignupForm.tsx`, and it posts
+   * to the storefront's `/newsletter/subscribe`, which calls this module's
+   * public subscribe with `source: 'cms-block'`. While `newsletter` is off the
+   * block is filtered from every palette and render, and the handler answers
+   * 404. `cms.NewsletterSignup`, a form posting to any external endpoint,
+   * stays `cms`' (owner decision (a), 2026-10-23).
+   */
+  blocks: [
+    {
+      name: 'newsletter.Signup',
+      translatable: [
+        { path: 'heading', format: 'tiptap' },
+        { path: 'text', format: 'tiptap' },
+        { path: 'emailLabel' },
+        { path: 'placeholder' },
+        { path: 'buttonLabel' },
+        { path: 'topicsLegend' },
+        { path: 'topics[].label' },
+        { path: 'consentLabel', format: 'tiptap' },
+        { path: 'messages.pending' },
+        { path: 'messages.active' },
+        { path: 'messages.consent' },
+        { path: 'messages.email' },
+        { path: 'messages.topics' },
+        { path: 'messages.unavailable' },
+      ],
+      labelKey: 'blocks.signup.label',
+      descriptionKey: 'blocks.signup.description',
+      category: 'forms',
+      contexts: ['cms'],
+      fields: {},
+      responsiveFields: [],
+      weight: 5,
+    },
+  ],
+  // The palette section the block sits in, declared beside it (the manifest
+  // validator refuses a block whose section its manifest does not declare);
+  // merged by key with `cms`'s.
+  blockCategories: [{ key: 'forms', titleKey: 'blocks.category.forms', contexts: ['cms'], weight: 70 }],
   permissions: [
     { code: 'newsletter:read', label: 'View newsletter' },
     {
@@ -210,6 +271,40 @@ export const manifest = defineModuleManifest({
       requiredPermission: 'newsletter:read',
       keywords: ['newsletter', 'automations', 'workflow', 'automatyzacje'],
       weight: 233,
+    },
+    // Issue #516 (Principle XVI): the last three sidebar screens. Tags and
+    // blocks open on `newsletter:read`; the provider screen opens on
+    // `newsletter:write`, its route's code and the code of its save and its
+    // test send (`check:action-route-permissions` ledgers the read-gated GET).
+    {
+      id: 'open-newsletter-tags',
+      labelKey: 'actions.openTags.label',
+      descriptionKey: 'actions.openTags.description',
+      icon: 'Inbox',
+      targetRoute: '/newsletter/tags',
+      requiredPermission: 'newsletter:read',
+      keywords: ['newsletter', 'tags', 'fields', 'subscribers', 'tagi', 'pola'],
+      weight: 234,
+    },
+    {
+      id: 'open-newsletter-blocks',
+      labelKey: 'actions.openBlocks.label',
+      descriptionKey: 'actions.openBlocks.description',
+      icon: 'Inbox',
+      targetRoute: '/newsletter/blocks',
+      requiredPermission: 'newsletter:read',
+      keywords: ['newsletter', 'blocks', 'email', 'header', 'footer', 'bloki', 'nagłówek', 'stopka'],
+      weight: 235,
+    },
+    {
+      id: 'open-newsletter-provider',
+      labelKey: 'actions.openProvider.label',
+      descriptionKey: 'actions.openProvider.description',
+      icon: 'Inbox',
+      targetRoute: '/newsletter/provider',
+      requiredPermission: 'newsletter:write',
+      keywords: ['newsletter', 'provider', 'sender', 'smtp', 'throttle', 'nadawca', 'wysyłka'],
+      weight: 236,
     },
   ],
 });

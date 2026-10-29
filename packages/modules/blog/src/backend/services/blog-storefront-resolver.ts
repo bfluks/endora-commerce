@@ -170,6 +170,69 @@ export class BlogStorefrontResolver {
     return out;
   }
 
+  /**
+   * The newest published posts of the resolved channel as cards, optionally
+   * from one category (feature 163, `GET /api/v1/blog/posts`). Returns `[]`
+   * when the blog is disabled in the channel or the category is unknown there,
+   * so a page block with a stale setting renders nothing instead of failing.
+   * Both the post and the category are joined to the channel (Constitution XII).
+   */
+  async listPosts(input: {
+    resolvedChannel: ResolvedChannel;
+    language?: string | undefined;
+    limit: number;
+    categorySlug?: string | undefined;
+  }): Promise<BlogPostCard[]> {
+    const em = this.emFactory();
+    const channel = toChannelRow(input.resolvedChannel);
+    const language = input.language ?? channel.default_language;
+    const settings = await this.settingsResolver.getResolved(channel.id);
+    if (!settings.enabled) return [];
+
+    const cacheKey = BlogCacheService.composeListKey(
+      channel.code,
+      language,
+      input.limit,
+      input.categorySlug ?? null,
+    );
+    if (this.cache) {
+      const cached = await this.cache.get<BlogPostCard[]>(cacheKey);
+      if (cached) return cached;
+    }
+
+    const categoryJoin = input.categorySlug
+      ? `join blog_post_categories pc on pc.blog_post_id = p.id
+         join blog_categories c on c.id = pc.blog_category_id
+          and c.deleted_at is null
+          and c.enabled = true
+         join blog_category_sales_channels csc on csc.blog_category_id = c.id
+          and csc.sales_channel_id = psc.sales_channel_id
+          and csc.slug = ?
+          and csc.deleted_at is null`
+      : '';
+    const rows = (await em.execute(
+      `select p.*
+         from blog_posts p
+         join blog_post_sales_channels psc on psc.blog_post_id = p.id
+         ${categoryJoin}
+        where p.deleted_at is null
+          and p.active = true
+          and p.status = 'published'
+          and psc.sales_channel_id = ?
+          and psc.deleted_at is null
+        order by p.published_at desc nulls last, p.created_at desc
+        limit ?`,
+      [...(input.categorySlug ? [input.categorySlug] : []), channel.id, input.limit],
+    )) as PostRow[];
+
+    const channelDefault = channel.default_language;
+    const out = await Promise.all(
+      rows.map((r) => this.toPostCard(em, r, language, channelDefault)),
+    );
+    if (this.cache) await this.cache.set(cacheKey, out);
+    return out;
+  }
+
   async getBySlug(
     slug: string,
     input: { resolvedChannel: ResolvedChannel; language?: string | undefined; page?: number },
@@ -477,7 +540,7 @@ export class BlogStorefrontResolver {
   ): Promise<BlogPostCard> {
     // Pull the primary category slug if any (the first one assigned).
     const catRows = (await em.execute(
-      `select c.slug
+      `select c.slug, c.name
          from blog_post_categories pc
          join blog_categories c on c.id = pc.blog_category_id
         where pc.blog_post_id = ?
@@ -485,8 +548,11 @@ export class BlogStorefrontResolver {
         order by c.is_system desc, c.position asc, c.slug asc
         limit 1`,
       [row.id],
-    )) as Array<{ slug: string }>;
+    )) as Array<{ slug: string; name: Record<string, string> | null }>;
     const primaryCategorySlug = catRows[0]?.slug ?? null;
+    const primaryCategoryName = catRows[0]
+      ? (this.pickName(catRows[0].name, language, channelDefault) ?? catRows[0].slug)
+      : null;
 
     const name = this.pickName(row.name, language, channelDefault) ?? row.slug;
     const excerpt =
@@ -501,6 +567,7 @@ export class BlogStorefrontResolver {
       excerpt,
       mainImageUrl: await this.maybeAssetUrl(row.main_image_asset_id),
       primaryCategorySlug,
+      primaryCategoryName,
     };
   }
 

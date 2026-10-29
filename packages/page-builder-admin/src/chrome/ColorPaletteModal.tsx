@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { CmsColorPaletteEntry } from '@endora-commerce/contracts';
 import { Button, ColorPicker } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { BRAND_COLOR_ROLES, type BrandColorRole } from '@endora-commerce/page-builder-core';
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
 
@@ -57,10 +58,67 @@ function ColorPaletteAddForm({
   );
 }
 
+/**
+ * Feature 163, T040 (research R-6) — the brand colour roles, listed before the
+ * saved colours when picking. Choosing one stores `token:<role>`, so the block
+ * follows the brand screen; the swatch shows the role's effective colour.
+ */
+function BrandColorList({
+  colors,
+  onPick,
+}: {
+  colors: Partial<Record<BrandColorRole, string>>;
+  onPick: (value: string) => void;
+}): ReactNode {
+  const t = useTranslation('core');
+  // Literal keys, one per role: the key walk of `chrome-core-namespace.test.tsx` reads string literals only.
+  const roleLabels: Record<BrandColorRole, string> = {
+    primary: t('pageBuilder.colorPalette.role.primary'),
+    'primary-hover': t('pageBuilder.colorPalette.role.primary-hover'),
+    secondary: t('pageBuilder.colorPalette.role.secondary'),
+    'secondary-hover': t('pageBuilder.colorPalette.role.secondary-hover'),
+    'on-primary': t('pageBuilder.colorPalette.role.on-primary'),
+    'on-secondary': t('pageBuilder.colorPalette.role.on-secondary'),
+  };
+  return (
+    <section className="mb-4 space-y-2" aria-labelledby="pb-brand-colors-title">
+      <h3 id="pb-brand-colors-title" className="text-sm font-medium">
+        {t('pageBuilder.colorPalette.brandTitle')}
+      </h3>
+      <p className="text-xs text-muted-foreground">{t('pageBuilder.colorPalette.brandHint')}</p>
+      <ul className="grid grid-cols-2 gap-2">
+        {BRAND_COLOR_ROLES.map((entry) => {
+          const hex = colors[entry.role] ?? entry.fallback;
+          return (
+            <li key={entry.role}>
+              <button
+                type="button"
+                className="flex w-full min-w-0 items-center gap-3 rounded-md border px-3 py-2 text-left hover:bg-muted"
+                onClick={(): void => onPick(entry.value)}
+              >
+                <span
+                  className="size-8 shrink-0 rounded-full border border-black/10"
+                  style={{ backgroundColor: hex }}
+                  aria-hidden
+                />
+                <span className="min-w-0">
+                  <span className="block truncate font-medium">{roleLabels[entry.role]}</span>
+                  <span className="block font-mono text-xs uppercase text-muted-foreground">{hex}</span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 export function ColorPaletteModal({
   open,
   entries,
   pickMode,
+  brandColors,
   onClose,
   onPick,
   onSave,
@@ -68,8 +126,11 @@ export function ColorPaletteModal({
   open: boolean;
   entries: CmsColorPaletteEntry[];
   pickMode: boolean;
+  /** When set, picking lists the brand colour roles first (their effective colours, where known). */
+  brandColors?: Partial<Record<BrandColorRole, string>> | undefined;
   onClose: () => void;
-  onPick: (hex: string) => void;
+  /** Receives `#rrggbb`, or `token:<role>` for a brand colour. */
+  onPick: (value: string) => void;
   onSave: (entries: CmsColorPaletteEntry[]) => Promise<void>;
 }): ReactNode {
   const t = useTranslation('core');
@@ -156,6 +217,10 @@ export function ColorPaletteModal({
           </Button>
         </div>
 
+        {pickMode && brandColors ? <BrandColorList colors={brandColors} onPick={onPick} /> : null}
+        {pickMode && brandColors ? (
+          <h3 className="mb-2 text-sm font-medium">{t('pageBuilder.colorPalette.savedTitle')}</h3>
+        ) : null}
         <ul className="mb-4 space-y-2">
           {localEntries.length === 0 ? (
             <li className="text-sm text-muted-foreground">{t('pageBuilder.colorPalette.empty')}</li>

@@ -125,9 +125,13 @@ export {
   GenerateHostError,
   GenerateInputError,
   runGenerate,
+  type DeclaredReleaseModule,
   type GeneratedArtefact,
   type GenerateOptions,
   type GenerateResult,
+  type GenerateStep,
+  type ReleaseModuleNeed,
+  type UnlistedReleaseModule,
 } from './generate/index.js';
 export {
   resolveStorefrontSource,

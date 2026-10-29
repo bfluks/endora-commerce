@@ -28,7 +28,6 @@ describe('admin CMS Templates contract (T077)', () => {
       defaultCurrency: 'PLN',
       active: true,
       systemDefault: false,
-      isPublic: true,
       status: 'active',
     });
     await em.persistAndFlush(plOnly);

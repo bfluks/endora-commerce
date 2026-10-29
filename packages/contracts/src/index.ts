@@ -15,6 +15,13 @@ export * from './pagination.js';
 export * from './common.js';
 export * from './scope-notice.js';
 export * from './catalog.js';
+// Feature 155 — the minimum-order rule (specs/155-catalog-order-constraints/).
+export * from './order-minimums.js';
+export * from './localized-name.js';
+// Feature 163, T196 — the product card's summary, shared by the catalogue and the page editor's preview.
+export * from './product-summary-text.js';
+// Feature 159 — named, ordered line groups shared by quotes and orders.
+export * from './line-groups.js';
 export * from './quote-requests.js';
 export * from './organizations.js';
 export * from './customers.js';
@@ -24,6 +31,14 @@ export * from './orders.js';
 export * from './saved-list-views.js';
 export * from './returns.js';
 export * from './price-lists.js';
+// Feature 160 (D-287 P1) — price books: header, sets, rows, explanation, precedence.
+export * from './price-books.js';
+// Feature 161 (G17) — the decimal arithmetic the resolver prices with, shared with the admin's previews.
+export * from './price-book-decimal.js';
+export * from './money-decimal.js';
+export * from './money-input.js';
+// Feature 161 (G15) — the admin name fold shared by catalog's stored keys and price_lists' grid order.
+export * from './admin-name.js';
 export * from './taxes.js';
 export * from './promotions.js';
 export * from './inventory.js';
@@ -36,6 +51,15 @@ export * from './admin.js';
 export * from './credit-limits.js';
 // CRM — Sales Opportunities (specs/143-crm-sales-opportunities/).
 export * from './crm.js';
+export * from './crm-rich-text.js';
+// The reference standard shared by CRM and Projects, and its formatted text
+// (specs/163-projects-and-tasks/ research R-14, FR-044). CRM's names above are
+// aliases of these.
+export * from './record-references.js';
+export * from './record-rich-text.js';
+// Tasks and Projects (specs/163-projects-and-tasks/).
+export * from './tasks.js';
+export * from './projects.js';
 export * from './api-keys.js';
 export * from './webhooks.js';
 export * from './analytics.js';
@@ -53,6 +77,7 @@ export {
   cmsPageStatusSchema,
   cmsContentEnvelopeSchema,
   cmsPageSummarySchema,
+  cmsBreadcrumbsSchemeSchema,
   cmsPageDetailSchema,
   createCmsPageRequestSchema,
   patchCmsPageRequestSchema,
@@ -116,6 +141,7 @@ export {
   type CmsPageStatus,
   type CmsContentEnvelope,
   type CmsPageSummary,
+  type CmsBreadcrumbsScheme,
   type CmsPageDetail,
   type CreateCmsPageRequest,
   type PatchCmsPageRequest,
@@ -167,6 +193,10 @@ export {
   type CmsLocalizedBlockRecord,
   type CmsBlockReadPort,
 } from './cms.js';
+// Feature 163 — the prop shapes page-builder blocks share, and the brand tokens
+// (`specs/163-page-builder-marketing-pages/` data-model §2–3).
+export * from './page-builder-props.js';
+export * from './cms-brand.js';
 export * from './shopping-lists.js';
 export * from './quick-order.js';
 export * from './settings.js';
@@ -180,10 +210,16 @@ export * from './blog.js';
 export * from './dictionary.js';
 export * from './modules.js';
 export * from './platform-info.js';
+export * from './admin-feedback.js';
 export * from './admin-actions.js';
 export * from './admin-contributions.js';
+// Feature 164 — per-admin Admin UI preferences (pins, folded groups, rail mode, page sizes).
+export * from './admin-preferences.js';
 export * from './product-scope-overrides.js';
 export * from './product-value-resolver.js';
+export * from './storefront-value-overrides.js';
+export * from './product-scopes.js';
+export * from './product-url-keys.js';
 export * from './mfa.js';
 export * from './prompt-actions.js';
 export * from './pwa.js';

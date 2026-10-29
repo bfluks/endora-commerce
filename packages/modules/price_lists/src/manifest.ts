@@ -3,6 +3,7 @@ import {
   defineModuleRecentActivity,
   defineModuleSettingsManifest,
   PRICING_SETTING_CODES,
+  SHOW_LIST_PRICE_SETTING_CODE,
 } from '@endora-commerce/contracts';
 
 /**
@@ -14,9 +15,9 @@ import {
  * codes of its own. Pricing is not catalogue content.
  *
  * The split is read/write rather than one code because the two authorities are
- * genuinely different: reading a price list, its brackets and the rule-target
- * pickers is what an operator needs to understand a quoted price, while editing
- * a bracket changes what a customer is charged.
+ * genuinely different: reading a price book, its rows and the price explainer
+ * is what an operator needs to understand a quoted price, while editing a row
+ * or a base price changes what a customer is charged.
  */
 export const PRICE_LIST_PERMISSIONS = {
   READ: 'price_lists:read',
@@ -53,6 +54,18 @@ const settings = defineModuleSettingsManifest({
       defaultValue: 'gross_only',
       enumOptions: ['gross_only', 'net_only', 'both', 'none'],
     },
+    {
+      // Feature 160 (G8 of `specs/161-price-book-editor/`, owner ruling Q8a):
+      // show the catalogue price beside a buyer's lower price on the product
+      // page and listing cards. Platform-wide; never in the basket or checkout.
+      code: SHOW_LIST_PRICE_SETTING_CODE,
+      name: 'Show list price beside the buyer price',
+      description:
+        "When on, a buyer whose price is below the catalogue price sees both on the product page and listing cards (never in the basket or checkout). Off by default.",
+      groupCode: 'pricing',
+      valueType: 'boolean',
+      defaultValue: false,
+    },
   ],
 });
 
@@ -61,7 +74,7 @@ export const manifest = defineModuleManifest({
   id: 'price_lists',
   name: 'Price Lists',
   description:
-    'Customer-group pricing, brackets, display modes, and rule-based engine.',
+    'Price books — base, catalogue, buyer and sale prices per currency, sales channel and audience — and price display modes.',
   version: '1.0.0',
   // `customer_accounts` since feature 076 (D-79): customer groups moved to the
   // module that owns the customer, so this module reads `customerGroupReadPort`
@@ -87,25 +100,34 @@ export const manifest = defineModuleManifest({
     'settings',
   ],
   permissions: [
-    { code: PRICE_LIST_PERMISSIONS.READ, label: 'View price lists and pricing rules' },
-    { code: PRICE_LIST_PERMISSIONS.WRITE, label: 'Edit price lists, brackets and display modes' },
+    { code: PRICE_LIST_PERMISSIONS.READ, label: 'View price books and display modes' },
+    {
+      code: PRICE_LIST_PERMISSIONS.WRITE,
+      label: 'Edit price books, base prices and display modes',
+      // Advisory (D-175): adding product lines uses the catalogue's product
+      // browser and a product's variants come from the catalogue's admin
+      // variant read, both on `catalog:read` (feature 161).
+      requires: ['catalog:read'],
+    },
   ],
   /**
-   * The palette advertisement for this module's landing screen (Principle
-   * XVI), arriving with feature 091's Phase 4 batch 13.
+   * The palette advertisements (Principle XVI): the landing screen since
+   * feature 091's Phase 4 batch 13, and the price-book editor's two other
+   * entry points since feature 161 (FR-029, `research.md` R3; moved from
+   * spec 160 T105, whose target screens did not exist yet).
    *
-   * It replaces a hand-written `PALETTE_ITEMS` row in
-   * `admin/src/components/AppShell.tsx` and carries that row's destination, its
-   * code and its keywords, so an operator's ⌘K answer for *cennik* is what it
-   * was. What changes is who answers: the shell's array was a copy the server
-   * was never asked about, while this declaration is resolved from the manifest
-   * against the effective enabled-set — which for a module that declares
-   * `activation.nonDeactivatable` is inert today and stops being inert the day
-   * the lock is lifted. Unlike batch 12's `quote_requests` row there was
-   * nothing here for it to duplicate: this module declared no action at all.
+   * `open-price-lists` replaced a hand-written `PALETTE_ITEMS` row in
+   * `admin/src/components/AppShell.tsx` and carries that row's code and
+   * keywords, so an operator's ⌘K answer for *cennik* is what it was. Feature
+   * 160 pointed it at the display-mode page while there was no book list;
+   * feature 161 points it back at `/price-lists`.
    *
-   * The label and the description are this module's own bundle's, the two
-   * strings the deleted row rendered out of `_i18n`'s.
+   * Each `requiredPermission` is the code its `targetRoute` opens on in this
+   * module's `./admin` declaration — read off the route rather than chosen, so
+   * the palette never advertises a screen the code cannot open (issue #232;
+   * `check:action-route-permissions`). The create flow opens on the write code,
+   * the `/new` shape of `blog` and `sales_channels`. Labels and descriptions
+   * are this module's own bundle's.
    */
   actions: [
     {
@@ -114,12 +136,44 @@ export const manifest = defineModuleManifest({
       descriptionKey: 'actions.openPriceLists.description',
       icon: 'CircleDollarSign',
       targetRoute: '/price-lists',
-      // The code the landing `GET` enforces and the code this module's own
-      // `./admin` route declaration carries — read off the route rather than
-      // chosen, so the palette never advertises a 403 (issue #232).
       requiredPermission: PRICE_LIST_PERMISSIONS.READ,
-      keywords: ['pricing', 'prices', 'price list', 'cennik', 'cenniki'],
+      keywords: ['pricing', 'prices', 'price list', 'price book', 'cennik', 'cenniki'],
       weight: 240,
+    },
+    {
+      id: 'new-price-book',
+      labelKey: 'actions.newPriceBook.label',
+      descriptionKey: 'actions.newPriceBook.description',
+      icon: 'PlusCircle',
+      targetRoute: '/price-lists/new',
+      requiredPermission: PRICE_LIST_PERMISSIONS.WRITE,
+      // Polish keywords are written folded: the palette folds diacritics on both
+      // sides of the match (`foldDiacritics`), and a module's sources default to
+      // English (`check:default-language-prose`).
+      keywords: ['new price book', 'create price list', 'nowy cennik', 'utworz cennik'],
+      weight: 241,
+    },
+    {
+      id: 'open-price-explainer',
+      labelKey: 'actions.openPriceExplainer.label',
+      descriptionKey: 'actions.openPriceExplainer.description',
+      icon: 'Search',
+      targetRoute: '/price-lists/explain',
+      requiredPermission: PRICE_LIST_PERMISSIONS.READ,
+      keywords: ['why this price', 'price explanation', 'explain price', 'wyjasnienie ceny', 'dlaczego ta cena'],
+      weight: 242,
+    },
+    {
+      // Feature 161, Checkpoint 10 ruling (Principle XVI): *Pricing settings*
+      // has no sidebar entry; the palette and the list header reach it.
+      id: 'open-pricing-settings',
+      labelKey: 'actions.openPricingSettings.label',
+      descriptionKey: 'actions.openPricingSettings.description',
+      icon: 'Settings',
+      targetRoute: '/price-lists/display-modes',
+      requiredPermission: PRICE_LIST_PERMISSIONS.READ,
+      keywords: ['pricing settings', 'display mode', 'precedence', 'list price', 'ustawienia cenowe', 'kolejnosc cen', 'cena katalogowa'],
+      weight: 243,
     },
   ],
   settings,
@@ -144,11 +198,15 @@ export const manifest = defineModuleManifest({
   /**
     * Nothing to demonstrate of its own (feature 113, T225 — contract §1.2).
     *
-    * The demo's prices are a backfill over `catalog`'s demo products into this
-    * module's default list — two modules' rows in one step, so it is step 3 of
-    * `@endora-commerce/demo-composition` and not this module's demo data
-    * (§5.1). The default list itself is **platform data**: a migration creates
-    * it and the platform needs it whether or not anybody ever seeds a demo.
+    * The demo's prices — a base price for every demo product and the price
+    * books of the owner's scenarios E1–E3 (feature 160, FR-044) — each name
+    * another module's row (a product, the *Screws* category, the demo
+    * organisation, the VIP group, the demo channel), so they are a composition
+    * step of `@endora-commerce/demo-composition` and not this module's demo
+    * data (§5.1). This module writes them, through `seedDemoPriceBooks` and
+    * `withdrawDemoPriceBooks` on `./backend`. The base books themselves are
+    * **platform data**: a migration creates them and the platform needs them
+    * whether or not anybody ever seeds a demo.
     *
     * `false` rather than absent, because the two are different states: this is
     * a decision that the module owes nothing, not a module nobody has looked at.
@@ -194,14 +252,19 @@ export const manifest = defineModuleManifest({
    */
   errorCodes: [
     { code: 'PRICE_LIST_NOT_FOUND' },
-    // Feature 148 — the price matrix. The noun is a matrix entry of a price
-    // list, this module's own entity (D-121 T1). Each carries a sentence in
-    // both bundles; `details` (conflicting entry, reason, limit) is for the
-    // admin UI's placement, not interpolated into the sentence.
-    { code: 'PRICE_MATRIX_ENTRY_NOT_FOUND' },
-    { code: 'PRICE_MATRIX_ENTRY_OVERLAP' },
-    { code: 'PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE' },
-    { code: 'PRICE_MATRIX_ENTRY_LIMIT' },
+    // Feature 160 — the price-book API (`contracts/admin-price-books-api.md`).
+    // Each carries a sentence in both bundles; `details` (the failing rows, the
+    // current version) is for the admin UI's placement, not interpolated.
+    { code: 'PRICE_BOOK_CHANNEL_CURRENCY' },
+    { code: 'PRICE_BOOK_AUDIENCE_KIND' },
+    { code: 'PRICE_BOOK_IMMUTABLE_FIELD' },
+    { code: 'PRICE_BOOK_NOT_APPLICABLE' },
+    { code: 'PRICE_BOOK_ROW_OVERLAP' },
+    { code: 'PRICE_BOOK_ROW_SHAPE' },
+    { code: 'PRICE_BOOK_ROW_TARGET' },
+    { code: 'PRICE_BOOK_ROW_LIMIT' },
+    { code: 'PRICE_BOOK_STALE' },
+    { code: 'PRECEDENCE_CHANGE_UNAVAILABLE' },
   ],
 });
 
@@ -268,5 +331,22 @@ export const recentActivity = defineModuleRecentActivity({
       icon: 'Archive',
       labelKey: 'activity.verb.price_list.matrix_entry_delete',
     },
+    // Feature 160 — price books.
+    {
+      action: 'price_list.base_prices_set',
+      icon: 'CircleDollarSign',
+      labelKey: 'activity.verb.price_list.base_prices_set',
+    },
+    {
+      action: 'price_list.channels_replace',
+      icon: 'Edit',
+      labelKey: 'activity.verb.price_list.channels_replace',
+    },
+    {
+      action: 'price_list.rows_replace',
+      icon: 'Edit',
+      labelKey: 'activity.verb.price_list.rows_replace',
+    },
+    { action: 'price_list.delete', icon: 'Archive', labelKey: 'activity.verb.price_list.delete' },
   ],
 });

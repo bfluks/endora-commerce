@@ -50,6 +50,7 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | Action | Opens | Permission |
 | --- | --- | --- |
 | `new-promotion` | `/promotions/new` | `promotions:write` |
+| `open-promotion-rules` | `/promotion-rules` | `promotions:read` |
 | `open-promotions` | `/promotions` | `promotions:read` |
 
 ## Settings

@@ -8,12 +8,19 @@ import {
   applyCartCoupon,
   clearCartCoupon,
   type CartCookieJar,
+  type CartSummary,
 } from '../../../lib/api/cart';
 import { listAddresses, createAddress } from '../../../lib/api/organization';
 import { listDeliveryMethods, listPaymentMethods } from '../../../lib/api/methods';
 import { CheckoutForm } from '../../../components/checkout/CheckoutForm';
 import { listCountries } from '../../../lib/api/dictionary';
-import { placeOrder } from '../../../lib/api/orders';
+import { placeOrder, previewOrderTotal } from '../../../lib/api/orders';
+import { BelowMinimumSummary } from '../../../components/checkout/BelowMinimumSummary';
+import {
+  canPlaceOrder,
+  checkoutBelowMinimumRows,
+  type CheckoutBelowMinimumLine,
+} from '../../../lib/cartMinimum';
 import { getMyCreditLimit } from '../../../lib/api/credit-limit';
 import { getResolvedQuickOrderDefaults } from '../../../lib/api/quick-order';
 import { CreditLimitWidget } from '../../../components/CreditLimitWidget';
@@ -36,6 +43,7 @@ import {
   ensureShippingAdapterDataOnFormData,
 } from '../../../lib/checkout/shipping-adapter-data';
 import type { Metadata } from 'next';
+import { lineAmountHalfUp } from '@endora-commerce/contracts';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -157,11 +165,6 @@ export default async function CheckoutPage({
   // (`delivery_methods` for one, `payment_methods` / `payments` for the other),
   // which `listDeliveryMethods` and `listPaymentMethods` degrade to the same
   // empty answer. Which reason wins is `placeOrderBlock`'s and not this page's.
-  const placeOrderBlockReason = placeOrderBlock({
-    canTransact,
-    deliveryMethodCount: deliveryMethods.length,
-    paymentMethodCount: paymentMethods.length,
-  });
   const tr = tForLocale(locale);
 
   if (cart.items.length === 0) {
@@ -175,6 +178,27 @@ export default async function CheckoutPage({
       </div>
     );
   }
+
+  // Feature 155 (FR-013, FR-036, FR-037) — the basket lines placement will refuse. The
+  // checkout preview is the authority here: it confirms a quote source is still valid before
+  // honouring a quote line's exemption, which the cart view takes at face value. It needs a
+  // delivery and a payment method, so it is asked with the ones the page preselects; the lines
+  // do not depend on which. A preview that cannot be read falls back to the cart view's own
+  // flags — advisory either way, since placement binds (contract §8).
+  const belowMinimumLines = await readBelowMinimumLines({
+    session,
+    ctx,
+    cart,
+    deliveryMethodId: preselectedId(deliveryMethods, defaults?.deliveryMethodId ?? null),
+    paymentMethodId: preselectedId(paymentMethods, defaults?.paymentMethodId ?? null),
+  });
+  const belowMinimumRows = checkoutBelowMinimumRows(belowMinimumLines, cart.items, locale);
+  const placeOrderBlockReason = placeOrderBlock({
+    canTransact,
+    deliveryMethodCount: deliveryMethods.length,
+    paymentMethodCount: paymentMethods.length,
+    belowMinimum: !canPlaceOrder({ belowMinimumLines }),
+  });
 
   // Feature 036 (US2) — the buyer may pick a saved address or enter a new one,
   // so an empty saved-address book no longer blocks checkout.
@@ -200,6 +224,7 @@ export default async function CheckoutPage({
         message={me?.organization?.moderationMessage ?? null}
       />
       {params.error ? <p className="b2b-auth__error">{params.error}</p> : null}
+      <BelowMinimumSummary id={BELOW_MINIMUM_SUMMARY_ID} rows={belowMinimumRows} locale={locale} />
 
       <CheckoutForm action={submitAction} className="b2b-auth__form">
         <AddressSection
@@ -270,7 +295,7 @@ export default async function CheckoutPage({
                 </td>
                 <td className="text-right">x {it.quantity}</td>
                 <td className="text-right">
-                  {formatMoney(it.unitPrice.amount * it.quantity, it.unitPrice.currency, locale)}
+                  {formatMoney(Number(lineAmountHalfUp(it.unitPrice.amount, it.quantity)), it.unitPrice.currency, locale)}
                 </td>
               </tr>
             ))}
@@ -319,11 +344,58 @@ export default async function CheckoutPage({
             label="Place order"
             pendingLabel="Placing order…"
             title={blockTitle(placeOrderBlockReason, tr, me?.organization?.moderationMessage ?? null)}
+            describedBy={placeOrderBlockReason === 'below-minimum' ? BELOW_MINIMUM_SUMMARY_ID : undefined}
           />
         </div>
       </CheckoutForm>
     </div>
   );
+}
+
+const BELOW_MINIMUM_SUMMARY_ID = 'checkout-below-minimum';
+
+/** The method the checkout section preselects: the buyer's default when offered, else the first. */
+function preselectedId(methods: ReadonlyArray<{ id: string }>, preferredId: string | null): string | null {
+  if (preferredId !== null && methods.some((m) => m.id === preferredId)) return preferredId;
+  return methods[0]?.id ?? null;
+}
+
+/**
+ * Feature 155 — the preview's `belowMinimumLines`, or the cart view's own flags when the
+ * preview cannot be asked (no method to ask it with) or does not answer.
+ */
+async function readBelowMinimumLines(input: {
+  session: string;
+  ctx: Awaited<ReturnType<typeof getServerContext>>['ctx'];
+  cart: CartSummary;
+  deliveryMethodId: string | null;
+  paymentMethodId: string | null;
+}): Promise<CheckoutBelowMinimumLine[]> {
+  if (input.deliveryMethodId !== null && input.paymentMethodId !== null) {
+    const preview = await previewOrderTotal(
+      input.session,
+      { deliveryMethodId: input.deliveryMethodId, paymentMethodId: input.paymentMethodId },
+      input.ctx,
+    ).catch(() => null);
+    if (preview !== null) return preview.belowMinimumLines ?? [];
+  }
+  const lines: CheckoutBelowMinimumLine[] = [];
+  for (const item of input.cart.items) {
+    if (item.unavailable === true) {
+      lines.push({ cartItemId: item.id, productId: item.productId, kind: 'product_unavailable' });
+    } else if (item.belowMinimum) {
+      lines.push({
+        cartItemId: item.id,
+        productId: item.productId,
+        kind: item.belowMinimum.kind,
+        minimum: item.belowMinimum.minimum,
+        ...(item.belowMinimum.packagingUnitName !== undefined
+          ? { packagingUnitName: item.belowMinimum.packagingUnitName }
+          : {}),
+      });
+    }
+  }
+  return lines;
 }
 
 async function readJar(): Promise<CartCookieJar> {

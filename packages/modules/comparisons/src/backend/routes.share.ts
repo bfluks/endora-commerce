@@ -1,11 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ERROR_CODES } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
-import { productAudienceOf } from '@endora-commerce/platform/http';
 import { getResolvedChannel } from '@endora-commerce/platform/kernel';
 import type { ComparisonOwner, ComparisonService } from './services/comparison-service.js';
 import { readAnonymousToken } from './services/anonymous-token-cookie.js';
 import { customerActor } from './request-actor.js';
+import { buyerViewerOf } from './buyer-viewer.js';
 
 /**
  * Public share-token endpoint — feature 007 / US2 / T040.
@@ -48,14 +48,17 @@ export async function registerComparisonsShareRoutes(
       const comparison = await comparisonService.findByShareToken(token);
       if (!comparison) throw notFound();
       const channel = getResolvedChannel(request);
-      const view = await comparisonService.buildOwnerView(
-        comparison,
-        channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
-      );
       const viewerIsOwner = comparisonService.isOwnedBy(
         comparison,
         viewerIdentity(request),
+      );
+      // Owner decision CMP-1 = A — a column unavailable to this reader is the
+      // owner's history: a recipient gets the `(removed product)` column for it.
+      const view = await comparisonService.buildOwnerView(
+        comparison,
+        channel.id,
+        buyerViewerOf(request),
+        viewerIsOwner ? 'owner' : 'recipient',
       );
       reply.header('cache-control', 'no-store');
       // Strip `maxProducts` from the wire shape — the cap is irrelevant

@@ -14,7 +14,13 @@ import type {
   SalesChannelsCache,
   SalesChannelsCacheInvalidation,
 } from '@endora-commerce/platform/kernel';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
+import type {
+  SalesChannelAccessCacheInvalidation,
+  SalesChannelAccessPort,
+  SalesChannelMembershipPort,
+  SalesChannelResolutionPort,
+  SettingsReadPort,
+} from '@endora-commerce/platform/kernel';
 import { SalesChannelAttributionRegistry } from './services/sales-channel-attribution-registry.js';
 import { SalesChannelsService } from './services/sales-channels.service.js';
 import type { AdminAuditContext, ChannelBridgeRead } from './services/sales-channels.service.js';
@@ -113,15 +119,19 @@ export function registerModule(ctx: ModuleContext): void {
             // registry is filled by every owning module's boot hook, so a value
             // captured while this module registers would be the empty one.
             lazyPort<ChannelBridgeRead>(ctx, 'salesChannelBridgeRegistry'),
+            // A deployment input, like `emFactory` and `eventBus` — not a port,
+            // so it is captured with them. Required: identity writes and
+            // `setDefault` are Commands.
+            commandBus,
             auditLogService,
             // Resolved per call rather than captured: the cache is composed by a
             // root. Narrowed to the invalidating half (D-93): this service drops
             // the cache at its write seam and must not be able to seed it, which
             // is the resolver's job.
             lazyPort<SalesChannelsCacheInvalidation>(ctx, 'salesChannelsCache'),
-            // A deployment input, like `emFactory` and `eventBus` — not a port,
-            // so it is captured with them.
-            commandBus,
+            // Feature 154 — kernel-composed, resolved per call like the channel
+            // cache, and narrowed to the invalidating half for the same reason.
+            lazyPort<SalesChannelAccessCacheInvalidation>(ctx, 'salesChannelAccessCache'),
           ),
       )
       .singleton(),
@@ -142,10 +152,15 @@ export function registerModule(ctx: ModuleContext): void {
         ctx.cradle<SalesChannelsCradle>().adminAuditActorResolver(req),
     });
 
-    // The public read of the resolved channel. It resolves nothing itself and
-    // takes no dependency, so it is registered beside the admin surface rather
-    // than in a second `ctx.routes` call.
-    await registerSalesChannelsStorefrontRoutes(app);
+    // The public reads of the resolved channel: its identity, and whether this
+    // viewer may use it (feature 154). Registered beside the admin surface
+    // rather than in a second `ctx.routes` call.
+    await registerSalesChannelsStorefrontRoutes(app, {
+      // Kernel-provided (feature 154), resolved per call like every port here.
+      accessPort: lazyPort<SalesChannelAccessPort>(ctx, 'salesChannelAccessPort'),
+      resolution: lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
+      settings: lazyPort<SettingsReadPort>(ctx, 'settingsReadPort'),
+    });
   });
 }
 

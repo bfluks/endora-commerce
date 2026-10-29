@@ -11,11 +11,15 @@ import { randomUUID } from 'crypto';
  * boot-time reconciler is the single source of truth for that flag
  * (research.md R-4).
  *
- * Legacy fields preserved for one release cycle (research.md R-12):
- *   - `isPublic` — anonymous-price visibility for the storefront. Will
- *     be folded into the new `active` flag's downstream effects later.
+ * Legacy field preserved for one release cycle (research.md R-12):
  *   - `status` — superseded by the boolean `active`. Keeping both for
  *     reversibility of migration 025; consumers should read `active`.
+ *
+ * Whether a channel shows prices is not this entity's question (issue #492):
+ * the retired public-channel flag withheld them from every viewer, signed-in
+ * buyers included, beside a display-mode chain that already answered it. A
+ * channel that hides prices until sign-in sets
+ * `pricing.unauthenticated_display_mode = none` for itself.
  *
  * Optimistic concurrency for identity edits (FR-005) is enforced by the
  * `version` column. The service layer bumps `version` on every mutation
@@ -34,13 +38,13 @@ export class SalesChannel {
     | 'id'
     | 'createdAt'
     | 'updatedAt'
-    | 'isPublic'
     | 'status'
     | 'logoAssetId'
     | 'themeCode'
     | 'languages'
     | 'currencies'
     | 'active'
+    | 'anonymousAccess'
     | 'systemDefault'
     | 'version';
 
@@ -77,6 +81,17 @@ export class SalesChannel {
   @Property({ type: 'boolean' })
   active: boolean = true;
 
+  /**
+   * May an anonymous request use this channel (feature 154, FR-001)? When
+   * false, the kernel's access step refuses anonymous requests with
+   * `SALES_CHANNEL_SIGN_IN_REQUIRED`; customers are decided by their
+   * Organization's channel assignment either way. Whether an anonymous visitor
+   * sees prices on an open channel is the display-mode chain's question
+   * (`pricing.unauthenticated_display_mode`), not this flag's.
+   */
+  @Property({ type: 'boolean' })
+  anonymousAccess: boolean = true;
+
   /** True for exactly one row platform-wide (partial unique index in migration 025). */
   @Property({ type: 'boolean' })
   systemDefault: boolean = false;
@@ -85,10 +100,7 @@ export class SalesChannel {
   @Property({ type: 'integer' })
   version: number = 1;
 
-  // -- Legacy columns (preserved for one release per research.md R-12) ------
-
-  @Property({ type: 'boolean' })
-  isPublic: boolean = false;
+  // -- Legacy column (preserved for one release per research.md R-12) -------
 
   @Property({ type: 'string', length: 16 })
   status: 'active' | 'inactive' = 'active';

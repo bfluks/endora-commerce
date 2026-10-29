@@ -41,6 +41,7 @@ import { createAssetEmbedResolver } from './services/asset-embed-resolver.js';
 import { registerCmsAssetReferences } from './services/asset-references.js';
 import { registerCmsLanguageReferences } from './services/cms-language-reference.js';
 import { CmsBlock } from './entities/cms-block.entity.js';
+import { CmsBrandTokens } from './entities/cms-brand-tokens.entity.js';
 import { CmsHookBlockAttachment } from './entities/cms-hook-block-attachment.entity.js';
 import { CmsHook } from './entities/cms-hook.entity.js';
 import { CmsPage } from './entities/cms-page.entity.js';
@@ -184,6 +185,9 @@ export interface CmsCradle {
 
 const breakpointSchema = z.number().int().positive();
 
+/** `cms.default_share_image_asset_id` — an asset id, or `''` while unset. */
+const shareImageSettingSchema = z.string();
+
 /**
  * The reserved-segments Setting as it comes off the store.
  *
@@ -305,6 +309,9 @@ export function registerModule(ctx: ModuleContext): void {
           // a captured guard would keep admitting requests after `auth` goes.
           requireAdmin: (permission) => async (req, reply) =>
             ctx.cradle<CmsCradle>().requireAdmin(permission)(req, reply),
+          // Feature 163 — a committed brand-token write drops the storefront's
+          // `cms:brand` entries. Read per call, like the bus above.
+          revalidateStorefront: (tags) => ctx.cradle<CmsCradle>().cmsStorefrontRevalidator.revalidate(tags),
           // Feature 151 (research R11). Everything is read per request: the
           // three settings through the store (platform-wide, D-41's `null`),
           // presence of `credentials` before its port is touched, and the port
@@ -424,6 +431,29 @@ export function registerModule(ctx: ModuleContext): void {
         result.handle.setAssetResolver(async (assetId) =>
           ctx.cradle<CmsCradle>().cmsAssetResolver(assetId),
         );
+
+        /**
+         * Feature 163 (FR-033) — the default sharing image, read for the
+         * **request's** channel the storefront route resolved (Constitution
+         * XII), so a channel may carry its own. The manifest declares `''`, so
+         * an unset value answers without an error; a settings store the
+         * platform refuses to serve is not that and goes through, while any
+         * other failure costs the page its image rather than the page.
+         */
+        result.handle.setDefaultShareImageResolver(async (salesChannelId) => {
+          const { settingsReadPort } = ctx.cradle<CmsCradle>();
+          try {
+            const assetId = await settingsReadPort.get(
+              CMS_SETTING_CODES.DEFAULT_SHARE_IMAGE_ASSET_ID,
+              salesChannelId,
+              shareImageSettingSchema,
+            );
+            return assetId.trim().length > 0 ? assetId.trim() : null;
+          } catch (err) {
+            rethrowIfModuleDisabled(err);
+            return null;
+          }
+        });
 
         return result;
       })
@@ -612,6 +642,7 @@ export function registerModule(ctx: ModuleContext): void {
  */
 export const entities = [
   CmsBlock,
+  CmsBrandTokens,
   CmsHookBlockAttachment,
   CmsHook,
   CmsPage,

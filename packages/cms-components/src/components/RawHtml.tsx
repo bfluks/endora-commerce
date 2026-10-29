@@ -1,7 +1,7 @@
 'use client';
 
 import { type ComponentConfig, type PuckComponent } from '@puckeditor/core';
-import { withHideOn } from '@endora-commerce/page-builder-core';
+import { withHideOn, createToggleField } from '@endora-commerce/page-builder-core';
 import type { RawHtmlProps } from '../schema/component-types.js';
 import { BoxStyled } from './box-styles.js';
 import {
@@ -32,14 +32,7 @@ const rawHtmlConfig: ComponentConfig<RawHtmlProps> = {
   label: 'Raw HTML',
   fields: {
     html: { type: 'textarea', label: 'HTML' },
-    sanitize: {
-      type: 'radio',
-      label: 'Sanitize',
-      options: [
-        { label: 'On (recommended)', value: true },
-        { label: 'Off (trusted)', value: false },
-      ],
-    },
+    sanitize: createToggleField({ label: 'Sanitize HTML (recommended)', defaultValue: true }),
     margin: BOX_MARGIN_FIELD,
     padding: BOX_PADDING_FIELD,
     border: BOX_BORDER_FIELD,

@@ -59,6 +59,10 @@ const PRICE_AND_STOCK: PlatformSource[] = [
   { sourceKind: 'sale_price', labelKey: 'fieldSource.salePrice' },
   { sourceKind: 'availability', labelKey: 'fieldSource.availability' },
   { sourceKind: 'stock_quantity', labelKey: 'fieldSource.stockQuantity' },
+  // Issue #430 — what a sub-cent price is the price of; empty for every other item.
+  { sourceKind: 'pack_quantity', labelKey: 'fieldSource.packQuantity' },
+  { sourceKind: 'pack_unit_pricing_measure', labelKey: 'fieldSource.packUnitPricingMeasure' },
+  { sourceKind: 'pack_unit_pricing_base_measure', labelKey: 'fieldSource.packUnitPricingBaseMeasure' },
 ];
 
 const COMPUTED: PlatformSource[] = [

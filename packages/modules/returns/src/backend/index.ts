@@ -8,6 +8,7 @@ import type {
   EmailMailerPort,
   OrderReturnContextPort,
   PaymentRefundPort,
+  ReturnRefundReadPort,
   TransactionalEmailSender,
 } from '@endora-commerce/contracts';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
@@ -17,6 +18,7 @@ import { lazyPort } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import { returnsModule, type ReturnsModuleOptions } from './plugin.js';
 import { ReturnEmailNotifier } from './services/return-email-notifier.js';
+import { ReturnRefundReadService } from './services/return-refund-read-service.js';
 import {
   createChannelLanguageResolver,
   createCustomerEmailResolver,
@@ -173,6 +175,16 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.routes(async (app) => {
     await ctx.cradle<ReturnsCradle>().returns(app);
   });
+
+  /**
+   * What an order's settled return cases refunded (issue #428), for the invoice
+   * that states what was paid for the order: a refund an operator transferred
+   * by hand, or a credit-limit top-up, never passes through `payments`.
+   */
+  ctx.di.providePort<ReturnRefundReadPort>(
+    'returnRefundReadPort',
+    ctx.asFunction(({ emFactory }: ReturnsCradle) => new ReturnRefundReadService(emFactory)).singleton(),
+  );
 
   /**
    * The default subject and content for the 2 transactional emails this

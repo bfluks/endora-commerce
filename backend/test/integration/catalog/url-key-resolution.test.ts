@@ -1,0 +1,393 @@
+import { randomUUID } from 'crypto';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  ERROR_CODES,
+  productKeyResolutionSchema,
+  productPath,
+  type ProductKeyResolution,
+} from '@endora-commerce/contracts';
+import {
+  setupBackendServer,
+  teardownBackendServer,
+  type BackendServerHandle,
+} from '../../helpers/test-server.js';
+import { TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { errorBodyOf, setChannelStatus } from '../../helpers/product-scope-fixture.js';
+
+/**
+ * Feature 163, Phase 17 (T107) — resolving a storefront key at (C, L)
+ * (`specs/163-product-data-scopes/contracts/url-keys-and-redirects.md` §4,
+ * data-model §5 "Resolution order", research R12, R28; FR-071, FR-072, US7 #1,
+ * #3, #8, #11; re-analyze H1).
+ *
+ * `GET /api/v1/catalog/products/resolve/:key` answers `kind: 'product'` for the
+ * product's effective key at (C, L), `kind: 'redirect'` (HTTP 200) for any other
+ * of its current keys in L and for its redirect keys in L — always to the path
+ * `productPath()` builds for the effective key — and one not-found for a key of
+ * another language (K1), a key of no product, and a product unavailable to the
+ * caller at (C, L). A redirect never discloses an unavailable product: it is
+ * checked before the answer, and answers the absent key's body.
+ *
+ * Keys are written through the admin PUT (the Command of Phase 16); the channel
+ * pair is this suite's own, both offering `en-US` (default) and `pl-PL`.
+ */
+describe('URL-key resolution at (C, L) (spec 163, T107)', () => {
+  let h: BackendServerHandle;
+  const run = randomUUID().slice(0, 8);
+  const admin = { cookies: { b2b_session: 'stub-admin-session' } };
+  const buyer = { cookies: { b2b_session: 'stub-customer-session' } };
+  const channels: Array<{ id: string; code: string }> = [];
+  const products: string[] = [];
+  let c1: { id: string; code: string };
+  let c2: { id: string; code: string };
+
+  const k = (base: string): string => `${base}-${run}`;
+
+  async function sql(query: string, params: unknown[] = []): Promise<void> {
+    await h.em().getConnection().execute(query, params);
+  }
+
+  async function insertChannel(label: string): Promise<{ id: string; code: string }> {
+    const id = randomUUID();
+    const code = `r163-${run}-${label}`;
+    await sql(
+      `insert into sales_channels (id, code, name, default_language, languages, currencies, default_currency,
+                                   active, created_at, updated_at)
+       values (?, ?, ?::jsonb, 'en-US', '["en-US","pl-PL"]'::jsonb, '["PLN"]'::jsonb, 'PLN', true, now(), now())`,
+      [id, code, JSON.stringify({ 'en-US': `163 resolve ${label}` })],
+    );
+    await sql(
+      `insert into sales_channel_organizations (sales_channel_id, organization_id) values (?, ?) on conflict do nothing`,
+      [id, TEST_ORGANIZATION_ID],
+    );
+    const channel = { id, code };
+    channels.push(channel);
+    return channel;
+  }
+
+  async function insertProduct(
+    slug: string,
+    fields: { archived?: boolean; restrictedTo?: string[] } = {},
+  ): Promise<string> {
+    const id = randomUUID();
+    await sql(
+      `insert into products (id, sku, slug, type, status, name, description, visibility, allowed_organization_ids,
+                             archived_at, created_at, updated_at)
+       values (?, ?, ?, 'simple', ?, ?::jsonb, '{}'::jsonb, ?, ?::jsonb, ?, now(), now())`,
+      [
+        id,
+        `R163-${run}-${products.length}`,
+        slug,
+        fields.archived ? 'inactive' : 'active',
+        JSON.stringify({ 'en-US': `Resolve ${slug}`, 'pl-PL': `Rozwiąż ${slug}` }),
+        fields.restrictedTo ? 'organization_restricted' : 'public',
+        JSON.stringify(fields.restrictedTo ?? []),
+        fields.archived ? new Date() : null,
+      ],
+    );
+    for (const channel of [c1, c2]) {
+      await sql(`insert into sales_channel_products (sales_channel_id, product_id) values (?, ?)`, [channel.id, id]);
+    }
+    products.push(id);
+    return id;
+  }
+
+  async function putKeys(productId: string, payload: unknown): Promise<void> {
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/admin/catalog/products/${productId}/url-keys`,
+      ...admin,
+      payload: payload as object,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+  }
+
+  function resolveRaw(key: string, channel: { code: string }, language: string, who: object = {}) {
+    return h.app.inject({
+      method: 'GET',
+      url: `/api/v1/catalog/products/resolve/${encodeURIComponent(key)}`,
+      headers: { 'x-sales-channel': channel.code, 'accept-language': language },
+      ...who,
+    });
+  }
+
+  async function resolve(key: string, channel: { code: string }, language: string): Promise<ProductKeyResolution> {
+    const res = await resolveRaw(key, channel, language);
+    expect(res.statusCode, `${key} at ${channel.code}/${language}: ${res.body}`).toBe(200);
+    return productKeyResolutionSchema.parse((res.json() as { data: unknown }).data);
+  }
+
+  async function expectServed(key: string, channel: { code: string }, language: string, productId: string): Promise<void> {
+    expect(await resolve(key, channel, language)).toEqual({ kind: 'product', productId, key });
+  }
+
+  async function expectRedirect(key: string, channel: { code: string }, language: string, to: string): Promise<void> {
+    expect(await resolve(key, channel, language)).toEqual({
+      kind: 'redirect',
+      key: to,
+      languageCode: language,
+      // The target is the one helper's answer — channels default to en-US here.
+      path: productPath({ key: to, languageCode: language, channelDefaultLanguage: 'en-US' }),
+    });
+  }
+
+  /**
+   * The body a key nobody holds answers at this channel, in this language, for this
+   * caller — the message is localised to the request language, so the reference
+   * is fetched with exactly the probe's request.
+   */
+  async function absentBody(channel: { code: string }, language: string, who: object = {}): Promise<unknown> {
+    const absent = await resolveRaw(k('nobody-holds-this'), channel, language, who);
+    expect(absent.statusCode).toBe(404);
+    expect((absent.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_NOT_FOUND);
+    return errorBodyOf(absent);
+  }
+
+  async function expectAbsent(key: string, channel: { code: string }, language: string, who: object = {}): Promise<void> {
+    const res = await resolveRaw(key, channel, language, who);
+    expect(res.statusCode, `${key} at ${channel.code}/${language}: ${res.body}`).toBe(404);
+    expect(errorBodyOf(res)).toEqual(await absentBody(channel, language, who));
+  }
+
+  beforeAll(async () => {
+    h = await setupBackendServer();
+    c1 = await insertChannel('c1');
+    c2 = await insertChannel('c2');
+  });
+
+  afterAll(async () => {
+    if (h) {
+      if (products.length > 0) {
+        const list = products.map(() => '?').join(',');
+        await sql(`delete from product_channel_language_scopes where product_id in (${list})`, products);
+        await sql(`delete from product_channel_scopes where product_id in (${list})`, products);
+        await sql(`delete from sales_channel_products where product_id in (${list})`, products);
+        await sql(`delete from products where id in (${list})`, products);
+      }
+      for (const channel of channels) {
+        await sql(`delete from sales_channel_organizations where sales_channel_id = ?`, [channel.id]);
+        await sql(`delete from sales_channels where id = ?`, [channel.id]);
+      }
+      await teardownBackendServer(h);
+    }
+  });
+
+  it('serves the effective key, redirects the global key in L to the first L key, and answers not-found across languages (US7 #1, #8; K1)', async () => {
+    const p = await insertProduct(k('drill'));
+    await putKeys(p, { languageKeys: [{ languageCode: 'pl-PL', key: k('wiertarka') }] });
+
+    await expectServed(k('wiertarka'), c1, 'pl-PL', p);
+    // The global key keeps serving every language without a language key.
+    await expectServed(k('drill'), c1, 'en-US', p);
+    // In pl-PL it became the product's redirect `(pl-PL, drill)` (US7 #8).
+    await expectRedirect(k('drill'), c1, 'pl-PL', k('wiertarka'));
+    await expectRedirect(k('drill'), c2, 'pl-PL', k('wiertarka'));
+    // A key the product holds only in pl-PL is not a key of en-US (K1).
+    await expectAbsent(k('wiertarka'), c1, 'en-US');
+  });
+
+  it('redirects another current key of the product in L to its effective key at (C, L)', async () => {
+    const p = await insertProduct(k('saw'));
+    await putKeys(p, {
+      languageKeys: [{ languageCode: 'pl-PL', key: k('pila') }],
+      channelKeys: [{ channelId: c1.id, languageCode: 'pl-PL', key: k('pila-c1') }],
+    });
+
+    await expectServed(k('pila-c1'), c1, 'pl-PL', p);
+    // The language key is a current key in pl-PL but not the effective one at (C1, pl-PL).
+    await expectRedirect(k('pila'), c1, 'pl-PL', k('pila-c1'));
+    // At C2 the language key is effective, and C1's override is another current key in pl-PL.
+    await expectServed(k('pila'), c2, 'pl-PL', p);
+    await expectRedirect(k('pila-c1'), c2, 'pl-PL', k('pila'));
+  });
+
+  it('redirects an old key at every (C, L) of its language, straight to the current key (US7 #3, #4)', async () => {
+    const p = await insertProduct(k('hammer'));
+    await putKeys(p, { languageKeys: [{ languageCode: 'pl-PL', key: k('mlotek-1') }] });
+    await putKeys(p, { languageKeys: [{ languageCode: 'pl-PL', key: k('mlotek-2') }] });
+    await putKeys(p, { languageKeys: [{ languageCode: 'pl-PL', key: k('mlotek-3') }] });
+
+    for (const channel of [c1, c2]) {
+      await expectRedirect(k('mlotek-1'), channel, 'pl-PL', k('mlotek-3'));
+      await expectRedirect(k('mlotek-2'), channel, 'pl-PL', k('mlotek-3'));
+      await expectServed(k('mlotek-3'), channel, 'pl-PL', p);
+    }
+    // An L redirect is not a key of another language.
+    await expectAbsent(k('mlotek-1'), c1, 'en-US');
+  });
+
+  it('answers the absent body, never a redirect, for a product unavailable at (C, L)', async () => {
+    const p = await insertProduct(k('level'));
+    await putKeys(p, { languageKeys: [{ languageCode: 'pl-PL', key: k('poziomica-1') }] });
+    await putKeys(p, { languageKeys: [{ languageCode: 'pl-PL', key: k('poziomica-2') }] });
+
+    await setChannelStatus(h.em(), p, [c2.id], 'inactive');
+    try {
+      await expectServed(k('poziomica-2'), c1, 'pl-PL', p);
+      await expectAbsent(k('poziomica-2'), c2, 'pl-PL');
+      // The old key does not redirect to it either (security carry 1).
+      await expectAbsent(k('poziomica-1'), c2, 'pl-PL');
+      await expectAbsent(k('level'), c2, 'en-US');
+    } finally {
+      await setChannelStatus(h.em(), p, [c2.id], null);
+    }
+  });
+
+  it('answers the absent body to a caller outside the audience, for current and redirect keys alike', async () => {
+    const p = await insertProduct(k('restricted'), { restrictedTo: [TEST_ORGANIZATION_ID] });
+    await putKeys(p, { languageKeys: [{ languageCode: 'pl-PL', key: k('zastrzezony') }] });
+
+    // The organisation's buyer reaches it — the audience comes from the session.
+    const asBuyer = await resolveRaw(k('zastrzezony'), c1, 'pl-PL', buyer);
+    expect(asBuyer.statusCode, asBuyer.body).toBe(200);
+    expect(asBuyer.headers['cache-control']).toBe('private, no-store');
+    const viaRedirect = await resolveRaw(k('restricted'), c1, 'pl-PL', buyer);
+    expect(viaRedirect.statusCode, viaRedirect.body).toBe(200);
+    expect((viaRedirect.json() as { data: ProductKeyResolution }).data.kind).toBe('redirect');
+
+    // Anonymous: neither the key nor its redirect discloses the product.
+    await expectAbsent(k('zastrzezony'), c1, 'pl-PL');
+    await expectAbsent(k('restricted'), c1, 'pl-PL');
+    await expectAbsent(k('restricted'), c1, 'en-US');
+  });
+
+  it('answers 410 for an archived product reached by its current key or a redirect', async () => {
+    const p = await insertProduct(k('archived'));
+    await putKeys(p, { languageKeys: [{ languageCode: 'pl-PL', key: k('archiwalny') }] });
+    await sql(`update products set status = 'inactive', archived_at = now() where id = ?`, [p]);
+
+    for (const [key, language] of [
+      [k('archiwalny'), 'pl-PL'],
+      [k('archived'), 'en-US'],
+      [k('archived'), 'pl-PL'],
+    ] as const) {
+      const res = await resolveRaw(key, c1, language);
+      expect(res.statusCode, `${key} ${language}: ${res.body}`).toBe(410);
+      expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.PRODUCT_ARCHIVED);
+    }
+  });
+
+  it('T156s/T156t: an `inactive` product that is not archived answers the absent 404, by key and by id', async () => {
+    const p = await insertProduct(k('inactive-only'));
+    await sql(`update products set status = 'inactive', archived_at = null where id = ?`, [p]);
+    await expectAbsent(k('inactive-only'), c1, 'en-US');
+    const byId = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/catalog/products/${p}`,
+      headers: { 'x-sales-channel': c1.code, 'accept-language': 'en-US' },
+    });
+    expect(byId.statusCode, byId.body).toBe(404);
+    // The PDP read of an absent product answers the same body as the resolution's.
+    const absentById = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/catalog/products/${randomUUID()}`,
+      headers: { 'x-sales-channel': c1.code, 'accept-language': 'en-US' },
+    });
+    expect(absentById.statusCode).toBe(404);
+    expect(errorBodyOf(byId)).toEqual(errorBodyOf(absentById));
+    expect(errorBodyOf(byId)).toEqual(await absentBody(c1, 'en-US'));
+  });
+
+  it('H1: a language-less redirect resolves in every language, also after its product gains its first L key', async () => {
+    const q = await insertProduct(k('s0'));
+    // s0 → s1 writes `(NULL, s0)`; only then does Q get its first pl-PL key.
+    await putKeys(q, { globalKey: k('s1') });
+    await putKeys(q, { languageKeys: [{ languageCode: 'pl-PL', key: k('q-pl') }] });
+
+    await expectRedirect(k('s0'), c1, 'en-US', k('s1'));
+    await expectRedirect(k('s0'), c1, 'pl-PL', k('q-pl'));
+    await expectRedirect(k('s0'), c2, 'pl-PL', k('q-pl'));
+  });
+
+  it("H1: a product's own current L key wins over its own language-less redirect with the same key", async () => {
+    const q = await insertProduct(k('t0'));
+    await putKeys(q, { globalKey: k('t1') });
+    // Q writes its own `(NULL, t0)` back as its pl-PL key: the NULL row is kept (data-model §5).
+    await putKeys(q, { languageKeys: [{ languageCode: 'pl-PL', key: k('t0') }] });
+
+    await expectServed(k('t0'), c1, 'pl-PL', q);
+    await expectRedirect(k('t0'), c1, 'en-US', k('t1'));
+  });
+
+  it('the JSON lookup answers an id, a current key at (C, L) and the global key — never a redirect (R28)', async () => {
+    const p = await insertProduct(k('block'));
+    await putKeys(p, { languageKeys: [{ languageCode: 'pl-PL', key: k('blok-1') }] });
+    await putKeys(p, { languageKeys: [{ languageCode: 'pl-PL', key: k('blok-2') }] });
+
+    const lookup = (idOrSlug: string, language: string) =>
+      h.app.inject({
+        method: 'GET',
+        url: `/api/v1/catalog/products/${encodeURIComponent(idOrSlug)}`,
+        headers: { 'x-sales-channel': c1.code, 'accept-language': language },
+      });
+
+    for (const [handle, language] of [
+      [p, 'pl-PL'],
+      [k('blok-2'), 'pl-PL'],
+      // The global key is a stable handle (CMS product blocks), in every language.
+      [k('block'), 'pl-PL'],
+      [k('block'), 'en-US'],
+    ] as const) {
+      const res = await lookup(handle, language);
+      expect(res.statusCode, `${handle} ${language}: ${res.body}`).toBe(200);
+      expect((res.json() as { data: { id: string } }).data.id).toBe(p);
+    }
+    // An old key is a redirect, which this lookup never answers.
+    const old = await lookup(k('blok-1'), 'pl-PL');
+    expect(old.statusCode).toBe(404);
+  });
+
+  it('carries the effective key per (C, L) on the PDP and listing summaries, and ready paths on the PDP (R28, FR-074)', async () => {
+    const before = new Date(Date.now() - 1000).toISOString();
+    const p = await insertProduct(k('wrench'));
+    await putKeys(p, {
+      languageKeys: [{ languageCode: 'pl-PL', key: k('klucz') }],
+      channelKeys: [{ channelId: c2.id, languageCode: 'pl-PL', key: k('klucz-c2') }],
+    });
+
+    const pdp = async (channel: { code: string }, language: string) => {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/catalog/products/${p}`,
+        headers: { 'x-sales-channel': channel.code, 'accept-language': language },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      return (res.json() as {
+        data: { slug: string; paths: { canonical: string; alternates: Array<{ languageCode: string; path: string }> } };
+      }).data;
+    };
+
+    const atC1pl = await pdp(c1, 'pl-PL');
+    expect(atC1pl.slug).toBe(k('klucz'));
+    expect(atC1pl.paths.canonical).toBe(`/p/${k('klucz')}?lang=pl-PL`);
+    expect([...atC1pl.paths.alternates].sort((a, b) => a.languageCode.localeCompare(b.languageCode))).toEqual([
+      { languageCode: 'en-US', path: `/p/${k('wrench')}` },
+      { languageCode: 'pl-PL', path: `/p/${k('klucz')}?lang=pl-PL` },
+    ]);
+    expect((await pdp(c2, 'pl-PL')).paths.canonical).toBe(`/p/${k('klucz-c2')}?lang=pl-PL`);
+    expect((await pdp(c1, 'en-US')).slug).toBe(k('wrench'));
+
+    // An alternate is listed only where the product is available to the anonymous audience.
+    await sql(
+      `insert into product_channel_language_scopes (product_id, sales_channel_id, language_code, status, created_at, updated_at)
+       values (?, ?, 'pl-PL', 'inactive', now(), now())`,
+      [p, c1.id],
+    );
+    try {
+      const atC1en = await pdp(c1, 'en-US');
+      expect(atC1en.paths.alternates).toEqual([{ languageCode: 'en-US', path: `/p/${k('wrench')}` }]);
+    } finally {
+      await sql(`delete from product_channel_language_scopes where product_id = ?`, [p]);
+    }
+
+    // `changedSince` keeps the listing on the Postgres path (a text query may go to the index).
+    const listing = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/catalog/products?changedSince=${encodeURIComponent(before)}&limit=200`,
+      headers: { 'x-sales-channel': c2.code, 'accept-language': 'pl-PL' },
+    });
+    expect(listing.statusCode, listing.body).toBe(200);
+    const card = (listing.json() as { data: Array<{ id: string; slug: string }> }).data.find((row) => row.id === p);
+    expect(card?.slug).toBe(k('klucz-c2'));
+  });
+});

@@ -4,7 +4,7 @@ import type { Data } from '@puckeditor/core';
 import { slugify as slugifyText, type BlogPostDetail } from '@endora-commerce/contracts';
 import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader, SaveButtonGroup } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
-import { ContentLanguageTabs, ScopePicker, type ScopePickerValue } from '@endora-commerce/admin-kit/components';
+import { AssetFieldPicker, ContentLanguageTabs, ScopePicker, type ScopePickerValue } from '@endora-commerce/admin-kit/components';
 import { PageBuilderEditor } from '@endora-commerce/mod-cms/admin-ui';
 import {
   PageBuilderEditorLayout,
@@ -22,6 +22,8 @@ interface FormState {
   slug: string;
   active: boolean;
   description: string;
+  /** Library asset id, `''` while unset (feature 163). */
+  mainImageAssetId: string;
   metaTitle: string;
   metaDescription: string;
   metaKeywords: string;
@@ -32,6 +34,7 @@ const blankForm: FormState = {
   slug: '',
   active: true,
   description: '',
+  mainImageAssetId: '',
   metaTitle: '',
   metaDescription: '',
   metaKeywords: '',
@@ -110,6 +113,7 @@ export function BlogPostEditor(): ReactNode {
         slug: loaded.slug,
         active: loaded.active,
         description: loaded.description ?? '',
+        mainImageAssetId: loaded.mainImageAssetId ?? '',
         metaTitle: pickValue(loaded.metaTitle, lang),
         metaDescription: pickValue(loaded.metaDescription, lang),
         metaKeywords: pickValue(loaded.metaKeywords, lang),
@@ -201,6 +205,7 @@ export function BlogPostEditor(): ReactNode {
         slug: form.slug,
         active: form.active,
         description: form.description || null,
+        mainImageAssetId: form.mainImageAssetId || null,
         salesChannelIds: scope.salesChannelIds,
         languages: scope.languages,
         categoryIds: [], // service auto-fills the seeded Default
@@ -247,6 +252,7 @@ export function BlogPostEditor(): ReactNode {
         slug: form.slug,
         active: form.active,
         description: form.description || null,
+        mainImageAssetId: form.mainImageAssetId || null,
         salesChannelIds: scope.salesChannelIds,
         languages: scope.languages,
         metaTitle: { ...(post.metaTitle ?? {}), [lang]: form.metaTitle },
@@ -556,6 +562,17 @@ export function BlogPostEditor(): ReactNode {
                 />
                 {t('fields.activeWhenPublished')}
               </label>
+              <div className="space-y-1">
+                <Label htmlFor="post-image">{t('fields.mainImage')}</Label>
+                <AssetFieldPicker
+                  id="post-image"
+                  value={form.mainImageAssetId}
+                  onChange={(assetId) => setForm((f) => ({ ...f, mainImageAssetId: assetId }))}
+                  acceptMimePrefix="image/"
+                  allowUpload
+                />
+                <p className="text-xs text-muted-foreground">{t('postEditor.mainImageHint')}</p>
+              </div>
             </CardContent>
           </Card>
 

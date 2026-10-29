@@ -37,6 +37,7 @@ import {
 import type { ShareTokenGenerator } from './services/share-token-generator.js';
 import type { Comparison } from './entities/comparison.entity.js';
 import { customerActor } from './request-actor.js';
+import { buyerViewerOf, languageTagOf } from './buyer-viewer.js';
 
 /**
  * Public HTTP surface — feature 007 / US1 (T027).
@@ -145,7 +146,9 @@ export async function registerComparisonsPublicRoutes(
       data: await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        buyerViewerOf(request),
+        // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+        'owner',
       ),
     };
   });
@@ -165,6 +168,7 @@ export async function registerComparisonsPublicRoutes(
         channel.id,
         body.productId,
         productAudienceOf(request),
+        languageTagOf(request),
       );
     } catch (err) {
       throw translate(err);
@@ -174,7 +178,9 @@ export async function registerComparisonsPublicRoutes(
       data: await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        buyerViewerOf(request),
+        // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+        'owner',
       ),
     };
   });
@@ -203,7 +209,9 @@ export async function registerComparisonsPublicRoutes(
         data: await comparisonService.buildOwnerView(
           comparison,
           channel.id,
-          { kind: 'buyer', audience: productAudienceOf(request) },
+          buyerViewerOf(request),
+          // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+          'owner',
         ),
       };
     },
@@ -229,7 +237,9 @@ export async function registerComparisonsPublicRoutes(
       data: await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        buyerViewerOf(request),
+        // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+        'owner',
       ),
     };
   });
@@ -248,7 +258,9 @@ export async function registerComparisonsPublicRoutes(
       const view = await comparisonService.buildOwnerView(
         comparison,
         channel.id,
-        { kind: 'buyer', audience: productAudienceOf(request) },
+        buyerViewerOf(request),
+        // Owner decision CMP-1 = A — `/me` is the owner's own comparison.
+        'owner',
       );
       if (view.products.length === 0) {
         throw new HttpError(

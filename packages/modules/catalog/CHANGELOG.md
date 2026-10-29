@@ -1,5 +1,255 @@
 # @endora-commerce/mod-catalog
 
+## 0.108.0
+
+### Minor Changes
+
+- 0bd5a2b: Products carry a minimum order quantity and a **Returnable** flag; packaging units carry a minimum number of units.
+
+  - **Upgrade note (FR-034): every existing product becomes not returnable for new orders.** The new `products.returnable` column defaults to `false`, so lines of orders placed after the upgrade are not returnable until their products are marked. Mark them in bulk: select the products on the product list and use **Bulk edit → Returnable → Yes — returnable**. Orders placed before the upgrade are unaffected — their lines carry no recorded value and stay returnable.
+  - **Behaviour change for API clients.** `POST`/`PATCH /api/v1/admin/catalog/products[/:id]` accept `minOrderQuantity` (integer 1–1 000 000, or `null` to clear) and `returnable`; the admin product response carries both. `minOrderQuantity` on a `grouped`, `bundle` or `virtual` product is refused with `422 VALIDATION_FAILED`; a value outside the range with `400`. `POST /api/v1/admin/catalog/products/bulk-update` accepts `returnable` and writes one audit entry per product it changes. Packaging-unit create/update accept `minOrderUnits` (same range), and the response always carries it; the in-process `CatalogPackagingPort` accepts the same optional field.
+  - **Storefront reads:** product detail and product list summaries carry `minOrderQuantity` (`null` when none or when the type takes no minimum); the product detail's `packagingUnits[]` carry `minOrderUnits`.
+  - **Read port:** `CatalogProductReadPort` records gain `minOrderQuantity`, `returnable` and `minOrderUnits`, and the port gains `listPackagingUnitsByProductIds(productIds)`. **Implementers of typed `CatalogProductReadPort` stubs must add it**, and its callers must pass only product ids they have already vetted for visibility.
+  - **Duplicate** does not copy either rule: the copy starts with no minimum and not returnable.
+  - The admin product editor gains an **Order rules** card (Inventory tab), the packaging-unit editor a **Minimum (units)** column, and the bulk edit a **Returnable** section. The card is built from the admin kit's `Checkbox`, `Input` and `Button`; a refused unit minimum stays marked invalid (`aria-invalid`, with its message) until its value changes, even across another save on the editor. New error sentences in both bundles for `PRODUCT_BELOW_MINIMUM_QUANTITY`, `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` and `PACKAGING_UNIT_MISMATCH`.
+  - Migration `20261016T082008_catalog_order_rules.ts` adds `products.min_order_quantity`, `products.returnable` and `product_packaging_units.min_order_units`.
+
+- 14bcf1d: A product has no price of its own any more (feature 160, FR-042, FR-043): prices are rows of price books.
+
+  - **Removed, not converted.** Migration `20261022T111811_catalog_price_fields_removed` drops `product_variants.price_override` and strips the `defaultPrice` and `price` keys from `products.attribute_values`. The `ProductVariant.priceOverride` property and the `priceOverride` field of the variant DTOs, the admin variant read and `CatalogProductVariantRecord` are gone.
+  - **Refused.** `POST`/`PATCH /api/v1/admin/catalog/products[/:id]` naming `attributeValues.defaultPrice` or `attributeValues.price` (or either at the top level), and `POST`/`PATCH …/products/:productId/variants[/:variantId]` naming `priceOverride`, answer `400 PRICE_SET_IN_PRICE_BOOKS` and write nothing. Old: `PATCH …/products/:id` with `{ attributeValues: { defaultPrice: 49.99 } }`, or a variant with `{ priceOverride: 49.99 }`. New: `PUT /api/v1/admin/price-books/base-prices/:productId` with the product's tiers and its variants' rows, per currency.
+  - **Admin.** The product editor's _Default unit price_ field and the variant table's _Price override_ column and field are removed; the attribute-set swap no longer keeps a `defaultPrice` key.
+  - **Listing.** Price sort and the price range read the price surface; the unpriced tail has no `defaultPrice` arm. Listings, product detail, product links and the external catalogue API pass variants to the pricing port and render the source, compare-at and "from" prices.
+  - **Demo.** The catalogue demo writes no `defaultPrice`; `price_lists`' demo step prices the demo products (_Screws 0200_ at 100 PLN).
+
+- 301a69f: An admin read of a product's variants (feature 161, Checkpoint 5 review).
+
+  - **`GET /api/v1/admin/catalog/products/:productId/variants`** (`catalog:read`): every variant of the product by SKU, serialized as the variant writes answer them (`id`, `parentProductId`, `sku`, `variantAttributeValues`, `stockLevel`, `createdAt`, `updatedAt`), whatever the product's status, sales channels or audience; an unknown or deleted product is `404`. `CatalogAdminService.listVariants(productId)` is new. The storefront's `GET /api/v1/catalog/products/:id`, which answers an inactive product `410` and an out-of-channel one `404`, is unchanged.
+  - **Contracts:** `adminProductVariantSchema`, `adminProductVariantsResponseSchema` and their types.
+  - **The price-book grid** expands a product line through this read (the action is absent without `catalog:read`).
+
+- af57b55: Feature 161 (G14, G15) on the catalogue.
+
+  - **List price on the cards and the product page (G14).** `GET /api/v1/catalog/products` and `GET /api/v1/catalog/products/:idOrSlug` carry `resolvedPrice.listPrice: { amount, currency }` when the pricing engine answers one (`pricing.show_list_price` on and the channel's everyone price above the buyer's). Absent otherwise; nothing else in the summary changes.
+  - **Stored admin name and search keys (G15, `specs/161-price-book-editor/research.md` R14).** Migration `20261022T182523_catalog_admin_name_keys` adds `create extension if not exists pg_trgm`, the IMMUTABLE SQL functions `catalog_admin_fold`, `catalog_admin_display_name` and `catalog_admin_name_key`, the generated stored columns `products.admin_name_key_en|pl` (collation `"C"`) and `admin_search_key_en|pl`, the btree `products_admin_order_en|pl` and the GIN trigram indexes `products_admin_search_en|pl_trgm` and `product_variants_sku_lower_trgm`. Postgres maintains the columns on every write; `Product` maps them read-only (`adminNameKeyEn`, `adminNameKeyPl`, `adminSearchKeyEn`, `adminSearchKeyPl`: generated, lazy, hidden). The migration rewrites `products` (seconds at 50 000 rows).
+  - **`CatalogProductReadService.pageProductsByAdminName({ membership, language, search?, offset, limit, withTotal? })` (G15)** — one page of the products a caller's membership subquery names, by the stored key of the admin language (`en`, `pl`; others read `en`), then SKU, then id, with the total; `search` matches the folded shown name, the SKU or a variant's SKU, literally. One statement without a search, two with one. **Replaces `pageProductIdsByName`**, which is removed. Old: `pageProductIdsByName({ ids, search, language, offset, limit })` → `{ ids, total }`. New: `pageProductsByAdminName({ membership: { sql, params }, search, language, offset, limit })` → `{ ids, total }` (`total` is `null` with `withTotal: false`). The constructor takes an optional `{ sparseSearchLimit }` (default 2 000).
+
+- d2d3d9a: Catalogue reads are priced once and on the customer's own group (D-287 P0).
+
+  - **`ProductSummary.resolvedPrice`** (`basePrice`, `salePrice`, `displayMode`) is emitted on every listing card and on the product detail, from the same resolution as `price` — `CatalogQueryService` now prices through `ListingPriceDetailPort.resolveListingPriceDetails` (its fifth constructor argument is typed `ListingPriceDetailPort`). The product page no longer needs `GET /storefront/products/:id/resolved-price`. `null` where the channel withholds prices.
+  - **Customer group.** Listing, product detail and product-link prices pass the signed-in customer's `customerAccountId`, so a customer whose own group overrides their organization's is priced on it — a behaviour change for such customers.
+  - **External catalogue API.** `CatalogOrgPriceDecorator` prices summaries, bulk lines and the tier ladder with one `resolveLinePrices` call each, instead of one `resolveLinePrice` per summary, line and rung; its `pricingService` dependency (and `CatalogModuleOptions['pricingService']`) is now `OrgLinePricePort & LinePricesPort & …`.
+
+### Patch Changes
+
+- 8d62ff8: Documentation only (feature 160, FR-048): the module pages describe how prices are determined with price books.
+
+  - `price_lists` ships three pages instead of one: _Price books_ (what a book is, base prices, the four resolution steps, the default precedence, variants, where prices appear, the demo's worked examples, permissions, known limitations and a migration note), _The price-book editor_ (every admin screen) and _Pricing for developers_ (data model, resolver, the batched read path, caching, the price surface, the admin and storefront API, the ports and the conversion from the old model).
+  - The pages of `catalog`, `carts`, `orders`, `organizations`, `product_feeds`, `quick_order`, `quote_requests` and `search` describe their prices as resolved from price books, with no product-owned price and no fallback. No code changes.
+
+- e358ccb: Documentation only (feature 160): the module pages follow the targeted refresh of the price surface and the pinned-feed rules of 2026-10-23.
+
+  - `price_lists` — _Pricing for developers_ describes the two kinds of mark (a (profile, product) mark in `price_profile_stale_products`, a whole-profile mark), what each write marks, the worker's pass, `namedListPublishability` and the reference a pinned book's percentages are taken off, and the unpriced shape of `resolved-price`; _Price books_ says how soon a price change shows in a price-sorted listing — within a minute for a targeted change, within five minutes at about 200 profiles for a catalogue-wide one (SC-005, owner ruling 2026-10-24) — and that a list a feed was pinned to is retired, not deleted, by the upgrade. The demo is loaded with `demo seed`, not `demo reset`.
+  - `product_feeds` — a pinned price book publishes only while it is active or scheduled within its dates, on the feed's channel and for everyone; the feed page warns otherwise, and a run ends `withdrawn` and withdraws the published file (not a failure: no notification, no delivery; the old file stays downloadable from its run). A feed is pinned through the admin API (issue #414).
+  - `catalog` — product, category and attribute events mark on the price surface the products they concern. No code changes.
+
+- 6865b14: Pricing strings (feature 160): the product editor's _Pricing_ tab label is translated (`productEditor.tab.pricing`, _Ceny_ in Polish); `price_lists`' Polish hint names the attribute flag _Reguły cennika_, as the catalogue's attribute screen does; a comment on the cart read's pricing chain no longer describes a product price of its own.
+- a2cfed7: A price-sorted listing with no price surface built yet pages to its end.
+
+  While no price order exists for the viewer (right after the 0.108.0 upgrade, on a new channel, before the surface worker has run), `sort=price` is served in the default order. That fallback dropped the cursor too, so every page was page 1 with `hasMore: true` and an infinite scroll never ended. The fallback now returns the default listing's cursor wrapped in the price cursor, and a later page honours it: the walk meets every product once and ends, also when the surface is built in the middle of it.
+
+- 0194c0c: A price-sorted listing walk whose price order goes missing midway (its price surface retired or being rebuilt) no longer starts again at the default listing's first page, which showed the buyer products already served. It carries on from the last price it served: the products still to come — those whose live price sorts after it in the walk's direction, then the unpriced ones — in the default order, to the end, so nothing already served is served again from the start. A product whose price changes during the walk may still be met twice or not at all, as on any walk over a live price; every other product is met exactly once. A page that loses the order between two chunks ends with the products it collected. The listing's response shape does not change.
+- 528aec6: A price-sorted listing page on a cursor of a walk begun in the default order (no price order existed) is handed to the default listing before anything else is read: it no longer resolves the viewer's pricing context, the category tree or the search's attribute keys only to discard them, and issues exactly the statements the default listing's page does.
+- 5001ba1: A malformed cursor on a price-sorted product listing — a price that is not a four-place decimal, an id that is not a uuid, a date that does not parse — is discarded and the listing answers its first page, as the default listing does with a cursor it cannot read, instead of failing with a 500. A default-listing cursor naming an id that is not a uuid is discarded the same way.
+- 84f4165: A price range (`minPrice`, `maxPrice`) on the product listing selects the same products under every sort. The bounds are read once, exactly — a minimum rounded up and a maximum rounded down to the four places a price has — and compared as decimals on every path; the price-sorted path rounded them with `toFixed(4)` and the other sorts compared binary numbers, so `minPrice=9.04504` kept a product at 9.0450 when sorted by price and dropped it otherwise. It is now dropped on both.
+- 2b9689b: A price-sorted or price-filtered listing page builds the viewer's pricing context (including the organization lookup) and reads the category tree once per page, instead of once per chunk it scans — up to eight times on a page that skips many products.
+- 0ef7316: The catalogue and pricing documentation now state what a price-sorted walk guarantees: every product whose price does not change during the walk is met exactly once, including when the price order goes missing midway; a product repriced meanwhile may be met twice or not at all, as with any cursor over a live price. They no longer claim that nothing is ever repeated or lost, and they say that a page may be short or empty and still have more after it.
+- ceeab70: A price-sorted or price-filtered product listing page that runs out of its scan budget (it reads at most eight times the page size of rows) no longer ends the walk and loses the products after it: it answers `hasMore: true` with a cursor that continues from where its scan stopped. Such a page can be short, or empty where every row it read was hidden from the viewer or already served; the walk still reaches the end, since every page moves the scan forward.
+- 456b948: The remainder of a price-sorted walk whose price order went missing no longer drops every product on a sales channel that publishes no prices: the walk decides on the viewer's own price whether or not the channel shows it, unpriced products are served as before, and the cards still show no price on such a channel.
+- eda7da8: Storefront product reads show a product's per-sales-channel value overrides.
+
+  - **Behaviour change for API clients — channel overrides are now visible on the storefront.** `GET /api/v1/catalog/products/:idOrSlug` (name, description, `seo`, `structuredDataJsonLd`, `attributeValues`, `visibleAttributes`, grouped children and bundle options) and every `GET /api/v1/catalog/products` card name now return the override written in the product scope editor for the request's sales channel and language. The resolver's override slots are walked over the storefront's own baseline language order — the `Accept-Language` language, the channel's default language, `en-US`, `en`, the first stored language — taking the (channel, language) override at each language until the baseline has text for one, so an override never replaces baseline text of an earlier language in that order; the channel-only slot is asked last. Product-link tiles (in the product page's `links` and `GET /api/v1/catalog/products/:idOrSlug/links`) show overrides too, walked over their own pick, which has no channel-default leg. Channel-scoped user attributes return their channel override. A product without an override for that channel answers exactly as before.
+  - Override rows are read for the request's sales channel only, once per read section, never per card.
+  - **Search result cards show the same name.** Every card of the Meilisearch-served listing (`GET /api/v1/catalog/products?q=…` and `GET /api/v1/search/suggest`) now shows the name the catalogue's listing card shows for the request's sales channel and language, rather than the baseline text. The indexed name is still what the index ranks and sorts by. The request channel's override rows are read once per results page.
+  - `@endora-commerce/contracts` exports the slot choice both modules share (`overrideLanguages`, `channelOverrideFor`, `effectiveSystemText`, `StorefrontOverrideContext`) and the resolver's `isNonEmpty` presence test the walk reuses, and `CatalogProductReadPort.listValueOverridesByProductIds` takes an optional `{ channelId }` that narrows the read to one sales channel's rows. Existing callers and implementations are unaffected.
+
+- 359ee2b: `CatalogProductReadPort` answers products the way pricing resolves them, without building a record of each (issue #416).
+
+  - **New, required on every implementation of the port:** `listPricingRefs()` and `findPricingRefsByIds(ids)`, answering `CatalogProductPricingRef` (`{ id, attributeValues }`, exported from `@endora-commerce/contracts`). `listPricingRefs()` answers the products `listAll()` answers, ordered by id; `findPricingRefsByIds(ids)` answers the ones `findByIds(ids)` answers. Soft-deleted and inactive products are included in both. An implementation outside this repository has to add both methods. It can map `listAll()` and `findByIds()` to `{ id, attributeValues }`.
+  - `@endora-commerce/mod-catalog` answers each with one statement and no entity hydration. The price surface's worker reads the catalogue at the start of every whole build. On a 50 000-product catalogue, `listAll()` took 3.8 s for that, most of it hydrating `Product` entities whose fields the build does not use.
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [1846a38]
+- Updated dependencies [b124db8]
+- Updated dependencies [ee26beb]
+- Updated dependencies [44c1615]
+- Updated dependencies [3d1e47c]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [b0e1abd]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [55d957b]
+- Updated dependencies [9a2d1f8]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+  - @endora-commerce/mod-custom-fields@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- 76f9757: `catalogProductReadPort` implements `listProductIdsByAttributeValue({ key, value, match })`: the ids
+  of products whose own attribute value equals `value` (`scalar`), contains it (`array`) or is the
+  boolean it names (`boolean`), structurally — soft-deleted and inactive products included, like
+  `listProductIdsInCategory`. The _Attributes_ documentation now describes what the _Price list
+  rules_ flag does: it lets an attribute select products in a price list's price matrix.
+- bf9881f: The admin category tree accepts `/catalog/categories?focus=<id>`: once the list has loaded, the
+  category's row is marked `aria-current="true"`, highlighted, scrolled into view and focused, once. It
+  is where a global-search Category result lands. An id the tree does not hold changes nothing.
+- bf9881f: Each module contributes its record type to admin global search (`@endora-commerce/mod-admin-search`).
+
+  | Package              | Record type                           | Fields offered (default in bold)                                                 | Permission                             |
+  | -------------------- | ------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------- |
+  | `mod-orders`         | `orders.order`                        | **number**, **organizationName**, **customer**, billingCompanyName, billingTaxId | `orders:read`                          |
+  | `mod-quote-requests` | `quote_requests.quote_request`        | **number**, **organizationName**, **customer**, customerNote                     | `rfqs:handle`                          |
+  | `mod-crm`            | `crm.opportunity`                     | **number**, **title**, **organizationName**, description                         | `crm:read`                             |
+  | `mod-organizations`  | `organizations.organization`          | **name**, **taxId**, legalName                                                   | `customers:read` or `customers:manage` |
+  | `mod-customers`      | `customers.customer`                  | **email**, **name**                                                              | `customers:read`                       |
+  | `mod-catalog`        | `catalog.product`, `catalog.category` | **sku**, **name**, slug, quickSearchAttributes; **name**, **slug**               | `catalog:read`                         |
+
+  Every provider applies its own admin list's visibility: sales representatives see only their
+  organizations' orders, quote requests, opportunities and customers; organizations follow the
+  Organizations list, with a representative's assigned organizations ranked first. Each module declares
+  a `contributes-to` edge on `adminSearchProviderRegistry`, so none of them depends on global search and
+  none loses its switch. `mod-quote-requests`, `mod-organizations`, `mod-customers` and `mod-catalog`
+  now declare `_i18n` in `dependencies` (status labels in the admin's language), and each module's
+  bundle gains `adminSearch.*` keys in English and Polish.
+
+- 8397b0f: Page Builder translation. A **Translate** action in the Page Builder toolbar translates the canvas of the language tab being edited — or only the selected component or text — with the LLM configured in Settings → Page Builder (`cms.page_builder.translation.enabled`, `…llm_credentials`, `…max_source_characters`; off by default), behind the new permission `cms.translate`, through `GET /api/v1/admin/cms/page-builder/translation` and `POST /api/v1/admin/cms/page-builder/translate`. The result is an unsaved change with _Restore previous content_; every request that sent text is audited as `cms.page_builder.translate`.
+
+  For block authors: `BlockDefinition` gains an optional `translatable: [{ path, format? }]` (`format` `plain` | `tiptap` | `html`, paths like `items[].title`) naming the props that are prose; it is served on the Page Builder descriptor. A block without it is never sent to a model. Every CMS-context block of `cms` and `catalog` declares it. `PageBuilderHeaderActions` gains an optional `extraActions` slot, and the blog post and category editors pass the editor what the action needs.
+
+- e9a92b9: Saved views on the admin product list (#289).
+
+  - The Product list's toolbar carries the admin kit's saved-views control: a selector of the admin's own views and every shared view, _Save view_ and _Delete view_. A view is named, private or shared, and stores the list's status tab, type chip and search text — only the ones not at their default. The Stock, Category and Channel chips are not saved. Loading a view replaces status, type and search, returns Stock to _All_, goes back to the first page and clears the row selection; a status or type the list no longer offers loads as _All_, and keys the list does not know are ignored. Any admin who can open the Product list (`catalog:read`) can use it.
+  - Four new routes, gated by `catalog:read`: `GET` and `POST /api/v1/admin/catalog/products/list-views`, `PATCH` and `DELETE /api/v1/admin/catalog/products/list-views/{id}`. A view stores the list's filters only (`sort` and `visibleColumns` in a request body are ignored). `GET` returns the caller's own views and every shared view, ordered by name; every item carries `ownedByCaller` and `canModify`. Another admin's private view answers `404`; a shared view is modified or deleted only by its owner or a platform admin (any role except `sales_representative`), `403` otherwise. All four routes answer `401 UNAUTHORIZED` when no admin session resolves.
+  - A `PATCH` that changes nothing — an empty body, or every value as already stored — writes nothing and logs nothing; it answers `200` with the current view. It is still refused (`403`/`404`) to a caller who may not modify the view.
+  - `PATCH` and `DELETE` answer an `id` that is not a UUID with the same `404 NOT_FOUND` as a view that does not exist.
+  - Names are trimmed, 1–160 characters, without control or format characters. One admin cannot hold two views on the product list whose names differ only by letter case or surrounding spaces: `POST`, and a `PATCH` that changes the name, answer `409 PRODUCT_SAVED_VIEW_NAME_TAKEN` with a translated message (English and Polish). The rule binds the view's owner.
+  - New table `product_list_saved_views`, created by the migration `Migration20261014T170531CatalogProductListSavedViews`, with a unique index on the owner and the lower-cased name.
+  - When a platform admin changes or deletes another admin's view, the `catalog` module logs one `info` record (`event: 'saved_view.updated' | 'saved_view.deleted'`, `list`, `viewId`, `ownerAdminUserId`, `actorAdminUserId`).
+
+  `@endora-commerce/contracts` gains the `ERROR_CODES.PRODUCT_SAVED_VIEW_NAME_TAKEN` member.
+
+- d76291d: Storefront catalogue reads can be priced in the currency the shopper selected. `GET /api/v1/catalog/products`, `GET /api/v1/catalog/products/:idOrSlug` and `GET /api/v1/catalog/products/:idOrSlug/links` accept `?currency=` (an ISO 4217 code, any case). The listing price, the price ordering, the price-range filter, the link tiles and the Meilisearch-served listing are all resolved in that currency when the request's sales channel lists it in its `currencies`, and in the channel's `defaultCurrency` otherwise. A malformed code answers `400 VALIDATION_FAILED`. Without the parameter, every read asks the pricing engine exactly what it asked before.
+
+  `@endora-commerce/contracts` exports the pieces both modules use: `listingCurrencyQuerySchema` (the parameter), `resolveListingCurrency(requested, channel)` (requested if the channel offers it, else its default) and `listingPriceChannelContext(channel, currency)` (the `salesChannel` and `currencyCode` half of a `ListingPriceViewerContext`, with the default currency left implicit). `SearchQueryContext` gains an optional `currency`.
+
+  `@endora-commerce/mod-price-lists`: a listing priced in a currency other than the channel's default no longer falls back to the Product's own `defaultPrice` / `price` attribute. That attribute has no currency of its own and was entered in the default one, so the fallback would have quoted, for example, 100 PLN as 100 EUR; such a product now has no listing price in that currency (`source: 'none'`). In the default currency nothing changes.
+
+### Patch Changes
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+  - @endora-commerce/mod-custom-fields@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

@@ -87,7 +87,7 @@ function deps(overrides: Partial<FeedGenerationDeps>): FeedGenerationDeps {
     catalogGallery: { listForProducts: async () => [] as CatalogGalleryBatchItem[] },
     resolvePublicImageUrls: async () => new Map<string, string>(),
     resolveAvailability: async () => new Map(),
-    resolveAnonymousPrice: async () => null,
+    resolveAnonymousPrice: async () => new Map(),
     ...overrides,
   } as unknown as FeedGenerationDeps;
 }
@@ -112,7 +112,9 @@ describe('product_feeds — gallery items come from the catalog port', () => {
     ).hydrateItems([PRODUCT_A, PRODUCT_B], scope);
 
     expect(listForProducts).toHaveBeenCalledTimes(1);
-    expect(listForProducts).toHaveBeenCalledWith([PRODUCT_A, PRODUCT_B]);
+    // Feature 163 (MED-1 = A) — asked in the feed's channel, so an image hidden there
+    // never reaches the feed.
+    expect(listForProducts).toHaveBeenCalledWith([PRODUCT_A, PRODUCT_B], scope.salesChannelId);
     expect(items[0]?.imageUrls).toEqual(['https://cdn.test/a.png', 'https://cdn.test/b.png']);
     expect(items[1]?.imageUrls).toEqual(['https://cdn.test/b.png']);
   });

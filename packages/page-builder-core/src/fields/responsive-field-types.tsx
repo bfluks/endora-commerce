@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useRef, useState, type ReactElement, type
 import type { FieldProps } from '@puckeditor/core';
 import {
   ScopedFieldHint,
+  ScopedInheritedNote,
   ScopedResetLink,
   readScopedValue,
   responsiveBaseSeed,
@@ -19,8 +20,9 @@ import {
 } from '../types/responsive.js';
 import { useComponentScope } from '../editor/use-component-scope.js';
 import { usePageBuilderPuck } from '../editor/use-page-builder-puck.js';
+import { PB_FIELD_INPUT_CLASS } from './field-classes.js';
 
-const inputClassName = '_Input-input_bsxfo_26';
+const inputClassName = PB_FIELD_INPUT_CLASS;
 
 type ResponsiveFieldProps<Value> = FieldProps & {
   children: ReactNode;
@@ -131,7 +133,7 @@ const ResponsiveNumberControl = memo(function ResponsiveNumberControl({
         }}
       />
       {inherited ? (
-        <p className="text-xs opacity-60">Inherited value shown — change to override for this scope.</p>
+        <ScopedInheritedNote />
       ) : null}
     </div>
   );
@@ -219,7 +221,7 @@ const ResponsiveSelectControl = memo(function ResponsiveSelectControl({
         ))}
       </select>
       {inherited ? (
-        <p className="text-xs opacity-60">Inherited value shown — change to override for this scope.</p>
+        <ScopedInheritedNote />
       ) : null}
     </div>
   );

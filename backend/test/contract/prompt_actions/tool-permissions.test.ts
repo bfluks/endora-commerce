@@ -69,7 +69,13 @@ const MODULE_LAYOUT = await requireModuleLayout('[prompt-tool-permissions]');
 
 /** Enough of each contributor's dependency bag to build its tool descriptors. */
 const emFactory = (): EntityManager => ({}) as EntityManager;
-const catalogDeps = { emFactory, events: { publish: () => undefined } } as unknown as CatalogPromptToolsDeps;
+// `commandBus` present so the sweep reaches the Archive / Restore tools, which
+// catalog contributes only where its bus is wired (feature 163, P-1 = A).
+const catalogDeps = {
+  emFactory,
+  events: { publish: () => undefined },
+  commandBus: { run: () => Promise.reject(new Error('not run here')) },
+} as unknown as CatalogPromptToolsDeps;
 const inventoryDeps = { emFactory } as InventoryPromptToolsDeps;
 const ordersDeps = { emFactory } as OrdersPromptToolsDeps;
 

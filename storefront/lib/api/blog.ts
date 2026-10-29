@@ -1,6 +1,7 @@
 import type {
   BlogBySlugResponse,
   BlogIndexResponse,
+  BlogPostCard,
   BlogTagByCodeResponse,
 } from '@endora-commerce/contracts';
 import { apiGet, StorefrontApiError, type RequestContext } from './client';
@@ -83,6 +84,28 @@ export async function getBlogTagByCode(
     return res.data;
   } catch (err) {
     if (err instanceof StorefrontApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+/**
+ * The newest published posts of the active channel as cards, optionally of
+ * one category (feature 163, `GET /api/v1/blog/posts`) — what
+ * `blog.LatestPosts` renders. Always fresh, as the other blog reads. An unknown
+ * category is an empty list; a switched-off `blog` is an empty list too, as an
+ * absence rather than an error.
+ */
+export async function listBlogPosts(
+  query: { limit: number; categorySlug?: string },
+  ctx: RequestContext,
+): Promise<BlogPostCard[]> {
+  const qs = new URLSearchParams({ limit: String(query.limit) });
+  if (query.categorySlug) qs.set('categorySlug', query.categorySlug);
+  try {
+    const res = await apiGet<{ data: BlogPostCard[] }>(`/api/v1/blog/posts?${qs.toString()}`, ctx);
+    return res.data;
+  } catch (err) {
+    if (isModuleDisabled(err)) return [];
     throw err;
   }
 }

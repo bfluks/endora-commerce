@@ -38,7 +38,9 @@ export async function registerI18nRoutes(
   const { languageService, currencyRead, requireAdmin, onConfigChange } = deps;
 
   // ---- Public (storefront + admin) i18n config ----
-  app.get('/api/v1/i18n/config', async () => {
+  // Feature 154 — reachable whatever the sales-channel access rule decides: the
+  // sign-in pages of both UIs read the languages before anybody is signed in.
+  app.get('/api/v1/i18n/config', { config: { salesChannelAccess: 'open' } }, async () => {
     const [languages, currencies, defaultLanguage, defaultCurrency] = await Promise.all([
       languageService.listActive(),
       currencyRead.listActive(),

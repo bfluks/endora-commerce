@@ -56,6 +56,9 @@ describe('boot-time default-channel reconciliation (T021)', () => {
       expect(row.code).toBe('default');
       expect(row.systemDefault).toBe(true);
       expect(row.active).toBe(true);
+      // Feature 154 (FR-003, A5) — the reconciler's default channel is open to
+      // anonymous visitors, so a fresh shop answers its storefront as before.
+      expect(row.anonymousAccess).toBe(true);
       expect(row.currencies).toContain('EUR');
 
       // Every language the inserted channel names must be a row of the
@@ -87,7 +90,6 @@ describe('boot-time default-channel reconciliation (T021)', () => {
         defaultCurrency: 'PLN',
         languages: ['pl'],
         currencies: ['PLN'],
-        isPublic: true,
         active: true,
         systemDefault: false,
         version: 1,
@@ -99,7 +101,6 @@ describe('boot-time default-channel reconciliation (T021)', () => {
         defaultCurrency: 'EUR',
         languages: ['en'],
         currencies: ['EUR'],
-        isPublic: false,
         active: true,
         systemDefault: false,
         version: 1,
@@ -130,7 +131,6 @@ describe('boot-time default-channel reconciliation (T021)', () => {
         defaultCurrency: 'EUR',
         languages: ['en'],
         currencies: ['EUR'],
-        isPublic: false,
         active: true,
         systemDefault: true,
         version: 5,

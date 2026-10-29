@@ -5,6 +5,8 @@
 //   - cms_pages.content
 //   - cms_blocks.content
 //   - cms_templates.content
+//   - cms_pages.share_image_asset_id (feature 163, data-model §1.1 — a
+//     plain uuid column, not an FK, because assets live in `assets_library`)
 //
 // Match shape: any node whose `assetId` (or any `*assetId` key under
 // `props`) equals the requested id. Caught by jsonb_path_exists with a
@@ -47,6 +49,10 @@ function cmsAssetReferenceDescriptor(
            from cms_pages
            where jsonb_path_exists(content, ${path})
            union all
+           select id::text as id, name, 'cms_page_share_image' as kind
+           from cms_pages
+           where share_image_asset_id::text = lower('${aid}')
+           union all
            select id::text as id, name, 'cms_block' as kind
            from cms_blocks
            where jsonb_path_exists(content, ${path})
@@ -60,7 +66,9 @@ function cmsAssetReferenceDescriptor(
           const label =
             r.kind === 'cms_page'
               ? `CMS page "${r.name}"`
-              : r.kind === 'cms_block'
+              : r.kind === 'cms_page_share_image'
+                ? `CMS page "${r.name}" (sharing image)`
+                : r.kind === 'cms_block'
                 ? `CMS block "${r.name}"`
                 : `CMS template "${r.name}"`;
           out.push({ kind: 'cms_body_embed', entityId: r.id, label });

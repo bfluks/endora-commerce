@@ -11,10 +11,11 @@
 
 import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 
 import {
   ERROR_CODES,
+  applyTranslationPatch,
   type AssetReadPort,
   type AttachmentType as AttachmentTypeDto,
   type CreateAttachmentTypeRequest,
@@ -25,7 +26,15 @@ import {
 } from '@endora-commerce/contracts';
 
 import { HttpError } from '@endora-commerce/platform/http';
-import type { CommandBus } from '@endora-commerce/platform/commands';
+import type { Command, CommandBus } from '@endora-commerce/platform/commands';
+import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
+import {
+  assertProductChannelMembers,
+  loadHiddenChannelsByAttachment,
+  mirrorTranslationRemovals,
+  sortedTranslations,
+  writeAttachmentHiddenChannels,
+} from './attachment-packaging-scopes.js';
 import { Product } from '../entities/product.entity.js';
 import { AttachmentType } from '../entities/attachment-type.entity.js';
 import { ProductAttachment } from '../entities/product-attachment.entity.js';
@@ -44,6 +53,11 @@ export class AttachmentService {
      * `assets_library` off the port fails closed and the attach is refused.
      */
     private readonly assets?: AssetReadPort,
+    /**
+     * Feature 163 (FR-014) — which channels the product is a member of: an attachment
+     * may be hidden only in one of them. Removing a hidden channel never asks.
+     */
+    private readonly membership?: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>,
   ) {}
 
   #requireAssets(): AssetReadPort {
@@ -216,7 +230,8 @@ export class AttachmentService {
       { productId },
       { orderBy: { position: 'asc', id: 'asc' } },
     );
-    return items.map((i) => this.#attachmentDto(i));
+    const hidden = await loadHiddenChannelsByAttachment(em, items.map((i) => i.id));
+    return items.map((i) => this.#attachmentDto(i, hidden.get(i.id) ?? []));
   }
 
   async createAttachment(
@@ -248,8 +263,12 @@ export class AttachmentService {
     }
 
     const position = req.position ?? (await this.#nextPosition(em, productId));
+    const hiddenInChannels = [...new Set(req.hiddenInChannels ?? [])].sort();
+    await assertProductChannelMembers(this.membership, productId, hiddenInChannels);
     const id = randomUUID();
-    const attachment = await this.#audited('product_attachment.create', 'product_attachment', id, async (cem) => {
+    // Feature 163 (FR-080) — one audit entry per request, the Command's; the route
+    // writes none of its own. `product.updated.v1` `['attachments']` after commit.
+    const attachment = await this.#runAttachmentCommand('product_attachment.create', id, productId, async (cem) => {
       const created = cem.create(ProductAttachment, {
         id,
         productId,
@@ -258,15 +277,20 @@ export class AttachmentService {
         name: req.name,
         description: req.description ?? null,
         position,
+        nameTranslations: applyTranslationPatch({}, req.nameTranslations ?? {}),
+        descriptionTranslations: applyTranslationPatch({}, req.descriptionTranslations ?? {}),
       });
       await cem.flush();
+      if (hiddenInChannels.length > 0) {
+        await writeAttachmentHiddenChannels(cem, productId, id, hiddenInChannels);
+      }
       return {
         result: created,
         before: null,
-        after: { productId, assetId: req.assetId, attachmentTypeId: req.attachmentTypeId, name: req.name, position },
+        after: { ...attachmentProjection(created, hiddenInChannels), assetId: req.assetId },
       };
     });
-    return this.#attachmentDto(attachment);
+    return this.#attachmentDto(attachment, hiddenInChannels);
   }
 
   async updateAttachment(
@@ -274,8 +298,15 @@ export class AttachmentService {
     attachmentId: string,
     req: UpdateAttachmentRequest,
   ): Promise<ProductAttachmentDto> {
-    const a = await this.#audited('product_attachment.update', 'product_attachment', attachmentId, async (em) => {
-      const row = await em.findOne(ProductAttachment, { id: attachmentId, productId });
+    let hiddenAfter: string[] = [];
+    const a = await this.#runAttachmentCommand('product_attachment.update', attachmentId, productId, async (em) => {
+      // Locked, so concurrent writes on one attachment serialise and each audit
+      // `before` is its true predecessor (FR-081).
+      const row = await em.findOne(
+        ProductAttachment,
+        { id: attachmentId, productId },
+        { lockMode: LockMode.PESSIMISTIC_WRITE },
+      );
       if (!row) {
         throw new HttpError(
           404,
@@ -283,7 +314,16 @@ export class AttachmentService {
           `Attachment ${attachmentId} not found under Product ${productId}.`,
         );
       }
-      const before = { attachmentTypeId: row.attachmentTypeId, name: row.name, position: row.position };
+      const hiddenBefore = (await loadHiddenChannelsByAttachment(em, [attachmentId])).get(attachmentId) ?? [];
+      const before = attachmentProjection(row, hiddenBefore);
+      hiddenAfter =
+        req.hiddenInChannels === undefined ? hiddenBefore : [...new Set(req.hiddenInChannels)].sort();
+      // FR-014 / FR-015 — only a channel the write adds must be a member one.
+      await assertProductChannelMembers(
+        this.membership,
+        productId,
+        hiddenAfter.filter((channelId) => !hiddenBefore.includes(channelId)),
+      );
       if (req.attachmentTypeId !== undefined) {
         const type = await em.findOne(AttachmentType, { id: req.attachmentTypeId });
         if (!type) {
@@ -298,13 +338,23 @@ export class AttachmentService {
       if (req.name !== undefined) row.name = req.name;
       if (req.description !== undefined) row.description = req.description;
       if (req.position !== undefined) row.position = req.position;
-      return {
-        result: row,
-        before,
-        after: { attachmentTypeId: row.attachmentTypeId, name: row.name, position: row.position },
-      };
+      if (req.nameTranslations !== undefined) {
+        row.nameTranslations = applyTranslationPatch(row.nameTranslations, req.nameTranslations);
+      }
+      if (req.descriptionTranslations !== undefined) {
+        row.descriptionTranslations = applyTranslationPatch(row.descriptionTranslations, req.descriptionTranslations);
+      }
+      const after = attachmentProjection(row, hiddenAfter);
+      // A request that changes nothing writes and announces nothing.
+      if (JSON.stringify(before) === JSON.stringify(after)) return { result: row, unchanged: true };
+      mirrorTranslationRemovals(before, after, ['nameTranslations', 'descriptionTranslations']);
+      if (req.hiddenInChannels !== undefined) {
+        await writeAttachmentHiddenChannels(em, productId, attachmentId, hiddenAfter);
+      }
+      await em.flush();
+      return { result: row, before, after };
     });
-    return this.#attachmentDto(a);
+    return this.#attachmentDto(a, hiddenAfter);
   }
 
   async deleteAttachment(productId: string, attachmentId: string): Promise<void> {
@@ -326,6 +376,57 @@ export class AttachmentService {
   }
 
   // -- INTERNALS ------------------------------------------------------------
+
+  /**
+   * Feature 163 (FR-080, FR-082) — an attachment write as a Command (`objectType:
+   * 'product_attachment'`): one audit entry whose projections carry the product, the
+   * translations and the hidden channels; `product.updated.v1` `['attachments']` after
+   * commit. `write` answers `unchanged` for a no-op — no audit row, no event.
+   */
+  async #runAttachmentCommand(
+    action: string,
+    attachmentId: string,
+    productId: string,
+    write: (em: EntityManager) => Promise<
+      | { result: ProductAttachment; unchanged: true }
+      | { result: ProductAttachment; before: Record<string, unknown> | null; after: Record<string, unknown> }
+    >,
+  ): Promise<ProductAttachment> {
+    const command: Command<{ row: ProductAttachment; changed: boolean }> = {
+      action,
+      objectType: 'product_attachment',
+      objectId: attachmentId,
+      run: async ({ em }) => {
+        const written = await write(em);
+        if ('unchanged' in written) return { result: { row: written.result, changed: false }, skipAudit: true };
+        return {
+          result: { row: written.result, changed: true },
+          before: written.before,
+          after: { ...written.after, changedFields: ['attachments'] },
+        };
+      },
+      event: ({ changed }) =>
+        changed
+          ? {
+              eventName: 'product.updated.v1',
+              payload: {
+                eventId: randomUUID(),
+                occurredAt: new Date().toISOString(),
+                productId,
+                changedFields: ['attachments'],
+              },
+            }
+          : undefined,
+    };
+    if (this.commandBus) return (await this.commandBus.run(command)).row;
+    return this.emFactory().transactional(async (em) => {
+      const outcome = await command.run({
+        em,
+        actor: { actorAdminUserId: null, impersonatedCustomerAccountId: null, kind: 'system' },
+      });
+      return outcome.result.row;
+    });
+  }
 
   async #assertProductExists(em: EntityManager, productId: string): Promise<void> {
     const product = await em.findOne(Product, { id: productId });
@@ -360,7 +461,7 @@ export class AttachmentService {
     return rows[0]?.next_position ?? 0;
   }
 
-  #attachmentDto(a: ProductAttachment): ProductAttachmentDto {
+  #attachmentDto(a: ProductAttachment, hiddenInChannels: readonly string[]): ProductAttachmentDto {
     return {
       id: a.id,
       productId: a.productId,
@@ -369,8 +470,28 @@ export class AttachmentService {
       name: a.name,
       description: a.description ?? null,
       position: a.position,
+      nameTranslations: { ...(a.nameTranslations ?? {}) },
+      descriptionTranslations: { ...(a.descriptionTranslations ?? {}) },
+      hiddenInChannels: [...hiddenInChannels],
       createdAt: a.createdAt.toISOString(),
       updatedAt: a.updatedAt.toISOString(),
     };
   }
+}
+
+/**
+ * The audit projection of one attachment write (FR-080): every field the PATCH accepts
+ * plus the product, so re-sending it (minus `productId`) restores the row (FR-081).
+ */
+function attachmentProjection(row: ProductAttachment, hiddenInChannels: readonly string[]): Record<string, unknown> {
+  return {
+    productId: row.productId,
+    attachmentTypeId: row.attachmentTypeId,
+    name: row.name,
+    description: row.description ?? null,
+    position: row.position,
+    nameTranslations: sortedTranslations(row.nameTranslations),
+    descriptionTranslations: sortedTranslations(row.descriptionTranslations),
+    hiddenInChannels: [...hiddenInChannels].sort(),
+  };
 }

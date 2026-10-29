@@ -33,15 +33,29 @@ export interface ResolvableTemplateField {
   readonly transformArg: string | null;
 }
 
-/** A resolved money amount for one item, already net/gross-aware. */
+/**
+ * A feed item's price: decimal strings — the resolver's amount as `price_lists`
+ * answers it, and the gross computed from it by `grossAmountHalfUp` — written
+ * to the file at two places by `roundAmountHalfUp` (review 2, finding 1 of
+ * release 0.108.0). Never a JS number: that is how binary rounding got in.
+ *
+ * A net with more than two significant places is not written that way: it is
+ * published as the price of a pack (issue #430, `feed-pack.ts`), whose gross is
+ * computed from the pack's net at `taxRatePercent`.
+ */
 export interface FeedItemPrice {
-  readonly net: number;
-  readonly gross: number;
+  readonly net: string;
+  readonly gross: string;
   /**
    * False when `TaxService` fell through to `{ rate: 0, source: 'none' }`. On a
    * gross feed that is a run **warning**, not a silent zero-VAT price (R12).
    */
   readonly taxResolved: boolean;
+  /**
+   * The rate `gross` was computed at, in percent (`23`); `null` on a net feed
+   * and when no tax rule matched (`gross` is then the net).
+   */
+  readonly taxRatePercent: number | null;
 }
 
 /**
@@ -125,6 +139,13 @@ export interface ResolvedFeedItem {
 
 export interface ResolveFeedItemInput {
   readonly fields: readonly ResolvableTemplateField[];
+  /**
+   * The whole template, when `fields` is only part of it — the editor preview
+   * resolves one field at a time. Whether a sub-cent price can be published as
+   * a pack depends on the template binding a `pack_quantity` field and on every
+   * price it publishes (issue #430). Defaults to `fields`.
+   */
+  readonly templateFields?: readonly ResolvableTemplateField[];
   readonly item: FeedItemSource;
   readonly context: FeedResolutionContext;
 }

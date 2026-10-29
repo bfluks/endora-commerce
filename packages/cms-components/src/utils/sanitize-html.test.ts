@@ -172,3 +172,47 @@ describe('sanitizeHtml', () => {
     });
   });
 });
+
+/**
+ * `specs/163-page-builder-marketing-pages/` T061, FR-025, research R-14 — the
+ * rich-content policy gains exactly: `details` (with `open`) and `summary` for
+ * a read-more passage, and `id` on `h1`–`h6` when it is a valid anchor. Check
+ * lists and button links are classes, which the policy already keeps.
+ */
+describe('rich content policy — R-14 additions', () => {
+  it('keeps a read-more passage: details, its open state and its summary', () => {
+    const html = '<details class="cmsc-read-more" open><summary>Read more</summary><p>Hidden <strong>text</strong></p></details>';
+    expect(sanitizeRichHtml(html)).toBe(html);
+    expect(sanitizeRichHtml('<details class="cmsc-read-more"><summary>More</summary><p>x</p></details>')).toBe(
+      '<details class="cmsc-read-more"><summary>More</summary><p>x</p></details>',
+    );
+  });
+
+  it('keeps an id on a heading only when it is a valid anchor, and never on another element', () => {
+    for (const level of [1, 2, 3, 4, 5, 6]) {
+      expect(sanitizeRichHtml(`<h${level} id="pricing-2026">x</h${level}>`)).toBe(`<h${level} id="pricing-2026">x</h${level}>`);
+    }
+    for (const bad of ['2026-pricing', 'Pricing', 'two words', 'a_b', `a${'b'.repeat(64)}`, '', 'a:b', 'a<b']) {
+      expect(sanitizeRichHtml(`<h2 id="${bad}">x</h2>`), bad).toBe('<h2>x</h2>');
+    }
+    // An entity-encoded id is judged by what the browser would read.
+    expect(sanitizeRichHtml('<h2 id="&#80;ricing">x</h2>')).toBe('<h2>x</h2>');
+    expect(sanitizeRichHtml('<p id="pricing">x</p>')).toBe('<p>x</p>');
+    expect(sanitizeRichHtml('<details id="pricing"><summary id="pricing">x</summary></details>')).toBe('<details><summary>x</summary></details>');
+  });
+
+  it('keeps the check-list class on a list and the button classes on a link', () => {
+    const list = '<ul class="cmsc-list--check"><li><p>One</p></li></ul>';
+    expect(sanitizeRichHtml(list)).toBe(list);
+    const button = '<a class="cmsc-btn cmsc-btn--primary-solid" href="/contact">Contact us</a>';
+    expect(sanitizeRichHtml(button)).toBe(button);
+  });
+
+  it('still drops div and button, keeping their text', () => {
+    expect(sanitizeRichHtml('<div class="cmsc-read-more"><button type="button">Open</button><p>x</p></div>')).toBe('Open<p>x</p>');
+  });
+
+  it('renders a read-more passage carrying a handler inert', () => {
+    expectInert(sanitizeRichHtml('<details open ontoggle=alert(1)><summary onclick=alert(1)>x</summary></details>'));
+  });
+});

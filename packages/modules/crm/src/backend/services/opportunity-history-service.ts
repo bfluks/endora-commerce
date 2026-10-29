@@ -19,6 +19,12 @@ export interface OpportunityHistoryServiceDeps {
   adminUsers: AdminUserReadPort;
   /** What the tokens of an audited text name, for the reader. */
   references: Pick<ReferenceService, 'resolveMany'>;
+  /**
+   * Feature 162 (owner ruling P2 = a) — whether the caller may read custom
+   * fields (`custom_fields:read`). Without it, no entry serves the
+   * Opportunity's custom-field values.
+   */
+  mayReadCustomFields: () => Promise<boolean>;
 }
 
 /** The audited keys that hold a text which may carry reference tokens. */
@@ -30,6 +36,19 @@ function textsOf(state: unknown): string[] {
   return TEXT_FIELDS.map((field) => (state as Record<string, unknown>)[field]).filter(
     (value): value is string => typeof value === 'string' && value !== '',
   );
+}
+
+/**
+ * An audited state as the reader may see it: without `customFieldValues` for a
+ * caller who may not read custom fields. Only the top-level key holds values —
+ * `customFieldCarry` names keys, reasons and labels, never a value, and stays.
+ * The audit entry itself is never rewritten.
+ */
+function visibleState(state: unknown, mayReadCustomFields: boolean): unknown {
+  if (mayReadCustomFields || state === null || typeof state !== 'object' || Array.isArray(state)) return state;
+  if (!Object.hasOwn(state, 'customFieldValues')) return state;
+  const { customFieldValues: _hidden, ...rest } = state as Record<string, unknown>;
+  return rest;
 }
 
 /** The object type every Command about an Opportunity, or anything hanging on it, is recorded under. */
@@ -91,6 +110,11 @@ function decodeCursor(cursor: string | undefined): number {
  * is no next page; the last page then carries `truncated: true`. `hasMore`
  * keeps its one meaning — a next page exists and `cursor` asks for it.
  *
+ * **Custom-field values need `custom_fields:read`** (feature 162, owner ruling
+ * P2 = a). `crm:read`'s `requires` is advisory, so a reader may hold it alone;
+ * for that reader every entry's `before` and `after` are served without
+ * `customFieldValues`, decided here, server-side, once per page.
+ *
  * The `action` of an entry is the Command's (`crm.opportunity.transition`); the
  * Admin UI labels it with `auditLog.<action>` from this module's bundle.
  */
@@ -128,6 +152,7 @@ export class OpportunityHistoryService {
     const texts = page.map((entry) => [...textsOf(entry.stateBefore), ...textsOf(entry.stateAfter)]);
     const resolved = await this.deps.references.resolveMany(texts.map((list) => list.join('\n')));
     const referencesOf = (index: number): OpportunityReference[] => resolved[index] ?? [];
+    const mayReadCustomFields = page.length > 0 ? await this.deps.mayReadCustomFields() : true;
 
     return {
       data: page.map((entry, index) => {
@@ -142,8 +167,8 @@ export class OpportunityHistoryService {
             actorId === null
               ? { kind: 'system', id: null, name: null }
               : { kind: 'admin', id: actorId, name: actorNames.get(actorId) ?? null },
-          before: entry.stateBefore ?? null,
-          after: entry.stateAfter ?? null,
+          before: visibleState(entry.stateBefore ?? null, mayReadCustomFields),
+          after: visibleState(entry.stateAfter ?? null, mayReadCustomFields),
           references: referencesOf(index),
         };
       }),

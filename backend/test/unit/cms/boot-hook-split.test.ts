@@ -48,6 +48,8 @@ vi.mock('../../../../packages/modules/cms/src/backend/plugin.js', () => ({
       setColorPaletteWriter: () => undefined,
       setReservedSlugSegmentsResolver: () => undefined,
       setAssetResolver: () => undefined,
+      // Feature 163 (T084): the default sharing image's late-bound reader.
+      setDefaultShareImageResolver: () => undefined,
     },
     plugin: async () => undefined,
   }),

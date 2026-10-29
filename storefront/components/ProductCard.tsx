@@ -2,12 +2,13 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { ProductSummary, StorefrontProductStock } from '@endora-commerce/contracts';
 import { tForLocale } from '../lib/i18n/messages';
-import { DEFAULT_VAT_RATE, grossFromNet } from '../lib/i18n/money';
+import { cardAddToCartLabel } from '../lib/orderMinimum';
+import { DEFAULT_VAT_RATE, formatMoney, grossUnitPriceFromNet } from '../lib/i18n/money';
 import { CompareToggle } from './CompareToggle';
 import { BaseSalePriceBlock } from './pricing/BaseSalePriceBlock';
 import { QuoteRequestCta } from './pricing/QuoteRequestCta';
 import { ProductCardActions } from './ProductCardActions';
-import type { ResolvedPrice } from '../lib/api/pricing';
+import type { PriceDisplay } from '../lib/api/pricing';
 import { toAbsoluteAssetUrl } from '../lib/asset-url';
 import { publicApiBaseUrl } from '../lib/env.mjs';
 
@@ -47,13 +48,18 @@ export function ProductCard(props: {
   stock?: StorefrontProductStock | null;
   /** Optional feature-011 resolver payload — when present it drives
    *  the price block, sale treatment, and display-mode handling. */
-  resolved?: ResolvedPrice | null;
+  resolved?: PriceDisplay | null;
   /**
    * Fractional VAT rate used to derive gross from net; defaults to the
    * deployment assumption in `lib/i18n/money` (issue #132). The card used to
    * bake its own `1.23` literal here.
    */
   vatRate?: number;
+  /**
+   * The active sales channel. The card's compare toggle and action buttons call
+   * the backend from the browser, where no request header carries it.
+   */
+  salesChannelCode: string | undefined;
 }): ReactNode {
   const { product, locale, stock, resolved, vatRate = DEFAULT_VAT_RATE } = props;
   const t = tForLocale(locale);
@@ -96,7 +102,7 @@ export function ProductCard(props: {
           />
         )}
       </Link>
-      <CompareToggle productId={product.id} />
+      <CompareToggle productId={product.id} salesChannelCode={props.salesChannelCode} />
       {resolved && resolved.salePrice ? (
         <span className="industria-badge industria-badge--sale" aria-label={t('product.requestQuote')}>
           Promocja
@@ -118,11 +124,15 @@ export function ProductCard(props: {
         </div>
         <ProductCardActions
           apiBase={CARD_API_BASE}
+          salesChannelCode={props.salesChannelCode}
           productId={product.id}
           productSlug={product.slug}
           productName={product.name}
           unitPrice={product.price ?? null}
           buyable={resolved ? resolved.displayMode !== 'none' : product.price != null}
+          minOrderQuantity={product.minOrderQuantity ?? null}
+          addToCartMinimumLabel={cardAddToCartLabel(product.minOrderQuantity, locale)}
+          locale={locale}
         />
       </div>
     </article>
@@ -132,7 +142,7 @@ export function ProductCard(props: {
 function renderPriceSlot(args: {
   product: ProductSummary;
   locale: string;
-  resolved: ResolvedPrice | null | undefined;
+  resolved: PriceDisplay | null | undefined;
   t: ReturnType<typeof tForLocale>;
   vatRate: number;
 }): ReactNode {
@@ -155,10 +165,13 @@ function renderPriceSlot(args: {
         <BaseSalePriceBlock
           basePrice={resolved.basePrice}
           salePrice={resolved.salePrice}
+          listPrice={resolved.listPrice ?? null}
           displayMode={resolved.displayMode}
           locale={locale}
           vatRate={vatRate}
           variant="card"
+          listLabel={t('product.listPrice')}
+          yourPriceLabel={t('product.yourPrice')}
         />
       </>
     );
@@ -167,25 +180,18 @@ function renderPriceSlot(args: {
   // `ProductSummary.price` — since issue #132 this is the pricing engine's own
   // answer for the listing, resolved server-side through the `pricingService`
   // port, not the catalogue's legacy `defaultPrice` projection it used to be.
+  // A unit price: its significant places, up to four (owner ruling of 2026-10-25).
   const priceFmt = product.price
-    ? new Intl.NumberFormat(locale, {
-        style: 'currency',
-        currency: product.price.currency,
-        minimumFractionDigits: 2,
-      }).format(product.price.amount)
+    ? formatMoney(product.price.amount, product.price.currency, locale, { unitPrice: true })
     : null;
   // Derived through the shared seam (issue #132). The previous form multiplied
   // by a literal `1.23` and then tested the product with `grossAmount &&`, so a
   // price of zero lost its gross line entirely — the "no price" / "price zero"
   // collapse, on the render side.
-  const grossAmount = product.price ? grossFromNet(product.price.amount, vatRate) : null;
+  const grossAmount = product.price ? grossUnitPriceFromNet(product.price.amount, vatRate) : null;
   const grossFmt =
     grossAmount !== null && product.price
-      ? new Intl.NumberFormat(locale, {
-          style: 'currency',
-          currency: product.price.currency,
-          minimumFractionDigits: 2,
-        }).format(grossAmount)
+      ? formatMoney(grossAmount, product.price.currency, locale, { unitPrice: true })
       : null;
 
   if (!priceFmt) {
@@ -196,10 +202,51 @@ function renderPriceSlot(args: {
     );
   }
 
+  // Feature 160 — the buyer's own price, struck through, when `price` is a
+  // charged sale (FR-025); and "from" when the variants differ (FR-024).
+  const compareAtFmt = product.compareAtPrice
+    ? formatMoney(product.compareAtPrice.amount, product.compareAtPrice.currency, locale, { unitPrice: true })
+    : null;
+
+  // Feature 161 (FR-026) — "list price / your price". The catalogue and search
+  // listings render this card without `resolved`, so the list price is read
+  // from the summary's own resolution; it is present only when the pricing
+  // engine decided to show it (setting on, catalogue price above `price`).
+  const listPrice = product.resolvedPrice?.listPrice;
+  const listFmt = listPrice
+    ? formatMoney(Number(listPrice.amount), listPrice.currency, locale, { unitPrice: true })
+    : null;
+
   return (
     <>
-      <div className="industria-product-card__price__from">od / szt.</div>
-      <div className="font-mono text-[16px] font-semibold tracking-[-0.01em] text-fg">{priceFmt}</div>
+      <div className="industria-product-card__price__from">
+        {product.priceVariesByVariant ? t('product.priceFromVariants') : 'od / szt.'}
+      </div>
+      {/* Owner ruling 2026-10-23: beside a list price a charged sale strikes the
+          list price, not the buyer's own — two numbers, never three. */}
+      {compareAtFmt && !listFmt ? (
+        <s
+          data-testid="card-compare-at"
+          aria-label={t('product.compareAtLabel')}
+          className="font-mono text-[11px] text-muted"
+        >
+          {compareAtFmt}
+        </s>
+      ) : null}
+      {listFmt ? (
+        <div data-testid="card-list-price" className="flex items-baseline gap-[6px] font-mono text-[11px] text-muted">
+          <span className="text-[10px] uppercase tracking-[0.04em] text-subtle">{t('product.listPrice')}</span>
+          {compareAtFmt ? <s>{listFmt}</s> : <span>{listFmt}</span>}
+        </div>
+      ) : null}
+      {listFmt ? (
+        <div className="flex items-baseline gap-[6px]">
+          <span className="font-mono text-[10px] uppercase tracking-[0.04em] text-subtle">{t('product.yourPrice')}</span>
+          <div className="font-mono text-[16px] font-semibold tracking-[-0.01em] text-fg">{priceFmt}</div>
+        </div>
+      ) : (
+        <div className="font-mono text-[16px] font-semibold tracking-[-0.01em] text-fg">{priceFmt}</div>
+      )}
       {grossFmt ? (
         <div className="font-mono text-[11px] text-muted">brutto {grossFmt}</div>
       ) : null}

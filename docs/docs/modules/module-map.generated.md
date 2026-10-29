@@ -22,13 +22,14 @@ of the platform, not of what happens to be written.
 | [Module Lifecycle](./lifecycle.md) | CLI-driven install / uninstall / enable / disable / status for every backend module + dependency validation + first-boot reconciliation | core |
 | [addresses](./addresses.md) | Customer postal addresses with default-per-kind invariant | @endora-commerce/mod-addresses |
 | [Admin Command Palette Actions](./admin-actions.md) | Module-contributed action registry surfaced in the Admin Command Palette (⌘K Actions group) | @endora-commerce/mod-admin-actions |
+| [Feedback](./admin-feedback.md) | Administrators send feedback from the admin to the makers of Endora Commerce, relayed as one e-mail and stored nowhere | @endora-commerce/mod-admin-feedback |
 | `admin_notifications` | _no page yet_ | @endora-commerce/mod-admin-notifications |
 | [admin_roles](./admin_roles.md) | Admin role definitions + per-module Permissions | @endora-commerce/mod-admin-roles |
 | [admin_search](./admin-search.md) | Global search in the admin — find organizations, customers, orders, quote requests, sales opportunities, products and categories from the command palette, with configurable searchable fields | @endora-commerce/mod-admin-search |
 | [admin_users](./admin_users.md) | Platform Administrator accounts + impersonation | @endora-commerce/mod-admin-users |
 | [analytics](./analytics.md) | Storefront event ingest + admin aggregation + optional GA4 forwarder | @endora-commerce/mod-analytics |
 | [api_keys](./api_keys.md) | Bearer-token integration credentials | @endora-commerce/mod-api-keys |
-| [Assets Library](./assets-library/index.md) | Central digital-asset library with pluggable storage adapters, soft-delete, and reference-protection guards | @endora-commerce/mod-assets-library |
+| [Assets Library](./assets-library/index.md) | Central digital-asset library with pluggable storage adapters, stable file URLs and permalinks, in-place file replacement, soft-delete with a retention sweep, and reference-protection guards | @endora-commerce/mod-assets-library |
 | [audit_logs](./audit_logs.md) | Sensitive-action audit trail | @endora-commerce/mod-audit-logs |
 | [auth](./auth.md) | Customer + admin sessions, password hashing, TOTP | @endora-commerce/mod-auth |
 | [Blog](./blog/index.md) | Editorial Posts with Page Builder bodies, taxonomy (Categories + Tags), and storefront feeds | @endora-commerce/mod-blog |
@@ -40,7 +41,7 @@ of the platform, not of what happens to be written.
 | [credit_limits](./credit_limits.md) | Credit-limit grant + atomic reservation | @endora-commerce/mod-credit-limits |
 | [crm](./crm.md) | Sales opportunities with a configurable status workflow that linked orders follow | @endora-commerce/mod-crm |
 | [currencies](./currencies.md) | Pool of accepted ISO 4217 currencies + default | @endora-commerce/mod-currencies |
-| `custom_fields` | _no page yet_ | @endora-commerce/mod-custom-fields |
+| [custom_fields](./custom_fields.md) | Typed fields an operator adds to orders, quote requests, opportunities and other records without a code change, edited on one screen, offered as filters on the admin lists and carried from one record to the record created from it. | @endora-commerce/mod-custom-fields |
 | [customer_accounts](./customer_accounts.md) | Customer login, password reset, 2FA, role assignment | @endora-commerce/mod-customer-accounts |
 | [customers](./customers.md) | Customer lifecycle over `customer_accounts` — company and personal Organizations, sales-rep assignment and the admin customer surface | @endora-commerce/mod-customers |
 | [delivery_methods](./delivery_methods.md) | Configured delivery options | @endora-commerce/mod-delivery-methods |
@@ -65,8 +66,9 @@ of the platform, not of what happens to be written.
 | [payment_methods](./payment_methods.md) | Configured payment methods | @endora-commerce/mod-payment-methods |
 | [payments](./payments.md) | Payment driver dispatch + settlement events | @endora-commerce/mod-payments |
 | `pim_connector` | _no page yet_ | @endora-commerce/mod-pim-connector |
-| [price_lists](./price_lists.md) | Customer / group / default pricing with volume tiers + per-category adjustments | @endora-commerce/mod-price-lists |
+| [Price books](./price_lists.md) | Price books — base prices per currency, catalogue, buyer and sale prices on sales channels, and the rules that decide what each buyer pays. | @endora-commerce/mod-price-lists |
 | [Product Feeds](./product_feeds.md) | Provider-shaped product feeds per sales channel — scheduled generation, tokenised pull URLs and SFTP/FTP/HTTP push | @endora-commerce/mod-product-feeds |
+| [projects](./projects.md) | Projects for zero or more Organizations, run through their own Stages by Members holding Project Roles | @endora-commerce/mod-projects |
 | [promotions](./promotions.md) | Cart-level percentage / amount / free-delivery discounts with eligibility filters | @endora-commerce/mod-promotions |
 | [Prompt Actions (AI assistant)](./prompt-actions.md) | Natural-language prompt mode for the admin command palette, with an explicit preview-and-confirm step before any change | @endora-commerce/mod-prompt-actions |
 | [PWA (Progressive Web App)](./pwa.md) | Progressive-Web-App capabilities for the storefront and admin — installability, opt-in asset caching, a controlled update path and opt-in push | @endora-commerce/mod-pwa |
@@ -79,6 +81,7 @@ of the platform, not of what happens to be written.
 | [Settings](./settings/index.md) | Manifest-driven, per-sales-channel platform configuration with cached read API | @endora-commerce/mod-settings |
 | [shipments](./shipments.md) | The retryable Shipment record and its lifecycle — the delivery-side twin of payments | @endora-commerce/mod-shipments |
 | [shopping_lists](./shopping_lists.md) | Per-customer named bundles convertible to Cart or RFQ | @endora-commerce/mod-shopping-lists |
+| [tasks](./tasks.md) | Tasks assigned to administrators, with a due date and a status, which other modules can own through a Task context | @endora-commerce/mod-tasks |
 | [taxes](./taxes.md) | Tax-rate resolver narrowed by country / product type / VAT status | @endora-commerce/mod-taxes |
 | [transactional_emails](./transactional-emails.md) | Admin-editable transactional emails — subject, content and look, globally and per sales channel | @endora-commerce/mod-transactional-emails |
 | [webhooks](./webhooks.md) | Outbound HMAC-signed event subscriptions | @endora-commerce/mod-webhooks |

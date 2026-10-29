@@ -1,3 +1,5 @@
 {
-  "nav.taxes.label": "Podatki"
+  "nav.taxes.label": "Podatki",
+  "actions.openTaxes.label": "Podatki",
+  "actions.openTaxes.description": "Zarządzaj stawkami podatkowymi i regułami ich stosowania"
 }

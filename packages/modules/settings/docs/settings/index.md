@@ -189,6 +189,25 @@ the all-channels value, or that channel's own — and not the value the channel
 resolved to: a first write records `stored: false` rather than the manifest
 default. A `secret` setting is recorded as `[redacted]` on both sides.
 
+## Shop information
+
+The **Shop information** group (`shop`) holds the facts about the shop that the
+storefront publishes: `shop.name`, `shop.address`, `shop.contact_email`,
+`shop.support_email`, `shop.phone`, `shop.contact_form_recipient_emails`, and
+two settings for search engines:
+
+| Setting | Type | What it is |
+| --- | --- | --- |
+| `shop.logo_asset_id` | `string` | **Shop logo** — a public image from the Assets Library, chosen with the asset picker. Empty publishes no logo. |
+| `shop.social_profiles` | `string_list` | **Social profiles** — the full `https://` addresses of the organisation's profiles on social networks and other sites, one per entry. A write holding any other value is refused with `422 VALIDATION_FAILED` and nothing is stored. |
+
+The storefront reads them through `GET /api/v1/storefront/shop-info`, which
+returns `logoUrl` (the logo asset's public URL, or `null` when the setting is
+empty or the asset is gone or not public) and `socialProfiles` (only `https:`
+entries). It publishes both in its `Organization` structured data, as `logo`
+and `sameAs`, on the home page and on every CMS page. Resolving the logo is why
+this module depends on `assets_library`.
+
 ## For module consumers — reading values
 
 Other modules inject `SettingsService` from the composition root and read

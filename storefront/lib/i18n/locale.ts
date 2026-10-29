@@ -4,21 +4,24 @@ import type { I18nConfigResponse } from '@endora-commerce/contracts';
  * Resolve the storefront locale for a server-rendered request.
  *
  * Priority:
- *   1. explicit `?lang=` query parameter (a language switcher writes this).
+ *   1. the explicit language requests in `langQuery`, in the order given —
+ *      the first that is an active language wins; one that is not is skipped.
  *   2. `Accept-Language` header — q-weighted; first active match wins.
  *   3. configured default from `i18n/config`.
  *   4. hard-coded `en-US` if the API call failed.
  */
 export function resolveLocale(input: {
   acceptLanguage?: string | null;
-  langQuery?: string | null;
+  langQuery?: string | null | ReadonlyArray<string | null | undefined>;
   config: I18nConfigResponse;
 }): string {
   const active = input.config.languages.filter((l) => l.isActive).map((l) => l.code);
   const def = input.config.defaultLanguageCode ?? 'en-US';
 
-  if (input.langQuery) {
-    const exact = active.find((l) => l.toLowerCase() === input.langQuery!.toLowerCase());
+  const requested = Array.isArray(input.langQuery) ? input.langQuery : [input.langQuery];
+  for (const lang of requested) {
+    if (!lang) continue;
+    const exact = active.find((l) => l.toLowerCase() === lang.toLowerCase());
     if (exact) return exact;
   }
 

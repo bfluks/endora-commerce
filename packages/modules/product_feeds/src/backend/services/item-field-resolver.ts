@@ -1,4 +1,6 @@
+import { grossAmountHalfUp, lineAmountHalfUp, roundAmountHalfUp } from '@endora-commerce/contracts';
 import type { FeedRunIssueReason } from '@endora-commerce/contracts';
+import { feedPackQuantity, MAX_FEED_PACK_QUANTITY, packCountMeasure } from './feed-pack.js';
 import type { FeedItemField } from './serializers/serializer.interface.js';
 import type {
   FeedItemPrice,
@@ -90,18 +92,32 @@ function stringifyValue(value: unknown): string {
 }
 
 /** `123.00 PLN` — the "amount currency" form both Google and Meta parse. */
-function formatMoney(amount: number, currencyCode: string): string {
-  return `${amount.toFixed(2)} ${currencyCode}`;
+function formatMoney(amount: string, currencyCode: string): string {
+  return `${roundAmountHalfUp(amount)} ${currencyCode}`;
+}
+
+/**
+ * The amount a price field publishes: the unit price, or — for a sub-cent
+ * price (issue #430) — the price of `packQuantity` units, which is exact at
+ * two places by the choice of the pack. Its gross is the gross of that pack's
+ * net, half-up, as a basket line of that many units is charged (§10.18).
+ */
+function publishedAmount(price: FeedItemPrice, context: FeedResolutionContext, packQuantity: number): string {
+  if (packQuantity === 1) return context.pricePresentation === 'gross' ? price.gross : price.net;
+  const net = lineAmountHalfUp(price.net, packQuantity);
+  if (context.pricePresentation !== 'gross' || price.taxRatePercent === null) return net;
+  return grossAmountHalfUp(net, price.taxRatePercent);
 }
 
 function priceValue(
   price: FeedItemPrice | null,
   context: FeedResolutionContext,
   outputName: string,
+  packQuantity: number,
 ): FieldOutcome {
   if (!price) return { value: '', issues: [] };
   const issues: ResolvedItemIssue[] = [];
-  const amount = context.pricePresentation === 'gross' ? price.gross : price.net;
+  const amount = publishedAmount(price, context, packQuantity);
   if (context.pricePresentation === 'gross' && !price.taxResolved) {
     // Never a silent zero-VAT price: the operator asked for gross, and no tax
     // rule matched, so the number on the offer is not what it claims to be.
@@ -158,6 +174,7 @@ function resolveSource(
   field: ResolvableTemplateField,
   item: FeedItemSource,
   context: FeedResolutionContext,
+  packQuantity: number,
 ): FieldOutcome {
   const none: FieldOutcome = { value: '', issues: [] };
   switch (field.sourceKind) {
@@ -203,9 +220,16 @@ function resolveSource(
       return { value: stringifyValue(raw), issues: [] };
     }
     case 'price':
-      return priceValue(item.price, context, field.outputName);
+      return priceValue(item.price, context, field.outputName, packQuantity);
     case 'sale_price':
-      return priceValue(item.salePrice, context, field.outputName);
+      return priceValue(item.salePrice, context, field.outputName, packQuantity);
+    case 'pack_quantity':
+      return { value: packQuantity > 1 ? String(packQuantity) : '', issues: [] };
+    case 'pack_unit_pricing_measure':
+    case 'pack_unit_pricing_base_measure':
+      // The base is the pack itself, so the unit price Google shows is the
+      // pack price, exact — `1,25 PLN / 100 ct`, never a rounded `0,01 PLN / 1 ct`.
+      return { value: packCountMeasure(packQuantity), issues: [] };
     case 'availability':
       if (item.inStock === null) return none;
       return { value: item.inStock ? 'in_stock' : 'out_of_stock', issues: [] };
@@ -273,13 +297,62 @@ function requiredFailureReason(field: ResolvableTemplateField): FeedRunIssueReas
   return 'missing_required_field';
 }
 
+/**
+ * The pack every price of this item is published for (issue #430): 1 for a
+ * price with two significant places, else the largest pack any price the
+ * template publishes needs — the price and the sale price describe one offer,
+ * so they are of the same pack. A skip when the template cannot state a pack
+ * (it binds no `pack_quantity` field) or no pack of at most 10 000 is exact.
+ */
+function packFor(input: ResolveFeedItemInput): { quantity: number } | { skip: ResolvedItemIssue } {
+  const template = input.templateFields ?? input.fields;
+  let quantity = 1;
+  for (const field of template) {
+    const price =
+      field.sourceKind === 'price' ? input.item.price : field.sourceKind === 'sale_price' ? input.item.salePrice : null;
+    if (!price) continue;
+    const needed = feedPackQuantity(price.net);
+    const unitPrice = `${price.net} ${input.context.currencyCode}`;
+    if (needed === null) {
+      return {
+        skip: issue(
+          'skip',
+          'sub_cent_price_beyond_pack_limit',
+          field.outputName,
+          `The unit price ${unitPrice} has more than two decimal places, and no pack of up to ` +
+            `${MAX_FEED_PACK_QUANTITY} units makes it exact to the cent.`,
+        ),
+      };
+    }
+    if (needed > 1 && !template.some((f) => f.sourceKind === 'pack_quantity')) {
+      return {
+        skip: issue(
+          'skip',
+          'sub_cent_price_without_pack_field',
+          field.outputName,
+          `The unit price ${unitPrice} has more than two decimal places. It can be published only ` +
+            `as the price of a pack of ${needed}, and this template has no field bound to the pack size.`,
+        ),
+      };
+    }
+    quantity = Math.max(quantity, needed);
+  }
+  return { quantity };
+}
+
 export function resolveFeedItem(input: ResolveFeedItemInput): ResolvedFeedItem {
   const fields: FeedItemField[] = [];
   const issues: ResolvedItemIssue[] = [];
   let skipReason: FeedRunIssueReason | null = null;
 
+  // Never a sub-cent price rounded to two places (issue #430): a pack, or no item.
+  const pack = packFor(input);
+  if ('skip' in pack) {
+    return { fields: [], issues: [pack.skip], skipped: true, skipReason: pack.skip.reason };
+  }
+
   for (const field of input.fields) {
-    const sourced = resolveSource(field, input.item, input.context);
+    const sourced = resolveSource(field, input.item, input.context, pack.quantity);
     let value = sourced.value;
     let carryIssues = sourced.issues;
 

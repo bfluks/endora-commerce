@@ -2,7 +2,6 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import { ERROR_CODES } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { Order } from '../entities/order.entity.js';
-import { OrderItem } from '../entities/order-item.entity.js';
 import type {
   CartWritePort,
   CatalogProductReadPort,
@@ -17,6 +16,7 @@ import {
   type OrderEmailResult,
 } from './transactional-email-helper.js';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
+import { loadArrangedOrderLines } from './order-line-order.js';
 
 export interface ReorderUnavailableItem {
   productId: string;
@@ -33,6 +33,12 @@ export interface ReorderResult {
 interface ReorderContext {
   customerAccountId: string;
   organizationId: string;
+  /**
+   * The channel whose basket the lines are seeded into
+   * (`specs/154-sales-channel-access/`): the storefront request's for a buyer's
+   * reorder, the order's own for an operator's.
+   */
+  salesChannelId: string;
 }
 
 /**
@@ -76,14 +82,17 @@ export class OrderReorderService {
       });
     }
 
-    const items = await em.find(OrderItem, { orderId });
+    // Feature 159 — the lines in the order's display order.
+    const items = (await loadArrangedOrderLines(em, orderId)).lines;
     const productIds = [...new Set(items.map((it) => it.productId))];
-    // `liveOnly` is the soft-delete half of the old predicate; the status half
-    // stays here because it is `!== 'inactive'` rather than `=== 'active'`, and
-    // `activeOnly` would quietly drop a draft product a past order contains.
+    // `liveOnly` is the soft-delete half of the predicate; the other half is
+    // archiving (feature 163, FR-019): an archived product is `discontinued`
+    // whatever its status. A product merely switched off (`inactive`) is seeded
+    // like any line and left to the cart and to placement to refuse — `activeOnly`
+    // would report it discontinued, which it is not.
     const products = await this.catalogProductRead.findByIds(productIds, { liveOnly: true });
     const available = new Map(
-      products.filter((p) => p.status !== 'inactive').map((p) => [p.id, p]),
+      products.filter((p) => !p.archivedAt).map((p) => [p.id, p]),
     );
 
     /**
@@ -123,15 +132,24 @@ export class OrderReorderService {
       return true;
     });
 
-    // Clear the customer's active cart and reseed it from the order's items
-    // (snapshot prices; the cart re-prices on read where wired). This module
+    // Clear the customer's active cart and reseed it from the order's items.
+    // `carts` prices every seeded line at what this buyer may order it at
+    // now, in one batch through the chain placement charges by; with
+    // `dropUnorderable` a line nobody may order now — nothing prices it for
+    // this buyer, or it is sold on request only — is left out and named, and
+    // is reported below as `no_price` beside the discontinued ones (issue
+    // #166). It used to be seeded at the old order's price, silently. This module
     // used to `em.create(Cart, …)` and hand-build `CartItem` rows, which is two
     // of another module's tables written from here, with the clear-then-seed
     // rule spelled out a second time and the `lastActivityAt` bookkeeping in
     // neither. `replaceItemsForCustomer` is `carts`' published answer to
     // exactly that, and its doc comment names this path.
     const cart = await this.cartWrite.replaceItemsForCustomer(
-      { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId },
+      {
+        customerAccountId: ctx.customerAccountId,
+        organizationId: ctx.organizationId,
+        salesChannelId: ctx.salesChannelId,
+      },
       reorderable.map((it) => ({
         productId: it.productId,
         ...(it.variantId ? { variantId: it.variantId } : {}),
@@ -139,7 +157,11 @@ export class OrderReorderService {
         unitPrice: String(it.unitPrice),
         currency: order.currency,
       })),
+      { dropUnorderable: true },
     );
+    for (const line of cart.unorderable ?? []) {
+      unavailableItems.push({ productId: line.productId, variantId: line.variantId, reason: 'no_price' });
+    }
 
     if (opts.notifyCustomer) await this.notify(em, order);
 

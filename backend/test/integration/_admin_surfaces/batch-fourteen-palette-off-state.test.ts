@@ -107,7 +107,7 @@ const SUBJECTS: readonly Subject[] = [
   },
   {
     module: 'organizations',
-    actions: ['open-organizations'],
+    actions: ['new-organization', 'open-organizations'],
     axis: 'platform-unavailable',
     admin: organizationsAdmin,
   },

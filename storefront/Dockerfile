@@ -67,12 +67,16 @@ COPY eslint.config.js eslint.config.js
 # `Type error: Cannot find module '../backend/scripts/lib/workspace-packages.js'`; without
 # it, the image builds. A root script this image can never hold is not a supply.
 #
-# So this file supplies nothing here **because nothing in its build closure asks for
-# anything** — which is a derived fact, and one that moves without this file moving. That is
-# how `build:admin` broke in pipeline 13398. The day a package in
-# `storefront^...` grows such a build step,
+# So this file supplies **exactly the paths its build closure asks for**, which is a derived
+# fact and one that moves without this file moving. That is how `build:admin` broke in
+# pipeline 13398. The day a package in `storefront^...` grows such a build step,
 # `backend/test/unit/ci/image-root-script-supply.test.ts` goes red naming the path, and the
 # answer is a `COPY` of **that path**, not of the directory holding it.
+#
+# One path so far: every package's `build` starts by deleting its own `dist`
+# (issue #443 — `tsc` deletes nothing, so the output of a deleted source otherwise survives
+# every later build), and that step is a repository-root script.
+COPY scripts/clean-package-dist.mjs scripts/clean-package-dist.mjs
 
 # Every `@endora-commerce/*` package resolves through its own `exports` map at `./dist` (feature 080,
 # T042), so all of the storefront's workspace dependencies are built, not just the one

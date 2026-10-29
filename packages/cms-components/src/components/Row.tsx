@@ -6,6 +6,7 @@ import {
   buildResponsiveNumberVars,
   contentPositionToJustify,
   normalizeResponsive,
+  createToggleField,
   PB_RESPONSIVE_METADATA,
   resolveContentPosition,
   resolveResponsive,
@@ -34,7 +35,7 @@ import {
 
 const RESPONSIVE_ROW_GAP_FIELD = {
   type: 'number' as const,
-  label: 'Space between rows',
+  label: 'Space between rows (px)',
   min: 0,
   max: 96,
   step: 4,
@@ -332,12 +333,13 @@ const ROW_FIELDS = {
       { label: 'Custom', value: 'custom' },
     ],
   },
+  // R17 (T209): the one range of a custom maximum width (stored values are not clamped).
   customMaxWidthPx: {
     type: 'number' as const,
     label: 'Custom max width (px)',
-    min: 320,
-    max: 1920,
-    step: 8,
+    min: 160,
+    max: 2000,
+    step: 10,
     metadata: PB_RESPONSIVE_METADATA,
   },
   contentPosition: {
@@ -351,7 +353,7 @@ const ROW_FIELDS = {
     ],
   },
   minHeight: RESPONSIVE_MIN_HEIGHT_FIELD,
-  gap: { ...RESPONSIVE_GAP_FIELD, label: 'Space between columns' },
+  gap: { ...RESPONSIVE_GAP_FIELD, label: 'Space between columns (px)' },
   rowGap: RESPONSIVE_ROW_GAP_FIELD,
   verticalAlign: {
     type: 'select' as const,
@@ -370,31 +372,18 @@ const ROW_FIELDS = {
   background: BACKGROUND_FIELD,
   cornerRadius: CORNER_RADIUS_FIELD,
   shadow: SHADOW_FIELD,
-  columnDivider: {
-    type: 'radio' as const,
-    label: 'Divider between columns',
-    options: [
-      { label: 'No', value: false },
-      { label: 'Yes', value: true },
-    ],
-  },
-  reverseOnMobile: {
-    type: 'radio' as const,
-    label: 'Reverse column order on mobile',
-    options: [
-      { label: 'No', value: false },
-      { label: 'Yes', value: true },
-    ],
-  },
-  overflow: {
-    type: 'select' as const,
-    label: 'Clip content',
-    options: [
-      { label: 'No', value: false },
-      { label: 'Yes', value: true },
-    ],
-  },
+  // R17 (T204): switches; the stored booleans are unchanged.
+  columnDivider: createToggleField({ label: 'Divider between columns' }),
+  reverseOnMobile: createToggleField({ label: 'Reverse column order on mobile' }),
+  overflow: createToggleField<boolean>({ label: 'Clip content' }),
 };
+
+/** R17 (T219): a minimum height set at any breakpoint — what the content position moves the content within. */
+function hasMinHeight(value: unknown): boolean {
+  if (typeof value === 'number') return value > 0;
+  if (value !== null && typeof value === 'object') return Object.values(value as Record<string, unknown>).some(hasMinHeight);
+  return false;
+}
 
 function migrateRowContent(props: RowProps): RowProps['content'] {
   const existing = slotContentItems(props.content);
@@ -450,15 +439,18 @@ const rowConfig: ComponentConfig<{ props: RowProps }> = {
     overflow: false,
     ...DEFAULT_LAYOUT_BOX_PROPS,
   },
-  resolveFields: (data) => {
+  // Filters the host's field set (the admin's background picker survives).
+  resolveFields: (data, params) => {
     const maxWidth = data.props.contentMaxWidth;
     const isCustom =
       maxWidth === 'custom' ||
       (typeof maxWidth === 'object' &&
         (maxWidth.base === 'custom' || maxWidth.tablet === 'custom' || maxWidth.desktop === 'custom'));
-    if (isCustom) return ROW_FIELDS;
-    const { customMaxWidthPx: _removed, ...rest } = ROW_FIELDS;
-    return rest;
+    const fields = { ...((params?.fields as typeof ROW_FIELDS | undefined) ?? ROW_FIELDS) } as Record<string, unknown>;
+    if (!isCustom) delete fields['customMaxWidthPx'];
+    // R17 (T219): the content's position within a minimum height only once there is one.
+    if (!hasMinHeight(data.props.minHeight)) delete fields['contentPosition'];
+    return fields as never;
   },
   resolveData: async ({ props }) => {
     let next: RowProps = { ...props };

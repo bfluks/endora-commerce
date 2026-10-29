@@ -3,12 +3,17 @@ import type { Redis } from 'ioredis';
 import type {
   AdminRolePort,
   AssetReferenceRegistryPort,
+  AssetsLibraryPort,
   DictionaryValidator,
   SystemRoleCodePort,
   DictionaryReferenceRegistryPort,
 } from '@endora-commerce/contracts';
 import type { ModuleContext, RequireAdminFactory } from '@endora-commerce/platform/kernel';
-import { effectiveState, lazyPort } from '@endora-commerce/platform/kernel';
+import {
+  effectiveState,
+  lazyPort,
+  rethrowIfModuleDisabled,
+} from '@endora-commerce/platform/kernel';
 
 import { BlogCacheService } from './services/blog-cache.js';
 import {
@@ -89,6 +94,29 @@ export interface BlogCradle {
   readonly blogStorefrontResolver: BlogStorefrontResolver;
 }
 
+/**
+ * How a post's or category's `main_image_asset_id` becomes a storefront URL
+ * (feature 163). No composition ever passed `blogStorefrontDeps`, so until
+ * this default every card's `mainImageUrl` was `null`. The port is resolved
+ * per call through the `lazyPort` proxy; `assets_library` is a declared
+ * dependency. Only a public asset is served — a storefront visitor carries no
+ * session — and a missing asset renders the card without an image, while an
+ * owner's refusal still propagates (`rethrowIfModuleDisabled`).
+ */
+function publicAssetUrlResolver(
+  assets: Pick<AssetsLibraryPort, 'getAsset'>,
+): (assetId: string) => Promise<string | null> {
+  return async (assetId) => {
+    try {
+      const detail = await assets.getAsset(assetId);
+      return detail.visibility === 'public' ? detail.url : null;
+    } catch (err) {
+      rethrowIfModuleDisabled(err);
+      return null;
+    }
+  };
+}
+
 export function registerModule(ctx: ModuleContext): void {
   ctx.di.register({
     // Singletons, matching what the composition root constructed once at boot.
@@ -142,7 +170,12 @@ export function registerModule(ctx: ModuleContext): void {
           new BlogStorefrontResolver(
             emFactory,
             blogSettingsResolver,
-            blogStorefrontDeps ?? {},
+            {
+              resolveAssetUrl: publicAssetUrlResolver(
+                lazyPort<AssetsLibraryPort>(ctx, 'assetsLibraryPort'),
+              ),
+              ...(blogStorefrontDeps ?? {}),
+            },
             blogCacheService,
           ),
       )

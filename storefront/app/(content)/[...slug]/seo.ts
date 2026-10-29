@@ -8,5 +8,6 @@ import type { RouteSeo } from '../../../lib/seo/route-seo';
  */
 export const seo: RouteSeo = {
   route: '/[...slug]',
-  jsonLd: ['BreadcrumbList'],
+  // `Organization` since feature 163 (FR-035): every CMS page carries it.
+  jsonLd: ['BreadcrumbList', 'Organization'],
 };

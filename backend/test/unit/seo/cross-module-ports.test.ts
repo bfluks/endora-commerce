@@ -70,6 +70,8 @@ function productRecord(
     lowStockThresholdMode: 'cumulative',
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: null,
+    returnable: false,
     ...overrides,
   };
 }
@@ -115,6 +117,8 @@ function pageRecord(id: string, overrides: Partial<CmsPageRecord> = {}): CmsPage
     archivedAt: null,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    // Feature 163 (T080): the record carries the breadcrumb parent.
+    parentPageId: null,
     ...overrides,
   };
 }
@@ -170,10 +174,12 @@ describe('seo — the meta-tag rule sources arrive over published read ports', (
 
     const service = new MetaTagResolverService(
       fakeEm({ SeoMetaOverride: null }),
-      undefined,
+      // A read: the bus (feature 163 — writes are Commands) and the membership are never reached.
+      refusing('command bus'),
       catalogProducts,
       refusing('catalog categories'),
       refusing('cms'),
+      refusing('sales channel membership'),
     );
 
     const meta = await service.resolve({
@@ -198,10 +204,12 @@ describe('seo — the meta-tag rule sources arrive over published read ports', (
 
     const service = new MetaTagResolverService(
       fakeEm({ SeoMetaOverride: null }),
-      undefined,
+      // A read: the bus (feature 163 — writes are Commands) and the membership are never reached.
+      refusing('command bus'),
       refusing('catalog products'),
       catalogCategories,
       refusing('cms'),
+      refusing('sales channel membership'),
     );
 
     await expect(
@@ -217,10 +225,12 @@ describe('seo — the meta-tag rule sources arrive over published read ports', (
 
     const service = new MetaTagResolverService(
       fakeEm({ SeoMetaOverride: null }),
-      undefined,
+      // A read: the bus (feature 163 — writes are Commands) and the membership are never reached.
+      refusing('command bus'),
       refusing('catalog products'),
       refusing('catalog categories'),
       cmsPages,
+      refusing('sales channel membership'),
     );
 
     const meta = await service.resolve({
@@ -282,7 +292,8 @@ describe('seo — the sitemap reads memberships through the sanctioned bridge ac
 
     const catalogProducts = {
       findByIds: async (ids: readonly string[], opts?: Record<string, boolean>) => {
-        expect(opts).toEqual({ liveOnly: true, activeOnly: true });
+        // Feature 163 — no status narrowing in the read: availability is `catalog`'s answer.
+        expect(opts).toEqual({ liveOnly: true });
         return ids.map((id) =>
           id === 'p-private'
             ? productRecord(id, { visibility: 'logged_in_only' })
@@ -316,6 +327,26 @@ describe('seo — the sitemap reads memberships through the sanctioned bridge ac
       catalogProducts,
       catalogCategories,
       cmsPages,
+      // Feature 163 — the anonymous crawler's answer per member: the private
+      // product's channel-effective rule is `logged_in_only`.
+      {
+        describeChannelAvailability: async (ids: readonly string[]) =>
+          new Map(
+            ids.map((id) => [
+              id,
+              {
+                liveLanguages: ['en-US'],
+                window: { from: null, until: null },
+                audience: {
+                  visibility: id === 'p-private' ? ('logged_in_only' as const) : ('public' as const),
+                  allowedOrganizationIds: [],
+                },
+              },
+            ]),
+          ),
+      },
+      // Feature 163 (T112) — no URL-key rows: every key is the product's global key.
+      { effectiveKeys: async () => new Map() },
       { baseUrl: 'https://shop.test', staleAfterMs: 0 },
     );
 
@@ -353,11 +384,59 @@ describe('seo — the sitemap reads memberships through the sanctioned bridge ac
       catalogProducts,
       { findByIds: async () => [] } as unknown as CatalogCategoryReadPort,
       { findByIds: async () => [] } as unknown as CmsPageReadPort,
+      { describeChannelAvailability: async () => new Map() },
+      { effectiveKeys: async () => new Map() },
       { baseUrl: 'https://shop.test', staleAfterMs: 0 },
     );
 
     await service.regenerateForChannel('web');
 
     expect(received).toBe(1200);
+  });
+
+  it('emits one URL per live language with the effective key there, `?lang` off the default (163 T112, FR-074)', async () => {
+    const membership = membershipStub({ product: ['p-1'] }, []);
+    const askedFor: Array<{ ids: readonly string[]; channelId: string }> = [];
+    const service = new SitemapGeneratorService(
+      fakeEm({ SalesChannel: CHANNEL, SitemapCache: null }),
+      new StorefrontAddressService(null, { fallbackUrl: 'https://shop.test' }),
+      membership,
+      {
+        findByIds: async (ids: readonly string[]) => ids.map((id) => productRecord(id, { slug: 'drill' })),
+      } as unknown as CatalogProductReadPort,
+      { findByIds: async () => [] } as unknown as CatalogCategoryReadPort,
+      { findByIds: async () => [] } as unknown as CmsPageReadPort,
+      {
+        describeChannelAvailability: async (ids: readonly string[]) =>
+          new Map(
+            ids.map((id) => [
+              id,
+              {
+                // Live in en-US and pl-PL; de-DE is off, so it gets no URL even with a key.
+                liveLanguages: ['en-US', 'pl-PL'],
+                window: { from: null, until: null },
+                audience: { visibility: 'public' as const, allowedOrganizationIds: [] },
+              },
+            ]),
+          ),
+      },
+      {
+        effectiveKeys: async (ids: readonly string[], channelId: string) => {
+          askedFor.push({ ids, channelId });
+          return new Map([
+            ['p-1', new Map([['en-US', 'drill'], ['pl-PL', 'wiertarka'], ['de-DE', 'bohrer']])],
+          ]);
+        },
+      },
+      { baseUrl: 'https://shop.test', staleAfterMs: 0 },
+    );
+
+    const { payload } = await service.regenerateForChannel('web');
+
+    expect(askedFor).toEqual([{ ids: ['p-1'], channelId: 'chan-1' }]);
+    expect(payload).toContain('<loc>https://shop.test/p/drill</loc>');
+    expect(payload).toContain('<loc>https://shop.test/p/wiertarka?lang=pl-PL</loc>');
+    expect(payload).not.toContain('bohrer');
+    expect(payload).not.toContain('/p/drill?lang=pl-PL');
   });
 });

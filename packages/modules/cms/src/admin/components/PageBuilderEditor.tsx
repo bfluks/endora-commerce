@@ -22,8 +22,10 @@ import {
 import {
   buildPaletteCategories,
   contextAdmits,
-  countBlockNames,
+  countComponentNames,
   filterConfigByContext,
+  isSectionBackgroundField,
+  type BrandColorRole,
   type PageBuilderContext,
 } from '@endora-commerce/page-builder-core';
 import {
@@ -32,6 +34,7 @@ import {
   withPuckLegacySideBar,
 } from '@endora-commerce/page-builder-core/editor';
 import { AdminCmsAssetProvider } from './AdminCmsAssetProvider.js';
+import { PreviewBrandTokens, PreviewBrandTokensProvider } from './PreviewBrandTokens.js';
 import type {
   CmsPageBuilderDescriptor,
   CmsPageBuilderTranslateResponse,
@@ -61,6 +64,9 @@ import {
   createImageSourceField,
   createImageUrlField,
   createSlideImageField,
+  createVideoAssetField,
+  createButtonSpecField,
+  createLinkField,
   PageBuilderHeaderActions,
   PageBuilderHeaderShell,
   PageBuilderTemplateActions,
@@ -69,8 +75,11 @@ import {
   PageBuilderOverlayBridge,
 } from '@endora-commerce/page-builder-admin';
 import { AdminCatalogPreviewProvider } from './AdminCatalogPreviewProvider.js';
-import { createButtonLinkSlugField } from './ButtonLinkFields.js';
-import { createAdminBackgroundField } from './BackgroundFields.js';
+import { createAdminBackgroundField, withAdminSectionAssetInput } from './BackgroundFields.js';
+import { withAdminHeroFields } from './HeroFields.js';
+import { SECTION_BLOCKS_WITH_ADMIN_FIELDS, withAdminSectionBlockFields } from './SectionBlockFields.js';
+import { CAROUSEL_BLOCKS_WITH_ADMIN_FIELDS, withAdminCarouselFields } from './CarouselFields.js';
+import { LISTING_BLOCKS_WITH_ADMIN_FIELDS, withAdminListingFields } from './ListingFields.js';
 import { buildViewports } from './build-viewports.js';
 import {
   applyRowLayoutPreset,
@@ -82,8 +91,10 @@ import {
 import { isContentSliderSlidesZone, toPuckItemArray } from '@endora-commerce/page-builder-core/editor';
 import { createPuckActionHandler, PuckDispatchBridgeSlot } from './PuckActionGuard.js';
 import { RowLayoutPicker } from './RowLayoutPicker.js';
+import { INLINE_RICH_TEXT_FIELD_TRANSFORMS } from '@endora-commerce/cms-components/editor/inline-rich-text-canvas';
 import { PageBuilderActionBar } from './PageBuilderActionBar.js';
 import { PageBuilderDrawer } from './PageBuilderDrawer.js';
+import { SectionPresetsPanel } from './SectionPresetsPanel.js';
 import { applyPageBuilderTranslations } from './page-builder-i18n.js';
 import { hasInvalidColumnPlacement } from '@endora-commerce/page-builder-core/editor';
 
@@ -196,6 +207,37 @@ const NO_CONTRIBUTED_EDITORS: Pick<LoadedBlockEditors, 'editors' | 'owners'> = {
   owners: {},
 };
 
+/** Stable: a field recreated on every merge loses its input focus. */
+const CMS_BUTTON_SPEC_FIELD = createButtonSpecField({ label: 'Button', responsive: true });
+/** R17 (T212): the shared link of the image, icon, logo, announcement bar and map marker. */
+const OPTIONAL_LINK_FIELD = createLinkField({ label: 'Link (optional)' });
+const LOGO_IMAGE_FIELD = createSlideImageField();
+
+/** `cfg` with each named top-level field replaced, where the block has it. */
+function withFields(cfg: ComponentConfig | undefined, replacements: Record<string, unknown>): ComponentConfig | undefined {
+  if (!cfg) return cfg;
+  const fields = { ...(cfg.fields ?? {}) } as Record<string, unknown>;
+  for (const [key, field] of Object.entries(replacements)) if (key in fields) fields[key] = field;
+  return { ...cfg, fields } as ComponentConfig;
+}
+
+/**
+ * Feature 163, T040 — the brand colour roles the colour palette offers first,
+ * with the effective colours of the brand tokens the descriptor carries.
+ */
+function brandPaletteColors(tokens: CmsPageBuilderDescriptor['brandTokens']): Partial<Record<BrandColorRole, string>> {
+  const colors = tokens?.colors;
+  if (!colors) return {};
+  return {
+    primary: colors.primary,
+    'primary-hover': colors.primaryHover,
+    secondary: colors.secondary,
+    'secondary-hover': colors.secondaryHover,
+    'on-primary': colors.onPrimary,
+    'on-secondary': colors.onSecondary,
+  };
+}
+
 function mergeConfig(
   descriptor: CmsPageBuilderDescriptor | null,
   extensionTitle: string,
@@ -229,29 +271,46 @@ function mergeConfig(
     } as ComponentConfig;
   }
 
+  // Feature 163, T039 — `cms.Button` carries one `ButtonSpec`; its link field
+  // has the page, product, category and file pickers, and its style and fill
+  // stay per breakpoint as today's variant was.
   const button = bundled['cms.Button'];
   if (button) {
     bundled['cms.Button'] = {
       ...button,
       fields: {
         ...button.fields,
-        linkSlug: createButtonLinkSlugField(),
+        button: CMS_BUTTON_SPEC_FIELD,
       },
     } as ComponentConfig;
   }
 
+  // Feature 163, T043 — `cms.Hero` picks its media, its buttons' links and its
+  // social-proof image from the library; its media replaces today's background.
   const hero = bundled['cms.Hero'];
   if (hero) {
-    bundled['cms.Hero'] = {
-      ...hero,
-      fields: {
-        ...hero.fields,
-        buttonLinkSlug: createButtonLinkSlugField({
-          label: 'Button link target',
-          linkTypeProp: 'buttonLinkType',
-        }),
-      },
-    } as ComponentConfig;
+    bundled['cms.Hero'] = withAdminHeroFields(hero);
+  }
+
+  // Feature 163, T047 and T049 — the section blocks of US3 pick their images,
+  // videos, uploaded icons and button links from the library.
+  for (const name of SECTION_BLOCKS_WITH_ADMIN_FIELDS) {
+    const cfg = bundled[name];
+    if (cfg) bundled[name] = withAdminSectionBlockFields(name, cfg);
+  }
+
+  // Feature 163, T054 — the Carousel and its item blocks: images, files, media,
+  // links and buttons from the library pickers.
+  for (const name of CAROUSEL_BLOCKS_WITH_ADMIN_FIELDS) {
+    const cfg = bundled[name];
+    if (cfg) bundled[name] = withAdminCarouselFields(name, cfg);
+  }
+
+  // Feature 163, T069–T072 — the dynamic listings' header, footer and row
+  // buttons get their link pickers.
+  for (const name of LISTING_BLOCKS_WITH_ADMIN_FIELDS) {
+    const cfg = bundled[name];
+    if (cfg) bundled[name] = withAdminListingFields(name, cfg);
   }
 
   const productCard = bundled['catalog.ProductCard'];
@@ -299,64 +358,49 @@ function mergeConfig(
         imageSource: createImageSourceField(),
         src: createImageUrlField('Image URL'),
         assetId: createImageAssetField('Image'),
+        // Feature 163, T127: the mobile image, from the same source.
+        mobileSrc: createImageUrlField('Mobile image URL'),
+        mobileAssetId: createImageAssetField('Mobile image'),
+        // R17 (T212): any kind of link, with the page, product, category and file pickers.
+        link: OPTIONAL_LINK_FIELD,
       },
     } as ComponentConfig;
   }
 
-  const imageSlider = bundled['cms.ImageSlider'];
-  if (imageSlider) {
-    const itemsField = imageSlider.fields?.items;
-    bundled['cms.ImageSlider'] = {
-      ...imageSlider,
+  // R17 (T212): the icon's and the announcement bar's link, with the pickers.
+  for (const name of ['cms.Icons', 'cms.AnnouncementBar'] as const) {
+    const cfg = withFields(bundled[name], { link: OPTIONAL_LINK_FIELD });
+    if (cfg) bundled[name] = cfg;
+  }
+
+  // R17 (T212): a map marker's link, with the pickers.
+  const map = bundled['cms.Map'];
+  const markersField = map?.fields?.['markers'];
+  if (map && markersField && markersField.type === 'array') {
+    bundled['cms.Map'] = withFields(map, {
+      markers: { ...markersField, arrayFields: { ...markersField.arrayFields, link: OPTIONAL_LINK_FIELD } },
+    })!;
+  }
+
+  // Feature 163, T126: a self-hosted video's files and poster come from the asset library.
+  const video = bundled['cms.Video'];
+  if (video) {
+    bundled['cms.Video'] = {
+      ...video,
       fields: {
-        ...imageSlider.fields,
-        items:
-          itemsField && itemsField.type === 'array'
-            ? {
-                ...itemsField,
-                arrayFields: {
-                  image: createSlideImageField(),
-                  title: { type: 'text', label: 'Title' },
-                  titlePlacement: itemsField.arrayFields?.titlePlacement ?? {
-                    type: 'select',
-                    label: 'Title placement',
-                    options: [
-                      { label: 'Hidden', value: 'none' },
-                      { label: 'Top left', value: 'top-left' },
-                      { label: 'Top center', value: 'top-center' },
-                      { label: 'Top right', value: 'top-right' },
-                      { label: 'Center', value: 'center' },
-                      { label: 'Bottom left', value: 'bottom-left' },
-                      { label: 'Bottom center', value: 'bottom-center' },
-                      { label: 'Bottom right', value: 'bottom-right' },
-                    ],
-                  },
-                  ...(itemsField.arrayFields?.titleBackground
-                    ? { titleBackground: itemsField.arrayFields.titleBackground }
-                    : {}),
-                  ...(itemsField.arrayFields?.titleColor
-                    ? { titleColor: itemsField.arrayFields.titleColor }
-                    : {}),
-                  ...(itemsField.arrayFields?.titleBorderColor
-                    ? { titleBorderColor: itemsField.arrayFields.titleBorderColor }
-                    : {}),
-                  ...(itemsField.arrayFields?.titleBorderWidth
-                    ? { titleBorderWidth: itemsField.arrayFields.titleBorderWidth }
-                    : {}),
-                  ...(itemsField.arrayFields?.titleBorderRadius
-                    ? { titleBorderRadius: itemsField.arrayFields.titleBorderRadius }
-                    : {}),
-                  ...(itemsField.arrayFields?.titlePaddingPx
-                    ? { titlePaddingPx: itemsField.arrayFields.titlePaddingPx }
-                    : {}),
-                },
-              }
-            : itemsField,
+        ...video.fields,
+        videoAssetId: createVideoAssetField('Video file'),
+        mobileVideoAssetId: createVideoAssetField('Mobile video file'),
+        posterAssetId: createImageAssetField('Poster image'),
+        // T162: the mobile video's own poster from the library (its URL stays a text box).
+        mobilePosterAssetId: createImageAssetField('Mobile poster image'),
       },
     } as ComponentConfig;
   }
 
-  for (const name of ['cms.Row', 'cms.Column', 'cms.Hero', 'cms.Testimonial', 'cms.NewsletterSignup'] as const) {
+  // `cms.Testimonial` left this list with T049: its card background is swapped
+  // by `withAdminSectionBlockFields` above, with its image and avatar.
+  for (const name of ['cms.Row', 'cms.Column', 'cms.NewsletterSignup'] as const) {
     const cfg = bundled[name];
     if (cfg) {
       bundled[name] = {
@@ -369,16 +413,21 @@ function mergeConfig(
     }
   }
 
-  const testimonial = bundled['cms.Testimonial'];
-  if (testimonial) {
-    bundled['cms.Testimonial'] = {
-      ...testimonial,
-      fields: {
-        ...testimonial.fields,
-        avatarSource: createImageSourceField(),
-        avatarUrl: createImageUrlField('Avatar URL'),
-        avatarAssetId: createImageAssetField('Avatar'),
-      },
+  // Feature 163, T033, T110, T117 — the section background (since the owner's
+  // ruling of 2026-10-23 only `cms.Section` carries one, as its own
+  // `background` prop) picks its assets from the library. Keyed on the field,
+  // not on a block or prop name.
+  for (const [name, cfg] of Object.entries(bundled)) {
+    const fields = cfg.fields ?? {};
+    if (!Object.values(fields).some(isSectionBackgroundField)) continue;
+    bundled[name] = {
+      ...cfg,
+      fields: Object.fromEntries(
+        Object.entries(fields).map(([key, field]) => [
+          key,
+          isSectionBackgroundField(field) ? withAdminSectionAssetInput(field) : field,
+        ]),
+      ),
     } as ComponentConfig;
   }
 
@@ -394,12 +443,10 @@ function mergeConfig(
             ? {
                 ...itemsField,
                 arrayFields: {
-                  image: createSlideImageField(),
+                  image: LOGO_IMAGE_FIELD,
                   alt: itemsField.arrayFields?.alt ?? { type: 'text', label: 'Alt text' },
-                  href: itemsField.arrayFields?.href ?? {
-                    type: 'text',
-                    label: 'Link URL (optional)',
-                  },
+                  // R17 (T212): any kind of link, with the pickers (a stored URL is carried into it).
+                  link: OPTIONAL_LINK_FIELD,
                 },
               }
             : itemsField,
@@ -452,6 +499,91 @@ function mergeConfig(
   } as Config;
 }
 
+type ScopedTranslate = (scope: string, key: string, params?: Record<string, string | number>) => string;
+
+export interface PageBuilderEditorConfigInput {
+  descriptor: CmsPageBuilderDescriptor | null;
+  context: PageBuilderContext;
+  /** `cms`' own translator. */
+  t: (key: string, params?: Record<string, string | number>) => string;
+  /** The scoped translator: section titles, block and field labels are the declaring module's. */
+  translateInScope: ScopedTranslate;
+  blockOptions?: BlockOption[];
+  contributed?: Pick<LoadedBlockEditors, 'editors' | 'owners'>;
+  /** The block names the loaded document carries, for the missing-block placeholders. */
+  storedBlockNames?: readonly string[];
+  /** Wrap the canvas in the CMS page max-width container (pages only). */
+  pageContainer?: boolean;
+}
+
+/** `null` when `scope` has no such key: a missing key resolves to its `<scope>.<key>` placeholder. */
+function scopedOrUndefined(translateInScope: ScopedTranslate, scope: string, key: string): string | undefined {
+  const resolved = translateInScope(scope, key);
+  return resolved === `${scope}.${key}` ? undefined : resolved;
+}
+
+/**
+ * The Puck config `PageBuilderEditor` hands its `<Puck>`: the bundled blocks
+ * with the admin's pickers, the descriptor's declared blocks and sections, the
+ * context filter, the missing-block placeholders, the page root and the
+ * translated labels. Exported so a test can read the editor's real config.
+ */
+export function buildPageBuilderEditorConfig(input: PageBuilderEditorConfigInput): Config {
+  const { descriptor, context, t, translateInScope } = input;
+  // A section's `titleKey` is **module-relative** and belongs to the module
+  // whose declaration won the merge, so it is resolved in that module's scope
+  // and not in `cms`' (`contracts/block-definition.md` §2). The section key is
+  // a last resort so a drawer is never headed with nothing.
+  const sectionTitle = (ownerModule: string, titleKey: string, fallback: string): string =>
+    scopedOrUndefined(translateInScope, ownerModule, titleKey) ?? fallback;
+  // A block's palette label, from the declaring module's own bundle. Same rule
+  // and same reason: after Phase 3 five of the CMS palette's entries are
+  // `catalog`'s. Falls through to `applyPageBuilderTranslations`' legacy
+  // `pageBuilder.components.<name>` key while the descriptor is not fetched.
+  const blockLabel = (name: string): string | undefined => {
+    const entry = descriptor?.components.find((component) => component.name === name);
+    if (!entry?.labelKey) return undefined;
+    return scopedOrUndefined(translateInScope, entry.ownerModule, entry.labelKey);
+  };
+
+  // Feature 163 (research R-24, FR-039) — a block's field and option labels
+  // sit under its label-key stem (`blocks.mediaText.label` →
+  // `blocks.mediaText.fields.…`) in the declaring module's bundle; a missing
+  // key keeps the config's English.
+  const stems = new Map(
+    (descriptor?.components ?? []).flatMap((entry) =>
+      entry.labelKey?.endsWith('.label')
+        ? [[entry.name, { owner: entry.ownerModule, stem: entry.labelKey.slice(0, -'.label'.length) }] as const]
+        : [],
+    ),
+  );
+  const fieldLabel = (name: string, key: string): string | undefined => {
+    const entry = stems.get(name);
+    return entry ? scopedOrUndefined(translateInScope, entry.owner, `${entry.stem}.${key}`) : undefined;
+  };
+
+  const merged = mergeConfig(
+    descriptor,
+    t('pageBuilder.extensions'),
+    input.blockOptions ?? [],
+    context,
+    sectionTitle,
+    input.contributed ?? NO_CONTRIBUTED_EDITORS,
+    t('pageBuilder.blockPreview.unavailable'),
+  );
+  const filtered = filterConfigByContext(merged, context);
+  // FR-019/FR-020 — a stored block nothing here can render degrades to the
+  // placeholder rather than vanishing from the canvas. **After** the context
+  // filter and after the categories, deliberately: the block stays visible and
+  // editable where it already is, and is not something an operator may insert.
+  const degraded = withMissingBlockPlaceholders(filtered, [...(input.storedBlockNames ?? [])]);
+  const rooted = input.pageContainer ? withCmsPageRoot(degraded) : degraded;
+  // R17 (T200): the fields the page builder owns are translated once, in the `core` bundle.
+  const sharedFieldLabel = (key: string): string | undefined =>
+    scopedOrUndefined(translateInScope, 'core', `pageBuilder.sharedFields.${key}`);
+  return applyPageBuilderTranslations(rooted, t, blockLabel, fieldLabel, sharedFieldLabel);
+}
+
 export function PageBuilderEditor({
   data,
   onChange,
@@ -466,6 +598,7 @@ export function PageBuilderEditor({
   onResolveTemplateLayout,
   resource,
   savedVersion,
+  salesChannelId = null,
 }: {
   data: Data | null;
   onChange: (data: Data) => void;
@@ -508,46 +641,22 @@ export function PageBuilderEditor({
    * no longer about the stored state, so it goes (FR-019).
    */
   savedVersion?: string | number | null;
+  /**
+   * Feature 163 — the sales channel whose brand tokens the preview is styled
+   * with: a page's first assigned channel. Without one, the global set.
+   */
+  salesChannelId?: string | null;
 }): ReactNode {
   const t = useTranslation('cms');
-  // A section's `titleKey` is **module-relative** and belongs to the module
-  // whose declaration won the merge, so it is resolved in that module's scope
-  // and not in `cms`' (`contracts/block-definition.md` §2). The key itself is
-  // the fallback the resolver already renders for a key it cannot find; the
-  // section key is a last resort so a drawer is never headed with nothing.
+  // Section titles, block labels and field labels are module-relative and are
+  // resolved in the declaring module's scope (`buildPageBuilderEditorConfig`).
   const { t: translateInScope } = useTranslationContext();
-  const sectionTitle = useCallback(
-    (ownerModule: string, titleKey: string, fallback: string): string => {
-      const resolved = translateInScope(ownerModule, titleKey);
-      return resolved === `${ownerModule}.${titleKey}` ? fallback : resolved;
-    },
-    [translateInScope],
-  );
   // The shared page-builder chrome (`PageBuilderHeaderShell`,
   // `PageBuilderTemplateActions`, `PageBuilderHeaderActions`) owns no module
   // knowledge and reads `core`; this screen's own strings stay `cms`' (feature
   // 091 P5a, R-1).
   const tChrome = useTranslation('core');
   const [descriptor, setDescriptor] = useState<CmsPageBuilderDescriptor | null>(null);
-  /**
-   * A block's palette label, from the declaring module's own bundle.
-   *
-   * Same rule as the section title and for the same reason: `labelKey` is
-   * module-relative, and after Phase 3 five of the CMS palette's entries are
-   * `catalog`'s. Falls through to `applyPageBuilderTranslations`' legacy
-   * `pageBuilder.components.<name>` key when the descriptor has not been
-   * fetched yet, which is the first render.
-   */
-  const blockLabel = useCallback(
-    (name: string): string | undefined => {
-      const entry = descriptor?.components.find((component) => component.name === name);
-      if (!entry?.labelKey) return undefined;
-      const resolved = translateInScope(entry.ownerModule, entry.labelKey);
-      return resolved === `${entry.ownerModule}.${entry.labelKey}` ? undefined : resolved;
-    },
-    [descriptor, translateInScope],
-  );
-
   /**
    * The editor renderers the present modules contribute for the blocks the
    * descriptor declares (feature 141, contract R4.2). `null` until the
@@ -635,7 +744,7 @@ export function PageBuilderEditor({
   useEffect(() => {
     let live = true;
     cmsClient
-      .getPageBuilderConfig()
+      .getPageBuilderConfig(salesChannelId)
       .then((result) => {
         if (live) setDescriptor(result);
       })
@@ -645,7 +754,7 @@ export function PageBuilderEditor({
     return () => {
       live = false;
     };
-  }, []);
+  }, [salesChannelId]);
 
   // Available CMS blocks power the InsertBlock dropdown; their resolved content
   // (and templates') power the on-canvas embed previews. Best-effort: any
@@ -710,42 +819,35 @@ export function PageBuilderEditor({
    * degradation merge below actually depends on (feature 096, T602).
    */
   const storedBlockNamesKey = useMemo(
-    () => [...countBlockNames(editorData).keys()].sort().join('\n'),
+    () => [...countComponentNames(editorData).keys()].sort().join('\n'),
     [editorData],
   );
 
-  const config = useMemo(() => {
-    const merged = mergeConfig(
+  const brandColors = useMemo(() => brandPaletteColors(descriptor?.brandTokens), [descriptor?.brandTokens]);
+
+  const config = useMemo(
+    () =>
+      buildPageBuilderEditorConfig({
+        descriptor,
+        context,
+        t,
+        translateInScope,
+        blockOptions,
+        contributed: contributedEditors ?? NO_CONTRIBUTED_EDITORS,
+        storedBlockNames: storedBlockNamesKey === '' ? [] : storedBlockNamesKey.split('\n'),
+        pageContainer,
+      }),
+    [
       descriptor,
-      t('pageBuilder.extensions'),
+      t,
+      translateInScope,
       blockOptions,
+      pageContainer,
       context,
-      sectionTitle,
-      contributedEditors ?? NO_CONTRIBUTED_EDITORS,
-      t('pageBuilder.blockPreview.unavailable'),
-    );
-    const filtered = filterConfigByContext(merged, context);
-    // FR-019/FR-020 — a stored block nothing here can render degrades to the
-    // placeholder rather than vanishing from the canvas. **After** the context
-    // filter and after the categories, deliberately: the block stays visible and
-    // editable where it already is, and is not something an operator may insert.
-    const degraded = withMissingBlockPlaceholders(
-      filtered,
-      storedBlockNamesKey === '' ? [] : storedBlockNamesKey.split('\n'),
-    );
-    const rooted = pageContainer ? withCmsPageRoot(degraded) : degraded;
-    return applyPageBuilderTranslations(rooted, t, blockLabel);
-  }, [
-    descriptor,
-    t,
-    sectionTitle,
-    blockLabel,
-    blockOptions,
-    pageContainer,
-    context,
-    storedBlockNamesKey,
-    contributedEditors,
-  ]);
+      storedBlockNamesKey,
+      contributedEditors,
+    ],
+  );
   const lastValidDataRef = useRef(editorData);
   const knownRowIdsRef = useRef<Set<string>>(collectRowIds(editorData));
 
@@ -950,6 +1052,10 @@ export function PageBuilderEditor({
 
   const puckOverrides = useMemo(
     () => ({
+      // Feature 163 (research R-4): the canvas iframe gets the page's brand tokens.
+      iframe: ({ children, document }: { children: ReactNode; document?: Document }): ReactElement => (
+        <PreviewBrandTokens document={document}>{children}</PreviewBrandTokens>
+      ),
       puck: ({ children }: { children: ReactNode }): ReactElement => (
         <PuckDispatchBridgeSlot dispatchRef={dispatchRef}>{children}</PuckDispatchBridgeSlot>
       ),
@@ -979,6 +1085,8 @@ export function PageBuilderEditor({
             searchPlaceholder={state.drawerSearchPlaceholder}
             emptyLabel={state.drawerSearchEmpty}
           >
+            {/* Feature 163 (FR-042, R-22) — ready-made sections, beside the row layout picker's presets. */}
+            <SectionPresetsPanel />
             {children}
           </PageBuilderDrawer>
         );
@@ -1089,7 +1197,11 @@ export function PageBuilderEditor({
             the canvas. */}
         <AdminCmsAssetProvider embeds={embeds} data={editorData}>
           <AdminCatalogPreviewProvider>
-            <PageBuilderColorPaletteProvider initialEntries={descriptor?.colorPalette ?? []}>
+            <PageBuilderColorPaletteProvider
+              initialEntries={descriptor?.colorPalette ?? []}
+              brandColors={brandColors}
+            >
+              <PreviewBrandTokensProvider tokens={descriptor?.brandTokens ?? null}>
               <Puck
                 key={`${contentKey ?? 'pb'}:${canvasEpoch}`}
                 config={config}
@@ -1101,7 +1213,9 @@ export function PageBuilderEditor({
                 plugins={plugins}
                 dnd={PUCK_LEGACY_DND}
                 overrides={puckOverrides}
+                fieldTransforms={INLINE_RICH_TEXT_FIELD_TRANSFORMS}
               />
+              </PreviewBrandTokensProvider>
             </PageBuilderColorPaletteProvider>
           </AdminCatalogPreviewProvider>
         </AdminCmsAssetProvider>

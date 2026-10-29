@@ -25,6 +25,9 @@ User + role CRUD is gated by the `admin_users:manage` permission.
 | `PUT /api/v1/admin/admin-roles/:code` | Upsert role by code; unknown permissions return 400 `VALIDATION_FAILED` |
 | `DELETE /api/v1/admin/admin-roles/:id` | Delete; refuses with 409 `ADMIN_ROLE_IN_USE` if any user is still assigned — **including a soft-deleted one**, whose assignment comes back when the account is restored. The refusal names which population holds the role (`details.code` is `assigned` or `assigned_to_deleted`) and how many there are |
 | `GET /api/v1/admin/permissions` | Canonical permission catalogue (module / code / label) used by the matrix UI |
+| `GET /api/v1/admin/me/preferences` | The signed-in administrator's own Admin UI preferences; no permission code is needed (see *Admin UI preferences*) |
+| `PATCH /api/v1/admin/me/preferences` | Change one or more of them; an invalid body is refused with 400 `VALIDATION_FAILED` and nothing is written |
+| `POST /api/v1/admin/me/preferences/legacy-import` | The one-time carry-over of the browser's page sizes; never overwrites a stored value |
 | `POST /api/v1/admin/organizations/:id/impersonate` | Begin impersonation; writes `impersonation.start` audit row before issuing the cookie |
 | `POST /api/v1/admin/impersonation/end` | Restore the original admin session |
 
@@ -312,6 +315,71 @@ through the `adminAuthenticationThrottlePort` port
 comparison in one `verify(attempt, check)` call. The attempt carries the client
 address and the verified value of the known-device cookie.
 
+## Admin UI preferences
+
+Every administrator's layout of the Admin UI is kept on the server, with their account: the
+entries they pinned to the sidebar, the sidebar groups they folded, whether the sidebar is
+collapsed to icons (rail mode), and how many rows each list shows. It follows them to any
+browser and to the installed app, and nobody else sees it.
+
+### For operators
+
+- **Pin an entry** — point at a sidebar entry, or move to it with the keyboard: a pin button
+  appears after it (with the keyboard it is the next Tab stop after the entry). Activate it and
+  the entry is added at the end of a **Pinned** section at the top of the sidebar; it also stays
+  where it was. On a phone or tablet the button is always shown.
+- **Pin from the command palette** (⌘K / Ctrl+K) — a result that opens a sidebar entry has a
+  pin button beside it, and **Alt+Enter** (⌥↵ on a Mac) pins or unpins the highlighted result.
+  **Enter** still opens it. The palette stays open on the same search.
+- **Unpin** — the same button, on the pinned row or on the entry's own row. In the collapsed
+  (rail) sidebar the Pinned section is the first icon; its fly-out lists your pins, each with
+  an unpin button.
+- **Reorder** — drag a pinned row; or focus its handle, press Space, move it with the arrow
+  keys and press Space again (Escape cancels); on a touch screen use its up and down buttons.
+  Every pin, unpin and move is announced to screen readers.
+- **Pins you cannot open are not shown.** If you lose the permission an entry needs, or its
+  module is switched off, its pin disappears everywhere — and comes back in the same place
+  when access returns. Nothing is deleted.
+- **If a change cannot be saved** (for example while offline) it stays in effect on this
+  screen and one notice says so below the top bar; it is saved again when the connection
+  returns or the page comes back to the foreground. Close the notice with **Dismiss**.
+- **After the upgrade that introduced this**, each list opens with the page size you had chosen
+  in this browser — it is carried over once, unless you had already set one on the server — and
+  the sidebar opens with every group unfolded and not collapsed, because the old browser
+  values were not tied to an administrator. Fold and collapse it again once; it is remembered
+  from then on, everywhere.
+
+### For engineers
+
+- **Storage.** Table `admin_user_preferences` (`AdminUserPreference`, a platform-global entity):
+  one row per administrator and preference, the value as `jsonb`, removed with the
+  administrator row and kept when the account is deactivated or soft-deleted.
+- **The closed set** is `ADMIN_PREFERENCE_KEYS` in `@endora-commerce/contracts`:
+  `sidebarPins` (destinations, at most 200, each a sidebar route), `sidebarCollapsedGroups`
+  (group keys, at most 32; the Pinned section folds as `pinned`), `sidebarRailMode` (boolean)
+  and `listPageSizes` (list id → one of 5, 10, 20, 50, 100, 500; at most 128 lists). The bounds
+  protect the server; they are not product limits, and the Admin UI never refuses a pin. Writes
+  are strict (`adminPreferencesPatchSchema`): an unknown key, a wrong shape, a duplicate or a
+  value beyond a bound is 400 `VALIDATION_FAILED` and nothing is written. Reads are tolerant: a
+  value a later release no longer understands is returned as stored and ignored by the Admin UI.
+- **Routes.** `GET` and `PATCH /api/v1/admin/me/preferences` and
+  `POST /api/v1/admin/me/preferences/legacy-import` need a session and no permission code, and
+  no route takes an administrator id — so nobody, the wildcard role included, can read or change
+  another administrator's preferences. A `PATCH` replaces each sidebar preference it names and
+  merges `listPageSizes` per list (`null` forgets a list); the import adds only lists the server
+  does not hold. Every answer is the whole document. `GET /api/v1/admin/me` also carries
+  `preferences`, so the Admin UI opens already pinned, folded and collapsed; when they cannot be
+  read the field is `null`, sign-in still succeeds, and the Admin UI saves nothing until a later
+  load succeeds.
+- **In a screen**, `usePageSizePreference(scope)` from `@endora-commerce/admin-kit/lib` gives a
+  list its remembered page size: pick a list id (`'catalog-products'`) and nothing else. Two
+  screens naming the same id share one value. The value is read when the list opens, so a change
+  made on another device applies the next time it opens. `useAdminPreference(key)` and
+  `useAdminPreferencesStatus()` read and write the sidebar preferences; `AuthProvider` provides
+  them, so there is nothing else to mount.
+- **No audit entry.** These are personal UI settings, not business records: the writes do not go
+  through the Command Bus and the audit log does not record them.
+
 ## Impersonation model
 
 `impersonation-service.ts` implements the switch-user pattern: starts a
@@ -324,6 +392,9 @@ through the audit log.
 
 `AdminUser` (email, passwordHash, two-factor state, single `adminRoleId`,
 `status`, soft-delete `deletedAt`).
+
+`AdminUserPreference` (administrator, preference key, `jsonb` value, `updatedAt`) — see
+*Admin UI preferences*.
 
 `AdminRole` (code, display name, JSONB `permissions[]`,
 `requiresTwoFactor`). The wildcard `*` is bootstrap-only and rejected by

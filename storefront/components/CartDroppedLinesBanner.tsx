@@ -8,22 +8,27 @@ import type { ReactNode } from 'react';
  * the products that were skipped during the conversion and the typed
  * reason for each skip.
  *
+ * Feature 155 (FR-011) — a line left out because it would leave its product
+ * below a minimum is reported as such, with the minimum, distinct from
+ * "no price available".
+ *
  * Returns null when the list is empty — the consumer can render
  * unconditionally.
- *
- * Browser-verification note: layout + styling needs eyes.
  */
 
 export type DroppedLineReason =
   | 'not_purchasable'
   | 'out_of_stock'
   | 'no_price_in_customer_list'
-  | 'removed_by_conversion';
+  | 'removed_by_conversion'
+  | 'below_minimum';
 
 interface DroppedLine {
   productId: string;
   productName: string;
   reason: DroppedLineReason;
+  /** Feature 155 — the minimum a `below_minimum` line missed. */
+  minimum?: number | undefined;
 }
 
 interface CartDroppedLinesBannerProps {
@@ -36,6 +41,8 @@ interface CartDroppedLinesBannerProps {
     reasonOutOfStock: string;
     reasonNoPriceInCustomerList: string;
     reasonRemovedByConversion: string;
+    /** Feature 155 — `droppedBelowMinimumReason(minimum, locale)` from `lib/batchReport`. */
+    reasonBelowMinimum: (minimum: number | undefined) => string;
   };
 }
 
@@ -45,18 +52,16 @@ export function CartDroppedLinesBanner({
 }: CartDroppedLinesBannerProps): ReactNode {
   if (droppedLines.length === 0) return null;
   return (
-    <div
-      role="alert"
-      className="mb-4 rounded-sm border border-[#d4a000] bg-[#fffaeb] px-4 py-3"
-    >
+    <div role="alert" className="mb-4 rounded-sm border border-warn bg-warn-soft px-4 py-3 text-fg">
       <h2 className="m-0 mb-2 text-[0.95rem]">{strings.heading}</h2>
       <p className="m-0 mb-2">{strings.intro}</p>
       <ul className="m-0 pl-5">
-        {droppedLines.map((line) => (
-          <li key={line.productId}>
+        {droppedLines.map((line, index) => (
+          // A product can be dropped twice (two variants), so the product id alone is no key.
+          <li key={`${line.productId}:${index}`}>
             <strong>{line.productName}</strong>
             {' — '}
-            <span className="text-[#a06000]">{labelFor(line.reason, strings)}</span>
+            <span className="text-warn">{labelFor(line, strings)}</span>
           </li>
         ))}
       </ul>
@@ -64,11 +69,8 @@ export function CartDroppedLinesBanner({
   );
 }
 
-function labelFor(
-  reason: DroppedLineReason,
-  strings: CartDroppedLinesBannerProps['strings'],
-): string {
-  switch (reason) {
+function labelFor(line: DroppedLine, strings: CartDroppedLinesBannerProps['strings']): string {
+  switch (line.reason) {
     case 'not_purchasable':
       return strings.reasonNotPurchasable;
     case 'out_of_stock':
@@ -77,5 +79,7 @@ function labelFor(
       return strings.reasonNoPriceInCustomerList;
     case 'removed_by_conversion':
       return strings.reasonRemovedByConversion;
+    case 'below_minimum':
+      return strings.reasonBelowMinimum(line.minimum);
   }
 }

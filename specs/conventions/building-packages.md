@@ -63,6 +63,20 @@ output beside that sibling's source** — 432 untracked files in `packages/contr
 sets **`noEmitOnError: true`**, because `dist/` is git-ignored: a compile that failed would
 otherwise ship its artefacts and leave nothing for anybody to notice.
 
+The same git-ignored `dist` is why **every build starts by deleting it**
+(`scripts/clean-package-dist.mjs --src <rootDir> --out <outDir>`, issue #443). `tsc` writes and
+never deletes, so before that step the compiled output of a deleted source survived every later
+build: two removed `price_lists` entities kept being exported, and
+`classification-check.test.ts` counted 11 entity classes against the repository's 9. A full clean
+and not a prune of orphans, because no package builds incrementally (no `.tsbuildinfo` anywhere),
+so the compile costs the same either way, and because `dist` has more writers than `tsc` — the
+asset copier, the CLI's release index, a Tailwind stylesheet — whose outputs a prune would have
+to tell apart. It runs once, first; the UI layer's second `tsc` writes into the same directory.
+A module package's script is rendered by `manifests:generate`; every other package names the
+step by hand, and `test/unit/packages/package-dist-clean.test.ts` holds both to it. If a package
+ever turns `incremental` on, its `.tsbuildinfo` must go with the `dist`, or `tsc` will consider
+the deleted outputs current and emit nothing.
+
 
 ## One package may not be default-imported
 

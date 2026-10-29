@@ -151,10 +151,12 @@ export class DefaultChannelReconciler {
       currencies: [currency],
       defaultCurrency: currency,
       active: true,
+      // Feature 154 (FR-003) — open to anonymous visitors, stated here rather
+      // than left to the column default so the intent is in the code.
+      anonymousAccess: true,
       systemDefault: true,
       version: 1,
-      // Legacy columns preserved for one release (research R-12).
-      isPublic: false,
+      // Legacy column preserved for one release (research R-12).
       status: 'active',
     });
     await em.persistAndFlush(channel);

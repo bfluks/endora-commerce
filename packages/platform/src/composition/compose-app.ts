@@ -134,6 +134,7 @@ import {
   loadPackageModuleEntries,
 } from '../packages/package-runtime.js';
 import { nodeModulesRootsFor } from '../packages/installed-packages.js';
+import { createCursorSeal } from './cursor-seal.js';
 import { newsletterTokenSecretFrom } from './newsletter-token-secret.js';
 import { processRunsWorkersFor } from './process-runs-workers.js';
 import { forkScopedEm } from '../tenancy/scoped-em.js';
@@ -680,6 +681,12 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
       process.env['NEWSLETTER_TOKEN_SECRET'],
       process.env['SESSION_COOKIE_SECRET'],
     ),
+    // Issue #497 — what a listing seals a cursor with when its next position
+    // may name a row the client must not learn about (the catalogue's price
+    // walk). A platform value rather than a module's: the key is derived from
+    // the session key every instance already has, so no module reads it and no
+    // operator provisions a new one. Keyed lazily — see `./cursor-seal.ts`.
+    cursorSeal: createCursorSeal(process.env['SESSION_COOKIE_SECRET'] ?? ''),
     // The one connection ioredis has put into subscriber mode. Shared, because
     // a subscriber connection cannot serve commands: a per-module one would
     // cost a socket per module and buy nothing.
@@ -722,6 +729,7 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     emFactory: em,
     eventBus,
     redis,
+    redisSubscriber,
     auditLogService,
   });
 
@@ -861,6 +869,13 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     // T129 and neither root registered it, so the channel-scoped storefront
     // stock read threw `AwilixResolutionError` on its first call.
     salesChannelResolutionPort: salesChannels.resolver,
+    // Feature 154 — the sales-channel access rule, for the paths that decide
+    // it before a request exists for the session in question (sign-in, second
+    // factor, federated callback) and for the storefront's access read.
+    salesChannelAccessPort: salesChannels.accessPolicy,
+    // Feature 154 — the per-Organization permitted-channel cache, which
+    // `sales_channels` drops when a channel delete rebinds or drops assignments.
+    salesChannelAccessCache: salesChannels.accessCache,
     /**
      * The channel a **channel-scoped** settings read resolves against outside a
      * request (worker, boot hook, CLI): the deployment's system-default sales

@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PriceDisplayModeOverride } from '../../helpers/package-entities.js';
 import type { DisplayMode } from '@endora-commerce/contracts';
+import { settlePriceSurface, warmPriceSort } from '../../helpers/price-surface.js';
+import { priceBookApi } from '../../helpers/price-book-admin.js';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -12,9 +14,11 @@ import { SettingValue } from '@endora-commerce/platform/kernel';
 import {
   ALPHA,
   BETA,
+  DELTA,
   GAMMA,
   PRICE_SORT_CHANNEL,
   PRICE_SORT_ORG_A,
+  PRICE_SORT_ORG_B,
   seedPriceSortFixture,
 } from '../../helpers/price-sort-fixture.js';
 import { TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
@@ -30,11 +34,11 @@ import { TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
  *
  *  - the page-level mode is `none` ⇒ refused, for the viewer it is `none` for
  *    and not for the one it is not;
- *  - a **single product** overridden to `none` ⇒ served, and that product keeps
- *    its position. The recommendation is implemented rather than guessed, and
- *    the whole of it is `PriceListService.resolvePageDisplayMode` omitting the
- *    product and category steps — moving those products to the tail instead is
- *    a change there and nowhere else.
+ *  - a **single product** overridden to `none` ⇒ served, and that product
+ *    takes no part in the order or the range (issue #491): its amount is
+ *    withheld on the server, so the price surface leaves it out and the walk
+ *    meets it in the unpriced tail. Spec 086 recommended that it keep its
+ *    position, which disclosed the rank of a price the page does not show.
  */
 
 describe('a page that may not show prices refuses to order by them', () => {
@@ -44,6 +48,12 @@ describe('a page that may not show prices refuses to order by them', () => {
   beforeAll(async () => {
     h = await setupBackendServer();
     await seedPriceSortFixture(h.em());
+    // A request never builds a price surface: register and build them first.
+    await warmPriceSort(h, [
+      { headers: PRICE_SORT_CHANNEL },
+      { headers: PRICE_SORT_CHANNEL, cookies: PRICE_SORT_ORG_A },
+      { headers: PRICE_SORT_CHANNEL, cookies: PRICE_SORT_ORG_B },
+    ]);
     retailChannelId = (await h.em().findOneOrFail(SalesChannel, { code: 'pl_retail' })).id;
   }, 60_000);
 
@@ -125,26 +135,52 @@ describe('a page that may not show prices refuses to order by them', () => {
     }
   });
 
-  it('serves the ordering when a single product is overridden to `none`, and keeps its position', async () => {
-    // Spec clarification 2, implemented as recommended. A per-product override
-    // reads as "ask us for a quote", not "this price is secret", and
-    // withdrawing the whole control for it would make the sort appear and
-    // disappear as a buyer walks the catalogue.
-    const em = h.em();
-    const override = em.create(PriceDisplayModeOverride, {
-      scope: 'product',
-      targetId: BETA.id,
-      mode: 'none',
-    });
-    await em.persistAndFlush(override);
+  it('serves the ordering when a single product is overridden to `none`, and walks that product in the unpriced tail (#491)', async () => {
+    // Withdrawing the whole control for one product would make the sort appear
+    // and disappear as a buyer walks the catalogue (spec clarification 2), so
+    // the ordering is served — but without the product whose price the page
+    // does not show: ranked among the priced ones, its position would bound
+    // its price between its neighbours'. Organisation A's order is
+    // ALPHA 10 < DELTA 55 < BETA 90, then the unpriced GAMMA.
+    const api = priceBookApi(h);
+    const set = async (mode: 'none' | 'inherit') => {
+      const res = await api.put(`/api/v1/admin/pricing/display-mode-overrides/product/${BETA.id}`, { mode });
+      expect([200, 204], res.raw).toContain(res.status);
+      // The write marked BETA on every surface; the worker refreshes it.
+      await settlePriceSurface(h);
+    };
+    const before = await list('sort=price', PRICE_SORT_ORG_A);
+    expect(before.skus).toEqual([ALPHA.sku, DELTA.sku, BETA.sku, GAMMA.sku]);
+    await set('none');
     try {
-      const served = await list('sort=price');
-      expect(served.status).toBe(200);
-      expect(served.skus).toEqual([ALPHA.sku, BETA.sku, GAMMA.sku]);
+      const ascending = await list('sort=price', PRICE_SORT_ORG_A);
+      expect(ascending.status).toBe(200);
+      expect(ascending.skus.slice(0, 2)).toEqual([ALPHA.sku, DELTA.sku]);
+      expect(new Set(ascending.skus.slice(2))).toEqual(new Set([BETA.sku, GAMMA.sku]));
+
+      // The tail closes the walk in both directions: BETA does not lead "most
+      // expensive first", which is where its price would put it.
+      const descending = await list('sort=-price', PRICE_SORT_ORG_A);
+      expect(descending.skus.slice(0, 2)).toEqual([DELTA.sku, ALPHA.sku]);
+      expect(new Set(descending.skus.slice(2))).toEqual(new Set([BETA.sku, GAMMA.sku]));
+
+      // A range is a claim about a number, and BETA is shown none: excluded,
+      // so the range cannot be narrowed until it brackets BETA's price.
+      const ranged = await list('minPrice=80&maxPrice=100', PRICE_SORT_ORG_A);
+      expect(ranged.status).toBe(200);
+      expect(ranged.skus).toEqual([]);
+      const wide = await list('sort=price&minPrice=1&maxPrice=1000', PRICE_SORT_ORG_A);
+      expect(wide.skus).toEqual([ALPHA.sku, DELTA.sku]);
+
+      // And for the anonymous visitor: ALPHA 50, then the tail.
+      const anonymous = await list('sort=price');
+      expect(anonymous.skus[0]).toBe(ALPHA.sku);
+      expect(new Set(anonymous.skus.slice(1))).toEqual(new Set([BETA.sku, GAMMA.sku]));
     } finally {
-      em.remove(override);
-      await em.flush();
+      await set('inherit');
     }
+    // The override gone, BETA is ranked again.
+    expect((await list('sort=price', PRICE_SORT_ORG_A)).skus).toEqual([ALPHA.sku, DELTA.sku, BETA.sku, GAMMA.sku]);
   });
 
   it('follows the organisation-level override, which is the page-level tier a buyer can carry', async () => {

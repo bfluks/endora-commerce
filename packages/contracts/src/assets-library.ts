@@ -36,9 +36,12 @@ export const assetReferenceKindSchema = z.enum([
   'cms_body_embed',
   'megamenu_item_target',
   'blog_category_main_image',
+  'blog_post_main_image',
   'blog_post_content',
   'blog_category_description',
   'crm_opportunity_attachment',
+  // `specs/163-projects-and-tasks/` FR-027: a file attached to a Project.
+  'project_attachment',
 ]);
 export type AssetReferenceKind = z.infer<typeof assetReferenceKindSchema>;
 
@@ -68,6 +71,16 @@ export const listFoldersResponseSchema = z.object({
   data: z.array(assetFolderSchema),
 });
 export type ListFoldersResponse = z.infer<typeof listFoldersResponseSchema>;
+
+/**
+ * `GET /api/v1/admin/assets/folders/:folderId/permalink-count` — how many live
+ * assets in the folder's subtree have a permalink, named by the folder delete
+ * confirmation (specs/156-asset-stable-url/, owner ruling S4).
+ */
+export const folderPermalinkCountResponseSchema = z.object({
+  data: z.object({ permalinkedAssets: z.number().int().nonnegative() }),
+});
+export type FolderPermalinkCountResponse = z.infer<typeof folderPermalinkCountResponseSchema>;
 
 export const createFolderRequestSchema = z.object({
   parentId: uuidSchema.nullable(),
@@ -123,13 +136,49 @@ export const assetSummarySchema = z.object({
   updatedAt: isoDateTimeSchema,
   deletedAt: isoDateTimeSchema.nullable(),
   pendingCleanup: z.boolean(),
+  /** The stable, unversioned file URL — the same across replaces (specs/156-asset-stable-url/). */
+  fileUrl: z.string(),
+  /** Operator-chosen alias served at `<base>/assets/file/<permalink>`, or null. */
+  permalink: z.string().nullable(),
+  /** Absolute permalink URL on the local public base, or null when no permalink is set. */
+  permalinkUrl: z.string().nullable(),
+  /** Identity of the bytes the asset currently holds. */
+  contentVersion: z.string(),
 });
 export type AssetSummary = z.infer<typeof assetSummarySchema>;
+
+/** The one kept previous version of an asset's file, as the detail panel shows it. */
+export const assetPreviousVersionSchema = z.object({
+  filename: z.string().min(1).max(255),
+  mimeType: z.string().min(1).max(127),
+  sizeBytes: z.number().int().nonnegative(),
+  contentVersion: z.string().min(1).max(32),
+  replacedAt: isoDateTimeSchema,
+  replacedBy: z.object({ id: uuidSchema, displayName: z.string() }).nullable(),
+  /** `replacedAt` + `assets.soft_delete_retention_days` as read now. */
+  restorableUntil: isoDateTimeSchema,
+});
+export type AssetPreviousVersion = z.infer<typeof assetPreviousVersionSchema>;
 
 /** Detail extends summary with multilingual alt text + the deletion-protection list. */
 export const assetDetailSchema = assetSummarySchema.extend({
   altText: multilingualStringSchema.nullable(),
   references: z.array(assetReferenceSchema),
+  /** The one kept previous version of the file, or null (specs/156-asset-stable-url/). */
+  previousVersion: assetPreviousVersionSchema.nullable(),
+  /**
+   * `assets.soft_delete_retention_days` as the retention sweep reads it, in
+   * whole days (at least one): how long a replaced file stays restorable, named
+   * by the replace confirmation (specs/156-asset-stable-url/).
+   */
+  retentionDays: z.number().int().min(1),
+  /**
+   * Whether the file can be replaced in place (and a previous version
+   * restored): false for a legacy row and for a row with no storage key, which
+   * both answer `409 ASSET_LEGACY_CANNOT_REPLACE` (specs/156-asset-stable-url/,
+   * owner ruling S3).
+   */
+  replaceable: z.boolean(),
 });
 export type AssetDetail = z.infer<typeof assetDetailSchema>;
 
@@ -189,6 +238,69 @@ export const moveManyAssetsResponseSchema = z.object({
   data: z.object({ movedCount: z.number().int().nonnegative() }),
 });
 export type MoveManyAssetsResponse = z.infer<typeof moveManyAssetsResponseSchema>;
+
+// ────────────────────────────────────────────────────────────────────────────
+// (2) HTTP — permalinks and the previous version (specs/156-asset-stable-url/)
+// ────────────────────────────────────────────────────────────────────────────
+
+export const ASSET_PERMALINK_MAX_LENGTH = 200;
+
+export type AssetPermalinkInvalidReason =
+  | 'empty'
+  | 'too_long'
+  | 'invalid_characters'
+  | 'invalid_segment'
+  | 'uuid_shaped';
+
+const ASSET_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PERMALINK_CHARACTERS = /^[A-Za-z0-9._/-]+$/;
+
+/**
+ * True for the shape the file route treats as an asset id, in either case. A
+ * permalink of this shape would be unreachable, so the validator refuses it.
+ */
+export function isAssetIdShaped(segment: string): boolean {
+  return ASSET_ID_SHAPE.test(segment);
+}
+
+/**
+ * The one permalink rule for the server and the admin form. Pure; no I/O.
+ * Checks run in a fixed order so a value breaking several rules always gets
+ * the same reason.
+ */
+export function validateAssetPermalink(
+  value: string,
+): { ok: true } | { ok: false; reason: AssetPermalinkInvalidReason } {
+  if (value.length === 0) return { ok: false, reason: 'empty' };
+  if (value.length > ASSET_PERMALINK_MAX_LENGTH) return { ok: false, reason: 'too_long' };
+  if (!PERMALINK_CHARACTERS.test(value)) return { ok: false, reason: 'invalid_characters' };
+  const segments = value.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    return { ok: false, reason: 'invalid_segment' };
+  }
+  if (isAssetIdShaped(value)) return { ok: false, reason: 'uuid_shaped' };
+  return { ok: true };
+}
+
+export const setAssetPermalinkRequestSchema = z.object({
+  /** Shape judged by `validateAssetPermalink`; the bound only caps the body. */
+  permalink: z.string().max(ASSET_PERMALINK_MAX_LENGTH * 2),
+  /**
+   * Acknowledges taking a permalink whose last holder was a different asset;
+   * never needed by the asset that last held it.
+   */
+  confirmReuse: z.boolean().optional(),
+});
+export type SetAssetPermalinkRequest = z.infer<typeof setAssetPermalinkRequestSchema>;
+
+/** Both required: a restore names the current file and the previous file it brings back. */
+export const restorePreviousAssetVersionRequestSchema = z.object({
+  expectedContentVersion: z.string().min(1).max(32),
+  expectedPreviousContentVersion: z.string().min(1).max(32),
+});
+export type RestorePreviousAssetVersionRequest = z.infer<
+  typeof restorePreviousAssetVersionRequestSchema
+>;
 
 // ────────────────────────────────────────────────────────────────────────────
 // (2) HTTP — storage administration
@@ -280,6 +392,10 @@ export interface AssetRecord {
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
+  /** Identity of the bytes the asset currently holds (specs/156-asset-stable-url/). */
+  contentVersion: string;
+  /** Operator-chosen alias, or null. */
+  permalink: string | null;
 }
 
 /**

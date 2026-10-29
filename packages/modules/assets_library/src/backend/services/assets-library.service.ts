@@ -2,15 +2,37 @@
 // patch / setVisibility / resolveUrl. US2 will fill softDelete / restore /
 // move. US3 brings cloud adapters online.
 
+import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES, type AssetSummary, type AssetDetail } from '@endora-commerce/contracts';
+import {
+  ERROR_CODES,
+  validateAssetPermalink,
+  type AdminUserReadPort,
+  type AssetDetail,
+  type AssetPreviousVersion,
+  type AssetSummary,
+} from '@endora-commerce/contracts';
 import { Asset } from '../entities/asset.entity.js';
+import {
+  AssetPermalinkRelease,
+  type AssetPermalinkReleaseReason,
+} from '../entities/asset-permalink-release.entity.js';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { AdapterRegistry } from './storage/adapter-registry.js';
 import type { AssetReferenceRegistry } from './reference-registry.js';
 import { UploadPipeline, type UploadInput, type UploadPolicy } from './upload-pipeline.js';
 import { LegacyAssetCannotHardenError } from './storage/errors.js';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
+import { permalinkUrl, versionedAssetUrl } from './asset-urls.js';
+import {
+  isReplaceableInPlace,
+  replaceAssetFile,
+  restorePreviousVersion,
+  type AssetReplaceDeps,
+  type AssetReplaceInput,
+  type RestorePreviousVersionInput,
+} from './asset-replace.js';
+import { ObjectCleanupLedger } from './object-cleanup-ledger.js';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 
 export class NotImplementedYet extends Error {
@@ -32,6 +54,19 @@ export interface AssetsLibraryServiceDeps {
   loadRetentionDays?: () => Promise<number>;
   /** Feature 054 — audits asset writes co-transactionally when provided. */
   auditLog?: AuditPort;
+  /**
+   * Runs the Commands of feature 156 (`asset.replace`). Optional so a
+   * composition that never replaces a file needs none; `replace` refuses
+   * without it.
+   */
+  commandBus?: AssetReplaceDeps['commandBus'];
+  /** Where a failed replace compensation is reported. */
+  logError?: (message: string, context: Record<string, unknown>) => void;
+  /**
+   * Names who replaced the previous version. Optional: without it the detail
+   * answers `replacedBy: null` (specs/156-asset-stable-url/ research R-14).
+   */
+  adminUsers?: Pick<AdminUserReadPort, 'findById'>;
 }
 
 export interface ListAssetsQuery {
@@ -74,6 +109,191 @@ export class AssetsLibraryService {
     }
   }
 
+  /**
+   * Replace the asset's file in place — same id, same storage key, same URLs
+   * (specs/156-asset-stable-url/ FR-001 – FR-010). Runs Command `asset.replace`.
+   */
+  async replace(input: AssetReplaceInput): Promise<AssetDetail> {
+    const row = await replaceAssetFile(this.#swapDeps('replace'), input);
+    return this.detail(row);
+  }
+
+  /**
+   * Bring back the kept previous version — a swap with the current file
+   * (FR-023). Runs Command `asset.restore_previous_version`.
+   */
+  async restorePreviousVersion(input: RestorePreviousVersionInput): Promise<AssetDetail> {
+    const row = await restorePreviousVersion(this.#swapDeps('restorePreviousVersion'), input);
+    return this.detail(row);
+  }
+
+  /**
+   * Set the asset's permalink (specs/156-asset-stable-url/ FR-014 – FR-019,
+   * research R-22). Runs Command `asset.permalink_set`; the same value again is
+   * a no-op without an audit row. A name another asset holds is refused; a name
+   * a **different** asset held last needs `confirmReuse`, and the audit row
+   * records which asset that was.
+   */
+  async setPermalink(
+    assetId: string,
+    input: { permalink: string; confirmReuse?: boolean },
+  ): Promise<AssetDetail> {
+    const verdict = validateAssetPermalink(input.permalink);
+    if (!verdict.ok) {
+      throw new HttpError(400, ERROR_CODES.ASSET_PERMALINK_INVALID, 'The permalink is not valid.', {
+        code: verdict.reason,
+      });
+    }
+    const permalink = input.permalink;
+    const lower = permalink.toLowerCase();
+    const commandBus = this.#commandBus('setPermalink');
+    let row: Asset;
+    try {
+      row = await commandBus.run<Asset>({
+        action: 'asset.permalink_set',
+        objectType: 'asset',
+        objectId: assetId,
+        run: async ({ em }) => {
+          const a = await em.findOne(Asset, { id: assetId }, { lockMode: LockMode.PESSIMISTIC_WRITE });
+          if (!a) throw new HttpError(404, ERROR_CODES.ASSET_NOT_FOUND, `Asset ${assetId} not found.`);
+          refuseSoftDeleted(a);
+          const old = a.permalink ?? null;
+          if (old === permalink) {
+            return { result: a, before: null, after: null, skipAudit: true };
+          }
+          await this.#refuseTaken(em, assetId, permalink, lower);
+
+          const release = await em.findOne(AssetPermalinkRelease, { permalinkLower: lower });
+          let reusedPermalink:
+            | { previousAssetId: string; releasedAt: string; reason: AssetPermalinkReleaseReason }
+            | null = null;
+          if (release && release.assetId !== assetId) {
+            if (!input.confirmReuse) {
+              throw new HttpError(
+                409,
+                ERROR_CODES.ASSET_PERMALINK_PREVIOUSLY_USED,
+                `The permalink "${permalink}" was used by another file before.`,
+                { permalink, releasedAt: release.releasedAt.toISOString() },
+              );
+            }
+            reusedPermalink = {
+              previousAssetId: release.assetId,
+              releasedAt: release.releasedAt.toISOString(),
+              reason: release.reason,
+            };
+          }
+          // The name is held again: it is no longer a previously used one.
+          if (release) em.remove(release);
+          if (old !== null && old.toLowerCase() !== lower) {
+            await this.#release(em, old, assetId, 'changed');
+          }
+          a.permalink = permalink;
+          await em.flush();
+          return {
+            result: a,
+            before: { permalink: old },
+            after: { permalink, ...(reusedPermalink ? { reusedPermalink } : {}) },
+          };
+        },
+      });
+    } catch (err) {
+      // Two requests passed the pre-check together: the unique index decides.
+      if (err instanceof UniqueConstraintViolationException) {
+        const holders = await this.deps.emFactory().fork().execute<Array<{ id: string }>>(
+          'select id::text as id from assets where lower(permalink) = ? and id <> ? limit 1',
+          [lower, assetId],
+        );
+        throw new HttpError(
+          409,
+          ERROR_CODES.ASSET_PERMALINK_TAKEN,
+          `The permalink "${permalink}" is already used by another asset.`,
+          { permalink, assetId: holders[0]?.id ?? null },
+        );
+      }
+      throw err;
+    }
+    return this.detail(row);
+  }
+
+  /** Remove the asset's permalink — Command `asset.permalink_remove`; none set is a no-op. */
+  async removePermalink(assetId: string): Promise<AssetDetail> {
+    const commandBus = this.#commandBus('removePermalink');
+    const row = await commandBus.run<Asset>({
+      action: 'asset.permalink_remove',
+      objectType: 'asset',
+      objectId: assetId,
+      run: async ({ em }) => {
+        const a = await em.findOne(Asset, { id: assetId }, { lockMode: LockMode.PESSIMISTIC_WRITE });
+        if (!a) throw new HttpError(404, ERROR_CODES.ASSET_NOT_FOUND, `Asset ${assetId} not found.`);
+        refuseSoftDeleted(a);
+        const old = a.permalink ?? null;
+        if (old === null) return { result: a, before: null, after: null, skipAudit: true };
+        await this.#release(em, old, assetId, 'removed');
+        a.permalink = null;
+        await em.flush();
+        return { result: a, before: { permalink: old }, after: { permalink: null } };
+      },
+    });
+    return this.detail(row);
+  }
+
+  /** Refuses a name another asset holds, compared case-insensitively. */
+  async #refuseTaken(em: EntityManager, assetId: string, permalink: string, lower: string): Promise<void> {
+    const rows = await em.execute<Array<{ id: string }>>(
+      'select id::text as id from assets where lower(permalink) = ? and id <> ? limit 1',
+      [lower, assetId],
+    );
+    const holder = rows[0];
+    if (holder) {
+      throw new HttpError(
+        409,
+        ERROR_CODES.ASSET_PERMALINK_TAKEN,
+        `The permalink "${permalink}" is already used by another asset.`,
+        { permalink, assetId: holder.id },
+      );
+    }
+  }
+
+  /** Records a name that stopped being held, naming its last holder (research R-22). */
+  async #release(
+    em: EntityManager,
+    permalink: string,
+    assetId: string,
+    reason: AssetPermalinkReleaseReason,
+  ): Promise<void> {
+    await em.upsert(AssetPermalinkRelease, {
+      permalinkLower: permalink.toLowerCase(),
+      permalink,
+      assetId,
+      releasedAt: new Date(),
+      reason,
+    });
+  }
+
+  #commandBus(method: string): NonNullable<AssetsLibraryServiceDeps['commandBus']> {
+    const commandBus = this.deps.commandBus;
+    if (!commandBus) {
+      throw new Error(`AssetsLibraryService.${method}: no command bus is wired into this composition.`);
+    }
+    return commandBus;
+  }
+
+  #swapDeps(method: string): AssetReplaceDeps {
+    const commandBus = this.deps.commandBus;
+    if (!commandBus) {
+      throw new Error(`AssetsLibraryService.${method}: no command bus is wired into this composition.`);
+    }
+    return {
+      emFactory: this.deps.emFactory,
+      adapters: this.deps.adapters,
+      stage: (stageInput) => this.pipeline.stage(stageInput),
+      ledger: new ObjectCleanupLedger(this.deps.emFactory),
+      commandBus,
+      ...(this.deps.logError ? { logError: this.deps.logError } : {}),
+      ...(this.deps.loadRetentionDays ? { loadRetentionDays: this.deps.loadRetentionDays } : {}),
+    };
+  }
+
   /** Upload entry point — runs the atomic put + insert + compensating-delete pipeline. */
   async upload(input: UploadInput): Promise<AssetDetail> {
     const asset = await this.pipeline.run(input);
@@ -81,6 +301,20 @@ export class AssetsLibraryService {
   }
 
   /** Resolve the serving URL for an asset by id (public or private). */
+  /**
+   * The embed form of an asset's URL — the stable URL plus `?v=<contentVersion>`
+   * for a public asset, the signed URL for a private one (specs/156-asset-stable-url/
+   * research R-8). What anything that *embeds* the asset should use; `resolveUrl`
+   * stays the stable form.
+   */
+  async resolveEmbedUrl(assetId: string): Promise<string> {
+    const em = this.deps.emFactory();
+    const a = await em.findOne(Asset, { id: assetId });
+    if (!a) throw new HttpError(404, ERROR_CODES.ASSET_NOT_FOUND, `Asset ${assetId} not found.`);
+    const resolved = await this.resolveUrl(assetId);
+    return versionedAssetUrl(resolved.url, a.contentVersion, a.storageBackend);
+  }
+
   async resolveUrl(
     assetId: string,
     opts: { ttlSec?: number } = {},
@@ -120,6 +354,7 @@ export class AssetsLibraryService {
         $or: [
           { filename: { $ilike: `%${query.q}%` } },
           { label: { $ilike: `%${query.q}%` } },
+          { permalink: { $ilike: `%${query.q}%` } },
         ],
       });
     }
@@ -143,7 +378,9 @@ export class AssetsLibraryService {
     const overflow = rows.length > limit;
     const page = overflow ? rows.slice(0, limit) : rows;
     const nextCursor = overflow ? encodeCursor(offset + limit) : null;
-    const summaries = await Promise.all(page.map((a) => this.summary(a)));
+    // The permalink base is two settings reads: once per call, not once per row.
+    const permalinkBase = this.#permalinkBase();
+    const summaries = await Promise.all(page.map((a) => this.summary(a, permalinkBase)));
     return { data: summaries, nextCursor };
   }
 
@@ -166,48 +403,60 @@ export class AssetsLibraryService {
     },
   ): Promise<AssetDetail> {
     const em = this.deps.emFactory();
-    const a = await em.findOne(Asset, { id: assetId });
-    if (!a) throw new HttpError(404, ERROR_CODES.ASSET_NOT_FOUND, `Asset ${assetId} not found.`);
-
-    if (patch.filename !== undefined) a.filename = patch.filename;
-    if (patch.label !== undefined) a.label = patch.label;
-    if (patch.altText !== undefined) a.altText = patch.altText;
-    if (patch.mimeType !== undefined) {
-      a.mimeType = patch.mimeType;
-      a.mimeTypeOverridden = true;
-    }
-    if (patch.folderId !== undefined) a.folderId = patch.folderId;
-
-    if (patch.visibility !== undefined && patch.visibility !== a.visibility) {
-      // Refuse to flip a `legacy` asset to private — we cannot sign URLs we
-      // didn't issue.
-      if (a.storageBackend === 'legacy' && patch.visibility === 'private') {
-        throw new HttpError(
-          409,
-          ERROR_CODES.ASSET_LEGACY_LOCATOR_CANNOT_HARDEN,
-          'Cannot mark a `legacy` asset as private — re-upload it through the active adapter first.',
-        );
-      }
-      const adapter = await this.deps.adapters.getForBackend(
-        a.storageBackend as 'local' | 's3' | 'gcs' | 'legacy',
+    // A visibility change takes the row lock a replace takes, so the ACL a
+    // replace copies with is never stale (specs/156-asset-stable-url/ R-18).
+    // A pessimistic lock needs a transaction; the other edits do not.
+    const locking = patch.visibility !== undefined;
+    const apply = async (tx: EntityManager): Promise<Asset> => {
+      const a = await tx.findOne(
+        Asset,
+        { id: assetId },
+        locking ? { lockMode: LockMode.PESSIMISTIC_WRITE } : {},
       );
-      // Cloud adapters update object ACLs; local FS no-ops (visibility is
-      // enforced by routes.public.ts on every request).
-      if ('setVisibility' in adapter && typeof adapter.setVisibility === 'function') {
-        try {
-          await adapter.setVisibility({ locator: a.storageLocator || a.storageUrl, visibility: patch.visibility });
-        } catch (err) {
-          if (err instanceof LegacyAssetCannotHardenError) {
-            throw new HttpError(409, ERROR_CODES.ASSET_LEGACY_LOCATOR_CANNOT_HARDEN, err.message);
-          }
-          throw err;
-        }
-      }
-      a.visibility = patch.visibility;
-    }
+      if (!a) throw new HttpError(404, ERROR_CODES.ASSET_NOT_FOUND, `Asset ${assetId} not found.`);
 
-    this.#audit(em, 'asset.update', a.id, null, { filename: a.filename, visibility: a.visibility });
-    await em.flush();
+      if (patch.filename !== undefined) a.filename = patch.filename;
+      if (patch.label !== undefined) a.label = patch.label;
+      if (patch.altText !== undefined) a.altText = patch.altText;
+      if (patch.mimeType !== undefined) {
+        a.mimeType = patch.mimeType;
+        a.mimeTypeOverridden = true;
+      }
+      if (patch.folderId !== undefined) a.folderId = patch.folderId;
+
+      if (patch.visibility !== undefined && patch.visibility !== a.visibility) {
+        // Refuse to flip a `legacy` asset to private — we cannot sign URLs we
+        // didn't issue.
+        if (a.storageBackend === 'legacy' && patch.visibility === 'private') {
+          throw new HttpError(
+            409,
+            ERROR_CODES.ASSET_LEGACY_LOCATOR_CANNOT_HARDEN,
+            'Cannot mark a `legacy` asset as private — re-upload it through the active adapter first.',
+          );
+        }
+        const adapter = await this.deps.adapters.getForBackend(
+          a.storageBackend as 'local' | 's3' | 'gcs' | 'legacy',
+        );
+        // Cloud adapters update object ACLs; local FS no-ops (visibility is
+        // enforced by routes.public.ts on every request).
+        if ('setVisibility' in adapter && typeof adapter.setVisibility === 'function') {
+          try {
+            await adapter.setVisibility({ locator: a.storageLocator || a.storageUrl, visibility: patch.visibility });
+          } catch (err) {
+            if (err instanceof LegacyAssetCannotHardenError) {
+              throw new HttpError(409, ERROR_CODES.ASSET_LEGACY_LOCATOR_CANNOT_HARDEN, err.message);
+            }
+            throw err;
+          }
+        }
+        a.visibility = patch.visibility;
+      }
+
+      this.#audit(tx, 'asset.update', a.id, null, { filename: a.filename, visibility: a.visibility });
+      await tx.flush();
+      return a;
+    };
+    const a = locking ? await em.transactional((tx) => apply(tx)) : await apply(em);
     return this.detail(a);
   }
 
@@ -221,9 +470,14 @@ export class AssetsLibraryService {
     const em = this.deps.emFactory();
     const a = await em.findOne(Asset, { id: assetId });
     if (!a) throw new HttpError(404, ERROR_CODES.ASSET_NOT_FOUND, `Asset ${assetId} not found.`);
+    const retentionDays = this.deps.loadRetentionDays ? await this.deps.loadRetentionDays() : 30;
+    const purgeAfter = (deletedAt: Date) =>
+      new Date(deletedAt.getTime() + retentionDays * 24 * 60 * 60 * 1000);
     if (a.deletedAt) {
-      // Idempotent — return current state.
-      return { deletedAt: a.deletedAt, purgeAfterAt: a.purgeAfterAt as Date };
+      // Idempotent. The date reported follows the setting as read now — what
+      // the retention sweep uses (specs/156-asset-stable-url/ owner ruling P1);
+      // the stored `purgeAfterAt` keeps the first value as a rollback snapshot.
+      return { deletedAt: a.deletedAt, purgeAfterAt: purgeAfter(a.deletedAt) };
     }
     // Reference protection (FR-030).
     const refs = await this.deps.referenceRegistry.findReferences(assetId);
@@ -238,10 +492,10 @@ export class AssetsLibraryService {
         })),
       );
     }
-    const retentionDays = this.deps.loadRetentionDays ? await this.deps.loadRetentionDays() : 30;
     const now = new Date();
     a.deletedAt = now;
-    a.purgeAfterAt = new Date(now.getTime() + retentionDays * 24 * 60 * 60 * 1000);
+    // Written at deletion for a rollback; no longer read (research R-13).
+    a.purgeAfterAt = purgeAfter(now);
     this.#audit(em, 'asset.soft_delete', a.id, { filename: a.filename }, null);
     await em.flush();
     return { deletedAt: a.deletedAt, purgeAfterAt: a.purgeAfterAt };
@@ -285,8 +539,24 @@ export class AssetsLibraryService {
 
   // — Serialization helpers --------------------------------------------------
 
-  private async summary(a: Asset): Promise<AssetSummary> {
+  /** The base permalink URLs are built on — read lazily, at most once. */
+  #permalinkBase(): () => Promise<string> {
+    let base: Promise<string> | undefined;
+    return () => {
+      base ??= this.deps.adapters.localPublicBase();
+      return base;
+    };
+  }
+
+  private async summary(a: Asset, permalinkBase = this.#permalinkBase()): Promise<AssetSummary> {
     const url = await this.resolveUrl(a.id);
+    const adapter = await this.deps.adapters.getForBackend(a.storageBackend);
+    // The stable form: the unsigned URL of the stable key, whatever the visibility.
+    const fileUrl = await adapter.resolveUrl({
+      locator: a.storageLocator || a.storageUrl,
+      visibility: 'public',
+    });
+    const permalink = a.permalink ?? null;
     return {
       id: a.id,
       folderId: a.folderId ?? null,
@@ -296,22 +566,81 @@ export class AssetsLibraryService {
       sizeBytes: Number(a.sizeBytes),
       visibility: a.visibility,
       storageBackend: a.storageBackend,
-      url: url.url,
+      // The embed form: a public URL carries the content version (R-8).
+      url: versionedAssetUrl(url.url, a.contentVersion, a.storageBackend),
       createdAt: a.createdAt.toISOString(),
       updatedAt: a.updatedAt.toISOString(),
       deletedAt: a.deletedAt ? a.deletedAt.toISOString() : null,
       pendingCleanup: a.pendingCleanup,
+      fileUrl: fileUrl.url,
+      permalink,
+      permalinkUrl:
+        permalink === null
+          ? null
+          : permalinkUrl(await permalinkBase(), permalink),
+      contentVersion: a.contentVersion,
     };
   }
 
   private async detail(a: Asset): Promise<AssetDetail> {
     const summary = await this.summary(a);
     const references = await this.deps.referenceRegistry.findReferences(a.id);
+    // Read once: it dates the previous version and is named by the replace
+    // confirmation. Whole days, at least one, as the contract declares.
+    const retentionDays = this.deps.loadRetentionDays ? await this.deps.loadRetentionDays() : 30;
     return {
       ...summary,
       altText: a.altText ?? null,
       references,
+      previousVersion: await this.previousVersion(a, retentionDays),
+      retentionDays: Math.max(1, Math.floor(retentionDays)),
+      replaceable: isReplaceableInPlace(a),
     };
+  }
+
+  /** The kept previous version as the detail panel shows it (FR-022, FR-023). */
+  private async previousVersion(a: Asset, retentionDays: number): Promise<AssetPreviousVersion | null> {
+    if (
+      !a.previousStorageLocator ||
+      !a.previousFilename ||
+      !a.previousMimeType ||
+      !a.previousContentVersion ||
+      !a.previousReplacedAt ||
+      a.previousSizeBytes == null
+    ) {
+      return null;
+    }
+    let replacedBy: AssetPreviousVersion['replacedBy'] = null;
+    if (a.previousReplacedBy && this.deps.adminUsers) {
+      const admin = await this.deps.adminUsers.findById(a.previousReplacedBy);
+      if (admin) {
+        replacedBy = {
+          id: admin.id,
+          displayName: `${admin.firstName} ${admin.lastName}`.trim() || admin.email,
+        };
+      }
+    }
+    return {
+      filename: a.previousFilename,
+      mimeType: a.previousMimeType,
+      sizeBytes: Number(a.previousSizeBytes),
+      contentVersion: a.previousContentVersion,
+      replacedAt: a.previousReplacedAt.toISOString(),
+      replacedBy,
+      restorableUntil: new Date(
+        a.previousReplacedAt.getTime() + retentionDays * 24 * 60 * 60 * 1000,
+      ).toISOString(),
+    };
+  }
+}
+
+/**
+ * A soft-deleted asset's permalink is not changed: it is refused like a replace
+ * or a restore of its file, and the asset keeps the permalink it had.
+ */
+function refuseSoftDeleted(a: Asset): void {
+  if (a.deletedAt) {
+    throw new HttpError(410, ERROR_CODES.ASSET_GONE, 'Restore the asset before changing its permalink.');
   }
 }
 

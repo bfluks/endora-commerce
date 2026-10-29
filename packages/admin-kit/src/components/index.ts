@@ -61,6 +61,30 @@ export type { CurrencyPickerProps } from './dictionary-picker/CurrencyPicker.js'
 export { listDictionaryCountries, listDictionaryCurrencies } from './dictionary-picker/dictionary-api.js';
 export { useCountriesQuery } from './country-select/useCountriesQuery.js';
 export type { UseCountriesQueryResult } from './country-select/useCountriesQuery.js';
+export { CustomFieldListFilters } from './custom-field-filters/CustomFieldListFilters.js';
+export type { CustomFieldListFiltersProps } from './custom-field-filters/CustomFieldListFilters.js';
+export {
+  customFieldDisplayName,
+  customFieldFilterChips,
+  resolveCustomFieldLabel,
+} from './custom-field-filters/custom-field-filter-chips.js';
+export type { CustomFieldFilterChip, CustomFieldFilterTranslator } from './custom-field-filters/custom-field-filter-chips.js';
+export {
+  customFieldFilterRefusal,
+  emptyCustomFieldFilters,
+  pruneRemovedOptions,
+  readCustomFieldFilterParams,
+  sanitizeCustomFieldFilters,
+  toCustomFieldFiltersParam,
+  withCustomFieldFilter,
+  withoutCustomFieldFilter,
+  writeCustomFieldFilterParams,
+} from './custom-field-filters/custom-field-filter-params.js';
+export { useCustomFieldListFilterFields } from './custom-field-filters/useCustomFieldListFilterFields.js';
+export type {
+  CustomFieldListFilterFieldsState,
+  CustomFieldListFilterFieldsStatus,
+} from './custom-field-filters/useCustomFieldListFilterFields.js';
 export { CustomFieldValuesPanel } from './custom-field-values/CustomFieldValuesPanel.js';
 export type { CustomFieldValuesPanelProps } from './custom-field-values/CustomFieldValuesPanel.js';
 export { CustomerGroupPicker } from './customer-group-picker/CustomerGroupPicker.js';
@@ -84,11 +108,19 @@ export type { ModalDialogProps } from './modal-dialog/ModalDialog.js';
 export { useViewportTier } from './hooks/useViewportTier.js';
 export type { ViewportTier } from './hooks/useViewportTier.js';
 export { MethodAvailabilityCaption, MethodAvailabilityCell, MethodNotOfferedNotice } from './payment-method-availability/MethodAvailabilityCell.js';
+// Feature 161 — the editable grid (`specs/161-price-book-editor/research.md` R4).
+export { EditableGrid } from './editable-grid/index.js';
+export type { EditableGridCellChange, EditableGridChangeReason, EditableGridColumn, EditableGridHandle, EditableGridProps, EditableGridRenderContext, EditableGridRow, EditableGridSelection } from './editable-grid/index.js';
 export { KanbanBoard } from './kanban/index.js';
 export type { KanbanBoardLabels, KanbanBoardProps, KanbanCardRenderState, KanbanColumnRenderState, KanbanColumnState, KanbanDropState } from './kanban/index.js';
 export { ReorderAnnouncer } from './reorder/ReorderAnnouncer.js';
 export type { ReorderAnnouncerProps } from './reorder/ReorderAnnouncer.js';
 export { moveItem, useReorderList } from './reorder/useReorderList.js';
+// Feature 159 — named, ordered line groups: the editor and its section reorder hook.
+export { LineGroupsEditor, SplitLineDialog, canSplitLine, splitLineInto } from './line-groups/index.js';
+export type { LineGroupsEditorGroup, LineGroupsEditorLabels, LineGroupsEditorLine, LineGroupsEditorLineSlots, LineGroupsEditorProps, LineGroupsEditorSection, SplitLineDialogLabels, SplitLineDialogProps, SplitLineDialogTarget } from './line-groups/index.js';
+export { useGroupedReorder } from './reorder/useGroupedReorder.js';
+export type { GroupedHandleProps, GroupedItemContext, GroupedItemProps, GroupedReorderKeyboardEvent, GroupedReorderLabels, GroupedReorderModel, GroupedReorderSection, GroupedSectionContext, GroupedSectionHandleProps, GroupedSectionProps, UseGroupedReorderOptions, UseGroupedReorderResult } from './reorder/useGroupedReorder.js';
 export type { ReorderHandleProps, ReorderItemProps, ReorderKeyboardEvent, ReorderLabelContext, ReorderLabels, ReorderListOptions, UseReorderListOptions, UseReorderListResult } from './reorder/useReorderList.js';
 export { RuleBuilder } from './rule-builder/RuleBuilder.js';
 export { ProductBrowserDialog } from './product-browser/ProductBrowserDialog.js';
@@ -96,7 +128,7 @@ export type { ProductBrowserDialogProps } from './product-browser/ProductBrowser
 export { ProductBrowserTrigger } from './product-browser/ProductBrowserTrigger.js';
 export type { ProductBrowserTriggerProps } from './product-browser/ProductBrowserTrigger.js';
 export { parsePositiveInt, productDisplayName } from './product-browser/product-line.js';
-export { productSelectability, productSelectabilityReasonKey } from './product-browser/selectability.js';
+export { isProductArchived, productSelectability, productSelectabilityReasonKey } from './product-browser/selectability.js';
 export type { ProductBrowserRules, ProductSelectability, ProductSelectabilityContext, ProductSelectabilityReason } from './product-browser/selectability.js';
 export type { ProductBrowserItem, ProductBrowserStatus, ProductBrowserType } from './product-browser/types.js';
 export { ProductPicker } from './product-picker/ProductPicker.js';
@@ -124,3 +156,32 @@ export type { ScopeNoticeProps } from './scope-notice/ScopeNotice.js';
 export { SavedViewsControl } from './saved-views/SavedViewsControl.js';
 export type { SavedViewState, SavedViewsControlProps } from './saved-views/SavedViewsControl.js';
 export type { RuleAttributeField, RuleBuilderBuiltinField, RuleBuilderLabels, RuleBuilderProps, RuleFieldOptions, StructuralRule, StructuralRuleCondition, StructuralRuleField, StructuralRuleValue } from './rule-builder/RuleBuilder.js';
+// Feature 163 — the collaboration components promoted from CRM (`specs/163-projects-and-tasks/research.md` R-17).
+export { ReferenceField } from './references/ReferenceField.js';
+export type { ReferenceFieldProps } from './references/ReferenceField.js';
+export { ReferenceText } from './references/ReferenceText.js';
+export type { ReferenceTextProps } from './references/ReferenceText.js';
+export { REFERENCE_TRIGGER_KINDS } from './references/reference-kinds.js';
+export type { ReferenceLookups, ReferenceSuggestion, ReferenceTriggerKind } from './references/reference-kinds.js';
+export { clipReferenceText, findMentionTrigger, MENTION_QUERY_LIMIT } from './references/mention-trigger.js';
+export type { MentionTrigger } from './references/mention-trigger.js';
+export { editorDocOf, REFERENCE_NODE, textOfEditorDoc } from './references/rich-text-doc.js';
+export type { EditorDoc } from './references/rich-text-doc.js';
+export { COMMENT_MAX_LENGTH, CommentComposer } from './comments/CommentComposer.js';
+export type { CommentComposerProps } from './comments/CommentComposer.js';
+export { CommentThread } from './comments/CommentThread.js';
+export type { CommentThreadApi, CommentThreadCopy, CommentThreadProps, RecordComment } from './comments/CommentThread.js';
+export { AttachmentUploader } from './attachments/AttachmentUploader.js';
+export type { AttachmentUploaderProps } from './attachments/AttachmentUploader.js';
+export { uploadAttachment } from './attachments/upload-attachment.js';
+export { RecordHistory, recordHistoryChanges, useRecordHistory } from './record-history/RecordHistory.js';
+export type {
+  RecordHistoryChange,
+  RecordHistoryCopy,
+  RecordHistoryEntryShape,
+  RecordHistoryPageShape,
+  RecordHistoryProps,
+  RecordHistoryState,
+} from './record-history/RecordHistory.js';
+export { CursorPagination } from './record-history/CursorPagination.js';
+export type { CursorPaginationProps } from './record-history/CursorPagination.js';

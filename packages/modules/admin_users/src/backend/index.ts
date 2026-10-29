@@ -21,6 +21,7 @@ import { effectiveState } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory, SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { adminModule } from './plugin.js';
 import { AdminUser } from './entities/admin-user.entity.js';
+import { AdminUserPreference } from './entities/admin-user-preference.entity.js';
 import {
   AdminUserReadService,
   createAdminPasswordVerificationPort,
@@ -267,4 +268,5 @@ export function registerModule(ctx: ModuleContext): void {
  */
 export const entities = [
   AdminUser,
+  AdminUserPreference,
 ];

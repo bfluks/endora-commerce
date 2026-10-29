@@ -33,20 +33,19 @@
  * composes the platform and reads the value at its boot, so there is no cache
  * to refresh and no second CLI entry point to run.
  */
-import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { migratedDatabase, type MigratedDatabase } from '../../helpers/migrated-database.js';
+
 const BACKEND_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-/** Migrations, then six composed CLI runs. */
+/** A migrated database, then six composed CLI runs. */
 const SUITE_TIMEOUT_MS = 900_000;
 
-const RUN = randomBytes(4).toString('hex');
-const SHOP_DB = `dpo_${RUN}_shop_test`;
 const DEMO_SEED = ['pnpm', 'exec', 'tsx', 'src/cli.ts', 'demo', 'seed'];
 const DEMO_RESET = ['pnpm', 'exec', 'tsx', 'src/cli.ts', 'demo', 'reset'];
 
@@ -65,20 +64,6 @@ const CRM_ROW_TABLES = [
   'crm_opportunity_message_reads',
   'crm_tags',
 ] as const;
-
-/** `DATABASE_URL`'s host, port and credentials, with the database replaced. */
-function dsnFor(database: string): string {
-  const declared = process.env['DATABASE_URL'];
-  if (declared === undefined || declared === '') {
-    throw new Error(
-      'demo pipeline off-state: DATABASE_URL is not set. This test provisions its own ' +
-        'throwaway database from the running invocation’s DSN and cannot invent one.',
-    );
-  }
-  const url = new URL(declared);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
 
 interface RunOutcome {
   readonly code: number | null;
@@ -129,6 +114,7 @@ const NO_CRM_ROWS = Object.fromEntries(CRM_ROW_TABLES.map((table) => [table, 0])
 describe('the demo sales pipeline while CRM is switched off', () => {
   let shop: Client;
   let url: string;
+  let database: MigratedDatabase | undefined;
 
   let seededOff: string;
   let crmAfterOffSeed: Record<string, number>;
@@ -159,16 +145,12 @@ describe('the demo sales pipeline while CRM is switched off', () => {
   }
 
   beforeAll(async () => {
-    const admin = new Client({ connectionString: dsnFor('postgres') });
-    await admin.connect();
-    try {
-      await admin.query(`drop database if exists "${SHOP_DB}" with (force)`);
-      await admin.query(`create database "${SHOP_DB}"`);
-    } finally {
-      await admin.end();
-    }
-    url = dsnFor(SHOP_DB);
-    await run('migration:up', ['pnpm', 'exec', 'tsx', 'src/db/migrate.ts', 'up'], url);
+    // Exactly what `migration:up` from empty leaves, cloned from this run's
+    // template rather than migrated again — see the helper.
+    database = await migratedDatabase('dpo', async (migrateUrl) => {
+      await run('migration:up', ['pnpm', 'exec', 'tsx', 'src/db/migrate.ts', 'up'], migrateUrl);
+    });
+    url = database.url;
     // One boot, so the settings exist to be switched.
     await run('endora demo reset (boot)', DEMO_RESET, url);
 
@@ -202,13 +184,7 @@ describe('the demo sales pipeline while CRM is switched off', () => {
 
   afterAll(async () => {
     if (shop !== undefined) await shop.end();
-    const admin = new Client({ connectionString: dsnFor('postgres') });
-    await admin.connect();
-    try {
-      await admin.query(`drop database if exists "${SHOP_DB}" with (force)`);
-    } finally {
-      await admin.end();
-    }
+    await database?.drop();
   }, SUITE_TIMEOUT_MS);
 
   describe('seeding with CRM off', () => {

@@ -31,7 +31,8 @@ export class BlogPost {
     | 'content'
     | 'metaTitle'
     | 'metaDescription'
-    | 'metaKeywords';
+    | 'metaKeywords'
+    | 'mainImageAssetId';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -65,6 +66,10 @@ export class BlogPost {
 
   @Property({ type: 'json' })
   content: Record<string, unknown> = {};
+
+  /** Library asset shown on post cards (feature 163, data-model §1.2). */
+  @Property({ type: 'uuid', fieldName: 'main_image_asset_id', nullable: true })
+  mainImageAssetId?: string | null;
 
   @Property({ type: 'integer' })
   version: number = 1;

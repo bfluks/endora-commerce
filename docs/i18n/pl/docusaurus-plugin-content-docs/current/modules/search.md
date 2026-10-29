@@ -107,13 +107,26 @@ createdAt, updatedAt). Indeksator ustawia też w Meilisearch `searchableAttribut
 `filterableAttributes` na podstawie bieżących flag `product_attributes.is_searchable` i
 `is_filterable`, a `sortableAttributes` — na podstawie `SORTABLE_ATTRIBUTES` (zobacz *Sortowanie*).
 
-**Dokument nie zawiera ceny.** Kiedyś zawierał — skopiowaną ze starego atrybutu katalogu
-`attributes.defaultPrice`, a nie z żadnego cennika — i nie była ona odczytywana w ścieżce zapytań,
-która przy uzupełnianiu wyników ustala cenę dla oglądającego na podstawie `price_lists`, więc indeks
-nie może decydować o tym, ile płaci kupujący. Ceny dla konkretnego kupującego i tak nie da się
-zindeksować: jeden indeks na kanał sprzedaży i jeden dokument na produkt oznaczają, że dodanie ceny
-do dokumentu pomnożyłoby indeks przez liczbę klientów. Stary atrybut jest nadal indeksowany pod
-`attributes.defaultPrice`, gdzie nazwa mówi, czym jest.
+**Dokument nie zawiera ceny.** Ceny należą do oglądającego: ścieżka zapytań ustala je z cenników
+(`price_lists`) przy uzupełnianiu wyników, więc indeks nigdy nie decyduje o tym, ile płaci
+kupujący. Ceny dla konkretnego kupującego i tak nie da się zindeksować: jeden indeks na kanał
+sprzedaży i jeden dokument na produkt oznaczają, że dodanie ceny do dokumentu pomnożyłoby indeks
+przez liczbę klientów.
+
+### Ceny w wynikach wyszukiwania
+
+- **Wyniki i podpowiedzi** są wyceniane dla oglądającego — jego organizacji, grupy klientów i kanału
+  sprzedaży — jednym zbiorczym wywołaniem `resolveListingPriceDetails` na stronę lub okno
+  podpowiedzi, tą samą wyceną co lista produktów w katalogu, więc wynik wyszukiwania, karta w
+  katalogu i koszyk pokazują tę samą cenę. Podpowiedzi są wyceniane w walucie żądania.
+- Produkt z wariantami pokazuje najniższą cenę wariantu jako cenę **„od”**, a naliczona cena
+  promocyjna niesie własną cenę kupującego jako cenę przekreśloną.
+- Przy włączonym ustawieniu cenników `pricing.show_list_price` wynik niesie `listPrice` obok niższej
+  ceny kupującego, tak samo jak karta w katalogu.
+- **Sortowania ani filtrowania według ceny** (`?sort=price`, `?sort=-price`, `minPrice`,
+  `maxPrice`) nigdy nie obsługuje Meilisearch: katalog kieruje taką listę do PostgreSQL, gdzie
+  wstępnie wyliczona powierzchnia cen modułu `price_lists` porządkuje ją według cen, które karty
+  pokazują temu oglądającemu.
 
 ### Sortowanie
 
@@ -132,8 +145,16 @@ Cztery sposoby sortowania z kontraktu listy produktów odpowiadają następując
 | `name` | `name:asc` |
 | `-name` | `name:desc` |
 
-Zindeksowane `name` jest ustalane w domyślnym języku kanału, czyli w języku, w którym wyświetla się
-lista produktów, więc kolejność widziana przez kupującego to ta, według której posortowano wyniki.
+Zindeksowane `name` jest ustalane w domyślnym języku kanału, czyli w języku, w którym domyślnie
+wyświetla się lista produktów, więc kolejność widziana przez kupującego to ta, według której
+posortowano wyniki.
+
+Nazwa *wyświetlana* na karcie wyniku nie pochodzi z indeksu. Każde trafienie jest przed udzieleniem
+odpowiedzi ponownie odczytywane z Postgresa, a karta dostaje tę nazwę, którą dla kanału sprzedaży i
+języka z żądania pokazuje karta na liście produktów katalogu: nadpisanie wartości dla kanału, jeśli
+obowiązuje (wiersze nadpisań kanału dla strony wyników są odczytywane raz), a w przeciwnym razie
+tekst bazowy w języku z żądania. Żądanie w języku innym niż domyślny język kanału jest więc nadal
+sortowane według nazwy w języku domyślnym.
 
 **Aktualizacja indeksu zbudowanego przed wprowadzeniem ustawień sortowania** wymaga ponownego
 zindeksowania: ustawienia nigdy nie były stosowane (`sortableAttributes` było `[]` w każdym indeksie,
@@ -169,6 +190,17 @@ zdarzenia.
 Każda procedura obsługi przechwytuje własne błędy — chwilowa awaria Meilisearch nie psuje zapisu w
 katalogu. Zapasowa ścieżka odczytu (`catalog/routes.public.ts`) utrzymuje wyszukiwanie w storefroncie
 w działaniu przy nieaktualnym indeksie aż do następnego ręcznego `search:reindex`.
+
+### Dostępność w kanale i języku
+
+Od wprowadzenia zakresów danych produktu (`specs/163-product-data-scopes/`) produkt można włączyć lub wyłączyć w każdym kanale sprzedaży i w każdym języku kanału, nadać mu okno publikacji i odbiorców właściwych dla kanału. Indeksator pyta moduł `catalog` (`catalogProductAvailabilityPort.describeChannelAvailability`) zamiast czytać status produktu:
+
+- produkt należący do kanału trafia do indeksu, gdy jest włączony w **co najmniej jednym** języku kanału; produkt zarchiwizowany lub usunięty nie jest włączony w żadnym;
+- każdy dokument zawiera `liveLanguages` (języki kanału, w których produkt jest włączony), `publishFromMs` / `publishUntilMs` (obowiązujące okno w milisekundach od epoki; `0` i `Number.MAX_SAFE_INTEGER`, gdy okno jest otwarte) oraz obowiązujące w kanale `visibility` i `allowedOrganizationIds`. Wszystkie pięć to atrybuty filtrowalne;
+- zapytanie dodaje filtr dla języka żądania (pierwszy znacznik `Accept-Language` dopasowany do języków kanału, w przeciwnym razie język domyślny), okna w chwili zapytania i odbiorców wywołującego, więc strona jest wycinana wyłącznie z dostępnych trafień. Lista dozwolonych organizacji służy tylko do filtrowania i nigdy nie trafia do odpowiedzi;
+- przy uzupełnianiu wyników moduł `catalog` jest pytany ponownie (`filterAvailable`) o każde trafienie, więc nieaktualny dokument nie pokaże produktu, który nie jest już dostępny.
+
+Około minuty po pierwszym uruchomieniu po aktualizacji proces workera doprowadza ustawienia każdego istniejącego indeksu kanału do aktualnego stanu bez ponownego indeksowania: pięć pól dostępności staje się filtrowalnych, a `localizedNames` przeszukiwalne, więc zapytania nadal obsługuje indeks, zamiast przechodzić na PostgreSQL. Raz na uruchomienie odczytuje ustawienia każdego indeksu i zmienia je tylko tam, gdzie czegoś brakuje. Dokument zaindeksowany przed tą zmianą nadal nie ma nowych pól i jest obsługiwany jak dotąd. **Po aktualizacji uruchom ponowne indeksowanie każdego kanału sprzedaży** (operacja zbiorcza `search_reindex` albo opisane niżej polecenie CLI), aby filtry okna i języka działały dokładnie.
 
 ### Gdy indeks nie odpowiada
 

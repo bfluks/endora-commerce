@@ -80,9 +80,28 @@ describe('cms manifest — command palette', () => {
     expect(actions.map((a) => a.id)).toEqual([
       'new-page',
       ...NAVIGATION_ENTRIES.map((e) => e.id),
-      // Feature 151 — the translation settings entry closes the list.
+      // Feature 151 — the translation settings entry.
       'open-page-builder-translation-settings',
+      // Feature 163 — the brand screen closes the list.
+      'open-cms-brand',
     ]);
+  });
+
+  it('opens the brand screen under the read code, found by English and Polish words', () => {
+    expect(actions.find((a) => a.id === 'open-cms-brand')).toMatchObject({
+      targetRoute: '/cms/brand',
+      requiredPermission: 'cms.read',
+      icon: 'Layers',
+      weight: 136,
+      labelKey: 'actions.openCmsBrand.label',
+      descriptionKey: 'actions.openCmsBrand.description',
+      keywords: expect.arrayContaining(['brand', 'fonts', 'colours', 'colors', 'typography', 'theme', 'marka']),
+    });
+    for (const language of LANGUAGES) {
+      const messages = bundle(language);
+      expect(messages['actions.openCmsBrand.label']).toMatch(/\S/);
+      expect(messages['actions.openCmsBrand.description']).toMatch(/\S/);
+    }
   });
 
   for (const entry of NAVIGATION_ENTRIES) {

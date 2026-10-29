@@ -279,4 +279,21 @@ export const manifest = defineModuleManifest({
     { code: 'mfa:reset', label: "Reset a user's 2FA" },
     { code: 'mfa:manage', label: 'Manage 2FA policies and organization enforcement' },
   ],
+  // Principle XVI (issue #510): the signed-in admin's own two-factor screen was
+  // reachable from neither the sidebar nor the palette. **No
+  // `requiredPermission`, deliberately** — the route declares none and its six
+  // endpoints are gated by the bare admin guard, because every admin manages
+  // their own second factor (`src/admin/index.ts` carries the reasoning). The
+  // palette therefore offers it to every signed-in admin while `mfa` is on.
+  actions: [
+    {
+      id: 'open-security',
+      labelKey: 'actions.openSecurity.label',
+      descriptionKey: 'actions.openSecurity.description',
+      icon: 'ShieldCheck',
+      targetRoute: '/security',
+      keywords: ['2fa', 'mfa', 'two-factor', 'security', 'authenticator', 'totp', 'bezpieczeństwo', 'dwuskładnikowe'],
+      weight: 900,
+    },
+  ],
 });

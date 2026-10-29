@@ -35,8 +35,8 @@ export function CatalogToolbar(props: {
    * Feature 086 / FR-023 — whether this page may be ordered by price at all,
    * as the **server** answered it on this response.
    *
-   * Never inferred here: a non-public sales channel publishes no prices and
-   * `pricing.unauthenticated_display_mode = none` hides them until login, and a
+   * Never inferred here: `pricing.unauthenticated_display_mode = none` hides
+   * prices until login, on one channel or on all of them, and a
    * storefront that guessed would guess wrong on exactly the deployments that
    * care. Offering an ordering the API refuses is a worse defect than offering
    * none, so `false` is the answer for an older backend that sends no

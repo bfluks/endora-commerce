@@ -153,7 +153,15 @@ function leavesOf(component: ComponentRef, declaration: BlockTranslatableText): 
     }
     frontier = next;
   }
-  return frontier.map(({ value, path }) => ({ value, path, format }));
+  // Feature 163 (T039): a block reshaped to inline rich text (`cms.Heading`'s
+  // `text`) still holds a plain string where it was stored before the reshape
+  // and has not been opened in the editor since. That string is prose, and is
+  // translated as the plain text it is; the answer is written back as a string.
+  return frontier.map(({ value, path }) => ({
+    value,
+    path,
+    format: format === 'tiptap' && typeof value === 'string' ? 'plain' : format,
+  }));
 }
 
 function isTiptapDoc(value: unknown): value is TiptapNode {

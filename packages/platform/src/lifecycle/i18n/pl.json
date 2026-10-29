@@ -1,4 +1,7 @@
 {
   "actions.openPlatformModules.label": "Moduły",
-  "actions.openPlatformModules.description": "Co udostępnia ta instalacja i co Twoja firma ma włączone"
+  "actions.openPlatformModules.description": "Co udostępnia ta instalacja i co Twoja firma ma włączone",
+  "actions.openApiDescription.label": "Opis API",
+  "actions.openApiDescription.description": "Dokument OpenAPI i interaktywna dokumentacja API",
+  "adminRoles.permission.platform.api_description.read": "Odczyt opisu API"
 }

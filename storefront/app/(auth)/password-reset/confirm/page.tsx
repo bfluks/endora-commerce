@@ -86,7 +86,7 @@ async function confirmAction(formData: FormData): Promise<void> {
     await confirmPasswordReset(token, newPassword);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not reset your password.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not reset your password.';
     redirect(
       `/password-reset/confirm?token=${encodeURIComponent(token)}&error=${encodeURIComponent(message)}`,
     );

@@ -1,9 +1,11 @@
+import { CATALOG_PRODUCT_STOREFRONT_CACHE_TAGS } from '@endora-commerce/contracts';
 import type {
   CategoryNode,
   CategoryPageContent,
   FilterDefinition,
   Pagination,
   ProductDetail,
+  ProductKeyResolution,
   ProductListCapabilities,
   ProductListSort,
   ProductSummary,
@@ -118,9 +120,93 @@ export async function getProductBySlug(
   const res = await apiGetForViewer<{ data: ProductDetail }>(
     withQuery(`/api/v1/catalog/products/${encodeURIComponent(slug)}`, params),
     ctx,
-    { revalidate: 60, tags: ['catalog:product', `catalog:product:${slug}`] },
+    { revalidate: 60, tags: productCacheTags(slug) },
   );
   return res.data;
+}
+
+/**
+ * Feature 163 (checkpoint E security review, I4; T155 finding CACHE-1) — a product
+ * read's cache tags: the shared tag, and the per-key tag of the key it was asked by
+ * while it fits Next's tag limit (the key comes from the URL, so it can be any length).
+ * `catalog` drops a product's per-key tags — its id, slug, URL keys and former keys —
+ * after every write that can change whether or where it is available
+ * (`CATALOG_PRODUCT_STOREFRONT_CACHE_TAGS`): Next keeps only a `200`, so the time-based
+ * window alone would go on serving a product that has since become unavailable.
+ */
+export function productCacheTags(key: string, shared: string = CATALOG_PRODUCT_STOREFRONT_CACHE_TAGS.product): string[] {
+  const keyed = CATALOG_PRODUCT_STOREFRONT_CACHE_TAGS.productKey(key);
+  return keyed.length <= CATALOG_PRODUCT_STOREFRONT_CACHE_TAGS.maxLength ? [shared, keyed] : [shared];
+}
+
+/**
+ * Feature 163 (`specs/163-product-data-scopes/contracts/url-keys-and-redirects.md`
+ * §4) — which product the key a product page was opened by names at the
+ * request's channel and language, or the path it redirects to.
+ *
+ * Asked as the viewer: the answer depends on who may see the product (an
+ * unavailable one is not found, for a redirect too), so a signed-in buyer's
+ * answer never enters the shared Data Cache — `apiGetForViewer`'s rule, as for
+ * the product read it precedes. A redirect is answered `200` with
+ * `kind: 'redirect'`; the page turns it into a permanent redirect.
+ */
+export async function resolveProductKey(
+  key: string,
+  ctx: RequestContext,
+): Promise<ProductKeyResolution> {
+  const res = await apiGetForViewer<{ data: ProductKeyResolution }>(
+    `/api/v1/catalog/products/resolve/${encodeURIComponent(key)}`,
+    ctx,
+    { revalidate: 60, tags: productCacheTags(key) },
+  );
+  return res.data;
+}
+
+/** Feature 155 — the most product reads `getProductMinimumsBySlugs` makes (the draft's 200 lines). */
+export const DRAFT_MINIMUM_MAX_SLUGS = 200;
+
+/**
+ * Feature 155 (FR-032, research R15) — the current pieces minimum of each product, by slug,
+ * read through the existing public product detail (no new route). For the quote-request
+ * draft page, whose lines live in `localStorage` and may predate a minimum (US4 #14).
+ *
+ * Threat S8: distinct non-empty slugs only, at most {@link DRAFT_MINIMUM_MAX_SLUGS}, at most
+ * `concurrency` reads in flight (the `getResolvedPricesBulk` pattern). Plan I5: any failure —
+ * a 404 for a product the buyer may not see, a 5xx, the network — leaves the slug out ("minimum
+ * unknown"); it never fails the whole read. `null` = the product has no minimum.
+ *
+ * A plain object, not a `Map`, because a server action hands it to the browser.
+ */
+export async function getProductMinimumsBySlugs(
+  slugs: readonly unknown[],
+  ctx: RequestContext,
+  concurrency = 8,
+): Promise<Record<string, number | null>> {
+  const distinct = [
+    ...new Set(
+      slugs
+        .filter((s): s is string => typeof s === 'string')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    ),
+  ].slice(0, DRAFT_MINIMUM_MAX_SLUGS);
+  const out: Record<string, number | null> = {};
+  const queue = [...distinct];
+  async function worker(): Promise<void> {
+    while (queue.length > 0) {
+      const slug = queue.shift();
+      if (slug === undefined) return;
+      try {
+        const product = await getProductBySlug(slug, ctx);
+        const minimum = product.minOrderQuantity;
+        out[slug] = typeof minimum === 'number' && minimum > 1 ? minimum : null;
+      } catch {
+        // Minimum unknown: the API refusal at submission stays the binding rule.
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, distinct.length) }, worker));
+  return out;
 }
 
 /**
@@ -168,7 +254,7 @@ export async function getProductLinks(
     }>(
       withQuery(`/api/v1/catalog/products/${encodeURIComponent(productIdOrSlug)}/links`, linkParams),
       ctx,
-      { revalidate: 60, tags: ['catalog:links', `catalog:product:${productIdOrSlug}`] },
+      { revalidate: 60, tags: productCacheTags(productIdOrSlug, 'catalog:links') },
     );
     return res.data;
   } catch {

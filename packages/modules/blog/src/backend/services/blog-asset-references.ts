@@ -5,6 +5,7 @@
 // of any asset still pointed at by:
 //
 //   - blog_categories.main_image_asset_id    (column-level reference)
+//   - blog_posts.main_image_asset_id         (column-level reference, feature 163)
 //   - jsonb references inside blog_posts.content or
 //     blog_categories.description (Page Builder asset embeds)
 //
@@ -37,17 +38,30 @@ function blogMainImageReferenceDescriptor(
       const em = emFactory();
       const placeholders = assetIds.map(() => '?').join(', ');
       const rows = (await em.execute(
-        `select id::text as id, slug
+        `select id::text as id, slug, 'blog_category' as kind
            from blog_categories
           where main_image_asset_id in (${placeholders})
+            and deleted_at is null
+         union all
+         select id::text as id, slug, 'blog_post' as kind
+           from blog_posts
+          where main_image_asset_id in (${placeholders})
             and deleted_at is null`,
-        [...assetIds],
-      )) as Array<{ id: string; slug: string }>;
-      return rows.map((r) => ({
-        kind: 'blog_category_main_image',
-        entityId: r.id,
-        label: `Blog category "${r.slug}"`,
-      }));
+        [...assetIds, ...assetIds],
+      )) as Array<{ id: string; slug: string; kind: string }>;
+      return rows.map((r) =>
+        r.kind === 'blog_post'
+          ? {
+              kind: 'blog_post_main_image',
+              entityId: r.id,
+              label: `Blog post "${r.slug}"`,
+            }
+          : {
+              kind: 'blog_category_main_image',
+              entityId: r.id,
+              label: `Blog category "${r.slug}"`,
+            },
+      );
     },
   };
 }

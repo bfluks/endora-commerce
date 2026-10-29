@@ -29,6 +29,8 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 
 | Moduł | Wiążąca | Co to oznacza |
 | --- | --- | --- |
+| `_i18n` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
+| `admin_roles` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `admin_users` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `assets_library` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `audit_logs` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
@@ -47,13 +49,13 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 | `prompt_actions` | nie | contributes-to `promptActionToolRegistry` |
 | `search` | nie | degrades-without `searchQueryPort` — listy produktów w sklepie są pobierane z PostgreSQL zamiast z indeksu wyszukiwarki |
 | `search` | nie | degrades-without `searchReindexPort` — zmiana flagi `searchable` atrybutu nie przebudowuje indeksu wyszukiwarki |
+| `seo` | nie | degrades-without `seoProductMetaPort` — strony produktów pokazują metadane wyprowadzone z nazwy i opisu, a stare klucze URL odpowiadają „nie znaleziono” |
 | `webhooks` | nie | contributes-to `webhookEventRegistry` |
 
 ## Uprawnienia
 
 | Kod | Etykieta | Wymaga też |
 | --- | --- | --- |
-| `_i18n` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `catalog:write` | Edit catalog | `catalog:read` |
 
 ## Paleta poleceń
@@ -61,13 +63,19 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 | Akcja | Otwiera | Uprawnienie |
 | --- | --- | --- |
 | `new-product` | `/catalog/products/new` | `catalog:write` |
+| `open-archived-products` | `/catalog/products/archived` | `catalog:read` |
+| `open-attachment-types` | `/catalog/attachment-types` | `catalog:read` |
+| `open-attribute-sets` | `/catalog/attribute-sets` | `catalog:read` |
 | `open-attributes` | `/catalog/attributes` | `catalog:read` |
+| `open-bulk-operations` | `/catalog/bulk-operations` | `catalog:read` |
 | `open-categories` | `/catalog/categories` | `catalog:read` |
 | `open-products` | `/catalog/products` | `catalog:read` |
 
 ## Ustawienia
 
-_Brak._
+| Kod | Nazwa | Typ |
+| --- | --- | --- |
+| `catalog.scope_completeness_gate` | Completeness check when switching a product on | `string` |
 
 ## Tłumaczenia
 

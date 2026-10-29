@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AdminMe } from '@endora-commerce/admin-kit/lib';
+import { ADMIN_PREFERENCES_DEFAULTS } from '@endora-commerce/contracts';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { readFileSync } from 'node:fs';
@@ -8,6 +10,7 @@ import { MemoryRouter } from 'react-router-dom';
 import type { Bundle } from '../../../../packages/admin-shell/src/i18n/types';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+import { ORGANIZATION_CHANNEL_ID, organizationSalesChannelsAnswer } from '../../helpers/organization-sales-channels';
 
 /**
  * Feature 145, User Story 3 (FR-030…FR-036, research R-11): on **Create quote
@@ -21,7 +24,7 @@ import { adminSession, modulePresence, withSession } from '../../helpers/render-
  * screen's test does), so a missing key fails here instead of passing as its name.
  *
  * **The server is a small fake**: the catalogue list filters, counts and paginates
- * what the picker asks for; `resolved-price` answers per product, customer and
+ * what the picker asks for; the price explanation (`POST …/price-books/resolve`) answers per product, customer and
  * quantity, with a few products resolving to nothing.
  */
 
@@ -67,7 +70,7 @@ const tr = (key: string): string => {
 
 // ---------------------------------------------------------------- fake catalogue
 
-type Status = 'draft' | 'active' | 'inactive';
+type Status = 'active' | 'inactive';
 type Type = 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
 
 interface Row {
@@ -77,33 +80,49 @@ interface Row {
   name: Record<string, string>;
   status: Status;
   type: Type;
+  /** Feature 163 (FR-019) — archived is its own axis, independent of status. */
+  archivedAt: string | null;
 }
 
-function product(id: string, name: string, status: Status = 'active', type: Type = 'simple'): Row {
-  return { id, sku: `SKU-${id.toUpperCase()}`, slug: id, name: { 'en-US': name }, status, type };
+function product(
+  id: string,
+  name: string,
+  status: Status = 'active',
+  type: Type = 'simple',
+  archivedAt: string | null = null,
+): Row {
+  return { id, sku: `SKU-${id.toUpperCase()}`, slug: id, name: { 'en-US': name }, status, type, archivedAt };
 }
 
 const pad = (n: number): string => String(n).padStart(2, '0');
 
-/** g1 (active, grouped), b1 (active, bundle), d1 (draft), i1 (inactive), then a01…a24 — all active simple. */
+/**
+ * g1 (active, grouped), p1 and i1 (inactive), then a01…a24 — all active simple — and
+ * x1, an active product that is archived (feature 163).
+ */
 const CATALOG: Row[] = [
   product('g1', 'Grouped set', 'active', 'grouped'),
   product('b1', 'Starter bundle', 'active', 'bundle'),
-  product('d1', 'Draft widget', 'draft'),
+  product('p1', 'Paused widget', 'inactive'),
   product('i1', 'Old widget', 'inactive'),
   ...Array.from({ length: 24 }, (_, i) => product(`a${pad(i + 1)}`, `Widget ${pad(i + 1)}`)),
+  product('x1', 'Retired widget', 'active', 'simple', '2026-10-20T00:00:00.000Z'),
 ];
 
 const LIST_PATH = '/api/v1/admin/catalog/products';
 
 function serveCatalog(url: string): unknown {
   const params = new URLSearchParams(url.split('?')[1] ?? '');
+  // The list's rules (feature 163, R30.4): archived excluded by default,
+  // `includeArchived=1` includes them, `archived` wins when sent.
+  const archivedMode =
+    params.get('archived') ?? (params.get('includeArchived') === '1' ? 'include' : 'exclude');
   const status = params.get('status');
   const type = params.get('type');
   const q = (params.get('q') ?? '').toLowerCase();
   const page = Number(params.get('page') ?? '0');
   const pageSize = Number(params.get('pageSize') ?? '20');
-  const base = CATALOG.filter(
+  const matches = CATALOG.filter(
     (p) =>
       (type === null || p.type === type) &&
       (q === '' ||
@@ -111,15 +130,18 @@ function serveCatalog(url: string): unknown {
         p.slug.includes(q) ||
         Object.values(p.name).some((n) => n.toLowerCase().includes(q))),
   );
+  const live = matches.filter((p) => p.archivedAt === null);
+  const archived = matches.filter((p) => p.archivedAt !== null);
+  const base = archivedMode === 'only' ? archived : archivedMode === 'include' ? matches : live;
   const filtered = base.filter((p) => status === null || p.status === status);
   return {
     data: filtered.slice(page * pageSize, (page + 1) * pageSize),
     pagination: { page, pageSize, total: filtered.length },
     counts: {
-      all: base.length,
-      active: base.filter((p) => p.status === 'active').length,
-      draft: base.filter((p) => p.status === 'draft').length,
-      inactive: base.filter((p) => p.status === 'inactive').length,
+      all: live.length,
+      active: live.filter((p) => p.status === 'active').length,
+      inactive: live.filter((p) => p.status === 'inactive').length,
+      archived: archived.length,
     },
   };
 }
@@ -161,17 +183,18 @@ interface ResolveCall {
 }
 
 function resolveCalls(): ResolveCall[] {
-  return getSpy.mock.calls
-    .map(([path]) => String(path))
-    .filter((path) => path.includes('/resolved-price'))
-    .map((path) => {
-      const [head, query] = path.split('?');
-      const params = new URLSearchParams(query ?? '');
+  return postSpy.mock.calls
+    .filter(([path]) => path === '/api/v1/admin/price-books/resolve')
+    .map(([, body]) => {
+      const request = body as {
+        buyer: { organizationId?: string; customerAccountId?: string };
+        lines: Array<{ productId: string; quantity: number }>;
+      };
       return {
-        productId: (head ?? '').split('/').at(-2) ?? '',
-        organizationId: params.get('organizationId'),
-        customerAccountId: params.get('customerAccountId'),
-        quantity: Number(params.get('quantity')),
+        productId: request.lines[0]?.productId ?? '',
+        organizationId: request.buyer.organizationId ?? null,
+        customerAccountId: request.buyer.customerAccountId ?? null,
+        quantity: request.lines[0]?.quantity ?? 0,
       };
     });
 }
@@ -179,7 +202,20 @@ function resolveCalls(): ResolveCall[] {
 // ---------------------------------------------------------------- rig
 
 const SESSION = adminSession({ permissions: ['*'] });
-const PAGE_SIZE_KEY = `b2b-admin.page-size.catalog-products.${SESSION.adminUser.id}`;
+/**
+ * The page size the Product list and this picker share (`catalog-products`),
+ * seeded on the session as the server would send it (feature 164 moved it off
+ * `localStorage`).
+ */
+let catalogPageSize = 20;
+const sessionWithPageSize = (): AdminMe => ({
+  ...SESSION,
+  preferences: { ...ADMIN_PREFERENCES_DEFAULTS, listPageSizes: { 'catalog-products': catalogPageSize } },
+});
+/** The kit's own client, which the preferences store writes through. */
+const kitClient = (
+  await vi.importActual<typeof import('@endora-commerce/admin-kit/lib')>('@endora-commerce/admin-kit/lib')
+).apiClient;
 
 beforeEach(() => {
   getSpy.mockReset();
@@ -187,24 +223,14 @@ beforeEach(() => {
   navigateSpy.mockReset();
   held = new Map();
   holdNext = new Set();
-  window.localStorage.clear();
-  window.localStorage.setItem(PAGE_SIZE_KEY, '20');
+  catalogPageSize = 20;
+  vi.spyOn(kitClient, 'patch').mockResolvedValue({ data: ADMIN_PREFERENCES_DEFAULTS });
   getSpy.mockImplementation((path: string) => {
+    const channels = organizationSalesChannelsAnswer(path);
+    if (channels) return channels;
     const one = CUSTOMERS.find((c) => path === `/api/v1/admin/customers/${c.id}`);
     if (one) return Promise.resolve({ data: one });
     if (path.startsWith('/api/v1/admin/customers')) return Promise.resolve({ data: CUSTOMERS });
-    if (path.includes('/resolved-price')) {
-      const [head, query] = path.split('?');
-      const productId = (head ?? '').split('/').at(-2) ?? '';
-      const params = new URLSearchParams(query ?? '');
-      const amount = priceFor(productId, params.get('customerAccountId') ?? '', Number(params.get('quantity')));
-      const body = { data: { resolvedPrice: amount === null ? null : { amount, currency: 'PLN' } } };
-      if (holdNext.has(productId)) {
-        holdNext.delete(productId);
-        return new Promise((resolveHeld) => held.set(productId, () => resolveHeld(body)));
-      }
-      return Promise.resolve(body);
-    }
     if (path.startsWith(`${LIST_PATH}?`)) return Promise.resolve(serveCatalog(path));
     if (path.startsWith(`${LIST_PATH}/`)) {
       const row = CATALOG.find((p) => p.id === path.slice(LIST_PATH.length + 1));
@@ -212,7 +238,17 @@ beforeEach(() => {
     }
     return Promise.resolve({ data: [] });
   });
-  postSpy.mockResolvedValue({ data: { id: 'new-rfq-1' } });
+  postSpy.mockImplementation((path: string, request: { buyer: { customerAccountId?: string }; lines: Array<{ key: string; productId: string; quantity: number }> }) => {
+    if (path !== '/api/v1/admin/price-books/resolve') return Promise.resolve({ data: { id: 'new-rfq-1' } });
+    const line = request.lines[0]!;
+    const amount = priceFor(line.productId, request.buyer.customerAccountId ?? '', line.quantity);
+    const body = { data: [{ key: line.key, price: amount === null ? null : { amount, currency: 'PLN', source: 'buyer' } }] };
+    if (holdNext.has(line.productId)) {
+      holdNext.delete(line.productId);
+      return new Promise((resolveHeld) => held.set(line.productId, () => resolveHeld(body)));
+    }
+    return Promise.resolve(body);
+  });
 });
 
 /** Opened with cust-1 chosen unless `customer` says otherwise (`null` = none). */
@@ -225,7 +261,7 @@ function renderPage(customer: string | null = 'cust-1'): void {
         <MemoryRouter initialEntries={[`/quote-requests/new${customer ? `?customerAccountId=${customer}` : ''}`]}>
           <RfqCreatePage />
         </MemoryRouter>,
-        { session: SESSION, presence: modulePresence({ present: ['quote_requests'] }) },
+        { session: sessionWithPageSize(), presence: modulePresence({ present: ['quote_requests'] }) },
       )}
     </StrictMode>,
     BUNDLE,
@@ -305,7 +341,7 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     expect(submitButton()).toBeDisabled();
   });
 
-  it('opens on Active with the quote-request rules: draft and inactive selectable, grouped and bundle not (sc. 1, 7)', async () => {
+  it('opens on Active with the quote-request rules: inactive selectable, grouped and bundle not (sc. 1, 7)', async () => {
     const user = userEvent.setup();
     renderPage();
     const dialog = await openPicker(user);
@@ -322,14 +358,41 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
         tr('productBrowser.reason.groupParent'),
       );
     }
-    expect(rowCheckbox(dialog, 'Draft widget').disabled).toBe(false);
+    expect(rowCheckbox(dialog, 'Paused widget').disabled).toBe(false);
     expect(rowCheckbox(dialog, 'Old widget').disabled).toBe(false);
 
-    await user.click(rowCheckbox(dialog, 'Draft widget'));
+    await user.click(rowCheckbox(dialog, 'Paused widget'));
     await user.click(rowCheckbox(dialog, 'Old widget'));
     await user.click(within(dialog).getByRole('button', { name: 'Add 2' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(lineNames()).toEqual(['Draft widget', 'Old widget']);
+    expect(lineNames()).toEqual(['Paused widget', 'Old widget']);
+  });
+
+  // Owner decision P-3 → A (2026-10-26): a quote request refuses archived products, as an
+  // order does. This case asserted the opposite until then.
+  it('offers no Archived tab, and All leaves archived products out (feature 163, P-3)', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const dialog = await openPicker(user);
+    expect(within(dialog).queryByRole('tab', { name: /^Archived/ })).toBeNull();
+    await user.click(within(dialog).getByRole('tab', { name: /^All/ }));
+    await waitFor(() => expect(within(dialog).getByText('Paused widget')).toBeInTheDocument());
+    expect(within(dialog).queryByText('Retired widget')).toBeNull();
+    expect(getSpy.mock.calls.some(([p]) => /archived=only|includeArchived/.test(String(p)))).toBe(false);
+  });
+
+  // Owner decision RFQ-c → B (2026-10-26): the quick search behaves as the order's — it
+  // lists archived products, refused with the reason, rather than hiding them.
+  it('the quick search lists an archived product, refused with the reason (feature 163, P-3, RFQ-c)', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await waitForCustomer('Jan Kowalski');
+    const quick = screen.getByRole('combobox', { name: tr('rfqCreate.items.quickSearch') });
+    await user.type(quick, 'retired');
+    const retired = await screen.findByRole('option', { name: /Retired widget/ });
+    expect(retired).toHaveAttribute('aria-disabled', 'true');
+    expect(retired.textContent).toContain(tr('productBrowser.reason.archived'));
+    expect(getSpy.mock.calls.some(([p]) => String(p).includes('includeArchived=1'))).toBe(true);
   });
 
   it('adds 10 lines with quantity 1 and prefills the prices that resolve, leaving the rest empty (sc. 2, FR-031)', async () => {
@@ -393,7 +456,7 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     await waitFor(() => expect(priceInput('Widget 01')).toHaveValue(9));
   });
 
-  it('prefills only the lines an add actually appended, when two confirms land in the same tick', async () => {
+  it('appends an add once, and prefills only its lines, when two confirms land in the same tick', async () => {
     const user = userEvent.setup();
     renderPage();
     await waitForCustomer('Jan Kowalski');
@@ -462,6 +525,7 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     expect(postSpy).toHaveBeenCalledWith('/api/v1/admin/quote-requests', {
       organizationId: ORG_1,
       customerAccountId: 'cust-1',
+      salesChannelId: ORGANIZATION_CHANNEL_ID,
       items: [
         { productId: 'a01', quantity: 2, agreedUnitPrice: 10 },
         { productId: 'a02', quantity: 1, agreedUnitPrice: 10 },
@@ -496,25 +560,18 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     expect(screen.getByText(totalText('10.00'))).toBeInTheDocument();
   });
 
-  it('shows a product that is already a line as already added, not selectable (sc. 6)', async () => {
+  it('a product already a line can be picked again, as a line of its own (feature 159, N-31)', async () => {
     const user = userEvent.setup();
     renderPage();
     await addThroughPicker(user, ['Widget 01']);
 
     const dialog = await openPicker(user);
     const box = rowCheckbox(dialog, 'Widget 01');
-    expect(box.disabled).toBe(true);
-    expect(document.getElementById(box.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
-      tr('productBrowser.reason.alreadyAdded'),
-    );
-    expect(rowCheckbox(dialog, 'Widget 02').disabled).toBe(false);
-    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
-
-    // Removing the line makes the product selectable again.
-    await user.click(within(lineRow('Widget 01')).getByRole('button', { name: `${tr('common.action.delete')} Widget 01` }));
-    expect(lineNames()).toEqual([]);
-    const again = await openPicker(user);
-    expect(rowCheckbox(again, 'Widget 01').disabled).toBe(false);
+    expect(box.disabled).toBe(false);
+    await user.click(box);
+    await user.click(within(dialog).getByRole('button', { name: 'Add 1' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(lineNames()).toEqual(['Widget 01', 'Widget 01']);
   });
 
   it('adds lines before a customer with empty prices, and prefills them once a customer with an organization is chosen (FR-032)', async () => {
@@ -542,6 +599,8 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     await waitFor(() => expect(priceInput('Widget 01')).toHaveValue(20));
     expect(priceInput('Widget 02')).toHaveValue(15);
     expect(priceInput('Widget 03')).toHaveValue(null);
+    // Once per line not typed by hand, on the new customer's channel once it is
+    // read — never first without a channel (feature 163, owner decision 2026-10-29 "A").
     expect(resolveCalls().filter((c) => c.customerAccountId === 'cust-2').map((c) => c.productId).sort()).toEqual([
       'a01',
       'a03',
@@ -578,9 +637,10 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     const quick = screen.getByRole('combobox', { name: tr('rfqCreate.items.quickSearch') });
 
     await user.type(quick, 'widget');
-    const draft = await screen.findByRole('option', { name: /Draft widget/ });
-    expect(draft).not.toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByRole('option', { name: /Widget 01/ }).textContent).toContain(
+    const paused = await screen.findByRole('option', { name: /Paused widget/ });
+    expect(paused).not.toHaveAttribute('aria-disabled', 'true');
+    // Feature 159 (N-31) — a product already a line is offered again.
+    expect(screen.getByRole('option', { name: /Widget 01/ }).textContent).not.toContain(
       tr('productBrowser.reason.alreadyAdded'),
     );
     await user.clear(quick);
@@ -593,7 +653,8 @@ describe('RfqCreatePage — Browse products and the quick search (US3)', () => {
     await user.type(quick, 'SKU-A07');
     await user.click(await screen.findByRole('option', { name: /Widget 07/ }));
 
-    expect(lineNames()).toEqual(['Widget 01', 'Widget 07']);
+    // The line is added after the click settles; asserting at once raced the render.
+    await waitFor(() => expect(lineNames()).toEqual(['Widget 01', 'Widget 07']));
     expect(within(lineRow('Widget 07')).getByText('SKU-A07')).toBeInTheDocument();
     expect(qtyInput('Widget 07')).toHaveValue('1');
     expect(screen.queryByRole('dialog')).toBeNull();

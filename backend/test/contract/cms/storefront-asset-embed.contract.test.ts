@@ -80,7 +80,13 @@ describe('storefront CMS asset embed contract (T118c)', () => {
        values (?, 'image', 'hero.png', 'image/png', 2048, ?, 'Hero image', 'public', now(), now())`,
       [id, `https://example.test/${id}.png`],
     );
-    return { id, url: `${resolvePublicApiBaseUrl()}/assets/file/${id}` };
+    // specs/156-asset-stable-url/ T065 (deliberate, R-20): the embed form
+    // carries the asset's content version.
+    const [row] = await h
+      .em()
+      .getConnection()
+      .execute<Array<{ content_version: string }>>('select content_version from assets where id = ?', [id]);
+    return { id, url: `${resolvePublicApiBaseUrl()}/assets/file/${id}?v=${row!.content_version}` };
   }
 
   /** A published page whose Puck tree carries one `assetId` prop. */

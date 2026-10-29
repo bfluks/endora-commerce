@@ -1,4 +1,7 @@
 {
   "actions.openPlatformModules.label": "Modules",
-  "actions.openPlatformModules.description": "What this deployment offers, and what your business has switched on"
+  "actions.openPlatformModules.description": "What this deployment offers, and what your business has switched on",
+  "actions.openApiDescription.label": "API description",
+  "actions.openApiDescription.description": "The OpenAPI document and the interactive API reference",
+  "adminRoles.permission.platform.api_description.read": "Read the API description"
 }

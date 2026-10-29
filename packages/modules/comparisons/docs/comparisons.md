@@ -132,8 +132,18 @@ any shared links you sent stop resolving.
   while it is in your comparison, the column stays but is marked
   unavailable; *Add to cart* is disabled for that column.
 - **Shared link in a different sales channel** — recipients see prices
-  in their own channel currency, and any product that isn't sold in
-  their channel still appears but is marked unavailable.
+  in their own channel currency. A product that is not available to a
+  recipient in their channel and language (not sold there, switched off,
+  outside its publication window, archived) appears to them exactly as a
+  removed product does: a `(removed product)` column with no name, SKU,
+  price, image or attribute values. Only you, the owner, keep seeing
+  such a column with its details, marked unavailable — and only when
+  the reason is the product's own lifecycle: switched off in that channel
+  or language, archived, outside its publication window, or no longer
+  sold in the channel. A product you may no longer see because of who
+  may see it — the channel restricts it to other customers, or your
+  organization is no longer among the customers the channel admits —
+  is a `(removed product)` column for you too.
 - **Shared link opened by a buyer from another organization** — the
   columns are re-priced for that buyer's own agreements, and any product
   they are not entitled to see is left out with a note saying so.

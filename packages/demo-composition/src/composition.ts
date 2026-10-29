@@ -84,10 +84,12 @@ import type {
   DemoCompositionInput,
   DemoCompositionResult,
 } from '@endora-commerce/platform/demo';
-import { SalesChannel, hashPassword } from '@endora-commerce/platform/kernel';
+import { PRICING_SETTING_CODES } from '@endora-commerce/contracts';
+import { SalesChannel, Setting, SettingValue, hashPassword } from '@endora-commerce/platform/kernel';
 import { entityNamed } from '@endora-commerce/platform/packages';
 import { createAttributeFixture, findAttributeDefinitionByKey } from './attribute-fixtures.js';
 import { DEMO_USAGE_WITHDRAWAL_NAME, withdrawDemoUsage } from './demo-usage.js';
+import { demoProjectsStep, demoProjectTasksStep } from './projects.js';
 import { demoSalesPipelineStep } from './sales-pipeline.js';
 
 /** A sign-in detail the runner prints — the platform's own shape. */
@@ -111,6 +113,7 @@ interface CategoryRow {
 interface ProductRow {
   id: Opt<string>;
   slug: string;
+  sku: string;
 }
 interface MegamenuRow {
   id: Opt<string>;
@@ -272,6 +275,8 @@ async function creditLimitRows() {
 export const DEMO_BUYER_EMAIL = 'buyer@demo-org.example';
 export const DEMO_BUYER_PASSWORD = 'ChangeMe!123';
 const DEMO_ORG_TAX_ID = 'PL5210000099';
+/** The demo's customer group, by the code `customer_accounts`' demo data assigns (feature 160). */
+const DEMO_VIP_GROUP_CODE = 'demo-vip';
 /** The demo's two sales channels, by the codes the foundation step assigns. */
 const DEMO_RETAIL_CHANNEL_CODE = 'pl_retail';
 /**
@@ -327,6 +332,9 @@ const DEMO_PRODUCT_ATTRIBUTES: readonly Parameters<typeof createAttributeFixture
     valueType: 'enum',
     isSearchable: true,
     isFilterable: true,
+    // Feature 160 (E1): a price book may select on `color = red`, which only an
+    // attribute flagged as a price rule allows (D-287 §5.9).
+    isPriceRule: true,
     sortOrder: 0,
     options: ['red', 'green', 'blue', 'black', 'white'].map((value, index) => ({
       value,
@@ -695,7 +703,6 @@ const FOUNDATION_STEPS: readonly CompositionStep[] = [
       // the demo's own name is given only to a channel that had none of its own.
       if (retail.code === PLATFORM_FALLBACK_CHANNEL_CODE) retail.code = DEMO_RETAIL_CHANNEL_CODE;
       retail.name = { 'en-US': 'PL Retail', 'pl-PL': 'PL Retail' };
-      retail.isPublic = true;
       retail.languages = ['pl-PL', 'en-US'];
       retail.defaultLanguage = 'pl-PL';
       retail.currencies = ['PLN', 'EUR'];
@@ -712,7 +719,6 @@ const FOUNDATION_STEPS: readonly CompositionStep[] = [
         em.create(SalesChannel, {
           code: DEMO_VIP_CHANNEL_CODE,
           name: { 'en-US': 'PL B2B VIP', 'pl-PL': 'PL B2B VIP' },
-          isPublic: false,
           languages: ['pl-PL', 'en-US'],
           defaultLanguage: 'pl-PL',
           currencies: ['PLN', 'EUR'],
@@ -965,32 +971,122 @@ const STEPS: readonly CompositionStep[] = [
     },
   },
   {
-    // ── 3. the price-list backfill ────────────────────────────────────────
-    // The Default price list is created by a migration and gets a bracket per
-    // currency from each product's `attributeValues.defaultPrice`. Re-running
-    // the migrator picks up whatever the demo just created, so the storefront
-    // resolver always finds a Base bracket. It is idempotent, and it asks
-    // `catalog` for its products over the published read port rather than
-    // importing the entity.
-    name: 'price-list backfill over the demo catalogue',
-    modules: ['price_lists', 'catalog'],
+    // ── 3a. the demo organisation joins the VIP customer group ────────────
+    // Feature 160 (FR-044, E3): *Acme B2B (demo)* is in *VIP*. The group is
+    // `customer_accounts`' demo data and the organisation `organizations'`; the
+    // membership is the organisation's column naming the group, so it is two
+    // modules' rows and this step's (§5.1).
+    name: 'demo organisation joins the VIP customer group',
+    modules: ['organizations', 'customer_accounts'],
     async apply(em) {
-      const [{ DefaultPriceListMigrator }, { CatalogProductReadService }] = await Promise.all([
-        import('@endora-commerce/mod-price-lists/backend'),
-        import('@endora-commerce/mod-catalog/backend'),
-      ]);
-      await new DefaultPriceListMigrator(() => em).run(new CatalogProductReadService(() => em));
+      await em.execute(
+        `update organizations set customer_group_id = (select id from customer_groups where code = ?)
+          where tax_id = ? and customer_group_id is null`,
+        [DEMO_VIP_GROUP_CODE, DEMO_ORG_TAX_ID],
+      );
     },
     async withdraw(em) {
       await em.execute(
-        `delete from price_list_price_brackets where product_id in
-           (select id from products where slug like ?)`,
-        [`${DEMO_PRODUCT_SLUG_PREFIX}%`],
+        `update organizations set customer_group_id = null
+          where tax_id = ? and customer_group_id in (select id from customer_groups where code = ?)`,
+        [DEMO_ORG_TAX_ID, DEMO_VIP_GROUP_CODE],
       );
+    },
+  },
+  {
+    // ── 3b. the demo's prices ──────────────────────────────────────────────
+    // Feature 160 (FR-044, N12): a base price for every demo product in the
+    // PLN base book, and the price books of the owner's scenarios E1–E3 on the
+    // demo channel (E3's active, E1's and E2's drafts). Every row names a demo
+    // product, the *Screws* category, the demo organisation or the VIP group,
+    // so the step is the composition's; the writing is `price_lists`' own,
+    // through the install surface it publishes, over the ids resolved here.
+    // A product carries no price of its own any more, so nothing is read off
+    // the catalogue but the products' SKUs.
+    name: 'base prices and price books over the demo catalogue',
+    modules: ['price_lists', 'catalog', 'organizations', 'customer_accounts'],
+    async apply(em) {
+      const [{ seedDemoPriceBooks }, { Product }, { Organization }] = await Promise.all([
+        import('@endora-commerce/mod-price-lists/backend'),
+        catalogRows(),
+        organizationRows(),
+      ]);
+      const channel = await systemDefaultChannel(em);
+      const products = await em.find(
+        Product,
+        { slug: { $like: `${DEMO_PRODUCT_SLUG_PREFIX}%` } },
+        { fields: ['id', 'sku'] },
+      );
+      const screws = (await categoriesBySlug(em)).get('screws');
+      const organization = await em.findOne(Organization, { taxId: DEMO_ORG_TAX_ID });
+      const [group] = await em.execute<Array<{ id: string }>>(
+        `select id from customer_groups where code = ?`,
+        [DEMO_VIP_GROUP_CODE],
+      );
+      if (screws === undefined || organization === null || group === undefined) return;
+      await seedDemoPriceBooks(em, {
+        channelId: channel.id,
+        products: products.map((product) => ({ id: product.id, sku: product.sku })),
+        screwsCategoryId: screws.id,
+        acmeOrganizationId: organization.id,
+        vipCustomerGroupId: group.id,
+      });
+    },
+    async withdraw(em) {
+      const [{ withdrawDemoPriceBooks }, { Product }] = await Promise.all([
+        import('@endora-commerce/mod-price-lists/backend'),
+        catalogRows(),
+      ]);
+      const products = await em.find(
+        Product,
+        { slug: { $like: `${DEMO_PRODUCT_SLUG_PREFIX}%` } },
+        { fields: ['id'] },
+      );
+      await withdrawDemoPriceBooks(
+        em,
+        products.map((product) => product.id),
+      );
+    },
+  },
+  {
+    // ── 3c. the VIP channel hides prices until sign-in ────────────────────
+    // Issue #492. The VIP channel used to be created as a non-public channel,
+    // a flag that withheld prices from its signed-in B2B buyers as well as
+    // from anonymous visitors. That flag is retired; "hide prices until
+    // sign-in" is the display-mode chain's `pricing.unauthenticated_display_mode
+    // = none`, set for this channel only, so its buyers see their prices and
+    // the retail channel keeps publishing prices to everyone.
+    //
+    // A composition step rather than part of the foundation: the setting is
+    // `price_lists`' declaration, so the step is guarded on that module like
+    // any other. The rows are the kernel's (`settings`, `setting_values`), the
+    // same two `PriceListService.setSettingsDisplayMode` writes. A value the
+    // channel already carries is an operator's and is left alone.
+    name: 'the VIP channel hides prices until sign-in',
+    modules: ['price_lists'],
+    async apply(em) {
+      const channel = await em.findOne(SalesChannel, { code: DEMO_VIP_CHANNEL_CODE });
+      const setting = await em.findOne(Setting, {
+        code: PRICING_SETTING_CODES.UNAUTHENTICATED_DISPLAY_MODE,
+      });
+      if (channel === null || setting === null) return;
+      const existing = await em.findOne(SettingValue, {
+        setting: setting.id,
+        salesChannel: channel.id,
+      });
+      if (existing !== null) return;
+      em.create(SettingValue, { setting, salesChannel: channel, value: 'none' });
+      await em.flush();
+    },
+    async withdraw(em) {
+      // The foundation's withdrawal deletes the channel later, and its values
+      // with it (`on delete cascade`). Removed here as well, so this step's
+      // withdrawal does not depend on another step having run.
       await em.execute(
-        `delete from price_list_products where product_id in
-           (select id from products where slug like ?)`,
-        [`${DEMO_PRODUCT_SLUG_PREFIX}%`],
+        `delete from setting_values
+          where setting_id in (select id from settings where code = ?)
+            and sales_channel_id in (select id from sales_channels where code = ?)`,
+        [PRICING_SETTING_CODES.UNAUTHENTICATED_DISPLAY_MODE, DEMO_VIP_CHANNEL_CODE],
       );
     },
   },
@@ -1078,6 +1174,16 @@ const STEPS: readonly CompositionStep[] = [
       ]);
       const organization = await em.findOne(Organization, { taxId: DEMO_ORG_TAX_ID });
       if (organization === null) return;
+      // Feature 154 — a buyer may shop only on the sales channels its
+      // Organization is assigned, so the demo organisation is assigned the
+      // system-default channel the retail store adopts. A bridge row like the
+      // channel↔product ones above, and idempotent the same way.
+      await em.execute(
+        `insert into sales_channel_organizations (sales_channel_id, organization_id)
+           select id, ? from sales_channels where system_default = true
+           on conflict do nothing`,
+        [organization.id],
+      );
       const existing = await em.findOne(CustomerAccount, { email: DEMO_BUYER_EMAIL });
       if (existing !== null) {
         existing.organizationId = organization.id;
@@ -1104,6 +1210,14 @@ const STEPS: readonly CompositionStep[] = [
       // The buyer this step created, and only that one. Whoever joined the
       // demo organisation since, and everything any of its accounts was used
       // to create, is withdrawn before any step (`demo-usage.ts`).
+      const { Organization } = await organizationRows();
+      const organization = await em.findOne(Organization, { taxId: DEMO_ORG_TAX_ID });
+      if (organization !== null) {
+        await em.execute(
+          `delete from sales_channel_organizations where organization_id = ?`,
+          [organization.id],
+        );
+      }
       const { CustomerAccount } = await customerAccountRows();
       const buyer = await em.findOne(CustomerAccount, { email: DEMO_BUYER_EMAIL });
       if (buyer === null) return;
@@ -1432,6 +1546,12 @@ const STEPS: readonly CompositionStep[] = [
   // before `organizations`' own `reset`, the order the foreign key on
   // `crm_opportunities.organization_id` (`on delete restrict`) needs.
   demoSalesPipelineStep,
+  // The demo Projects and their Template (`projects.ts`): after the pipeline,
+  // and their Tasks after them. On the way out the Tasks go first, then the
+  // Projects — before `organizations`' own reset, which the foreign key on
+  // `project_organizations.organization_id` (`on delete restrict`) needs.
+  demoProjectsStep,
+  demoProjectTasksStep,
 ];
 
 /**

@@ -233,13 +233,13 @@ describe('product feed selection [integration]', () => {
     });
 
     it('keeps the eligibility floor under an OR with a refinement leaf', async () => {
-      // `status = draft` can never pass the floor, and the OR must not let the
+      // `status = inactive` can never pass the floor, and the OR must not let the
       // in-memory stage smuggle an ineligible product back in (FR-026).
       const count = await previewCount({
         kind: 'group',
         op: 'OR',
         children: [
-          { kind: 'condition', field: { kind: 'builtin', key: 'status' }, op: 'eq', values: ['draft'] },
+          { kind: 'condition', field: { kind: 'builtin', key: 'status' }, op: 'eq', values: ['inactive'] },
           {
             kind: 'condition',
             field: { kind: 'builtin', key: 'price' },

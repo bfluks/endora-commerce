@@ -124,6 +124,8 @@ export const cartDroppedLineReasonSchema = z.enum([
   'out_of_stock',
   'no_price_in_customer_list',
   'removed_by_conversion',
+  /** Feature 155 — the line would leave its product below a minimum (R8). */
+  'below_minimum',
 ]);
 export type CartDroppedLineReason = z.infer<typeof cartDroppedLineReasonSchema>;
 
@@ -145,7 +147,15 @@ export const cartViewLineSchema = z.object({
   productId: uuidSchema,
   variantId: uuidSchema.nullable(),
   productName: z.string(),
-  productSlug: z.string().optional(),
+  /**
+   * Feature 163 (owner decision S1 = A) — `null` when the product is not
+   * available at the basket's (channel, language): the line keeps its name and
+   * SKU and reads `unavailable`, and links nowhere, because the product page
+   * answers 404 there.
+   */
+  productSlug: z.string().nullable().optional(),
+  /** The product's SKU, kept on an unavailable line too. */
+  productSku: z.string().nullable().optional(),
   productThumbnailUrl: z.string().nullable(),
   quantity: z.number().int().positive(),
   unitPrice: moneySchema,
@@ -159,6 +169,17 @@ export const cartViewLineSchema = z.object({
   packagingUnitName: z.string().nullable().optional(),
   packagingUnitBaseQuantity: z.number().int().positive().nullable().optional(),
   displayName: z.string().nullable().optional(),
+  /** Feature 155 — the product's current pieces minimum (null = none); the storefront's input floor. */
+  minOrderQuantity: z.number().int().positive().nullable().optional(),
+  /** Feature 155 — set when this line is below a current minimum and not exempt (FR-013, FR-028). */
+  belowMinimum: z
+    .object({
+      kind: z.enum(['pieces', 'packaging_unit']),
+      minimum: z.number().int().positive(),
+      packagingUnitName: z.string().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 export type CartViewLine = z.infer<typeof cartViewLineSchema>;
 
@@ -185,6 +206,8 @@ const cartDroppedLineSchema = z.object({
   productId: uuidSchema,
   productName: z.string(),
   reason: cartDroppedLineReasonSchema,
+  /** Feature 155 — the minimum a `below_minimum` line missed. */
+  minimum: z.number().int().positive().optional(),
 });
 
 /** Feature 045 — one applied promotion's contribution to the cart discount. */
@@ -527,6 +550,14 @@ export interface CartCustomerContext {
    * valid; a no-org cart falls back to platform-default prices.
    */
   organizationId: string | null;
+  /**
+   * The sales channel whose basket is meant (`specs/154-sales-channel-access/`,
+   * FR-030). A customer holds one active basket per channel, created, priced
+   * and placed on that channel; every producer passes the channel of its own
+   * request — or, for an operator placing an order on a customer's behalf, the
+   * channel that order names.
+   */
+  salesChannelId: string;
 }
 
 /**
@@ -588,8 +619,41 @@ export interface CartItemRecord {
   packagingUnitId: string | null;
   packagingUnitName: string | null;
   packagingUnitBaseQuantity: number | null;
+  /**
+   * Feature 155 (FR-028) — the quantity this line was seeded with from an accepted
+   * quote request; `null` for every other line. Written only by
+   * `CartWritePort.replaceItemsForCustomer` with a `sourceQuoteRequestId` — it is
+   * the line's agreed quantity, the one its agreed price holds at.
+   */
+  quoteSeededQuantity: number | null;
+  /**
+   * Feature 160 (FR-030) — which tier priced `unitPrice` (`base`, `catalogue`,
+   * `buyer`, `sale`), or `agreed`; `null` for a line priced before the feature.
+   * Order placement copies it onto the order line.
+   */
+  priceSource?: 'agreed' | 'base' | 'catalogue' | 'buyer' | 'sale' | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * Feature 155 (FR-028, owner ruling P2; data-model §2) — whether a basket line is
+ * exempt from the catalogue's order minimums: it was seeded from an accepted quote,
+ * the basket still carries that quote as its source, and the line's quantity equals
+ * the quote's. State-based, so 5 → 12 → 5 is exempt again.
+ *
+ * The per-line half only: `carts` applies it to the basket's mark at face value;
+ * `orders` first decides whether the quote source honours exemptions at all (R19).
+ */
+export function isQuoteSeededLineExempt(
+  cart: Pick<CartRecord, 'sourceQuoteRequestId'>,
+  item: Pick<CartItemRecord, 'quantity' | 'quoteSeededQuantity'>,
+): boolean {
+  return (
+    cart.sourceQuoteRequestId !== null &&
+    item.quoteSeededQuantity !== null &&
+    item.quantity === item.quoteSeededQuantity
+  );
 }
 
 /** A cart with its lines — the unit every consumer actually wants. */
@@ -611,6 +675,24 @@ export interface CartSeedLine {
 export interface CartSeedOptions {
   /** The accepted Quote Request these lines are the agreed lines of. */
   sourceQuoteRequestId?: string | null;
+  /**
+   * Issue #166 — leave out of the basket every seed line that has no price
+   * this customer may order it at now (no price list and no price of its own,
+   * or sold on request only), and name them in the answer's `unorderable`.
+   * A reorder sets it, so the buyer is told rather than handed a basket
+   * placement refuses. Ignored for an agreed seed (`sourceQuoteRequestId`),
+   * whose lines are priced by their agreement. Absent, such a line is kept at
+   * the price it was seeded with, as before.
+   */
+  dropUnorderable?: boolean;
+}
+
+/** A seed line `dropUnorderable` left out, and why (issue #166). */
+export interface CartSeedUnorderableLine {
+  productId: string;
+  variantId: string | null;
+  /** `unpriced`: nothing prices it for this customer; `quote_only`: sold on request only. */
+  reason: 'unpriced' | 'quote_only';
 }
 
 /**
@@ -677,6 +759,46 @@ export interface CartReadPort {
  * `activation` to say, not this line's: a module declaring
  * `nonDeactivatable` never enters one.
  */
+/**
+ * Feature 155 (research R8) — one line of a batch add (`CartWritePort.addItems`).
+ * The fields of `addItem`'s line.
+ */
+export interface CartBatchLineInput {
+  productId: string;
+  variantId?: string;
+  /** Pieces, or units when `packagingUnitId` is set — as `addItem`. */
+  quantity: number;
+  packagingUnitId?: string;
+  /** As `addItem`'s: set only by an operator surface that names the channel itself. */
+  salesChannelId?: string;
+}
+
+/**
+ * Feature 155 (research R8) — what became of one batch line, at its input `index`.
+ *
+ * A `failed` line carries the refusal it met and nothing about the product: a
+ * product the caller may not see fails with the unknown id's `404`, never with a
+ * name or a minimum (FR-035, threat F1).
+ */
+export type CartBatchLineOutcome =
+  | { index: number; status: 'added' }
+  | {
+      index: number;
+      status: 'below_minimum';
+      productId: string;
+      /** In `options.language`, the language the response is answered in. */
+      productName: string;
+      kind: 'pieces' | 'packaging_unit';
+      minimum: number;
+      packagingUnitName?: string;
+    }
+  | {
+      index: number;
+      status: 'failed';
+      /** The refusal as `addItem` threw it; `details` only when it carried any. */
+      error: { status: number; code: string; message: string; details?: unknown };
+    };
+
 export interface CartWritePort {
   getOrCreateForCustomer(ctx: CartCustomerContext): Promise<CartRecord>;
   addItem(
@@ -694,7 +816,57 @@ export interface CartWritePort {
        */
       salesChannelId?: string;
     },
+    /** The language a minimum refusal names the product in (feature 155, D3/D4). */
+    options?: { language?: string },
   ): Promise<CartWithItems>;
+  /**
+   * Feature 155 (R8) — add several lines. (1) Every line is resolved with exactly
+   * `addItem`'s preconditions (quantity, visibility, channel, packaging unit in
+   * product); a line that fails gets the unknown-id answer and takes no part in
+   * the evaluation. (2) The resolved lines are judged with the cart in two passes
+   * — unit minimums, then pieces minimums over the survivors; lines below a
+   * minimum are not added and are reported. Lines already in the cart are never
+   * rejected. (3) The accepted lines are added.
+   *
+   * `onLineError: 'throw'` — the first resolution failure is thrown before
+   * anything is written; a later add failure is thrown as `addItem` would (lines
+   * before it stay added). `'report'` — every failure is returned as `failed`.
+   *
+   * `onBelowMinimum: 'report'` (the default) — a line below a minimum is a
+   * `below_minimum` outcome. `'throw'` — any such line refuses the whole batch
+   * after step (2) and before anything is written: `422
+   * PRODUCT_BELOW_MINIMUM_QUANTITY` / `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`,
+   * every offending line in `details.lines` keyed by its `index`.
+   *
+   * `replaceExisting` (a customer actor only) — the batch becomes the customer's
+   * whole basket: step (2) judges the batch alone, and the active cart is cleared
+   * only after steps (1) and (2) pass, so a request refused there leaves the
+   * basket exactly as it was. It requires `onLineError: 'throw'`; with
+   * `'report'` the call is refused before anything is read or written.
+   *
+   * `keepRepeatedLines` (with `replaceExisting` only) — every line stays a line
+   * of its own: a repeated `(product, variant, unit)` is not merged into the
+   * first, each line is priced at its own quantity, and the basket reads back in
+   * the batch's order. Minimums are still judged on a product's total. Feature
+   * 159 (research N-31): the admin order creation's one product on lines of
+   * several groups.
+   *
+   * `ModuleDisabledError` is always thrown. At most `CART_MAX_LINES` (200) lines.
+   *
+   * `language` names a refused product — the language the response is answered
+   * in (`request.responseLanguage()`); absent, the record's own fallback chain.
+   */
+  addItems(
+    actor: { customer?: CartCustomerContext; anonymousToken?: string },
+    lines: readonly CartBatchLineInput[],
+    options: {
+      onLineError: 'throw' | 'report';
+      onBelowMinimum?: 'report' | 'throw';
+      replaceExisting?: boolean;
+      keepRepeatedLines?: boolean;
+      language?: string;
+    },
+  ): Promise<CartWithItems & { outcomes: CartBatchLineOutcome[] }>;
   clearForCustomer(ctx: CartCustomerContext): Promise<void>;
   /**
    * Clear the customer's active cart and seed it with these lines, creating
@@ -712,7 +884,7 @@ export interface CartWritePort {
     ctx: CartCustomerContext,
     lines: readonly CartSeedLine[],
     options?: CartSeedOptions,
-  ): Promise<CartWithItems>;
+  ): Promise<CartWithItems & { unorderable?: CartSeedUnorderableLine[] }>;
 }
 
 export interface CartItemView {

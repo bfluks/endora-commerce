@@ -94,6 +94,19 @@ const GOOGLE_MERCHANT: PredefinedTemplate = {
     },
     { outputName: 'g:price', sourceKind: 'price', providerRequired: true, helpKey: 'templateHelp.google.price' },
     { outputName: 'g:sale_price', sourceKind: 'sale_price', helpKey: 'templateHelp.google.salePrice' },
+    // Issue #430 — empty, so omitted, unless the price has more than two
+    // significant places and is published as the price of a pack.
+    { outputName: 'g:multipack', sourceKind: 'pack_quantity', helpKey: 'templateHelp.google.multipack' },
+    {
+      outputName: 'g:unit_pricing_measure',
+      sourceKind: 'pack_unit_pricing_measure',
+      helpKey: 'templateHelp.google.unitPricingMeasure',
+    },
+    {
+      outputName: 'g:unit_pricing_base_measure',
+      sourceKind: 'pack_unit_pricing_base_measure',
+      helpKey: 'templateHelp.google.unitPricingBaseMeasure',
+    },
     { outputName: 'g:brand', sourceKind: 'brand', helpKey: 'templateHelp.google.brand' },
     {
       outputName: 'g:condition',

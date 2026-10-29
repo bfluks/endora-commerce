@@ -29,6 +29,7 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 
 | Moduł | Wiążąca | Co to oznacza |
 | --- | --- | --- |
+| `admin_users` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `auth` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 
 ## Uprawnienia
@@ -40,7 +41,9 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 
 ## Paleta poleceń
 
-_Brak._
+| Akcja | Otwiera | Uprawnienie |
+| --- | --- | --- |
+| `open-assets-library` | `/assets-library` | `assets.read` |
 
 ## Ustawienia
 

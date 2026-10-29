@@ -93,6 +93,9 @@ export const MIGRATED_MODULES: readonly string[] = [
   'crm',
   'admin_search',
   'document_templates',
+  'admin_feedback',
+  'tasks',
+  'projects',
 ];
 
 /**

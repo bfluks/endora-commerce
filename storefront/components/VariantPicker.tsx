@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { formatMoney } from '../lib/i18n/money';
 
 /**
  * VariantPicker — server-rendered variant selector for configurable
@@ -12,7 +13,12 @@ import type { ReactNode } from 'react';
  * Each variant shows:
  *   - the localized attribute combination (e.g. "M / Red")
  *   - SKU as small caption
- *   - price-override + stock badges if set
+ *   - a stock badge if set
+ *
+ * **Each variant's resolved price** (feature 160, FR-031), when the page
+ * passes one: the price the cart will charge for that variant, resolved by the
+ * price books. It never prints `product_variants.price_override`, which no
+ * price list ever read (D-287 P0).
  *
  * The currently-selected variant (matched against the `variant` URL query
  * parameter resolved by the parent page) gets `aria-current="true"`.
@@ -22,12 +28,15 @@ interface Variant {
   id: string;
   sku: string;
   variantAttributeValues: Record<string, unknown>;
-  priceOverride?: number | null;
   stockLevel?: number | null;
+  /** Feature 160 — the variant's resolved unit price for this viewer; `null` when unpriced. */
+  price?: { amount: string; currency: string } | null;
 }
 
 export interface VariantPickerProps {
   productSlug: string;
+  /** Feature 160 — the locale prices are formatted in. */
+  locale?: string;
   variants: Variant[];
   /** SKU of the variant currently chosen (e.g. from `?variant=...`). */
   selectedSku?: string | null;
@@ -35,7 +44,6 @@ export interface VariantPickerProps {
   labels: {
     heading: string;
     sku: string;
-    priceOverride: string;
     stockLevel: string;
     outOfStock: string;
     selectThisVariant: string;
@@ -44,6 +52,7 @@ export interface VariantPickerProps {
 
 export function VariantPicker({
   productSlug,
+  locale = 'pl-PL',
   variants,
   selectedSku,
   labels,
@@ -80,10 +89,9 @@ export function VariantPicker({
                 <span className="text-[0.875rem] text-muted">
                   {labels.sku}: <code>{v.sku}</code>
                 </span>
-                {v.priceOverride != null ? (
-                  <span className="text-[0.875rem]">
-                    {labels.priceOverride}:{' '}
-                    <strong>{formatPriceOverride(v.priceOverride)}</strong>
+                {v.price ? (
+                  <span data-testid={`variant-price-${v.sku}`} className="font-mono text-[0.875rem] font-semibold">
+                    {formatMoney(Number(v.price.amount), v.price.currency, locale, { unitPrice: true })}
                   </span>
                 ) : null}
                 {v.stockLevel != null ? (
@@ -120,10 +128,4 @@ function formatValue(value: unknown): string {
   }
   if (Array.isArray(value)) return value.join(', ');
   return JSON.stringify(value);
-}
-
-function formatPriceOverride(value: number): string {
-  return new Intl.NumberFormat('en-US', { style: 'decimal', minimumFractionDigits: 2 }).format(
-    value,
-  );
 }

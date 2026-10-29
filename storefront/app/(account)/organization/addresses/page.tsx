@@ -144,7 +144,7 @@ async function createAddressAction(formData: FormData): Promise<void> {
     });
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not save address.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not save address.';
     redirect(`/organization/addresses?error=${encodeURIComponent(message)}`);
   }
   redirect(`/organization/addresses?status=created`);
@@ -159,7 +159,7 @@ async function removeAddressAction(formData: FormData): Promise<void> {
     await deleteAddress(session, id);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not remove address.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not remove address.';
     redirect(`/organization/addresses?error=${encodeURIComponent(message)}`);
   }
   redirect(`/organization/addresses?status=removed`);

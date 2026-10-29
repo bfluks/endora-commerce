@@ -106,7 +106,8 @@ describe('146 — quote request pricing/history schema [integration]', () => {
       expect(cols).toEqual([
         expect.objectContaining({ column_name: 'reference_captured_at', data_type: 'timestamp with time zone', is_nullable: 'YES' }),
         expect.objectContaining({ column_name: 'reference_currency', data_type: 'character varying', is_nullable: 'YES', character_maximum_length: 3 }),
-        expect.objectContaining({ column_name: 'reference_unit_price', data_type: 'numeric', is_nullable: 'YES', numeric_precision: 12, numeric_scale: 2 }),
+        // Widened to the price book's own type by the four-place unit-price ruling of 2026-10-25.
+        expect.objectContaining({ column_name: 'reference_unit_price', data_type: 'numeric', is_nullable: 'YES', numeric_precision: 14, numeric_scale: 4 }),
       ]);
     });
 

@@ -67,3 +67,14 @@ describe('CmsProductCardView — the price locale', () => {
     expect(text(renderCard(undefined))).toContain(text(formatted('en')));
   });
 });
+
+describe('CmsProductCardView — a sub-cent price (§10.18)', () => {
+  it('shows a unit price with its significant places, up to four', () => {
+    const html = renderToString(
+      <BlockRenderEnvironmentProvider value={{ language: 'pl-PL', preview: false }}>
+        <CmsProductCardView product={{ ...product, price: { amount: 0.0125, currency: 'PLN' } } as CmsProductSummary} />
+      </BlockRenderEnvironmentProvider>,
+    );
+    expect(text(html)).toContain('0,0125 zł');
+  });
+});

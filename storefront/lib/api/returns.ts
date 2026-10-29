@@ -1,3 +1,4 @@
+import type { ReturnableResponse as ContractReturnableResponse } from '@endora-commerce/contracts';
 import { apiGetAuthed, apiMutate } from './mutations';
 
 /**
@@ -41,22 +42,19 @@ export interface ReturnCaseDetail extends ReturnCaseSummary {
   comments: ReturnCaseComment[];
 }
 
-export interface ReturnableLine {
-  orderItemId: string;
-  productId: string;
-  name: string;
-  purchasedQty: number;
-  remainingReturnableQty: number;
-  paidUnitAmount: number;
-  currency: string;
-}
-
-export interface ReturnableResponse {
-  eligible: boolean;
-  reason?: 'order_not_completing' | 'window_passed' | 'fully_returned';
-  freeReturnEligible: boolean;
-  lines: ReturnableLine[];
-}
+/**
+ * `GET /api/v1/orders/:orderId/returnable` — derived from the contract rather than copied, so
+ * the reason union and the line fields cannot drift from it (feature 155 adds
+ * `no_returnable_lines` and the per-line returnability, which a hand-written copy lacked).
+ *
+ * Feature 155 (`contracts/returns-api.md` §2): each line says whether it may be included in a
+ * `return` case (`returnable`, with `notReturnableReason` when not); complaints are never
+ * restricted. `eligible: false` now means "no `return`-kind case" — with
+ * `reason: 'no_returnable_lines'` a complaint is still accepted, so a caller branches on
+ * `reason`, never on `eligible` alone.
+ */
+export type ReturnableResponse = ContractReturnableResponse;
+export type ReturnableLine = ReturnableResponse['lines'][number];
 
 export interface ReturnReason {
   id: string;

@@ -1,5 +1,19 @@
 # @endora-commerce/email-components
 
+## 0.108.0
+
+### Patch Changes
+
+- @endora-commerce/page-builder-core@0.108.0
+
+## 0.107.0
+
+### Patch Changes
+
+- ad55813: `sanitizeEmailHtml` reads its input in one left-to-right scan: every `<` either starts a tag that is rebuilt from the allowlist or dropped, or is written out as `&lt;`. Removing a tag can no longer join the surrounding text into a new tag, and HTML comments are dropped.
+- Updated dependencies [dd939be]
+  - @endora-commerce/page-builder-core@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

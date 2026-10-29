@@ -2,7 +2,14 @@ import { randomUUID } from 'crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
+  compareDecimals,
+  lineAmountHalfUp,
+  moneySum,
+  pickLocalized,
+  resolveScopeLanguage,
+  roundHalfUp,
   type CartSnapshot,
+  type CustomFieldCarryPort,
   type FulfilmentStrategy,
   type InventoryFulfilmentPlanningPort,
   type InventoryStockReadPort,
@@ -35,7 +42,9 @@ import { NoSystemDefaultChannel } from '@endora-commerce/platform/kernel';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Order } from '../entities/order.entity.js';
 import { OrderItem } from '../entities/order-item.entity.js';
+import { OrderItemGroup } from '../entities/order-item-group.entity.js';
 import { OrderAppliedPromotion } from '../entities/order-applied-promotion.entity.js';
+import { buildCarrySkipNote } from '../order-carry-note.js';
 /**
  * The two em-carrying interfaces their owners write (D-94.5).
  *
@@ -111,6 +120,23 @@ import { releaseOrderAllocations } from './order-allocation-release.js';
 import type { OrderTransitionEffectService } from './order-transition-effect-service.js';
 import { effectsOwedByPaymentStatusChange } from '../domain/transition-effects.js';
 import { judgeQuoteRequestSource } from '../domain/quote-request-source.js';
+import {
+  adminLayout,
+  basketLayout,
+  carryQuoteGrouping,
+  layoutShape,
+  type OrderLineGroupingInput,
+} from '../domain/quote-line-groups.js';
+import { quoteSourceHonoursExemptions } from '../domain/quote-source-exemption.js';
+import {
+  assertBasketMeetsMinimums,
+  belowMinimumLinesOf,
+  evaluateBasketMinimums,
+  readBasketCatalogue,
+  availableOnly,
+} from './placement-minimums.js';
+import { returnableAtPurchase } from './returnable-at-purchase.js';
+import { orderTotalsMoney } from './order-money.js';
 import type { InvoicePlacementApplyPort } from '@endora-commerce/mod-invoices/ports';
 import type { PaymentPlacementApplyPort } from '../../ports/index.js';
 import type { CreditLimitPort } from '@endora-commerce/mod-credit-limits/ports';
@@ -134,6 +160,7 @@ import { assertMethodsOfferedInChannel } from './method-channel-gate.js';
 import type {
   AddressReadPort,
   CartReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   DeliveryMethodReadPort,
@@ -147,7 +174,10 @@ import type {
   PaymentAdapterRegistryPort,
   PaymentMethodReadPort,
   PaymentMethodRecord,
+  OrderPreviewTotalResponse,
+  QuoteRequestLineRecord,
   QuoteRequestReadPort,
+  QuoteRequestRecord,
   ShippingAdapterRegistryPort,
   TransactionalEmailSender,
 } from '@endora-commerce/contracts';
@@ -164,6 +194,7 @@ import {
   assertMethodsAllowedForOrganization,
   type OrganizationMethodChoice,
 } from './organization-method-allow-list-gate.js';
+import { loadArrangedOrderLines } from './order-line-order.js';
 
 
 export interface OrderEvents extends Record<string, EventBase> {
@@ -270,6 +301,13 @@ export interface OrderServiceNeighbourPorts {
   readonly customerAccountRead: CustomerAccountReadPort;
   readonly addressRead: AddressReadPort;
   readonly catalogProductRead: CatalogProductReadPort;
+  /**
+   * Feature 163 (FR-006) — `catalog`'s availability answer, asked again at
+   * placement: a line whose product is no longer available at the order's
+   * (channel, language) to its Organization refuses the placement with the
+   * unknown-id 404, as a line whose product is gone does.
+   */
+  readonly catalogProductAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>;
   /** `null` ⇒ `payment_methods` is not effectively present. */
   readonly paymentMethodRead: () => PaymentMethodReadPort | null;
   /** `null` ⇒ `delivery_methods` is not effectively present. */
@@ -332,6 +370,13 @@ export interface OrderServiceNeighbourPorts {
    */
   readonly quoteRequestRead: () => QuoteRequestReadPort | null;
   /**
+   * `custom_fields`' carry port (`specs/162-custom-fields-value-carry/`,
+   * research R-7): which of the vouched Quote Request's custom-field values the
+   * new Order receives. Resolved per call; `custom_fields` is not
+   * deactivatable, so there is no absent state to ask about and no `catch`.
+   */
+  readonly customFieldCarry: () => CustomFieldCarryPort;
+  /**
    * The payment row placement opens — this transaction's own `EntityManager`,
    * and no accessor (feature 080, T048; D-179).
    *
@@ -343,6 +388,31 @@ export interface OrderServiceNeighbourPorts {
    */
   readonly paymentPlacementApply: PaymentPlacementApplyPort;
 }
+
+/**
+ * What placement (and the checkout preview) concluded about the quote request a
+ * basket claims (feature 155, research R19): the source the order may name,
+ * the request as read, and whether its quote-seeded lines keep their exemption.
+ */
+interface QuoteRequestSourceAssessment {
+  sourceQuoteRequestId: string | null;
+  quoteRequest: QuoteRequestRecord | null;
+  honoursExemptions: boolean;
+  /**
+   * Feature 159 (research R-16) — the request's lines as the judgement read
+   * them, in the quote's display order; the carry-over of its grouping reads
+   * these rather than asking the port a second time. Empty when nothing was read.
+   */
+  quoteRequestLines: readonly QuoteRequestLineRecord[];
+}
+
+/** A basket with no claim, or a claim nothing can vouch for: no source, no exemption. */
+const NO_QUOTE_REQUEST_SOURCE: QuoteRequestSourceAssessment = Object.freeze({
+  sourceQuoteRequestId: null,
+  quoteRequest: null,
+  honoursExemptions: false,
+  quoteRequestLines: [],
+});
 
 export class OrderService {
   private readonly accessService: OrderAccessService;
@@ -622,7 +692,8 @@ export class OrderService {
     const em = this.emFactory();
     const [customer, items] = await Promise.all([
       this.neighbours.customerAccountRead.findById(order.placedByCustomerAccountId),
-      em.find(OrderItem, { orderId: order.id }),
+      // Feature 159 — the confirmation lists the lines in display order.
+      loadArrangedOrderLines(em, order.id).then((arranged) => arranged.lines),
     ]);
     if (!customer) return orderEmailNotSent(undefined, emailContext, 'no_recipient');
 
@@ -1063,8 +1134,8 @@ export class OrderService {
     productById: Map<string, { type: string }>;
     vatStatus: string;
     taxCountry: string | null;
-    deliveryCost: number;
-    paymentSurcharge: number;
+    deliveryCost: string | number;
+    paymentSurcharge: string | number;
     currency: string;
     appliedPromotionCode: string | null;
     salesChannelId: string | null;
@@ -1072,6 +1143,8 @@ export class OrderService {
     /** The buyer's effective group — see {@link resolveCustomerGroupId}. */
     customerGroupId: string | null;
   }): Promise<{
+    /** The same totals as two-place decimal strings — what placement stores (issue #417). */
+    money: ReturnType<typeof orderTotalsMoney>;
     subtotal: number;
     taxTotal: number;
     deliveryTotal: number;
@@ -1081,10 +1154,8 @@ export class OrderService {
     currency: string;
     appliedPromotionCode: string | null;
     appliedPromotions: PromotionApplication['appliedPromotions'];
-    rateForProductId: (productId: string) => number;
   }> {
     const { items, productById, currency } = input;
-    const subtotal = items.reduce((acc, it) => acc + Number(it.unitPrice) * it.quantity, 0);
 
     // Real VAT: resolve the rate per product tax class (its `type`) against the
     // billing country + org VAT status. VAT-exempt / reverse-charge orgs resolve
@@ -1116,16 +1187,6 @@ export class OrderService {
     // that cannot be mistaken for a resolved rate.
     const rateForProductId = (productId: string): number =>
       rateByType.get(productById.get(productId)?.type ?? 'simple') ?? 0;
-    const taxTotal =
-      Math.round(
-        items.reduce(
-          (acc, it) => acc + Number(it.unitPrice) * it.quantity * rateForProductId(it.productId),
-          0,
-        ) * 100,
-      ) / 100;
-
-    const deliveryTotal = input.deliveryCost;
-    const paymentSurcharge = input.paymentSurcharge;
 
     // Promotion engine — includes automatic (couponless) promotions plus the
     // cart's applied coupon. No-op when no promotion port is wired.
@@ -1144,7 +1205,7 @@ export class OrderService {
           quantity: it.quantity,
           unitPrice: { amount: Number(it.unitPrice), currency: it.currency },
         })),
-        deliveryTotal,
+        deliveryTotal: Number(roundHalfUp(input.deliveryCost)),
         promotionCode: input.appliedPromotionCode ?? null,
         salesChannelId: input.salesChannelId ?? null,
       };
@@ -1156,21 +1217,32 @@ export class OrderService {
       }
     }
 
-    const total =
-      Math.round((subtotal + taxTotal + deliveryTotal + paymentSurcharge - discountTotal) * 100) /
-      100;
+    // The one VAT method (issue #417, owner ruling of 2026-10-24): VAT per rate
+    // on the sum of the nets at that rate (`vatByRate`), rounded once per rate;
+    // the total rounded once.
+    const money = orderTotalsMoney({
+      lines: items.map((it) => ({
+        unitPrice: it.unitPrice,
+        quantity: it.quantity,
+        taxRate: rateForProductId(it.productId),
+      })),
+      deliveryTotal: input.deliveryCost,
+      paymentSurcharge: input.paymentSurcharge,
+      discountTotal,
+    });
 
     return {
-      subtotal,
-      taxTotal,
-      deliveryTotal,
-      paymentSurcharge,
-      discountTotal,
-      total,
+      money,
+      // Two-place decimals read as numbers, losslessly.
+      subtotal: Number(money.subtotal),
+      taxTotal: Number(money.taxTotal),
+      deliveryTotal: Number(money.deliveryTotal),
+      paymentSurcharge: Number(money.paymentSurcharge),
+      discountTotal: Number(money.discountTotal),
+      total: Number(money.total),
       currency,
       appliedPromotionCode,
       appliedPromotions,
-      rateForProductId,
     };
   }
 
@@ -1195,6 +1267,8 @@ export class OrderService {
        */
       salesChannelId?: string | undefined;
     },
+    /** The language the response is answered in — names a below-minimum line's product (feature 155). */
+    options: { language?: string | undefined } = {},
   ): Promise<{
     subtotal: number;
     taxTotal: number;
@@ -1203,9 +1277,13 @@ export class OrderService {
     discountTotal: number;
     total: number;
     currency: string;
+    belowMinimumLines: OrderPreviewTotalResponse['belowMinimumLines'];
   }> {
-    // No `EntityManager` at all any more: the last thing this method used one
-    // for was the basket read below, and it is a port now (feature 080, T048).
+    // No `EntityManager` for the basket: it is read through a port now
+    // (feature 080, T048). The reads this method makes itself are the
+    // system-default channel, for a caller that names no channel, and — on a
+    // fork of this module's own `Order` table — the "already ordered" count of
+    // the quote-source assessment (feature 155, research R19), never a write seam.
     const org = await this.neighbours.organizationDetails.findById(ctx.organizationId);
     // The **standalone** read, through `cartReadPort` — no `EntityManager`,
     // because this method opens no transaction and a read handed one is a
@@ -1225,9 +1303,18 @@ export class OrderService {
     // `carts.organization_id` is nullable for a customer account that has none.
     // Narrowing it would be a real change of behaviour for those rows and is
     // not this conversion's to make.
+    //
+    // The basket previewed is the one of the channel previewed
+    // (`specs/154-sales-channel-access/`), resolved the way placement resolves
+    // the order's: the channel named, else the system default.
+    const basketChannelId =
+      req.salesChannelId ??
+      (await this.emFactory().findOne(SalesChannel, { systemDefault: true }, { fields: ['id'] }))?.id;
+    if (!basketChannelId) throw new NoSystemDefaultChannel();
     const basket = await this.neighbours.cartRead.findActiveForCustomer({
       customerAccountId: ctx.customerAccountId,
       organizationId: null,
+      salesChannelId: basketChannelId,
     });
     const cart = basket?.cart ?? null;
     const items = basket?.items ?? [];
@@ -1256,11 +1343,39 @@ export class OrderService {
         paymentMethodId: paymentMethod.id,
       });
     }
-    const products =
-      items.length > 0
-        ? await this.neighbours.catalogProductRead.findByIds(items.map((i) => i.productId))
-        : [];
-    const productById = new Map(products.map((p) => [p.id, p]));
+    // Feature 163 (FR-006) — the lines whose product is no longer available
+    // in the basket's channel are reported as placement will refuse them.
+    const basketChannel = await this.emFactory().findOne(SalesChannel, { id: basketChannelId });
+    const catalogue = await readBasketCatalogue(this.neighbours.catalogProductRead, items, (products) =>
+      availableOnly(this.neighbours.catalogProductAvailability, products, {
+        channelId: basketChannelId,
+        languageCode: basketChannel
+          ? resolveScopeLanguage(
+              {
+                id: basketChannel.id,
+                languages: basketChannel.languages,
+                defaultLanguage: basketChannel.defaultLanguage,
+              },
+              options.language,
+            )
+          : null,
+        organizationId: ctx.organizationId,
+      }),
+    );
+    const productById = new Map(catalogue.products.map((p) => [p.id, p]));
+
+    // Feature 155 (FR-008, FR-036, FR-037; research R19) — the lines placement
+    // will refuse, judged by the same rule with the quote source assessed by the
+    // lock-free twin of placement's vouch. Advisory: placement binds.
+    const quoteSource = await this.#previewedQuoteRequestSource(
+      ctx.organizationId,
+      cart.sourceQuoteRequestId,
+      items,
+    );
+    const belowMinimumLines = belowMinimumLinesOf(
+      evaluateBasketMinimums(cart, items, catalogue, quoteSource.honoursExemptions),
+      (productId) => this.#productName(productById, productId, options.language),
+    );
 
     // Tax country: prefer the selected billing address (matches placeOrder),
     // else the organization's registered country.
@@ -1279,8 +1394,8 @@ export class OrderService {
       productById,
       vatStatus: org?.vatStatus ?? 'vat_payer',
       taxCountry,
-      deliveryCost: Number(deliveryMethod.cost),
-      paymentSurcharge: Number(paymentMethod.additionalPrice ?? '0'),
+      deliveryCost: deliveryMethod.cost,
+      paymentSurcharge: paymentMethod.additionalPrice ?? '0',
       currency: deliveryMethod.currency,
       appliedPromotionCode: cart.appliedPromotionCode ?? null,
       salesChannelId: cart.salesChannelId ?? null,
@@ -1296,24 +1411,32 @@ export class OrderService {
       discountTotal: totals.discountTotal,
       total: totals.total,
       currency: totals.currency,
+      belowMinimumLines,
     };
   }
 
   /**
-   * The Quote Request an order may name as its source, or `null`
-   * (`specs/143-crm-sales-opportunities/`, FR-100 … FR-103).
+   * The Quote Request an order may name as its source, and whether the basket's
+   * quote-seeded lines keep their exemption from the minimums
+   * (`specs/143-crm-sales-opportunities/`, FR-100 … FR-103; feature 155,
+   * FR-036, research R19).
    *
    * The basket carries a claim, never a fact: `carts` records what the
    * converting module said and judges nothing. So the request is read again
    * here, over the port its owner publishes, and
    * {@link judgeQuoteRequestSource} decides — same Organization, still
    * convertible, an agreed line still on the basket. A refused claim is logged
-   * and dropped; it never refuses the placement, because the buyer is ordering
-   * a basket they are entitled to order and only its provenance is in doubt.
+   * and dropped; it never refuses the placement by itself, because the buyer is
+   * ordering a basket they are entitled to order and only its provenance is in
+   * doubt. What it does take away is the exemption: a seeded line below its
+   * minimum is then refused by the minimum check like any other line, and so is
+   * one whose quote's validity has lapsed ({@link quoteSourceHonoursExemptions}).
    *
    * No `catch` around the port. Presence is asked first, which is the degrade
-   * the manifest declares; a read that fails for any other reason is a failed
-   * placement, not an order silently detached from its quote.
+   * the manifest declares — and with the module off nothing can vouch for the
+   * claim, so no line is exempt (fail-closed, R17); a read that fails for any
+   * other reason is a failed placement, not an order silently detached from
+   * its quote.
    *
    * **One request, one Order — held here and not by the request's status.**
    * `quote_requests` completes a request in reaction to `order.created.v1`,
@@ -1324,44 +1447,138 @@ export class OrderService {
    * its own table whether an Order already names the request, behind a
    * transaction-scoped advisory lock on the request's id. The lock is what
    * makes two concurrent placements take turns: without it both count zero
-   * under `read committed` and both stamp. It is taken only for a basket that
-   * carries a claim, late in the transaction, and released by the commit.
+   * under `read committed`, both stamp, and both keep the exemption.
+   *
+   * **Lock order (feature 155, plan I7).** Called right after the basket and
+   * its products are read — before the minimum check, the value gate, the
+   * business id, any stock reservation and the credit reservation — so the
+   * exemption is granted under the same lock that makes "no Order names it yet"
+   * true, and the lock is held to commit. A placement therefore takes, in this
+   * order: the request's advisory lock (only for a basket that carries a mark),
+   * then the `stock_levels` row locks (`lockAvailabilityForPlacement`), then the
+   * business-id sequence and its own rows. An ordinary basket never takes the
+   * advisory lock, and no placement takes it after a row lock, so no
+   * transaction waits for the advisory lock while holding a row another one
+   * needs: there is no cycle to deadlock on. Two placements of one request
+   * simply take turns for the whole placement instead of its tail.
    */
   async #vouchedQuoteRequestSource(
     tx: EntityManager,
     organizationId: string,
     claimedQuoteRequestId: string | null,
     basketLines: ReadonlyArray<{ productId: string; variantId: string | null; unitPrice: string }>,
-  ): Promise<string | null> {
-    if (!claimedQuoteRequestId) return null;
+  ): Promise<QuoteRequestSourceAssessment> {
+    if (!claimedQuoteRequestId) return NO_QUOTE_REQUEST_SOURCE;
     const quoteRequests = this.neighbours.quoteRequestRead();
-    if (!quoteRequests) return null;
+    if (!quoteRequests) return NO_QUOTE_REQUEST_SOURCE;
     await tx.execute('select pg_advisory_xact_lock(hashtextextended(?, 0))', [
       `orders.source_quote_request_id:${claimedQuoteRequestId}`,
     ]);
-    const alreadyOrdered = (await tx.count(Order, { sourceQuoteRequestId: claimedQuoteRequestId })) > 0;
+    return this.#assessQuoteRequestSource(quoteRequests, {
+      organizationId,
+      claimedQuoteRequestId,
+      basketLines,
+      countOrdersNamingIt: () => tx.count(Order, { sourceQuoteRequestId: claimedQuoteRequestId }),
+      logRefusal: true,
+    });
+  }
+
+  /**
+   * The checkout preview's read-only twin of {@link #vouchedQuoteRequestSource}
+   * (feature 155, research R19 *Checkout preview*): the same port reads, the
+   * same judge and validity rule, and the "already ordered" count on this
+   * module's **own** `Order` table through a fresh fork — no transaction and no
+   * lock. Under a race (another basket of the same request placing between the
+   * preview and the placement) the two can disagree; placement is binding and
+   * the preview advisory, as it is for stock.
+   */
+  async #previewedQuoteRequestSource(
+    organizationId: string,
+    claimedQuoteRequestId: string | null,
+    basketLines: ReadonlyArray<{ productId: string; variantId: string | null; unitPrice: string }>,
+  ): Promise<QuoteRequestSourceAssessment> {
+    if (!claimedQuoteRequestId) return NO_QUOTE_REQUEST_SOURCE;
+    const quoteRequests = this.neighbours.quoteRequestRead();
+    if (!quoteRequests) return NO_QUOTE_REQUEST_SOURCE;
+    return this.#assessQuoteRequestSource(quoteRequests, {
+      organizationId,
+      claimedQuoteRequestId,
+      basketLines,
+      countOrdersNamingIt: () =>
+        this.emFactory().fork().count(Order, { sourceQuoteRequestId: claimedQuoteRequestId }),
+      logRefusal: false,
+    });
+  }
+
+  /**
+   * The checkout preview's quote-source answer, published as
+   * `OrderQuoteSourcePort` (feature 155, FR-039; `contracts/cart-and-checkout-api.md`
+   * §12) — so `carts`' submit-for-approval judges a basket's quote-seeded lines
+   * exactly as the preview does: {@link #previewedQuoteRequestSource}, lock-free,
+   * fail-closed while `quote_requests` is off. Advisory; placement re-checks.
+   */
+  async quoteSourceHonoursExemptions(input: {
+    organizationId: string;
+    quoteRequestId: string;
+    basketLines: ReadonlyArray<{ productId: string; variantId: string | null; unitPrice: string }>;
+  }): Promise<boolean> {
+    const assessed = await this.#previewedQuoteRequestSource(
+      input.organizationId,
+      input.quoteRequestId,
+      input.basketLines,
+    );
+    return assessed.honoursExemptions;
+  }
+
+  async #assessQuoteRequestSource(
+    quoteRequests: QuoteRequestReadPort,
+    input: {
+      organizationId: string;
+      claimedQuoteRequestId: string;
+      basketLines: ReadonlyArray<{ productId: string; variantId: string | null; unitPrice: string }>;
+      countOrdersNamingIt: () => Promise<number>;
+      logRefusal: boolean;
+    },
+  ): Promise<QuoteRequestSourceAssessment> {
+    const { organizationId, claimedQuoteRequestId } = input;
+    const alreadyOrdered = (await input.countOrdersNamingIt()) > 0;
     const quoteRequest = await quoteRequests.findById(claimedQuoteRequestId);
+    const quoteRequestLines = quoteRequest ? await quoteRequests.listItems(quoteRequest.id) : [];
     const judged = judgeQuoteRequestSource({
       orderOrganizationId: organizationId,
       quoteRequest,
       alreadyOrdered,
-      quoteRequestLines: quoteRequest ? await quoteRequests.listItems(quoteRequest.id) : [],
-      basketLines,
+      quoteRequestLines,
+      basketLines: input.basketLines,
     });
-    if (judged.accepted) return claimedQuoteRequestId;
-    this.log?.warn(
-      { claimedQuoteRequestId, organizationId, reason: judged.reason },
-      '[orders] the basket names a quote request this order may not carry; placing it without a source',
-    );
-    return null;
+    const honoursExemptions = quoteSourceHonoursExemptions(judged, quoteRequest, new Date());
+    if (judged.accepted) {
+      return { sourceQuoteRequestId: claimedQuoteRequestId, quoteRequest, honoursExemptions, quoteRequestLines };
+    }
+    if (input.logRefusal) {
+      this.log?.warn(
+        { claimedQuoteRequestId, organizationId, reason: judged.reason },
+        '[orders] the basket names a quote request this order may not carry; placing it without a source',
+      );
+    }
+    // A refused source carries nothing of the request — its grouping included (FR-052).
+    return { sourceQuoteRequestId: null, quoteRequest, honoursExemptions, quoteRequestLines: [] };
   }
 
   async placeOrder(
     ctx: CustomerContext,
     req: PlaceOrderRequest,
-    // Not on `OrderPlacementPort`: only this module's own admin create path
-    // hands an origin on. It is echoed on `order.created.v1` and read nowhere.
-    options?: { origin?: OriginReference },
+    // `origin` is not on `OrderPlacementPort`: only this module's own admin
+    // create path hands one on. It is echoed on `order.created.v1` and read
+    // nowhere. `language` (feature 155) is the language the response is
+    // answered in, which a minimum refusal names the product in.
+    // `lineGrouping` (feature 159, research R-17) is the grouping an
+    // administrator laid the order out in — likewise this module's own.
+    options?: {
+      origin?: OriginReference;
+      language?: string | undefined;
+      lineGrouping?: OrderLineGroupingInput | undefined;
+    },
   ): Promise<Order> {
     const em = this.emFactory();
     // What this placement announces, emitted once the transaction below has
@@ -1418,22 +1635,119 @@ export class OrderService {
         );
       }
 
+      // Resolve the order's sales channel once. Prefer the channel carried on
+      // the request (Checkout / admin create); otherwise the platform's
+      // **system-default** channel. Used for the basket the order is placed
+      // from, candidate warehouses, the channel-level fulfilment setting, and
+      // the stamped order channel below, so all four agree. Resolved before the
+      // basket is read, because the basket is the one of this channel
+      // (`specs/154-sales-channel-access/`).
+      //
+      // Issue #85 — the fallback used to be `findOne(SalesChannel, { status:
+      // 'active' })`: an arbitrary active row, ordered by nothing, read from
+      // the legacy `status` column rather than from the flag that actually
+      // names the default. Which channel an order recorded therefore depended
+      // on Postgres' row order, and moving the flag changed nothing. The flag
+      // is the platform's one answer to "which channel, when nobody said"
+      // (D-47), and since D-51 an operator can move it, so the lookup has to
+      // follow it. Read inside the transaction rather than through the
+      // resolver's cache so the three uses below see one consistent snapshot.
+      //
+      // The fallback is not an existence check on a named id. Admin create
+      // refuses an unknown channel upstream (`order-creation-admin-service.ts`);
+      // the storefront route and one-click pass the request's resolved channel,
+      // and the API-key intake the key's bound one. So it is reached by a
+      // caller that names no channel, or by one that resolves its channel
+      // itself.
+      const orderChannel =
+        (req.salesChannelId
+          ? await tx.findOne(SalesChannel, { id: req.salesChannelId })
+          : null) ?? (await tx.findOne(SalesChannel, { systemDefault: true }));
+      // An order records the channel it was placed through; there is no honest
+      // value for "none" in a `not null` column other code joins on. D-47's
+      // invariant says this cannot happen after boot — so say so, rather than
+      // persisting the `randomUUID()` that used to stand here (issue #85).
+      if (orderChannel === null) throw new NoSystemDefaultChannel();
+
       // The basket, read on **this** transaction through the port `carts`
       // publishes for placement (feature 080, T048). It is the same
       // `EntityManager` the completion below writes on, which is the whole
       // content of the seam: a read on a second one would put a commit boundary
       // between the totals this method quotes and the basket it clears.
+      //
+      // The basket is the customer's basket **of this order's channel**: a
+      // customer holds one per channel, created and priced on the channel it is
+      // used on (`specs/154-sales-channel-access/`, contracts/basket-attribution.md
+      // §4).
       const basket = await this.neighbours.cartPlacementApply.readActiveForPlacement(tx, {
         customerAccountId: ctx.customerAccountId,
         // `null` for the reason `previewTotal` states above: the query this
         // replaces filtered on the customer account and the status alone.
         organizationId: null,
+        salesChannelId: orderChannel.id,
       });
       const cart = basket?.cart ?? null;
       const items = basket?.items ?? [];
       if (!cart || items.length === 0) {
         throw new HttpError(409, ERROR_CODES.CART_EMPTY, 'Cart is empty.');
       }
+      // Defence in depth: by construction the read above answers this channel's
+      // basket, so this refuses only a basket handed over from elsewhere. Its
+      // assortment, its line prices and its promotions were all answered for
+      // the channel it records; placed on another one it would carry them as
+      // they are. Refused rather than repriced — a silent price change at
+      // placement is what the price check below refuses as well — inside the
+      // transaction and before anything is reserved or written, so the basket
+      // survives.
+      if (cart.salesChannelId !== orderChannel.id) {
+        throw new HttpError(
+          422,
+          ERROR_CODES.ORDER_SALES_CHANNEL_MISMATCH,
+          'The basket belongs to a different sales channel than this order.',
+          { cartSalesChannelId: cart.salesChannelId, requestSalesChannelId: orderChannel.id },
+        );
+      }
+
+      // Feature 155 (FR-008, FR-036, FR-037; research R19; threats F2, F3) —
+      // the basket's order minimums, judged here, inside the transaction and
+      // **before the first side effect**: before the value gate, the business
+      // id, any stock reservation and the credit reservation. Every caller of
+      // this method — checkout, one-click, admin create, API intake and a
+      // direct `OrderPlacementPort` call — passes through it, so no path can
+      // place a basket another path let below a minimum.
+      //
+      // One read of the basket's products (and their packaging units), reused
+      // below for the totals and the line snapshots; then the quote source,
+      // vouched under its lock (lock order: see `#vouchedQuoteRequestSource`),
+      // whose answer is both the exemption decision here and the stamp below;
+      // then the evaluation. A line whose product record is gone refuses the
+      // placement (FR-037, fail-closed). Nothing has been written, so the
+      // rollback releases the lock and leaves the basket as it was.
+      const catalogue = await readBasketCatalogue(this.neighbours.catalogProductRead, items, (products) =>
+        availableOnly(this.neighbours.catalogProductAvailability, products, {
+          channelId: orderChannel.id,
+          languageCode: resolveScopeLanguage(
+            {
+              id: orderChannel.id,
+              languages: orderChannel.languages,
+              defaultLanguage: orderChannel.defaultLanguage,
+            },
+            options?.language,
+          ),
+          organizationId: ctx.organizationId,
+        }),
+      );
+      const productById = new Map(catalogue.products.map((p) => [p.id, p]));
+      const quoteSource = await this.#vouchedQuoteRequestSource(
+        tx,
+        ctx.organizationId,
+        cart.sourceQuoteRequestId,
+        items,
+      );
+      assertBasketMeetsMinimums(
+        evaluateBasketMinimums(cart, items, catalogue, quoteSource.honoursExemptions),
+        (productId) => this.#productName(productById, productId, options?.language),
+      );
 
       // A cart line is ordered at its stored unit price — copied onto the order
       // line below, and the figure every total here is computed from. So the
@@ -1473,13 +1787,13 @@ export class OrderService {
       if (this.resolveMinOrderValue) {
         const min = await this.resolveMinOrderValue(req.salesChannelId ?? null).catch(() => 0);
         if (min > 0) {
-          const cartSubtotal = items.reduce((sum, it) => sum + Number(it.unitPrice) * it.quantity, 0);
-          if (cartSubtotal < min) {
+          const cartSubtotal = moneySum(items.map((it) => lineAmountHalfUp(it.unitPrice, it.quantity)));
+          if (compareDecimals(cartSubtotal, min) < 0) {
             throw new HttpError(
               422,
               ERROR_CODES.VALIDATION_FAILED,
-              `Order total ${cartSubtotal.toFixed(2)} is below the minimum ${min.toFixed(2)} for this sales channel.`,
-              { code: 'order_below_minimum', minimum: min, subtotal: cartSubtotal },
+              `Order total ${cartSubtotal} is below the minimum ${roundHalfUp(min)} for this sales channel.`,
+              { code: 'order_below_minimum', minimum: min, subtotal: Number(cartSubtotal) },
             );
           }
         }
@@ -1525,37 +1839,6 @@ export class OrderService {
       // Feature 035 (FR-014/FR-015) — same re-validation for the shipping method.
       await this.assertShippingMethodUsable(ctx, deliveryMethod, req.salesChannelId ?? null);
 
-      // Resolve the order's sales channel once. Prefer the channel carried on
-      // the request (Checkout / admin create); otherwise the platform's
-      // **system-default** channel. Used for candidate warehouses, the
-      // channel-level fulfilment setting, and the stamped order channel below,
-      // so all three agree.
-      //
-      // Issue #85 — the fallback used to be `findOne(SalesChannel, { status:
-      // 'active' })`: an arbitrary active row, ordered by nothing, read from
-      // the legacy `status` column rather than from the flag that actually
-      // names the default. Which channel an order recorded therefore depended
-      // on Postgres' row order, and moving the flag changed nothing. The flag
-      // is the platform's one answer to "which channel, when nobody said"
-      // (D-47), and since D-51 an operator can move it, so the lookup has to
-      // follow it. Read inside the transaction rather than through the
-      // resolver's cache so the three uses below see one consistent snapshot.
-      //
-      // The fallback is not an existence check on a named id. Admin create
-      // refuses an unknown channel upstream (`order-creation-admin-service.ts`);
-      // the storefront route and one-click pass the request's resolved channel,
-      // and the API-key intake the key's bound one. So it is reached by a
-      // caller that names no channel, or by one that resolves its channel
-      // itself.
-      const orderChannel =
-        (req.salesChannelId
-          ? await tx.findOne(SalesChannel, { id: req.salesChannelId })
-          : null) ?? (await tx.findOne(SalesChannel, { systemDefault: true }));
-      // An order records the channel it was placed through; there is no honest
-      // value for "none" in a `not null` column other code joins on. D-47's
-      // invariant says this cannot happen after boot — so say so, rather than
-      // persisting the `randomUUID()` that used to stand here (issue #85).
-      if (orderChannel === null) throw new NoSystemDefaultChannel();
 
       // Both chosen methods must be offered in the channel this order records.
       // The storefront catalogues list only such methods; this is the refusal
@@ -1771,13 +2054,6 @@ export class OrderService {
         }
       }
 
-      const productIds = items.map((i) => i.productId);
-      const products =
-        productIds.length > 0
-          ? await this.neighbours.catalogProductRead.findByIds(productIds)
-          : [];
-      const productById = new Map(products.map((p) => [p.id, p]));
-
       // Resolved once and used twice: the promotion engine's audience filter
       // inside the totals below, and the redemption row `finalizeUsage` writes.
       const customerGroupId = await this.resolveCustomerGroupId(ctx.customerAccountId, org);
@@ -1786,23 +2062,19 @@ export class OrderService {
       // promotion discount) runs through one shared computation so the storefront
       // preview endpoint and order placement can never drift.
       const {
-        subtotal,
-        taxTotal,
-        deliveryTotal,
+        money,
         paymentSurcharge,
         currency,
-        discountTotal,
         total,
         appliedPromotionCode,
         appliedPromotions,
-        rateForProductId,
       } = await this.computeMonetaryTotals({
         items,
         productById,
         vatStatus: org.vatStatus ?? 'vat_payer',
         taxCountry: billing.country ?? delivery.country ?? null,
-        deliveryCost: Number(deliveryMethod.cost),
-        paymentSurcharge: Number(paymentMethod.additionalPrice ?? '0'),
+        deliveryCost: deliveryMethod.cost,
+        paymentSurcharge: paymentMethod.additionalPrice ?? '0',
         currency: deliveryMethod.currency,
         appliedPromotionCode: cart.appliedPromotionCode ?? null,
         salesChannelId: cart.salesChannelId ?? null,
@@ -1825,12 +2097,24 @@ export class OrderService {
         ? await this.businessId.generate(tx, channel.id)
         : undefined;
 
-      const sourceQuoteRequestId = await this.#vouchedQuoteRequestSource(
-        tx,
-        ctx.organizationId,
-        cart.sourceQuoteRequestId,
-        items,
-      );
+      // Vouched once, at the top of the transaction under the request's lock.
+      const { sourceQuoteRequestId } = quoteSource;
+
+      // Feature 162 (US1; research R-7) — the vouched request's custom-field
+      // values its definitions carry to Orders, read now, under the same lock.
+      // Only empty fields are filled (a new Order has none) and nothing here can
+      // refuse the placement: a value that cannot be carried is skipped and
+      // named in a system note below. The carried bag is not run through
+      // `validateAndMerge` — an unrelated required field must not fail checkout.
+      const carry =
+        sourceQuoteRequestId !== null && quoteSource.quoteRequest !== null
+          ? await this.neighbours.customFieldCarry().plan({
+              sourceType: 'quote_request',
+              targetType: 'order',
+              sourceValues: quoteSource.quoteRequest.customFieldValues,
+              targetValues: {},
+            })
+          : null;
 
       const order = tx.create(Order, {
         organizationId: ctx.organizationId,
@@ -1892,13 +2176,13 @@ export class OrderService {
         ...(this.resolvePendingStatus(paymentMethod.statusOnPending)
           ? { status: this.resolvePendingStatus(paymentMethod.statusOnPending)! }
           : {}),
-        subtotal: subtotal.toFixed(2),
-        taxTotal: taxTotal.toFixed(2),
-        deliveryTotal: deliveryTotal.toFixed(2),
+        subtotal: money.subtotal,
+        taxTotal: money.taxTotal,
+        deliveryTotal: money.deliveryTotal,
         // Feature 036 (US3) — coupon discount recomputed above.
-        discountTotal: discountTotal.toFixed(2),
+        discountTotal: money.discountTotal,
         ...(appliedPromotionCode ? { promotionCode: appliedPromotionCode } : {}),
-        total: total.toFixed(2),
+        total: money.total,
         currency,
         ...(req.customerNote ? { customerNote: req.customerNote } : {}),
         ...(req.shippingAdapterData
@@ -1916,8 +2200,26 @@ export class OrderService {
         // second write. The column's `false` default is the opposite answer
         // on purpose, and only for rows that predate it — see the migration.
         purchaseConversionOwed: true,
+        // Issue #417 — placed under the per-rate VAT method.
+        vatMethod: 'per_rate',
+        ...(carry && carry.carried.length > 0 ? { customFieldValues: { ...carry.values } } : {}),
       });
       await tx.persistAndFlush(order);
+
+      // Feature 162 (FR-010a) — what could not be carried, as one internal,
+      // author-less, non-notifying note in this transaction.
+      if (carry && carry.skipped.length > 0 && quoteSource.quoteRequest) {
+        buildCarrySkipNote(tx, {
+          orderId: order.id,
+          source: {
+            entityType: 'quote_request',
+            recordId: quoteSource.quoteRequest.id,
+            reference: quoteSource.quoteRequest.businessId,
+          },
+          skipped: carry.skipped,
+        });
+        await tx.flush();
+      }
 
       // Feature 045 (US2) — stamp the per-promotion discount breakdown.
       for (const ap of appliedPromotions) {
@@ -1926,7 +2228,7 @@ export class OrderService {
             orderId: order.id,
             promotionId: ap.promotionId,
             couponId: ap.couponId ?? null,
-            amount: ap.amount.toFixed(2),
+            amount: roundHalfUp(ap.amount),
             currency,
           }),
         );
@@ -1953,8 +2255,38 @@ export class OrderService {
         });
       }
 
-      const orderItems = items.map((item) => {
+      // Feature 159 (contracts/orders-api.md §2; I-O1 … I-O3) — the layout of
+      // the order's lines, decided once: an administrator's grouping, else the
+      // grouping of the quote this order is vouched to be (from the lines the
+      // judgement above already read — the port is not asked again), else the
+      // basket's own order. The groups are written first and flushed: a line
+      // references its group by a plain column and the unit of work orders
+      // inserts by relations, which there are none of.
+      const placedLines = items.map((item, index) => ({
+        key: String(index),
+        productId: item.productId,
+        variantId: item.variantId ?? null,
+        unitPrice: item.unitPrice,
+        quantity: item.quantity,
+      }));
+      const lineLayout = options?.lineGrouping
+        ? adminLayout(placedLines, options.lineGrouping)
+        : quoteSource.sourceQuoteRequestId !== null
+          ? carryQuoteGrouping(quoteSource.quoteRequestLines, placedLines)
+          : basketLayout(placedLines);
+      const orderGroupIdBySource = new Map<string, string>();
+      if (lineLayout.groups.length > 0) {
+        for (const group of lineLayout.groups) {
+          const row = tx.create(OrderItemGroup, { orderId: order.id, name: group.name, position: group.position });
+          orderGroupIdBySource.set(group.sourceId, row.id);
+        }
+        await tx.flush();
+      }
+
+      const orderItems = items.map((item, index) => {
         const product = productById.get(item.productId);
+        const laidOut = lineLayout.lines.get(String(index));
+        const groupId = laidOut?.groupSourceId ? (orderGroupIdBySource.get(laidOut.groupSourceId) ?? null) : null;
         // Feature 043 — when the line was ordered as a packaging unit, append
         // the unit name to the snapshot name so every order-derived document
         // shows it, and keep a structured snapshot for programmatic use.
@@ -1962,6 +2294,10 @@ export class OrderService {
         const snapshotName = item.packagingUnitName
           ? `${baseName} (${item.packagingUnitName})`
           : baseName;
+        // The line's stored gross: its net plus its share of its rate's VAT under
+        // the one VAT method (issue #417), from the totals computed above, so the
+        // order's line grosses add up to its products' gross.
+        const lineMoney = money.lines[index]!;
         return tx.create(OrderItem, {
           orderId: order.id,
           productId: item.productId,
@@ -1981,12 +2317,18 @@ export class OrderService {
           ...(item.variantId ? { variantId: item.variantId } : {}),
           quantity: item.quantity,
           unitPrice: item.unitPrice,
-          taxRate: rateForProductId(item.productId).toFixed(4),
-          lineTotal: (
-            Number(item.unitPrice) *
-            item.quantity *
-            (1 + rateForProductId(item.productId))
-          ).toFixed(2),
+          // Feature 160 (FR-030) — the tier that priced the cart line, copied.
+          priceSource: item.priceSource ?? null,
+          // Feature 155 (FR-016a, D-44) — the product's returnable flag as it
+          // stands now, from the one basket read above; copied once and never
+          // updated. Always an explicit boolean (fail-closed): `null` is kept
+          // for lines placed before the feature.
+          returnableAtPurchase: returnableAtPurchase(product),
+          // Feature 159 (I-O3) — the line's group and its place in its section.
+          groupId,
+          position: laidOut?.position ?? index,
+          taxRate: lineMoney.taxRate,
+          lineTotal: lineMoney.gross,
         });
       });
       await tx.persistAndFlush(orderItems);
@@ -2059,7 +2401,7 @@ export class OrderService {
       const payment = await this.neighbours.paymentPlacementApply.openForOrder(tx, {
         orderId: order.id,
         paymentMethodId: paymentMethod.id,
-        amount: total.toFixed(2),
+        amount: money.total,
         currency,
       });
 
@@ -2146,8 +2488,8 @@ export class OrderService {
               // organization's own — what `GET /me/credit-limit` already tells
               // the same buyer, and the total of the order they are placing.
               {
-                availableAmount: result.availableAmount.toFixed(2),
-                orderTotal: total.toFixed(2),
+                availableAmount: roundHalfUp(result.availableAmount),
+                orderTotal: money.total,
                 currency,
               },
             );
@@ -2205,7 +2547,7 @@ export class OrderService {
         await invoicePlacement.createProformaForOrder(tx, {
           orderId: order.id,
           currency,
-          total: total.toFixed(2),
+          total: money.total,
         });
       }
 
@@ -2273,7 +2615,15 @@ export class OrderService {
           objectType: 'order',
           objectId: order.id,
           stateBefore: null,
-          stateAfter: { total: total.toFixed(2), currency, status: order.status },
+          stateAfter: {
+            total: money.total,
+            currency,
+            status: order.status,
+            // Feature 159 (FR-081, research R-22) — the grouping's shape, when the order has one.
+            ...(lineLayout.groups.length > 0 ? { groups: layoutShape(lineLayout) } : {}),
+            // Feature 162 (US1-5) — the custom-field values carried from the request.
+            ...(carry && carry.carried.length > 0 ? { carriedCustomFieldKeys: [...carry.carried] } : {}),
+          },
         });
       }
 
@@ -2471,6 +2821,20 @@ export class OrderService {
       }
     }
     return order;
+  }
+
+  /**
+   * The name a minimum refusal gives a product: in `language`, the language the
+   * envelope translates the sentence around it into (feature 155, D3/D4). The id
+   * when the record is gone.
+   */
+  #productName(
+    productById: ReadonlyMap<string, { name: Record<string, string> }>,
+    productId: string,
+    language: string | undefined,
+  ): string {
+    const product = productById.get(productId);
+    return (product ? pickLocalized(product.name, language) : '') || productId;
   }
 
   private anyValue(blob: Record<string, string>): string {

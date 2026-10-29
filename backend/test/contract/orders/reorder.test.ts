@@ -10,6 +10,7 @@ import {
 } from '../../helpers/test-server.js';
 
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 
@@ -31,7 +32,8 @@ import { Order, OrderItem } from '../../helpers/package-entities.js';
  */
 describe('Order reorder', () => {
   let h: BackendServerHandle;
-  const ctx = { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID };
+  /** The lines go into the basket of the reordering request's channel — here the default's. */
+  let ctx: { customerAccountId: string; organizationId: string; salesChannelId: string };
   let orderId = '';
   const missingProductId = randomUUID();
 
@@ -40,7 +42,9 @@ describe('Order reorder', () => {
     const order = em.create(Order, {
       organizationId: TEST_ORGANIZATION_ID,
       placedByCustomerAccountId: TEST_CUSTOMER_ID,
-      salesChannelId: randomUUID(),
+      // A real channel: an operator's reorder seeds the basket of the order's
+      // own channel (`specs/154-sales-channel-access/`).
+      salesChannelId: ctx.salesChannelId,
       status: 'completed',
       deliveryAddress: { recipientName: 'A', street: 'S', city: 'C', postalCode: '00-000', country: 'PL' },
       billingAddress: { recipientName: 'A', street: 'S', city: 'C', postalCode: '00-000', country: 'PL' },
@@ -82,6 +86,11 @@ describe('Order reorder', () => {
 
   beforeAll(async () => {
     h = await setupBackendServer();
+    ctx = {
+      customerAccountId: TEST_CUSTOMER_ID,
+      organizationId: TEST_ORGANIZATION_ID,
+      salesChannelId: await systemDefaultSalesChannelId(h.em()),
+    };
     orderId = await makeOrderWithItems();
   });
   afterAll(async () => {

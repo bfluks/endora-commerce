@@ -16,9 +16,10 @@ export interface OrganizationPickerMultiProps {
   /**
    * Labels keyed by id for organizations that may not appear in the
    * current page of search results. Lets the chip render correctly even
-   * after the dropdown has scrolled past the original selection.
+   * after the dropdown has scrolled past the original selection. `status` is
+   * optional: without one the chip shows no status badge.
    */
-  selectedLabels?: Record<string, { name: string; status: OrganizationStatus }>;
+  selectedLabels?: Record<string, { name: string; status?: OrganizationStatus }>;
   statusFilter?: OrganizationStatus[];
   placeholder?: string;
   emptyMessage?: string;

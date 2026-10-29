@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { ProductSummary } from '@endora-commerce/contracts';
 import { tForLocale } from '../lib/i18n/messages';
-import { DEFAULT_VAT_RATE, grossFromNet } from '../lib/i18n/money';
+import { DEFAULT_VAT_RATE, formatMoney, grossUnitPriceFromNet } from '../lib/i18n/money';
 
 /**
  * List-view row for the catalog. Same data surface as `<ProductCard>`,
@@ -26,18 +26,15 @@ export function ProductRow(props: {
   const { product, locale, vatRate = DEFAULT_VAT_RATE } = props;
   const t = tForLocale(locale);
 
+  // A unit price: its significant places, up to four (owner ruling of 2026-10-25).
   const fmtCurrency = (amount: number): string =>
-    new Intl.NumberFormat(locale, {
-      style: 'currency',
-      currency: product.price!.currency,
-      minimumFractionDigits: 2,
-    }).format(amount);
+    formatMoney(amount, product.price!.currency, locale, { unitPrice: true });
 
   const priceFmt = product.price ? fmtCurrency(product.price.amount) : null;
   // Derived through the shared seam, so the list and grid views agree and both
   // are corrected in one place. `null` price and price `0` stay distinct: the
   // first renders no figure at all, the second renders zero.
-  const gross = product.price ? grossFromNet(product.price.amount, vatRate) : null;
+  const gross = product.price ? grossUnitPriceFromNet(product.price.amount, vatRate) : null;
   const grossFmt = gross === null ? null : fmtCurrency(gross);
 
   return (

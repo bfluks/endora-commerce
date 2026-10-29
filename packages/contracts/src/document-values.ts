@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { unitPriceFractionDigits } from './money-decimal.js';
 
 /**
  * Typed values of a document's lines, and the pure functions that format them,
@@ -49,7 +50,25 @@ export const documentValueSchema = z
   .discriminatedUnion('kind', [
     z.object({ kind: z.literal('text'), value: z.string() }),
     z.object({ kind: z.literal('number'), value: z.number() }),
-    z.object({ kind: z.literal('money'), amount: z.number(), currency: z.string() }),
+    /**
+     * `unitPrice` marks a **unit price** (owner ruling of 2026-10-25): it is
+     * carried at four places and shown with its significant places, up to
+     * four, never fewer than the format's `decimals` (`unitPriceFractionDigits`).
+     * A line value or a total is an amount and has no mark.
+     *
+     * `belowMinorUnit` marks an amount that is **not zero but rounds to zero**
+     * at the minor unit — a quote line's discount of 0.0001 a unit over three
+     * units (issue #430). It is printed {@link DOCUMENT_BELOW_MINOR_UNIT_TEXT}
+     * rather than `0,00`, which would read as "no discount"; the amount stays
+     * the rounded `0`, so a sum and "list value − discount = net" still hold.
+     */
+    z.object({
+      kind: z.literal('money'),
+      amount: z.number(),
+      currency: z.string(),
+      unitPrice: z.boolean().optional(),
+      belowMinorUnit: z.boolean().optional(),
+    }),
     /** `12.5` means 12.5 %. */
     z.object({ kind: z.literal('percent'), value: z.number() }),
     /** An ISO date (`2026-10-17`) or date-time. */
@@ -60,10 +79,22 @@ export const documentValueSchema = z
 export type DocumentValue =
   | { readonly kind: 'text'; readonly value: string }
   | { readonly kind: 'number'; readonly value: number }
-  | { readonly kind: 'money'; readonly amount: number; readonly currency: string }
+  | {
+      readonly kind: 'money';
+      readonly amount: number;
+      readonly currency: string;
+      readonly unitPrice?: boolean;
+      readonly belowMinorUnit?: boolean;
+    }
   | { readonly kind: 'percent'; readonly value: number }
   | { readonly kind: 'date'; readonly value: string }
   | null;
+
+/**
+ * What a money value marked `belowMinorUnit` prints, in every language: a dash,
+ * not a word, so the document needs no translation for it (issue #430).
+ */
+export const DOCUMENT_BELOW_MINOR_UNIT_TEXT = '—';
 
 export const documentValueFormatSchema = z.object({
   decimals: z.number().int().min(0).max(4).optional(),
@@ -136,9 +167,13 @@ function decimalsFor(value: number, format: DocumentValueFormat, fallback: numbe
 }
 
 function plainNumber(value: number, decimals: number, language: string): string {
+  return plainNumberRange(value, decimals, decimals, language);
+}
+
+function plainNumberRange(value: number, least: number, most: number, language: string): string {
   return new Intl.NumberFormat(language, {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
+    minimumFractionDigits: least,
+    maximumFractionDigits: most,
   }).format(value);
 }
 
@@ -169,22 +204,25 @@ export function formatDocumentValue(
       case 'percent':
         return `${plainNumber(v.value, decimalsFor(v.value, f, 2), language)} %`;
       case 'money': {
+        if (v.belowMinorUnit && v.amount === 0) return DOCUMENT_BELOW_MINOR_UNIT_TEXT;
         const decimals =
           typeof f.decimals === 'number' && Number.isInteger(f.decimals) && f.decimals >= 0 && f.decimals <= 4
             ? f.decimals
             : 2;
-        if (f.currencyDisplay === 'none') return plainNumber(v.amount, decimals, language);
+        // A unit price never shows fewer places than it carries (up to four).
+        const most = v.unitPrice ? Math.max(decimals, unitPriceFractionDigits(v.amount)) : decimals;
+        if (f.currencyDisplay === 'none') return plainNumberRange(v.amount, decimals, most, language);
         try {
           return new Intl.NumberFormat(language, {
             style: 'currency',
             currency: v.currency,
             currencyDisplay: f.currencyDisplay === 'code' ? 'code' : 'symbol',
             minimumFractionDigits: decimals,
-            maximumFractionDigits: decimals,
+            maximumFractionDigits: most,
           }).format(v.amount);
         } catch {
           // A currency code Intl does not accept: the number and the code as stored.
-          return `${plainNumber(v.amount, decimals, language)} ${v.currency}`;
+          return `${plainNumberRange(v.amount, decimals, most, language)} ${v.currency}`;
         }
       }
       case 'date': {
@@ -253,11 +291,10 @@ export function sumDocumentValues(values: readonly (DocumentValue | undefined)[]
   if (present.every((value) => value.kind === 'money')) {
     const currency = (present[0] as { currency: string }).currency;
     if (present.some((value) => (value as { currency: string }).currency !== currency)) return null;
-    return {
-      kind: 'money',
-      amount: round2(present.reduce((sum, value) => sum + (value as { amount: number }).amount, 0)),
-      currency,
-    };
+    const amount = round2(present.reduce((sum, value) => sum + (value as { amount: number }).amount, 0));
+    // Amounts that are real but each round to no cent still sum to something real (issue #430).
+    const belowMinorUnit = amount === 0 && present.some((value) => value.kind === 'money' && value.belowMinorUnit === true);
+    return belowMinorUnit ? { kind: 'money', amount, currency, belowMinorUnit } : { kind: 'money', amount, currency };
   }
   return null;
 }

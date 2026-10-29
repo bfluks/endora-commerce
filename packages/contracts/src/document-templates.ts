@@ -313,6 +313,101 @@ export interface DocumentCollectionDeclaration<TData = unknown> {
   items(data: TData): readonly DocumentItem[];
   summaryFields?(language: string): Promise<readonly DocumentFieldDefinition[]>;
   summary?(data: TData): Readonly<Record<string, DocumentValue>>;
+  /**
+   * Feature 159 — the document's groups as sections of `items(data)`
+   * (`specs/159-quote-request-item-groups/contracts/document-sections.md` §1).
+   * Absent = the collection has no sections. Only non-empty sections, groups
+   * first in order, the ungrouped lines last; each section a contiguous
+   * ascending run of indexes. A partition the facility cannot use prints the
+   * table flat — the document never fails for it.
+   */
+  sections?(data: TData): readonly DocumentItemSection[];
+}
+
+/** Feature 159 — one section of a collection: a group's lines, or the lines in no group. */
+export interface DocumentItemSection {
+  /** The group's id, or the literal `'ungrouped'`. Unique within one render. */
+  readonly key: string;
+  readonly kind: 'group' | 'ungrouped';
+  /** The group's name as an administrator wrote it; `null` for `ungrouped`. Never translated. */
+  readonly label: string | null;
+  /** Indexes into `items(data)`; ascending; the sections together cover every index exactly once. */
+  readonly itemIndexes: readonly number[];
+  /** The section's totals, keyed like `summary(data)`, computed by the host over the section's lines. */
+  readonly summary: Readonly<Record<string, DocumentValue>>;
+}
+
+export const DOCUMENT_UNGROUPED_SECTION_KEY = 'ungrouped';
+
+export const documentItemSectionSchema = z.object({
+  key: z.string().min(1).max(64),
+  kind: z.enum(['group', 'ungrouped']),
+  label: z.string().nullable(),
+  itemIndexes: z.array(z.number().int().nonnegative()),
+  summary: z.record(z.string(), documentValueSchema),
+});
+
+/**
+ * Whether `sections` is a partition of `itemCount` items the Line items table
+ * can print (contract §1): read in order, the sections' indexes are exactly
+ * `0…itemCount-1`; no section is empty; keys are unique; the ungrouped section,
+ * if any, is last. Pure — the renderer and the canvas both call it.
+ */
+export function isValidSectionPartition(sections: readonly DocumentItemSection[], itemCount: number): boolean {
+  const keys = new Set<string>();
+  let next = 0;
+  for (const [index, section] of sections.entries()) {
+    if (keys.has(section.key)) return false;
+    keys.add(section.key);
+    if (section.itemIndexes.length === 0) return false;
+    if (section.kind === 'ungrouped' && index !== sections.length - 1) return false;
+    for (const itemIndex of section.itemIndexes) {
+      if (itemIndex !== next) return false;
+      next += 1;
+    }
+  }
+  return next === itemCount;
+}
+
+/**
+ * The facility's own texts around sections — the default *Other items* heading
+ * and the item count — in the document's language (contract §3). Here rather
+ * than in the facility's backend so the editor canvas prints what the PDF
+ * prints (153 FR-036). Polish and English ship; any other language reads
+ * English. The count's form is chosen by `Intl.PluralRules`.
+ */
+export interface DocumentSectionTexts {
+  readonly otherItems: string;
+  itemCount(count: number): string;
+}
+
+const SECTION_TEXTS: Readonly<
+  Record<'en' | 'pl', { readonly otherItems: string; readonly items: Readonly<Partial<Record<Intl.LDMLPluralRule, string>>> & { readonly other: string } }>
+> = {
+  en: { otherItems: 'Other items', items: { one: '{count} item', other: '{count} items' } },
+  pl: {
+    otherItems: 'Pozostałe pozycje',
+    items: { one: '{count} pozycja', few: '{count} pozycje', many: '{count} pozycji', other: '{count} pozycji' },
+  },
+};
+
+export function documentSectionTexts(language: string): DocumentSectionTexts {
+  const texts = language.toLowerCase().split('-')[0] === 'pl' ? SECTION_TEXTS.pl : SECTION_TEXTS.en;
+  const locale = language || 'en-US';
+  return {
+    otherItems: texts.otherItems,
+    itemCount(count) {
+      let form: Intl.LDMLPluralRule = 'other';
+      let formatted = String(count);
+      try {
+        form = new Intl.PluralRules(locale).select(count);
+        formatted = new Intl.NumberFormat(locale).format(count);
+      } catch {
+        // A language code Intl does not accept: the plain number and the general form.
+      }
+      return (texts.items[form] ?? texts.items.other).replace('{count}', formatted);
+    },
+  };
 }
 
 /** Puck stores what its fields edit; a number may arrive as a numeric string. */
@@ -377,13 +472,49 @@ export const itemsTableTotalSchema = z.object({
 });
 export type ItemsTableTotal = z.infer<typeof itemsTableTotalSchema>;
 
-export const itemsTableGroupingSchema = z.object({
+/** 153's grouping by a field's value; templates saved before feature 159 carry no `by`. */
+export const itemsTableFieldGroupingSchema = z.object({
+  by: z.literal('field').optional(),
   field: fieldPath,
   emptyLabel: z.string().max(ITEMS_TABLE_LIMITS.maxGroupEmptyLabelLength).default(''),
   subtotalField: fieldPath.nullable().default(null),
   subtotalLabel: z.string().max(ITEMS_TABLE_LIMITS.maxLabelLength).default(''),
 });
+/** Feature 159 — the document's own groups (`DocumentCollectionDeclaration.sections`). */
+export const itemsTableSectionsGroupingSchema = z.object({
+  by: z.literal('sections'),
+  otherItemsLabel: z.string().max(ITEMS_TABLE_LIMITS.maxGroupEmptyLabelLength).default(''),
+  showItemCount: booleanLike.default(true),
+});
+export const itemsTableNoGroupingSchema = z.object({ by: z.literal('none') });
+
+/**
+ * The table's *Grouping* setting (159 contract §2). The props' `grouping` is
+ * `null` or absent on a table whose grouping was never configured, which means
+ * **the document's groups** with the defaults — so every template saved before
+ * feature 159 prints a grouped document's groups without being edited, and an
+ * ungrouped document exactly as before.
+ */
+export const itemsTableGroupingSchema = z.union([
+  itemsTableSectionsGroupingSchema,
+  itemsTableNoGroupingSchema,
+  itemsTableFieldGroupingSchema,
+]);
 export type ItemsTableGrouping = z.infer<typeof itemsTableGroupingSchema>;
+export type ItemsTableGroupingMode = 'sections' | 'none' | 'field';
+
+/**
+ * The mode a stored `grouping` means, read tolerantly as the renderer reads
+ * every prop: `null`, absent, an unreadable value or an unknown `by` is
+ * *sections*; a record without `by` is 153's field grouping.
+ */
+export function itemsTableGroupingMode(raw: unknown): ItemsTableGroupingMode {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return 'sections';
+  const by = (raw as { by?: unknown }).by;
+  if (by === undefined || by === 'field') return 'field';
+  if (by === 'none') return 'none';
+  return 'sections';
+}
 
 /**
  * The stored props of one `document_templates.ItemsTable` node
@@ -636,6 +767,8 @@ export const documentCollectionDetailSchema = z.object({
   /** The sample's items, a field's `sampleValue` filled where the sample has none. */
   sampleItems: z.array(documentItemSchema),
   sampleSummary: z.record(z.string(), documentValueSchema),
+  /** Feature 159 — the sample's sections; `[]` when the collection declares none. */
+  sampleSections: z.array(documentItemSectionSchema).default([]),
 });
 export type DocumentCollectionDetail = z.infer<typeof documentCollectionDetailSchema>;
 

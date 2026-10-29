@@ -35,6 +35,13 @@ import {
   STATUS_SWEEP_SCOPE_REASON,
   statusSweepTick,
 } from '../../../../packages/modules/price_lists/src/backend/plugin.js';
+import type { StageAlertService } from '../../../../packages/modules/projects/src/backend/services/stage-alert-service.js';
+import {
+  STAGE_ALERT_SCOPE_REASON,
+  runStageAlertJob,
+  stageAlertTick,
+} from '../../../../packages/modules/projects/src/backend/workers/stage-alert-worker.js';
+import { PROJECTS_ADMIN, createProject, deleteProjects, patchStage, stageNamed } from '../projects/helpers.js';
 
 /**
  * Issue #120 — a tick of a scheduled worker that finds nothing to do writes no
@@ -570,7 +577,6 @@ describe('idle worker ticks write no escape-hatch audit row (issue #120)', () =>
       const em = h.em();
       const suffix = randomUUID().slice(0, 8);
       const scheduled = em.create(PriceList, {
-        code: `idle-ticks-${suffix}`,
         name: `Idle ticks ${suffix}`,
         currency: 'PLN',
         type: 'sale',
@@ -593,7 +599,6 @@ describe('idle worker ticks write no escape-hatch audit row (issue #120)', () =>
       const em = h.em();
       const suffix = randomUUID().slice(0, 8);
       const active = em.create(PriceList, {
-        code: `idle-ticks-ended-${suffix}`,
         name: `Idle ticks ended ${suffix}`,
         currency: 'PLN',
         type: 'sale',
@@ -615,7 +620,6 @@ describe('idle worker ticks write no escape-hatch audit row (issue #120)', () =>
       const em = h.em();
       const suffix = randomUUID().slice(0, 8);
       const scheduled = em.create(PriceList, {
-        code: `idle-ticks-unanswered-${suffix}`,
         name: `Idle ticks unanswered ${suffix}`,
         currency: 'PLN',
         type: 'sale',
@@ -639,6 +643,111 @@ describe('idle worker ticks write no escape-hatch audit row (issue #120)', () =>
       const row = await h.em().findOneOrFail(PriceList, { id: scheduled.id }, { refresh: true });
       expect(row.status).toBe('active');
       expect(await recorded(STATUS_SWEEP_SCOPE_REASON)).toBe(before + 1);
+    });
+  });
+
+  // --- projects: Stage deadline alerts, every 15 min ---------------------------
+
+  describe('projects — the Stage deadline alert sweep', () => {
+    const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined };
+    const alerts = () => h.container.resolve('projectsStageAlertService') as StageAlertService;
+    /**
+     * The job BullMQ runs, around the tick the module composes — with the
+     * clock handed in, because an alert is due only on its day, from 08:00 in
+     * the alert zone. 2033 is a year no other file gives a Stage deadline in.
+     */
+    const tick = (now: Date) =>
+      asWorker(() =>
+        runStageAlertJob({
+          isPresent: () => true,
+          hasWork: () => alerts().hasWork(now),
+          tick: stageAlertTick({
+            alerts: { sweep: () => alerts().sweep(now) },
+            isPresent: () => true,
+            log: quiet,
+          }),
+        }),
+      );
+    // 09:00 in Europe/Warsaw (UTC+1 in March).
+    const DUE_DAY = new Date('2033-03-10T08:00:00.000Z');
+    const DAY_BEFORE = new Date('2033-03-09T08:00:00.000Z');
+    const EARLY_ON_DUE_DAY = new Date('2033-03-10T05:00:00.000Z');
+    const created: string[] = [];
+
+    beforeAll(async () => {
+      // The default zone — set, not assumed: another file may have written it.
+      const zone = await h.app.inject({
+        method: 'PUT',
+        url: '/api/v1/admin/settings/projects.alerts_time_zone/value',
+        cookies: PROJECTS_ADMIN,
+        payload: { scope: 'all', value: 'Europe/Warsaw' },
+      });
+      expect(zone.statusCode, zone.body).toBeLessThan(400);
+    });
+
+    afterAll(async () => {
+      await deleteProjects(h, created);
+    });
+
+    it('several ticks with no alert due write no row', async () => {
+      const before = await recorded(STAGE_ALERT_SCOPE_REASON);
+      for (let i = 0; i < IDLE_TICKS; i += 1) await tick(DAY_BEFORE);
+
+      expect(await recorded(STAGE_ALERT_SCOPE_REASON)).toBe(before);
+    });
+
+    it('a tick with an alert due delivers it and writes its row; one before 08:00, and the next one, are idle', async () => {
+      const project = await createProject(h, {
+        title: 'Idle ticks alert',
+        visibility: 'everyone',
+        stages: [{ name: 'Design', color: '#3b82f6', plannedDurationDays: 5, alertOffsetsDays: [2] }],
+      });
+      created.push(project.id);
+      const stageId = stageNamed(project, 'Design');
+      await patchStage(h, project.id, stageId, { deadlineOn: '2033-03-12' });
+      const deliveries = async () =>
+        (await h
+          .em()
+          .getConnection()
+          .execute(`select "outcome" from "project_stage_alert_deliveries" where "stage_id" = ?`, [stageId])) as Array<{
+          outcome: string | null;
+        }>;
+      const before = await recorded(STAGE_ALERT_SCOPE_REASON);
+
+      // Due today, but not before 08:00: no question, no row.
+      for (let i = 0; i < IDLE_TICKS; i += 1) await tick(EARLY_ON_DUE_DAY);
+      expect(await deliveries()).toEqual([]);
+      expect(await recorded(STAGE_ALERT_SCOPE_REASON)).toBe(before);
+
+      await tick(DUE_DAY);
+
+      const rows = await deliveries();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.outcome).not.toBeNull();
+      expect(await recorded(STAGE_ALERT_SCOPE_REASON)).toBe(before + 1);
+      // Claimed once: the tick after it is idle again.
+      await tick(DUE_DAY);
+      expect(await recorded(STAGE_ALERT_SCOPE_REASON)).toBe(before + 1);
+    });
+
+    it('a question that cannot be answered counts as yes: the sweep runs, and is recorded', async () => {
+      const before = await recorded(STAGE_ALERT_SCOPE_REASON);
+
+      await asWorker(() =>
+        runStageAlertJob({
+          isPresent: () => true,
+          hasWork: async () => {
+            throw new Error('connection refused');
+          },
+          tick: stageAlertTick({
+            alerts: { sweep: () => alerts().sweep(DAY_BEFORE) },
+            isPresent: () => true,
+            log: quiet,
+          }),
+        }),
+      );
+
+      expect(await recorded(STAGE_ALERT_SCOPE_REASON)).toBe(before + 1);
     });
   });
 });

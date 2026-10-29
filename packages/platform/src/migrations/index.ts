@@ -77,3 +77,5 @@ export { Migration20260721T011510CoreSettingsCredentialRefValueType } from './20
 export { Migration20260816T203339CoreRetireCoreActivationSettings } from './20260816T203339_core_retire_core_activation_settings.js';
 export { Migration20260919T101500CoreModuleRegistrationsBootConverged } from './20260919T101500_core_module_registrations_boot_converged.js';
 export { Migration20261011T135250CoreSettingsMultiline } from './20261011T135250_core_settings_multiline.js';
+export { Migration20261018T101912CoreSalesChannelsAnonymousAccess } from './20261018T101912_core_sales_channels_anonymous_access.js';
+export { Migration20261028T173317CoreSalesChannelsRetireIsPublic } from './20261028T173317_core_sales_channels_retire_is_public.js';

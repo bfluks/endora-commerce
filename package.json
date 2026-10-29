@@ -26,6 +26,8 @@
     "setup": "pnpm run build:packages && pnpm --filter backend run setup",
     "dev:infra": "docker compose up -d",
     "dev:infra:down": "docker compose down",
+    "dev:infra:test": "docker compose --profile test up -d --wait postgres-test",
+    "dev:infra:test:down": "docker compose --profile test rm --stop --force postgres-test",
     "dev": "node scripts/dev.mjs",
     "dev:parallel": "pnpm --parallel --filter backend --filter storefront --filter admin run dev",
     "check:naming": "bash scripts/check-naming.sh",
@@ -40,7 +42,8 @@
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react-hooks": "^7.1.1",
     "prettier": "^3.9.9",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
   },
   "pnpm": {
     "overrides": {

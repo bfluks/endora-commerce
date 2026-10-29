@@ -32,7 +32,12 @@ import { tForLocale } from '../lib/i18n/messages';
  * difference a reader has to discover is one they will mistake for the
  * sender's numbers.
  */
-export function SharedComparisonTable(props: { token: string; locale: string }): ReactNode {
+export function SharedComparisonTable(props: {
+  token: string;
+  locale: string;
+  /** The active sales channel, sent on the browser-side read. Supplied by the page. */
+  salesChannelCode: string | undefined;
+}): ReactNode {
   const t = tForLocale(props.locale);
   const [state, setState] = useState<
     | { kind: 'loading' }
@@ -49,7 +54,7 @@ export function SharedComparisonTable(props: { token: string; locale: string }):
 
   useEffect(() => {
     let cancelled = false;
-    getSharedComparison(props.token)
+    getSharedComparison(props.token, props.salesChannelCode)
       .then((res) => {
         if (cancelled) return;
         if (!res) {
@@ -68,7 +73,7 @@ export function SharedComparisonTable(props: { token: string; locale: string }):
     return () => {
       cancelled = true;
     };
-  }, [props.token]);
+  }, [props.token, props.salesChannelCode]);
 
   const activeMode: ComparisonDisplayMode =
     state.kind === 'ready' ? (localMode ?? state.view.displayMode) : 'all';

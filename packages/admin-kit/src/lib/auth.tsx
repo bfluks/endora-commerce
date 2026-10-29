@@ -8,7 +8,9 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { ADMIN_PREFERENCES_DEFAULTS, type AdminPreferences } from '@endora-commerce/contracts';
 import { ApiError, apiClient, onUnauthorized } from './api-client.js';
+import { AdminPreferencesProvider } from './admin-preferences/AdminPreferencesProvider.js';
 
 /**
  * Admin auth context. The session lives in the `b2b_admin_session` httpOnly
@@ -70,6 +72,15 @@ export interface AdminMe {
    * predates the field. Either way the consumer applies its own default.
    */
   idleLogoutMinutes?: number | null;
+  /**
+   * Feature 164 — the admin's own Admin UI preferences (FR-016). `null` when the
+   * server could not read them; absent from a backend that predates the field.
+   * A **fetched** session in either state opens with the defaults and saves
+   * nothing until a later load succeeds (FR-018). A session **seeded** through
+   * `initial` without the field is read as the defaults, available — the test
+   * that seeded it chose it.
+   */
+  preferences?: AdminPreferences | null;
 }
 
 interface AuthState {
@@ -280,6 +291,19 @@ export function AuthProvider({ initial, children }: AuthProviderProps): ReactNod
     setState({ status: 'unauthenticated', me: null, lastLoginError: null, mfaChallengeId: null });
   }, []);
 
+  // Feature 164 — the store the preference hooks read. Seeded sessions without
+  // the field read as the defaults; fetched ones as unavailable (see `AdminMe`).
+  const [seeded] = useState(() => initial !== undefined);
+  const signedIn = state.status === 'authenticated' ? state.me : null;
+  const preferences =
+    signedIn === null
+      ? null
+      : signedIn.preferences === undefined
+        ? seeded
+          ? ADMIN_PREFERENCES_DEFAULTS
+          : null
+        : signedIn.preferences;
+
   const value = useMemo<AuthContextValue>(
     () => ({
       ...state,
@@ -296,7 +320,13 @@ export function AuthProvider({ initial, children }: AuthProviderProps): ReactNod
     [state, login, verifyMfa, cancelMfa, logout, refresh],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      <AdminPreferencesProvider adminUserId={signedIn?.adminUser.id ?? null} initial={preferences}>
+        {children}
+      </AdminPreferencesProvider>
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth(): AuthContextValue {

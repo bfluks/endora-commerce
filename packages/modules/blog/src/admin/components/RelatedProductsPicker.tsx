@@ -7,7 +7,9 @@ interface AdminProduct {
   id: string;
   sku: string;
   slug: string;
-  status: 'draft' | 'active' | 'inactive';
+  status: 'active' | 'inactive';
+  /** Archived is its own fact, independent of `status`. */
+  archivedAt?: string | null;
   name: Record<string, string>;
 }
 
@@ -100,12 +102,15 @@ export function RelatedProductsPicker({
           <div className="mt-2 flex flex-col gap-2">
             {value.map((id, idx) => {
               const product = productsById.get(id);
+              // `inactive` no longer means archived: each is named
+              // for what it is, and either one dims the row.
+              const archived = product?.archivedAt != null;
               const inactive = product?.status === 'inactive';
               return (
                 <div
                   key={id}
                   className={`flex flex-wrap items-center gap-2 rounded border px-2 py-1 text-sm ${
-                    !product || inactive ? 'opacity-60' : ''
+                    !product || inactive || archived ? 'opacity-60' : ''
                   }`}
                 >
                   <span className="min-w-[8rem] flex-1 truncate font-medium">
@@ -116,7 +121,12 @@ export function RelatedProductsPicker({
                   </Badge>
                   {inactive ? (
                     <Badge variant="outline" className="text-[10px]">
-                      {t('status.inactive')}
+                      {t('productStatus.inactive')}
+                    </Badge>
+                  ) : null}
+                  {archived ? (
+                    <Badge variant="outline" className="text-[10px]">
+                      {t('productStatus.archived')}
                     </Badge>
                   ) : null}
                   {!product ? (
@@ -192,6 +202,11 @@ export function RelatedProductsPicker({
                 <Badge variant="outline" className="ml-auto shrink-0 text-[10px]">
                   {t(`productStatus.${product.status}`)}
                 </Badge>
+                {product.archivedAt != null ? (
+                  <Badge variant="outline" className="shrink-0 text-[10px]">
+                    {t('productStatus.archived')}
+                  </Badge>
+                ) : null}
               </Button>
             ))}
           </div>

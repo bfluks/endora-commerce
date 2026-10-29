@@ -28,6 +28,7 @@ import type {
   OrderStatusMapping,
   Pagination,
   PropagationOutcome,
+  RecordDocumentLookupResponse,
   SetOpportunityTransitionsRequest,
   SetValueCountingStatusesRequest,
   UpdateOpportunityRequest,
@@ -55,6 +56,9 @@ import type {
  */
 
 const BASE = '/api/v1/admin/crm';
+
+/** The most rows the Opportunities endpoint returns in one page. */
+export const MAX_PAGE_LIMIT = 200;
 const ORDERS_BASE = '/api/v1/admin/orders';
 const PRODUCTS_BASE = '/api/v1/admin/catalog/products';
 const QUOTE_REQUESTS_BASE = '/api/v1/admin/quote-requests';
@@ -507,6 +511,26 @@ export const crmApi = {
     return data(
       apiClient.get<{ data: OpportunityMentionOption[] }>(`${BASE}/lookups/mentionable${queryTail(qs)}`),
     );
+  },
+
+  /**
+   * Gated `crm:write`: the `@@` document list of a text
+   * (`specs/163-projects-and-tasks/` FR-044) — Orders · Quote Requests · Tasks,
+   * each group only as the server offers it to this reader. Orders and Quote
+   * Requests are the Opportunity's Organization's — or, on the create form,
+   * the Organization chosen there; with neither, Tasks only. The answer is
+   * the shared `RecordDocumentLookupResponse`, unwrapped.
+   */
+  lookupDocuments(
+    scope: { opportunityId?: string | null; organizationId?: string | null },
+    query = '',
+  ): Promise<RecordDocumentLookupResponse> {
+    const qs = new URLSearchParams();
+    if (scope.opportunityId) qs.set('opportunityId', scope.opportunityId);
+    else if (scope.organizationId) qs.set('organizationId', scope.organizationId);
+    const q = query.trim();
+    if (q) qs.set('q', q);
+    return apiClient.get<RecordDocumentLookupResponse>(`${BASE}/lookups/documents${queryTail(qs)}`);
   },
 
   // --- Wave 2: value, Quote Requests, history (User Stories 8, 11) ----------

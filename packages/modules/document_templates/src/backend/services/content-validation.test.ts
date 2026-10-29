@@ -57,3 +57,32 @@ describe('validateTree — the Line items table (153)', () => {
     expect(error.details).toMatchObject({ path: 'content.0', blockName: TABLE });
   });
 });
+
+describe('validateTree — the table’s Grouping setting (159 FR-041, FR-045)', () => {
+  it.each<[string, unknown]>([
+    ['never configured (null)', null],
+    ['the document’s groups', { by: 'sections', otherItemsLabel: 'Rest', showItemCount: false }],
+    ['no grouping', { by: 'none' }],
+    ['153 by field, saved before the feature', { field: 'attributes.brand', emptyLabel: '', subtotalField: null, subtotalLabel: '' }],
+    ['by field', { by: 'field', field: 'attributes.brand' }],
+  ])('accepts %s', (_label, grouping) => {
+    expect(() => validateTree(tree([table({ grouping })]), facts())).not.toThrow();
+  });
+
+  it('accepts a table saved before the feature with no grouping key at all', () => {
+    expect(() => validateTree(tree([table({})]), facts())).not.toThrow();
+  });
+
+  it('refuses an Other items heading over the limit, naming the setting', () => {
+    const error = refusal(() =>
+      validateTree(tree([table({ grouping: { by: 'sections', otherItemsLabel: 'x'.repeat(101) } })]), facts()),
+    );
+    expect(error.code).toBe('DOCUMENT_TEMPLATE_INVALID');
+    expect(error.details).toMatchObject({ path: 'content.0.props.grouping.otherItemsLabel', blockName: TABLE });
+  });
+
+  it('refuses an unknown grouping mode at the setting', () => {
+    const error = refusal(() => validateTree(tree([table({ grouping: { by: 'brand' } })]), facts()));
+    expect(error.details).toMatchObject({ path: 'content.0.props.grouping', blockName: TABLE });
+  });
+});

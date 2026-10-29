@@ -1,17 +1,22 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { notFound, permanentRedirect } from 'next/navigation';
-import { Breadcrumbs } from '../../../components/Breadcrumbs';
+import type { CmsResolvedPage } from '@endora-commerce/contracts';
+import { Breadcrumbs, type BreadcrumbCrumb } from '../../../components/Breadcrumbs';
 import { CmsPageRenderer } from '../../../components/CmsPageRenderer';
+import { OrganizationJsonLd } from '../../../components/seo/OrganizationJsonLd';
 import { getCmsPageBySlug, normalizeCmsUrlPath } from '../../../lib/api/cms';
 import { getHomepageConfig } from '../../../lib/api/homepage';
 import { tForLocale } from '../../../lib/i18n/messages';
 import { getServerContext } from '../../../lib/server-context';
+import { cmsSocialMetadata } from '../../../lib/seo/cms-share-metadata';
 import { canonicalPath } from '../../../lib/seo/route-seo';
+import { cmsRenderLocation, type PageSearchParams } from '../../../lib/page-builder/render-location';
 import { seo } from './seo';
 
 interface PageProps {
   params: Promise<{ slug: string[] }>;
+  searchParams?: Promise<PageSearchParams>;
 }
 
 /**
@@ -35,19 +40,26 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const { ctx } = await getServerContext();
   const page = await getCmsPageBySlug(path, ctx);
   if (!page) return { title: 'Not found', robots: { index: false, follow: false } };
+  const canonical = canonicalPath(seo.route, { slug });
+  // Feature 163 (FR-033, FR-034): the sharing card — image, locale and its
+  // alternates. No `alternates.languages`: there are no per-language URLs.
+  const social = cmsSocialMetadata(page, canonical);
   return {
-    title: page.meta.title ?? page.name,
+    title: social.title,
     description: page.meta.description ?? undefined,
     keywords: page.meta.keywords ?? undefined,
     // Indexable (FR-010/FR-012).
-    alternates: { canonical: canonicalPath(seo.route, { slug }) },
+    alternates: { canonical },
+    openGraph: social.openGraph,
+    twitter: social.twitter,
   };
 }
 
-export default async function CmsContentPage({ params }: PageProps): Promise<ReactNode> {
+export default async function CmsContentPage({ params, searchParams }: PageProps): Promise<ReactNode> {
   const { slug } = await params;
+  const query = (await searchParams) ?? {};
   const path = normalizeCmsUrlPath(slug.join('/'));
-  const { ctx, locale } = await getServerContext();
+  const { ctx, locale, modules } = await getServerContext();
   const t = tForLocale(locale);
   const [page, { cmsPageSlug }] = await Promise.all([
     getCmsPageBySlug(path, ctx),
@@ -74,12 +86,40 @@ export default async function CmsContentPage({ params }: PageProps): Promise<Rea
   // (`check:storefront-indexability`'s `status-decision-under-a-boundary`).
   if (cmsPageSlug !== null && normalizeCmsUrlPath(cmsPageSlug) === path) permanentRedirect('/');
 
+  // Feature 163 (FR-030, FR-031): Home › the ancestors the backend resolved for
+  // this channel › the page. An ancestor this channel does not serve arrives
+  // with `slug: null` and renders as text. `?? DEFAULT_BREADCRUMBS` covers an
+  // answer cached before the field existed — today's trail, shown and light.
+  const breadcrumbs = page.breadcrumbs ?? DEFAULT_BREADCRUMBS;
+  const crumbs: BreadcrumbCrumb[] = [
+    { href: '/', label: t('nav.home') },
+    ...breadcrumbs.trail.map((crumb) => ({
+      href: crumb.slug !== null ? `/${normalizeCmsUrlPath(crumb.slug)}` : null,
+      label: crumb.name,
+    })),
+    { href: `/${path}`, label: page.name },
+  ];
+
   return (
     <>
-      <div className="mx-auto max-w-[1360px] px-[24px] pt-[24px] max-md:pt-[16px]">
-        <Breadcrumbs crumbs={[{ href: '/', label: t('nav.home') }, { href: `/${path}`, label: page.name }]} />
-      </div>
-      <CmsPageRenderer page={page} ctx={ctx} />
+      {/* Feature 163 (FR-035): the organisation's data on every CMS page, not only on `/`. */}
+      <OrganizationJsonLd ctx={ctx} />
+      {breadcrumbs.visible ? (
+        // The scheme binds the brand's `--cmsb-*` colours for the trail. Light,
+        // the default, paints nothing, so a page that never chose a scheme looks
+        // exactly as it did; muted and dark paint a full-width band.
+        <div
+          data-cmsb-scheme={breadcrumbs.scheme}
+          className={breadcrumbs.scheme === 'light' ? undefined : 'bg-[var(--cmsb-bg,#ffffff)]'}
+        >
+          <div className="mx-auto max-w-[1360px] px-[24px] pt-[24px] max-md:pt-[16px]">
+            <Breadcrumbs crumbs={crumbs} scheme={breadcrumbs.scheme} />
+          </div>
+        </div>
+      ) : null}
+      <CmsPageRenderer page={page} ctx={ctx} modules={modules} location={cmsRenderLocation(`/${path}`, query)} />
     </>
   );
 }
+
+const DEFAULT_BREADCRUMBS: CmsResolvedPage['breadcrumbs'] = { visible: true, scheme: 'light', trail: [] };

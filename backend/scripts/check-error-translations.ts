@@ -39,6 +39,34 @@
  *          Phase 4 — that file's own header scheduled the handover, and shipping
  *          both would be two readers of one derivation.
  *
+ * One more landed with issue #441, because P1 counts a key as translated the
+ * moment it holds a string:
+ *
+ *   **P5** every translation is a sentence in its own language. For each
+ *          `errors.*` key in a bundle that is not the reference language's,
+ *          the value is neither a `placeholder` — the code itself, lowercased,
+ *          optionally behind a one-word label (`Błąd: product not found.`) —
+ *          nor `same-as-english`, the reference sentence copied across under
+ *          the same key. 137 Polish placeholders stood in the tree, counted as
+ *          translated by P1, when this landed; every one was written as prose
+ *          in the same change. **No ledger**: every repair is one sentence
+ *          written, and the one legitimate identity — a value that is nothing
+ *          but an interpolation, such as `{reason}` — carries no language and
+ *          is excluded by its shape rather than by a list. If a sixth kind of
+ *          legitimately identical value is found (a brand name, an acronym),
+ *          add the ledger then, two-way like `UNTRANSLATED_ERROR_CODES` — do
+ *          not ship an empty one.
+ *
+ *          The reference language is never compared with itself, but since
+ *          issue #486 it is judged for its own placeholder shape: the code in
+ *          **Title Case**, optionally behind a one-word label
+ *          (`Product Not Found.`). That match is case-sensitive, because the
+ *          honest English sentence for a `*_NOT_FOUND` code is often the same
+ *          words in sentence case (`Order not found.`), which the
+ *          case-insensitive rule for every other language would report. The
+ *          English entries of the same 137 codes had that shape when it
+ *          landed; every one was written as a sentence in the same change.
+ *
  * P1 alone cannot see a sentence written in a bundle the table does not name,
  * and that is where issue #229's five defects lived: `carts` had finished
  * wording for two codes routed to `core`, and three more codes were shadowed by
@@ -142,6 +170,13 @@ export type ModuleDirectories = ReadonlyMap<string, string>;
 
 /** The languages every user-facing string ships in (Principle VIII). */
 const LANGUAGES = ['en', 'pl'] as const;
+
+/**
+ * The language every other bundle is a translation of (P5). Its sentences are
+ * the reference a copied value is compared against, so it is never compared
+ * with itself; it is judged only for its own placeholder shape (issue #486).
+ */
+const REFERENCE_LANGUAGE = 'en';
 
 /**
  * Codes with no sentence in either language, first measured on 2026-08-16.
@@ -728,6 +763,145 @@ export function findUnreachableSentences(
   );
 }
 
+/** Why a written translation is not a sentence in its own language (P5). */
+export type PlaceholderFindingKind = 'placeholder' | 'same-as-english';
+
+export interface PlaceholderFinding extends BundleKey {
+  /** The base code, with any `.<token>` suffix resolved away. */
+  readonly code: string;
+  readonly kind: PlaceholderFindingKind;
+  /** The value as written, so the report shows what the operator reads. */
+  readonly value: string;
+  readonly repair: string;
+}
+
+/** `X_REFUSED` and `x refused` are one placeholder; so is `too_late` and `too late`. */
+function spelledOut(identifier: string): string {
+  return identifier.toLowerCase().replace(/_+/g, ' ').trim();
+}
+
+/**
+ * A one-word label in front of the code — `Błąd: `, `Fehler: ` — which is the
+ * whole of what the generator that wrote the placeholders added. One word only,
+ * so a real sentence that opens with the word for "error" and goes on in its
+ * own language is not mistaken for one.
+ */
+const PLACEHOLDER_LABEL = /^\p{L}+:\s*/u;
+
+/**
+ * Whether `value` is the key's own code written back as text: the code, or the
+ * code and its token, lowercased and spelled out, behind at most a one-word
+ * label and a full stop. Case-insensitive, so `X Refused.` — the reference
+ * language's own title-cased form, copied across — is the same shape.
+ */
+function isPlaceholder(value: string, code: string, token: string | undefined): boolean {
+  const body = value
+    .trim()
+    .replace(PLACEHOLDER_LABEL, '')
+    .replace(/\.$/, '')
+    .trim()
+    .toLowerCase();
+  if (body === spelledOut(code)) return true;
+  return token !== undefined && body === spelledOut(`${code}_${token}`);
+}
+
+/** `X_REFUSED` and `X Refused`; `too_late` and `Too Late`. Case is significant. */
+function titleCased(identifier: string): string {
+  return identifier
+    .split(/_+/)
+    .filter((word) => word.length > 0)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
+/**
+ * Whether a reference-language `value` is the key's own code written back as
+ * text (issue #486): the code, or the code and its token, in Title Case, behind
+ * at most a one-word label and a full stop. **Case-sensitive**, unlike
+ * `isPlaceholder`: `Order not found.` is an English sentence that spells the
+ * same words, and only the Title-Case form is the generator's.
+ */
+function isReferencePlaceholder(value: string, code: string, token: string | undefined): boolean {
+  const body = value.trim().replace(PLACEHOLDER_LABEL, '').replace(/\.$/, '').trim();
+  if (body === titleCased(code)) return true;
+  return token !== undefined && body === titleCased(`${code}_${token}`);
+}
+
+/**
+ * A value that is nothing but interpolations — `{reason}` — carries no language,
+ * so it is the same string in every bundle by construction and is not a copy.
+ */
+function carriesNoLanguage(value: string): boolean {
+  return !/\p{L}/u.test(value.replace(/\{[^{}]*\}/g, ''));
+}
+
+/**
+ * P5 — every translation is a sentence in its own language (issue #441).
+ *
+ * P1 asks whether a string exists under the key and P2 whether it is in the
+ * bundle that is read; neither asks what the string says, which is how 137
+ * Polish entries of the shape `Błąd: product not found.` passed both. One
+ * finding per key, and `placeholder` wins over `same-as-english`: a value that
+ * is the code written back is that whatever the reference sentence says. The
+ * reference language is judged for `placeholder` only, in its Title-Case shape
+ * (issue #486); it has nothing to be a copy of.
+ */
+export function findPlaceholderSentences(
+  input: Pick<TranslationInput, 'readBundle' | 'listBundleKeys'>,
+): PlaceholderFinding[] {
+  const findings: PlaceholderFinding[] = [];
+  for (const written of input.listBundleKeys()) {
+    const match = ERROR_KEY.exec(written.key);
+    if (!match) continue;
+    const value = input.readBundle(written.moduleId, written.language)[written.key];
+    if (typeof value !== 'string') continue;
+    const code = match[1] as string;
+    if (written.language === REFERENCE_LANGUAGE) {
+      if (isReferencePlaceholder(value, code, match[2])) {
+        findings.push({
+          ...written,
+          code,
+          kind: 'placeholder',
+          value,
+          repair:
+            'this is the code in Title Case, not a sentence — write what the refusal means ' +
+            'in sentence case, from the raise site and the other languages\' sentences',
+        });
+      }
+      continue;
+    }
+    if (isPlaceholder(value, code, match[2])) {
+      findings.push({
+        ...written,
+        code,
+        kind: 'placeholder',
+        value,
+        repair:
+          'this is the code written back as text, not a sentence — write what the refusal ' +
+          `means in ${written.language}, from the ${REFERENCE_LANGUAGE} sentence and the raise site`,
+      });
+      continue;
+    }
+    if (carriesNoLanguage(value)) continue;
+    const reference = input.readBundle(written.moduleId, REFERENCE_LANGUAGE)[written.key];
+    if (reference === value) {
+      findings.push({
+        ...written,
+        code,
+        kind: 'same-as-english',
+        value,
+        repair: `this is the ${REFERENCE_LANGUAGE} sentence copied across — translate it into ${written.language}`,
+      });
+    }
+  }
+  return findings.sort(
+    (a, b) =>
+      a.moduleId.localeCompare(b.moduleId) ||
+      a.key.localeCompare(b.key) ||
+      a.language.localeCompare(b.language),
+  );
+}
+
 export interface AnalysisResult {
   /** P1 findings, ledgered and not. */
   readonly findings: readonly Finding[];
@@ -739,6 +913,8 @@ export interface AnalysisResult {
   readonly reconciliations: readonly ReconciliationFinding[];
   /** P4 findings — a code more than one registered module declares. */
   readonly collisions: readonly ErrorCodeCollision[];
+  /** P5 findings — a translation that is a placeholder or a copy. No ledger. */
+  readonly placeholders: readonly PlaceholderFinding[];
   /** What the bundle walk actually read, so a vacuous pass has a name. */
   readonly keysWalked: readonly BundleKey[];
   /**
@@ -772,6 +948,7 @@ export function analyseErrorTranslations(
   const sentences = findUnreachableSentences(input);
   const reconciliations = reconcileEnumeration(input);
   const collisions = input.collisions;
+  const placeholders = findPlaceholderSentences(input);
   const total = Object.keys(input.keys).length;
   const declaredCodes = total + collisions.length;
   // The `sources=error-codes:` half of the read line, as two real counts rather
@@ -790,8 +967,8 @@ export function analyseErrorTranslations(
     declaredEnumMembers +
     reconciliations.filter((finding) => finding.kind === 'undeclared-enum-member').length;
   const empty = {
-    findings, unledgered, stale, sentences, reconciliations, collisions, keysWalked,
-    enumeratedCodesAccountedFor,
+    findings, unledgered, stale, sentences, reconciliations, collisions, placeholders,
+    keysWalked, enumeratedCodesAccountedFor,
   };
 
   // Three vacuity guards, independent on purpose (§2.3). The declarations, the
@@ -831,6 +1008,8 @@ export function analyseErrorTranslations(
     sentences.filter((f) => f.kind === kind).length;
   const byReconciliation = (kind: ReconciliationFindingKind): number =>
     reconciliations.filter((f) => f.kind === kind).length;
+  const byPlaceholder = (kind: PlaceholderFindingKind): number =>
+    placeholders.filter((f) => f.kind === kind).length;
   return {
     ...empty,
     exitCode:
@@ -838,7 +1017,8 @@ export function analyseErrorTranslations(
       stale.length > 0 ||
       sentences.length > 0 ||
       reconciliations.length > 0 ||
-      collisions.length > 0
+      collisions.length > 0 ||
+      placeholders.length > 0
         ? 1
         : 0,
     summary:
@@ -849,7 +1029,9 @@ export function analyseErrorTranslations(
       `duplicate=${byKind('duplicate')} noCode=${byKind('no-code')} ` +
       `undeclaredEnumMember=${byReconciliation('undeclared-enum-member')} ` +
       `undeclaredInEnum=${byReconciliation('undeclared-in-enum')} ` +
-      `collision=${collisions.length}`,
+      `collision=${collisions.length} ` +
+      `placeholder=${byPlaceholder('placeholder')} ` +
+      `sameAsEnglish=${byPlaceholder('same-as-english')}`,
   };
 }
 
@@ -994,6 +1176,21 @@ async function main(): Promise<void> {
         'the thrower (specs/082-error-code-ownership/):\n' +
         describeErrorCodeCollisions(result.collisions),
     );
+  }
+
+  if (result.placeholders.length > 0) {
+    console.error(
+      '\nThese error messages are not sentences in their own language: the code written ' +
+        'back as text, or the English sentence copied across. Every check above counts ' +
+        'them as translated, and an operator reads them verbatim. There is no ledger — ' +
+        'every repair is one sentence written:',
+    );
+    for (const f of result.placeholders) {
+      console.error(
+        `  - [${f.kind}] ${f.moduleId}/i18n/${f.language}.json "${f.key}": ` +
+          `${JSON.stringify(f.value)} — ${f.repair}`,
+      );
+    }
   }
 
   if (result.exitCode !== 0) process.exit(result.exitCode);

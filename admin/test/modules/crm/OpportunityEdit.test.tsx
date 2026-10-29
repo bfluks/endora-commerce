@@ -8,19 +8,22 @@ import {
   core,
   detail,
   en,
+  editorOf,
   renderCrm,
   storedText,
 } from './crm-fixtures';
 
 /**
  * Editing and deleting an Opportunity, and the reason of a status change
- * (`specs/143-crm-sales-opportunities/`, User Story 1 — task T181; FR-005,
+ * (`specs/158-crm-opportunity-inline-editing/` FR-001 – FR-004;
+ * `specs/143-crm-sales-opportunities/`, User Story 1 — task T181; FR-005,
  * `contracts/admin-api.md` §1–§2).
  *
- * Three subjects. An edit sends the fields that changed and nothing else, under
- * the version they were read at. A stale version is **said**, with a way to
- * read the Opportunity again, and is never retried behind the operator's back.
- * Deleting is offered to a holder of `crm:configure` and asks first.
+ * Three subjects. Every field is edited where it is shown, and a save sends
+ * that field alone, under the version it was read at. A stale version is
+ * **said**, the newer Opportunity is put on screen, and the draft is saved
+ * against it only when the operator asks again — never retried behind their
+ * back. Deleting is offered to a holder of `crm:configure` and asks first.
  */
 
 const getSpy = vi.fn();
@@ -107,13 +110,13 @@ async function renderPage(permissions?: readonly string[]): Promise<void> {
   await screen.findByRole('heading', { level: 2, name: en('opportunity.field.description') });
 }
 
-async function openForm(): Promise<HTMLElement> {
-  await userEvent.click(screen.getByRole('button', { name: en('opportunity.edit.open') }));
-  return screen.findByRole('form', { name: en('opportunity.edit.title') });
+/** The pencil beside a field, named "Edit <field>". */
+function pencil(field: string): HTMLElement {
+  return screen.getByRole('button', { name: en('inlineEdit.edit', { field }) });
 }
 
-function save(form: HTMLElement): Promise<void> {
-  return userEvent.click(within(form).getByRole('button', { name: en('opportunity.edit.submit') }));
+function save(): Promise<void> {
+  return userEvent.click(screen.getByRole('button', { name: core('common.action.save') }));
 }
 
 /** A status the workflow allows from here is a button of the stage bar, named by what it does. */
@@ -124,192 +127,193 @@ const MOVE_TO_LOST = en('opportunity.stage.moveToClosing', {
 
 const IF_MATCH_1 = { headers: { 'If-Match': '"1"' } };
 
-describe('OpportunityDetail — editing', () => {
-  it('offers no edit control to an operator who may only read', async () => {
+describe('OpportunityDetail — editing in place (specs/158-crm-opportunity-inline-editing/)', () => {
+  const TITLE = en('opportunity.field.title');
+  const DESCRIPTION = en('opportunity.field.description');
+  const CLOSE_DATE = en('opportunity.field.expectedCloseDate');
+  const CONTACT = en('opportunity.field.contact');
+  const CHANNEL = en('opportunity.field.salesChannel');
+  const VALUE = en('value.title');
+
+  it('offers no pencil to an operator who may only read, and no edit form to anybody', async () => {
     await renderPage(['crm:read', 'orders:read']);
-    expect(screen.queryByRole('button', { name: en('opportunity.edit.open') })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Edit / })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
   });
 
-  it('opens on the current values and shows what cannot be changed as text', async () => {
-    current = detail({
-      customerAccount: { id: CONTACT_ID, name: 'Jan Kowalski', email: 'jan@acme.test' },
-    });
+  it('offers a pencil beside every field that can change, and none beside one that cannot', async () => {
     await renderPage();
-    const form = await openForm();
-    expect(within(form).getByLabelText(new RegExp(en('opportunity.field.title')))).toHaveValue(
-      'Fleet renewal',
-    );
-    expect(storedText(within(form).getByLabelText(en('opportunity.field.description')))).toBe(
-      'Forty vans over two years.',
-    );
-    expect(within(form).getByLabelText(en('opportunity.field.expectedCloseDate'))).toHaveValue(
-      '2026-12-01',
-    );
-    expect(within(form).getByLabelText(en('opportunity.field.value'))).toHaveValue('12500.00');
-    expect(within(form).getByLabelText(en('opportunity.edit.valueMode'))).toHaveValue('manual');
-    // The contact picker searches the Opportunity's own Organization only.
-    expect(getSpy).toHaveBeenCalledWith(
-      `/api/v1/admin/crm/lookups/contacts?organizationId=${ORGANIZATION_ID}`,
-    );
-    // The person already chosen is named in the picker itself.
-    expect(within(form).getByLabelText(en('opportunity.field.contact'))).toHaveValue('Jan Kowalski');
-    // Organization and currency are immutable: named, with no control to change them.
-    expect(
-      within(form).getByText(en('opportunity.edit.fixed', { organization: 'Acme', currency: 'PLN' })),
-    ).toBeInTheDocument();
-    expect(patchSpy).not.toHaveBeenCalled();
+    for (const field of [TITLE, DESCRIPTION, CLOSE_DATE, CONTACT, CHANNEL, VALUE]) {
+      expect(pencil(field)).toBeInTheDocument();
+    }
+    for (const fixed of ['opportunity.field.organization', 'opportunity.field.source', 'opportunity.field.number']) {
+      expect(screen.queryByRole('button', { name: en('inlineEdit.edit', { field: en(fixed) }) })).toBeNull();
+    }
   });
 
-  it('sends only the fields that changed, under the version they were read at', async () => {
-    const saved = detail({ title: 'Fleet renewal 2027', version: 2 });
-    patchSpy.mockResolvedValue({ data: saved });
+  it('edits the title in place: the current title, Enter saves it alone under the version read', async () => {
+    patchSpy.mockResolvedValue({ data: detail({ title: 'Fleet renewal 2027', version: 2 }) });
     await renderPage();
-    const form = await openForm();
-    const title = within(form).getByLabelText(new RegExp(en('opportunity.field.title')));
-    await userEvent.clear(title);
-    await userEvent.type(title, 'Fleet renewal 2027');
-    await save(form);
+    await userEvent.click(pencil(TITLE));
+    const field = screen.getByRole('textbox', { name: TITLE });
+    expect(field).toHaveValue('Fleet renewal');
+    expect(field).toHaveFocus();
+    // The heading stays a heading while its words are edited.
+    expect(screen.getByRole('heading', { level: 1, name: 'Fleet renewal' })).toBeInTheDocument();
+    await userEvent.clear(field);
+    await userEvent.type(field, 'Fleet renewal 2027{Enter}');
 
     await waitFor(() =>
       expect(patchSpy).toHaveBeenCalledWith(DETAIL_PATH, { title: 'Fleet renewal 2027' }, IF_MATCH_1),
     );
-    // The answer is what the screen now shows, and the form is gone.
     expect(await screen.findByRole('heading', { level: 1, name: /Fleet renewal 2027/ })).toBeInTheDocument();
-    expect(screen.queryByRole('form', { name: en('opportunity.edit.title') })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: TITLE })).toBeNull();
+    expect(await screen.findByText(en('inlineEdit.saved', { field: TITLE }))).toBeInTheDocument();
+    await waitFor(() => expect(pencil(TITLE)).toHaveFocus());
   });
 
-  it('sends every optional field it changed, and null for one it cleared', async () => {
-    current = detail({
-      customerAccount: { id: CONTACT_ID, name: 'Jan Kowalski', email: 'jan@acme.test' },
-    });
-    patchSpy.mockResolvedValue({ data: detail({ version: 2 }) });
+  it('refuses an empty title without a request, and Escape leaves it as it was', async () => {
     await renderPage();
-    const form = await openForm();
-    // The first clear button of the form is the contact picker's.
-    await userEvent.click(
-      within(form).getAllByRole('button', { name: core('common.combobox.clearSelection') })[0] as HTMLElement,
-    );
-    await userEvent.clear(within(form).getByLabelText(en('opportunity.field.description')));
-    await userEvent.clear(within(form).getByLabelText(en('opportunity.field.expectedCloseDate')));
-    const value = within(form).getByLabelText(en('opportunity.field.value'));
-    await userEvent.clear(value);
-    // What a Polish keyboard produces is an amount, not an error.
-    await userEvent.type(value, '14 000,5');
-    await save(form);
-
-    await waitFor(() =>
-      expect(patchSpy).toHaveBeenCalledWith(
-        DETAIL_PATH,
-        { customerAccountId: null, description: null, expectedCloseDate: null, manualValue: '14000.50' },
-        IF_MATCH_1,
-      ),
-    );
-  });
-
-  it('sends another contact person and a sales channel when they are chosen', async () => {
-    patchSpy.mockResolvedValue({ data: detail({ version: 2 }) });
-    await renderPage();
-    const form = await openForm();
-    await userEvent.click(within(form).getByLabelText(en('opportunity.field.contact')));
-    await userEvent.click(await screen.findByRole('option', { name: /Ewa Inna/ }));
-    await userEvent.click(within(form).getByRole('combobox', { name: en('opportunity.field.salesChannel') }));
-    await userEvent.click(await screen.findByRole('option', { name: /Wholesale/ }));
-    await save(form);
-
-    await waitFor(() =>
-      expect(patchSpy).toHaveBeenCalledWith(
-        DETAIL_PATH,
-        { customerAccountId: OTHER_CONTACT_ID, salesChannelId: CHANNEL_ID },
-        IF_MATCH_1,
-      ),
-    );
-  });
-
-  it('switches the value to the computed one, and then asks for no amount', async () => {
-    patchSpy.mockResolvedValue({ data: detail({ version: 2, valueMode: 'computed', value: '0.00' }) });
-    await renderPage();
-    const form = await openForm();
-    await userEvent.selectOptions(within(form).getByLabelText(en('opportunity.edit.valueMode')), 'computed');
-    expect(within(form).queryByLabelText(en('opportunity.field.value'))).toBeNull();
-    await save(form);
-    await waitFor(() =>
-      expect(patchSpy).toHaveBeenCalledWith(DETAIL_PATH, { valueMode: 'computed' }, IF_MATCH_1),
-    );
-  });
-
-  it('refuses an empty title and a value that is not an amount, without a request', async () => {
-    await renderPage();
-    const form = await openForm();
-    await userEvent.clear(within(form).getByLabelText(new RegExp(en('opportunity.field.title'))));
-    const value = within(form).getByLabelText(en('opportunity.field.value'));
-    await userEvent.clear(value);
-    await userEvent.type(value, 'a lot');
-    await save(form);
-    expect(within(form).getByText(en('opportunity.create.error.title'))).toBeInTheDocument();
-    expect(within(form).getByText(en('opportunity.create.error.value'))).toBeInTheDocument();
-    expect(patchSpy).not.toHaveBeenCalled();
-  });
-
-  it('makes no request when nothing was changed', async () => {
-    await renderPage();
-    const form = await openForm();
-    await save(form);
-    await waitFor(() =>
-      expect(screen.queryByRole('form', { name: en('opportunity.edit.title') })).toBeNull(),
-    );
-    expect(patchSpy).not.toHaveBeenCalled();
-  });
-
-  it('discards the draft on Cancel', async () => {
-    await renderPage();
-    const form = await openForm();
-    await userEvent.type(within(form).getByLabelText(new RegExp(en('opportunity.field.title'))), ' X');
-    await userEvent.click(within(form).getByRole('button', { name: core('common.action.cancel') }));
-    expect(screen.queryByRole('form', { name: en('opportunity.edit.title') })).toBeNull();
-    expect(patchSpy).not.toHaveBeenCalled();
+    await userEvent.click(pencil(TITLE));
+    const field = screen.getByRole('textbox', { name: TITLE });
+    await userEvent.clear(field);
+    await save();
+    expect(screen.getByText(en('opportunity.create.error.title'))).toHaveAttribute('role', 'alert');
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('textbox', { name: TITLE })).toBeNull();
     expect(screen.getByRole('heading', { level: 1, name: /Fleet renewal/ })).toBeInTheDocument();
+    expect(patchSpy).not.toHaveBeenCalled();
   });
 
-  it('says so when somebody else saved first, and overwrites nothing until the operator reloads', async () => {
+  it('edits the description in the formatted field, in its own section, and sends it alone', async () => {
+    patchSpy.mockResolvedValue({ data: detail({ description: '**Forty** vans.', version: 2 }) });
+    await renderPage();
+    await userEvent.click(pencil(DESCRIPTION));
+    const field = screen.getByRole('textbox', { name: DESCRIPTION });
+    expect(storedText(field)).toBe('Forty vans over two years.');
+    expect(screen.getByRole('toolbar', { name: core('editor.toolbar') })).toBeInTheDocument();
+    editorOf(field).commands.setContent('<p><strong>Forty</strong> vans.</p>');
+    await save();
+    await waitFor(() =>
+      expect(patchSpy).toHaveBeenCalledWith(DETAIL_PATH, { description: '**Forty** vans.' }, IF_MATCH_1),
+    );
+    expect((await screen.findByText('Forty')).tagName).toBe('STRONG');
+  });
+
+  it('sends null for a description that was emptied', async () => {
+    patchSpy.mockResolvedValue({ data: detail({ description: null, version: 2 }) });
+    await renderPage();
+    await userEvent.click(pencil(DESCRIPTION));
+    editorOf(screen.getByRole('textbox', { name: DESCRIPTION })).commands.clearContent(true);
+    await save();
+    await waitFor(() => expect(patchSpy).toHaveBeenCalledWith(DETAIL_PATH, { description: null }, IF_MATCH_1));
+  });
+
+  it('edits the expected close date in the sidebar, and clears it as null', async () => {
+    patchSpy.mockResolvedValue({ data: detail({ expectedCloseDate: null, version: 2 }) });
+    await renderPage();
+    await userEvent.click(pencil(CLOSE_DATE));
+    const field = screen.getByLabelText(CLOSE_DATE);
+    expect(field).toHaveValue('2026-12-01');
+    await userEvent.clear(field);
+    await save();
+    await waitFor(() =>
+      expect(patchSpy).toHaveBeenCalledWith(DETAIL_PATH, { expectedCloseDate: null }, IF_MATCH_1),
+    );
+  });
+
+  it('chooses another contact person — of this Organization only — and a sales channel, each saved alone', async () => {
+    current = detail({ customerAccount: { id: CONTACT_ID, name: 'Jan Kowalski', email: 'jan@acme.test' } });
+    patchSpy.mockResolvedValue({ data: detail({ version: 2 }) });
+    await renderPage();
+    await userEvent.click(pencil(CONTACT));
+    // The picker opens on the focus it is given, listing this Organization's people.
+    await userEvent.click(screen.getByLabelText(CONTACT));
+    expect(getSpy).toHaveBeenCalledWith(`/api/v1/admin/crm/lookups/contacts?organizationId=${ORGANIZATION_ID}`);
+    await userEvent.click(await screen.findByRole('option', { name: /Ewa Inna/ }));
+    await save();
+    await waitFor(() =>
+      expect(patchSpy).toHaveBeenCalledWith(DETAIL_PATH, { customerAccountId: OTHER_CONTACT_ID }, IF_MATCH_1),
+    );
+
+    expect(await screen.findByText(en('inlineEdit.saved', { field: CONTACT }))).toBeInTheDocument();
+    await userEvent.click(pencil(CHANNEL));
+    await userEvent.click(screen.getByRole('combobox', { name: CHANNEL }));
+    await userEvent.click(await screen.findByRole('option', { name: /Wholesale/ }));
+    await save();
+    await waitFor(() =>
+      expect(patchSpy).toHaveBeenLastCalledWith(DETAIL_PATH, { salesChannelId: CHANNEL_ID }, { headers: { 'If-Match': '"2"' } }),
+    );
+  });
+
+  it('edits a typed value where it is read, taking what a Polish keyboard produces, and refuses what is no amount', async () => {
+    patchSpy.mockResolvedValue({ data: detail({ manualValue: '14000.50', version: 2 }) });
+    await renderPage();
+    await userEvent.click(pencil(VALUE));
+    const field = screen.getByRole('textbox', { name: VALUE });
+    expect(field).toHaveValue('12500.00');
+    await userEvent.clear(field);
+    await userEvent.type(field, 'a lot');
+    await save();
+    expect(screen.getByText(en('opportunity.create.error.value'))).toHaveAttribute('role', 'alert');
+    expect(patchSpy).not.toHaveBeenCalled();
+    await userEvent.clear(field);
+    await userEvent.type(field, '14 000,5{Enter}');
+    await waitFor(() =>
+      expect(patchSpy).toHaveBeenCalledWith(DETAIL_PATH, { manualValue: '14000.50' }, IF_MATCH_1),
+    );
+  });
+
+  it('offers no pencil on a computed value — the documents make it', async () => {
+    current = detail({ valueMode: 'computed' });
+    await renderPage();
+    expect(screen.queryByRole('button', { name: en('inlineEdit.edit', { field: VALUE }) })).toBeNull();
+  });
+
+  it('opens a field that holds no value yet — a Sales Channel never chosen', async () => {
+    await renderPage();
+    await userEvent.click(pencil(CHANNEL));
+    expect(screen.getByRole('combobox', { name: CHANNEL })).toBeInTheDocument();
+  });
+
+  it('makes no request when nothing was changed, and discards a draft on Cancel', async () => {
+    await renderPage();
+    await userEvent.click(pencil(CLOSE_DATE));
+    await save();
+    await waitFor(() => expect(screen.queryByLabelText(CLOSE_DATE)).toBeNull());
+    await userEvent.click(pencil(TITLE));
+    await userEvent.type(screen.getByRole('textbox', { name: TITLE }), ' X');
+    await userEvent.click(screen.getByRole('button', { name: core('common.action.cancel') }));
+    expect(screen.queryByRole('textbox', { name: TITLE })).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: /^Fleet renewal/ })).toBeInTheDocument();
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('says so when somebody else saved first, shows their version, and saves the draft only when asked again', async () => {
     patchSpy.mockRejectedValueOnce(
       new ApiError(409, {
         error: { code: 'VERSION_CONFLICT', message: 'The opportunity was updated concurrently.' },
       }),
     );
     await renderPage();
-    const form = await openForm();
-    const title = within(form).getByLabelText(new RegExp(en('opportunity.field.title')));
-    await userEvent.clear(title);
-    await userEvent.type(title, 'Mine');
-    await save(form);
-
-    const alert = await within(form).findByRole('alert');
-    expect(within(alert).getByText(en('opportunity.edit.conflict'))).toBeInTheDocument();
-    // Saving again with the stale version is not possible; nothing is retried.
-    expect(within(form).getByRole('button', { name: en('opportunity.edit.submit') })).toBeDisabled();
-    expect(patchSpy).toHaveBeenCalledTimes(1);
-
-    // Reload: the latest Opportunity is read and the form starts from it.
+    await userEvent.click(pencil(TITLE));
+    const field = screen.getByRole('textbox', { name: TITLE });
+    await userEvent.clear(field);
+    await userEvent.type(field, 'Mine');
     current = detail({ title: 'Theirs', version: 5 });
-    patchSpy.mockResolvedValueOnce({ data: detail({ title: 'Theirs, then mine', version: 6 }) });
-    await userEvent.click(within(alert).getByRole('button', { name: en('opportunity.edit.reload') }));
-    await waitFor(() =>
-      expect(within(form).getByLabelText(new RegExp(en('opportunity.field.title')))).toHaveValue('Theirs'),
-    );
-    expect(within(form).queryByRole('alert')).toBeNull();
+    await save();
+
+    expect(await screen.findByText(en('inlineEdit.conflict'))).toHaveAttribute('role', 'alert');
+    // Their version was read and is what the page now holds; the draft is kept.
+    expect(screen.getByRole('textbox', { name: TITLE })).toHaveValue('Mine');
+    expect(screen.getByRole('heading', { level: 1, name: /Theirs/ })).toBeInTheDocument();
     expect(patchSpy).toHaveBeenCalledTimes(1);
 
-    await userEvent.type(
-      within(form).getByLabelText(new RegExp(en('opportunity.field.title'))),
-      ', then mine',
-    );
-    await save(form);
+    patchSpy.mockResolvedValueOnce({ data: detail({ title: 'Mine', version: 6 }) });
+    await save();
     await waitFor(() =>
-      expect(patchSpy).toHaveBeenLastCalledWith(
-        DETAIL_PATH,
-        { title: 'Theirs, then mine' },
-        { headers: { 'If-Match': '"5"' } },
-      ),
+      expect(patchSpy).toHaveBeenLastCalledWith(DETAIL_PATH, { title: 'Mine' }, { headers: { 'If-Match': '"5"' } }),
     );
   });
 
@@ -320,13 +324,13 @@ describe('OpportunityDetail — editing', () => {
       }),
     );
     await renderPage();
-    const form = await openForm();
-    const title = within(form).getByLabelText(new RegExp(en('opportunity.field.title')));
-    await userEvent.type(title, ' B');
-    await save(form);
-    expect(await within(form).findByText('The sales channel does not exist.')).toBeInTheDocument();
-    expect(title).toHaveValue('Fleet renewal B');
-    expect(within(form).getByRole('button', { name: en('opportunity.edit.submit') })).toBeEnabled();
+    await userEvent.click(pencil(TITLE));
+    const field = screen.getByRole('textbox', { name: TITLE });
+    await userEvent.type(field, ' B');
+    await save();
+    expect(await screen.findByText('The sales channel does not exist.')).toBeInTheDocument();
+    expect(field).toHaveValue('Fleet renewal B');
+    expect(screen.getByRole('button', { name: core('common.action.save') })).toBeEnabled();
   });
 });
 

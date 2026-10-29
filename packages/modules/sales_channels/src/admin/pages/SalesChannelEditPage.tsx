@@ -78,6 +78,7 @@ export function SalesChannelEditPage(): ReactNode {
             currencies: value.currencies,
             defaultCurrency: value.defaultCurrency,
             active: value.active,
+            anonymousAccess: value.anonymousAccess,
           });
           navigate(`/sales-channels/${encodeURIComponent(created.code)}`, { replace: true });
           return;
@@ -92,6 +93,7 @@ export function SalesChannelEditPage(): ReactNode {
           currencies: value.currencies,
           defaultCurrency: value.defaultCurrency,
           active: value.active,
+          anonymousAccess: value.anonymousAccess,
         });
         setChannel(updated);
       } catch (err) {

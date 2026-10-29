@@ -11,7 +11,7 @@ import type { SalesChannel } from './sales-channel.entity.js';
  *   1. Per-process LRU (cap {@link LRU_MAX}, entries older than
  *      {@link SALES_CHANNELS_LRU_TTL_MS} ignored) — absorbs intra-request
  *      bursts and removes the Redis hop entirely on warm processes.
- *   2. Redis (`sales-channels:v2:<code>`, TTL {@link TTL_SECONDS}) —
+ *   2. Redis (`sales-channels:v4:<code>`, TTL {@link TTL_SECONDS}) —
  *      cross-process consistency in multi-instance deployments.
  *
  * Invalidation flows write → drop in Redis → drop in LRU → announce. It is the
@@ -34,11 +34,15 @@ import type { SalesChannel } from './sales-channel.entity.js';
  * for "no such channel"; absence of a key means "cache miss".
  */
 
-// v2 (feature 053): `isPublic` added to the cached shape so storefront
-// consumers read price-visibility off the resolved channel instead of
-// re-querying. Bumped from v1 so entries cached without the field are ignored.
+// v2 (feature 053): a price-visibility flag added to the cached shape so
+// storefront consumers read it off the resolved channel instead of re-querying.
+// v3 (feature 154): `anonymousAccess` added, read by the kernel's access step on
+// every anonymous request. An entry cached without it would decide nothing.
+// v4 (issue #492): the price-visibility flag removed with its column — the
+// display-mode chain decides who sees prices. Bumped so a process still running
+// the v3 code never reads an entry without the flag it reads.
 /** Shared with the operator-facing cache-clear surface, so the two cannot drift. */
-export const SALES_CHANNELS_CACHE_KEY_PREFIX = 'sales-channels:v2:';
+export const SALES_CHANNELS_CACHE_KEY_PREFIX = 'sales-channels:v4:';
 export const SALES_CHANNELS_CACHE_NAMESPACE = 'sales_channels';
 
 /** Maximum age of an entry in the per-process layer; see `SETTINGS_LRU_TTL_MS`. */
@@ -55,8 +59,8 @@ export interface CachedChannel {
   code: string;
   name: Record<string, string>;
   active: boolean;
-  /** Price-visibility flag (display concern, distinct from resolution). */
-  isPublic: boolean;
+  /** May an anonymous request use this channel (feature 154)? Read by the access step. */
+  anonymousAccess: boolean;
   systemDefault: boolean;
   defaultLanguage: string;
   defaultCurrency: string;
@@ -73,7 +77,7 @@ export function toCachedChannel(channel: SalesChannel): CachedChannel {
     code: channel.code,
     name: channel.name,
     active: channel.active,
-    isPublic: channel.isPublic,
+    anonymousAccess: channel.anonymousAccess,
     systemDefault: channel.systemDefault,
     defaultLanguage: channel.defaultLanguage,
     defaultCurrency: channel.defaultCurrency,

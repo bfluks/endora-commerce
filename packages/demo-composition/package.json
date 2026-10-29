@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/demo-composition",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "description": "The Endora Commerce demo shop's composition: the wiring between modules' demo data that no one module may own — which channel sells the demo products, which role each demo administrator holds, the menu, the prices and the stock. Installed only when an instance asks for demo data.",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "type": "demo-composition"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src",
     "test": "vitest run"
@@ -49,6 +49,8 @@
     "@endora-commerce/mod-megamenu": "workspace:*",
     "@endora-commerce/mod-organizations": "workspace:*",
     "@endora-commerce/mod-price-lists": "workspace:*",
+    "@endora-commerce/mod-projects": "workspace:*",
+    "@endora-commerce/mod-tasks": "workspace:*",
     "@endora-commerce/platform": "workspace:*",
     "@mikro-orm/core": "^6",
     "@mikro-orm/postgresql": "^6"
@@ -86,6 +88,12 @@
     },
     "@endora-commerce/mod-price-lists": {
       "optional": true
+    },
+    "@endora-commerce/mod-projects": {
+      "optional": true
+    },
+    "@endora-commerce/mod-tasks": {
+      "optional": true
     }
   },
   "devDependencies": {
@@ -101,6 +109,8 @@
     "@endora-commerce/mod-megamenu": "workspace:*",
     "@endora-commerce/mod-organizations": "workspace:*",
     "@endora-commerce/mod-price-lists": "workspace:*",
+    "@endora-commerce/mod-projects": "workspace:*",
+    "@endora-commerce/mod-tasks": "workspace:*",
     "@endora-commerce/platform": "workspace:*",
     "@mikro-orm/core": "^6.6.13",
     "@mikro-orm/postgresql": "^6.6.13",

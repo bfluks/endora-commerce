@@ -267,9 +267,12 @@ const PUBLISHED_KERNEL_SURFACE: Readonly<Record<string, readonly string[]>> = {
   'ports/settings.js': ['SettingsReadPort', 'SettingsReadResult'],
   'ports/sales-channel.js': [
     'ResolvedChannel',
+    'SalesChannelAccessPort',
     'SalesChannelMembershipPort',
     'SalesChannelResolutionPort',
   ],
+  /** Feature 154 — the write seam a channel delete drops the access cache through. */
+  'sales-channels/sales-channel-access-cache.js': ['SalesChannelAccessCacheInvalidation'],
 };
 
 /**
@@ -299,8 +302,13 @@ const PUBLISHED_TENANCY_SURFACE: Readonly<Record<string, readonly string[]>> = {
     'TransitivelyScoped',
     'RuleScoped',
   ],
-  /** Row 21 — the one symbol of the escape hatch a module takes. */
-  'escape-hatch.js': ['withSystemScope'],
+  /**
+   * Row 21 — the symbols of the escape hatch a module takes. `withSystemScopeActingFor`
+   * joined `withSystemScope` in feature 163 (S-W2): a worker finishing work an admin
+   * queued runs system-scoped *as that admin*, so its Commands are audited with the
+   * requester — `catalog`'s `bulk-operation.service.ts` is the reach.
+   */
+  'escape-hatch.js': ['withSystemScope', 'withSystemScopeActingFor'],
   /** Row 28, plus `orgConstraintFor`'s return shape. */
   'derived-scope.js': ['orgConstraintFor', 'isOrgInScope', 'ruleVisibleForScope', 'OrgConstraint'],
 };
@@ -575,6 +583,11 @@ const HOST_COMPOSITION_SURFACE: Readonly<Record<string, readonly string[]>> = {
     'ComposeAppOptions',
     'ComposedAppContext',
   ],
+  // Issue #497 — the cursor seal both roots register as the `cursorSeal`
+  // value: `composeApp` keyed by the session key, the test kit by its own. A
+  // module resolves the value and declares the shape it uses in its cradle, so
+  // `CursorSeal` itself is not on the barrel (R3.1a).
+  'composition/cursor-seal.ts': ['createCursorSeal'],
   // What an entry point does with a refusal the platform wrote for the
   // operator: `exitOnRefusal` on `composeApp`'s promise in the API and the
   // worker, `refuseOverlaySchema` in `migrate`, which composes nothing and has

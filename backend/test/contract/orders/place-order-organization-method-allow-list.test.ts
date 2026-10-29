@@ -214,6 +214,8 @@ describe('order placement honours the Organization method allow-lists', () => {
       customerAccountId: BUYER_B_ID,
       organizationId: OTHER_TEST_ORGANIZATION_ID,
       status: 'active',
+      // The basket of the channel buyer B places on — the system default.
+      salesChannelId: await systemDefaultSalesChannelId(em),
     });
     await em.persistAndFlush(cart);
     await em.persistAndFlush(
@@ -372,7 +374,6 @@ describe('order placement honours the Organization method allow-lists', () => {
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
     await em.persistAndFlush(channel);
     await h.salesChannels.cache.invalidate('allow-list-intake');

@@ -16,7 +16,6 @@ import { VariantPicker } from '../../components/VariantPicker';
 const labels = {
   heading: 'Variants',
   sku: 'SKU',
-  priceOverride: 'Price',
   stockLevel: 'In stock',
   outOfStock: 'Out of stock',
   selectThisVariant: 'Currently selected',
@@ -82,18 +81,18 @@ describe('VariantPicker — SSR contract', () => {
     expect(html).toContain('In stock: 5');
   });
 
-  it('renders priceOverride when present', () => {
+  it('never shows a variant price_override, which is never charged (D-287 P0)', () => {
+    // `product_variants.price_override` is read by no price list: a variant
+    // line is charged the product's resolved price, which the product page's
+    // price block shows. A figure here was a price the cart would not charge.
+    const variants = [
+      { id: 'a', sku: 'WID-PRICED', variantAttributeValues: {}, priceOverride: 49.99 },
+    ] as unknown as Parameters<typeof VariantPicker>[0]['variants'];
     const html = renderToString(
-      <VariantPicker
-        productSlug="widget"
-        variants={[
-          { id: 'a', sku: 'WID-PRICED', variantAttributeValues: {}, priceOverride: 49.99 },
-        ]}
-        labels={labels}
-      />,
+      <VariantPicker productSlug="widget" variants={variants} labels={labels} />,
     );
-    expect(html).toContain('Price');
-    expect(html).toContain('49.99');
+    expect(html).not.toContain('49.99');
+    expect(html).not.toContain('Price');
   });
 
   it('SKU is shown inside a <code> for crawler-friendly identification', () => {

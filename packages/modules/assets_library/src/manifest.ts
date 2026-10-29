@@ -138,8 +138,31 @@ export const manifest = defineModuleManifest({
   // `auth` owns the `requireAdmin` port the admin routes are gated by; the
   // edge became real with the conversion (feature 072, T092), which also made
   // the gate non-optional.
-  dependencies: ['auth'],
+  //
+  // `admin_users` publishes `adminUserReadPort`, which the asset detail reads to
+  // name who replaced the kept previous version (feature 156,
+  // `specs/156-asset-stable-url/` research R-14). The read is one display
+  // name; when nobody is found the detail answers `replacedBy: null`.
+  dependencies: ['auth', 'admin_users'],
   settings,
+  /**
+   * The module's landing action under ⌘K (Constitution XVI) — "Assets library",
+   * named like the sidebar entry: the product decision `specs/156-asset-stable-url/`
+   * research R-16 records, with the name the owner ruled later. Its keywords keep
+   * "media" so a search for the media library still finds it.
+   */
+  actions: [
+    {
+      id: 'open-assets-library',
+      labelKey: 'actions.openLibrary.label',
+      descriptionKey: 'actions.openLibrary.description',
+      icon: 'Image',
+      targetRoute: '/assets-library',
+      requiredPermission: 'assets.read',
+      keywords: ['assets', 'assets library', 'media', 'media library', 'files', 'images', 'permalink', 'pliki', 'zasoby', 'multimedia'],
+      weight: 250,
+    },
+  ],
   // Feature 074 (Constitution XVII), test C3 — platform primitive. This module
   // had no activation declaration at all, which resolved as "always activated"
   // and read as an omission. Media storage carries no independent business
@@ -168,13 +191,14 @@ export const manifest = defineModuleManifest({
       'do not want files" is not a business decision.',
   },
   /**
-   * The fifteen error codes this module owns — feature 090 Phase 3
-   * (`specs/090-module-owned-error-codes/contracts/error-code-declaration.md`
-   * §1.1). This is where each sentence is looked up from: `errors.<CODE>` in
-   * this module's own `i18n/{en,pl}.json`, which holds all fifteen in both
-   * languages and no sixteenth.
+   * The twenty-two error codes this module owns — fifteen from feature 090
+   * Phase 3 (`specs/090-module-owned-error-codes/contracts/error-code-declaration.md`
+   * §1.1) and seven minted by feature 156 (`specs/156-asset-stable-url/`).
+   * This is where each sentence is looked up from: `errors.<CODE>` in this
+   * module's own `i18n/{en,pl}.json`, which holds all twenty-two in both
+   * languages and no twenty-third.
    *
-   * The list is answer-preserving, not a judgement (§6.2 and §6.5): it is
+   * The fifteen are answer-preserving, not a judgement (§6.2 and §6.5): they are
    * exactly what the prefix chain that used to route error codes sent here,
    * copied from the frozen capture at
    * `backend/test/fixtures/error-code-routing/chain-answers.ts` rather than
@@ -206,17 +230,21 @@ export const manifest = defineModuleManifest({
    * two codes this module raises and does not own are `INTERNAL` and
    * `VALIDATION_FAILED`, both the platform's.
    *
-   * **No `tokens`, and it is derived rather than assumed.** The envelope's
-   * `refusalToken` (`packages/platform/src/http/error-envelope.ts`) reads
-   * exactly one member of `details` — `code`, and only when `details` is an
-   * object — as the tail of `errors.<CODE>.<token>`. All twenty-nine raises of
-   * these codes were enumerated over `packages` and `backend/src` rather than
-   * over this package alone (runbook §5): twenty-seven pass no fourth argument
-   * at all, and the two that do — `ASSET_REFERENCED` in
-   * `assets-library.service.ts` and in `folders.service.ts` — pass the
-   * Zod-style **array** of `{ path, issue }` pairs, which `refusalToken`
-   * refuses by construction. The bundle agrees from the other direction: it
-   * holds fifteen `errors.<CODE>` keys and not one `errors.<CODE>.<token>`.
+   * **One code with `tokens`, and it is derived rather than assumed.** The
+   * envelope's `refusalToken` (`packages/platform/src/http/error-envelope.ts`)
+   * reads exactly one member of `details` — `code`, and only when `details` is
+   * an object — as the tail of `errors.<CODE>.<token>`. Of the fifteen codes of
+   * feature 090, all twenty-nine raises were enumerated over `packages` and
+   * `backend/src` rather than over this package alone (runbook §5):
+   * twenty-seven pass no fourth argument at all, and the two that do —
+   * `ASSET_REFERENCED` in `assets-library.service.ts` and in
+   * `folders.service.ts` — pass the Zod-style **array** of `{ path, issue }`
+   * pairs, which `refusalToken` refuses by construction. Of the seven of
+   * feature 156, `ASSET_PERMALINK_INVALID` passes `details.code` — the reason
+   * `validateAssetPermalink` (`@endora-commerce/contracts`) names — so it
+   * declares those five reasons as tokens, and the bundle holds one
+   * `errors.ASSET_PERMALINK_INVALID.<reason>` sentence for each; the other six
+   * pass no `details.code`.
    */
   errorCodes: [
     { code: 'ASSET_ACCESS_DENIED' },
@@ -234,6 +262,16 @@ export const manifest = defineModuleManifest({
     { code: 'ASSET_UPLOAD_NO_FILE' },
     { code: 'ASSET_UPLOAD_TOO_LARGE' },
     { code: 'ASSET_UPLOAD_TYPE_NOT_ALLOWED' },
+    { code: 'ASSET_REPLACE_KIND_MISMATCH' },
+    { code: 'ASSET_LEGACY_CANNOT_REPLACE' },
+    { code: 'ASSET_REPLACE_CONFLICT' },
+    { code: 'ASSET_NO_PREVIOUS_VERSION' },
+    { code: 'ASSET_PERMALINK_TAKEN' },
+    { code: 'ASSET_PERMALINK_PREVIOUSLY_USED' },
+    {
+      code: 'ASSET_PERMALINK_INVALID',
+      tokens: ['empty', 'too_long', 'invalid_characters', 'invalid_segment', 'uuid_shaped'],
+    },
   ],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },

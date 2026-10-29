@@ -5,6 +5,7 @@ import type {
   CartReadPort,
   CartRecord,
   CartSeedLine,
+  CartSeedUnorderableLine,
   CartWithItems,
   CartWritePort,
 } from '@endora-commerce/contracts';
@@ -38,6 +39,8 @@ export class CartReadService implements CartReadPort {
       // D-178, so the empty arm is unreachable rather than a supported mode.
       // It stays because the context type still admits a null.
       ...(ctx.organizationId === null ? {} : { organizationId: ctx.organizationId }),
+      // One active basket per customer per channel (`specs/154-sales-channel-access/`).
+      salesChannelId: ctx.salesChannelId,
       status: 'active',
     });
     if (!cart) return null;
@@ -75,14 +78,27 @@ export function createCartWritePort(
       return toCartRecord(await getService().getOrCreateForCustomer(ctx));
     },
 
-    async addItem(actor, input) {
-      const result = await getService().addItem(actor, input);
+    async addItem(actor, input, options) {
+      const result = await getService().addItem(actor, input, options);
       return { cart: toCartRecord(result.cart), items: result.items.map(toCartItemRecord) };
+    },
+
+    async addItems(actor, lines, options) {
+      const result = await getService().addItems(actor, lines, options);
+      return {
+        cart: toCartRecord(result.cart),
+        items: result.items.map(toCartItemRecord),
+        outcomes: result.outcomes,
+      };
     },
 
     clearForCustomer: (ctx) => getService().clearForCustomer(ctx),
 
-    async replaceItemsForCustomer(ctx, lines, options): Promise<CartWithItems> {
+    async replaceItemsForCustomer(
+      ctx,
+      lines,
+      options,
+    ): Promise<CartWithItems & { unorderable?: CartSeedUnorderableLine[] }> {
       // command-coverage-ignore: seeds the customer's own active cart from an
       // already-audited source (a reorder, an accepted quote). The cart is not
       // an auditable domain object — the order or quote that produced these
@@ -95,11 +111,23 @@ export function createCartWritePort(
       // price holds at the quantity it was agreed for and at no other
       // (`cart-line-pricing.ts`). Any other seed — a reorder — carries none, and
       // its lines are priced like any other line, below.
+      // Feature 155 (FR-028) — the agreed quantity is also what exempts the line
+      // from the catalogue's minimums while the quantity still equals it
+      // (`CartItemRecord.quoteSeededQuantity`). This is the only writer of
+      // `agreedQuantity`: a reorder (no source) and every other path leave it
+      // `null`.
       const agreed = Boolean(options?.sourceQuoteRequestId);
       const created: CartItem[] = [];
-      for (const line of lines) {
+      // One line per seed line, never merged, created a millisecond apart in
+      // seed order: the basket is read back by creation time, and lines sharing
+      // one would fall back to their random ids — an order placed from it would
+      // list them, and a quote's split product (feature 159, research N-31)
+      // would meet them, in no stable order.
+      const seedBase = Date.now();
+      for (const [index, line] of lines.entries()) {
         const item = em.create(CartItem, {
           cartId: cart.id,
+          createdAt: new Date(seedBase + index),
           productId: line.productId,
           ...(line.variantId ? { variantId: line.variantId } : {}),
           quantity: line.quantity,
@@ -110,6 +138,8 @@ export function createCartWritePort(
                 agreedQuantity: line.quantity,
                 agreedUnitPrice: line.unitPrice,
                 agreedCurrency: line.currency,
+                // Feature 160 (FR-030) — a quote's agreed price.
+                priceSource: 'agreed' as const,
               }
             : {}),
         });
@@ -118,7 +148,21 @@ export function createCartWritePort(
       // A seed without an agreement (a reorder) copies prices from the past;
       // the basket holds the prices the customer may order the lines at now,
       // so the buyer reviews and places at what they are shown.
-      if (!agreed) await getService().repriceLinesForCustomer(em, ctx, created);
+      const unorderable: CartSeedUnorderableLine[] = [];
+      if (!agreed) {
+        const refused = await getService().repriceLinesForCustomer(em, ctx, created);
+        // Issue #166 — a reorder asks for the lines nobody may order now to be
+        // left out and named, rather than seeded at a past price placement
+        // would refuse.
+        if (options?.dropUnorderable) {
+          for (const item of created) {
+            const reason = refused.get(item.id);
+            if (!reason) continue;
+            unorderable.push({ productId: item.productId, variantId: item.variantId ?? null, reason });
+            em.remove(item);
+          }
+        }
+      }
       // The basket as **this** `EntityManager` holds it. `getOrCreateForCustomer`
       // answers a row managed by the service's own, so a column set on that
       // object is flushed by nobody — which is how `lastActivityAt` below went
@@ -138,7 +182,7 @@ export function createCartWritePort(
       if (!seeded) {
         throw new Error(`[carts] cart ${cart.id} vanished between seeding and reading it back.`);
       }
-      return seeded;
+      return options?.dropUnorderable ? { ...seeded, unorderable } : seeded;
     },
   };
 }
@@ -184,6 +228,8 @@ export function toCartItemRecord(item: CartItem): CartItemRecord {
     packagingUnitId: item.packagingUnitId ?? null,
     packagingUnitName: item.packagingUnitName ?? null,
     packagingUnitBaseQuantity: item.packagingUnitBaseQuantity ?? null,
+    quoteSeededQuantity: item.agreedQuantity ?? null,
+    priceSource: item.priceSource ?? null,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
   };

@@ -15,6 +15,12 @@ export const ERROR_CODES = {
   FORBIDDEN: 'FORBIDDEN',
   RATE_LIMITED: 'RATE_LIMITED',
   VERSION_CONFLICT: 'VERSION_CONFLICT',
+  // Issue #417 — a typed money amount with more than two decimal places
+  // (`money-input.ts`). Refused, never rounded.
+  AMOUNT_PRECISION_EXCEEDED: 'AMOUNT_PRECISION_EXCEEDED',
+  // Owner ruling of 2026-10-25 — a typed unit price with more than four decimal
+  // places (`money-input.ts`). Refused, never rounded.
+  UNIT_PRICE_PRECISION_EXCEEDED: 'UNIT_PRICE_PRECISION_EXCEEDED',
 
   // Catalog
   FILTER_NOT_ALLOWED: 'FILTER_NOT_ALLOWED',
@@ -63,6 +69,24 @@ export const ERROR_CODES = {
   PACKAGING_UNIT_NAME_CONFLICT: 'PACKAGING_UNIT_NAME_CONFLICT',
   PACKAGING_UNIT_NOT_SUPPORTED_FOR_TYPE: 'PACKAGING_UNIT_NOT_SUPPORTED_FOR_TYPE',
 
+  // Catalog 155 — minimum order quantities (owned by `catalog`, raised by the
+  // modules that accept order lines: carts, orders, quote_requests)
+  PRODUCT_BELOW_MINIMUM_QUANTITY: 'PRODUCT_BELOW_MINIMUM_QUANTITY',
+  PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY: 'PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY',
+  PACKAGING_UNIT_MISMATCH: 'PACKAGING_UNIT_MISMATCH',
+
+  // Catalog 160 — a product or variant write names an old price field; prices
+  // are set in price books (owned by `catalog`, raised by its admin writes and
+  // by the products import of `import_export`)
+  PRICE_SET_IN_PRICE_BOOKS: 'PRICE_SET_IN_PRICE_BOOKS',
+
+  // Catalog 163 — product data scopes and URL keys (owned by `catalog`)
+  SCOPE_INVALID: 'SCOPE_INVALID',
+  SCOPE_INCOMPLETE: 'SCOPE_INCOMPLETE',
+  URL_KEY_TAKEN: 'URL_KEY_TAKEN',
+  URL_KEY_REDIRECT_TAKEOVER_REQUIRED: 'URL_KEY_REDIRECT_TAKEOVER_REQUIRED',
+  URL_REDIRECT_NOT_FOUND: 'URL_REDIRECT_NOT_FOUND',
+
   // Catalog 002 — Product Links (US4)
   SELF_LINK_NOT_ALLOWED: 'SELF_LINK_NOT_ALLOWED',
   LINK_ALREADY_EXISTS: 'LINK_ALREADY_EXISTS',
@@ -96,6 +120,11 @@ export const ERROR_CODES = {
   // holds a view on the quote request list whose name differs only by case or
   // surrounding spaces.
   RFQ_SAVED_VIEW_NAME_TAKEN: 'RFQ_SAVED_VIEW_NAME_TAKEN',
+  // Feature 163 (security review M1) — 422: the sales channel of an operator's
+  // quote request on a customer's behalf — the one named, or the one the admin
+  // request resolved when none is named (owner decision 2026-10-29 "A") — is not
+  // one of the Organization's active channels.
+  RFQ_SALES_CHANNEL_NOT_ALLOWED: 'RFQ_SALES_CHANNEL_NOT_ALLOWED',
   QUOTE_INCOMPLETE: 'QUOTE_INCOMPLETE',
   QUOTE_VALIDITY_ENDED: 'QUOTE_VALIDITY_ENDED',
   // Quote PDF by e-mail (`specs/153-quote-request-pdf-template/`, owner answer
@@ -171,6 +200,8 @@ export const ERROR_CODES = {
   ORGANIZATION_SUSPENDED: 'ORGANIZATION_SUSPENDED',
   ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
   ORDER_NOT_CANCELLABLE: 'ORDER_NOT_CANCELLABLE',
+  /** 422 — the basket handed to placement belongs to another sales channel (feature 154). */
+  ORDER_SALES_CHANNEL_MISMATCH: 'ORDER_SALES_CHANNEL_MISMATCH',
   // Saved list views (`specs/147-saved-views/`, FR-022) — an admin already
   // holds a view on the order list whose name differs only by case or
   // surrounding spaces.
@@ -183,7 +214,16 @@ export const ERROR_CODES = {
   // configuration, the second refuses the document.
   INVOICE_NUMBER_PATTERN_COLLIDES: 'INVOICE_NUMBER_PATTERN_COLLIDES',
   INVOICE_NUMBER_ALREADY_ISSUED: 'INVOICE_NUMBER_ALREADY_ISSUED',
+  // Invoices — an order whose payments were refunded in full before it was
+  // invoiced has no sale left to document (issue #417, owner ruling of
+  // 2026-10-24), so issuance refuses it.
+  INVOICE_ORDER_REFUNDED: 'INVOICE_ORDER_REFUNDED',
   INVALID_TRANSITION: 'INVALID_TRANSITION',
+
+  // Returns 155 — a `return`-kind case naming an order line recorded as not
+  // returnable at purchase (owned and raised by `returns`; complaints are
+  // never refused by it).
+  RETURN_LINE_NOT_RETURNABLE: 'RETURN_LINE_NOT_RETURNABLE',
 
   // Credit Limit
   CREDIT_LIMIT_NOT_GRANTED: 'CREDIT_LIMIT_NOT_GRANTED',
@@ -301,6 +341,12 @@ export const ERROR_CODES = {
   STALE_SALES_CHANNEL_WRITE: 'STALE_SALES_CHANNEL_WRITE',
   SALES_CHANNEL_ATTRIBUTION_IMMUTABLE: 'SALES_CHANNEL_ATTRIBUTION_IMMUTABLE',
   SALES_CHANNEL_CODE_IMMUTABLE: 'SALES_CHANNEL_CODE_IMMUTABLE',
+  // Sales-channel access (feature 154). Raised by the kernel's access step
+  // after a request's channel is resolved; `details.channelCode` names it.
+  /** 403 — an anonymous request on a channel closed to anonymous visitors. */
+  SALES_CHANNEL_SIGN_IN_REQUIRED: 'SALES_CHANNEL_SIGN_IN_REQUIRED',
+  /** 403 — a customer request on a channel its Organization is not assigned to. */
+  SALES_CHANNEL_NOT_PERMITTED: 'SALES_CHANNEL_NOT_PERMITTED',
 
   // Compare (feature 007)
   COMPARISON_FULL: 'COMPARISON_FULL',
@@ -340,6 +386,14 @@ export const ERROR_CODES = {
   ASSET_FILE_MISSING: 'ASSET_FILE_MISSING',
   ASSET_GONE: 'ASSET_GONE',
   ASSET_ACCESS_DENIED: 'ASSET_ACCESS_DENIED',
+  // Assets Library — stable asset URLs (specs/156-asset-stable-url/)
+  ASSET_REPLACE_KIND_MISMATCH: 'ASSET_REPLACE_KIND_MISMATCH',
+  ASSET_LEGACY_CANNOT_REPLACE: 'ASSET_LEGACY_CANNOT_REPLACE',
+  ASSET_REPLACE_CONFLICT: 'ASSET_REPLACE_CONFLICT',
+  ASSET_NO_PREVIOUS_VERSION: 'ASSET_NO_PREVIOUS_VERSION',
+  ASSET_PERMALINK_TAKEN: 'ASSET_PERMALINK_TAKEN',
+  ASSET_PERMALINK_PREVIOUSLY_USED: 'ASSET_PERMALINK_PREVIOUSLY_USED',
+  ASSET_PERMALINK_INVALID: 'ASSET_PERMALINK_INVALID',
 
   // CMS (feature 014)
   CMS_PAGE_NOT_FOUND: 'CMS_PAGE_NOT_FOUND',
@@ -362,6 +416,12 @@ export const ERROR_CODES = {
   CMS_TRANSLATION_SELECTION_NOT_FOUND: 'CMS_TRANSLATION_SELECTION_NOT_FOUND',
   CMS_TRANSLATION_PROVIDER_FAILED: 'CMS_TRANSLATION_PROVIDER_FAILED',
   CMS_SCHEMA_UPGRADE_FAILED: 'CMS_SCHEMA_UPGRADE_FAILED',
+  // Feature 163 — page-builder section anchors and the page tree
+  // (`specs/163-page-builder-marketing-pages/` data-model §6). The two anchor
+  // codes name the offending anchor through `details` → `{anchor}`.
+  CMS_DUPLICATE_ANCHOR: 'CMS_DUPLICATE_ANCHOR',
+  CMS_RESERVED_ANCHOR: 'CMS_RESERVED_ANCHOR',
+  CMS_PAGE_PARENT_CYCLE: 'CMS_PAGE_PARENT_CYCLE',
 
   // Megamenu (feature 015)
   MEGAMENU_NOT_FOUND: 'MEGAMENU_NOT_FOUND',
@@ -487,6 +547,23 @@ export const ERROR_CODES = {
   // definitions are mutated only through the owning host module's surface
   // (generic admin mutations refuse with 409 "host_managed").
   CUSTOM_FIELD_HOST_MANAGED: 'CUSTOM_FIELD_HOST_MANAGED',
+  // Feature 157 — an admin list was asked to filter on a custom field it does
+  // not offer as a list filter (the definition's list-filter option is off,
+  // the definition is gone, or its entity type is not served).
+  CUSTOM_FIELD_FILTER_UNAVAILABLE: 'CUSTOM_FIELD_FILTER_UNAVAILABLE',
+  // Feature 157 — three 409 refusals of a definition change that used to share
+  // `CUSTOM_FIELD_DEFINITION_INVALID` and an English message: an option records
+  // still hold (`details.value`, `details.label`), a value type records hold
+  // values under (`details.key`), and a customer-visible field over values a
+  // deleted field left (`details.key`).
+  CUSTOM_FIELD_OPTION_IN_USE: 'CUSTOM_FIELD_OPTION_IN_USE',
+  CUSTOM_FIELD_VALUE_TYPE_LOCKED: 'CUSTOM_FIELD_VALUE_TYPE_LOCKED',
+  CUSTOM_FIELD_STORED_VALUES_EXIST: 'CUSTOM_FIELD_STORED_VALUES_EXIST',
+  // Feature 162 — turning on a definition's "carry value to" option for a
+  // target that cannot take the values: no same-key field, another value type,
+  // missing options, an internal value into a customer-visible field, a pair the
+  // registry does not offer, or a target whose module is off (`details.code`).
+  CUSTOM_FIELD_CARRY_INCOMPATIBLE: 'CUSTOM_FIELD_CARRY_INCOMPATIBLE',
 
   // Feature 058 — Credentials (reusable credential configurations).
   CREDENTIAL_NOT_FOUND: 'CREDENTIAL_NOT_FOUND',
@@ -540,14 +617,26 @@ export const ERROR_CODES = {
    * identifiers says nothing about which one was wrong.
    */
   PRICE_LIST_NOT_FOUND: 'PRICE_LIST_NOT_FOUND',
-  /** Feature 148 — a price matrix entry that does not exist on this list, or is out of scope. */
-  PRICE_MATRIX_ENTRY_NOT_FOUND: 'PRICE_MATRIX_ENTRY_NOT_FOUND',
-  /** Feature 148 — an entry with the same coordinates and an overlapping window exists (FR-005). */
-  PRICE_MATRIX_ENTRY_OVERLAP: 'PRICE_MATRIX_ENTRY_OVERLAP',
-  /** Feature 148 — the attribute may not select prices (`details.reason`, FR-008/FR-009). */
-  PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE: 'PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE',
-  /** Feature 148 — the list already holds the maximum number of entries (FR-007). */
-  PRICE_MATRIX_ENTRY_LIMIT: 'PRICE_MATRIX_ENTRY_LIMIT',
+  /** Feature 160 — a channel of a price book's set does not offer the book's currency (FR-003). */
+  PRICE_BOOK_CHANNEL_CURRENCY: 'PRICE_BOOK_CHANNEL_CURRENCY',
+  /** Feature 160 — an audience set names members of another kind, or that do not exist (FR-002, A4). */
+  PRICE_BOOK_AUDIENCE_KIND: 'PRICE_BOOK_AUDIENCE_KIND',
+  /** Feature 160 — the currency, or the audience kind of a book once active, may not change (FR-004). */
+  PRICE_BOOK_IMMUTABLE_FIELD: 'PRICE_BOOK_IMMUTABLE_FIELD',
+  /** Feature 160 — the book would apply nowhere or to no one, so it cannot be activated. */
+  PRICE_BOOK_NOT_APPLICABLE: 'PRICE_BOOK_NOT_APPLICABLE',
+  /** Feature 160 — two rows of one selection overlap in their quantity windows (FR-006); `details.errors` names them. */
+  PRICE_BOOK_ROW_OVERLAP: 'PRICE_BOOK_ROW_OVERLAP',
+  /** Feature 160 — rows break a shape rule (FR-005–FR-009); `details.errors` names every failing row. */
+  PRICE_BOOK_ROW_SHAPE: 'PRICE_BOOK_ROW_SHAPE',
+  /** Feature 160 — a row names a product, variant, category or attribute value that does not exist or cannot select prices. */
+  PRICE_BOOK_ROW_TARGET: 'PRICE_BOOK_ROW_TARGET',
+  /** Feature 160 — the book would hold more rows than its limit. */
+  PRICE_BOOK_ROW_LIMIT: 'PRICE_BOOK_ROW_LIMIT',
+  /** Feature 160 — the book changed since the version the write was made against; `details.currentVersion`. */
+  PRICE_BOOK_STALE: 'PRICE_BOOK_STALE',
+  /** Feature 160 — the precedence is read-only until the change flow ships (FR-023). */
+  PRECEDENCE_CHANGE_UNAVAILABLE: 'PRECEDENCE_CHANGE_UNAVAILABLE',
 
   // Shared PIM connector layer (feature 089).
   /** Another PIM connector is operator-active; activation refused (FR-003). */
@@ -618,6 +707,73 @@ export const ERROR_CODES = {
   /** A message on an Opportunity cannot be edited or deleted once sent. */
   CRM_MESSAGE_IMMUTABLE: 'CRM_MESSAGE_IMMUTABLE',
 
+  // Tasks (`specs/163-projects-and-tasks/`, `contracts/admin-api.md` §1) — the
+  // spellings of `TASKS_ERROR_CODES`. Each is declared by the `tasks` module's
+  // manifest and joins this block in the change that adds its first raise site.
+  /** No such Task, or one whose context the caller may not see — indistinguishable. */
+  TASK_NOT_FOUND: 'TASK_NOT_FOUND',
+  /** The context's type is not registered by a present module, or the caller may not see the id. */
+  TASK_CONTEXT_INVALID: 'TASK_CONTEXT_INVALID',
+  /** The assignee is not an active administrator. */
+  TASK_ASSIGNEE_INVALID: 'TASK_ASSIGNEE_INVALID',
+
+  // Projects (`specs/163-projects-and-tasks/`, `contracts/admin-api.md` §2) —
+  // the spellings of `PROJECTS_ERROR_CODES`. Each is declared by the `projects`
+  // module's manifest and joins this block in the change that adds its first
+  // raise site.
+  /** No such Project, or one out of the caller's reach or visibility — indistinguishable. */
+  PROJECT_NOT_FOUND: 'PROJECT_NOT_FOUND',
+  /** A Project with linked records cannot be deleted; unlink them first. */
+  PROJECT_HAS_LINKS: 'PROJECT_HAS_LINKS',
+  /** An Organization outside the caller's reach, or one that does not exist — indistinguishable. */
+  PROJECT_ORGANIZATION_OUT_OF_SCOPE: 'PROJECT_ORGANIZATION_OUT_OF_SCOPE',
+  /** The Stage the Project is in cannot be deleted. */
+  PROJECT_STAGE_CURRENT: 'PROJECT_STAGE_CURRENT',
+  /** A Project's only Stage cannot be deleted. */
+  PROJECT_STAGE_LAST: 'PROJECT_STAGE_LAST',
+  /** The Project's workflow has no such move, or the Project is not in a state to make it. */
+  PROJECT_MOVE_NOT_PERMITTED: 'PROJECT_MOVE_NOT_PERMITTED',
+  /** The version sent is stale: the Project changed since it was read. */
+  PROJECT_CHANGED: 'PROJECT_CHANGED',
+  /** A registered Stage guard refused; `details.reason` is its sentence. */
+  PROJECT_GUARD_REFUSED: 'PROJECT_GUARD_REFUSED',
+  /** Completing the Project is not permitted from its current Stage. */
+  PROJECT_COMPLETION_NOT_PERMITTED: 'PROJECT_COMPLETION_NOT_PERMITTED',
+  /** The loss reason is unknown or archived. */
+  PROJECT_LOSS_REASON_INVALID: 'PROJECT_LOSS_REASON_INVALID',
+  /** A Member or listed person is not an active administrator, or a Role is unknown. */
+  PROJECT_MEMBER_INVALID: 'PROJECT_MEMBER_INVALID',
+  /** A Stage that holds Tasks cannot be deleted. */
+  PROJECT_STAGE_HAS_TASKS: 'PROJECT_STAGE_HAS_TASKS',
+  /** The Stage's completion gate is closed; `details.openTaskCount` counts the open Tasks, `details.openTasks` names them to a reader of Tasks. */
+  PROJECT_STAGE_GATE_OPEN_TASKS: 'PROJECT_STAGE_GATE_OPEN_TASKS',
+  /** Creating a Stage's Tasks again was asked of a Stage whose last entry did not fail to create them. */
+  PROJECT_STAGE_TASKS_NOT_RETRYABLE: 'PROJECT_STAGE_TASKS_NOT_RETRYABLE',
+  /** The Template is unknown, or archived when a Project is created from it. */
+  PROJECT_TEMPLATE_NOT_FOUND: 'PROJECT_TEMPLATE_NOT_FOUND',
+  /** No Project Role or loss reason with that id. */
+  PROJECT_DICTIONARY_ENTRY_NOT_FOUND: 'PROJECT_DICTIONARY_ENTRY_NOT_FOUND',
+  /** A seeded Project Role or loss reason is renamable and archivable, never deleted. */
+  PROJECT_DICTIONARY_ENTRY_SYSTEM: 'PROJECT_DICTIONARY_ENTRY_SYSTEM',
+  /** A Project or a Template uses the Project Role or loss reason, so it is archived rather than deleted. */
+  PROJECT_DICTIONARY_ENTRY_IN_USE: 'PROJECT_DICTIONARY_ENTRY_IN_USE',
+  /** Another Project Role (or loss reason) already has this default name, whatever its case. */
+  PROJECT_DICTIONARY_NAME_TAKEN: 'PROJECT_DICTIONARY_NAME_TAKEN',
+  /** A record of the Organization being removed is linked to the Project; unlink it first. */
+  PROJECT_ORGANIZATION_IN_USE: 'PROJECT_ORGANIZATION_IN_USE',
+  /** The record to link does not exist, or is out of the caller's reach — indistinguishable. */
+  PROJECT_RECORD_NOT_FOUND: 'PROJECT_RECORD_NOT_FOUND',
+  /** The record already belongs to a Project; `details.project` names it only to a caller who may see it. */
+  PROJECT_RECORD_ALREADY_LINKED: 'PROJECT_RECORD_ALREADY_LINKED',
+  /** The record belongs to an Organization the Project does not have. */
+  PROJECT_LINK_ORGANIZATION_MISMATCH: 'PROJECT_LINK_ORGANIZATION_MISMATCH',
+  /** Only a note's author edits or deletes it — whatever else the caller holds. */
+  PROJECT_NOTE_NOT_AUTHOR: 'PROJECT_NOTE_NOT_AUTHOR',
+  /** A message of a Project is never edited or deleted, by anybody. */
+  PROJECT_MESSAGE_IMMUTABLE: 'PROJECT_MESSAGE_IMMUTABLE',
+  /** The uploaded file is larger than an attachment of a Project may be; `details.maxMb` names the limit. */
+  PROJECT_ATTACHMENT_TOO_LARGE: 'PROJECT_ATTACHMENT_TOO_LARGE',
+
   // SEO — search engine robots (`specs/144-seo-search-engine-robots/`, FR-006).
   // Declared by the `seo` module's manifest.
   /**
@@ -641,6 +797,13 @@ export const ERROR_CODES = {
   DOCUMENT_TEMPLATE_NOT_SELECTABLE: 'DOCUMENT_TEMPLATE_NOT_SELECTABLE',
   /** Producing the document failed. */
   DOCUMENT_RENDER_FAILED: 'DOCUMENT_RENDER_FAILED',
+
+  // Admin feedback (issue #379) — declared in the `admin_feedback` module's
+  // manifest; the same spellings as `ADMIN_FEEDBACK_ERROR_CODES`.
+  /** The relay address is empty or not an http(s) URL: sending is switched off. */
+  ADMIN_FEEDBACK_NOT_CONFIGURED: 'ADMIN_FEEDBACK_NOT_CONFIGURED',
+  /** The relay could not be reached in time, refused the message, or redirected. */
+  ADMIN_FEEDBACK_DELIVERY_FAILED: 'ADMIN_FEEDBACK_DELIVERY_FAILED',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

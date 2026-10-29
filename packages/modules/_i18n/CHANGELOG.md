@@ -1,5 +1,372 @@
 # @endora-commerce/mod-i18n
 
+## 0.108.0
+
+### Minor Changes
+
+- 0bd5a2b: Placement enforces minimum order quantities, records whether each line was returnable, and admin and API order intake are bounded to 200 lines.
+
+  - **Behaviour change for API clients — placement refuses a basket below a minimum.** Checkout, one-click buy, reorder, a basket filled from a quote request, admin Create order and the external order API answer `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]`, checked right after the basket is read and **before** the order value and credit checks, the order number and any stock or credit reservation — a refusal writes nothing. A line whose product record is gone answers `404 PRODUCT_NOT_FOUND` with `details.cartItemIds`.
+  - **Quote exemption only while the quote is valid.** Lines seeded from an accepted quote request are exempt only while that quote request still exists, belongs to the buyer's organization, is `Approved` and within its validity, is recorded by no order, and still has a line at the agreed price in the basket. With `mod-quote-requests` switched off no line is exempt.
+  - **Product names in the response language.** Every minimum refusal (placement, preview, admin create, the external API) names products in the language its sentence is written in — an admin's stored preference, otherwise the q-sorted `Accept-Language`. `OrderPlacementPort.placeOrder` takes an optional `{ language }`.
+  - **New port `orderQuoteSourcePort` (`OrderQuoteSourcePort`).** `quoteSourceHonoursExemptions({ organizationId, quoteRequestId, basketLines })` answers whether a basket's quote-seeded lines keep their exemption — the checkout preview's lock-free check, published so `mod-carts` judges submit for approval as placement does. Advisory: placement confirms the source again. `false` while `mod-quote-requests` is off.
+  - **Checkout preview:** `POST /api/v1/orders/preview-total` answers `belowMinimumLines[]` with the same exemptions (`kind: 'product_unavailable'` for a vanished product).
+  - **Admin order preview:** a line whose product total is below its minimum is unavailable at zero price with the message code `BELOW_MINIMUM_QUANTITY` and its `minimum`, judged after the four existing codes.
+  - **Behaviour change for API clients — 200-line bound.** `POST /api/v1/admin/orders`, `POST /api/v1/admin/orders/preview` and the external `POST /api/v1/external/orders` refuse more than 200 lines with `422 VALIDATION_FAILED`, `details: { code: 'too_many_items', maximum: 200 }`, before any line is evaluated. On the external API this is a public API change: it is checked before the `Idempotency-Key` header is required and leaves no idempotency record. Admin create and the external API also refuse a request whose product total is below the pieces minimum, `details.lines[]` keyed by `index`. Both refusals — below a minimum, or a product the customer may not see — are decided **before** the customer's basket is replaced, so a refused request leaves the basket exactly as it was (it used to be cleared, or partly re-seeded with the lines that passed).
+  - **Returnable at purchase.** Every placement path stamps `order_items.returnable_at_purchase` from the product's **Returnable** flag (fail-closed: a product that cannot be read is recorded not returnable). Older lines hold `null`. `OrderReturnContextPort` lines carry it as `returnableAtPurchase`.
+  - **Create order screen** shows a below-minimum line's reason; `mod-i18n`'s `core` bundle gains `orderCreate.line.belowMinimum` and `orderCreate.line.belowMinimumUnknown` in English and Polish.
+  - Migration `20261016T082022_orders_order_item_returnable_at_purchase.ts`.
+
+- 0bd5a2b: Quote requests validate packaging units by id and apply minimum order quantities — refused for buyers, flagged for sales reps.
+
+  - **Behaviour change for API clients — packaging validation.** A customer line (create, draft edit, cart → quote request) may carry `packagingUnitId`; it must be a current unit of the line's product, and the server stores that unit's catalogue name and base quantity. A line sending a packaging name and base quantity without an id is accepted only when both match one of the product's units. Anything else is refused whole with `422 PACKAGING_UNIT_MISMATCH`, `details.lines[]` with `index` and `reason`; every failure of an id has the single reason `unknown_unit` (a name gives `name_unknown` or `base_quantity_mismatch`). **A buyer request with a non-matching packaging label is now refused, including a draft edit of an existing request whose stored label no longer matches a catalogue unit.** `packagingUnitId` is returned on the admin and customer reads.
+  - **Behaviour change for API clients — buyer writes refused below a minimum.** Customer create (`POST /api/v1/quote-requests`, also from the cart, quick order, a shopping list or an order clone), draft edit (`PATCH /api/v1/quote-requests/:id`) and resubmit answer `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]`. Order: hidden or unpublished products as unknown first, then packaging, then minimums. A draft edit does not refuse a line left unchanged; a line is matched to its stored row by the packaging unit's id first, so a unit renamed in the catalogue since does not make the line "changed" (it keeps its exemption and its stored reference price). Resubmit is judged as a new request; **a resubmit of a request whose product no longer exists now answers `404 PRODUCT_NOT_FOUND`**.
+  - **Product names in the response language.** The minimum and packaging refusals of a buyer's create (also from the cart, quick order and a shopping list), draft edit and resubmit name products in the language their sentence is written in (q-sorted `Accept-Language`, else the channel default); `createForCustomer` takes `options.language`.
+  - **Sales-rep writes warn.** Create on behalf, Modify, the admin's order clone and the admin quick-order build write below-minimum lines; `GET /api/v1/admin/quote-requests/:id` gives each such line `minimumWarning` (`{ kind, minimum, packagingUnitName? }`), shown as a _Below minimum_ badge on the quote request screen. It never reaches the customer read.
+  - `RfqCustomerPort.createForCustomer` accepts `options.minimums` (`'enforce' | 'warn'`).
+  - `mod-i18n`'s `core` bundle gains `rfq.detail.minimum.pieces`, `rfq.detail.minimum.packagingUnit` and `rfq.detail.minimum.packagingUnitUnnamed` in English and Polish.
+  - Migration `20261018T122118_quote_requests_item_packaging_unit_id.ts` adds `quote_request_items.packaging_unit_id`.
+
+- 0bd5a2b: Returns honour the per-line returnable flag recorded at purchase; complaints stay unrestricted.
+
+  - **Behaviour change for API clients.** `GET /api/v1/orders/:orderId/returnable` gives each line `returnable` and, when it may not be returned, `notReturnableReason: 'product_not_returnable'`. **`eligible: false` with the new reason `no_returnable_lines` still allows a complaint** — `eligible` answers for `return`-kind cases only.
+  - `POST /api/v1/returns` with `kind: 'return'` naming a line recorded as not returnable is refused with `422 RETURN_LINE_NOT_RETURNABLE` (`details.productName`, `orderItemIds[]`, `lines[]`). Complaints are never restricted.
+  - **Behaviour change — a complaint on a non-returnable line refunds nothing by default.** A `complaint` line recorded as not returnable at purchase is stored with `approvedRefundAmount` `0`; its `defaultRefundAmount` stays the amount paid (the settlement cap). The admin settlement form now pre-fills each line from its stored approved amount rather than from the amount paid, and the case view marks such a line **Not returnable at purchase** (`mod-i18n` `core` key `returns.detail.notReturnableAtPurchase`, English and Polish). The case detail's items carry `returnableAtPurchase`, read through `OrderReturnContextPort`.
+  - **Duplicate order lines in one request are summed** per order line, for both kinds, and checked against the remaining quantity (`qty_exceeds_returnable`). An unknown line is reported before any quantity error.
+  - Lines of orders placed before this release carry no recorded value and count as returnable. **FR-034: products default to not returnable, so lines of orders placed after the upgrade are not returnable until their products are marked** in the catalogue (Bulk edit → Returnable); orders placed before the upgrade are unaffected.
+  - New bundle sentence `errors.RETURN_LINE_NOT_RETURNABLE` in English and Polish.
+
+- 291ec86: Custom-field filters for admin lists: one composite, its hook and the pure helpers the Orders, Quote Requests and Opportunities lists share.
+
+  **New in `@endora-commerce/admin-kit/components`.**
+
+  - `CustomFieldListFilters` — one filter control per custom field a list offers, rendered as grid
+    cells for the host's own advanced-filters grid. Props: `idPrefix`, `fields`
+    (`CustomFieldListFilterField[]`), `value` (`CustomFieldFilters`), `onChange(key, filter | null)`
+    (one key's filter, whole; `null` when nothing of it is left), `language`, and optionally
+    `status` (the hook's) with `onRetry`: a placeholder cell while the fields load, and on failure a
+    sentence with a _Try again_ button. A text field is a search box committed after a 300 ms pause;
+    a number is a minimum and a maximum, a decimal comma accepted, also paused; a date is a from and
+    a to. Both ranges stack below `sm` with a visible short label on each bound, explain a bound that
+    is not a number and an inverted range in a message linked to the input, and send nothing for
+    either. A yes/no field is _Any / Yes / No_; a select or multiselect field is a multi-select of its
+    options in their order, searchable above eight. Labels follow `label[language]`, then the base
+    language, then `labelDefault`. A pending text or number commit is dropped when the value changes
+    from outside.
+  - `useCustomFieldListFilterFields(endpoint)` — `{ fields, status: 'loading' | 'ready' | 'error',
+reload }` from one `GET` of a list's offered-fields endpoint; `reload()` reads it again.
+  - `readCustomFieldFilterParams(params)` / `writeCustomFieldFilterParams(params, filters)` — the
+    filters in an address's `cf.<key>.<op>` parameters (`in` repeated) and back, other parameters
+    untouched. A key failing the definition-key grammar and a malformed operator value are dropped;
+    an unknown well-formed key is kept for the server to refuse; at most 10 keys and 100 `in`
+    values.
+  - `sanitizeCustomFieldFilters(saved, fields)` — a saved view's filters against the offered fields:
+    `{ kept, dropped }`, removed options pruned. `pruneRemovedOptions(filters, fields)` — removes
+    options a known field no longer has from filters read from the address.
+  - `customFieldFilterChips(fields, filters, language, t)` — one `{ id, label, remove, removeLabel }`
+    chip per key, the label plain text and `removeLabel` the remove action's accessible name.
+  - `customFieldDisplayName(fields, key, language)` — how a field is named to the operator: its label
+    (language, base language, `labelDefault`), or for a key the list does not offer the key cut to
+    64 characters. `resolveCustomFieldLabel(label, labelDefault, language)` — the label rule alone.
+  - `emptyCustomFieldFilters()`, `withCustomFieldFilter(filters, key, filter | null)` and
+    `withoutCustomFieldFilter(filters, key)` — new prototype-free records with one key set or removed. `customFieldFilterRefusal(error)` — the key a
+    `CUSTOM_FIELD_FILTER_UNAVAILABLE` refusal names, else `null`. `toCustomFieldFiltersParam(filters)`
+    — the `customFieldFilters` request parameter, keys sorted, `null` when empty.
+  - Types: `CustomFieldListFiltersProps`, `CustomFieldFilterChip`, `CustomFieldFilterTranslator`,
+    `CustomFieldListFilterFieldsState`, `CustomFieldListFilterFieldsStatus`.
+
+  Every record the helpers return has a `null` prototype, so a key such as `constructor` is an
+  ordinary key and never an inherited member.
+
+  **`@endora-commerce/mod-i18n`** ships the `customFieldFilters.*` keys of the `core` namespace in
+  English and Polish, which the composite reads; a host needs that version alongside this one.
+
+  **`Input`** (`@endora-commerce/admin-kit/ui`) draws its border in the destructive colour while
+  `aria-invalid` is set.
+
+- c8aa175: Quote request lines can be arranged in named, ordered groups.
+
+  - **Admin API.** `PATCH /api/v1/admin/quote-requests/:id` and `POST /api/v1/admin/quote-requests` accept `groups` (`{ key, id?, name }`, in display order) and a per-line `groupKey`. A body with `groups` replaces the grouping (an `id` keeps a group across a rename; a stored group not named is deleted; its lines become ungrouped); a body with `items` and no `groups` keeps every paired line in its group; `groups` without `items` answers 400; a group id of another quote answers `422 VALIDATION_FAILED` at `groups.<i>.id`. The grouping is written under the existing row lock and recorded on the `quote_request.modify` / `quote_request.create_on_behalf` audit entry (`stateBefore.groups`, `stateAfter.groups` as `{ name, lineCount }`). A save that only regroups is an ordinary revision.
+  - **Replies.** Every quote reply answers `itemGroups` (admin: every group, empty ones included; customer: groups holding a line only) and each item's `groupId` and `position`, with `items` **in display order** — the reply read had no order before. The customer comparison may carry `{ kind: 'grouping' }`; the admin history lists the five new change kinds. Customer bodies accept no grouping (`PATCH` refuses `groups`; a create body's keys are stripped as before); a customer draft edit keeps every paired line's group; resubmission copies none.
+  - **One product on several lines.** A quote may hold one product and variant on several lines, in different groups or in one. Lines without an id pair with stored lines by group and quantity first (draft edits, API clients, revision comparisons); the customer comparison pairs revision lines one to one instead of by product, and an entry about a product on several lines names its group (`groupName`), as the admin history's line reference does. A `PATCH` line may carry `splitFromId`: a new line split off a stored line keeps its variant, packaging unit, proposal, note, currency and reference. The _Modify_ tab offers _Split line_; the create screen lets a product be added again and keys its price prefill by line.
+  - **Read port.** `quoteRequestReadPort.listItems` answers lines in display order with `position` and `group`.
+  - **PDF data.** The document data carries `groups` and each line's `groupId` / `position`, lines in display order; the quote PDF prints them as sections (see the document-sections changeset).
+  - **Admin screens.** The detail _Modify_ tab and the create screen group lines with the line groups editor, with a summary per group; _Overview_ shows the groups read-only.
+  - **Migration** `20261020T171341_quote_requests_quote_request_item_groups.ts` creates `quote_request_item_groups` and adds `quote_request_items.group_id` (on delete set null) and `position` (default 0, no backfill).
+  - `mod-i18n`'s `core` bundle gains `rfq.detail.history.change.{group_added,group_removed,group_renamed,line_group,line_order}`, `rfq.detail.history.ungrouped` and `rfq.detail.history.lineInGroup` in English and Polish.
+
+- e1b173f: The shared `core` bundle gains the editable grid's strings, in English and Polish (feature 161): `editableGrid.instructions`, `editableGrid.editorLabel` and the live-region sentences `editableGrid.announce.{pasted,pasteSkipped,filled,cleared,undone,redone,nothingToUndo,nothingToRedo,readOnly}`. Additive; no key changes or goes.
+- 53e88c7: _Send feedback_ beside the release in the Admin UI sidebar (an icon of its own when the sidebar is collapsed), shown while the `admin_feedback` module is present. It opens a dialog — the feedback (required), the sender's e-mail (the signed-in administrator's, editable) and an optional phone — that posts to `POST /api/v1/admin/feedback`, and says every outcome: thanks, sending switched off on the instance, too many messages, or not delivered, always with `support@endora.software` to write to by hand and with what was typed kept. New `appShell.feedback.*` keys in the core bundle (EN, PL); `theme.css` gains `.b2b-sidebar__feedback` and `.b2b-sidebar__feedback-rail-row`.
+- 8f0fd0e: A typed money amount with more than two decimal places is refused with `400 AMOUNT_PRECISION_EXCEEDED`, never rounded (issue #417, owner ruling of 2026-10-24).
+
+  - `@endora-commerce/contracts`: new `money-input` module — `twoDecimalAmount(schema)` for a number schema, `twoDecimalAmountString(schema)` for a decimal string, `addAmountPrecisionIssue(ctx, path)` for a `superRefine` that decides per field, `hasAtMostTwoDecimals(value)`, `isAmountPrecisionIssue(issue)` and the `AMOUNT_PRECISION_EXCEEDED` constant; new `ERROR_CODES.AMOUNT_PRECISION_EXCEEDED`.
+  - `@endora-commerce/platform`: the error envelope answers `400 AMOUNT_PRECISION_EXCEEDED` when every failed issue of a request is the precision issue, whether the route validated through the type provider or parsed the body itself; a request failing anything else as well stays `VALIDATION_FAILED`, the precision issue listed among its details.
+  - `@endora-commerce/mod-i18n`: declares the code in the platform block, with its sentence in English and Polish.
+
+- a8919dc: A unit price keeps up to four decimal places, unrounded, from the price book to the invoice line; only the line value is rounded (owner ruling of 2026-10-25).
+
+  - `@endora-commerce/contracts`: new `unitPriceHalfUp(value)` (a unit price at its four places, as `numeric(14,4)` stores it), `unitPriceFractionDigits(value)` and `unitPriceDisplayText(value)` (the one display rule: two places when places three and four are zero, otherwise the significant places, up to four), `grossUnitPriceHalfUp(net, rate, unit?)` (a displayed gross unit price: two places for a two-place net, four for a sub-cent one) and `UNIT_PRICE_PLACES`. In `money-input`: `fourDecimalUnitPrice(schema)`, `fourDecimalUnitPriceString(schema)`, `hasAtMostFourDecimals(value)`, `isUnitPricePrecisionIssue(issue)` and the `UNIT_PRICE_PRECISION_EXCEEDED` constant; new `ERROR_CODES.UNIT_PRICE_PRECISION_EXCEEDED`. A quote's `desiredUnitPrice` (`createQuoteRequestLineSchema`) and `agreedUnitPrice` (`adminCreateQuoteRequestLineSchema`, `adminPatchQuoteRequestLineSchema`) now accept four places; a fifth is refused with the new code. Typed money amounts keep `twoDecimalAmount`. A `money` document value (`documentValueSchema`, `DocumentValue`) takes an optional `unitPrice: true`, and `formatDocumentValue` shows such a value with its significant places, up to four, never fewer than the format's `decimals`.
+  - `@endora-commerce/platform`: the error envelope answers `400 UNIT_PRICE_PRECISION_EXCEEDED` when every failed issue of a request is the unit-price precision issue; a request refused for an amount and a unit price at once stays `VALIDATION_FAILED`.
+  - `@endora-commerce/mod-i18n`: declares `UNIT_PRICE_PRECISION_EXCEEDED` in the platform block, with its sentence in English and Polish.
+
+### Patch Changes
+
+- 815daa8: The shared admin bundle drops 161 `priceLists.*` strings, in English and Polish, that nothing reads since feature 160 replaced the price-list screens with the price-book editor: the old list, create and detail pages (tabs, products, bulk add, picker), the Application rule builder, the per-currency bracket editor and the linked-lists panel. The `priceLists.displayMode.*` and `priceLists.displayModes.*` strings the display-mode screens use, and `priceLists.loading` and `priceLists.dismiss`, stay.
+- 256e488: The `price_lists` manifest describes price books (feature 160): the module description reads _Price books — base, catalogue, buyer and sale prices per currency, sales channel and audience — and price display modes._, and the permissions _View price books and display modes_ (`price_lists:read`) and _Edit price books, base prices and display modes_ (`price_lists:write`), in English and Polish. They named brackets, pricing rules and a rule-based engine the module no longer has.
+- 4d07648: The price display-mode page is titled _Pricing settings_ (feature 161, FR-025). Old: `priceLists.displayModes.title` "Price display modes" / "Tryby prezentacji cen" and its settings card `priceLists.displayModes.settings.title` "Pricing settings" / "Ustawienia cenowe". New: the page title is "Pricing settings" / "Ustawienia cenowe" and the card "Default display modes" / "Domyślne tryby prezentacji cen". No key is added or removed.
+- 5669aee: The core bundle titles the quote request history's new `custom_field_carry_skipped` entry ("Custom field values not carried from a sales opportunity"), in English and Polish.
+- 56b075d: The _Place order_ action on an approved Quote Request in the Admin UI works. It posted to the storefront's `POST /api/v1/quote-requests/:id/convert-to-order`, which is customer-only: an administrator's session answered `401`, which the Admin UI reads as an expired session, so the operator was signed out — and an accepted call would have seeded the administrator's own basket.
+
+  `@endora-commerce/mod-quote-requests` adds `POST /api/v1/admin/quote-requests/:id/prepare-customer-basket`, behind the module's `rfqs:handle` permission and the sales-representative scope of the other admin actions. It puts the approved request's lines into the basket of the customer who owns the request, at the agreed unit prices — replacing what that basket held, exactly as the customer's own conversion does and under the same rules — and records `quote_request.prepare_customer_basket` in the audit log. The customer completes the order at checkout. `@endora-commerce/contracts` exports its response schema, `adminPrepareCustomerBasketResponseSchema` (`cartId`, `customerAccountId`, `itemCount`).
+
+  The Admin UI button calls it after a confirmation that names the replaced basket, and is labelled _Prepare the customer's basket_ (`@endora-commerce/mod-i18n`, English and Polish).
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- 70bb5e5: New `core` strings, in English and Polish, for the admin quote-request screen: `rfq.detail.reference.*` (reference price, proposal and difference columns; _price at request_ / _current price_ / _no price_; _per base unit_), `rfq.detail.history.*` (history entries, changes, actors, roles, loading, error and truncation notices; the truncation notice takes the event window as `{count}`) and `rfq.detail.modify.lineGroup` (_Line {number}_, the accessible name of a Modify line that has no product name yet). Removed: `rfq.detail.column.desired` and `rfq.detail.modify.desiredPrice`, which the screen no longer renders; the proposal column is now labelled by `rfq.detail.reference.column.proposed`.
+- bf9881f: The command palette finds records as well as screens and actions.
+
+  On every open the palette asks `GET /api/v1/admin/global-search/capability`; when the answer names
+  at least one record type, typing at least the minimum search length searches records after a 250 ms
+  pause (the previous request aborted, a stale answer ignored) and shows one group per record type
+  after _Actions_, with server-resolved titles, a status badge, a "more results" hint and a note for a
+  type that could not be searched. Records join the palette's one Arrow/Enter list; a final row opens
+  `/global-search?q=…`. A refused or failed probe — global search switched off or not installed —
+  leaves the palette exactly as it was. A live region announces the number of records found.
+
+  The `core` bundle gains five keys in English and Polish: `appShell.palette.records.searching`,
+  `.more`, `.unavailable`, `.seeAll` and `.announce`, so a host needs `@endora-commerce/mod-i18n` at
+  this version.
+
+- dd939be: The shared admin bundle drops the `invoiceTemplates.*` keys and `appShell.nav.invoiceTemplates`
+  (the invoice template screens moved to the `document_templates` module, which ships its own
+  strings), and relabels `adminRoles.permission.invoices:write` in English and Polish
+  (`specs/152-compare-pdf-template/`).
+- 2933bf0: `@endora-commerce/admin-kit/components` publishes two new components. `ModalDialog` (with `ModalDialogProps`) is the dialog primitive `crm` used to keep to itself: a titled panel over a scrim with an accessible name, a focus trap, Escape and scrim to close, and a `busy` flag that makes both inert. It gains two optional props, `initialFocusRef` (focused on open instead of the first focusable element) and `finalFocusRef` (focused after close instead of the opener, read at close time); without them it behaves as before. `useFocusTrap` accepts the same two refs through a new optional third argument (`FocusTrapOptions`). `SavedViewsControl` (with `SavedViewsControlProps` and `SavedViewState`) is the saved-views selector with _Save view_ and _Delete view_, both through dialogs rather than the browser's native prompts: the caller passes the list's saved-view endpoint, its current state and an `onApply` callback, and the control lists, creates and deletes views through the kit's `apiClient`. A name the server refuses as taken (`409`) is shown in the save dialog with the name field marked invalid until the next keystroke. It never sends an update.
+
+  `crm` imports `ModalDialog` from the kit instead of its own copy, which is deleted. No behaviour changes.
+
+  The `core` bundle gains eighteen `savedViews.*` keys in English and Polish — the copy `SavedViewsControl` and its dialogs render.
+
+- 5865c59: The API description is available to administrators with the `platform.api_description.read` permission and to API keys with the `platform.api_description.read` scope.
+
+  **`@endora-commerce/platform`.**
+
+  - New permission `platform.api_description.read` (_Read the API description_), declared by `_lifecycle`'s manifest with English and Polish labels. The platform administrator grants it through an admin role.
+  - `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` now answer only an administrator holding the code or an API key whose scopes include it. Anybody else is answered `401 UNAUTHORIZED` (no administrator session or key, a customer session included) or `403 FORBIDDEN` (an administrator or a key without the code). Both stay outside the sales-channel access rule (`salesChannelAccess: 'open'`). Responses carry `Cache-Control: private, no-store`.
+  - New admin route `GET /api/v1/admin/api-description`, gated on the same code, serving the same document to the Admin UI.
+  - `buildServer` no longer mounts the two routes. It decorates the root instance with `apiDescription(): OpenAPIV3_1.Document` (built on first call, as before), and `_lifecycle` mounts the routes where `auth`'s `requireAdmin` port is available. A composition that mounts no `_lifecycle` serves no API description; one that called `buildServer` and read `/api/v1/_openapi.json` in-process reads `app.apiDescription()` instead, or sends credentials. `registerOpenApiRoutes` is removed; it was reachable only through the host-internal `./http/openapi` subpath.
+  - The reference page loads `swagger-ui-dist@5.33.3` from jsDelivr with Subresource Integrity on both files (`swagger-ui.css` `sha384-Ov4/wv3j2bmct8cDc5X4ngJZohVPzEmc6uDPH8WeljUxO5vtoykvMEfbu9Vh6RaW`, `swagger-ui-bundle.js` `sha384-h00llMzD1afyNow1pDmnZKlHsUZgp9KE9HXLFXF2CvbwsBY0+WBO4f75SfGwvM4K`) and `crossorigin="anonymous"`; it used to load an unpinned version.
+  - A command-palette action, _API description_, targets `/api-description` and requires the new code.
+
+  **`@endora-commerce/contracts`.** `apiKeyScopeSchema` gains `'platform.api_description.read'`, so an administrator who holds the code can issue an API key that reads the API description.
+
+  **`@endora-commerce/admin-shell`.** New kernel-served screen `/api-description` (_System → API description_, gated on `platform.api_description.read`): the document's title, version and endpoint count, a JSON download, and a link that opens the interactive reference on the API's own address in a new tab, carrying the administrator session.
+
+  **`@endora-commerce/mod-i18n`.** The screen's strings and its navigation label in English and Polish (`platform.apiDescription.*`, `appShell.nav.platformApiDescription`).
+
+  **`@endora-commerce/mod-api-keys`.** The module page lists the new scope.
+
+### Patch Changes
+
+- 2420ff9: The `core` bundle gains, in English and Polish, the strings of the price list's bulk add through
+  the product browser: `priceLists.detail.picker.alreadyOnList`, `priceLists.detail.bulkAdd.error`,
+  the cause-specific `priceLists.detail.bulkAdd.error.conflict`,
+  `priceLists.detail.bulkAdd.error.forbidden`, `priceLists.detail.bulkAdd.error.invalid` and
+  `priceLists.detail.bulkAdd.error.notFound`, `priceLists.detail.bulkAdd.failed` (with `{count}`
+  and `{products}`), `priceLists.detail.bulkAdd.failed.product_not_found` and
+  `priceLists.detail.products.add.noPermission`. `priceLists.detail.picker.title` now reads "Add
+  products" / "Dodaj produkty". The single-product drawer's `priceLists.detail.picker.empty`,
+  `priceLists.detail.picker.error.load`, `priceLists.detail.picker.searchPlaceholder` and
+  `priceLists.detail.picker.subtitle` are removed, as are `priceLists.detail.picker.cancel`,
+  `priceLists.detail.products.error.add` and `priceLists.detail.products.loadingProduct`; nothing
+  reads them any more.
+- 97d24cf: The `core` bundle gains the `productBrowser.*` strings in English and Polish, used by the admin
+  kit's `ProductBrowserDialog`, `ProductBrowserTrigger` and the rule-aware `ProductPicker`: the
+  trigger and its missing-permission hint, the status tabs, the type filter, the search
+  placeholder, the column headers, translated product statuses and types, the reasons a product
+  cannot be selected, the selection footer (`productBrowser.action.confirm` is "Add {count}" /
+  "Dodaj {count}"), the per-confirm limit notice, and the loading, empty, load-error and
+  confirm-error states. No existing key changes.
+- 519fecb: **Create order** shows **Items** and **Order summary** only once both the customer and the sales
+  channel are chosen — the two inputs pricing needs; payment method, delivery method and addresses
+  do not gate them. Until then one hint names what is missing. The summary still appears only after
+  the first priced line. Clearing either field hides both sections without discarding the lines,
+  which come back when the field is set again and still count as unsaved work for the
+  leave-the-page prompt. A page opened with `customerAccountId` and `salesChannelId` in the query
+  string shows **Items** at once.
+
+  The `core` bundle gains `orderCreate.gate.missingCustomer`, `orderCreate.gate.missingChannel` and
+  `orderCreate.gate.missingBoth` in English and Polish. No existing key changes.
+
+- 708a3e3: The admin order preview says why a line cannot be ordered, and refuses a sales channel that does not exist.
+
+  **Two new message codes on `POST /api/v1/admin/orders/preview`.** A line is now also unavailable
+  when the customer's Organization may not see the product (`PRODUCT_NOT_VISIBLE_TO_CUSTOMER`) or
+  when the product is not in the assortment of the sales channel named by the request body's
+  `salesChannelId` (`PRODUCT_NOT_IN_SALES_CHANNEL`). Each unavailable line carries exactly one
+  `messages` entry, the first that applies in the order `PRODUCT_NOT_FOUND`,
+  `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`, `PRODUCT_NOT_IN_SALES_CHANNEL`, `QUOTE_ONLY`
+  (`ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE` in `@endora-commerce/contracts`). An unavailable line
+  keeps the existing shape — `unitPrice: '0'`, `lineTotal: 0`, `unavailable: true` — and adds
+  nothing to the subtotal or VAT. The request and response schemas are unchanged; `messages[].code`
+  stays a string, so a client that does not know a code keeps parsing the response. A soft-deleted
+  product is priced as before.
+
+  **Behaviour change: an unknown `salesChannelId` is now refused.** The preview used to fall back
+  silently to any active channel when the body's `salesChannelId` named none, and priced the
+  basket on that other channel. It now answers **404 `NOT_FOUND`** (the route's existing
+  not-found error) before any line is evaluated, so the channel a preview is priced on
+  and the channel its assortment is checked against are always the one the operator chose. The
+  route is admin-only (`orders:write`); an admin client that sends a stale channel id now receives
+  the error instead of a preview priced on a different channel. Order creation
+  (`POST /api/v1/admin/orders`) is not changed by this release.
+
+  **Create order adds products through the product browser.** Inside **Items** — shown once the
+  customer and the sales channel are chosen — **Browse products** opens the shared picker on the
+  Active tab, where grouped and bundle parents, draft and inactive products, and products already on
+  the order are listed with their reason and cannot be ticked; up to 200 ticked products, across
+  pages and filters, are added in one step as lines of quantity 1. Beside it a quick search by name
+  or SKU appends one product under the same rules. The per-line product search and **Add item** are
+  gone: each line shows the product's name and SKU, an editable quantity (a whole number of 1 or
+  more — anything else marks the line, keeps it out of the preview and blocks submit), the unit
+  price, the line total and a remove action. A line the preview reports unavailable shows that
+  cause's reason instead of a price — "The customer cannot see this product" for
+  `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`, "Not in this sales channel's assortment" for
+  `PRODUCT_NOT_IN_SALES_CHANNEL`, and **No price** for `PRODUCT_NOT_FOUND`, `QUOTE_ONLY` and any code
+  the screen does not know — and blocks submit until it is removed; a refused preview (such as a
+  sales channel deleted meanwhile) shows **Could not calculate prices** and marks no line. The
+  created order still carries exactly the lines and quantities on screen, in the unchanged payload
+  shape. The `core` bundle gains `orderCreate.items.browse`, `orderCreate.items.quickSearch`,
+  `orderCreate.items.empty`, `orderCreate.line.notVisible`, `orderCreate.line.notInChannel` and
+  `orderCreate.line.quantityInvalid` in English and Polish, and loses `orderCreate.addItem`, which
+  nothing reads any more.
+
+- b4fbb1c: **Create quote request** adds lines through **Browse products** — the admin kit's shared product
+  browser, many products at once — and a quick search by name or SKU beside it; the per-row product
+  search and **Add line** are gone. Draft and inactive products can be added; grouped and bundle
+  parents are shown with a reason and cannot; a product already on the request is marked as already
+  added. Each line shows name and SKU, an editable whole-number quantity (default 1), an editable
+  agreed unit price and remove.
+
+  The agreed unit price is prefilled from the customer's price lists through a queue with at most
+  four requests in flight, and a response is applied only while it still answers the line's current
+  product, quantity and customer. **A hand-typed agreed price is no longer overwritten** — before,
+  changing the quantity or the customer replaced it. A prefilled price answers one quantity, so
+  once the quantity is no longer a valid one that price is cleared and the line is marked. On a
+  customer change every price not typed by hand is cleared and resolved again for the new
+  customer, so it may become empty; lines added before a customer is chosen are prefilled once one
+  with an organization is.
+
+  **Incomplete lines block submit instead of being dropped**: a line with no agreed price or an
+  invalid quantity is marked and the request cannot be sent until it is fixed or removed; every line
+  on screen is sent. The running total counts the lines with both a valid quantity and a price.
+
+  The `core` bundle gains `rfqCreate.items.browse`, `rfqCreate.items.quickSearch`,
+  `rfqCreate.items.empty`, `rfqCreate.line.priceMissing` and `rfqCreate.line.quantityInvalid` in
+  English and Polish, and loses `rfqCreate.addItem`, which nothing reads any more.
+
+- d571d8c: The quote request History gains the _PDF sent to the customer_ entry and its recipients, template,
+  language and message lines, in English and Polish (`specs/153-quote-request-pdf-template/`).
+- ad55813: E-mail HTML previews are drawn in sandboxed frames that do not run scripts: the e-mail editor's full preview and the newsletter campaign preview carry `sandbox=""`, and the e-mail editor's inline preview of an embedded block or template is drawn in a script-less frame sized to its content instead of being injected into the editor's document. The inline frame's title is the new `core` key `pageBuilder.emailPreview.embedTitle` (English and Polish).
+- 882e88f: The order list's saved views now run on the admin kit's `SavedViewsControl` (#288).
+
+  - Saving a view opens one in-app dialog that asks for the name and whether to share the view, instead of two browser prompts. The name is checked as it is submitted — empty, too long, containing characters that cannot be used, or already used by one of your own views — and a server refusal is shown inside the dialog with what you typed kept.
+  - Deleting a view asks for confirmation in an in-app dialog that names the view and, for a shared view, warns that it disappears for every admin who can open the list. _Delete view_ is offered only for a view you may delete.
+  - Both dialogs are keyboard-operable (focus moves into the dialog, stays there and returns to the control afterwards; Escape cancels) and translated in English and Polish. A shared view is announced as shared in the selector, in words rather than a star.
+  - Loading a view saved without a sort applies the list's default sort (newest first) instead of failing.
+  - Loading a view returns the list to its first page and clears the row selection, without first requesting the old page under the view's filters.
+
+  `@endora-commerce/mod-i18n` drops the four `orders.views.*` keys the replaced component read; the control reads the `savedViews.*` keys added earlier in this feature.
+
+- Updated dependencies [fcf4d09]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

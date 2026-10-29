@@ -7,6 +7,7 @@ import { adminSession, modulePresence, withSession } from '../../helpers/render-
 
 const getSpy = vi.fn();
 const patchSpy = vi.fn();
+const postSpy = vi.fn();
 
 // The **kit's** barrel, not `@/lib/api-client`. The screen is
 // `@endora-commerce/mod-quote-requests/admin`'s since feature 091's batch 12
@@ -21,7 +22,7 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
     ...actual,
     apiClient: {
       get: (...args: unknown[]) => getSpy(...args),
-      post: vi.fn(),
+      post: (...args: unknown[]) => postSpy(...args),
       put: vi.fn(),
       patch: (...args: unknown[]) => patchSpy(...args),
       delete: vi.fn(),
@@ -56,6 +57,8 @@ const BUNDLE = passthroughBundle('core', [
   'rfq.detail.badge.validityEnded',
   'rfq.detail.cancelRfq',
   'rfq.detail.convert.placeOrder',
+  'rfq.detail.convert.confirm',
+  'rfq.detail.convert.success',
   'rfq.detail.copyHint',
   'rfq.detail.tabs.overview',
   'rfq.detail.tabs.modify',
@@ -172,6 +175,8 @@ beforeEach(() => {
   getSpy.mockReset();
   patchSpy.mockReset();
   patchSpy.mockResolvedValue({ data: {} });
+  postSpy.mockReset();
+  vi.restoreAllMocks();
 });
 
 describe('RfqDetail — the operator sets and changes the validity deadline', () => {
@@ -344,5 +349,46 @@ describe('RfqDetail — the operator sets and changes the validity deadline', ()
     await screen.findByText('rfq.detail.tabs.overview');
     expect(screen.queryByText('rfq.detail.badge.validityEnded')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue #170 — the order action on an approved request
+  // -------------------------------------------------------------------------
+
+  it('prepares the customer\'s basket through the admin endpoint, after confirming', async () => {
+    const VALID_UNTIL = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    postSpy.mockResolvedValue({
+      data: { cartId: '00000000-0000-4000-8000-0000000000c1', customerAccountId: 'cust-1', itemCount: 1 },
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderDetail({ status: 'Approved', expiresAt: VALID_UNTIL, awaitingCustomerRevisionAcceptance: false });
+
+    await userEvent.click(await screen.findByRole('button', { name: /rfq\.detail\.convert\.placeOrder/ }));
+
+    expect(confirm).toHaveBeenCalledWith('rfq.detail.convert.confirm');
+    // Not the storefront's `convert-to-order`: that route is customer-only and
+    // answers an administrator with 401, which signs the operator out.
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith(
+        `/api/v1/admin/quote-requests/${RFQ_ID}/prepare-customer-basket`,
+        {},
+      ),
+    );
+    expect(await screen.findByText('rfq.detail.convert.success')).toBeInTheDocument();
+  });
+
+  it('sends nothing when the operator does not confirm', async () => {
+    const VALID_UNTIL = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderDetail({ status: 'Approved', expiresAt: VALID_UNTIL, awaitingCustomerRevisionAcceptance: false });
+
+    await userEvent.click(await screen.findByRole('button', { name: /rfq\.detail\.convert\.placeOrder/ }));
+
+    // Only the basket endpoint: the reference-price probe is itself a POST
+    // (`/price-books/resolve`, feature 160), and it is a read, not a send.
+    expect(postSpy).not.toHaveBeenCalledWith(
+      `/api/v1/admin/quote-requests/${RFQ_ID}/prepare-customer-basket`,
+      expect.anything(),
+    );
   });
 });

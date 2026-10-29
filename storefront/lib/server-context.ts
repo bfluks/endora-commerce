@@ -1,5 +1,6 @@
 import { cookies, headers } from 'next/headers';
-import type { I18nConfigResponse } from '@endora-commerce/contracts';
+import type { CmsBrandTokens, I18nConfigResponse } from '@endora-commerce/contracts';
+import { getBrandTokens } from './api/brand';
 import { getI18nConfig } from './api/i18n';
 import { getPublicSalesChannel } from './api/sales-channel';
 import { themeForChannel, type ResolvedStorefrontTheme } from './theme/theme';
@@ -7,6 +8,7 @@ import { getModulePresence, type ModulePresenceSet } from './api/module-presence
 import { resolveLocale } from './i18n/locale';
 import { getSessionCookie } from './session';
 import type { RequestContext } from './api/client';
+import { SALES_CHANNEL_REQUEST_HEADER } from './channel/channel-header';
 
 /**
  * Per-request context resolution. Pages call `getRequestContext()` once
@@ -15,8 +17,12 @@ import type { RequestContext } from './api/client';
  *
  * The Sales Channel header is read from `X-Sales-Channel` so a reverse
  * proxy / multi-storefront deployment can stamp it per-host. When no proxy
- * stamps the header (local dev, single-channel deployment), the code is
- * left undefined and the backend resolves its system-default channel.
+ * stamps it, `middleware.ts` stamps the code of the channel the backend
+ * resolves for this storefront, so the header is there on every request it
+ * served (`specs/154-sales-channel-access/contracts/storefront-ux.md` §1.2).
+ * Should the middleware have been unable to read that channel, the code of
+ * the channel identity read here is used instead; only when neither is known
+ * is the code left undefined and the backend resolves its default.
  */
 export interface ServerContext {
   config: I18nConfigResponse;
@@ -43,13 +49,26 @@ export interface ServerContext {
    * theme this storefront does not have (feature 102).
    */
   theme: ResolvedStorefrontTheme;
+  /**
+   * Whether this store serves anonymous visitors
+   * (`specs/154-sales-channel-access/`). `false` only when the channel says so;
+   * a channel that could not be read counts as open, because the backend
+   * refuses on its own and the storefront must not invent a closed store.
+   */
+  anonymousAccess: boolean;
+  /**
+   * The channel's effective brand tokens (feature 163, research R-3), which the
+   * root layout writes into `<style id="cmsb">`. `null` while `cms` is off or
+   * when the read failed: the page builder then renders on its built-in look.
+   */
+  brandTokens: CmsBrandTokens | null;
 }
 
 export async function getServerContext(input?: { langOverride?: string | null }): Promise<ServerContext> {
   const h = await headers();
   const jar = await cookies();
   const acceptLanguage = h.get('accept-language');
-  const salesChannelCode = h.get('x-sales-channel') ?? undefined;
+  const stampedChannelCode = h.get(SALES_CHANNEL_REQUEST_HEADER) || undefined;
 
   // All three resolve on every page. Fetched together rather than in sequence
   // so neither presence nor the channel identity costs a round-trip on the
@@ -57,13 +76,17 @@ export async function getServerContext(input?: { langOverride?: string | null })
   // because the channel read is the one that has to carry `X-Sales-Channel` —
   // asking the backend which channel this is, without telling it, would get the
   // system default on every host.
-  const [config, modules, channel] = await Promise.all([
+  //
+  // The brand tokens ride along (feature 163): the same channel signal, and a
+  // read the first byte of HTML needs, so it is not a round-trip of its own.
+  const channelSignal = stampedChannelCode !== undefined ? { salesChannelCode: stampedChannelCode } : {};
+  const [config, modules, channel, brandTokens] = await Promise.all([
     getI18nConfig(),
     getModulePresence(),
-    getPublicSalesChannel(
-      salesChannelCode !== undefined ? { salesChannelCode } : {},
-    ),
+    getPublicSalesChannel(channelSignal),
+    getBrandTokens(channelSignal),
   ]);
+  const salesChannelCode = stampedChannelCode ?? channel?.code;
   // A channel that could not be read is not a channel with no theme, but the
   // buyer-facing answer is the same one: the reference token set. See
   // `lib/theme/theme.ts` for what "refuses rather than guesses" means here.
@@ -71,8 +94,17 @@ export async function getServerContext(input?: { langOverride?: string | null })
 
   // The header language/currency switchers persist the buyer's choice in
   // cookies (the root layout that renders the header can't read `?lang`
-  // query params). The cookie-set language takes priority over the explicit
-  // override and the Accept-Language header.
+  // query params). The cookie-set language takes priority over the
+  // Accept-Language header.
+  //
+  // An explicit override — the product page's `?lang=`, the only caller that
+  // passes one — beats the cookie (feature 163, owner decision L-1 = A,
+  // 2026-10-26): product URL keys are per language and a non-default-language
+  // product link is `/p/<key>?lang=<L>`, so rendering it in the cookie's
+  // language would look the key up in the wrong language and answer not-found.
+  // An override that is not an active language is skipped and the cookie
+  // decides. The cookie is deliberately not rewritten: opening a link is not
+  // choosing a preference, and only the header switcher stores one.
   const langCookie = jar.get('lang')?.value ?? null;
   const currency = jar.get('currency')?.value || undefined;
   // Issue #265 — who is in front of the page, for the readers that carry a
@@ -83,7 +115,7 @@ export async function getServerContext(input?: { langOverride?: string | null })
 
   const locale = resolveLocale({
     acceptLanguage,
-    langQuery: langCookie ?? input?.langOverride ?? null,
+    langQuery: [input?.langOverride, langCookie],
     config,
   });
 
@@ -93,6 +125,8 @@ export async function getServerContext(input?: { langOverride?: string | null })
     currency,
     modules,
     theme,
+    anonymousAccess: channel?.anonymousAccess !== false,
+    brandTokens,
     ctx: {
       ...(salesChannelCode !== undefined ? { salesChannelCode } : {}),
       locale,

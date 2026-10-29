@@ -229,9 +229,77 @@ export const manifest = defineModuleManifest({
     { code: 'BLOG_URL_PREFIX_INVALID' },
     { code: 'BLOG_URL_PREFIX_RESERVED' },
   ],
+  /**
+   * Feature 163 (US6, FR-026, research R-15) — the latest-posts block. Declared
+   * here, by the module whose data it shows, as `catalog` declares its blocks;
+   * its React code is `@endora-commerce/cms-components`' `LatestPosts`. While
+   * `blog` is off the block is filtered from every palette and render, and the
+   * storefront skips its read.
+   */
+  blocks: [
+    {
+      name: 'blog.LatestPosts',
+      translatable: [
+        { path: 'header.heading', format: 'tiptap' },
+        { path: 'header.lead' },
+        { path: 'header.button.label' },
+        { path: 'readMoreLabel' },
+      ],
+      labelKey: 'blocks.latestPosts.label',
+      descriptionKey: 'blocks.latestPosts.description',
+      category: 'content',
+      contexts: ['cms'],
+      fields: {},
+      responsiveFields: [
+        'headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'columns', 'slidesPerView', 'gap', 'gapPx', 'controlsPlacement', 'controlsAlign',
+        // T189: the post card's look, the lead's size and the header button's place and width, per breakpoint.
+        'cardPadding', 'cardPaddingPx', 'cardTextPadding', 'cardTextPaddingPx', 'imageRatio', 'cardTitleSize', 'cardTitleSizePx', 'cardTitleWeight',
+        'leadSize', 'leadSizePx', 'headerButtonPlacement', 'headerButtonFullWidth',
+        'headingWeight',
+      ],
+      weight: 60,
+    },
+  ],
+  // The palette section the block sits in, declared beside it (as `catalog`
+  // declares `content` for its e-mail blocks); merged by key with `cms`'s.
+  blockCategories: [{ key: 'content', titleKey: 'blocks.category.content', contexts: ['cms'], weight: 20 }],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
   actions: [
+    // Principle XVI (issue #510): the three screens the sidebar lists were
+    // reachable from the sidebar alone — the palette offered only the create
+    // form. Each is gated on `blog.read`, the code its route and its `GET`
+    // enforce; the create form stays on `blog.write`.
+    {
+      id: 'open-blog-posts',
+      labelKey: 'actions.openPosts.label',
+      descriptionKey: 'actions.openPosts.description',
+      icon: 'Newspaper',
+      targetRoute: '/blog/posts',
+      requiredPermission: 'blog.read',
+      keywords: ['blog', 'post', 'posts', 'article', 'wpis', 'wpisy', 'artykuł', 'artykuły'],
+      weight: 130,
+    },
+    {
+      id: 'open-blog-categories',
+      labelKey: 'actions.openCategories.label',
+      descriptionKey: 'actions.openCategories.description',
+      icon: 'Newspaper',
+      targetRoute: '/blog/categories',
+      requiredPermission: 'blog.read',
+      keywords: ['blog', 'category', 'categories', 'kategoria', 'kategorie'],
+      weight: 150,
+    },
+    {
+      id: 'open-blog-tags',
+      labelKey: 'actions.openTags.label',
+      descriptionKey: 'actions.openTags.description',
+      icon: 'Newspaper',
+      targetRoute: '/blog/tags',
+      requiredPermission: 'blog.read',
+      keywords: ['blog', 'tag', 'tags', 'tagi'],
+      weight: 160,
+    },
     {
       id: 'new-post',
       labelKey: 'actions.newPost.label',

@@ -168,7 +168,7 @@ async function inviteAction(formData: FormData): Promise<void> {
     await inviteMember(session, { email, role });
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not send invitation.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not send invitation.';
     redirect(`/organization/members?error=${encodeURIComponent(message)}`);
   }
   redirect(`/organization/members?status=invited&email=${encodeURIComponent(email)}`);
@@ -184,7 +184,7 @@ async function changeRoleAction(formData: FormData): Promise<void> {
     await changeMemberRole(session, memberId, role);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not change role.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not change role.';
     redirect(`/organization/members?error=${encodeURIComponent(message)}`);
   }
   redirect(`/organization/members`);
@@ -199,7 +199,7 @@ async function removeAction(formData: FormData): Promise<void> {
     await removeMember(session, memberId);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not remove member.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not remove member.';
     redirect(`/organization/members?error=${encodeURIComponent(message)}`);
   }
   redirect(`/organization/members`);
@@ -214,7 +214,7 @@ async function revokeAction(formData: FormData): Promise<void> {
     await revokeInvitation(session, invitationId);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not revoke invitation.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not revoke invitation.';
     redirect(`/organization/members?error=${encodeURIComponent(message)}`);
   }
   redirect(`/organization/members?status=revoked`);

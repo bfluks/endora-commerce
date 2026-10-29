@@ -2,13 +2,16 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import { MfaSocialIdentity } from '../entities/mfa-social-identity.entity.js';
 import type { OAuthIdentity } from './oauth-provider-service.js';
+import type { CustomerChannelAccess } from './customer-channel-access.js';
 
 /**
  * Resolves a federated identity to a platform account and records the link
  * (feature 042, R6). Account find/create is delegated to injected ports so the
  * `mfa` module never reaches into the customer/admin internals (Principle I):
  *   - Storefront: match by verified email, else auto-create a standalone
- *     customer (when registration-without-organization is allowed). A matched
+ *     customer (when registration-without-organization is allowed) for the
+ *     sales channel the sign-in was started on — and only where that channel
+ *     is open to anonymous visitors (feature 154, owner decision D6). A matched
  *     account that is **blocked** is refused, as the password sign-in refuses
  *     it — before a link is written or anything is audited.
  *   - Admin: match an existing, active admin user only — never auto-create.
@@ -35,30 +38,69 @@ export interface SocialAccountMatch {
 
 export interface SocialIdentityDeps {
   resolveCustomerByEmail: (email: string) => Promise<SocialAccountMatch | null>;
-  /** Returns the new account id, or null when standalone registration is off. */
-  autoCreateCustomer: (email: string) => Promise<SocialAccountMatch | null>;
+  /**
+   * Returns the new account id, or null when standalone registration is off.
+   * The new personal Organization gets exactly `salesChannelId` — the channel
+   * the sign-in was started on (feature 154, D6).
+   */
+  autoCreateCustomer: (
+    email: string,
+    context: { salesChannelId: string },
+  ) => Promise<SocialAccountMatch | null>;
   resolveAdminByEmail: (email: string) => Promise<{ id: string } | null>;
 }
 
 export type SocialSignInResult =
   | { ok: true; subjectId: string; organizationId: string | null }
-  | { ok: false; reason: 'unverified' | 'registration_required' | 'no_account' | 'blocked' };
+  | {
+      ok: false;
+      reason:
+        | 'unverified'
+        | 'registration_required'
+        | 'no_account'
+        | 'blocked'
+        | 'sales_channel_sign_in_required';
+    };
+
+/** Where a customer's federated sign-in was started: the OAuth transaction's channel. */
+export interface CustomerSignInContext {
+  salesChannelId: string | null;
+}
 
 export class SocialIdentityService {
   constructor(
     private readonly emFactory: () => EntityManager,
     private readonly deps: SocialIdentityDeps,
     private readonly auditLogService: AuditPort,
+    /** Feature 154 — whether the started-on channel admits a new account at all. */
+    private readonly newAccountAdmission: Pick<CustomerChannelAccess, 'admitsNewAccount'>,
   ) {}
 
-  async signInCustomer(identity: OAuthIdentity): Promise<SocialSignInResult> {
+  async signInCustomer(
+    identity: OAuthIdentity,
+    context: CustomerSignInContext,
+  ): Promise<SocialSignInResult> {
     if (!identity.emailVerified || !identity.email) return { ok: false, reason: 'unverified' };
     const existing = await this.deps.resolveCustomerByEmail(identity.email);
     if (existing?.blocked) return { ok: false, reason: 'blocked' };
     let account = existing;
     let created = false;
     if (!account) {
-      account = await this.deps.autoCreateCustomer(identity.email);
+      // Feature 154 (D6) — a new account is created for the channel the
+      // sign-in was started on, and only where that channel is open to
+      // anonymous visitors: on a closed store individual self-registration is
+      // refused, and a provider sign-in is not a second way to it. Asked before
+      // anything is written, so a refusal leaves no account, no Organization and
+      // no link behind. An existing account is not asked: whether it may use
+      // the store is the assignment rule's answer, which the callback asks next.
+      const salesChannelId = context.salesChannelId;
+      if (
+        salesChannelId === null ||
+        !(await this.newAccountAdmission.admitsNewAccount(salesChannelId))
+      ) {
+        return { ok: false, reason: 'sales_channel_sign_in_required' };
+      }
+      account = await this.deps.autoCreateCustomer(identity.email, { salesChannelId });
       if (!account) return { ok: false, reason: 'registration_required' };
       created = true;
     }

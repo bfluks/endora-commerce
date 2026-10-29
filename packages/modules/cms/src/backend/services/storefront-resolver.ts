@@ -12,6 +12,13 @@ import type { CmsCache } from './cms-cache.js';
 
 export type CmsAssetResolver = (assetId: string) => Promise<CmsAssetEmbedResolution | null>;
 
+/**
+ * The asset id `cms.default_share_image_asset_id` holds for one sales channel,
+ * or `null` when it is empty (feature 163, FR-033). Late-bound, like the asset
+ * resolver: the setting is read through the settings store per request.
+ */
+export type CmsDefaultShareImageResolver = (salesChannelId: string) => Promise<string | null>;
+
 /** Recursion depth cap for InsertBlock/InsertTemplate inlining (per data-model.md / T082). */
 const EMBED_DEPTH_CAP = 3;
 
@@ -35,7 +42,20 @@ type PageRow = {
   meta_keywords: Record<string, string> | null;
   content: { languages?: Record<string, unknown> };
   languages: string[];
+  parent_page_id: string | null;
+  breadcrumbs_visible: boolean;
+  breadcrumbs_scheme: 'light' | 'muted' | 'dark';
+  share_image_asset_id: string | null;
 };
+
+type BreadcrumbTrail = CmsResolvedPage['breadcrumbs']['trail'];
+
+/**
+ * How far up the parent chain the trail walks — the write-side limit
+ * (`CMS_PAGE_TREE_MAX_DEPTH`, research R-18), so a well-formed tree is always
+ * walked whole and a stored loop still terminates.
+ */
+const TRAIL_MAX_DEPTH = 8;
 
 type ChannelRow = {
   id: string;
@@ -80,6 +100,7 @@ type HookRow = {
 
 export class StorefrontResolver {
   private assetResolver: CmsAssetResolver | null = null;
+  private defaultShareImageResolver: CmsDefaultShareImageResolver | null = null;
 
   constructor(
     private readonly emFactory: () => EntityManager,
@@ -88,6 +109,41 @@ export class StorefrontResolver {
 
   setAssetResolver(resolver: CmsAssetResolver | null): void {
     this.assetResolver = resolver;
+  }
+
+  setDefaultShareImageResolver(resolver: CmsDefaultShareImageResolver | null): void {
+    this.defaultShareImageResolver = resolver;
+  }
+
+  /**
+   * One asset as a sharing image: its URL when it resolves and is public —
+   * a crawler fetching `og:image` carries no session — else `null`.
+   */
+  private async shareImageUrl(assetId: string | null): Promise<string | null> {
+    if (!assetId || !this.assetResolver) return null;
+    const resolved = await this.assetResolver(assetId);
+    return resolved && resolved.visibility === 'public' ? resolved.url : null;
+  }
+
+  /**
+   * The deployment default applied to a page without a sharing image of its
+   * own (feature 163, FR-033). Applied after the page cache rather than stored
+   * in it: the page's own image is part of the page, invalidated with it, while
+   * the default is a setting whose change no page write announces. The read is
+   * for the request's channel (Constitution XII).
+   */
+  private async withDefaultShareImage(cached: CmsResolvedPage, channel: ChannelRow): Promise<CmsResolvedPage> {
+    // An entry cached before feature 163 carries neither field.
+    const partial = cached as Partial<Pick<CmsResolvedPage, 'share' | 'languages'>>;
+    const page: CmsResolvedPage = {
+      ...cached,
+      share: partial.share ?? { imageUrl: null },
+      languages: partial.languages ?? [cached.language],
+    };
+    if (page.share.imageUrl || !this.defaultShareImageResolver) return page;
+    const assetId = await this.defaultShareImageResolver(channel.id);
+    const imageUrl = await this.shareImageUrl(assetId);
+    return imageUrl ? { ...page, share: { imageUrl } } : page;
   }
 
   private async resolveAssetsForTrees(trees: unknown[]): Promise<Record<string, CmsAssetEmbedResolution>> {
@@ -119,7 +175,7 @@ export class StorefrontResolver {
     const cacheLanguage = input.language ?? channel.default_language;
     if (this.cache) {
       const cached = await this.cache.getPage(input.slug, channel.code, cacheLanguage);
-      if (cached) return cached;
+      if (cached) return this.withDefaultShareImage(cached, channel);
     }
 
     const rows = (await em.execute(
@@ -163,11 +219,86 @@ export class StorefrontResolver {
       },
       embeds,
       assets,
+      breadcrumbs: {
+        visible: page.breadcrumbs_visible,
+        scheme: page.breadcrumbs_scheme,
+        trail: await this.resolveTrail(em, channel, language, page),
+      },
+      share: { imageUrl: await this.shareImageUrl(page.share_image_asset_id) },
+      languages: this.servableLanguages(page, language),
     };
     if (this.cache) {
       await this.cache.setPage(input.slug, channel.code, cacheLanguage, resolved);
     }
-    return resolved;
+    return this.withDefaultShareImage(resolved, channel);
+  }
+
+  /**
+   * The languages the page carries content for, among those it declares — the
+   * ones a reader could be served (feature 163, FR-034) — with the served
+   * language always among them.
+   */
+  private servableLanguages(page: Pick<PageRow, 'content' | 'languages'>, served: string): string[] {
+    const available = page.content.languages ?? {};
+    const languages = page.languages.filter((language) => available[language] !== undefined);
+    return languages.includes(served) ? languages : [served, ...languages];
+  }
+
+  /**
+   * The breadcrumb trail of one page for one channel (feature 163,
+   * data-model §5; FR-030, FR-030a): its ancestors root-first, without Home
+   * and without the page itself.
+   *
+   * An ancestor's link is the slug **this channel** serves it under, read off
+   * `cms_page_sales_channels` (Constitution XII) — never the page row's own
+   * `slug`, which is one value shared by every channel. An ancestor this
+   * channel does not serve, published and active, keeps its place in the trail
+   * as text (`slug: null`): the hierarchy is still true, there is just no page
+   * here to link to.
+   *
+   * The name is the ancestor's meta title in the language being served, then
+   * its admin name — the same fallback the page's own `<title>` uses.
+   */
+  private async resolveTrail(
+    em: EntityManager,
+    channel: ChannelRow,
+    language: string,
+    page: Pick<PageRow, 'id' | 'parent_page_id'>,
+  ): Promise<BreadcrumbTrail> {
+    if (!page.parent_page_id) return [];
+    const rows = (await em.execute(
+      `with recursive chain(id, parent_page_id, depth) as (
+         select id, parent_page_id, 1 from cms_pages where id = ?
+         union all
+         select p.id, p.parent_page_id, c.depth + 1
+         from cms_pages p join chain c on p.id = c.parent_page_id
+         where c.depth < ?
+       )
+       select c.id::text as id, c.depth, p.name, p.meta_title,
+              case when p.status = 'published' and p.active = true then cpsc.slug end as slug
+       from chain c
+       join cms_pages p on p.id = c.id
+       left join cms_page_sales_channels cpsc
+         on cpsc.page_id = c.id and cpsc.sales_channel_id = ?
+       order by c.depth desc`,
+      [page.parent_page_id, TRAIL_MAX_DEPTH, channel.id],
+    )) as Array<{
+      id: string;
+      depth: number;
+      name: string;
+      meta_title: Record<string, string> | null;
+      slug: string | null;
+    }>;
+    // A stored loop through the page itself would otherwise repeat it.
+    const seen = new Set<string>([page.id]);
+    const trail: BreadcrumbTrail = [];
+    for (const row of rows) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      const title = row.meta_title?.[language]?.trim();
+      trail.push({ name: title && title.length > 0 ? title : row.name, slug: row.slug ?? null });
+    }
+    return trail;
   }
 
   /**

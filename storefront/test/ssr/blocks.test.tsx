@@ -76,7 +76,7 @@ function renderTree(name: string, block: PaletteBlock) {
 
 /**
  * Under the catalogue provider, because that is where the storefront renders a
- * Page Builder tree: `CatalogBlockData` resolves what the page's blocks declare
+ * Page Builder tree: `BlockData` resolves what the page's blocks declare
  * and mounts `CatalogPreviewProvider` with the answers. The answers here are
  * none — an empty catalogue, or a backend that did not answer — which is the
  * least a block can be given and still must not answer with a skeleton.

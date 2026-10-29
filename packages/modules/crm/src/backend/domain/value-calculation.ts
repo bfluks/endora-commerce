@@ -56,8 +56,8 @@ export interface OpportunityValueResult {
 export const VALUE_EXCLUSION_CURRENCY_MISMATCH = 'currency_mismatch';
 
 /**
- * Fractional digits kept while adding. A unit price may carry more places than
- * a total does; the sum is rounded to two once, at the end.
+ * Fractional digits kept while multiplying. A unit price carries four places
+ * (owner ruling of 2026-10-25); each line value is rounded to two once.
  */
 const SCALE_DIGITS = 6;
 const SCALE = 10n ** BigInt(SCALE_DIGITS);
@@ -84,21 +84,28 @@ function formatScaled(scaled: bigint): string {
   return `${whole}.${fraction}`;
 }
 
+/** A scaled amount rounded half up to the cent, still scaled. */
+function roundToCent(scaled: bigint): bigint {
+  return ((scaled + CENT / 2n) / CENT) * CENT;
+}
+
 function sumLines(lines: readonly ValueQuoteRequestLine[]): bigint {
   let total = 0n;
   for (const line of lines) {
     if (line.unitPrice === null) continue;
     const price = parseDecimal(line.unitPrice);
     if (price === null || !Number.isInteger(line.quantity) || line.quantity <= 0) continue;
-    total += price * BigInt(line.quantity);
+    // The line value is the rounding point (owner ruling of 2026-10-25).
+    total += roundToCent(price * BigInt(line.quantity));
   }
   return total;
 }
 
 /**
- * What a Quote Request is worth: the sum of `quantity × unit price` over its
- * lines — the quote desk's own arithmetic, done exactly. A line without a
- * price adds nothing.
+ * What a Quote Request is worth: the sum of its line values, each
+ * `quantity × unit price` rounded half up to the cent once — the quote desk's
+ * own arithmetic (`summarize`), done exactly. A line without a price adds
+ * nothing.
  */
 export function quoteRequestAmount(lines: readonly ValueQuoteRequestLine[]): string {
   return formatScaled(sumLines(lines));

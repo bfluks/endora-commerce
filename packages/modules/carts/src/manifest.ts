@@ -228,6 +228,21 @@ export const manifest = defineModuleManifest({
   ],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
+  // Principle XVI (issue #510): the platform-wide cart list was reachable from
+  // neither the sidebar nor the palette — only by typing its address. Gated on
+  // `carts:read`, the code its route and `GET /api/v1/admin/carts` enforce.
+  actions: [
+    {
+      id: 'open-carts',
+      labelKey: 'actions.openCarts.label',
+      descriptionKey: 'actions.openCarts.description',
+      icon: 'ShoppingCart',
+      targetRoute: '/carts',
+      requiredPermission: 'carts:read',
+      keywords: ['cart', 'carts', 'basket', 'abandoned', 'koszyk', 'koszyki', 'porzucone'],
+      weight: 200,
+    },
+  ],
 });
 
 /** Legacy export retained for backward compatibility. */

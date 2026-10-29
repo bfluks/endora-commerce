@@ -152,6 +152,8 @@ export async function registerCatalogExternalRoutes(
         const data = await decorator.resolveBulkPrices(parsed.data.lines, {
           organizationId: binding.organizationId,
           salesChannel: { id: channel.id, defaultCurrency: channel.defaultCurrency },
+          // Feature 163 (W5) — the bound key's audience, off the resolved actor.
+          audience: productAudienceOf(request),
         });
         return { data };
       },
@@ -182,9 +184,9 @@ function readContext(request: FastifyRequest): {
   resolvedChannel: {
     id: string;
     code: string;
-    isPublic: boolean;
     defaultCurrency: string;
     defaultLanguage: string;
+    languages: readonly string[];
   };
   audience: ProductAudience;
   preferredLanguage?: string | undefined;
@@ -197,9 +199,10 @@ function readContext(request: FastifyRequest): {
     resolvedChannel: {
       id: channel.id,
       code: channel.code,
-      isPublic: channel.isPublic,
       defaultCurrency: channel.defaultCurrency,
       defaultLanguage: channel.defaultLanguage,
+      // Feature 163 — the channel's content languages, from the resolved record.
+      languages: channel.languages,
     },
     audience: productAudienceOf(request),
     preferredLanguage,

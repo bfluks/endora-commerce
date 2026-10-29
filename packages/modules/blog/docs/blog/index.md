@@ -37,8 +37,19 @@ Products.
                                                               blog_post_related_products → catalog.products
 ```
 
-The schema lives entirely in `20260506T081055_blog_init.ts` (eleven new tables, all
-prefixed `blog_*`) and never touches existing tables.
+The schema lives in `20260506T081055_blog_init.ts` (eleven new tables, all
+prefixed `blog_*`) and never touches existing tables. Migration
+`20261023T063013_blog_post_main_image.ts` adds `blog_posts.main_image_asset_id`
+(nullable, referencing `assets`).
+
+## Main image
+
+A post has an optional **Main image**, chosen from the Assets Library in the
+post editor. It is shown on post cards — the blog index, category and tag
+lists, and the Page Builder's latest-posts block. The admin API carries it as
+`mainImageAssetId` (create, patch and detail), and storefront cards as
+`mainImageUrl`, which is the public URL of the asset or `null` when the post
+has none or the asset is not public.
 
 ## URLs and routing
 
@@ -108,7 +119,7 @@ Five guards block destructive operations:
 2. **Category delete with referencing posts** → 409 `BLOG_CATEGORY_IN_USE`.
 3. **Category delete with child rows** → 409 `BLOG_CATEGORY_HAS_CHILDREN`.
 4. **Seeded `Default` Category delete** → 409 `BLOG_CATEGORY_PROTECTED`.
-5. **Library Asset soft-delete while embedded in a Post body or Category description** →
+5. **Library Asset soft-delete while embedded in a Post body or Category description, or used as a Post's main image** →
    409 `ASSET_REFERENCED` (descriptors registered with the
    [Assets Library reference registry](../assets-library/index.md#asset-reference-registry)).
 
@@ -154,23 +165,32 @@ array if it has drifted.
 | GET    | `/api/v1/blog/by-channel`             | `BlogIndexResponse` — latest N + first-level Categories  |
 | GET    | `/api/v1/blog/by-slug?slug=…`         | Discriminated `BlogBySlugResponse` (category / post)     |
 | GET    | `/api/v1/blog/tag-by-code?code=…`     | `BlogTagByCodeResponse` — paginated posts for the Tag    |
+| GET    | `/api/v1/blog/posts?limit=…&categorySlug=…` | `{ data: BlogPostCard[] }` — the newest published posts, newest first |
 
-All three:
+`/posts` feeds the latest-posts block. `limit` is 1–24 (default 6); a larger
+value answers `400`. An unknown `categorySlug` answers an empty list rather
+than a 404, so a block whose category was removed simply shows nothing. A
+channel with `blog.enabled = false` also answers an empty list. Each card
+carries `mainImageUrl`, `primaryCategoryName` (the category chip) and `url`
+(`/<blog-prefix>/<slug>`).
+
+All four:
 
 - read the resolved channel + language from request headers (`x-sales-channel`, `x-blog-language` / `accept-language`);
 - read `blog.*` settings from the channel-aware Settings service;
-- return `404 BLOG_DISABLED` (or `BLOG_POST_NOT_FOUND` / `BLOG_TAG_NOT_FOUND`) when the resolved scope has no matching content;
+- return `404 BLOG_DISABLED` (or `BLOG_POST_NOT_FOUND` / `BLOG_TAG_NOT_FOUND`) when the resolved scope has no matching content — except `/posts`, which answers an empty list;
 - ride the [`BlogCacheService`](#cache-strategy) Redis read-through.
 
 ## Cache strategy
 
-Keys live under `blog:v1:<channelCode>:<language>:` with four shapes:
+Keys live under `blog:v1:<channelCode>:<language>:` with five shapes:
 
 ```
 blog:v1:<channel>:<language>:index
 blog:v1:<channel>:<language>:category:<slug>:p<page>
 blog:v1:<channel>:<language>:post:<slug>
 blog:v1:<channel>:<language>:tag:<code>:p<page>
+blog:v1:<channel>:<language>:list:<categorySlug|*>:n<limit>
 ```
 
 TTL: 5 minutes (aligned with the CMS module's cache).
@@ -185,6 +205,51 @@ Invalidation:
 The granular `invalidatePost(channelCode, slug)` and friends are wired
 on the cache class for future surgical-invalidation work (coarse
 invalidation is correct at v1; rate of writes is low).
+
+## Page Builder block: latest posts
+
+The blog module declares one Page Builder block, `blog.LatestPosts` (palette
+section *Content*), which shows the newest published posts of the page's sales
+channel in the page's language:
+
+| Option | Meaning |
+| --- | --- |
+| Header | An optional heading, lead text and button above the posts. |
+| Number of posts | How many posts, 1–12 (default 6). On the **Data** tab. |
+| Category | Only posts of this category; empty for all. On the **Data** tab, picked from the blog's categories (the block keeps storing the category's slug, so a block saved before is unchanged). |
+| Layout | Carousel (with the carousel options: slides per view per breakpoint, gap, effect, arrows and dots) or grid (columns per breakpoint). |
+| Read-more label | The text of the link on each card. |
+
+Each card shows the main image (2:1), the primary category, the title and the
+read-more link.
+
+**Card and header look.** Each of these options is unset by default, which
+keeps the card described above; the ones marked *per breakpoint* are set on the
+**Responsive** tab, a breakpoint left unset showing the default.
+
+| Option | Meaning |
+| --- | --- |
+| Card background | A brand colour or a hex value behind the whole card; unset, the section's background. |
+| Rounded corners | The card's corners: none, small, medium (the default, 8 px) or large. |
+| Card padding | Space around the card's image and text, a spacing step or Custom (px) — *per breakpoint*. |
+| Text padding | Space above and beside the text under the image — *per breakpoint*; unset, 16 px above and none beside. |
+| Image ratio | The image frame's proportions, a preset or Custom (`w:h`) — *per breakpoint*. |
+| Zoom on hover | The image grows slightly while the card is hovered or focused (not with reduced motion). |
+| Category chip | Filled (the default), outline or hidden. |
+| Card title size / weight | A type size or Custom (px), and a weight — *per breakpoint*. |
+| Read-more icon / alignment / weight | An arrow or a plus after the label, the link at the start or the end of the card, and its weight. |
+| Lead size / colour | The header lead's size (*per breakpoint*) and colour. |
+| Header button placement | Below the lead (the default), at the end of the header (level with the lead) or after the posts and their controls — *per breakpoint*. |
+| Header button width | Fit the label or full width — *per breakpoint*. | The posts are read on the server through
+`GET /api/v1/blog/posts`, so they are in the page's HTML. With no posts,
+customers see nothing and the editor preview shows "No posts". Like every
+section block, it carries the section settings (anchor, colour scheme,
+background, spacing, width) at the top level of a page. Its header and
+read-more texts are translatable with the Page Builder's **Translate** action.
+
+While the blog module is switched off, the block is not offered in the
+palette, a stored one renders nothing, `/api/v1/blog/posts` does not answer,
+and the storefront does not ask for posts.
 
 ## Cross-module dependencies
 

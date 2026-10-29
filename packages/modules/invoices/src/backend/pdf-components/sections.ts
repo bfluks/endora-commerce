@@ -1,5 +1,5 @@
 import type { Content, TableCell } from 'pdfmake/interfaces.js';
-import type { InvoiceDetail } from '@endora-commerce/contracts';
+import { unitPriceFractionDigits, type InvoiceDetail } from '@endora-commerce/contracts';
 import { amountToWords, type AmountToWordsLocale } from '../services/amount-to-words.js';
 
 /**
@@ -10,6 +10,14 @@ import { amountToWords, type AmountToWordsLocale } from '../services/amount-to-w
 
 export function money(n: number): string {
   return n.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+/**
+ * A unit price — the unit net price column: its significant places, up to
+ * four, at least two (owner ruling of 2026-10-25; `unitPriceFractionDigits`).
+ * Line values and totals are {@link money}, two places.
+ */
+export function unitMoney(n: number): string {
+  return n.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: unitPriceFractionDigits(n) });
 }
 export function pct(rate: number): string {
   return `${Math.round(rate * 100)}%`;
@@ -65,6 +73,7 @@ export function interpolate(text: string, inv: InvoiceDetail): string {
     'invoice.issuedAt': inv.issuedAt.slice(0, 10),
     'invoice.saleDate': inv.saleDate ?? inv.issuedAt.slice(0, 10),
     'invoice.amountDue': money(inv.amountDue),
+    'invoice.overpayment': money(inv.overpayment),
     'buyer.name': inv.buyer.name,
     'seller.legalName': inv.seller.legalName,
     'seller.taxId': inv.seller.taxId ?? '',
@@ -256,7 +265,7 @@ export function lineItemsSection(inv: InvoiceDetail, props: Props = {}): Content
           row.push(cell(String(l.quantity), true));
           break;
         case 'unitNet':
-          row.push(cell(money(l.unitNetPrice), true));
+          row.push(cell(unitMoney(l.unitNetPrice), true));
           break;
         case 'tax':
           row.push(cell(pct(l.taxRate), true));
@@ -338,6 +347,15 @@ export function vatSummarySection(inv: InvoiceDetail, props: Props = {}): Conten
   };
 }
 
+/**
+ * The overpayment row's default label, in the language the amounts are written
+ * in (issue #428). A template's `labelOverpayment` replaces it.
+ */
+const OVERPAYMENT_LABEL: Record<AmountToWordsLocale, string> = {
+  en: 'Overpayment',
+  pl: 'Nadpłata',
+};
+
 export function totalsSection(
   inv: InvoiceDetail,
   locale: AmountToWordsLocale,
@@ -363,6 +381,15 @@ export function totalsSection(
       bold: bool(props, 'amountDueBold', true),
       fontSize,
       color: amountDueColor,
+    });
+  }
+  // Issue #428 — what was paid above the gross, beside an amount due of 0.
+  if (bool(props, 'showOverpayment', true) && inv.overpayment > 0) {
+    stack.push({
+      text: `${str(props, 'labelOverpayment', OVERPAYMENT_LABEL[locale])}: ${money(inv.overpayment)} ${inv.currency}`,
+      alignment: align,
+      fontSize,
+      color,
     });
   }
   if (bool(props, 'showGross', true)) {

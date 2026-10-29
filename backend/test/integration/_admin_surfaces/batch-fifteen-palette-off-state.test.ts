@@ -127,13 +127,25 @@ interface Subject {
 const SUBJECTS: readonly Subject[] = [
   {
     module: 'catalog',
-    actions: ['new-product', 'open-attributes', 'open-categories', 'open-products'],
+    // `open-attachment-types`, `open-attribute-sets` and `open-bulk-operations`
+    // arrived with issue #516: the sidebar's remaining screens (Principle XVI).
+    actions: [
+      'new-product',
+      'open-archived-products',
+      'open-attachment-types',
+      'open-attribute-sets',
+      'open-attributes',
+      'open-bulk-operations',
+      'open-categories',
+      'open-products',
+    ],
     axis: 'platform-unavailable',
     admin: catalogAdmin,
   },
   {
     module: 'orders',
-    actions: ['open-orders', 'order-statuses'],
+    // `new-order` arrived with issue #516: the create form is a sidebar entry.
+    actions: ['new-order', 'open-orders', 'order-statuses'],
     axis: 'platform-unavailable',
     admin: ordersAdmin,
   },
@@ -293,6 +305,24 @@ describe('batch 15 contributes no palette action while off (Constitution XVII it
     }
   });
 
+  it('the Archived products action opens its own read-gated route (feature 163, PAL-1 = B)', () => {
+    // Owner decision PAL-1 = B (2026-10-26): "Archived products" is a palette row
+    // of its own. A `targetRoute` carries no query string (`ModuleActionSchema`),
+    // so it targets a dedicated SPA route, `/catalog/products/archived`, which
+    // opens the product list on its Archived tab. That route is declared by the
+    // catalog admin layer **before** the editor's `/catalog/products/:id`; until
+    // it is, the pairing cases above match the editor's pattern (same code) and
+    // pass, so this case pins the action's own half.
+    const action = (
+      REGISTERED_MANIFESTS.find((entry) => entry.manifest.id === 'catalog')?.manifest.actions ?? []
+    ).find((entry) => entry.id === 'open-archived-products');
+    expect(action?.targetRoute).toBe('/catalog/products/archived');
+    expect(action?.requiredPermission).toBe('catalog:read');
+    for (const keyword of ['archived', 'restore', 'archiwum', 'zarchiwizowane']) {
+      expect(action?.keywords, keyword).toContain(keyword);
+    }
+  });
+
   it('orders advertises its two screens once, having had a row it already declared', () => {
     // The other module, and the case that says why it needed nothing: both of
     // its actions predate this batch and name two of the four routes its
@@ -315,12 +345,18 @@ describe('batch 15 contributes no palette action while off (Constitution XVII it
     // makes it. `/orders/new` was `App.tsx`'s and therefore ungated while the
     // sidebar row that advertised it carried `orders:write` and the
     // `order.entry.tabs` contribution P4d declared carried the same code. No
-    // manifest action targets it — `orders` never declared one — so this is the
-    // route and the zone agreeing, which is the pair that can disagree.
+    // manifest action targeted it until issue #516 added `new-order`, so the
+    // route, the zone and that action now agree, which is the trio that can
+    // disagree.
     const route = (ordersAdmin.routes ?? []).find((entry) => entry.path === '/orders/new');
     expect(route?.requiredPermission).toBe('orders:write');
     const tab = (ordersAdmin.zones ?? []).find((entry) => entry.zone === 'order.entry.tabs');
     expect(tab?.requiredPermission).toBe('orders:write');
+    const action = (
+      REGISTERED_MANIFESTS.find((entry) => entry.manifest.id === 'orders')?.manifest.actions ?? []
+    ).find((entry) => entry.id === 'new-order');
+    expect(action?.targetRoute).toBe('/orders/new');
+    expect(action?.requiredPermission).toBe('orders:write');
   });
 
   it('neither module advertises a route it does not own', () => {

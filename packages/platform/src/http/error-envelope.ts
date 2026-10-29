@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { LANGUAGE_FALLBACK, ERROR_CODES, type ErrorCode, type ErrorEnvelope, type ModuleErrorCode, type SupportedLanguage } from '@endora-commerce/contracts';
+import { ERROR_CODES, isAmountPrecisionIssue, isUnitPricePrecisionIssue, type ErrorCode, type ErrorEnvelope, type ModuleErrorCode, type SupportedLanguage } from '@endora-commerce/contracts';
 import { ZodError, type core as zodCore } from 'zod';
 import { hasZodFastifySchemaValidationErrors } from '@fastify/type-provider-zod';
 import { OrgWriteOutOfScopeError } from '../tenancy/tenant-context.js';
+import { installResponseLanguage } from './response-language.js';
 
 /**
  * Fastify plugin that converts every error — Zod validation failures, MikroORM unique-constraint
@@ -145,12 +146,15 @@ export interface ErrorEnvelopeOptions {
 }
 
 export function registerErrorEnvelope(app: FastifyInstance, options: ErrorEnvelopeOptions = {}): void {
+  // Feature 155 (D3/D4) — `request.responseLanguage()`, the one answer a
+  // handler names a product in and this envelope translates the sentence into.
+  const responseLanguage = installResponseLanguage(app, options.resolvePreferredLanguage);
   app.addHook('preSerialization', async (request, reply, payload) => {
     if (!options.translateErrorMessage || !isErrorEnvelope(payload)) return payload;
     const target = options.errorTranslationTargets?.[payload.error.code];
     if (!target) return payload;
     try {
-      return await localizeErrorEnvelope(options, target, payload, request, reply);
+      return await localizeErrorEnvelope(options, target, payload, request, reply, responseLanguage);
     } catch (error) {
       // **Localising an error may never replace the error.**
       //
@@ -220,8 +224,7 @@ export function registerErrorEnvelope(app: FastifyInstance, options: ErrorEnvelo
     if (hasZodFastifySchemaValidationErrors(error)) {
       const envelope: ErrorEnvelope = {
         error: {
-          code: ERROR_CODES.VALIDATION_FAILED,
-          message: 'Request failed validation.',
+          ...validationCode(error.validation),
           details: error.validation.map((issue) => ({
             path: issue.instancePath.replace(/^\//, '').replace(/\//g, '.'),
             issue: issue.message ?? 'invalid',
@@ -236,8 +239,7 @@ export function registerErrorEnvelope(app: FastifyInstance, options: ErrorEnvelo
     if (error instanceof ZodError) {
       const envelope: ErrorEnvelope = {
         error: {
-          code: ERROR_CODES.VALIDATION_FAILED,
-          message: 'Request failed validation.',
+          ...validationCode(error.issues),
           details: error.issues.map((issue: zodCore.$ZodIssue) => ({
             path: issue.path.map(String).join('.'),
             issue: issue.message,
@@ -432,6 +434,7 @@ async function localizeErrorEnvelope(
   payload: ErrorEnvelope,
   request: FastifyRequest,
   reply: FastifyReply,
+  responseLanguage: (request: FastifyRequest) => Promise<SupportedLanguage>,
 ): Promise<ErrorEnvelope> {
   // Narrowing only: the hook already refused a composition that injects no
   // translator, and this is the same `options` object.
@@ -482,7 +485,7 @@ async function localizeErrorEnvelope(
   // the place a client can branch on too.
   const params = messageParams(payload.error.details);
   const token = refusalToken(payload.error.details);
-  const language = (await options.resolvePreferredLanguage?.(request)) ?? LANGUAGE_FALLBACK;
+  const language = await responseLanguage(request);
   const translated = await options.translateErrorMessage({
     moduleId: target.moduleId,
     key: token === null ? target.key : `${target.key}.${token}`,
@@ -518,6 +521,30 @@ async function localizeErrorEnvelope(
       message: translated,
     },
   };
+}
+
+/**
+ * The code and message a failed validation answers with. `VALIDATION_FAILED`,
+ * unless every issue is the money-precision refusal (issue #417, owner ruling
+ * of 2026-10-24): a typed amount with more than two decimal places is
+ * `AMOUNT_PRECISION_EXCEEDED`, one code for every money field, and a code the
+ * envelope translates — `VALIDATION_FAILED` is never translated (see
+ * `localizeErrorEnvelope`). A request that fails anything else as well keeps
+ * the generic code, with the precision issue listed among its details.
+ *
+ * A typed **unit price** keeps four places (owner ruling of 2026-10-25), and
+ * one with more is `UNIT_PRICE_PRECISION_EXCEEDED`, a sibling code whose
+ * sentence says four. A request refused for both kinds at once has no one
+ * sentence that is true, so it keeps the generic code.
+ */
+function validationCode(issues: readonly unknown[]): { code: ErrorCode; message: string } {
+  if (issues.length > 0 && issues.every(isAmountPrecisionIssue)) {
+    return { code: ERROR_CODES.AMOUNT_PRECISION_EXCEEDED, message: 'An amount has more than two decimal places.' };
+  }
+  if (issues.length > 0 && issues.every(isUnitPricePrecisionIssue)) {
+    return { code: ERROR_CODES.UNIT_PRICE_PRECISION_EXCEEDED, message: 'A unit price has more than four decimal places.' };
+  }
+  return { code: ERROR_CODES.VALIDATION_FAILED, message: 'Request failed validation.' };
 }
 
 /**

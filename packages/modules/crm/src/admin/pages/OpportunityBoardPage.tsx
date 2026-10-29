@@ -21,9 +21,8 @@ import {
   PageHeader,
 } from '@endora-commerce/admin-kit/ui';
 import { useAppLanguage, useTranslation } from '@endora-commerce/admin-kit/i18n';
-import { crmApi } from '../api.js';
+import { crmApi, MAX_PAGE_LIMIT } from '../api.js';
 import { BoardFieldFilters } from '../components/BoardFieldFilters.js';
-import { MAX_PAGE_LIMIT } from '../components/CursorPagination.js';
 import { OpportunityBoard, type BoardColumnView } from '../components/OpportunityBoard.js';
 import {
   OpportunityFilterFields,

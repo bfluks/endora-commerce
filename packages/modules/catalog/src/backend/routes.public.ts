@@ -105,11 +105,10 @@ export interface CatalogPublicDeps {
    * this route decides before the query runs: whether the page may show prices
    * at all (FR-016).
    *
-   * A non-public sales channel is this module's own fact and is read off the
-   * resolved channel; a page-level display mode of `none` is `price_lists`'
-   * fact and is asked of it. Optional in the signature only — a composition
-   * that wires no pricing at all cannot be asked for a price ordering either,
-   * and the query service refuses loudly when it is.
+   * A page-level display mode of `none` is `price_lists`' fact and is asked of
+   * it. Optional in the signature only — a composition that wires no pricing
+   * at all cannot be asked for a price ordering either, and the query service
+   * refuses loudly when it is.
    */
   listingPriceOrder?: ListingPriceOrderPort;
 }
@@ -142,19 +141,19 @@ export async function registerCatalogPublicRoutes(
   /**
    * Feature 086 / FR-016 — may this page order or filter by price at all?
    *
-   * Two conditions, and both are refusals rather than degradations: an ordering
-   * by a number the page may not show discloses that number's rank, which is
-   * most of what a competitor wants, and it is cheap to get right and expensive
-   * to retrofit.
+   * A refusal rather than a degradation: an ordering by a number the page may
+   * not show discloses that number's rank, which is most of what a competitor
+   * wants, and it is cheap to get right and expensive to retrofit.
    *
-   *  - a **non-public sales channel** withholds prices wholesale — `CatalogQueryService`
-   *    resolves none at all on one — so there is nothing to order by;
-   *  - a **page-level display mode of `none`** is the supported "hide prices
-   *    until login" configuration. Page-level, deliberately: a single product
-   *    overridden to `none` keeps its position (spec clarification 2), because
-   *    a per-product override reads as "ask us for a quote" rather than "this
-   *    price is secret", and withdrawing the control for it would make the sort
-   *    appear and disappear as a buyer walks the catalogue.
+   * The one condition is a **page-level display mode of `none`**, the supported
+   * "hide prices until login" configuration — since issue #492 also the only
+   * one: the sales channel's own price-visibility flag, which withheld prices
+   * from every viewer, is retired into it. Page-level, deliberately:
+   * withdrawing the control because one product is overridden to `none` would
+   * make the sort appear and disappear as a buyer walks the catalogue (spec
+   * clarification 2). Such a product takes no part in the order or a range all
+   * the same (issue #491): `price_lists` withholds its amount and leaves it out
+   * of the price order, so the walk meets it in the unpriced tail.
    *
    * The mode is resolved for **this viewer**, so the same shop refuses an
    * anonymous visitor and serves a signed-in buyer where the two `pricing.*`
@@ -163,13 +162,6 @@ export async function registerCatalogPublicRoutes(
   async function priceControlsAvailable(
     ctx: ReturnType<typeof readContext>,
   ): Promise<{ available: boolean; reason?: string }> {
-    if (!ctx.resolvedChannel.isPublic) {
-      return {
-        available: false,
-        reason:
-          'This sales channel does not publish prices, so the catalogue cannot be ordered or filtered by price.',
-      };
-    }
     if (!deps.listingPriceOrder) return { available: true };
     const organization =
       ctx.audience.organizationId === null ? null : { id: ctx.audience.organizationId };
@@ -264,9 +256,9 @@ export async function registerCatalogPublicRoutes(
     // every product it does not and only then consults B — a different relation
     // from "A's price if A prices it, else B's".
     //
-    // `IndexedDocument.price` is not the exception it looks like. It carries
-    // the legacy `defaultPrice` attribute, is read by nothing on the query
-    // path, and is not any price list's figure.
+    // A search document carries no price at all (issue #287), and since
+    // feature 160 a product has none of its own either: the price is the
+    // viewer's, resolved from the price books.
     const useMeili =
       indexAnswersListing(process.env['CATALOG_SEARCH_BACKEND'], q) &&
       searchQueryService !== undefined &&
@@ -367,15 +359,21 @@ export async function registerCatalogPublicRoutes(
           ctx,
         );
         const body = validateBundleConfigurationRequestSchema.parse(request.body);
-        const result = await bundle.validateConfiguration(product.id, body.selections);
+        const result = await bundle.validateConfiguration(product.id, body.selections, (ids) =>
+          queryService.filterAvailableForRequest(ids, ctx),
+        );
         return { data: result };
       },
     );
   }
 
   // GET /api/v1/catalog/categories
-  app.get('/api/v1/catalog/categories', async (request) => {
+  app.get('/api/v1/catalog/categories', async (request, reply) => {
     const ctx = readContext(request);
+    // Feature 163 — the tree is cut by what this caller may reach (a category
+    // whose products are all restricted to an organisation is not shown to the
+    // public), so a caller's tree must not enter a shared cache.
+    markPersonalisedPricing(reply, ctx.audience);
     const tree = await queryService.getCategoryTree(ctx);
     return { data: tree };
   });
@@ -392,20 +390,28 @@ export async function registerCatalogPublicRoutes(
   );
 
   // GET /api/v1/catalog/filters
-  app.get('/api/v1/catalog/filters', async (request) => {
+  app.get('/api/v1/catalog/filters', async (request, reply) => {
     const ctx = readContext(request);
+    // Feature 163 — the facet counts are counted over what this caller may
+    // reach, so they are the caller's and must not enter a shared cache.
+    markPersonalisedPricing(reply, ctx.audience);
     const filters = await queryService.getFilterDefinitions(ctx);
     return { data: filters };
   });
 }
 
-function readContext(request: FastifyRequest): {
+/**
+ * The catalogue's request context: the resolved channel, the request language and
+ * the audience from the session. Exported for the URL-key resolve route (feature
+ * 163), which must read a request exactly as the product page does.
+ */
+export function readContext(request: FastifyRequest): {
   resolvedChannel: {
     id: string;
     code: string;
-    isPublic: boolean;
     defaultCurrency: string;
     defaultLanguage: string;
+    languages: readonly string[];
   };
   audience: ProductAudience;
   preferredLanguage?: string | undefined;
@@ -430,9 +436,10 @@ function readContext(request: FastifyRequest): {
     resolvedChannel: {
       id: ch.id,
       code: ch.code,
-      isPublic: ch.isPublic,
       defaultCurrency: ch.defaultCurrency,
       defaultLanguage: ch.defaultLanguage,
+      // Feature 163 — the channel's content languages, from the resolved record.
+      languages: ch.languages,
     },
     audience: productAudienceOf(request),
     preferredLanguage,

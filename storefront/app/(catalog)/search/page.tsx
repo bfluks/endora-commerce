@@ -51,9 +51,7 @@ export default async function SearchPage(props: PageProps): Promise<ReactNode> {
         apiBaseUrl,
         phrase: q,
         resultCount: result.data.length,
-        ...(ctx.salesChannelCode !== undefined
-          ? { salesChannelCode: ctx.salesChannelCode }
-          : {}),
+        salesChannelCode: ctx.salesChannelCode,
       });
     } catch {
       // The catalog page itself will surface any backend error; we

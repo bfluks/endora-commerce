@@ -57,5 +57,6 @@ export function toCmsPageRecord(page: CmsPage): CmsPageRecord {
     archivedAt: page.archivedAt ?? null,
     createdAt: page.createdAt,
     updatedAt: page.updatedAt,
+    parentPageId: page.parentPageId ?? null,
   };
 }

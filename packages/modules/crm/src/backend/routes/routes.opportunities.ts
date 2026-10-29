@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   CreateOpportunityRequestSchema,
   ERROR_CODES,
+  isCustomFieldFilterUnavailableFailure,
   OpportunityListQuerySchema,
   UpdateOpportunityRequestSchema,
 } from '@endora-commerce/contracts';
@@ -55,8 +56,23 @@ export async function registerCrmOpportunityRoutes(
   const { requireAdmin, opportunityService: opportunities } = deps;
 
   app.get('/api/v1/admin/crm/opportunities', { preHandler: requireAdmin('crm:read') }, async (request) =>
-    opportunities.list(OpportunityListQuerySchema.parse(request.query ?? {})),
+    opportunities.list(OpportunityListQuerySchema.parse(request.query ?? {})).catch((error: unknown) => {
+      // A custom field the list does not offer is the caller's mistake: 400,
+      // naming it. Everything else is rethrown untouched.
+      if (isCustomFieldFilterUnavailableFailure(error)) {
+        throw new HttpError(400, ERROR_CODES.CUSTOM_FIELD_FILTER_UNAVAILABLE, error.message, {
+          key: error.keys[0] ?? '',
+          keys: [...error.keys],
+        });
+      }
+      throw error;
+    }),
   );
+
+  // `specs/157-custom-fields-list-filters/` — the custom fields the list offers as filters.
+  app.get('/api/v1/admin/crm/opportunities/custom-field-filters', { preHandler: requireAdmin('crm:read') }, async () => ({
+    data: await opportunities.customFieldFilterFields(),
+  }));
 
   app.post(
     '/api/v1/admin/crm/opportunities',

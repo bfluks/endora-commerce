@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/admin-kit",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "endora": {
     "type": "admin-ui"
@@ -57,7 +57,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src"
   },
@@ -69,6 +69,8 @@
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-separator": "^1.1.8",
     "@radix-ui/react-slot": "^1.2.4",
+    "@tiptap/react": "^3.22.5",
+    "@tiptap/starter-kit": "^3.22.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "echarts": "^6.1.0",
@@ -85,6 +87,8 @@
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-separator": "^1.1.8",
     "@radix-ui/react-slot": "^1.2.4",
+    "@tiptap/react": "^3.22.5",
+    "@tiptap/starter-kit": "^3.22.5",
     "@types/react": "^19.2.14",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -94,6 +98,6 @@
     "react-router-dom": "^7.18.2",
     "tailwind-merge": "^3.5.0",
     "typescript": "^5.9.3",
-    "vite": "^7.3.2"
+    "vite": "^7.3.7"
   }
 }

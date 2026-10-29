@@ -6,9 +6,11 @@ import { JsonLd } from '../../lib/seo/JsonLd';
 import { absoluteUrl } from '../../lib/seo/site-url';
 
 /**
- * `Organization` structured data for the home page
+ * `Organization` structured data for the home page and, since
+ * `specs/163-page-builder-marketing-pages/` (FR-035), every CMS page
  * (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-014;
- * `contracts/seo-declarations.md` §3).
+ * `contracts/seo-declarations.md` §3). `logo` comes from `shop.logo_asset_id`
+ * and `sameAs` from `shop.social_profiles`, each left out while unset.
  *
  * A component rather than a block inside `app/page.tsx` because that page has
  * **two** render paths — an operator-selected CMS home page and the built-in
@@ -22,6 +24,9 @@ import { absoluteUrl } from '../../lib/seo/site-url';
 export async function OrganizationJsonLd(props: { ctx: RequestContext }): Promise<ReactNode> {
   const shop = await getShopInfo(props.ctx);
   if (shop.name.length === 0) return null;
+  // `?? …` covers a shop-info answer cached before feature 163 added the fields.
+  const logoUrl = shop.logoUrl ?? null;
+  const socialProfiles = shop.socialProfiles ?? [];
 
   return (
     <JsonLd
@@ -30,6 +35,8 @@ export async function OrganizationJsonLd(props: { ctx: RequestContext }): Promis
         '@type': 'Organization',
         name: shop.name,
         url: absoluteUrl('/'),
+        ...(logoUrl ? { logo: logoUrl } : {}),
+        ...(socialProfiles.length > 0 ? { sameAs: socialProfiles } : {}),
         ...(shop.address.length > 0 ? { address: shop.address } : {}),
         ...(shop.contactEmail.length > 0 || shop.phone.length > 0
           ? {

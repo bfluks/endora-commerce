@@ -57,7 +57,7 @@ function LinkCard({ link, locale }: { link: ProductLinkSummary; locale?: string 
         </span>
         {link.product.price ? (
           <span className="font-mono text-[12px] font-medium text-accent">
-            {formatMoney(link.product.price.amount, link.product.price.currency, locale)}
+            {formatMoney(link.product.price.amount, link.product.price.currency, locale, { unitPrice: true })}
           </span>
         ) : null}
       </a>

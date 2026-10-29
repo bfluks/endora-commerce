@@ -23,7 +23,12 @@ import { StorefrontDocument } from '../lib/theme/StorefrontDocument';
 import { fetchDictionary } from '../lib/dictionary/client';
 import { DictionaryProvider } from '../lib/dictionary/DictionaryProvider';
 import { getCartItemCount } from '../lib/api/cart';
-import { getMe } from '../lib/api/account';
+import { getMe, type MeResult } from '../lib/api/account';
+import { StorefrontApiError } from '../lib/api/client';
+import { getSalesChannelAccess } from '../lib/api/sales-channel';
+import { signOutAction } from '../lib/actions/sign-out';
+import { ChannelAccessDenied } from '../components/ChannelAccessDenied';
+import { redirect } from 'next/navigation';
 import { getSpeculationRulesConfig } from '../lib/api/speculation-rules';
 import { getGoogleAnalyticsConfig } from '../lib/api/analytics-config';
 import { GoogleAnalytics } from '../components/analytics/GoogleAnalytics';
@@ -78,6 +83,43 @@ async function isUnreachableBackendRender(): Promise<boolean> {
  */
 async function defaultRobotsDirective(): Promise<RobotsDirective | null> {
   return robotsDirectiveFromHeader((await headers()).get(ROBOTS_DEFAULT_REQUEST_HEADER));
+}
+
+/**
+ * Who is signed in, and whether this store serves them
+ * (`specs/154-sales-channel-access/contracts/storefront-ux.md` §4).
+ *
+ * The identity read is the one call of every page that answers for the buyer
+ * rather than for the store, so it is where a refusal of the buyer is met:
+ *
+ *  - `not_permitted` — the account's Organization may not use this store. The
+ *    page is replaced by `ChannelAccessDenied`; every read under it would be
+ *    refused.
+ *  - `sign_in_required` — the store is closed to anonymous visitors and the
+ *    session cookie no longer names a customer. The middleware let the cookie
+ *    through; the buyer is sent to sign in again rather than shown a shop built
+ *    from refused reads.
+ *
+ * Any other failure is the signed-out state, as it always was: the header must
+ * render whatever the identity read did.
+ */
+interface ViewerRead {
+  me: MeResult | null;
+  refusal: 'not_permitted' | 'sign_in_required' | null;
+}
+
+async function readViewer(session: string): Promise<ViewerRead> {
+  try {
+    return { me: await getMe(session), refusal: null };
+  } catch (err) {
+    if (err instanceof StorefrontApiError && err.code === 'SALES_CHANNEL_NOT_PERMITTED') {
+      return { me: null, refusal: 'not_permitted' };
+    }
+    if (err instanceof StorefrontApiError && err.code === 'SALES_CHANNEL_SIGN_IN_REQUIRED') {
+      return { me: null, refusal: 'sign_in_required' };
+    }
+    return { me: null, refusal: null };
+  }
 }
 
 /**
@@ -152,7 +194,7 @@ export default async function RootLayout({
     );
   }
 
-  const { config, locale, currency, ctx, theme, modules } = await getServerContext();
+  const { config, locale, currency, ctx, theme, modules, brandTokens } = await getServerContext();
   const t = tForLocale(locale);
   // Feature 036 US5 — checkout uses a minimal, logo-only header. The full vs
   // minimal switch is decided per-route by the <HeaderSwitch> client component
@@ -169,7 +211,7 @@ export default async function RootLayout({
     megamenu,
     dictionary,
     cartItemCount,
-    me,
+    viewer,
     speculation,
     gaConfig,
     linkedInConfig,
@@ -182,8 +224,9 @@ export default async function RootLayout({
     // swallows all errors and returns 0 on the worst case.
     session || anon ? getCartItemCount(cartJar) : Promise.resolve(0),
     // Header user pill. Best-effort — a missing/expired session must render the
-    // signed-out state, never crash the layout, so swallow all errors → null.
-    session ? getMe(session).catch(() => null) : Promise.resolve(null),
+    // signed-out state, never crash the layout. A channel refusal is the one
+    // failure it acts on (see `readViewer`).
+    session ? readViewer(session) : Promise.resolve<ViewerRead>({ me: null, refusal: null }),
     // Speculation Rules toggle (Settings module). Best-effort — defaults to
     // enabled + 'moderate' on any read error.
     getSpeculationRulesConfig(),
@@ -198,6 +241,13 @@ export default async function RootLayout({
     // contract again.
     getGoogleTagManagerConfig(ctx),
   ]);
+  const me = viewer.me;
+  if (viewer.refusal === 'sign_in_required') {
+    const pathname = (await headers()).get('x-pathname') ?? '/';
+    redirect(`/session-expired?next=${encodeURIComponent(pathname)}`);
+  }
+  // Asked only on a refusal: it is the viewer's own answer and is never cached.
+  const access = viewer.refusal === 'not_permitted' ? await getSalesChannelAccess(ctx) : null;
   return (
     // <html lang> + <html data-theme>. Both are server-stamped: the locale for
     // crawlers, the theme because the channel's token set has to be in the
@@ -208,7 +258,9 @@ export default async function RootLayout({
     // carries `data-theme-requested` when the channel named a theme this
     // storefront does not have, and deriving that inside the component is what
     // stops a caller from forgetting it (feature 102).
-    <StorefrontDocument lang={locale} theme={theme}>
+    // `brandTokens` (feature 163): the channel's brand as `<style id="cmsb">` in
+    // the head, server-rendered so the first paint is already on brand.
+    <StorefrontDocument lang={locale} theme={theme} brandTokens={brandTokens}>
       {robotsDefault !== null ? <meta name="robots" content={robotsDefault} /> : null}
       {/* Feature 141 — every Page Builder tree below renders the installed
           modules' blocks under one presence answer: the modules the backend
@@ -253,9 +305,7 @@ export default async function RootLayout({
                   cartItemCount={cartItemCount}
                   megamenu={megamenu}
                   user={me}
-                  {...(ctx.salesChannelCode !== undefined
-                    ? { salesChannelCode: ctx.salesChannelCode }
-                    : {})}
+                  salesChannelCode={ctx.salesChannelCode}
                 />
                 <Hook code="header.bottom" />
               </>
@@ -272,7 +322,11 @@ export default async function RootLayout({
             <InstallPrompt />
             <PushOptIn />
             <Hook code="page.top" />
-            <RouteTransition>{children}</RouteTransition>
+            {viewer.refusal === 'not_permitted' ? (
+              <ChannelAccessDenied locale={locale} access={access} signOut={signOutAction} />
+            ) : (
+              <RouteTransition>{children}</RouteTransition>
+            )}
             <Hook code="page.bottom" />
           </main>
           {/* Footer is shown on every route, including checkout (the buyer
@@ -304,13 +358,13 @@ export default async function RootLayout({
       {/* Feature 049 — Google Analytics 4. Renders nothing for untracked
           channels; page views are emitted per navigation by the provider. */}
       <GoogleAnalytics config={gaConfig} />
-      <AnalyticsProvider config={gaConfig} />
+      <AnalyticsProvider config={gaConfig} salesChannelCode={ctx.salesChannelCode} />
       <LinkedInInsightTag config={linkedInConfig} />
       <MetaPixel config={metaConfig} />
       {/* Feature 066 — the operator's GTM container plus the client-side
           bootstrap for the platform's own dataLayer vocabulary. */}
       <GoogleTagManager config={gtmConfig} />
-      <GtmProvider config={gtmConfig} />
+      <GtmProvider config={gtmConfig} salesChannelCode={ctx.salesChannelCode} />
       {/* The prompt is owed whenever any enabled integration on the channel
           requires consent — not only Google Analytics (FR-015). */}
       <ConsentBanner

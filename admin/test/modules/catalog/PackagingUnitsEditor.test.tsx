@@ -77,7 +77,7 @@ describe('PackagingUnitsEditor (043)', () => {
 
   it('lists units returned by the API', async () => {
     getSpy.mockResolvedValue({ data: [unit] });
-    renderWithI18n(<PackagingUnitsEditor productId="p1" />, BUNDLE);
+    renderWithI18n(<PackagingUnitsEditor productId="p1" canWrite />, BUNDLE);
     await screen.findByDisplayValue('Paleta');
     expect(screen.getByDisplayValue('480')).toBeInTheDocument();
   });
@@ -85,7 +85,7 @@ describe('PackagingUnitsEditor (043)', () => {
   it('posts a new unit when the operator adds one', async () => {
     getSpy.mockResolvedValue({ data: [] });
     postSpy.mockResolvedValue({ data: unit });
-    renderWithI18n(<PackagingUnitsEditor productId="p1" />, BUNDLE);
+    renderWithI18n(<PackagingUnitsEditor productId="p1" canWrite />, BUNDLE);
     await screen.findByText('packagingUnits.empty');
 
     const user = userEvent.setup();

@@ -109,7 +109,7 @@ async function acceptInvitationAction(formData: FormData): Promise<void> {
     await setSessionCookie(login.sessionCookieValue);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not accept invitation. Try again.';
+      err instanceof StorefrontApiError ? err.detail : 'Could not accept invitation. Try again.';
     redirectWithError(message);
   }
 

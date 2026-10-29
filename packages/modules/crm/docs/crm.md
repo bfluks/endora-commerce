@@ -46,7 +46,7 @@ when at least one of them is visible.
 
 | Screen | Where | Permission | What it is for |
 | --- | --- | --- | --- |
-| Opportunities | **CRM → Opportunities** (`/crm/opportunities`) | `crm:read` | Every opportunity you may see, with search and filters by state, status, organization, assignee, tags, sales channel and creation date. |
+| Opportunities | **CRM → Opportunities** (`/crm/opportunities`) | `crm:read` | Every opportunity you may see, with search and filters by state, status, organization, assignee, tags, sales channel, creation date and the custom fields marked as list filters. |
 | New opportunity | the **New opportunity** button (`/crm/opportunities/new`) | `crm:write` | Create an opportunity by hand: a title, the organization and the currency are required; a contact person, a sales channel, an expected value, an expected close date and a description are optional. |
 | An opportunity | a row of the list (`/crm/opportunities/:id`) | `crm:read` | A header, a stage bar with its current status and the moves allowed from it, back and forward, a card of its facts on the right, and tabs: *Overview*, **Links** (its orders and quote requests), **Events** (what is planned for it, with reminders), *Notes*, *Messages*, *Attachments* and **Change history**. See *The opportunity's screen*. |
 | Board | **CRM → Board** (`/crm/board`) | `crm:read` | The same opportunities as cards, in a column per status. A holder of `crm:write` moves a card to another status. |
@@ -89,8 +89,10 @@ a card of its facts.
 
 **The header** carries the title with its status beside it and, under it, one
 quiet line: the number, the organization, who holds it — or *Unassigned* — and
-the sales channel when there is one. **Edit** (`crm:write`) and **Delete**
-(`crm:configure`) are on the right.
+the sales channel when there is one. **Delete** (`crm:configure`) is on the
+right. There is no **Edit** button and no separate edit form: every field that
+can be changed is changed where it is shown (see *Editing and deleting an
+opportunity*). The title has its pencil beside the heading.
 
 **The stage bar**, at the top of the left column, names the **current status**
 and shows where the opportunity can go from it — and nothing else. A workflow
@@ -124,7 +126,7 @@ whichever tab is open.
 
 | Tab | What is on it |
 | --- | --- |
-| **Overview** | The description, the custom fields, and — after **Edit** — the edit form. |
+| **Overview** | The description — formatted, and changed in place with its pencil — and the custom fields. |
 | **Links** | *Linked orders* and *Linked quote requests*: link, unlink, the *follow the opportunity's status* switch, **Create order** and **Create quote request**. The tab shows how many documents are linked. |
 | **Events** | What is planned for the opportunity — a call, a meeting, a deadline — as a list and on a calendar of its own, each with an optional reminder. The tab shows how many events have not ended yet. See *Events and reminders*. |
 | **Notes**, **Messages** | The two conversations. The **Notes** tab shows how many notes there are; the **Messages** tab shows how many messages you have not read yet. |
@@ -148,6 +150,15 @@ reload and can be sent to a colleague. An address that names no tab, or one
 that does not exist, opens *Overview*. Coming back from **Create order** or
 **Create quote request** opens **Links**, where the new document appears.
 
+**Back to the opportunity.** Every way an opportunity leads to an order or a
+quote request — the *Links* tab, an order mentioned in a description, a note or
+a message, what became of the linked orders after a move, the documents a
+computed value left out, the change history, and the link to a document just
+created — opens it with the opportunity's address, including the open tab, in
+`?returnTo=`. The back link in that order's or quote request's header then
+reads **Back** and leads to the opportunity, on the tab you left. Opened any
+other way, the back link is the usual one, to the list.
+
 **The facts**, in one card on the right — from the header down, beside the
 stage bar and whichever tab is open — each as a small label above its value. On
 a narrow screen the card comes after the stage bar and before the tabs, so the
@@ -155,15 +166,15 @@ value and the deadline are never under a long tab:
 
 | Group | Facts | Changed here |
 | --- | --- | --- |
-| **Value and deadline** | The value and whether it is entered by hand or computed; the expected close date. | The value's mode, with one button. |
-| **Customer and assignee** | The organization (a link to its screen), the contact person, the assignee. | The assignee. |
-| **Classification** | The sales channel, where the opportunity came from, its tags. | The tags. |
+| **Value and deadline** | The value and whether it is entered by hand or computed; the expected close date. | The value's mode, with one button; the amount while it is entered by hand; the expected close date. |
+| **Customer and assignee** | The organization (a link to its screen), the contact person, the assignee. | The contact person; the assignee. |
+| **Classification** | The sales channel, where the opportunity came from, its tags. | The sales channel; the tags. |
 | **Record** | The number, when it was created and last changed, and — once closed — when it closed. | — |
 
-A fact with no value is shown as empty rather than left out. Everything that is
-not changed in the card itself — the title, the description, the contact
-person, the sales channel, the expected close date and the amount — is changed
-with **Edit**.
+A fact with no value is shown as empty rather than left out. A fact that can be
+changed carries a pencil beside it, for a holder of `crm:write`; the
+organization, the currency, the source, the number and the record's dates
+carry none, because they cannot be changed.
 
 ## Configuring the workflow
 
@@ -236,19 +247,39 @@ closes the opportunity and stamps the moment; leaving one reopens it.
 
 ## Editing and deleting an opportunity
 
-On an opportunity's screen, **Edit** — in the header, for a holder of
-`crm:write` — opens a form on the *Overview* tab, whichever tab you were on:
-the title, the
-description, the contact person, the sales channel, the expected close date and
-the value. The organization and the currency are shown and cannot be changed.
-The value is either **entered by hand** or **calculated from linked
-documents**; the figure you entered is kept while the calculated one is shown.
+**You change a field where you read it.** There is no **Edit** button and no
+edit form: for a holder of `crm:write`, every field that can be changed carries
+a pencil button beside it — always visible, not only on hover — that a screen
+reader announces as *Edit* followed by the field's name. Pressing
+it turns that one field into its input, with **Save** and **Cancel**:
 
-Saving sends only the fields you changed. If the opportunity was changed in the
-meantime — by a colleague, or by a status change you made yourself while the
-form was open — nothing is saved and the form says so: press **Reload the
-opportunity** to see the latest version, then make your changes again. Nothing
-is ever overwritten silently.
+| Field | Where | How |
+| --- | --- | --- |
+| **Title** | Beside the page heading. | **Enter** saves, **Escape** cancels. |
+| **Description** | Its own section on the *Overview* tab. | The formatted editor (see *Formatted text*); **Ctrl+Enter** (**Cmd+Enter** on a Mac) or **Save** saves. |
+| **Expected close date** | The card of facts. | A date. |
+| **Contact person** | The card of facts. | Only people of the opportunity's organization are offered. |
+| **Sales channel** | The card of facts. | |
+| **Value** — the amount | The card of facts. | Only while the value is **entered by hand**. A computed value has no pencil: switch the mode first. |
+
+The assignee, the tags and the value's mode were already changed in place and
+still are. The organization, the currency, the source, the number and the
+record's dates cannot be changed and carry no pencil. Custom fields keep their
+own section and their own **Save custom fields** button (see *Custom fields*).
+
+**Saving sends that one field and nothing else**, with the version of the
+opportunity you were looking at (`If-Match`). What happens next:
+
+- **Saved** — the field shows the new value, and a short message says so.
+- **Somebody else saved first** — a colleague, or a status change you made
+  yourself in the meantime (`409 VERSION_CONFLICT`). Nothing is overwritten:
+  the screen shows the opportunity as it is now, a message says that it was
+  changed in the meantime, and **what you typed stays in the field**. Check the
+  newer version and press **Save** again to save your value over it — or
+  **Cancel** to drop it.
+- **Refused for any other reason** — a title left empty, a contact person who
+  is not of the organization — the field shows the server's own message and
+  keeps what you typed.
 
 A status change can carry a **reason**: write it in the field under the stage
 bar before pressing a status. It is optional and is recorded with the change.
@@ -354,6 +385,21 @@ send the link to a colleague and the same filters are applied. **Clear
 filters** removes them all. A link saved before the card was changed still
 opens: a filter on a field that is no longer on the card is ignored.
 
+### The list's custom-field filters
+
+The **Opportunities list** does not follow the card. It offers a filter for every opportunity
+custom field whose **Use as list filter** option is on (set on **Custom Fields**), whether or not a
+card shows the field, beside its other filters. The filters work as the board's do for the same
+kind of field, except that an opportunity without a value never matches — *No* included. They are
+in the page address, and a change returns the list to its first page. The panel shows the first
+three; the rest are behind **More filters (n)**, and a hidden field with an active filter is always
+shown.
+
+The two rules are independent: a field can be a board filter because the card shows it and not a
+list filter, or the reverse. **A card field that is not a list filter cannot filter the list**: a
+link that filtered the list by it is answered with an error naming the field and **Remove this
+filter**, until the option is turned on. The board — its *Show more* included — is unchanged.
+
 ### For integrators
 
 | Verb + Path | Permission | Purpose |
@@ -383,8 +429,19 @@ keyed by reference: `{"custom:lead_source":{"in":["referral"]},"builtin:value":{
 The operators are `contains` (text), `min` / `max` (numbers and amounts, as
 decimal strings), `from` / `to` (dates, `YYYY-MM-DD`, both days included),
 `is` (yes / no) and `in` (options, and the contact person's customer-account
-id). A reference that is not on the card is ignored; a parameter that is not
-valid JSON of this shape answers `400`.
+id). A parameter that is not valid JSON of this shape answers `400`.
+
+Which references count depends on the request:
+
+- **The board**, and **the list with `cardValues=true`** (a board column continued with *Show
+  more*): a reference that is not on the card is ignored.
+- **The list otherwise**: a `custom:` reference is filtered when the field's list-filter option is
+  on, whether or not the card shows it, and answered with `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE`
+  (the key in `details.key`) when it is not; `builtin:` references keep the card rule. The offered
+  fields are at `GET /api/v1/admin/crm/opportunities/custom-field-filters` (`crm:read`). An inverted range (`min` above `max`, `from` after `to`) or an operator that does not apply to the field's type answers `400` `VALIDATION_FAILED`.
+
+`cardValues` chooses the rule, never what may be seen: both run within the opportunities you may
+see.
 
 ## Linking orders
 
@@ -392,6 +449,10 @@ An existing order can be linked to an opportunity. The order must belong to the
 opportunity's organization, and an order belongs to **at most one**
 opportunity — linking one that is already linked is refused, naming the
 opportunity that holds it.
+
+Linking an order by hand carries no custom-field value in either direction —
+only an order placed from a linked quote request, or created from the
+opportunity, does (see *Custom fields*).
 
 Each link has a switch, **follow the opportunity's status**, on by default.
 Switch it off for an order that should stay linked — for reference, or for its
@@ -411,6 +472,9 @@ listed as **unavailable**, with no number, status or total, and an order change
 that was refused is shown without the order's number. The Admin UI offers the
 order picker and the following switch to a holder of both permissions and says
 so to anybody else.
+
+A linked order's number opens the order's screen, whose **Back** leads to this
+opportunity (see *Back to the opportunity* under *The opportunity's screen*).
 
 Moving an opportunity moves the orders that follow it **whoever moves it**:
 which order status a move asks for was set up by somebody holding
@@ -651,12 +715,18 @@ conversation, except the person who sent it, on the notification bell of the
 Admin UI with a link to the opportunity. The entry names the opportunity by
 its number and carries nothing of the message, and is not written for somebody
 who can no longer reach the opportunity's organization. **Nobody else is
-told, unless the message mentions them** (see *Mentioning a person, an order
+told, unless the message mentions them** (see *Mentioning a person, a document
 or a product with @*): the first message on an opportunity that has no
 assignee, mentioning nobody, notifies nobody. The entry is shown in the
 reader's own language, as the assignment's is. While the **Admin
 notifications** module is switched off, a message is stored all the same and
 nobody is told.
+
+**Both are formatted text.** A note and a message are written in the same
+editor as the description — bold, italic, strikethrough, lists and links — and
+can mention a person, an order, a quote request, a task or a product (see *Formatted text* and
+*Mentioning a person, a document or a product with @*). A note or a message
+holds up to 10,000 characters.
 
 **Both are internal.** Neither a note nor a message has a setting that shows it
 to the customer, and nothing the customer can open — an order, a quote request,
@@ -793,8 +863,9 @@ there is no event without an opportunity.
 An event has:
 
 - a **name** (required, up to 200 characters) and an optional **description**
-  of up to 5,000 characters. The description is plain text: the `@` shortcuts
-  are not offered in it;
+  of up to 5,000 characters. The description is formatted text, written in the
+  same editor as a note (see *Formatted text*), but it takes no mentions: the
+  `@` shortcuts and the insert buttons are not offered in it;
 - **one day**. Either a start and an end time on that day, the end later than
   the start, or **All day** — the date, with no times. An event cannot run over
   midnight: a meeting that does is two events;
@@ -804,7 +875,7 @@ Events are the opportunity's plan, not their author's property. Unlike a note,
 **any** holder of `crm:write` who can see the opportunity edits and deletes
 any of its events, whoever added them. When two people save the same event,
 the later save wins. Adding or changing an event does not count as an edit of
-the opportunity, so it never makes a colleague's open edit form fail.
+the opportunity, so it never makes a colleague's save of a field fail.
 
 Deleting an opportunity deletes its events, and none of their reminders is
 sent. Closing an opportunity deletes nothing — see *Closed opportunities*
@@ -1212,7 +1283,9 @@ opportunity the order is linked to the same one (`linkSource:
 closed, and whatever `crm.auto_create_from_orders` says: such an order never
 gets an opportunity of its own. From then on it is a linked order like any
 other: it follows the order-status mappings, and the opportunity's value counts
-it.
+it. Joining also fills the opportunity's **empty** custom fields from the
+order's, for every order field that carries to opportunities; a value the
+opportunity already holds is kept (see *Custom fields*).
 
 The order records its quote request when it is placed from the basket the
 customer filled by ordering the accepted quote request on its page in the
@@ -1299,10 +1372,16 @@ CRM does not need the Quote Requests module. While it is switched off:
   status, no value;
 - it adds nothing to a computed value;
 - linking a quote request answers `503 MODULE_DISABLED`; an existing link can
-  still be removed.
+  still be removed;
+- a quote request mentioned in a text reads as *Quote request unavailable*, and
+  the `@@` document list offers no quote requests.
 
 Nothing is lost: switched back on, the links show their documents again. A
 computed value picks the quote requests up again at its next recalculation.
+
+The **Tasks** module is optional in the same way. While it is switched off a
+task mentioned in a text reads as *Task unavailable* and the `@@` document list
+offers no tasks; switched back on, the mentions show their tasks again.
 
 ### In the Admin UI
 
@@ -1354,7 +1433,9 @@ An opportunity created this way:
 - is titled with the document's number and the organization's name;
 - is linked to the document, and its value is **computed** from it (see *Quote
   requests and a computed value*), in the document's currency;
-- records where it came from: `source` is `order` or `quote_request`.
+- records where it came from: `source` is `order` or `quote_request`;
+- receives the document's custom-field values for every order or quote request
+  field whose **Carry value to Opportunity** option is on (see *Custom fields*).
 
 What is **not** created:
 
@@ -1362,8 +1443,6 @@ What is **not** created:
 - nothing for an order that records a quote request linked to an opportunity —
   the order joins that opportunity instead, whatever the settings say (see
   *Linking quote requests*);
-  records its quote request today, so this is not effective yet (see *Linking
-  quote requests*);
 - nothing for documents that existed before the setting was switched on;
 - nothing while the CRM module is switched off, and nothing afterwards for the
   documents placed in the meantime;
@@ -1397,6 +1476,9 @@ on its **Links** tab, which says that the new document is being linked and then 
 document is in its list from then on, marked in the change history as *created
 from the opportunity*. An order created this way follows the opportunity's
 status like any linked order, and both kinds count towards a computed value.
+Once linked, the document receives the opportunity's custom-field values for
+every opportunity field whose **Carry value to Order** or **Carry value to
+Quote request** option is on, into its empty fields only (see *Custom fields*).
 
 What to expect:
 
@@ -1407,10 +1489,16 @@ What to expect:
   you may see. If you save the document for a customer of another organization
   it is created, but it is **not** linked: the opportunity says so on your
   return and offers a link to the document. Nothing about the opportunity is
-  changed.
+  changed, and no custom-field value is carried.
 - **Who sees the buttons.** *Create order* needs `crm:write` and
   `orders:write`; *Create quote request* needs `crm:write` and `rfqs:handle`.
   The create screens also search customers, which needs `customers:read`.
+- **A quote request's version moves once more.** The values are carried just
+  after the create request has answered, in a write of the quote request's own,
+  and a carry that fills a field raises the request's `version`. A client that
+  edits the new request with the version the create response returned is then
+  refused with `409 VERSION_CONFLICT`: read the request again and send the
+  version it reports now. A carry that fills nothing leaves the version alone.
 - **With the Quote Requests module switched off** there is no *Create quote
   request* button. *Create order* is unaffected.
 - **With the CRM module switched off** the create screens work exactly as they
@@ -1444,7 +1532,13 @@ Each entry says **when**, **what** (`action`), **who** (`actor`) and the state
 - a status change carries `before.status` and `after.status`, what caused it
   (`after.cause`: `manual`, `order_status` or `system`), the order that caused
   it when one did (`after.causeOrderId`), and the reason somebody typed;
-- an edit carries the fields as they were and as they are.
+- an edit carries the fields as they were and as they are;
+- a creation for a document, or an order joining from its quote request, that
+  carried or skipped custom-field values carries `after.customFieldCarry`:
+  `source` (`entityType` `order` or `quote_request`, `recordId`), `carried` (the
+  keys filled) and `skipped` (one `{ key, reason, label }` per field not
+  carried). The carried values themselves are in `after.customFieldValues`,
+  for a reader who holds `custom_fields:read`.
 
 | Verb + Path | Permission | Purpose |
 | --- | --- | --- |
@@ -1455,8 +1549,15 @@ disagree with what happened — and **anybody who may read the opportunity may
 read its history**. The permission that opens the platform-wide audit log is
 not needed.
 
-Five things to know:
+Six things to know:
 
+- **Custom field values need `custom_fields:read`.** An entry's `before` and
+  `after` carry the opportunity's custom field values (`customFieldValues`) only
+  for a reader who also holds `custom_fields:read`; for anybody else the server
+  leaves that member out of every entry, and the rest of the entry is as it was
+  recorded. `customFieldCarry` stays for every reader: it names fields, reasons
+  and labels, never a value. A role holding `crm:read` alone therefore no
+  longer reads custom field values through the history.
 - A note or a message is in the history as the fact that it was written,
   edited or deleted — by whom, and how long it was. Its text is not: that is
   read on the *Notes* and *Messages* tabs.
@@ -1482,26 +1583,102 @@ Each entry is a sentence — *Opportunity status changed*, *Note added* — with
 who did it and when. A status change shows the two statuses by name; when an
 order caused it, the entry names that order and links to it. An edit lists the
 fields that changed, as they were and as they are. Custom field values are
-listed a line per field under the fields' own labels — or under their codes for
-somebody without `custom_fields:read` — and an order's status is shown by name,
-to somebody holding `orders:read` only. A description that changed reads as it
-does on the *Overview*: a person, an order or a product it mentions is shown by
-name, never as the token. *Show earlier changes* reads the next page.
+listed a line per field under the fields' own labels, to somebody holding
+`custom_fields:read`; for anybody else the history holds no custom field
+values, so none are listed. An order's status is shown by name,
+to somebody holding `orders:read` only. A description that changed is shown as
+its words, without the formatting marks: a person, an order or a product it
+mentions is shown by name, never as the token. *Show earlier changes* reads the
+next page.
 
-## References to products and orders
+**Values not carried.** A creation or join entry that skipped custom-field
+values reads *Not carried from the order:* or *Not carried from the quote
+request:*, followed by one line per skipped field with the reason — the
+opportunity has no field with this key, its field has a different type, its
+field is visible to customers while the source field is internal, or the value
+is not valid for its field. A field is named by **the label of the order's or quote
+request's field, as it read when it was skipped**, in your language, and these lines are shown to **anybody who may
+read the opportunity** — `custom_fields:read` is not needed for them, and they
+hold no value. The values themselves stay behind `custom_fields:read` as above.
+An entry recorded before labels were kept names the field by its current label
+where it can, otherwise by its key. Values carried without a problem show as
+the custom-field lines of the entry, like any other change of them.
+
+## Formatted text
+
+The description of an opportunity, a note, a message and an event's description
+are written in a **formatted editor**. A toolbar above the field formats what
+is selected, and each of its buttons shows whether the text at the cursor
+already has that formatting:
+
+| Button | Keyboard (**Cmd** on a Mac) |
+| --- | --- |
+| **Bold** | **Ctrl+B** |
+| **Italic** | **Ctrl+I** |
+| **Strikethrough** | **Ctrl+Shift+S** |
+| **Bulleted list** | **Ctrl+Shift+8**, or type `- ` at the start of a line |
+| **Numbered list** | **Ctrl+Shift+7**, or type `1. ` at the start of a line |
+| **Link** | — |
+
+**Link** asks for an address. Only an address beginning `http://`, `https://`
+or `mailto:` is accepted; anything else is refused with a message, and nothing
+is linked.
+
+In the description, a note and a message the `@` shortcuts and the **Mention a
+person**, **Insert document** and **Insert product** buttons work as before (see
+below). An event's description is formatted too, but takes no mentions.
+
+Wherever the text is read — the *Overview*, the *Notes* and *Messages* tabs,
+the *Events* tab — it shows its formatting, and a link opens in a new tab.
+
+**For integrators.** What the API takes and returns is still **a string**, not
+HTML and not a document tree. The formatting is a small Markdown subset written
+into it, beside the reference tokens of the next section:
+
+| Written | Read as |
+| --- | --- |
+| `**text**` | bold |
+| `_text_` | italic — never inside a word, so a SKU such as `ABC_1_X` stays as typed |
+| `~~text~~` | strikethrough |
+| `- item` | an item of a bulleted list |
+| `3. item` | an item of a numbered list, starting at that number |
+| `[label](https://…)` | a link — `http`, `https` or `mailto` only; any other address is read as plain characters |
+| `\*`, `\_`, `\~`, `\[`, `\]`, `\\` | the character itself |
+
+Every line is a block. **No HTML is ever stored**, and a screen draws the text
+with elements of its own. Text written before formatting existed has none of
+these marks and reads exactly as it did — as plain paragraphs; nothing was
+migrated. The grammar is `@endora-commerce/contracts`'s:
+`parseOpportunityRichText` reads a text into blocks, `formatOpportunityRichText`
+writes blocks back, and `opportunityRichTextToPlain` gives the words without
+the marks — what an e-mail, a notification or the change history shows.
+
+The length limits count the stored string, marks included: a description up to
+20,000 characters, a note or a message up to 10,000, an event's description up
+to 5,000.
+
+## References to products, orders, quote requests and tasks
 
 The description of an opportunity, a note and a message can mention a
-**product** or an **order**. A mention is a token in the text:
+**product**, an **order**, a **quote request** or a **task**. A mention is a
+token in the text:
 
 ```text
 [[product:<product id>]]
 [[order:<order id>]]
+[[quote_request:<quote request id>]]
+[[task:<task id>]]
 ```
 
-The text is stored and returned exactly as it was written — plain text; nothing
-in it is treated as markup. Beside every such text the API returns
-`references`: one entry per product or order mentioned, in the order they
-appear, each once.
+This is the same reference standard the Projects module uses, so a text reads
+the same on both screens. Texts written before quote requests and tasks could
+be mentioned are unchanged: their tokens are a subset of these.
+
+The text is stored and returned exactly as it was written — a string with the
+tokens and the formatting marks of *Formatted text* in it, never HTML. Beside
+every such text the API returns
+`references`: one entry per target mentioned, in the order they appear, each
+once.
 
 ```json
 {
@@ -1514,12 +1691,41 @@ appear, each once.
 ```
 
 - `label` is the product's **current** name, in the reader's language, or the
-  order's number — looked up each time the text is read, so a renamed product
-  shows its new name.
-- `url` is where the mention leads in the Admin UI.
-- A product that no longer exists, and an order of an organization the reader
-  may not see, come back with `"available": false` and **no label and no
-  link**. The mention stays in the text; nothing about its target is shown.
+  order's, the quote request's or the task's number — looked up each time the
+  text is read, so a renamed product shows its new name.
+- `url` is where the mention leads in the Admin UI — `/catalog/products/…`,
+  `/orders/…`, `/quote-requests/…` or `/tasks/…`.
+- An available **order** also carries `order`: what the reader is shown beside
+  its number.
+
+  ```json
+  {
+    "type": "order",
+    "id": "9b2e…",
+    "available": true,
+    "label": "ORD-2026-000184",
+    "url": "/orders/9b2e…",
+    "order": {
+      "status": "processing",
+      "total": "12480.00",
+      "currency": "PLN",
+      "placedAt": "2026-10-14T09:12:00.000Z",
+      "customerName": "Hurtownia Nowak sp. z o.o."
+    }
+  }
+  ```
+
+  `status` is the order's status code, `total` its total as a decimal string,
+  `customerName` the billing company — or, without one, the billing recipient —
+  and `null` when there is neither. A product, a quote request, a task and a
+  person carry no such object.
+- A product that no longer exists, an order of an organization the reader may
+  not see, a quote request or a task that is gone or that the reader may not
+  see, and a quote request or a task while the Quote Requests or the Tasks
+  module is switched off, come back with `"available": false` and **no label
+  and no link**. The mention stays in the text; nothing about its target is
+  shown. A task is also hidden when the record it belongs to — a project, for
+  example — is one the reader may not see.
 
 A token that is not well-formed — an unknown type, something that is not an id
 — is simply text.
@@ -1528,25 +1734,45 @@ A token that is not well-formed — an unknown type, something that is not an id
 and message (for its `body`). There is no separate endpoint.
 
 In the Admin UI the description field and the note and message fields carry
-buttons under them, **Insert order** and **Insert product** among them. Each
+buttons under them, **Insert document** and **Insert product** among them. Each
 opens a search;
 choosing a result puts it into the text where the cursor was — **as its name,
-never as the token**: the field shows the order's number or the product's name
-as a small label while you write, and the token is only what is stored. Once
-saved, the text shows that name as a link in its place, and
-*Product unavailable* / *Order unavailable* for a target that is gone or that
-you may not see — in the saved text and in the field alike when it is opened
-for editing; what you cannot see is saved back unchanged. A name is shown only to somebody who could open the target
-itself: an order's number needs `orders:read`, a product's name
+never as the token**: the field shows the document's number or the product's
+name as a small label while you write, and the token is only what is stored.
+Once saved, the text shows that name as a link in its place, and
+*Product unavailable* / *Order unavailable* / *Quote request unavailable* /
+*Task unavailable* for a target that is gone or that you may not see — in the
+saved text and in the field alike when it is opened for editing; what you
+cannot see is saved back unchanged. A name is shown only to somebody who could
+open the target itself: an order's number needs `orders:read`, a quote
+request's `rfqs:handle`, a task's `tasks:read`, a product's name
 `catalog:read`.
 
-The two searches are the catalogue's and the Orders module's own, so *Insert
-product* is offered to a role that also holds `catalog:read` and *Insert order*
-to one that holds `orders:read`; orders are offered for the opportunity's
-organization only. A token typed or pasted by hand is saved without either,
-and reads as unavailable to whoever lacks the permission.
+**An order says more when it is read.** In saved text an order mentioned is
+shown as its number — a link that opens the order in the same tab, whose
+**Back** returns to the opportunity — followed by its status, its total, the
+date it was placed and its customer (the billing company, or the billing
+recipient when there is none). Beside it, a small separate icon — named *Open
+order ORD-2026-000184 in a new tab* when you point at it, and to a screen
+reader — opens it in a new tab instead.
 
-## Mentioning a person, an order or a product with @
+*Insert product* searches the catalogue, and is offered to a role that also
+holds `catalog:read`. *Insert document* searches **one list of documents**,
+grouped **Orders · Quote requests · Tasks** — the list the Projects module
+offers too:
+
+- **Orders** and **Quote requests** of the opportunity's organization only —
+  on the create form, of the organization chosen there; without one, neither
+  group is offered;
+- **Tasks** any you may see;
+- each group only to a role that also holds the permission its module reads it
+  with — `orders:read`, `rfqs:handle`, `tasks:read` — and only while that module
+  is switched on. A role holding none of the three is not offered the button.
+
+A token typed or pasted by hand is saved without any of these, and reads as
+unavailable to whoever lacks the permission.
+
+## Mentioning a person, a document or a product with @
 
 The same three fields — the description, a note, a message — take a mention
 straight from the keyboard:
@@ -1554,17 +1780,17 @@ straight from the keyboard:
 | Type | To mention | Offered to |
 | --- | --- | --- |
 | `@` | a **person** — a user of the Admin UI who may read opportunities | anybody writing the text |
-| `@@` | an **order** of the opportunity's organization | a role that also holds `orders:read` |
+| `@@` | a **document** — an order or a quote request of the opportunity's organization, or a task — from the grouped list above | a role that also holds `orders:read`, `rfqs:handle` or `tasks:read`; each group only with its own |
 | `@@@` | a **product** | a role that also holds `catalog:read` |
 
 Type the `@` at the start of the text or after a space and a list opens **where
 you are typing** — under that line, or above it when there is no room below;
-keep typing to narrow it — a first name, a surname, an order number,
-a product name or SKU. **Arrow keys** move through the list, **Enter** or
+keep typing to narrow it — a first name, a surname, an order, quote request or
+task number, a task's title, a product name or SKU. **Arrow keys** move through the list, **Enter** or
 **Tab** chooses, **Escape** closes it and leaves what you typed. Choosing
 replaces the `@` and the letters after it with the mention — shown as
-**@Tomasz Nowak**, as an order's number or as a product's name — and you carry
-on with the sentence:
+**@Tomasz Nowak**, as a document's number or as a product's name — and you
+carry on with the sentence:
 
 ```text
 @Tomasz Nowak - take this over
@@ -1573,20 +1799,24 @@ on with the sentence:
 **The field shows names, never tokens**, for a mention just chosen and for
 every one already in a text you open for editing. A mention behaves as one
 character: the arrow keys step over it, and **Backspace** or **Delete** removes
-the whole of it. The field is plain text — a paste arrives as its text with its
-line breaks and none of its formatting — and **Ctrl+Z** / **Ctrl+Shift+Z** undo
-and redo, a mention being one step. A token typed or pasted by hand turns into
-its name when the field knows it, and otherwise stays as you typed it and is
-resolved when the text is saved. Typing `@@` or `@@@` quickly opens the one
+the whole of it. The field is the formatted editor of *Formatted text*: a
+paste keeps only the formatting the field can hold, and **Ctrl+Z** /
+**Ctrl+Shift+Z** undo and redo, a mention being one step. A token pasted in its text form
+(`[[order:…]]`) becomes a chip — its name when the field knows it, otherwise
+*unavailable* until the text is saved and resolved; one typed character by
+character stays the characters you typed. Typing `@@` or `@@@` quickly opens the one
 list you asked for; a single `@` opens the people after a short pause.
 
 An `@` inside a word — an e-mail address — opens nothing, and neither does an
 `@` followed by a space. A shortcut your role is not offered leaves the
 characters exactly as typed. The line under the field names the shortcuts you
-have, and **Mention a person** beside *Insert order* and *Insert product* does
-the same by a button.
+have, and **Mention a person** beside *Insert document* and *Insert product*
+does the same by a button.
 
-A mention of a person is stored like the other two, as a token, and comes back
+`@@` replaces what it meant before: until the reference standard shared with
+Projects, it searched the organization's orders alone.
+
+A mention of a person is stored like the others, as a token, and comes back
 in `references`:
 
 ```text
@@ -1753,9 +1983,32 @@ button; on the create form they are saved with the opportunity.
   whenever the custom fields are saved. Editing something else on an
   opportunity — its title, its value, its status — never asks for it, so a
   field made required today does not block work on yesterday's opportunities.
-- An opportunity created automatically has no custom values until somebody
-  fills them in.
+- An opportunity created automatically has no custom values of its own until
+  somebody fills them in — except those carried from its document (below).
 - When a field is deleted, its values stop being shown.
+
+**Carrying values between an opportunity and its documents.** On **Custom
+fields**, an order or quote request field can have **Carry value to
+Opportunity** on, and an opportunity field **Carry value to Order** and **Carry
+value to Quote request**; the field on the other record must have the same key
+and a compatible type and options, and an internal field cannot carry into a
+customer-visible one. The Custom fields module's page has the whole rule. Only
+an empty field is filled, once, when the records are joined:
+
+| When | What is carried | Attributed to |
+| --- | --- | --- |
+| an opportunity is created automatically for an order or a quote request | the document's values, into the new opportunity | the system, in the creation's entry |
+| an order placed from a linked quote request joins its opportunity | the order's values, into the opportunity's empty fields | the system, in the link's entry |
+| an order or a quote request created from the opportunity is linked to it | the opportunity's values, into the document's empty fields | the system, in the document's own audit trail; the document's creation stays the administrator's |
+
+Nothing is carried when an order or a quote request is linked by hand — on the
+*Links* tab or from the document's *Linked opportunity* panel — nor when the
+records belong to different organizations. A value that cannot be carried is
+skipped, the opportunity or the document is created or linked all the same,
+and the skip is recorded **on the record that did not receive it**: in the
+opportunity's *Change history* (see *Change history*), as a system note in the
+order's comments, or in the quote request's history. While the CRM module is
+switched off nothing is carried, and nothing is caught up afterwards.
 
 **Who sees them.** Whoever can see the opportunity sees its custom values, and
 nobody else: they are part of the opportunity. Showing the fields also needs
@@ -2029,6 +2282,7 @@ the person may see, and is no more than a name to choose by.
 | `GET /api/v1/admin/crm/lookups/contacts?organizationId=…&q=…` | `crm:write` | Members of one organization the caller may see: `id`, `name`, `email`. |
 | `GET /api/v1/admin/crm/lookups/mentionable?q=…&organizationId=…` | `crm:write` | Active administrators holding `crm:read` — the people a text may mention: `id`, `name`. |
 | `GET /api/v1/admin/crm/lookups/quote-requests?organizationId=…&q=…` | `crm:write` and `rfqs:handle` | Quote requests of one organization the caller may see that can be linked: the open ones, and the one whose number is typed in full. `id`, `number`, `status`. Answers `503` while the Quote Requests module is off. |
+| `GET /api/v1/admin/crm/lookups/documents?opportunityId=…&q=…` | `crm:write` | The `@@` document list: `{ "groups": [{ "kind": "order" \| "quote_request" \| "task", "items": [{ "id", "label", "sublabel"? }] }] }`, at most ten per group. Orders and quote requests of the opportunity's organization (`organizationId=…` instead, before the opportunity exists); tasks the caller may see, with the task's title as `sublabel`. A group is present only for a caller holding `orders:read`, `rfqs:handle` or `tasks:read` respectively, and only while its module is on. An opportunity the caller cannot see answers `404`. The same shape as the Projects module's `GET /api/v1/admin/projects/lookups/documents`. |
 
 The currencies offered when an opportunity is created are the ones the active
 sales channels sell in.

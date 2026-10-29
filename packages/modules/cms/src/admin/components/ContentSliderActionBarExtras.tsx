@@ -2,7 +2,7 @@
 
 import { useEffect, type ReactElement } from 'react';
 import { ActionBar, useGetPuck } from '@puckeditor/core';
-import { Minus, Plus } from 'lucide-react';
+import { Minus } from 'lucide-react';
 import { resolveResponsiveNumber } from '@endora-commerce/page-builder-core';
 import { usePreviewBreakpointTier } from '@endora-commerce/page-builder-core/client';
 import {
@@ -17,6 +17,7 @@ import {
   setEditorCarouselPage,
   usePageBuilderPuck,
 } from '@endora-commerce/page-builder-core/editor';
+import { CarouselAddSlideMenu } from './CarouselAddSlideMenu.js';
 import { CarouselPreviewNav } from './CarouselPreviewNav.js';
 import { QuickTooltip } from '@endora-commerce/page-builder-admin';
 import { isPuckItemType, safeGetPuckData, safeGetPuckItem } from './puck-safe.js';
@@ -25,10 +26,13 @@ export function contentSliderSlidesZone(sliderId: string): string {
   return `${sliderId}:slides`;
 }
 
+/** Slides per editor page — as the carousel shell counts them: whole, and one under fade. */
 function slidesPerViewFromProps(
   value: unknown,
   tier: 'mobile' | 'tablet' | 'desktop',
+  effect?: unknown,
 ): number {
+  if (effect === 'fade') return 1;
   return Math.max(1, Math.round(resolveResponsiveNumber(value as never, tier, 1)));
 }
 
@@ -46,7 +50,7 @@ export function ContentSliderActionBarExtras({ sliderId }: { sliderId: string })
   const isActive = isPuckItemType(slider, 'cms.ContentSlider');
   const slideCount = isActive && data ? getSlotZoneItemCount(data, zone) : 0;
   const slidesPerView = isActive
-    ? slidesPerViewFromProps(slider.props.slidesPerView, tier)
+    ? slidesPerViewFromProps(slider.props.slidesPerView, tier, slider.props.effect)
     : 1;
 
   useEffect(() => {
@@ -116,13 +120,14 @@ export function ContentSliderActionBarExtras({ sliderId }: { sliderId: string })
     });
   };
 
-  const addSlide = (): void => {
+  // Feature 163 (T054): the kind is picked in the menu — free content or one of the item blocks.
+  const addSlide = (componentType: string): void => {
     const freshData = safeGetPuckData(() => getPuck().appState.data);
     if (!freshData) return;
     const count = getSlotZoneItemCount(freshData, zone);
     dispatch({
       type: 'insert',
-      componentType: 'cms.Slide',
+      componentType,
       destinationZone: zone,
       destinationIndex: count,
     });
@@ -146,19 +151,20 @@ export function ContentSliderActionBarExtras({ sliderId }: { sliderId: string })
     dispatch({ type: 'remove', zone, index: count - 1 });
   };
 
+  // Feature 163, T130: a grid shows every item, so it has no pages to step through.
+  const grid = slider.props.layout === 'grid';
+
   return (
     <>
-      <CarouselPreviewNav
-        carouselId={sliderId}
-        slideCount={slideCount}
-        slidesPerView={slidesPerView}
-        onNavigate={goToPreviewPage}
-      />
-      <QuickTooltip text="Add slide">
-        <ActionBar.Action label="Add slide" onClick={addSlide}>
-          <Plus size={16} />
-        </ActionBar.Action>
-      </QuickTooltip>
+      {grid ? null : (
+        <CarouselPreviewNav
+          carouselId={sliderId}
+          slideCount={slideCount}
+          slidesPerView={slidesPerView}
+          onNavigate={goToPreviewPage}
+        />
+      )}
+      <CarouselAddSlideMenu onAdd={addSlide} />
       <QuickTooltip text="Remove slide">
         <ActionBar.Action label="Remove slide" onClick={removeSlide}>
           <Minus size={16} />

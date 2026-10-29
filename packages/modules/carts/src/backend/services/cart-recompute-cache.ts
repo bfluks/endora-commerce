@@ -29,6 +29,8 @@ export interface CachedCartLinePrice {
   cartItemId: string;
   /** `amount: null` = resolver failed; the caller should fall back to the snapshot. */
   unitPrice: { amount: number | null; currency: string };
+  /** Why the chain gave the line no orderable price (issue #168); absent on older entries. */
+  refusal?: 'unpriced' | 'quote_only' | 'product_missing' | null;
   resolvedAt: string;
 }
 

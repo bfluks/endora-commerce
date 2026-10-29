@@ -13,7 +13,16 @@ import type { SecondFactorVerifier } from './second-factor-verifier.js';
 
 /** Result of completing the second step. */
 export type MfaVerifyResult =
-  | { ok: true; subject: MfaSubjectRef; factor: 'totp' | 'recovery' }
+  | {
+      ok: true;
+      subject: MfaSubjectRef;
+      factor: 'totp' | 'recovery';
+      /**
+       * Feature 154 — the sales channel the sign-in was begun on, so the route
+       * completing it can re-decide the access rule on that channel.
+       */
+      salesChannelId: string | null;
+    }
   | { ok: false; error: 'invalid_challenge' }
   | { ok: false; error: 'invalid_code' | 'locked'; subject: MfaSubjectRef };
 
@@ -122,7 +131,12 @@ export class MfaLoginService implements MfaLoginPort {
       return { ok: false, error: remaining === 0 ? 'locked' : 'invalid_code', subject };
     }
     await this.challengeStore.consumeChallenge(challengeId);
-    return { ok: true, subject, factor: verified.factor ?? 'totp' };
+    return {
+      ok: true,
+      subject,
+      factor: verified.factor ?? 'totp',
+      salesChannelId: challenge.salesChannelId,
+    };
   }
 
   private async findActiveEnrolment(

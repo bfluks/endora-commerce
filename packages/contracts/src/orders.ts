@@ -8,7 +8,17 @@ import {
   uuidSchema,
   type OriginReference,
 } from './common.js';
-import { customFieldValuesSchema } from './custom-fields.js';
+import {
+  lineGroupKeySchema,
+  lineGroupSchema,
+  newLineGroupInputSchema,
+  refineLineGrouping,
+} from './line-groups.js';
+import {
+  customFieldCarrySkipSchema,
+  customFieldFiltersQueryParamSchema,
+  customFieldValuesSchema,
+} from './custom-fields.js';
 import { vatStatusSchema } from './organizations.js';
 import {
   savedListViewColumnsSchema,
@@ -17,6 +27,7 @@ import {
   savedListViewSchema,
   savedListViewSortSchema,
 } from './saved-list-views.js';
+import { twoDecimalAmount } from './money-input.js';
 
 /**
  * Orders module contracts — Source of truth per Principle V.
@@ -55,6 +66,10 @@ export const orderItemSchema = z.object({
   unitPrice: z.number().finite().nonnegative(),
   taxRate: z.number().finite().nonnegative(),
   lineTotal: z.number().finite().nonnegative(),
+  /** Feature 159 — the line's group (`itemGroups[].id`), `null` = ungrouped. */
+  groupId: uuidSchema.nullable().default(null),
+  /** Feature 159 — 0-based order within the line's section. */
+  position: z.number().int().nonnegative().default(0),
 });
 export type OrderItem = z.infer<typeof orderItemSchema>;
 
@@ -175,6 +190,12 @@ export const orderSchema = z.object({
     kind: z.enum(['bank_transfer', 'pickup', 'credit_limit', 'gateway']),
   }),
   sourceQuoteRequestId: uuidSchema.nullable(),
+  /**
+   * Feature 159 — the order's line groups in display order (every one holds a
+   * line: an order never stores an empty group). Fixed at placement.
+   */
+  itemGroups: z.array(lineGroupSchema).default([]),
+  /** In display order: each group's lines, then the ungrouped lines. */
   items: z.array(orderItemSchema),
   subtotal: z.number().finite().nonnegative(),
   taxTotal: z.number().finite().nonnegative(),
@@ -370,6 +391,23 @@ export const orderPreviewTotalResponseSchema = z.object({
   discountTotal: z.number(),
   total: z.number(),
   currency: z.string(),
+  /**
+   * Feature 155 — basket lines placement will refuse. Exemptions apply only when the basket's quote
+   * source is confirmed valid now (FR-036); `product_unavailable` is a line whose product record is
+   * gone (FR-037), with no name or minimum.
+   */
+  belowMinimumLines: z
+    .array(
+      z.object({
+        cartItemId: uuidSchema,
+        productId: uuidSchema,
+        productName: z.string().optional(),
+        kind: z.enum(['pieces', 'packaging_unit', 'product_unavailable']),
+        minimum: z.number().int().positive().optional(),
+        packagingUnitName: z.string().optional(),
+      }),
+    )
+    .default([]),
 });
 export type OrderPreviewTotalResponse = z.infer<typeof orderPreviewTotalResponseSchema>;
 
@@ -385,7 +423,7 @@ export const adminOrderPaymentStatusTransitionSchema = z.object({
 });
 
 export const adminOrderRefundRequestSchema = z.object({
-  amount: z.number().finite().positive().optional(),
+  amount: twoDecimalAmount(z.number().finite().positive()).optional(),
 });
 
 export const adminOrderShippedRequestSchema = z.object({
@@ -519,6 +557,12 @@ export const adminOrdersListQuerySchema = z.object({
   // Order-total range (inclusive).
   totalMin: z.coerce.number().nonnegative().optional(),
   totalMax: z.coerce.number().nonnegative().optional(),
+  /**
+   * Filters on the Order custom fields marked as list filters, as JSON
+   * (`specs/157-custom-fields-list-filters/`). A key the list does not offer
+   * is refused with 400 `CUSTOM_FIELD_FILTER_UNAVAILABLE`.
+   */
+  customFieldFilters: customFieldFiltersQueryParamSchema,
   sort: z.string().optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(200).default(25),
@@ -648,11 +692,32 @@ export const adminCreateOrderInlineAddressSchema = z.object({
 });
 export type AdminCreateOrderInlineAddress = z.infer<typeof adminCreateOrderInlineAddressSchema>;
 
+/**
+ * Feature 155 (FR-038, research R20) — the most items admin create-order and the admin
+ * preview accept. Enforced by the service / handler as its first step (`422
+ * VALIDATION_FAILED`, `details: { code: 'too_many_items', maximum }`), deliberately not by
+ * a schema `.max()`, which would answer 400.
+ */
+export const ADMIN_ORDER_MAX_ITEMS = 200;
+
+/**
+ * Feature 159 — a line of the admin create request: the preview's item plus the
+ * `groups[].key` it belongs to (absent or `null` = ungrouped). The preview keeps
+ * `adminCreateOrderItemSchema`, so a `groupKey` sent there is stripped.
+ */
+export const adminCreateOrderLineSchema = adminCreateOrderItemSchema.extend({
+  groupKey: lineGroupKeySchema.nullable().optional(),
+});
+export type AdminCreateOrderLine = z.infer<typeof adminCreateOrderLineSchema>;
+
 export const adminCreateOrderRequestSchema = z
   .object({
     customerAccountId: uuidSchema,
     salesChannelId: uuidSchema,
-    items: z.array(adminCreateOrderItemSchema).min(1),
+    /** Feature 159 — the new order's groups in display order; a group no line names is not created. */
+    groups: z.array(newLineGroupInputSchema).optional(),
+    /** In display order: each group's lines, then the ungrouped lines. */
+    items: z.array(adminCreateOrderLineSchema).min(1),
     deliveryMethodId: uuidSchema,
     paymentMethodId: uuidSchema,
     /**
@@ -694,6 +759,7 @@ export const adminCreateOrderRequestSchema = z
         message: 'Provide exactly one of billingAddressId or billingAddress.',
       });
     }
+    refineLineGrouping(ctx, val);
   });
 export type AdminCreateOrderRequest = z.infer<typeof adminCreateOrderRequestSchema>;
 
@@ -787,6 +853,12 @@ export const adminOrderPreviewLineSchema = z.object({
   unitPrice: z.string(),
   currency: z.string(),
   lineTotal: z.number(),
+  /**
+   * Feature 159 — the rate the line is taxed at (a fraction, `0.23`), from the
+   * same authority as `summary.taxTotal`; absent on an unavailable line. The
+   * create screen sums a group's VAT from it.
+   */
+  taxRate: z.number().optional(),
   unavailable: z.boolean().optional(),
 });
 
@@ -801,6 +873,10 @@ export const ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE = [
   'PRODUCT_NOT_VISIBLE_TO_CUSTOMER',
   'PRODUCT_NOT_IN_SALES_CHANNEL',
   'QUOTE_ONLY',
+  /** Feature 160 (FR-018) — no price book prices the line; the cart would refuse it as unpriced. */
+  'UNPRICED',
+  /** Feature 155 — the line is below its product's pieces or packaging-unit minimum. */
+  'BELOW_MINIMUM_QUANTITY',
 ] as const;
 export const adminOrderPreviewMessageCodeSchema = z.enum(ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE);
 export type AdminOrderPreviewMessageCode = z.infer<typeof adminOrderPreviewMessageCodeSchema>;
@@ -820,16 +896,43 @@ export const adminOrderPreviewResponseSchema = z.object({
    * One entry per unavailable line, never more: its `code` is the first of
    * {@link ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE} that applies —
    * `PRODUCT_NOT_FOUND`, `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`,
-   * `PRODUCT_NOT_IN_SALES_CHANNEL`, `QUOTE_ONLY`. `code` is deliberately a plain
+   * `PRODUCT_NOT_IN_SALES_CHANNEL`, `QUOTE_ONLY`, `BELOW_MINIMUM_QUANTITY` (feature
+   * 155, which alone carries `minimum`). `code` is deliberately a plain
    * string, not {@link adminOrderPreviewMessageCodeSchema}: a newer server may
    * add a code, and an older client must still parse the answer (treat an
    * unknown code as unavailable).
    */
-  messages: z.array(z.object({ productId: uuidSchema, code: z.string() })),
+  messages: z.array(
+    z.object({
+      productId: uuidSchema,
+      code: z.string(),
+      /** Feature 155 — the missed minimum, on a `BELOW_MINIMUM_QUANTITY` message only. */
+      minimum: z.number().int().positive().optional(),
+    }),
+  ),
 });
 export type AdminOrderPreviewResponse = z.infer<typeof adminOrderPreviewResponseSchema>;
 
 // --- Comments --------------------------------------------------------------
+
+/**
+ * Feature 162 — an author-less **system note** the platform writes into an
+ * Order's comments: custom-field values that could not be carried into the
+ * Order from the record it was created from. Internal, never notifying, and
+ * never listed to the buyer. The comment's `body` is an English fallback; a
+ * reader renders the note in its own language from this shape.
+ */
+export const orderCommentSystemNoteSchema = z.object({
+  kind: z.literal('custom_field_carry_skipped'),
+  source: z.object({
+    entityType: z.enum(['quote_request', 'opportunity']),
+    recordId: uuidSchema,
+    /** The source's business number. */
+    reference: z.string(),
+  }),
+  skipped: z.array(customFieldCarrySkipSchema).min(1),
+});
+export type OrderCommentSystemNote = z.infer<typeof orderCommentSystemNoteSchema>;
 
 export const orderCommentSchema = z.object({
   id: uuidSchema,
@@ -840,6 +943,8 @@ export const orderCommentSchema = z.object({
   body: z.string(),
   isCustomerVisible: z.boolean(),
   notifyCustomer: z.boolean(),
+  /** Feature 162 — admin replies only; present ⇒ a system note (both authors `null`). */
+  systemNote: orderCommentSystemNoteSchema.nullable().optional(),
   createdAt: isoDateTimeSchema,
 });
 export type OrderComment = z.infer<typeof orderCommentSchema>;
@@ -1250,7 +1355,52 @@ export interface PlacedOrderRecord extends OrderRecord {
  * `nonDeactivatable` never enters one.
  */
 export interface OrderPlacementPort {
-  placeOrder(ctx: OrderCustomerContext, req: PlaceOrderRequest): Promise<PlacedOrderRecord>;
+  /**
+   * `options.language` (feature 155, D3/D4) — the language the caller's response
+   * is answered in, which a minimum refusal names the product in. Absent, the
+   * record's own fallback chain.
+   */
+  placeOrder(
+    ctx: OrderCustomerContext,
+    req: PlaceOrderRequest,
+    options?: { language?: string },
+  ): Promise<PlacedOrderRecord>;
+}
+
+/** One basket line, as the quote-source confirmation reads it. */
+export interface QuoteSourceBasketLine {
+  productId: string;
+  variantId: string | null;
+  /** The line's stored unit price — compared with the quote's agreed price. */
+  unitPrice: string;
+}
+
+/**
+ * Container name: `orderQuoteSourcePort`. Owner: `orders`.
+ *
+ * Feature 155 (FR-036, FR-039; `contracts/cart-and-checkout-api.md` §12) —
+ * whether a basket's quote-seeded lines keep their exemption from the
+ * catalogue's order minimums, answered by the **checkout preview's** check: the
+ * Quote Request belongs to `organizationId`, is `Approved`, its validity has not
+ * ended, no Order already carries it, and `basketLines` still hold a line agreed
+ * in it. Lock-free and advisory — placement confirms the source again under its
+ * own lock, so nothing a caller grants on this answer is relied on by placement.
+ *
+ * Published for `carts`' submit-for-approval, which must judge a basket as
+ * placement does rather than take the cart's quote mark at face value. The rule
+ * stays in one place: `orders` already owns it and is the only module that can
+ * answer "no Order carries it yet".
+ *
+ * Fail-closed: `false` whenever the source cannot be confirmed, including while
+ * `quote_requests` is off. **Owner off:** resolving the port throws
+ * `ModuleDisabledError` (503), as for every `orders` port.
+ */
+export interface OrderQuoteSourcePort {
+  quoteSourceHonoursExemptions(input: {
+    organizationId: string;
+    quoteRequestId: string;
+    basketLines: readonly QuoteSourceBasketLine[];
+  }): Promise<boolean>;
 }
 
 export interface OrderStatusActor {

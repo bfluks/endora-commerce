@@ -54,6 +54,14 @@ import { Migration20260925T125527CatalogInventoryColumns } from './20260925T1255
 import { Migration20261008T080839CatalogProductAttributeIsPriceRule } from './20261008T080839_catalog_product_attribute_is_price_rule.js';
 import { Migration20261008T092714CatalogCategoryContent } from './20261008T092714_catalog_category_content.js';
 import { Migration20261014T170531CatalogProductListSavedViews } from './20261014T170531_catalog_product_list_saved_views.js';
+import { Migration20261016T082008CatalogOrderRules } from './20261016T082008_catalog_order_rules.js';
+import { Migration20261022T035133CatalogProductScopes } from './20261022T035133_catalog_product_scopes.js';
+import { Migration20261022T054223CatalogProductUrlKeys } from './20261022T054223_catalog_product_url_keys.js';
+import { Migration20261022T111811CatalogPriceFieldsRemoved } from './20261022T111811_catalog_price_fields_removed.js';
+import { Migration20261022T182523CatalogAdminNameKeys } from './20261022T182523_catalog_admin_name_keys.js';
+import { Migration20261025T222634CatalogProductStatusDropDraft } from './20261025T222634_catalog_product_status_drop_draft.js';
+import { Migration20261026T033453CatalogProductMediaScopes } from './20261026T033453_catalog_product_media_scopes.js';
+import { Migration20261026T084533CatalogAttachmentPackagingTranslations } from './20261026T084533_catalog_attachment_packaging_translations.js';
 
 export const migrations = [
   Migration20260429T064146CatalogAttributeSetsInit,
@@ -83,6 +91,14 @@ export const migrations = [
   Migration20261008T080839CatalogProductAttributeIsPriceRule,
   Migration20261008T092714CatalogCategoryContent,
   Migration20261014T170531CatalogProductListSavedViews,
+  Migration20261016T082008CatalogOrderRules,
+  Migration20261022T035133CatalogProductScopes,
+  Migration20261022T054223CatalogProductUrlKeys,
+  Migration20261022T111811CatalogPriceFieldsRemoved,
+  Migration20261022T182523CatalogAdminNameKeys,
+  Migration20261025T222634CatalogProductStatusDropDraft,
+  Migration20261026T033453CatalogProductMediaScopes,
+  Migration20261026T084533CatalogAttachmentPackagingTranslations,
 ];
 
 export {
@@ -113,4 +129,12 @@ export {
   Migration20261008T080839CatalogProductAttributeIsPriceRule,
   Migration20261008T092714CatalogCategoryContent,
   Migration20261014T170531CatalogProductListSavedViews,
+  Migration20261016T082008CatalogOrderRules,
+  Migration20261022T035133CatalogProductScopes,
+  Migration20261022T054223CatalogProductUrlKeys,
+  Migration20261022T111811CatalogPriceFieldsRemoved,
+  Migration20261022T182523CatalogAdminNameKeys,
+  Migration20261025T222634CatalogProductStatusDropDraft,
+  Migration20261026T033453CatalogProductMediaScopes,
+  Migration20261026T084533CatalogAttachmentPackagingTranslations,
 };

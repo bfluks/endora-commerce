@@ -123,4 +123,27 @@ is not enough.
    `targetRoute` and not merely a code enforced somewhere. The permission inventory's two
    directions cannot see that — both codes in issue #232 were real, declared and enforced —
    so a valid code on the wrong route was invisible until this check existed.
+7. **Coverage** — `pnpm --filter admin exec vitest run test/unit/palette-coverage.test.ts`
+   holds every admin destination a module contributes to the palette (issue #510, which found
+   `taxes`, `blog`, `carts` and `mfa` short of it). A *destination* is a static path the module
+   declares as a route (`src/admin/index.ts` `routes`) or as a sidebar entry's `to`; a path with
+   a `:param` or `*` segment is a detail screen, which no action can target, and is never one.
+   It is *covered* when some manifest action — any module's — names it as its `targetRoute`.
+   Three classes, three treatments:
+   - the **landing** route (`index: true`) must be covered, with no exception;
+   - a **sidebar** destination must be covered, with no exception — a sidebar entry is
+     top-level by definition. The gaps that predated the rule were held in a shrink-only debt
+     ledger until issue #516 paid the last of them and removed it with its code path;
+   - **any other** static route — a create form its list opens, a tab of another screen, a
+     legacy address kept for bookmarks — is covered **or** listed in the test's
+     `PALETTE_EXEMPTIONS` under its module, with a reason. That ledger is the escape hatch, and
+     it is two-way: an entry whose route gained an action or stopped being contributed fails
+     as stale.
+
+   Curating (item 1) therefore means choosing which non-sidebar routes to exempt, in writing,
+   rather than leaving a screen out silently. Which code the covering action carries stays
+   item 2's question and `check:action-route-permissions`'; this test does not ask it again.
+   Its population is `admin/src/modules.generated.ts`, reconciled against the manifests of the
+   admin's module dependencies, and it prints what it read (`[palette-coverage] read: …`).
+   Overlay modules discovered at runtime are outside it.
 

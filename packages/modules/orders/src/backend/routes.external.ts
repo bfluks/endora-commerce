@@ -5,7 +5,7 @@ import {
   ERROR_CODES,
   OrganizationCannotTransactError,
 } from '@endora-commerce/contracts';
-import { HttpError } from '@endora-commerce/platform/http';
+import { HttpError, productAudienceOf } from '@endora-commerce/platform/http';
 import { serializeOrderForCustomer, type CustomerCustomFieldProjection } from './order-response.js';
 import type { OrderService } from './services/order-service.js';
 import type { OrderApiIntakeService } from './services/order-api-intake-service.js';
@@ -157,6 +157,12 @@ export async function registerOrdersExternalRoutes(
           },
           idempotencyKey,
           parsed.data,
+          {
+            language: await request.responseLanguage(),
+            // Feature 163 (W5) — who is asking, off the actor the auth plugin
+            // resolved for this bound key.
+            audience: productAudienceOf(request),
+          },
         );
         reply.status(result.replayed ? 200 : 201);
         return { data: await serializeOrderForCustomer(emFactory(), result.order, deps.customFieldValues) };

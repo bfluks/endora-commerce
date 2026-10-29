@@ -1,10 +1,22 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { Data } from '@puckeditor/core';
-import { firstSlugSegment, slugify as slugifyText, type CmsPageDetail } from '@endora-commerce/contracts';
+import {
+  firstSlugSegment,
+  slugify as slugifyText,
+  type CmsBreadcrumbsScheme,
+  type CmsPageDetail,
+  type CmsPageSummary,
+} from '@endora-commerce/contracts';
 import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader, SaveButtonGroup, Select, Textarea } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
-import { ContentLanguageTabs, ScopePicker, type ScopePickerValue } from '@endora-commerce/admin-kit/components';
+import {
+  AssetFieldPicker,
+  CmsPagePicker,
+  ContentLanguageTabs,
+  ScopePicker,
+  type ScopePickerValue,
+} from '@endora-commerce/admin-kit/components';
 import { PageBuilderEditor } from '../components/PageBuilderEditor.js';
 import {
   emptyPageBuilderData,
@@ -27,6 +39,11 @@ interface FormState {
   metaTitle: string;
   metaDescription: string;
   metaKeywords: string;
+  parentPageId: string | null;
+  breadcrumbsVisible: boolean;
+  breadcrumbsScheme: CmsBreadcrumbsScheme;
+  /** Feature 163 (FR-033) — `null` means the deployment default applies. */
+  shareImageAssetId: string | null;
 }
 
 const blankForm: FormState = {
@@ -37,7 +54,48 @@ const blankForm: FormState = {
   metaTitle: '',
   metaDescription: '',
   metaKeywords: '',
+  parentPageId: null,
+  breadcrumbsVisible: true,
+  breadcrumbsScheme: 'light',
+  shareImageAssetId: null,
 };
+
+/** Spelled out rather than built, so every label key is a literal a key check can find. */
+const BREADCRUMB_SCHEME_LABEL_KEYS: ReadonlyArray<[CmsBreadcrumbsScheme, string]> = [
+  ['light', 'pageEditor.breadcrumbs.scheme.light'],
+  ['muted', 'pageEditor.breadcrumbs.scheme.muted'],
+  ['dark', 'pageEditor.breadcrumbs.scheme.dark'],
+];
+
+/**
+ * The page and every page below it, from the rows the editor has seen — what
+ * a parent picker must not offer (feature 163, FR-032). Best effort by
+ * design: the list is bounded, and the `cms_page.update` Command refuses a
+ * cycle whatever the client offered.
+ */
+function pageAndDescendantIds(
+  pageId: string,
+  rows: ReadonlyArray<Pick<CmsPageSummary, 'id' | 'parentPageId'>>,
+): string[] {
+  const children = new Map<string, string[]>();
+  for (const row of rows) {
+    if (!row.parentPageId) continue;
+    const list = children.get(row.parentPageId) ?? [];
+    list.push(row.id);
+    children.set(row.parentPageId, list);
+  }
+  const out = new Set<string>([pageId]);
+  const queue = [pageId];
+  while (queue.length > 0) {
+    const next = queue.shift()!;
+    for (const child of children.get(next) ?? []) {
+      if (out.has(child)) continue;
+      out.add(child);
+      queue.push(child);
+    }
+  }
+  return [...out];
+}
 
 /**
  * Build a URL slug from a free-text page name (so Polish `Łatwy poradnik` gives
@@ -87,6 +145,10 @@ export function PageEditor(): ReactNode {
    * refusal is worse than no warning.
    */
   const [reservedSegments, setReservedSegments] = useState<readonly string[]>([]);
+  /** The stored parent's name, so the picker shows it before any search. */
+  const [parentLabel, setParentLabel] = useState('');
+  /** The rows the parent picker must not offer: this page and its descendants. */
+  const [excludedParentIds, setExcludedParentIds] = useState<readonly string[]>([]);
 
   const load = useCallback(async () => {
     if (isNew || !id) return;
@@ -101,9 +163,28 @@ export function PageEditor(): ReactNode {
       metaTitle: loaded.meta?.['en-US']?.title ?? '',
       metaDescription: loaded.meta?.['en-US']?.description ?? '',
       metaKeywords: loaded.meta?.['en-US']?.keywords ?? '',
+      parentPageId: loaded.parentPageId ?? null,
+      breadcrumbsVisible: loaded.breadcrumbsVisible ?? true,
+      breadcrumbsScheme: loaded.breadcrumbsScheme ?? 'light',
+      shareImageAssetId: loaded.shareImageAssetId ?? null,
     });
     setScope({ salesChannelIds: loaded.salesChannelIds, languages: loaded.languages });
     setActiveLanguage(loaded.languages[0] ?? null);
+    setExcludedParentIds([loaded.id]);
+    // Both reads only refine the picker; a failure leaves it usable, and the
+    // server still refuses a cyclic parent on Save.
+    if (loaded.parentPageId) {
+      void cmsClient
+        .getPage(loaded.parentPageId)
+        .then((parent) => setParentLabel(parent.name))
+        .catch(() => setParentLabel(''));
+    } else {
+      setParentLabel('');
+    }
+    void cmsClient
+      .listPages()
+      .then((list) => setExcludedParentIds(pageAndDescendantIds(loaded.id, list.data)))
+      .catch(() => undefined);
   }, [id, isNew]);
 
   useEffect(() => {
@@ -158,6 +239,8 @@ export function PageEditor(): ReactNode {
     setDraftData(null);
     setLanguageContentOverrides({});
     setSlugEdited(false);
+    setParentLabel('');
+    setExcludedParentIds([]);
     setError(null);
   }, [isNew, id]);
 
@@ -208,6 +291,10 @@ export function PageEditor(): ReactNode {
         salesChannelIds: scope.salesChannelIds,
         languages: scope.languages,
         ...(meta ? { meta } : {}),
+        parentPageId: form.parentPageId,
+        breadcrumbsVisible: form.breadcrumbsVisible,
+        breadcrumbsScheme: form.breadcrumbsScheme,
+        shareImageAssetId: form.shareImageAssetId,
       });
     }
 
@@ -220,6 +307,10 @@ export function PageEditor(): ReactNode {
       salesChannelIds: scope.salesChannelIds,
       languages: scope.languages,
       ...(meta ? { meta } : {}),
+      parentPageId: form.parentPageId,
+      breadcrumbsVisible: form.breadcrumbsVisible,
+      breadcrumbsScheme: form.breadcrumbsScheme,
+      shareImageAssetId: form.shareImageAssetId,
       version: page.version,
     });
   };
@@ -444,6 +535,75 @@ export function PageEditor(): ReactNode {
               </div>
             </CardContent>
           </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">{t('pageEditor.breadcrumbs.title')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="space-y-1">
+                <Label htmlFor="cms-page-parent">{t('pageEditor.breadcrumbs.parent')}</Label>
+                <CmsPagePicker
+                  id="cms-page-parent"
+                  value={form.parentPageId}
+                  onChange={(parentPageId) => {
+                    setForm((f) => ({ ...f, parentPageId }));
+                    if (!parentPageId) setParentLabel('');
+                  }}
+                  excludeIds={excludedParentIds}
+                  selectedLabel={parentLabel}
+                  placeholder={t('pageEditor.breadcrumbs.parentPlaceholder')}
+                  ariaLabel={t('pageEditor.breadcrumbs.parent')}
+                />
+                <p className="text-xs text-muted-foreground">{t('pageEditor.breadcrumbs.parentHelp')}</p>
+              </div>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.breadcrumbsVisible}
+                  onChange={(event) => setForm({ ...form, breadcrumbsVisible: event.target.checked })}
+                />
+                {t('pageEditor.breadcrumbs.visible')}
+              </label>
+              <div className="space-y-1">
+                <Label htmlFor="cms-page-breadcrumbs-scheme">{t('pageEditor.breadcrumbs.scheme')}</Label>
+                <Select
+                  id="cms-page-breadcrumbs-scheme"
+                  value={form.breadcrumbsScheme}
+                  onChange={(event) =>
+                    setForm({ ...form, breadcrumbsScheme: event.target.value as CmsBreadcrumbsScheme })
+                  }
+                >
+                  {BREADCRUMB_SCHEME_LABEL_KEYS.map(([scheme, labelKey]) => (
+                    <option key={scheme} value={scheme}>
+                      {t(labelKey)}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            </CardContent>
+          </Card>
+          {/* Feature 163 (FR-033): the page's own sharing image; empty falls back to the default. */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">{t('pageEditor.share.title')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1">
+              <Label htmlFor="cms-page-share-image">{t('pageEditor.share.image')}</Label>
+              <AssetFieldPicker
+                id="cms-page-share-image"
+                value={form.shareImageAssetId ?? ''}
+                onChange={(assetId) => setForm((f) => ({ ...f, shareImageAssetId: assetId || null }))}
+                acceptMimePrefix="image/"
+                allowUpload
+                placeholder={t('pageEditor.share.placeholder')}
+                ariaLabel={t('pageEditor.share.image')}
+                chooseLabel={t('pageEditor.share.choose')}
+                changeLabel={t('pageEditor.share.change')}
+                clearLabel={t('pageEditor.share.clear')}
+              />
+              <p className="text-xs text-muted-foreground">{t('pageEditor.share.help')}</p>
+            </CardContent>
+          </Card>
           <ScopePicker value={scope} onChange={setScope} />
         </>
       }
@@ -474,6 +634,8 @@ export function PageEditor(): ReactNode {
           // change (a save) retires its *Restore previous content*.
           resource={{ type: 'cms_page', id: page?.id ?? null }}
           savedVersion={page?.version ?? null}
+          // Feature 163 — the preview wears the brand of the page's first channel.
+          salesChannelId={scope.salesChannelIds[0] ?? null}
           pageContainer
           languages={scope.languages}
           activeLanguage={activeLanguage}

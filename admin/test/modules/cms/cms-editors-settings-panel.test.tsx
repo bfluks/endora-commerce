@@ -240,3 +240,173 @@ describe('the shell copy ships in both languages, in the bundle every consumer l
     expect(pl[`editorLayout.${key}`]).toBeUndefined();
   });
 });
+
+/**
+ * Feature 163 (T081; spec US8, FR-030–FR-032): the page editor's breadcrumb
+ * settings — the parent page, "Show breadcrumbs" and the scheme. The parent
+ * picker is the kit's `CmsPagePicker`; it leaves out the page itself and its
+ * descendants, while the `cms_page.update` Command stays the authority.
+ */
+describe('PageEditor breadcrumb settings (feature 163)', () => {
+  const tree = [
+    { id: 'entity-2', name: 'Edited page', slug: 'edited', status: 'published', parentPageId: 'root-1' },
+    { id: 'child-1', name: 'Child page', slug: 'child', status: 'published', parentPageId: 'entity-2' },
+    { id: 'grandchild-1', name: 'Grandchild page', slug: 'grandchild', status: 'draft', parentPageId: 'child-1' },
+    { id: 'root-1', name: 'Client zone', slug: 'client-zone', status: 'published', parentPageId: null },
+    { id: 'other-1', name: 'Other page', slug: 'other', status: 'published', parentPageId: null },
+  ];
+  const edited = {
+    ...stored,
+    id: 'entity-2',
+    name: 'Edited page',
+    slug: 'edited',
+    parentPageId: 'root-1',
+    breadcrumbsVisible: true,
+    breadcrumbsScheme: 'muted',
+    shareImageAssetId: null,
+  };
+
+  beforeEach(() => {
+    vi.spyOn(apiClient, 'get').mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/sales-channels?')) {
+        return Promise.resolve({ items: [channel], page: 1, pageSize: 100, total: 1 } as never);
+      }
+      if (path.startsWith('/api/v1/admin/sales-channels/')) {
+        return Promise.resolve({ ...channel, languages: ['en-US', 'pl-PL'] } as never);
+      }
+      if (path === '/api/v1/admin/cms/pages/entity-2') return Promise.resolve({ data: edited } as never);
+      if (path === '/api/v1/admin/cms/pages/root-1') {
+        return Promise.resolve({ data: { ...stored, id: 'root-1', name: 'Client zone' } } as never);
+      }
+      if (path === '/api/v1/admin/cms/pages/reserved-segments') {
+        return Promise.resolve({ data: { segments: [] } } as never);
+      }
+      if (path.startsWith('/api/v1/admin/cms/pages')) {
+        return Promise.resolve({ data: tree, nextCursor: null } as never);
+      }
+      return Promise.reject(new Error(`unstubbed read: ${path}`));
+    });
+  });
+
+  function renderEdited(): void {
+    renderWithI18n(
+      <MemoryRouter initialEntries={['/cms/pages/entity-2']}>
+        <Routes>
+          <Route path="/cms/pages/:id" element={<PageEditor />} />
+        </Routes>
+      </MemoryRouter>,
+      { cms: en, core: coreEn },
+    );
+  }
+
+  it('shows the stored parent, visibility and scheme, and saves all three', async () => {
+    const patch = vi.spyOn(apiClient, 'patch').mockResolvedValue({ data: edited } as never);
+    renderEdited();
+    await screen.findByRole('heading', { level: 1, name: 'Edited page' });
+
+    const settings = screen.getByRole('complementary', { name: shell('settings') });
+    expect(within(settings).getByText(copy('pageEditor.breadcrumbs.title'))).toBeTruthy();
+    const parent = within(settings).getByRole('combobox', { name: copy('pageEditor.breadcrumbs.parent') });
+    await waitFor(() => expect((parent as HTMLInputElement).value).toBe('Client zone'));
+
+    const visible = within(settings).getByRole('checkbox', { name: copy('pageEditor.breadcrumbs.visible') });
+    expect((visible as HTMLInputElement).checked).toBe(true);
+    const scheme = within(settings).getByLabelText(copy('pageEditor.breadcrumbs.scheme'));
+    expect((scheme as HTMLSelectElement).value).toBe('muted');
+
+    fireEvent.click(visible);
+    fireEvent.change(scheme, { target: { value: 'dark' } });
+    fireEvent.click(screen.getByRole('button', { name: copy('common.save') }));
+
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+    expect(patch.mock.calls[0]![1]).toMatchObject({
+      parentPageId: 'root-1',
+      breadcrumbsVisible: false,
+      breadcrumbsScheme: 'dark',
+    });
+  });
+
+  it('offers neither the page itself nor its descendants as its parent', async () => {
+    renderEdited();
+    await screen.findByRole('heading', { level: 1, name: 'Edited page' });
+
+    const parent = screen.getByRole('combobox', { name: copy('pageEditor.breadcrumbs.parent') });
+    fireEvent.click(parent);
+
+    expect(await screen.findByRole('option', { name: /Other page/ })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /Client zone/ })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /Edited page/ })).toBeNull();
+    expect(screen.queryByRole('option', { name: /^Child page/ })).toBeNull();
+    expect(screen.queryByRole('option', { name: /Grandchild page/ })).toBeNull();
+  });
+
+  /**
+   * Feature 163 (T084; spec US9, FR-033): the page's sharing image, through the
+   * kit's asset picker. Cleared, it is saved as `null` and the deployment
+   * default applies.
+   */
+  it('shows the stored sharing image and saves it, and saves null once cleared', async () => {
+    const withImage = { ...edited, shareImageAssetId: '00000000-0000-4000-8000-0000000000a1' };
+    const read = apiClient.get as unknown as { getMockImplementation(): ((path: string) => Promise<unknown>) | undefined };
+    const fallback = read.getMockImplementation()!;
+    vi.spyOn(apiClient, 'get').mockImplementation(((path: string) => {
+      if (path === '/api/v1/admin/cms/pages/entity-2') return Promise.resolve({ data: withImage });
+      if (path === `/api/v1/admin/assets/${withImage.shareImageAssetId}`) {
+        return Promise.resolve({ data: { id: withImage.shareImageAssetId, label: 'Launch banner', filename: 'banner.png' } });
+      }
+      return fallback(path);
+    }) as never);
+    const patch = vi.spyOn(apiClient, 'patch').mockResolvedValue({ data: withImage } as never);
+    renderEdited();
+    await screen.findByRole('heading', { level: 1, name: 'Edited page' });
+
+    const settings = screen.getByRole('complementary', { name: shell('settings') });
+    expect(within(settings).getByText(copy('pageEditor.share.title'))).toBeTruthy();
+    const field = within(settings).getByRole('textbox', { name: copy('pageEditor.share.image') });
+    await waitFor(() => expect((field as HTMLInputElement).value).toBe('Launch banner'));
+
+    fireEvent.click(screen.getByRole('button', { name: copy('common.save') }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch.mock.calls[0]![1]).toMatchObject({ shareImageAssetId: withImage.shareImageAssetId });
+
+    fireEvent.click(within(settings).getByRole('button', { name: copy('pageEditor.share.clear') }));
+    fireEvent.click(screen.getByRole('button', { name: copy('common.save') }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+    expect(patch.mock.calls[1]![1]).toMatchObject({ shareImageAssetId: null });
+  });
+
+  it('ships every sharing-image label in both languages, translated', () => {
+    for (const key of [
+      'pageEditor.share.title',
+      'pageEditor.share.image',
+      'pageEditor.share.placeholder',
+      'pageEditor.share.help',
+      'pageEditor.share.choose',
+      'pageEditor.share.change',
+      'pageEditor.share.clear',
+    ]) {
+      expect(en[key], key).toBeTruthy();
+      expect(pl[key], key).toBeTruthy();
+      expect(pl[key], key).not.toBe(en[key]);
+    }
+  });
+
+  it('ships every breadcrumb label in both languages, translated', () => {
+    const keys = [
+      'pageEditor.breadcrumbs.title',
+      'pageEditor.breadcrumbs.parent',
+      'pageEditor.breadcrumbs.parentHelp',
+      'pageEditor.breadcrumbs.parentPlaceholder',
+      'pageEditor.breadcrumbs.visible',
+      'pageEditor.breadcrumbs.scheme',
+      'pageEditor.breadcrumbs.scheme.light',
+      'pageEditor.breadcrumbs.scheme.muted',
+      'pageEditor.breadcrumbs.scheme.dark',
+    ];
+    for (const key of keys) {
+      expect(en[key], key).toBeTruthy();
+      expect(pl[key], key).toBeTruthy();
+      expect(pl[key], key).not.toBe(en[key]);
+    }
+  });
+});

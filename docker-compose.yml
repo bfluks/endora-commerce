@@ -42,6 +42,40 @@ services:
       timeout: 5s
       retries: 10
 
+  # A Postgres for the backend test suite only, behind the `test` profile so
+  # `pnpm run dev:infra` never starts it: `pnpm run dev:infra:test` does. It
+  # trades durability for speed — fsync, synchronous commit and full-page writes
+  # are off and the data directory is a tmpfs — which is right for databases the
+  # suite creates, truncates and drops thousands of times and wrong for anything
+  # else, so nothing but `TEST_DATABASE_URL` should ever point at it. Its data
+  # does not survive the container. See `specs/conventions/backend-test-suite.md`.
+  postgres-test:
+    image: postgres:16-alpine
+    profiles: ['test']
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - max_connections=300
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-b2b}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-b2b}
+      POSTGRES_DB: ${POSTGRES_USER:-b2b}
+    ports:
+      - '${POSTGRES_TEST_PORT:-5441}:5432'
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-b2b}']
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
   redis:
     image: redis:7-alpine
     command: ['redis-server', '--appendonly', 'yes']

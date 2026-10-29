@@ -1,5 +1,192 @@
 # @endora-commerce/mod-customer-accounts
 
+## 0.108.0
+
+### Minor Changes
+
+- 14bcf1d: Feature 160 (D-287 P1) on the edges of pricing.
+
+  - **customer_accounts** — demo data of its own: the _VIP_ customer group (code `demo-vip`) of the owner's E3 pricing scenario; `demo reset` withdraws it by its code.
+  - **import_export** — the products import refuses a file carrying a `default_price`, `defaultPrice`, `price`, `price_override` or `priceOverride` column with `400 PRICE_SET_IN_PRICE_BOOKS` and imports nothing: a product has no price of its own, so the column would otherwise be dropped without a word. Adapters may declare such columns with the new `refusedHeader`.
+  - **demo-composition** — the price-list backfill step (`DefaultPriceListMigrator` over each product's `defaultPrice`) is replaced by _base prices and price books over the demo catalogue_, which calls `price_lists`' `seedDemoPriceBooks` with the demo's ids, and _demo organisation joins the VIP customer group_; the `color` attribute is flagged as a price-rule attribute.
+
+### Patch Changes
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [8d62ff8]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+  - @endora-commerce/mod-organizations@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- bf9881f: `customerAccountAdminSearchPort.search` honours the two new optional criteria of
+  `CustomerAccountAdminSearchCriteria`: `qFields` matches `q` only against the e-mail and/or the first
+  and last name, literally, ordered by an exact e-mail, then one starting with `q`, then the most recent
+  change; `excludeDeleted` leaves out deleted and anonymized accounts. Without either, the search — and
+  the admin Customers list built on it — behaves exactly as before.
+- ac24f80: Customer password sign-in follows the sales-channel assignment of the customer's Organization.
+  After a correct password and a non-blocked account, a sign-in on a channel the Organization is not
+  assigned to answers 403 `SALES_CHANNEL_NOT_PERMITTED` with `details.channelCode`, and sets no
+  cookie, creates no session, starts no second factor and leaves `lastLoginAt` unchanged. A wrong
+  password is still answered 401 first. This holds with the `mfa` module switched off.
+
+  Individual self-registration assigns the new personal Organization the channel of the store the
+  visitor registered on. An account created by a federated sign-in does the same:
+  `customerSocialLoginPort.autoCreate(email, { salesChannelId })` takes the channel the sign-in was
+  started on, which `mfa` carries in the OAuth transaction, and gives the new personal Organization
+  exactly that channel, so the session issued next is accepted there. Without a channel the system
+  default applies.
+
+### Patch Changes
+
+- 1525d86: Customer sign-in, the customer second factor and password-reset requests are now limited per
+  account, the way administrator sign-in already was.
+
+  - `@endora-commerce/platform/kernel` publishes `AuthenticationAttemptThrottle`, the attempt
+    counter administrator sign-in used, with the profile types an owner of accounts builds one
+    over (`AttemptThrottleProfile`, `AttemptPolicy`, `AttemptCounterStore`, `ThrottledAttempt`,
+    `ThrottledCheckResult`, `ThrottledCredentialState`) and `ADDRESS_POLICY`, `ACCOUNT_POLICY`,
+    `ABANDONED_AFTER_SECONDS`, `DEFAULT_STORE_DEADLINE_MS`, `addressOrigin`. `admin_users`' own
+    throttle is now a profile over it; its keys, cookie values, codes and audit rows are unchanged.
+  - `@endora-commerce/contracts` adds `CustomerAuthenticationThrottlePort` (container name
+    `customerAuthenticationThrottlePort`, owner `customer_accounts`) with
+    `CustomerAuthenticationAttempt`, `CustomerAuthenticationCheckResult`,
+    `CustomerAuthenticationOrigin` and `CustomerAuthenticationFactor`; the error codes
+    `CUSTOMER_AUTHENTICATION_THROTTLED` (429, with `Retry-After`) and
+    `CUSTOMER_AUTHENTICATION_UNAVAILABLE` (503); the cookie name
+    `CUSTOMER_KNOWN_DEVICE_COOKIE_NAME` (`b2b_customer_device`) and its lifetime. Optional
+    additions: `CustomerLoginInput.knownDevice`, `CustomerLoginResult.knownDevice`, and a second
+    `context` argument on `CustomerPasswordResetPort.requestReset`.
+  - `customer_accounts` counts wrong passwords per folded e-mail address (50 in 30 minutes from a
+    device the account has not signed in on, 10 from a known one), and password-reset requests per
+    address (5 an hour). There is no per-address counter: the storefront signs shoppers in from its
+    own server. A completed sign-in sets the signed `b2b_customer_device` cookie, and an attempt
+    carrying it is held to that device's own budget. Asking for a new reset link retires the
+    earlier unused ones.
+  - `mfa` checks customer second-factor codes inside the customer throttle (20 in 30 minutes,
+    10 from a known device) and sets the customer known-device cookie when a customer sign-in
+    completes there.
+  - `organizations` reads and sets the customer known-device cookie on
+    `POST /api/v1/auth/customer/login` and reads it on `POST /api/v1/auth/password-reset/request`.
+
+- 30c61d9: Two ports answer more about the account they read:
+
+  - `customerSocialLoginPort.resolveByEmail` answers `{ id, organizationId, blocked }` (was `{ id }`), and `autoCreate` answers `{ id, organizationId }`. A blocked account is still returned — it is the account the address belongs to — so federated sign-in refuses it instead of creating a second one.
+  - `customerOrgResolver` answers `{ organizationId, active }`, or `null` for an account that does not exist (was the organisation id, or `null`). `active` is `false` for a blocked or deleted account. Its one consumer is `@endora-commerce/mod-auth`'s request hook; upgrade the two packages together.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [ac24f80]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [649fe8d]
+- Updated dependencies [248a9df]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+  - @endora-commerce/mod-organizations@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
 import { LlmProviderSchema } from './prompt-actions.js';
+import { cmsBrandTokensSchema } from './cms-brand.js';
 
 // ────────────────────────────────────────────────────────────────────
 // Domain primitives
@@ -50,8 +51,18 @@ export const cmsPageSummarySchema = z.object({
   version: z.number().int(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
+  /**
+   * The breadcrumb parent (feature 163, FR-030). On the list too, so the
+   * editor's parent picker can leave out the page's own descendants; the
+   * `cms_page.update` Command stays the authority (`CMS_PAGE_PARENT_CYCLE`).
+   */
+  parentPageId: uuidSchema.nullable(),
 });
 export type CmsPageSummary = z.infer<typeof cmsPageSummarySchema>;
+
+/** The breadcrumb colour scheme of a page (feature 163, FR-031). */
+export const cmsBreadcrumbsSchemeSchema = z.enum(['light', 'muted', 'dark']);
+export type CmsBreadcrumbsScheme = z.infer<typeof cmsBreadcrumbsSchemeSchema>;
 
 export const cmsPageDetailSchema = cmsPageSummarySchema.extend({
   meta: z
@@ -65,6 +76,10 @@ export const cmsPageDetailSchema = cmsPageSummarySchema.extend({
     )
     .nullable(),
   content: cmsContentEnvelopeSchema,
+  breadcrumbsVisible: z.boolean(),
+  breadcrumbsScheme: cmsBreadcrumbsSchemeSchema,
+  /** The page's sharing image, an `assets_library` asset id (feature 163, FR-033). */
+  shareImageAssetId: uuidSchema.nullable(),
 });
 export type CmsPageDetail = z.infer<typeof cmsPageDetailSchema>;
 
@@ -85,6 +100,12 @@ export const createCmsPageRequestSchema = z.object({
       }),
     )
     .optional(),
+  // Feature 163 (`contracts/storefront-and-admin-api.md` §2): optional on
+  // create and patch alike; an absent key leaves the column's default or value.
+  parentPageId: uuidSchema.nullable().optional(),
+  breadcrumbsVisible: z.boolean().optional(),
+  breadcrumbsScheme: cmsBreadcrumbsSchemeSchema.optional(),
+  shareImageAssetId: uuidSchema.nullable().optional(),
 });
 export type CreateCmsPageRequest = z.infer<typeof createCmsPageRequestSchema>;
 
@@ -461,6 +482,13 @@ export const cmsPageBuilderDescriptorSchema = z.object({
   schemaVersion: z.number().int(),
   breakpoints: pageBuilderBreakpointsSchema.optional(),
   colorPalette: cmsColorPaletteSchema.optional(),
+  /**
+   * Feature 163 (research R-4) — the effective brand tokens for the channel the
+   * editor previews (`?salesChannelId=`), else the global set, so the canvas
+   * renders as the storefront does. Optional on the wire: a consumer reading
+   * only the earlier fields keeps working.
+   */
+  brandTokens: cmsBrandTokensSchema.optional(),
   components: z.array(
     z.object({
       name: z.string(),
@@ -541,6 +569,28 @@ export const cmsResolvedPageSchema = z.object({
     templates: z.record(z.string(), cmsResolvedTemplateSchema),
   }),
   assets: z.record(uuidSchema, cmsAssetEmbedResolutionSchema),
+  /**
+   * The breadcrumb trail for the request's channel (feature 163, data-model §5):
+   * root-first, without Home and without the page itself. An ancestor the
+   * channel does not serve, published and active, carries `slug: null` and
+   * renders as text (FR-030a).
+   */
+  breadcrumbs: z.object({
+    visible: z.boolean(),
+    scheme: cmsBreadcrumbsSchemeSchema,
+    trail: z.array(z.object({ name: z.string(), slug: z.string().nullable() })),
+  }),
+  /**
+   * The sharing image (feature 163, FR-033): the page's own
+   * `shareImageAssetId`, else `cms.default_share_image_asset_id` read for the
+   * request's channel, else `null`. A public URL, ready for `og:image`.
+   */
+  share: z.object({ imageUrl: z.string().nullable() }),
+  /**
+   * The languages this page can be served in (feature 163, FR-034), for
+   * `og:locale:alternate`. Includes the served `language`.
+   */
+  languages: z.array(z.string()),
 });
 export type CmsResolvedPage = z.infer<typeof cmsResolvedPageSchema>;
 
@@ -701,6 +751,8 @@ export interface CmsPageRecord {
   archivedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  /** The breadcrumb parent (feature 163). Never part of the page's URL. */
+  parentPageId: string | null;
 }
 
 /**

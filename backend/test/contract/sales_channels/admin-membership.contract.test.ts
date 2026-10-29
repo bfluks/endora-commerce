@@ -62,7 +62,7 @@ describe('admin membership routes (Phase 5b)', () => {
       sku: `5B-${slug.toUpperCase()}-${randomUUID().slice(0, 4)}`,
       slug,
       type: 'simple',
-      status: 'draft',
+      status: 'inactive',
       name: { en: slug },
       description: { en: 'fixture' },
       visibility: 'public',
