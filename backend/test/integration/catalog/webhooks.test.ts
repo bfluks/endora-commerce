@@ -377,10 +377,13 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     const product = await createProduct();
     await storeWebhookSubscription(h, CATALOG_WEBHOOK_EVENT_TYPES);
     capture.clear();
+    // Scoped to this product: a late emission from an earlier case's product
+    // (the one above delays its commit by a second) may land in the window
+    // below and is not this write's (ci-pg/163-final11 went red on exactly that).
     const emitted: string[] = [];
     const offs = [PRODUCT_UPDATED, PRODUCT_ARCHIVED].map((eventType) =>
-      h.eventBus.on(eventType as never, () => {
-        emitted.push(eventType);
+      h.eventBus.on(eventType as never, (payload: unknown) => {
+        if ((payload as { productId?: string }).productId === product.id) emitted.push(eventType);
       }),
     );
     try {
@@ -392,7 +395,7 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
       offs.forEach((off) => off());
     }
     expect(emitted).toEqual([]);
-    expect(capture.jobs).toEqual([]);
+    expect(jobsFor(product.id)).toEqual([]);
     expect((await readProduct(product.id))?.status).not.toBe('inactive');
   });
 
