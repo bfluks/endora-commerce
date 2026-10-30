@@ -153,7 +153,7 @@ export interface CartsDeps {
    * (channel, language), outside its window or outside its audience reads as
    * a product with no record.
    */
-  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveNames' | 'effectiveOrderRules'>;
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveTexts' | 'effectiveOrderRules'>;
   /** Feature 163 (T113a, R28) — the effective URL key per channel language, for the lines' links. */
   catalogUrlKeys: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>;
   /**
@@ -290,7 +290,7 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
     });
     // Feature 163 (FR-017 d) — each line named as the storefront shows the
     // product in this basket's (channel, language), not in the baseline alone.
-    const effectiveNames = await deps.catalogAvailability.effectiveNames(
+    const effectiveTexts = await deps.catalogAvailability.effectiveTexts(
       records.map((p) => p.id),
       {
         channelId: actor.salesChannelId,
@@ -304,7 +304,7 @@ export async function registerCartRoutes(app: FastifyInstance, deps: CartsDeps):
       records,
       preferredLanguage,
       new Set(products.map((p) => p.id)),
-      effectiveNames,
+      new Map([...effectiveTexts].map(([id, text]) => [id, text.name])),
       await effectiveKeysAt(
         deps.catalogUrlKeys,
         products.map((p) => p.id),
