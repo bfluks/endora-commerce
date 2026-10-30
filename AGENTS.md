@@ -290,5 +290,6 @@ See "Repo map" above.
 
 ## Recent Changes
 - 169-page-builder-contact-form
+- 168-product-editor-scope-switcher
 - 166-asset-reference-visibility
 - 167-storefront-locale-path
