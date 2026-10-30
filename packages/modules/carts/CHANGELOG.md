@@ -1,5 +1,263 @@
 # @endora-commerce/mod-carts
 
+## 0.108.0
+
+### Minor Changes
+
+- 0bd5a2b: The cart enforces minimum order quantities and adds lines in batches.
+
+  - **Behaviour change for API clients — add and edit are refused below a minimum.** `POST /api/v1/cart/items` and `PATCH /api/v1/cart/items/:itemId` judge the cart as the change would leave it (the product's total over every line and variant) and refuse with `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`, message in the buyer's language, nothing written. An edit to `0` and `DELETE` still remove the line. Editing a line whose product no longer exists answers `404 PRODUCT_NOT_FOUND`.
+  - **Cart view.** `GET /api/v1/cart` gives each line `minOrderQuantity` and `belowMinimum` (`{ kind, minimum, packagingUnitName? }` or `null`). A line whose product record was hard-deleted is reported `unavailable: true` (`unavailableReason: 'not_purchasable'`). **If the catalogue cannot be read the view now answers `5xx`** instead of a cart without these flags. `?view=mini` is unchanged.
+  - **Behaviour change for API clients — submit for approval is refused below a minimum.** `POST /api/v1/cart/submit-for-approval` now judges the basket as placement judges it and refuses a basket with a line below a minimum with `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` (every offending line in `details.lines` with its `cartItemId`, message in the request's language), or a line whose product no longer exists with `404 PRODUCT_NOT_FOUND` (`details.cartItemIds`); the cart stays `not_required`. A basket that cannot be ordered can no longer be sent for approval. **A quote-seeded line is exempt at submit only once its quote is confirmed still valid** — the submitter's organization's, `Approved`, not expired, not yet ordered, an agreed line still on the basket — through `mod-orders`' new `orderQuoteSourcePort`, the checkout preview's check; while `quote_requests` is off nothing is exempt. A basket whose quote has lapsed is therefore refused at submit although the cart view, which trusts the quote mark, does not flag it. `CartApprovalService` takes the catalogue read port and the `OrderQuoteSourcePort` as new constructor arguments, before the optional e-mail dispatch.
+  - **Quote-seeded exemption, by state.** A line seeded from an accepted quote request is exempt from the minimums while its quantity equals the quote's — the quantity its agreed price holds at (`cart_items.agreed_quantity`; no new column); changing it makes it an ordinary line until it is set back. The cart takes the mark at face value; checkout and placement in `mod-orders` confirm the quote is still valid.
+  - **Batch add: `CartWritePort.addItems`** (and `CartService.addItems`), up to 200 lines per call. Every line is resolved first with the single add's checks, then the resolved lines are judged together with the cart and only those that pass are added; the rest come back as `below_minimum` or `failed` outcomes. With `onLineError: 'throw'`, **a batch with an unknown or hidden product now fails before any line is added**.
+  - **Batch add modes.** `addItems` takes `onBelowMinimum: 'throw'` — any line below a minimum refuses the whole batch with `422 PRODUCT_BELOW_MINIMUM_QUANTITY` / `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` (`details.lines[]` by `index`) before anything is written — and `replaceExisting` (customers only, and only with `onLineError: 'throw'`), which judges the batch alone and clears the customer's active cart only after it has passed — with `onLineError: 'throw'`, after the write step's own pricing refusals (`CART_PRODUCT_UNPRICED`, `CART_PRODUCT_QUOTE_ONLY`) have been judged too — so a refused request leaves the basket exactly as it was.
+  - **Behaviour change for API clients — product names follow the response language.** Minimum refusals and the cart view's line names use the language the response is answered in (`request.responseLanguage()`: the q-sorted `Accept-Language`, else the channel's default language), so `Accept-Language: en;q=0.2,pl;q=0.9` now names products in Polish, like the sentence around them. A `GET /api/v1/cart` without `Accept-Language` now names lines in the channel's default language, not English.
+  - **Quote request → cart** now adds the quote's lines as one batch. A line below a product's minimum is dropped with reason `below_minimum` and its `minimum` (it was reported as `no_price_in_customer_list`); a product the buyer may no longer see is dropped as `not_purchasable`.
+  - **Cart → quote request** sends each line's `packagingUnitId`; a line whose unit has since been deleted is sent as plain pieces.
+
+- 897a759: Baskets can hold one product on several lines when an order is created for a customer.
+
+  - **`addItems` `keepRepeatedLines`** (with `replaceExisting` only): every line of the batch is written as a line of its own — a repeated product, variant and packaging unit is not merged into the first — priced at its own quantity, and created in batch order a millisecond apart. Minimums are still judged on a product's total across the batch. The admin order creation uses it to place one product on lines of several groups (feature 159).
+  - **Deterministic basket order.** `replaceItemsForCustomer` creates its lines a millisecond apart in seed order, and the placement read of the basket (`readActiveForPlacement`) now orders the lines by creation time like every other basket read — it carried no order before, so an order placed from a seeded basket could list its lines in any order.
+
+- 14bcf1d: Every consumer prices on price books (feature 160, D-287 P1), through the one batched resolution chain.
+
+  - **carts** — `cart_items.price_source` (migration `…_carts_cart_items_price_source`) records which tier priced a line (`agreed | base | catalogue | buyer | sale`). `CartLinePricing.orderablePrices` drops the product's own price step, passes the variant, and stores the source.
+  - **orders** — `order_items.price_source` (migration `…_orders_order_items_price_source`) is copied from the cart line at placement. The admin order preview and the external order intake price through `resolveLinePrices` instead of one `resolveLinePrice` per line; a line no price book prices is refused, with no `defaultPrice` fallback.
+  - **organizations** — the effective price lists of an organization are its effective **price books**: `PriceListReadPort.listForOrganization({ organizationChain, customerGroupId })` answers the books whose audience holds the organization, an ancestor or its group, each with `reason` and `depth`. Old: `listActive()` plus `evaluateApplicationRule` per list. New: one `listForOrganization` call.
+  - **product_feeds** — a feed pinned to a price book publishes that book's rows over the channel's catalogue price (`namedListPrices` takes the feed's `salesChannelId`); a product the book does not price is absent.
+  - **search** — hits and suggestions price through the batched listing resolution; suggestions pass the request currency.
+  - **quote_requests** — reference prices are resolved in the request's currency; the RFQ create prefill and the reference probe call `POST /api/v1/admin/price-books/resolve` instead of `GET /api/v1/admin/products/:id/resolved-price`.
+
+- 61a1188: A reorder reports the lines that no longer have a price (issue #166).
+
+  - **Behaviour change — reorder.** `POST /api/v1/orders/:id/reorder` and the admin reorder seed every line at the price the buyer may order it at now, and leave out a line nothing prices for this buyer (or that is sold on request only), reporting it in `unavailableItems` with `reason: 'no_price'` beside the discontinued products. Such a line used to be seeded at the old order's price without being reported, and placement then refused the basket.
+  - **`CartSeedOptions.dropUnorderable`** (contracts): `CartWritePort.replaceItemsForCustomer` leaves out the seed lines that have no orderable price and names them in the answer's new optional `unorderable` (`CartSeedUnorderableLine[]`: `productId`, `variantId`, `reason: 'unpriced' | 'quote_only'`). Ignored for an agreed seed. Absent, behaviour is unchanged.
+  - **`CartService.repriceLinesForCustomer`** (carts) now answers the lines it could not price, by cart item id, with the reason; it still prices them all in one batched call.
+
+- 9fbb437: Cart pricing is batched, on the customer's own group, and in the basket's currency (D-287 P0).
+
+  - **Batched.** `CartLinePricing` takes `LinePricesPort` and gains `orderablePrices(ctx, lines)`; a basket's lines are priced in one `resolveLinePrices` call on the login/reorder reprice, the batch add and the placement price-drift check (each was one `resolveLinePrice` per line). `CartPricingRecompute` (the `GET /api/v1/cart` re-pricing) takes `LinePricesPort` and resolves every line in one call. `CartService`'s `pricingService` is now `LinePricesPort`.
+  - **Customer group.** `CartLinePricing.contextFor` and `CartPricingRecomputeContext` accept `customerAccountId`; adds, quantity changes, the read re-pricing and the placement check price on the customer's own group.
+  - **Behaviour change — currency of the own-price fallback.** A line priced from the product's own `defaultPrice` attribute is labelled with the basket channel's default currency, as the catalogue listing labels it; it was hard-coded `PLN` (issue #303's cart half). A basket whose channel no longer exists is now unpriced for such a product instead of being priced in `PLN`.
+  - **Behaviour change — `GET /api/v1/cart` shows the price placement charges (issue #168).** The read re-prices every line through `CartLinePricing.orderablePrices`, the chain order placement's price-drift check runs, instead of a plain list price per line: a line seeded from an accepted quote shows its agreed price at the agreed quantity (it showed the list price), a product priced only by its own price attribute shows that price (it showed its stored snapshot), and a line placement would refuse — sold on request only, no price for this buyer, product gone — reads `unavailable: true` with `unavailableReason` `not_purchasable` / `no_price_in_customer_list` at its stored price (it read as orderable). Still one batched pricing call per read. `CartPricingRecompute`'s constructor now takes `(emFactory, linePricing: CartLinePricing, cache, catalogProducts)`; `RecomputeLineRequest` gains `agreed`, `RecomputedLinePrice` gains `refusal`, and cached entries carry it.
+
+- 9b02fe7: A cart line carries its unit price at four decimal places, unrounded (owner ruling of 2026-10-25). The resolver's amount, an agreed quote price and a recomputed price are stored as `numeric(14,4)` (`cart_items.unit_price`, `recomputed_unit_price`, `agreed_unit_price`, widened by `Migration20261025T031727CartsUnitPriceFourPlaces`) instead of being rounded to two places half-up at intake; only the line value, `unit price × quantity`, is rounded to two. A screw priced 0.0125 was charged 0.01, so 10 000 pieces cost 100.00 instead of 125.00. Placement compares the stored price with the current one at four places, so a line priced at two places before the upgrade whose price has sub-cent places is repriced before it is ordered. The cart's string unit prices (`CartReadPort`, the placement drift's `storedUnitPrice`) are four-place decimal strings.
+
+### Patch Changes
+
+- 8d62ff8: Documentation only (feature 160, FR-048): the module pages describe how prices are determined with price books.
+
+  - `price_lists` ships three pages instead of one: _Price books_ (what a book is, base prices, the four resolution steps, the default precedence, variants, where prices appear, the demo's worked examples, permissions, known limitations and a migration note), _The price-book editor_ (every admin screen) and _Pricing for developers_ (data model, resolver, the batched read path, caching, the price surface, the admin and storefront API, the ports and the conversion from the old model).
+  - The pages of `catalog`, `carts`, `orders`, `organizations`, `product_feeds`, `quick_order`, `quote_requests` and `search` describe their prices as resolved from price books, with no product-owned price and no fallback. No code changes.
+
+- 6865b14: Pricing strings (feature 160): the product editor's _Pricing_ tab label is translated (`productEditor.tab.pricing`, _Ceny_ in Polish); `price_lists`' Polish hint names the attribute flag _Reguły cennika_, as the catalogue's attribute screen does; a comment on the cart read's pricing chain no longer describes a product price of its own.
+- 87ac085: A price is rounded to two places the same way everywhere: half-up on its decimal digits.
+
+  - **`@endora-commerce/contracts`.** New `roundAmountHalfUp(value: string | number): string` — an amount at two places, half-up on its decimal digits (half away from zero when negative). A number is read as the shortest decimal that round-trips it.
+  - **`@endora-commerce/mod-carts`.** The basket line stores the resolver's four-place amount through `roundAmountHalfUp`, and the placement drift check (`storedPriceDiffers`) compares with it. `Number(amount).toFixed(2)` rounded the binary double, so a 9.0450 price was stored and charged as 9.04 while the card showed 9.05, and 1.0050 as 1.00 against 1.01.
+  - **`@endora-commerce/mod-orders`.** The admin order preview rounds its line prices the same way.
+  - **`@endora-commerce/mod-quote-requests`.** A quote line's stored reference price is rounded the same way.
+  - **`@endora-commerce/mod-product-feeds`.** Feed prices (`123.45 PLN`) are rounded the same way.
+
+- fd4b8db: Cart amounts are computed in exact decimal arithmetic (issue #417): a line's `lineTotal`, the `subtotal` and the `grandTotal` of the cart view and the mini cart, the admin and organization cart totals, and the coupon minimum-spend check and its `shortfall`. On doubles, 3 × 9.05 was published as `27.150000000000002`, and a subtotal a binary residue below a coupon's minimum dropped the coupon. Each amount is still a number, now always the two-place decimal itself. New `services/cart-money.ts` (`cartLineAmount`, `cartSubtotal`, `cartTotalAfterDiscount`, `cartShortfall`).
+- 24c2005: `cartTotalsByCart` groups the lines by cart in linear time (issue #417, review of PR #423).
+- 849ed50: The admin and organization cart lists compute each cart's line count and total with one helper, `cartTotalsByCart`, which groups the lines by cart and sums each cart once, exactly (issue #417, review of PR #423). It replaces a running total folded through a synthetic line, copied in both services.
+- e6f3a78: Unit prices are shown by the one rule of the owner ruling of 2026-10-25: two places when the third and fourth are zero, otherwise the significant places, up to four (`0,0125 zł`, `1,50 zł`, `1,505 zł`); line values and totals keep two.
+
+  - `@endora-commerce/mod-invoices`: the invoice PDF's unit net price column (new `unitMoney` beside `money` in the PDF sections), the admin invoice screen and the template preview.
+  - `@endora-commerce/mod-carts`, `@endora-commerce/mod-customers`: the admin cart and the customer's cart history.
+  - `@endora-commerce/mod-comparisons`: a compared product's price on the screen, the canvas and the PDF (`1.50 PLN`, `0.0125 PLN`), where it was rounded to two places.
+  - `@endora-commerce/mod-crm`: an Opportunity's value of a linked Quote Request adds the quote's line values, each rounded to the cent once, as the quote desk does; it rounded only the sum.
+  - `@endora-commerce/cms-components`: the CMS product card's price; the package now depends on `@endora-commerce/contracts` for the rule.
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- 70bb5e5: Converting a cart into a quote request no longer records the cart's unit prices as the customer's proposed prices. Each cart line's unit price is passed to `RfqCustomerPort.createForCustomer` as that line's reference price instead (`options.lineReferencePrices`), so the resulting quote lines carry no proposal and conversion keeps working for a customer who may not propose prices.
+- 34f97ae: The basket belongs to the sales channel it is used on (`specs/154-sales-channel-access/`, User
+  Story 6). It used to be created on the system-default channel and priced there whatever
+  storefront it was used on.
+
+  - A customer holds one active basket per channel; every storefront cart route addresses the
+    basket of the request's channel, and a line of another channel's basket answers 404.
+  - An anonymous cookie token whose basket is another channel's names no basket on this one: reads
+    answer the empty cart, and the first write replaces the `b2b_cart_anon` cookie with a new token.
+  - Line prices, the "sold on request only" decision, the read-time recompute and the placement
+    price check resolve on the basket's own channel; the system-default fallback is gone.
+  - Merge at sign-in merges the anonymous basket of the sign-in channel into the customer's basket
+    of that channel; an anonymous basket of another channel is left alone (`noop_no_anon`).
+  - `cartPlacementApplyPort.readActiveForPlacement` reads the basket of `ctx.salesChannelId`.
+  - New migration `Migration20261019T043854CartsChannelBackfill` records baskets with no channel on
+    the system-default channel.
+  - Composition-facing API: `CartService.getOrCreateForAnon(em, token, salesChannelId)` returns
+    `Cart | null`; `CartService` methods take a `CartActor` whose customer context carries
+    `salesChannelId`; `CartLinePricing.contextFor` takes `salesChannelId`;
+    `CartShoppingListBridge.appendShoppingListToCart` receives `salesChannelId`.
+
+- 31175b7: `CartsDeps.cartCouponService`, `cartConversionService`, `pushLineToShoppingList` and `appendShoppingListToCart` are required. A composition that left one out made the matching cart route answer `503` with the `NOT_FOUND` code and an untranslated token as its message (`promotions_unavailable`, `quote_requests_unavailable`, `shopping_lists_unavailable`). Those branches are gone. The module's own `registerModule` already wires all four, so a deployment using it sees no change: a cross-module owner that is off still answers `503 MODULE_DISABLED` naming the module, with the translated sentence. Code calling `registerCartRoutes` directly must now pass all four.
+
+### Patch Changes
+
+- 649fe8d: Documentation for sales-channel access (`specs/154-sales-channel-access/`), shipped in each
+  package's `docs/` directory, English and Polish.
+
+  - `@endora-commerce/mod-sales-channels`: the access rule (anonymous visitors only on channels open
+    to them, customers only on channels assigned to their Organization), the _Open to anonymous
+    visitors_ option, `GET /api/v1/storefront/sales-channel/access`, and a corrected multi-storefront
+    section. The developer guide tells module authors to declare
+    `config: { salesChannelAccess: 'open' }` on every provider callback their module receives
+    (payment gateway notifications, carrier webhooks, provider return URLs) — such requests arrive
+    without a session and are refused on a store closed to anonymous visitors otherwise — and
+    describes `SalesChannelAccessPort`.
+  - `@endora-commerce/mod-organizations`: the _Sales channels_ panel, the _New organization_ screen,
+    which channel a new Organization gets, and that invitations change no channel.
+  - `@endora-commerce/mod-carts`: one basket per store, and the `ORDER_SALES_CHANNEL_MISMATCH`
+    refusal at order placement.
+
+- 3d5a203: A product sold on request only is refused by the cart whether or not a price list holds it. `CartService.addItem` read the display mode off the resolved list price, so a product no price list prices — priced from the catalogue attribute — resolved nothing, the `CART_PRODUCT_QUOTE_ONLY` guard was skipped, and `POST /api/v1/cart/items` added the line with `200`. It now answers `400 CART_PRODUCT_QUOTE_ONLY` for it too.
+
+  `@endora-commerce/contracts` publishes `ProductDisplayModePort` — `resolveDisplayMode({ productId, organizationId, salesChannelId, customerKind })` — and `@endora-commerce/mod-price-lists` provides it as `productDisplayModePort`, over the same Product → Category → Organization → Settings chain its storefront display-mode route answers with. `CartService` takes it as a new required constructor argument, after `channelMembership`; the module's own composition wires it.
+
+- edac0be: `POST /api/v1/admin/orders` now honours the sales channel the operator chose for the order.
+
+  - A `salesChannelId` that names no sales channel is refused with `404 NOT_FOUND` before anything is written; the customer's basket is left as it was. It used to be accepted and the order was placed on the system-default channel.
+  - The ordered products are checked against the assortment of the order's channel rather than the channel the admin request itself resolved (the system default, unless a channel header is sent). A product the chosen channel sells is now accepted even when the default channel does not sell it, and a product the chosen channel does not sell is refused with `404 PRODUCT_NOT_FOUND` even when the default channel sells it.
+
+  `CartWritePort.addItem` accepts an optional `salesChannelId` in its input: the channel whose assortment decides whether the product may be added. Without it the request's resolved channel decides, as before. Buyer-facing cart, shopping-list and quick-order paths do not pass it and behave exactly as before.
+
+- 7d2d00f: A cart line's stored unit price is now always the price for its current quantity.
+
+  - Adding more of a product already in the cart, changing a line's quantity, merging an
+    anonymous cart at login and seeding a basket from a past order
+    (`CartWritePort.replaceItemsForCustomer` without `sourceQuoteRequestId`) store the price for the
+    resulting quantity, so a quantity-tier bracket applies to the quantity actually ordered and a
+    reorder is priced at today's prices.
+  - A product that no price list and no price of its own (`defaultPrice` attribute) applies to is
+    refused with `422 CART_PRODUCT_UNPRICED` instead of being added at `0.00`.
+  - A line seeded from an accepted quote request (`CartWritePort.replaceItemsForCustomer` with
+    `sourceQuoteRequestId`) records the quantity its price was agreed for in three new nullable
+    `cart_items` columns (`agreed_quantity`, `agreed_unit_price`, `agreed_currency`; one migration).
+    It keeps the agreed price only at that quantity and is priced from the list at any other.
+  - `CartPlacementApplyPort` (`./ports`) gains `findPriceDrift(em, { cartId, organizationId })` and
+    `refreshLinePrices({ cartId, organizationId })`, which order placement uses to refuse and then
+    bring up to date a cart whose stored prices are no longer current. An implementation of the port
+    outside this package has to add both.
+  - Two new error sentences in the `carts` bundles: `errors.CART_PRODUCT_UNPRICED` and
+    `errors.CART_PRICE_CHANGED`.
+
+  A cart converted from an accepted quote before this release carries no agreed quantity; its lines
+  are priced from the list at placement, and converting the quote again restores the agreed prices.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

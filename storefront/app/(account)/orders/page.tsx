@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { listMyOrders, resolveOrderStatusLabel } from '../../../lib/api/orders';
 import { getSessionCookie } from '../../../lib/session';
 import { getServerContext } from '../../../lib/server-context';
 import { formatMoney } from '../../../lib/i18n/money';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -23,7 +23,7 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
 
 export default async function OrdersListPage(): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/orders');
+  if (!session) return await localeRedirect('/login?next=/orders');
   const orders = await listMyOrders(session);
   const { locale } = await getServerContext();
 
@@ -33,7 +33,7 @@ export default async function OrdersListPage(): Promise<ReactNode> {
         <h1>Orders</h1>
         <p>You don&apos;t have any orders yet.</p>
         <p>
-          <Link href="/catalog">Browse the catalog</Link>
+          <LocalizedLink href="/catalog">Browse the catalog</LocalizedLink>
         </p>
       </div>
     );
@@ -64,7 +64,7 @@ export default async function OrdersListPage(): Promise<ReactNode> {
                 {formatMoney(o.total, o.currency, locale)}
               </td>
               <td>
-                <Link href={`/orders/${o.id}`}>Open</Link>
+                <LocalizedLink href={`/orders/${o.id}`}>Open</LocalizedLink>
               </td>
             </tr>
           ))}

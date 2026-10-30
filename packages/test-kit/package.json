@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/test-kit",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "description": "Composes an Endora Commerce platform for a test, from a composition its caller supplies. The server seam, the per-invocation database lease and the module test-support contribution shape, none of which names a module package (feature 109).",
   "license": "MIT",
@@ -34,7 +34,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src test",
     "test": "vitest run",

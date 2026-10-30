@@ -96,5 +96,9 @@
   "policy.turnedOn": "Cart approval is now required for this organization.",
   "policy.turnedOff": "Cart approval is no longer required; pending carts were released.",
   "policy.loadError": "Failed to load the cart-approval policy.",
-  "policy.saveError": "Failed to update the policy."
+  "policy.saveError": "Failed to update the policy.",
+
+  "nav.carts.label": "Carts",
+  "actions.openCarts.label": "Carts",
+  "actions.openCarts.description": "Browse customer carts and their approval status"
 }

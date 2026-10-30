@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { FailurePanel } from '../../../../components/checkout/FailurePanel';
 import { PaymentFailurePanel } from '../../../../components/checkout/PaymentFailurePanel';
 import { getMyOrder } from '../../../../lib/api/orders';
@@ -15,6 +14,7 @@ import {
   paymentReturnUrl,
   resolvePostPaymentLanding,
 } from '../../../../lib/payments/post-payment-landing';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
 
 /**
  * Checkout Failure Page — **two readers**, told different things (issue #287).
@@ -53,7 +53,7 @@ export default async function CheckoutFailurePage({
   const outcome = parseReturnOutcome(rawOutcome);
   const session = await getSessionCookie();
   if (!session) {
-    redirect(`/login?next=${encodeURIComponent(paymentReturnUrl(id, outcome))}`);
+    return await localeRedirect(`/login?next=${encodeURIComponent(paymentReturnUrl(id, outcome))}`);
   }
 
   let order;
@@ -61,7 +61,7 @@ export default async function CheckoutFailurePage({
     order = await getMyOrder(session, id);
   } catch (err) {
     if (err instanceof StorefrontApiError && err.status === 404) {
-      redirect('/account/orders');
+      return await localeRedirect('/account/orders');
     }
     throw err;
   }
@@ -73,8 +73,8 @@ export default async function CheckoutFailurePage({
   });
   // The payment settled after the buyer was sent here, or the notification is
   // still in flight. Either way this page's verdict is out of date.
-  if (landing.kind === 'success') redirect(checkoutSuccessUrl(order.id));
-  if (landing.kind === 'pending') redirect(paymentReturnUrl(order.id, outcome));
+  if (landing.kind === 'success') return await localeRedirect(checkoutSuccessUrl(order.id));
+  if (landing.kind === 'pending') return await localeRedirect(paymentReturnUrl(order.id, outcome));
 
   return (
     <PaymentFailurePanel
@@ -103,7 +103,7 @@ export default async function CheckoutFailurePage({
 async function payAgainAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
   const { locale } = await getServerContext();
   const t = tForLocale(locale);
@@ -118,8 +118,8 @@ async function payAgainAction(formData: FormData): Promise<void> {
       )}`;
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : t('order.payment.retry.failed');
+      err instanceof StorefrontApiError ? err.detail : t('order.payment.retry.failed');
     target = `/orders/${id}?error=${encodeURIComponent(message)}`;
   }
-  redirect(target);
+  return await localeRedirect(target);
 }

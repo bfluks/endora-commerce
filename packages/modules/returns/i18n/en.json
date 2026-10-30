@@ -24,5 +24,6 @@
   "settlement.credit": "Credit toward future orders",
   "settlement.replacement": "Replacement",
   "settlement.repair": "Repair",
-  "nav.returns.label": "Returns"
+  "nav.returns.label": "Returns",
+  "errors.RETURN_LINE_NOT_RETURNABLE": "\"{productName}\" cannot be returned. You can still file a complaint."
 }

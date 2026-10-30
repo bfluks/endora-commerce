@@ -80,12 +80,67 @@ before/after events and is written to the audit log.
   which still settles as `pending_manual` for a person to pay out by hand —
   there is nothing there to switch on.
 
+## Returnable products
+
+Whether a line may be returned is decided by the product's **Returnable** flag
+as it stood when the order was placed — the Orders module records it on each
+order line at placement, and later changes to the product do not reach orders
+already placed. The flag is set on the product in the catalogue (the Catalog
+module's page describes it, including how to set it for many products at once
+through **Bulk edit**).
+
+- **Per-line answer.** `GET /api/v1/orders/:orderId/returnable` gives each line
+  `returnable` (always present) and, for a line that may not be returned,
+  `notReturnableReason: 'product_not_returnable'`. A line of an order placed
+  before the flag was recorded carries no recorded value and **counts as
+  returnable**.
+- **`eligible` answers for return-kind cases only.** The order-level verdict
+  is, in this order of precedence: `order_not_completing`, `fully_returned`,
+  then `no_returnable_lines`. `eligible: false` with
+  `reason: 'no_returnable_lines'` means the order still has quantities left
+  but none of them on a returnable line: **no return can be opened, but a
+  complaint still can.**
+- **A return naming a non-returnable line is refused.** `POST /api/v1/returns`
+  with `kind: 'return'` answers `422 RETURN_LINE_NOT_RETURNABLE` when any
+  requested line was recorded as not returnable, with `details.productName`
+  (the first such line), `details.orderItemIds[]` and `details.lines[]`
+  (`orderItemId`, `productName`) naming every such line. Nothing is written.
+- **Complaints are never restricted** by the flag: a `complaint` may name any
+  line of the order. **Nothing is refunded for a non-returnable line by
+  default**: such a complaint line is stored with an approved refund of `0`,
+  while its default refund stays the amount paid — the most the operator may
+  approve. The admin case view marks the line **Not returnable at purchase**
+  and the settlement form starts from `0` for it, so a refund or credit for it
+  happens only when the operator enters an amount. The case detail gives each
+  line `returnableAtPurchase` (`true`, `false`, or `null` for a line placed
+  before the value was recorded).
+- **Duplicate lines are summed.** When a request names one order line more
+  than once, the quantities are added up per order line and that total is
+  checked against the line's remaining quantity, for both kinds; a total above
+  it is refused with `422 VALIDATION_FAILED`, `details.code:
+  'qty_exceeds_returnable'`. The entries are still stored as sent.
+- **Order of the checks.** A line that does not belong to the order
+  (`details.code: 'unknown_line'`) is reported before any quantity error, the
+  quantity check runs before the reason check (`unknown_reason`), and
+  returnability is checked last. Cases opened before a product was marked not
+  returnable are never re-evaluated.
+
+**On upgrade, every existing product is not returnable.** The flag defaults to
+off, so lines of orders placed after the release are not returnable until the
+product is marked returnable in the catalogue — select the products on the
+product list and use **Bulk edit → Returnable → Yes — returnable**. Orders
+placed before the release are unaffected: their lines carry no recorded value
+and stay returnable.
+
 ## Cross-module interfaces
 
 The module reads/affects other domains only through documented ports, never
 internal imports:
 
-- `OrderReturnContextPort` (orders) — paid-per-line amounts + completing-status time.
+- `OrderReturnContextPort` (orders) — paid-per-line amounts + completing-status
+  time, and each line's `returnableAtPurchase` (`true`/`false` as recorded at
+  placement, `null` for an order placed before it was recorded). Orders reports
+  the fact; the policy for `null` — returnable — is this module's.
 - `PaymentRefundPort` (payments) — issue the refund, answer `pending_manual`
   where no PSP integration exists, or refuse when the gateway that took the
   payment is switched off.

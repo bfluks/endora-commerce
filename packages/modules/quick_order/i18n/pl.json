@@ -43,5 +43,14 @@
   "onBehalf.reason.variant_not_resolved": "Nie rozpoznano wariantu",
   "onBehalf.reason.variant_ambiguous": "Niejednoznaczny wariant",
   "onBehalf.reason.row_limit_exceeded": "Przekroczono limit wierszy",
+  "onBehalf.reason.below_minimum": "Poniżej minimalnej ilości zamówienia",
+  "onBehalf.reason.below_minimumDetail": "Poniżej minimum ({minimum} szt.; w pliku {productTotal} szt.)",
+  "onBehalf.minimum.badge": "Poniżej minimum ({minimum} szt.)",
+  "onBehalf.minimum.fileTotal": "W pliku łącznie {productTotal} szt. tego produktu",
+  "onBehalf.minimum.note": "Wiersze poniżej minimum produktu: {count}. Zapytanie ofertowe przyjmie je z oznaczeniem „poniżej minimum”; koszyk ich nie przyjmie.",
+  "onBehalf.build.rejectedTitle": "Nie dodano do koszyka: poniżej minimum",
+  "onBehalf.build.rejectedPieces": "{product}: {quantity} szt., minimum {minimum} szt.",
+  "onBehalf.build.rejectedUnits": "{product}: {quantity} szt., minimum {minimum} × {unit}",
+  "onBehalf.build.rejectedUnitsUnnamed": "{product}: {quantity} szt., minimum w jednostkach opakowania: {minimum}",
   "orderEntry.tab.quick": "Szybkie zamówienie"
 }

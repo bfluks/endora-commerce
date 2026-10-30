@@ -90,7 +90,23 @@ export interface AdminNotificationRecord {
  * presence question into their own return type — `'recorded' | 'not-present'`
  * — so an operator reading "not notified" can tell their own choice from a
  * defect.
+ *
+ * **Two ways to write.** `record` writes on an EntityManager of its own and
+ * commits on its own, whatever the caller's transaction does. `recordWithin`
+ * writes on the **caller's** EntityManager, with no fork and no flush (the
+ * kernel's `AuditPort.recordWithin` shape): the entry commits or rolls back
+ * with the caller's transaction, so a caller whose own row is the claim — a
+ * reminder's delivery row under a unique key — tells the bell exactly once
+ * (`specs/165-task-management/` SC-004). It refuses what `record` refuses,
+ * before anything is persisted. The older entries of the recipient are pruned
+ * by the next `record` for them, not here: pruning is a statement of its own.
+ *
+ * `EM` is the caller's MikroORM `EntityManager`; it is a type parameter
+ * because this package holds no `@mikro-orm` import (the lifecycle events'
+ * `EM` in `modules.ts` is the precedent). A consumer writes
+ * `AdminNotificationRecordPort<EntityManager>`.
  */
-export interface AdminNotificationRecordPort {
+export interface AdminNotificationRecordPort<EM = unknown> {
   record(input: RecordAdminNotificationInput): Promise<AdminNotificationRecord>;
+  recordWithin(em: EM, input: RecordAdminNotificationInput): AdminNotificationRecord;
 }

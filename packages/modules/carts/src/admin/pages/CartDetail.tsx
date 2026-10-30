@@ -186,7 +186,7 @@ export default function CartDetail(): ReactNode {
                 <TableRow key={it.id}>
                   <TableCell>{it.productName}</TableCell>
                   <TableCell className="tabular-nums">{it.quantity}</TableCell>
-                  <TableCell className="tabular-nums">{formatMoney(it.unitPrice.amount, it.unitPrice.currency)}</TableCell>
+                  <TableCell className="tabular-nums">{formatMoney(it.unitPrice.amount, it.unitPrice.currency, undefined, { unitPrice: true })}</TableCell>
                   <TableCell className="tabular-nums">{formatMoney(it.lineTotal.amount, it.lineTotal.currency)}</TableCell>
                 </TableRow>
               ))}

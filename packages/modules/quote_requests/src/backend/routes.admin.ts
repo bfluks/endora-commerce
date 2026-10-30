@@ -1,18 +1,24 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { z } from 'zod';
 import {
   adminApproveQuoteRequestSchema,
   adminAssignQuoteRequestSchema,
   adminCancelQuoteRequestSchema,
   adminCreateQuoteRequestSchema,
   adminPatchQuoteRequestSchema,
+  adminPrepareCustomerBasketResponseSchema,
   createQuoteRequestSavedViewRequestSchema,
+  customFieldFiltersQueryParamSchema,
+  ERROR_CODES,
+  isCustomFieldFilterUnavailableFailure,
   rfqStatusSchema,
   updateQuoteRequestSavedViewRequestSchema,
 } from '@endora-commerce/contracts';
 import { savedViewActor } from './saved-view-actor.js';
 import type { RfqAdminService, AdminContext, AdminAssignmentScope } from './services/rfq-admin-service.js';
 import type { QuoteRequestListViewService } from './services/quote-request-list-view-service.js';
-import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import { getResolvedChannel, type RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import { HttpError } from '@endora-commerce/platform/http';
 
 export interface AdminContextResolver {
   (request: FastifyRequest): Promise<AdminContext>;
@@ -25,6 +31,9 @@ export interface QuoteRequestsAdminDeps {
   /** `specs/147-saved-views/` (US3) — the Quote Request list's saved views. */
   listViewService: QuoteRequestListViewService;
 }
+
+/** The list's one query member with a schema: the custom-field filters (feature 157). */
+const customFieldFiltersQuerySchema = z.object({ customFieldFilters: customFieldFiltersQueryParamSchema });
 
 function parseIfMatch(request: FastifyRequest): number | null {
   const header = request.headers['if-match'];
@@ -45,9 +54,25 @@ export async function registerQuoteRequestsAdminRoutes(
   const { adminService, requireAdmin, resolveAdminContext, listViewService } = deps;
   const guard = requireAdmin('rfqs:handle');
 
+  // `specs/157-custom-fields-list-filters/` — the custom fields the list offers as filters.
+  app.get('/api/v1/admin/quote-requests/custom-field-filters', { preHandler: guard }, async () => ({
+    data: await adminService.customFieldFilterFields(),
+  }));
+
   app.get('/api/v1/admin/quote-requests', { preHandler: guard }, async (request) => {
     const ctx = await resolveAdminContext(request);
-    const q = (request.query ?? {}) as Record<string, string | undefined>;
+    const rawQuery = (request.query ?? {}) as Record<string, unknown>;
+    // The list has no route-level query schema, so the custom-field filters are
+    // read here: a repeated parameter arrives as an array and is refused rather
+    // than one of its copies silently applied.
+    const rawFilters = rawQuery['customFieldFilters'];
+    if (rawFilters !== undefined && typeof rawFilters !== 'string') {
+      throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, 'customFieldFilters must be given once.');
+    }
+    // Parsed under its own name, so a refusal is located at
+    // `customFieldFilters.<key>.<operator>` as on the Orders list.
+    const { customFieldFilters } = customFieldFiltersQuerySchema.parse({ customFieldFilters: rawFilters });
+    const q = rawQuery as Record<string, string | undefined>;
 
     const status = q['status']
       ? q['status']
@@ -61,6 +86,15 @@ export async function registerQuoteRequestsAdminRoutes(
       ...(q['organizationId'] ? { organizationId: q['organizationId']! } : {}),
       ...(status && status.length > 0 ? { status: status as never } : {}),
       ...(scope ? { scope } : {}),
+      ...(customFieldFilters ? { customFieldFilters } : {}),
+    }).catch((error: unknown) => {
+      if (isCustomFieldFilterUnavailableFailure(error)) {
+        throw new HttpError(400, ERROR_CODES.CUSTOM_FIELD_FILTER_UNAVAILABLE, error.message, {
+          key: error.keys[0] ?? '',
+          keys: [...error.keys],
+        });
+      }
+      throw error;
     });
     return {
       data,
@@ -98,9 +132,12 @@ export async function registerQuoteRequestsAdminRoutes(
       const ctx = await resolveAdminContext(request);
       const body = adminCreateQuoteRequestSchema.parse(request.body);
       const rfq = await adminService.createOnBehalf(ctx, body);
+      // Feature 163 (FR-018) — accepted, and each line not available to the
+      // Organization here is named for the operator.
+      const warnings = await adminService.onBehalfWarnings(body);
       setEtag(reply, rfq.version);
       reply.code(201);
-      return { data: rfq };
+      return { data: rfq, ...(warnings.length > 0 ? { warnings } : {}) };
     },
   );
 
@@ -127,6 +164,26 @@ export async function registerQuoteRequestsAdminRoutes(
       const rfq = await adminService.approve(ctx, request.params.id, expectedVersion, body.note);
       setEtag(reply, rfq.version);
       return { data: rfq };
+    },
+  );
+
+  // Issue #170 — the operator's conversion: the approved request's lines into
+  // the basket of the customer who owns it. The admin screen used to post to the
+  // storefront's `convert-to-order`, which refuses an administrator with 401.
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/quote-requests/:id/prepare-customer-basket',
+    { preHandler: guard },
+    async (request) => {
+      const ctx = await resolveAdminContext(request);
+      // The quote's own channel decides the basket; the resolved one (the
+      // system default on an admin route) only stands in where the request
+      // records none.
+      const result = await adminService.prepareCustomerBasket(
+        ctx,
+        request.params.id,
+        getResolvedChannel(request).id,
+      );
+      return { data: adminPrepareCustomerBasketResponseSchema.parse(result) };
     },
   );
 

@@ -81,13 +81,18 @@ async function loadActions(): Promise<{
  * disagreement fails the build, and an entry that no longer describes one fails
  * it too.
  *
- * The population that lands here is one shape: an action whose **intent is a
- * write** on a screen whose landing GET is read-gated — "Edit the megamenu",
+ * The population that lands here is mostly one shape: an action whose **intent
+ * is a write** on a screen whose landing GET is read-gated — "Edit the megamenu",
  * "Import products". Declaring the write code hides the action from an operator
  * who could open the screen; declaring the read code advertises an action the
  * operator cannot complete. `requiredPermission` is a single code and the screen
  * needs two, so neither answer is right and the choice is the owner's, not this
  * check's. An entry says which two codes are defensible.
+ *
+ * **One entry is the other shape, an `unresolvable` the walk cannot read past**:
+ * an action whose target's API is registered under a path the walk cannot
+ * evaluate. The entry says what the gate is, read by hand, and what would
+ * retire it.
  */
 export const ACTION_PERMISSION_DISAGREEMENTS: Readonly<Record<string, string>> = {
   'megamenu:edit-megamenu':
@@ -103,6 +108,91 @@ export const ACTION_PERMISSION_DISAGREEMENTS: Readonly<Record<string, string>> =
     'is the write one. Retire this entry with the same answer as the one above: a ' +
     'palette row is a navigation, and the field is a single code, so the label and the ' +
     'gate cannot both be honoured.',
+  'projects:open-project-templates':
+    '"Project templates" declares `projects:configure`, the code the Templates screen and every ' +
+    'write on it are gated on; the list it loads (GET /api/v1/admin/projects/templates) is ' +
+    '`projects:read`, because the create form offers Templates to everybody who may create a ' +
+    'Project (`specs/163-projects-and-tasks/contracts/admin-surfaces.md` §4). Declaring the read ' +
+    'code would advertise a screen a reader is refused. Retire this entry if the create form ' +
+    'stops reading the list, or the list moves under a lookup route of its own.',
+  'tasks:open-task-workflow':
+    '"Task statuses and workflow" declares `tasks:configure`, the code the workflow screen and every ' +
+    'write on it are gated on; the workflow it loads (GET /api/v1/admin/tasks/workflow) is `tasks:read`, ' +
+    'because the status picker, the list filter and the board need the statuses ' +
+    '(`specs/165-task-management/contracts/admin-surfaces.md` §4). Declaring the read code would ' +
+    'advertise a screen a reader is refused. Retire this entry if those screens stop reading the ' +
+    'workflow route, or the configuration screen reads one of its own.',
+  'tasks:open-task-priorities':
+    '"Task priorities" declares `tasks:configure`, the code the priorities screen and every write on ' +
+    'it are gated on; the list it loads (GET /api/v1/admin/tasks/priorities) is `tasks:read`, because ' +
+    'the priority picker, the list filter and the board card read it (`specs/165-task-management/' +
+    'contracts/admin-surfaces.md` §4). Retire this entry on the same terms as `open-task-workflow`.',
+  'tasks:open-task-tags':
+    '"Task tags" declares `tasks:configure`, the code the tags screen and every write on it are gated ' +
+    'on; the list it loads (GET /api/v1/admin/tasks/tags) is `tasks:read`, because whoever edits a Task ' +
+    'picks among the existing tags (US9 scenario 4, `specs/165-task-management/contracts/' +
+    'admin-surfaces.md` §4). Retire this entry on the same terms as `open-task-workflow`.',
+  'tasks:open-task-general-settings':
+    '"Task general settings" declares `tasks:configure`, the code the general settings screen and the ' +
+    'write on it are gated on; the time zone it loads (GET /api/v1/admin/tasks/settings/time-zone) is ' +
+    '`tasks:read`, because the Task screens count date-only due dates and reminders in it ' +
+    '(`specs/165-task-management/contracts/admin-api.md` §4). Retire this entry on the same terms as ' +
+    '`open-task-workflow`.',
+  // Issue #516 — sidebar screens that open on a configuration or write code
+  // while the walk compares them against a read-gated GET: either the list they
+  // load is read-gated because other screens read it too, or the walk cannot
+  // find the screen's own endpoints and falls back to the module landing. Each
+  // action declares the code of the screen's own route, which is what the admin
+  // router refuses on; declaring the read code would advertise a screen a
+  // reader is refused, the 403 this check exists to prevent.
+  'crm:open-crm-tags':
+    '"CRM tags" (issue #516) declares `crm:configure`, the code the /crm/tags screen and every ' +
+    'write on it (POST, PATCH, DELETE /api/v1/admin/crm/tags) are gated on; the list it loads, ' +
+    'GET /api/v1/admin/crm/tags, is `crm:read` because tagging an opportunity is daily work and ' +
+    'the opportunity screens read it. Retire this entry if the tag picker reads the list from a ' +
+    'lookup route of its own.',
+  'crm:open-crm-workflow':
+    '"Opportunity workflow" (issue #516) declares `crm:configure`, the code the /crm/workflow ' +
+    'screen and every write on it are gated on; GET /api/v1/admin/crm/workflow is `crm:read` ' +
+    'because the list, the board and the detail screen all need the statuses to render ' +
+    '(`routes.workflow.ts`). Retire this entry if those screens read the statuses elsewhere.',
+  'projects:open-project-roles':
+    '"Project roles" (issue #516) declares `projects:configure`, the code the /projects/roles ' +
+    'screen is gated on; GET /api/v1/admin/projects/roles is `projects:read` because the project ' +
+    'screens read the dictionary to offer its active entries. Same shape as ' +
+    '`projects:open-project-templates`; retire it on the same answer.',
+  'projects:open-project-loss-reasons':
+    '"Project loss reasons" (issue #516) declares `projects:configure`, the code the ' +
+    '/projects/loss-reasons screen is gated on; GET /api/v1/admin/projects/loss-reasons is ' +
+    '`projects:read` because the project screens read the dictionary to offer its active ' +
+    'entries. Same shape as `projects:open-project-templates`; retire it on the same answer.',
+  'newsletter:open-newsletter-provider':
+    '"Newsletter sending provider" (issue #516) declares `newsletter:write`, the code the ' +
+    '/newsletter/provider screen, its save (PUT) and its test send (POST …/provider/test) are ' +
+    'gated on; GET /api/v1/admin/newsletter/provider is `newsletter:read`. Retire this entry if ' +
+    'the screen opens to readers as a read-only view, which is a change to its route.',
+  'inventory:import-stock':
+    '"Import stock" (issue #516) declares `inventory:write`, the code the /inventory/import ' +
+    'wizard route and its one write, POST /api/v1/admin/inventory/import, are gated on. The walk ' +
+    'finds no GET under the screen path and falls back to the module landing, GET ' +
+    '/api/v1/admin/inventory (`inventory:read`). A wizard whose only purpose is a write opens on ' +
+    'the write code, like `orders:new-order`; retire this entry if the walk learns to compare a ' +
+    'write-only screen against its POST.',
+  'settings:clear-cache':
+    '"Clear cache" (issue #516) declares `settings:write`, the code the /settings/cache screen ' +
+    'and both of its endpoints, GET /api/v1/admin/cache/namespaces and POST ' +
+    '/api/v1/admin/cache/clear (`routes.cache.ts`), are gated on. The walk cannot connect ' +
+    '/settings/cache to /api/v1/admin/cache and falls back to the module landing, GET ' +
+    '/api/v1/admin/settings (`settings:read`). Retire this entry when those routes move under ' +
+    '/api/v1/admin/settings/cache or the walk resolves them.',
+  'mfa:open-security':
+    '"Account security" (issue #510) declares no code, and that is the right answer: `/security` ' +
+    "is the signed-in admin's own two-factor screen, and its six endpoints are registered by " +
+    "`registerMfaSelfServiceRoutes` under `pathPrefix: '/api/v1/admin/account/mfa'` " +
+    '(`packages/modules/mfa/src/backend/plugin.ts`), each gated by the bare admin guard and no ' +
+    '`requireAdmin(...)`. The walk counts `${pathPrefix}/status` as an unreadable path, so it ' +
+    'finds no registration to compare against. Retire this entry when the route walk resolves a ' +
+    'parameterised path prefix, or when those routes are registered under a literal path.',
 };
 
 async function main(): Promise<void> {

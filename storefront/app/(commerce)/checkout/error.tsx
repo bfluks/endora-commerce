@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
-import Link from 'next/link';
 import { tForLocale } from '../../../lib/i18n/messages';
 import { documentLocale, FALLBACK_LOCALE } from '../../../lib/i18n/document-locale';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 /**
  * The checkout segment's error boundary — and the first one anywhere under
@@ -66,7 +66,7 @@ export default function CheckoutError({
         <button type="button" onClick={reset}>
           {t('checkout.error.retry')}
         </button>
-        <Link href="/cart">{t('checkout.error.backToCart')}</Link>
+        <LocalizedLink href="/cart">{t('checkout.error.backToCart')}</LocalizedLink>
       </p>
     </div>
   );

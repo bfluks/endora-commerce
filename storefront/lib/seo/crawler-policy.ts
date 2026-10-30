@@ -79,6 +79,7 @@
  */
 
 import { backendBaseUrl } from '../env.mjs';
+import { channelHeaders } from '../channel/channel-header';
 
 /**
  * A sales channel's default robots policy, as the backend answers it.
@@ -144,6 +145,14 @@ export interface CrawlerFiles extends RobotsPolicy {
    * for.
    */
   readonly unreadable?: readonly string[];
+  /**
+   * `false` on a store closed to anonymous visitors
+   * (`specs/154-sales-channel-access/`): nothing on it is public, so its
+   * `robots.txt` disallows everything and its `llms.txt` lists nothing,
+   * whatever the rest of the answer says. Absent from a backend older than
+   * that feature, whose channels are all open — read as `true`.
+   */
+  readonly anonymousAccess?: boolean;
 }
 
 /** In {@link CrawlerFiles.unreadable}: the channel's default robots is not known. */
@@ -175,13 +184,16 @@ function isCrawlerText(value: unknown): value is string {
  */
 export function isCrawlerFilesResponse(body: unknown): body is { data: CrawlerFiles } {
   if (!isRobotsPolicyResponse(body)) return false;
-  const { robotsTxtCustom, llmsTxtAdditional, shop, unreadable } = body.data as {
+  const { robotsTxtCustom, llmsTxtAdditional, shop, unreadable, anonymousAccess } = body.data as {
     robotsTxtCustom?: unknown;
     llmsTxtAdditional?: unknown;
     shop?: unknown;
     unreadable?: unknown;
+    anonymousAccess?: unknown;
   };
   if (!isCrawlerText(robotsTxtCustom) || !isCrawlerText(llmsTxtAdditional)) return false;
+  // Optional, and a boolean when it is there.
+  if (anonymousAccess !== undefined && typeof anonymousAccess !== 'boolean') return false;
   // Optional, and a list of names when it is there. Which names is not judged:
   // a later backend may name something this storefront has never heard of.
   if (
@@ -349,7 +361,7 @@ export function createChannelCache<T>(deps: CrawlerPolicyReaderDeps, question: Q
       response = await deps.fetch(`${deps.baseUrl()}${question.path}`, {
         headers: {
           accept: 'application/json',
-          ...(channelCode !== undefined ? { 'x-sales-channel': channelCode } : {}),
+          ...channelHeaders(channelCode),
         },
         // This module is the cache; nothing underneath it may be one too.
         cache: 'no-store',
@@ -496,6 +508,10 @@ export function createCrawlerPolicyReader(deps: CrawlerPolicyReaderDeps): Crawle
             // has one shape whether the backend sent an empty list or none.
             ...(body.data.unreadable !== undefined && body.data.unreadable.length > 0
               ? { unreadable: [...body.data.unreadable] }
+              : {}),
+            // Carried as the backend said it, and not invented when it did not.
+            ...(body.data.anonymousAccess !== undefined
+              ? { anonymousAccess: body.data.anonymousAccess }
               : {}),
           }
         : null,

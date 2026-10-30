@@ -88,3 +88,28 @@ export const RESERVED_TOP_LEVEL_SEGMENTS: readonly string[] = [
   'shopping-lists',
   'verify',
 ];
+
+/**
+ * The top-level segments that are **language-neutral** (`specs/167-storefront-locale-path/`
+ * `contracts/url-shape.md` §4, OR-8): never prefixed with a language, never redirected
+ * for one, and given no language headers by the middleware. Every entry is a reserved
+ * segment (a unit test holds it).
+ *
+ * - `api` — route handlers (cache revalidation and the like), not pages;
+ * - `pwa` — the service worker's files;
+ * - `offline` — the static offline page, precached at one address;
+ * - `service-unavailable` — the outage rewrite target, never linked;
+ * - the files served at the root (`robots.txt`, `llms.txt`, `manifest.webmanifest`).
+ *
+ * Route handlers in the page namespace (`/newsletter/subscribe`, `/session-expired`)
+ * are deliberately **not** here: they are reached from a page and keep its prefix.
+ */
+export const LANGUAGE_NEUTRAL_SEGMENTS: readonly string[] = [
+  'api',
+  'pwa',
+  'offline',
+  'service-unavailable',
+  'robots.txt',
+  'llms.txt',
+  'manifest.webmanifest',
+];

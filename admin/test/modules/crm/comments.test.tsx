@@ -155,19 +155,19 @@ describe('the Notes tab', () => {
     const items = within(panel).getAllByRole('listitem');
     expect(items).toHaveLength(2);
     expect(within(items[0] as HTMLElement).getByText('Ada Min')).toBeInTheDocument();
-    expect(within(items[0] as HTMLElement).queryByText(en('comments.edited'))).toBeNull();
+    expect(within(items[0] as HTMLElement).queryByText(core('comments.edited'))).toBeNull();
     expect(within(items[1] as HTMLElement).getByText('Piotr Zielony')).toBeInTheDocument();
-    expect(within(items[1] as HTMLElement).getByText(en('comments.edited'))).toBeInTheDocument();
+    expect(within(items[1] as HTMLElement).getByText(core('comments.edited'))).toBeInTheDocument();
   });
 
   it('offers edit and delete on the author\'s own note and on nobody else\'s', async () => {
     const panel = await open();
     const mine = entry(panel, 'Call back on Friday.');
     const theirs = entry(panel, 'They want forty vans.');
-    expect(within(mine).getByRole('button', { name: en('comments.edit') })).toBeInTheDocument();
-    expect(within(mine).getByRole('button', { name: en('comments.delete') })).toBeInTheDocument();
-    expect(within(theirs).queryByRole('button', { name: en('comments.edit') })).toBeNull();
-    expect(within(theirs).queryByRole('button', { name: en('comments.delete') })).toBeNull();
+    expect(within(mine).getByRole('button', { name: core('comments.edit') })).toBeInTheDocument();
+    expect(within(mine).getByRole('button', { name: core('comments.delete') })).toBeInTheDocument();
+    expect(within(theirs).queryByRole('button', { name: core('comments.edit') })).toBeNull();
+    expect(within(theirs).queryByRole('button', { name: core('comments.delete') })).toBeNull();
   });
 
   it('says there are no notes yet', async () => {
@@ -213,7 +213,7 @@ describe('the Notes tab', () => {
   it('refuses an empty note without calling the server', async () => {
     const panel = await open();
     await userEvent.click(within(panel).getByRole('button', { name: en('comments.notes.composer.submit') }));
-    expect(within(panel).getByText(en('comments.error.empty'))).toBeInTheDocument();
+    expect(within(panel).getByText(core('comments.error.empty'))).toBeInTheDocument();
     expect(postSpy).not.toHaveBeenCalled();
   });
 
@@ -223,9 +223,9 @@ describe('the Notes tab', () => {
     });
     const panel = await open();
     await userEvent.click(
-      within(entry(panel, 'Call back on Friday.')).getByRole('button', { name: en('comments.edit') }),
+      within(entry(panel, 'Call back on Friday.')).getByRole('button', { name: core('comments.edit') }),
     );
-    const field = within(panel).getByLabelText(en('comments.edit.label'));
+    const field = within(panel).getByLabelText(core('comments.edit.label'));
     expect(storedText(field)).toBe('Call back on Friday.');
     await userEvent.clear(field);
     await userEvent.type(field, 'Call back on Monday.');
@@ -235,7 +235,7 @@ describe('the Notes tab', () => {
       expect(patchSpy).toHaveBeenCalledWith(`${COMMENTS_PATH}/${ID(1)}`, { body: 'Call back on Monday.' }),
     );
     const edited = await within(panel).findByText('Call back on Monday.');
-    expect(within(edited.closest('li') as HTMLElement).getByText(en('comments.edited'))).toBeInTheDocument();
+    expect(within(edited.closest('li') as HTMLElement).getByText(core('comments.edited'))).toBeInTheDocument();
   });
 
   it('shows the refusal when an edit is not accepted, and keeps what was typed', async () => {
@@ -244,9 +244,9 @@ describe('the Notes tab', () => {
     );
     const panel = await open();
     await userEvent.click(
-      within(entry(panel, 'Call back on Friday.')).getByRole('button', { name: en('comments.edit') }),
+      within(entry(panel, 'Call back on Friday.')).getByRole('button', { name: core('comments.edit') }),
     );
-    const field = within(panel).getByLabelText(en('comments.edit.label'));
+    const field = within(panel).getByLabelText(core('comments.edit.label'));
     await userEvent.type(field, ' Really.');
     await userEvent.click(within(panel).getByRole('button', { name: core('common.action.save') }));
     expect(await within(panel).findByText('Only the author may change a note.')).toBeInTheDocument();
@@ -260,11 +260,11 @@ describe('the Notes tab', () => {
     });
     const panel = await open();
     await userEvent.click(
-      within(entry(panel, 'Call back on Friday.')).getByRole('button', { name: en('comments.delete') }),
+      within(entry(panel, 'Call back on Friday.')).getByRole('button', { name: core('comments.delete') }),
     );
-    const dialog = screen.getByRole('dialog', { name: en('comments.delete.title') });
+    const dialog = screen.getByRole('dialog', { name: core('comments.delete.title') });
     expect(deleteSpy).not.toHaveBeenCalled();
-    await userEvent.click(within(dialog).getByRole('button', { name: en('comments.delete.confirm') }));
+    await userEvent.click(within(dialog).getByRole('button', { name: core('comments.delete.confirm') }));
     await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith(`${COMMENTS_PATH}/${ID(1)}`));
     await waitFor(() => expect(within(panel).queryByText('Call back on Friday.')).toBeNull());
     expect(within(panel).getByText('They want forty vans.')).toBeInTheDocument();
@@ -275,8 +275,8 @@ describe('the Notes tab', () => {
     const panel = await open(['crm:read', 'orders:read']);
     await within(panel).findByText('Call back on Friday.');
     expect(within(panel).queryByLabelText(en('comments.notes.composer.label'))).toBeNull();
-    expect(within(panel).queryByRole('button', { name: en('comments.edit') })).toBeNull();
-    expect(within(panel).queryByRole('button', { name: en('comments.delete') })).toBeNull();
+    expect(within(panel).queryByRole('button', { name: core('comments.edit') })).toBeNull();
+    expect(within(panel).queryByRole('button', { name: core('comments.delete') })).toBeNull();
   });
 });
 
@@ -289,8 +289,8 @@ describe('the Messages tab', () => {
     await within(panel).findByText('Who sends the offer?');
     expect(getSpy).toHaveBeenCalledWith(`${COMMENTS_PATH}?kind=message`);
     expect(within(panel).getAllByRole('listitem')).toHaveLength(2);
-    expect(within(panel).queryByRole('button', { name: en('comments.edit') })).toBeNull();
-    expect(within(panel).queryByRole('button', { name: en('comments.delete') })).toBeNull();
+    expect(within(panel).queryByRole('button', { name: core('comments.edit') })).toBeNull();
+    expect(within(panel).queryByRole('button', { name: core('comments.delete') })).toBeNull();
     expect(within(panel).getByText(en('comments.messages.hint'))).toBeInTheDocument();
   });
 

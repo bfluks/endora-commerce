@@ -76,6 +76,7 @@ _None._
 
 | Action | Opens | Permission |
 | --- | --- | --- |
+| `new-order` | `/orders/new` | `orders:write` |
 | `open-orders` | `/orders` | `orders:read` |
 | `order-statuses` | `/orders/statuses` | `orders:read` |
 

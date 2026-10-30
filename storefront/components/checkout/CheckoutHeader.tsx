@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
+import { LocalizedLink } from '../../lib/i18n/localized-link';
 
 /**
  * Minimal checkout chrome (feature 036, US5). On `/checkout*` routes the root
@@ -13,7 +13,7 @@ export function CheckoutHeader(): ReactNode {
       <div className="mx-auto flex h-[64px] max-w-[1360px] items-center justify-center px-[24px]">
         {/* Same brand mark as the full storefront header so the logo looks
             identical across checkout and the rest of the site. */}
-        <Link
+        <LocalizedLink
           href="/"
           className="industria-header__brand"
           aria-label="Industria — strona główna"
@@ -23,7 +23,7 @@ export function CheckoutHeader(): ReactNode {
             Industria
             <small>B2B · Komponenty przemysłowe</small>
           </span>
-        </Link>
+        </LocalizedLink>
       </div>
     </header>
   );

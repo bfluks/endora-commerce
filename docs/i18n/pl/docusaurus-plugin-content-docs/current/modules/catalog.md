@@ -23,16 +23,18 @@ w obu przypadkach każda cena podaje swoją walutę. Niepoprawny kod jest odrzuc
 | Metoda i ścieżka | Kto | Przeznaczenie |
 | --- | --- | --- |
 | `GET /api/v1/catalog/products` | storefront / klucz API | Lista, wyszukiwanie i filtrowanie produktów w aktywnym kanale sprzedaży |
-| `GET /api/v1/catalog/products/:idOrSlug` | storefront | Szczegóły produktu (bez ceny w niepublicznych kanałach sprzedaży) |
+| `GET /api/v1/catalog/products/:idOrSlug` | storefront | Szczegóły produktu (bez kwoty, gdy tryb wyświetlania cen oglądającego to *Żaden*) |
 | `GET /api/v1/catalog/categories` | storefront | Zagnieżdżone drzewo kategorii |
 | `GET /api/v1/catalog/categories/:id/content` | storefront | Treść strony jednej kategorii, dobrana do języka wywołującego |
 | `GET /api/v1/catalog/filters` | storefront | Atrybuty, po których można filtrować w aktywnym kanale sprzedaży |
 | `GET /api/v1/catalog/sitemap.xml` | roboty wyszukiwarek | Mapa witryny dla SEO |
-| `GET /api/v1/admin/catalog/products?includeArchived` | administrator | Lista produktów w panelu (ze szkicami; wiersze zarchiwizowane na żądanie) |
+| `GET /api/v1/admin/catalog/products?status&archived` | administrator | Lista produktów w panelu. `status` to `active` albo `inactive` (każda inna wartość: `400 VALIDATION_FAILED`); `archived` to `exclude` (domyślnie), `include` albo `only` — dawne `includeArchived=1` oznacza `include`. `counts` to `{ all, active, inactive, archived }` — zob. *Status produktu i archiwizacja* |
 | `GET /api/v1/admin/catalog/products/:id` | administrator | Szczegóły produktu |
 | `POST /api/v1/admin/catalog/products` | administrator | Utworzenie produktu (`type` nie można zmienić po utworzeniu; `sku` można edytować) |
 | `PATCH /api/v1/admin/catalog/products/:id` | administrator | Aktualizacja (łącznie z `sku`); zapisuje wpis audytu ze stateBefore / stateAfter; odrzuca z `409 sku_in_use`, gdy nowe SKU należy już do innego produktu |
-| `DELETE /api/v1/admin/catalog/products/:id` | administrator | Archiwizacja (usunięcie miękkie) |
+| `DELETE /api/v1/admin/catalog/products/:id` | administrator | Usunięcie (miękkie) — to nie jest akcja Archiwizuj |
+| `POST /api/v1/admin/catalog/products/:id/archive` | administrator (`catalog:write`) | Archiwizacja jednego produktu — zob. *Status produktu i archiwizacja* |
+| `POST /api/v1/admin/catalog/products/:id/restore` | administrator (`catalog:write`) | Przywrócenie jednego zarchiwizowanego produktu |
 | `GET`, `POST /api/v1/admin/catalog/products/list-views`; `PATCH`, `DELETE …/list-views/:id` | administrator | Zapisane widoki listy produktów — zob. *Zapisane widoki* niżej |
 | `GET /api/v1/admin/catalog/attributes` | administrator | Lista atrybutów |
 | `GET /api/v1/admin/catalog/attributes/by-flag?flag=isPromoRule\|isComparable\|...` | administrator | Dane do listy wyboru — wszystkie atrybuty z żądaną flagą |
@@ -51,7 +53,161 @@ w obu przypadkach każda cena podaje swoją walutę. Niepoprawny kod jest odrzuc
 | `DELETE /api/v1/admin/catalog/categories/:id` | administrator | Usunięcie miękkie; odrzucane z 409, gdy odwołuje się do niej aktywna kategoria podrzędna |
 | `GET /api/v1/admin/catalog/categories/:id/content` | administrator | Treść strony kategorii — jeden dokument Page Buildera na język ([Treść strony kategorii](./catalog/category-content.md)) |
 | `PUT /api/v1/admin/catalog/categories/:id/content` | administrator | Zastąpienie treści strony kategorii; `null` ją czyści |
-| `PUT /api/v1/catalog/products/by-sku/:sku` | klucz API | Idempotentne utworzenie lub aktualizacja (synchronizacja PIM) |
+| `PUT /api/v1/catalog/products/by-sku/:sku` | klucz API | Idempotentne utworzenie lub aktualizacja (synchronizacja PIM); aktualizacja jest audytowana jako `product.update` ze wskazaniem klucza (`apiKeyId`) i nigdy nie podlega kontroli kompletności |
+
+## Status produktu i archiwizacja
+
+**Status** produktu to `active` albo `inactive` — globalnie oraz jako nadpisanie dla kanału
+sprzedaży i dla pary kanał × język. `inactive` w dowolnym zakresie oznacza po prostu
+**wyłączenie** w tym zakresie: produkt nie jest wyświetlany na listach, nie da się go wyszukać
+ani zamówić, a jego strona odpowiada tak jak dla produktu, który nie istnieje. Wyłączenie
+produktu nigdy go nie archiwizuje. Nowe i powielone produkty zaczynają jako `inactive`. Każda
+inna wartość statusu jest odrzucana z `400 VALIDATION_FAILED` — w API panelu, przy zapisie
+kluczem API `PUT /api/v1/catalog/products/by-sku/:sku` i w imporcie; archiwizacja nie jest
+statusem.
+
+**Archiwizacja** to osobna akcja obejmująca cały produkt, dostępna jako **Archiwizuj** i
+**Przywróć** (`POST …/products/:id/archive`, `…/restore`) i wymagająca uprawnienia
+`catalog:write`. Archiwizuj ustawia czas archiwizacji produktu i wycofuje go ze wszystkich
+kanałów; Przywróć go czyści. Żadna z nich nie zmienia statusu w żadnym zakresie, a każda
+zapisuje jeden wpis audytu z czasem archiwizacji przed i po. Archiwizacja produktu już
+zarchiwizowanego albo przywrócenie produktu, który nie jest zarchiwizowany, odpowiada `200` i
+niczego nie zmienia — bez wpisu audytu i bez zdarzenia.
+
+- **Zbiorczo.** `POST /api/v1/admin/catalog/products/bulk-update` z
+  `fields: { archived: true }` archiwizuje każdy zaznaczony produkt, a `false` je przywraca —
+  każdy tą samą akcją i z własnym wpisem audytu. `archived` musi być jedynym polem żądania.
+  Duże zaznaczenia działają jako zbiorcza operacja w tle, a jej cofnięcie przywraca każdy
+  produkt do poprzedniego stanu. Operacja w tle zapisuje w audycie każdego produktu
+  administratora, który jej zażądał, tak jak operacja wykonana od razu. Archiwizacja i
+  przywracanie blokują produkt, więc dwie równoczesne archiwizacje jednego produktu
+  archiwizują go raz.
+- **Ustawienie `active` nigdy nie przywraca.** Zarchiwizowany produkt pozostaje zarchiwizowany
+  niezależnie od statusu; przywraca go tylko Przywróć. Przywrócenie produktu `inactive`
+  pozostawia go wyłączonym.
+- **Produkty zarchiwizowane przed tą zmianą.** Do tego wydania produkt archiwizowało się,
+  ustawiając go jako `inactive`. Każdy produkt, który w chwili aktualizacji jest `inactive`,
+  pozostaje więc zarchiwizowany (z zachowanym czasem archiwizacji albo, gdy go nie miał, z
+  czasem ostatniej zmiany) i **wymaga jawnego Przywróć**, aby wrócić — samo ustawienie `active`
+  pozostawia go zarchiwizowanym.
+- **Strona produktu.** Strona zarchiwizowanego produktu odpowiada `410 PRODUCT_ARCHIVED`
+  („usunięty”), ale tylko kupującemu, który w przeciwnym razie mógłby go tam zobaczyć:
+  sprawdzenie pomija archiwizację i czyta status globalny jako `active`, a wszystkie statusy
+  kanału i pary kanał × język, przynależność do kanału, języki kanału, okno publikacji i
+  odbiorcy nadal obowiązują. Wszędzie indziej, a także dla każdego produktu wyłączonego bez
+  archiwizacji, strona odpowiada `404` dokładnie tak jak dla produktu, który nie istnieje.
+- **Lista w panelu.** Zarchiwizowane produkty są domyślnie ukryte niezależnie od statusu;
+  `archived=only` pokazuje tylko je, a `archived=include` pokazuje je obok pozostałych. Licznik
+  i filtr `inactive` obejmują produkty wyłączone, ale niezarchiwizowane.
+  Na liście produktów karta **Zarchiwizowane** ma własny adres, `/catalog/products/archived`,
+  więc przycisk Wstecz przeglądarki i odświeżenie strony do niej wracają, a paleta poleceń
+  (⌘K / CTRL+K) otwiera ją jako **Zarchiwizowane produkty** — wystarczy wpisać „archiwum” lub
+  „archived”. Przy zaznaczeniu jej
+  pasek oferuje Przywróć, Edycję zbiorczą i Usuń; **Edytuj cenę** jest widoczne na pozostałych
+  kartach, ale nieaktywne, bo ceny ustawia się w cennikach.
+- **Z asystenta AI panelu.** Narzędzia asystenta `catalog.archive_product` i
+  `catalog.restore_product` (`catalog:write`) archiwizują i przywracają produkty po
+  zatwierdzeniu pokazanego planu — tą samą akcją i z tym samym wpisem audytu, z Tobą jako
+  wykonawcą; większe zaznaczenia działają jako opisana wyżej operacja zbiorcza. Narzędzie
+  statusu, `catalog.set_product_status`, tylko włącza i wyłącza produkty, nigdy ich nie
+  archiwizuje ani nie przywraca, a wyszukiwanie produktów asystenta pokazuje także
+  zarchiwizowane i oznacza je.
+
+### Status dla kanału i języka, zbiorczo
+
+`POST /api/v1/admin/catalog/products/bulk-update` z
+`fields: { scopedStatus: { channelId, languageCode, value } }` ustawia status każdego
+zaznaczonego produktu w jednym zakresie — kanale sprzedaży (`languageCode: null`) albo
+jednej parze kanał × język — na `active` lub `inactive`, albo usuwa tam nadpisanie
+wartością `inherit`. W każdym produkcie zmienia się tylko ten zakres; pozostałe zakresy
+i status globalny zostają bez zmian. Produkt, który nie należy do kanału, albo język,
+którego kanał nie oferuje, jest pomijany i raportowany jako `scope_invalid` — produkt
+nigdy nie zostaje dodany do kanału. `scopedStatus` nie może wystąpić razem ze `status`
+w jednym żądaniu. Zmiana każdego produktu to jeden wpis audytu z nazwą zakresu; duże
+zaznaczenia wykonują się jako operacja zbiorcza w tle, której cofnięcie przywraca każdy
+zakres i raportuje produkty zmienione w międzyczasie.
+
+### Kontrola kompletności przy włączaniu produktu
+
+Gdy **zmiana statusu** dokonana przez operatora włącza produkt w kanale sprzedaży i
+języku — status globalny, status kanału albo pary kanał × język, pojedynczo lub
+zbiorczo — produkt musi mieć w tym języku: **nazwę** (własną nazwę w tym języku albo
+nazwę nadpisaną dla tego kanału; nazwa w innym języku się nie liczy), **klucz URL**
+(liczy się klucz globalny) oraz każdy **wymagany** atrybut zależny od języka ze swojego
+zestawu atrybutów. Ustawienie **Completeness check when switching a product on**
+(`catalog.scope_completeness_gate`, jedna wartość dla całej platformy) decyduje, co się
+dzieje, gdy czegoś brakuje:
+
+- **`warn`** (domyślnie) — zmiana zostaje zapisana, a odpowiedź wymienia braki dla
+  każdego kanału i języka (`warnings`, rodzaj `completeness`).
+- **`refuse`** — zmiana nie zostaje zapisana: `422 SCOPE_INCOMPLETE` wymienia każdy
+  kanał i język wraz z brakami. Zmiana, która włączyłaby produkt w kilku miejscach, jest
+  odrzucana w całości, jeśli którekolwiek z nich nie spełnia warunków. W edycji
+  zbiorczej produkty spełniające warunki zostają zmienione, a pozostałe są pomijane jako
+  `completeness_gate`.
+
+Sprawdzana jest wyłącznie zmiana statusu. Produkt, który staje się dostępny, bo
+dołącza do kanału, kanał zyskuje język, otwiera się jego okno publikacji, zmienia się
+jego grupa odbiorców albo zostaje przywrócony z archiwum, nie jest sprawdzany — braki w
+każdym kanale i języku pokazuje wtedy **przegląd zakresów** w edytorze produktu.
+Ustawienie `active` dla zarchiwizowanego produktu jest sprawdzane jak każda zmiana
+statusu, choć produkt pozostaje zarchiwizowany. Importy, synchronizacja z PIM i upsert
+przez klucz API nigdy nie są sprawdzane.
+
+## Ceny
+
+**Produkt nie ma własnej ceny.** Każda cena jest wierszem cennika modułu `price_lists`: cena bazowa
+produktu w każdej walucie, ceny jego wariantów oraz każda cena katalogowa, cena kupującego i cena
+promocyjna. Cenę bazową produktu ustawia się w zakładce **Pricing** edytora produktu — panel *Ceny
+bazowe* i lista cenników ustalających cenę produktu pochodzą z modułu `price_lists` — albo w siatce
+cennika cen bazowych. Ceny wariantów ustawia się w tych samych miejscach, nigdy w samym wariancie.
+Na stronie modułu `price_lists` opisano, jak wybierana jest cena, którą płaci kupujący.
+
+- **Karty na listach, strona produktu i produkty powiązane** pokazują własną cenę oglądającego —
+  ceny jego organizacji i grupy klientów w kanale sprzedaży i walucie żądania. Produkt, którego
+  warianty kosztują różnie, pokazuje najniższą cenę jako cenę *od* (`ProductSummary.price` niesie
+  `variesByVariant` i `maxAmount`); naliczona cena promocyjna niesie zwykłą cenę kupującego jako cenę
+  porównawczą; przy włączonym `pricing.show_list_price` niższa cena kupującego niesie cenę katalogową
+  jako `listPrice`. Produkt, którego nic nie wycenia, nie ma ceny i prowadzi do zapytania ofertowego.
+- **Sortowanie i filtrowanie według ceny** — `?sort=price`, `?sort=-price`, `minPrice`, `maxPrice`
+  w `GET /api/v1/catalog/products` — porządkują i wybierają według tej samej ceny dla ilości 1, którą
+  karty pokazują temu oglądającemu, a dla produktu z wariantami według ceny *od*. Produkty z ceną
+  zawsze są przed produktami bez ceny. Porządek według ceny zawsze pochodzi z PostgreSQL, nigdy z
+  indeksu wyszukiwania. Przechodzenie kursorem przez porządek według ceny pokazuje każdy produkt raz,
+  o ile jego cena się w tym czasie nie zmienia; produkt, którego cena zmieni się w trakcie, może
+  pojawić się dwa razy albo wcale, jak przy każdym kursorze po bieżącej cenie. Strona może być krótsza,
+  a nawet pusta, i mimo to mieć dalszy ciąg (`hasMore: true`), gdy większość odczytanych wierszy jest
+  ukryta przed oglądającym; wtedy należy podążyć za jej kursorem.
+  Kursor porządku według ceny i zakresu cen jest zapieczętowany: nie da się go odczytać ani zmienić,
+  bo miejsce, od którego prowadzi dalej, może być produktem, którego oglądający nie widzi. Kursor,
+  którego nie da się otworzyć — zmieniony, wydany przez wersję sprzed pieczętowania albo przed zmianą
+  klucza sesji instancji — zaczyna listę od pierwszej strony.
+- **Gdy tryb wyświetlania cen oglądającego to *Żaden*** — na przykład dla niezalogowanego
+  odwiedzającego w kanale, który ukrywa ceny do czasu zalogowania — lista i szczegóły produktu nie
+  zawierają kwoty, a sortowanie i zakres cen są dla tej strony odrzucane. Kanały sprzedaży nie mają
+  już własnej flagi widoczności cen: o tym, co widzi każdy oglądający, decyduje tryb wyświetlania.
+
+Dla programistów: ścieżki list wyceniają całą stronę jednym zbiorczym wywołaniem —
+`resolveListingPrices` albo `resolveListingPriceDetails` tam, gdzie strona pokazuje podział
+(`ProductSummary.resolvedPrice`: `basePrice`, `salePrice`, `listPrice`, `displayMode`) — przez
+wycinki portu `pricingService` z `@endora-commerce/contracts`, przekazując organizację i konto
+klienta oglądającego, a nie wyliczoną grupę. Porządek według ceny czyta `ListingPriceOrderPort`
+(`orderByUnitPrice`, `pricedProductIds`) z wstępnie wyliczonej powierzchni cen modułu `price_lists`,
+a końcówkę bez cen składa sam (`catalog-query.service.ts`). Zewnętrzne API katalogu wycenia przez
+`resolveLinePrices` i buduje drabinę progów związanej organizacji z `listTierStarts`. Zapisy
+produktów, kategorii i atrybutów publikują zdarzenia, które subskrybuje `price_lists`; czyszczą one
+pamięć podręczną cen i oznaczają na powierzchni cen produkty, których dotyczy każde zdarzenie, do
+odświeżenia przez workera powierzchni.
+
+### Usunięte pola cen (uwaga migracyjna)
+
+Wydanie, które wprowadziło cenniki w obecnym kształcie, usunęło *Default unit price* produktu
+(klucze `defaultPrice` i `price` w `attributeValues` oraz pole edytora) oraz nadpisanie ceny wariantu
+(`product_variants.price_override` i pole ceny w edytorze wariantu), bez konwersji żadnego z nich.
+Tworzenie i aktualizacja produktu i wariantu oraz import produktów odrzucają te pola z kodem
+`400 PRICE_SET_IN_PRICE_BOOKS` (`PRICE_FIELDS_REFUSED_ON_PRODUCTS`, `PRICE_FIELDS_REFUSED_ON_VARIANTS`
+w `@endora-commerce/contracts`), informując, że ceny ustawia się w cennikach. Migracja katalogu
+`20261022T111811_catalog_price_fields_removed.ts` usunęła kolumnę i klucze.
 
 ## Encje
 
@@ -171,15 +327,17 @@ w całości; ścisłe schematy to `CATALOG_WEBHOOK_EVENT_SCHEMAS` w `@endora-com
 | --- | --- | --- |
 | `product.created.v1` | Utworzono produkt — w panelu administracyjnym, przez zapis kluczem API, przez import albo synchronizację z PIM, albo przez powielenie innego produktu. | `productId` (UUID), `sku` — SKU, z którym produkt utworzono; może się później zmienić, `productId` nie. |
 | `product.updated.v1` | Zapisano produkt albo utworzono, zmieniono lub usunięto jeden z jego wariantów. | `productId`, `changedFields` — nazwy pól produktu, których dotyczył zapis (`name`, `status`, `categoryIds`, …; `variants` przy zapisie wariantu). Same nazwy, lista otwarta, może być pusta. |
-| `product.archived.v1` | Status produktu zmienia się na `inactive` z innego statusu. Raz na każdą taką zmianę: edycja produktu, który już jest nieaktywny, nie wysyła go ponownie. | `productId` |
+| `product.archived.v1` | Produkt zarchiwizowano akcją Archiwizuj — pojedynczo albo zbiorczo. Raz na każdą taką zmianę: archiwizacja produktu już zarchiwizowanego niczego nie wysyła. Zmiana statusu nigdy go nie wysyła: `inactive` to zwykłe wyłączenie. | `productId` |
 
-- **Kolejność.** Zapis archiwizujący wysyła `product.updated.v1` (ze `status` w `changedFields`), a
-  potem `product.archived.v1` — na każdej ścieżce, która może zarchiwizować produkt: w panelu
-  administracyjnym, przy zapisie kluczem API, w edycji zbiorczej i w imporcie.
-- **Ponowna aktywacja nie ma własnego zdarzenia.** Produkt, który przestaje być `inactive`, wysyła
-  `product.updated.v1` ze `status` w `changedFields` i nic więcej — to ten sam sygnał co przy każdej
-  innej zmianie statusu, także przy opublikowaniu szkicu. Aby je rozróżnić, odczytaj produkt:
-  odpowiedzią jest jego `status`.
+- **Kolejność.** Archiwizuj wysyła `product.updated.v1` (z `archivedAt` w `changedFields`), a
+  potem `product.archived.v1` — dla pojedynczego produktu i dla każdego produktu archiwizacji
+  zbiorczej.
+- **Przywrócenie nie ma własnego zdarzenia.** Przywróć wysyła `product.updated.v1` z `archivedAt`
+  w `changedFields` i nic więcej. Włączenie albo wyłączenie produktu wysyła `product.updated.v1`
+  ze `status`. Aby je rozróżnić, odczytaj produkt: odpowiedzią są jego `status` i `archivedAt`.
+- **Cofnięcie.** Cofnięcie edycji zbiorczej wysyła `product.updated.v1` dla każdego produktu,
+  który przywróciło, z nazwami przywróconych pól, oraz `product.archived.v1` tam, gdzie ponownie
+  archiwizuje produkt.
 - **Usunięcie nie jest dostarczane.** Usunięcie produktu emituje `product.deleted.v1` wyłącznie na
   działającej w procesie szynie zdarzeń; webhookom się go nie oferuje i nie jest przy tym wysyłane
   `product.archived.v1`. Odbiorca odwzorowujący katalog dowiaduje się o usunięciu z odczytu: API
@@ -198,12 +356,112 @@ w całości; ścisłe schematy to `CATALOG_WEBHOOK_EVENT_SCHEMAS` w `@endora-com
 
 ## Punkty rozszerzenia
 
-- **Ceny w poszczególnych kanałach sprzedaży** — usługa zapytań dostaje kontekst kanału sprzedaży;
-  nowe ograniczenia (np. katalogi dla segmentów klientów) dodaje się przez kompozycję w
-  `catalog-query.service.ts`.
+- **Listy w poszczególnych kanałach sprzedaży** — usługa zapytań dostaje kontekst kanału sprzedaży,
+  a każda pokazywana cena jest wyceniana dla tego kanału; nowe ograniczenia (np. katalogi dla
+  segmentów klientów) dodaje się przez kompozycję w `catalog-query.service.ts`.
+- **Strefy edytora produktu** — edytor montuje strefy panelu, do których dokładają się inne
+  moduły; `product.editor.seo.after`, na końcu karty SEO (właściwości: `productId`), to miejsce,
+  w którym moduł SEO umieszcza link do edytora metatagów, dzięki czemu katalog go nie wymienia.
 - **Unikalność sluga** — slug jest domyślnie unikalny we wszystkich kanałach sprzedaży; jeśli kolizje
   między językami staną się problemem, nadpisz mechanizm tworzenia slugów w
   `catalog-admin.service.ts`.
+
+## Zasady zamawiania: minimalna ilość zamówienia i zwroty
+
+Dwie zasady na produkcie decydują o tym, jak można go zamówić i czy można go odesłać. Obie edytuje
+się na karcie **Zasady zamawiania** w zakładce **Inventory** edytora produktu.
+
+> **Aktualizacja: każdy istniejący produkt zaczyna jako niepodlegający zwrotowi.** Produkt, na
+> którym nikt nie ustawił **Podlega zwrotowi**, nie podlega zwrotowi — dotyczy to również każdego
+> produktu, który istniał przed wprowadzeniem tego ustawienia. Pozycje zamówień złożonych po
+> aktualizacji nie podlegają więc zwrotowi, dopóki nie oznaczysz ich produktów. Aby oznaczyć wiele
+> naraz, zaznacz je na liście produktów i użyj **Edycja masowa → Podlega zwrotowi → Tak — podlega
+> zwrotowi**. Zamówienia złożone przed aktualizacją pozostają bez zmian: ich pozycje podlegają
+> zwrotowi na dotychczasowych zasadach.
+
+### Minimalna ilość zamówienia
+
+- **Minimalna ilość zamówienia (szt.)** — najmniejsza liczba sztuk produktu, jaką kupujący może
+  zamówić w jednym zamówieniu. Opcjonalna; liczba całkowita od **1 do 1 000 000** albo puste pole,
+  gdy minimum nie ma. Dotyczy tylko produktów `simple` i `configurable`: na produkcie `grouped`,
+  `bundle` lub `virtual` karta o tym informuje, a API odrzuca to pole z kodem
+  `422 VALIDATION_FAILED` wskazującym `minOrderQuantity`, przy tworzeniu i przy aktualizacji.
+  Wartość spoza zakresu jest odrzucana z kodem `400 VALIDATION_FAILED`.
+- **Minimum dla jednostki opakowania** — każda jednostka opakowania może mieć własną minimalną
+  liczbę jednostek; zob. [Jednostki opakowania](./catalog/packaging-units.md).
+
+Minimum ocenia się na **łącznej ilości produktu**: liczy się każda pozycja produktu w koszyku —
+pozycje z pojedynczymi sztukami i z jednostkami opakowania, wszystkie warianty. Minimum jednostki
+opakowania liczy jednostki tej jednostki zamówione dla produktu, we wszystkich wariantach. Oba
+sprawdzenia są niezależne; koszyk musi spełnić każde ustawione minimum. Warianty dziedziczą
+minimum produktu.
+
+Stosuje je każda droga do koszyka, zapytania ofertowego albo zamówienia — koszyk, checkout, szybkie
+zamówienie, zakup jednym kliknięciem, listy zakupowe, zapytania ofertowe, ekran tworzenia
+zamówienia w panelu administracyjnym i zewnętrzne API zamówień. Strona każdego z tych modułów opisuje,
+co jego ścieżka robi z pozycją poniżej minimum. Odmowa to `422 PRODUCT_BELOW_MINIMUM_QUANTITY`
+(sztuki) albo `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` (jednostka opakowania), z komunikatem w
+języku kupującego podającym produkt i minimum. Usunięcie pozycji jest zawsze dozwolone.
+
+Produkt, którego kupujący nie może zobaczyć albo którego kanał sprzedaży z żądania nie publikuje,
+jest na każdej ścieżce zgłaszany jako nieznany produkt — jego nazwa i minimum nigdy nie są
+ujawniane.
+
+Szczegóły produktu w storefroncie, lista produktów, wyniki wyszukiwania i porównanie niosą
+`minOrderQuantity` (`null`, gdy minimum nie ma albo typ produktu go nie przyjmuje); tablica
+`packagingUnits[]` w szczegółach produktu niesie `minOrderUnits` każdej jednostki. Storefront
+zaczyna ilość od minimum i nie pozwala wybrać mniej.
+
+### Podlega zwrotowi
+
+**Podlega zwrotowi** (tak / nie, na każdym typie produktu) określa, czy kupujący może ująć produkt
+w **zwrocie**. Nie ogranicza **reklamacji**. Domyślnie: nie.
+
+Wartość jest **zapisywana na każdej pozycji zamówienia w chwili jego złożenia**
+(`order_items.returnable_at_purchase`); późniejsza zmiana flagi nie zmienia żadnego złożonego już
+zamówienia. Pozycja, której produktu nie dało się odczytać przy składaniu zamówienia, jest
+zapisywana jako niepodlegająca zwrotowi. To, co moduł Returns robi z zapisaną wartością, opisuje
+jego własna strona.
+
+### Dla kanału sprzedaży
+
+Obie zasady można nadpisać dla jednego kanału sprzedaży — **Zasady zamawiania** kanału w
+zakresach produktu (`PATCH /api/v1/admin/catalog/products/:id/scopes`, pola
+`minOrderQuantity` i `returnable` wpisu kanału; `null` przywraca wartość globalną).
+Wartość kanału obowiązuje wszędzie, gdzie koszyk, zamówienie albo zapytanie ofertowe należy
+do tego kanału: przy dodawaniu do koszyka, w widoku koszyka, przy przekazaniu do akceptacji,
+w podglądzie zamówienia, przy składaniu zamówienia, w podglądzie zamówienia tworzonego przez
+operatora, w zapytaniach ofertowych i w imporcie szybkiego zamówienia przez kupującego.
+Minimum kanału równe 1 oznacza brak minimum w tym kanale niezależnie od wartości globalnej.
+Przy składaniu zamówienia na każdej pozycji zapisywana jest flaga zwrotu z kanału
+zamówienia, więc zwroty podążają za kanałem, w którym złożono zamówienie. Karta produktu i
+lista produktów w sklepie podają minimum kanału żądania.
+
+### Audyt i kopie
+
+Ustawienie lub usunięcie którejkolwiek zasady trafia do dziennika audytu jak każda edycja
+produktu, ze starą i nową wartością. **Edycja masowa → Podlega zwrotowi** zapisuje jeden wpis
+audytu na każdy zmieniony produkt — do 200 produktów w jednym synchronicznym żądaniu, powyżej tej
+liczby przez kolejkowaną edycję masową. Zmiana zasady nigdy nie zmienia istniejącego koszyka,
+zamówienia, zapytania ofertowego ani zwrotu. **Duplicate** nie kopiuje żadnej z zasad: kopia
+zaczyna bez minimum i jako niepodlegająca zwrotowi.
+
+### API
+
+| Pole | Gdzie | Wartości |
+| --- | --- | --- |
+| `minOrderQuantity` | `POST` / `PATCH /api/v1/admin/catalog/products[/:id]`, odpowiedź produktu w panelu | liczba całkowita `1…1000000` albo `null`, aby usunąć |
+| `returnable` | to samo oraz `POST /api/v1/admin/catalog/products/bulk-update` | boolean |
+| `minOrderUnits` | `POST` / `PATCH …/packaging-units[/:unitId]`, odpowiedź jednostki opakowania | liczba całkowita `1…1000000` albo `null`, aby usunąć |
+
+Port odczytu katalogu (`CatalogProductReadPort`) podaje `minOrderQuantity` i `returnable` na każdym
+rekordzie produktu oraz `minOrderUnits` na każdej jednostce opakowania, a do odczytów zbiorczych
+dostaje metodę `listPackagingUnitsByProductIds`. Jak każda metoda tego portu nie stosuje żadnej
+polityki widoczności: wywołujący przekazuje tylko identyfikatory produktów, które już sprawdził.
+
+Migracja `20261016T082008_catalog_order_rules.ts` dodaje `products.min_order_quantity` (dopuszcza
+`null`, `CHECK` 1–1 000 000), `products.returnable` (not null, domyślnie `false`) oraz
+`product_packaging_units.min_order_units` (dopuszcza `null`, `CHECK` 1–1 000 000).
 
 ## Struktura i kompozycja produktu
 
@@ -222,6 +480,47 @@ Katalog zyskał kilka dodatkowych możliwości, każda z własną stroną:
 
 Obsługiwanych jest pięć typów produktu: `simple`, `configurable`, `grouped`, `bundle`, `virtual`.
 `simple` i `configurable` to pierwotna para; pozostałe trzy dodano później.
+
+## Bloki Page Buildera
+
+Katalog deklaruje bloki produktów i kategorii Page Buildera. Ich dane są
+odczytywane po stronie serwera, więc produkty są w HTML strony.
+
+**Siatka produktów i slider produktów** (`catalog.ProductGrid`,
+`catalog.ProductSlider`) zachowują wszystkie dotychczasowe opcje — źródło
+produktów (wybrane produkty, kategoria, wyszukiwanie), limit, kolumny, odstęp i
+widok — i dodają:
+
+| Opcja | Znaczenie |
+| --- | --- |
+| Nagłówek | Opcjonalny tytuł, tekst wstępu i przycisk (np. „Zobacz wszystkie”) nad produktami. |
+| Styl karty | Domyślna, kompaktowa, pozioma albo **showcase**: zdjęcie produktu na neutralnym tle, nazwa, krótki opis i link „więcej” — bez ceny i SKU. |
+| Tekst pod nazwą produktu | Jeden wiersz pod nazwą na każdej karcie: domyślny dla stylu karty (SKU na karcie domyślnej, kompaktowej i poziomej, krótki opis na karcie showcase), **Krótki opis** (pierwsze słowa opisu produktu, najwyżej 160 znaków), SKU albo nic. Podgląd w edytorze stron pokazuje ten sam wiersz co sklep. |
+| Grubość nazwy na karcie | Grubość nazwy produktu na każdej karcie: **Domyślna** (właściwa stylowi karty) albo 300–800. |
+| Tło obrazu karty | Kolor pola za obrazem każdej karty: kolor marki albo wartość szesnastkowa. Puste pole zostawia jasnoszare tło właściwe stylowi karty. |
+| Linia pod każdą kartą | **Brak** (jak dotąd) albo **Linia**: linia o grubości 1 px pod każdą kartą, w wybranym **kolorze linii** albo w neutralnym kolorze obramowania. W karcie z obramowaniem linią staje się jej dolna krawędź; karta „showcase” dostaje ją 16 px pod tekstem. |
+| Etykieta linku karty | Tekst linku na karcie showcase; „More”, gdy pole jest puste. |
+| Odstęp (siatka) | Stopień skali odstępów albo **Własny odstęp (px)**, dla każdego progu. Siatka zapisana z odstępem w pikselach otwiera się z wartością własną o tej liczbie i wygląda jak dotąd. Odstęp siatki kategorii działa tak samo. |
+| Równa wysokość elementów (siatka) | Dla każdego progu, obok kolumn i widoku, na karcie **Responsive**; wartość zapisana wcześniej obowiązuje na każdej szerokości. Tak samo działa w siatce kategorii. |
+| Przycisk pod produktami | Opcjonalny przycisk pod siatką lub sliderem. |
+
+Slider przejmuje opcje karuzeli Page Buildera: liczbę slajdów w widoku dla
+każdego progu, odstęp, efekt przesuwania lub przenikania, położenie strzałek i
+kropek, wyjście do krawędzi okna i opcjonalne automatyczne przewijanie. Siatka
+lub slider zapisane, zanim te opcje istniały, wyświetlają się jak wcześniej.
+Aby nadać któremuś z tych bloków kotwicę, schemat kolorów, tło, odstępy lub
+szerokość, umieść go w bloku **Sekcja** (`cms.Section`). Teksty nagłówka,
+etykietę linku karty i etykietę
+przycisku pod produktami można tłumaczyć akcją **Przetłumacz** w Page Builderze.
+
+**Krótki opis produktu.** Lista produktów i szczegóły produktu w storefroncie
+(`GET /api/v1/catalog/products`, `GET /api/v1/catalog/products/:idOrSlug`)
+zwracają `summary`: opis produktu w języku żądania jako zwykły tekst, przycięty
+na granicy słowa do najwyżej 160 znaków z `…`, albo `null`, gdy produkt nie ma
+opisu. Powstaje z opisu, który odczyt i tak wczytuje, więc nie kosztuje
+dodatkowego zapytania na produkt (`src/backend/services/product-summary-text.ts`
+w pakiecie modułu).
+Pokazuje go karta showcase.
 
 ## Rozszerzenia atrybutów na ścieżkach odczytu katalogu
 
@@ -333,4 +632,4 @@ Wyszukiwanie globalne w panelu administracyjnym (paleta poleceń, ⌘K / Ctrl+K)
 | Kategoria: Nazwa | tak |
 | Kategoria: Klucz URL (slug) | tak |
 
-Nazwy są dopasowywane we wszystkich językach i wyświetlane w języku administratora. Produkty robocze i nieaktywne są znajdowane i pokazują swój status; usunięte produkty i kategorie nie są znajdowane. Wynik kategorii otwiera drzewo kategorii z wyróżnioną tą kategorią. Oba typy pojawiają się dla roli z uprawnieniem `catalog:read`.
+Nazwy są dopasowywane we wszystkich językach i wyświetlane w języku administratora. Produkty nieaktywne i zarchiwizowane są znajdowane i pokazują swój status; usunięte produkty i kategorie nie są znajdowane. Wynik kategorii otwiera drzewo kategorii z wyróżnioną tą kategorią. Oba typy pojawiają się dla roli z uprawnieniem `catalog:read`.

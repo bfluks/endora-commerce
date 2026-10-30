@@ -52,9 +52,9 @@ itself resolved — a product the chosen channel does not sell is refused with
 `404 PRODUCT_NOT_FOUND`, and one it sells is accepted even when the system
 default does not sell it. Admin creation does accept a channel that exists but
 is switched off, which the storefront refuses with `422`
-`order_sales_channel_mismatch`; and a product outside the chosen channel's
-assortment is refused only after the customer's basket has been cleared, so
-that basket is not restored.
+`order_sales_channel_mismatch`. A product outside the chosen channel's
+assortment is refused before the customer's basket is touched, so the basket
+is left as it was.
 
 What is read from an order's channel:
 
@@ -320,10 +320,15 @@ once the module is back on.
 
 `Order`, `OrderItem`, `Payment`, `OrderStatus`,
 `OrderStatusTransition`, `OrderTransitionEffect`, `OrderComment`,
-`OrderListSavedView`, and the
+`OrderListSavedView`, `OrderItemGroup` (an order's line groups — see *Line
+groups*), and the
 `organizations.order_confirmation_emails` column (owned by `organizations`,
 read via a port). `OrderItem` snapshots the product + variant + unit price +
 tax rate at placement so historical orders survive pricing / catalog changes.
+It also copies the cart line's `price_source` — `agreed`, `base`, `catalogue`,
+`buyer` or `sale`, the price-book step (or the quote agreement) that priced the
+line — into `order_items.price_source`; the column is stored for reporting and
+for a later promotions rule, and is not part of the order API's answer.
 
 ## Events emitted
 
@@ -372,7 +377,9 @@ that fails announces nothing.
 - **Bulk** — `POST …/bulk/status` (eligible orders move; skipped reported with
   reason — a skipped order has not moved) and `…/bulk/print-invoices`.
 - **Comments** — admin/customer `…/:id/comments` with customer-visibility +
-  notify flags; closed on terminal orders.
+  notify flags; closed on terminal orders. The platform also writes internal
+  **system notes** here for custom-field values not carried into the order —
+  see *The system note* below.
 - **Reorder** — `…/:id/reorder` rebuilds the cart (gated by
   `orders.reorder_enabled`); **clone-to-quote** — `…/:id/clone-to-quote`.
 
@@ -393,8 +400,9 @@ shows **Items** at once.
   type filter and a search by SKU, slug or name. The selection survives page,
   page-size and filter changes, and **Add N** adds every ticked product as a
   line of quantity 1 — at most 200 in one step. Grouped and bundle parents,
-  draft and inactive products, and products already on the order are listed
-  with their reason and cannot be ticked.
+  and draft and inactive products, are listed with their reason and cannot be
+  ticked. A product already on the order can be added again: it becomes a line
+  of its own (for instance in another group).
 - **Quick add by name or SKU**, beside it, appends one product under the same
   rules.
 
@@ -417,15 +425,106 @@ code — the first that applies, in this order — and shows one reason:
 | `PRODUCT_NOT_VISIBLE_TO_CUSTOMER` | *The customer cannot see this product* | The product's visibility or its allowed organizations exclude the customer's Organization: change them on the product in the catalogue, choose another customer, or remove the line. |
 | `PRODUCT_NOT_IN_SALES_CHANNEL` | *Not in this sales channel's assortment* | Choose a sales channel whose assortment holds the product, add the product to this channel's assortment, or remove the line. |
 | `QUOTE_ONLY` | *No price* | The customer's price for the product is quote-only: remove the line, or create a quote request instead. |
+| `UNPRICED` | *No price* | No price book prices the product for this customer, channel and currency — not even a base price: set a base price, remove the line, or create a quote request instead. |
+| `BELOW_MINIMUM_QUANTITY` | *Below the minimum of N pcs* | The product's total on the order is below its minimum order quantity: raise the quantity, or remove the line. |
 
-A code the screen does not know is shown as *No price* as well. The other lines
+`BELOW_MINIMUM_QUANTITY` carries the `minimum` and is judged only over the
+lines that passed the checks above it, summing each product's lines. The lines
+are priced from the price books exactly as the customer's basket would price
+them — one batched resolution for every line, at each line's own quantity and
+variant — so the order created is charged what the preview showed. A
+code the screen does not know is shown as *No price* as well. The other lines
 keep their prices and the summary counts only the priced ones. The preview
 checks the assortment of exactly the sales channel the request names; a
 `salesChannelId` that names no channel is refused with `404 NOT_FOUND`, and the
 screen shows *Could not calculate prices* without marking any line. A
 soft-deleted product is priced as before. The order created is exactly the
-lines and quantities on screen, in the unchanged `POST /api/v1/admin/orders`
+lines and quantities on screen, in the `POST /api/v1/admin/orders`
 payload.
+
+**At most 200 lines.** `POST /api/v1/admin/orders` and
+`POST /api/v1/admin/orders/preview` refuse more than 200 items as their first
+step, with `422 VALIDATION_FAILED` and `details: { code: 'too_many_items',
+maximum: 200 }`, before any line is evaluated. Create order also refuses a
+request in which a product's total is below its minimum, with the minimum
+error and `details.lines[]` keyed by the item's `index`.
+
+**Line groups.** The screen's items can be sorted into named groups — *Add
+group*, rename, delete, drag and drop, the keyboard and each line's *Move to
+group* menu, exactly as on a quote request's *Modify* tab; a group's own *Add
+product* adds to that group, anything else to *Ungrouped*. Each group shows its
+item count, net, VAT and gross next to the live price summary; for that the
+preview answers each priced line's `taxRate` (a fraction, `0.23`, from the
+same authority as the summary's tax total; absent on a line it cannot price),
+and a group's VAT is the sum of net × rate over its lines. Moving a line between groups does not price the order again. Every
+group needs a name before **Create order** enables. See *Line groups* below for
+what the order keeps.
+
+**Split line.** A line of quantity 2 or more has a *Split line* button beside
+*Move to group*. It asks for the quantity to move to a new line (from 1 to the
+line's quantity minus 1) and the group of the new line — the line's own by
+default — and adds a line of the same product with that quantity, reducing the
+original. This is how one product goes into two groups: for example 5 pieces in
+*Hall A* and 3 in *Hall B*. Each line is priced at its own quantity.
+
+## Custom-field values carried into an order
+
+An order can receive custom-field values from the record it came from, for every field whose
+**Carry value to Order** option is on (set on **Custom Fields**; the rules — same key, compatible
+type and options, the audience rule — are on that module's page). Only an empty order field is
+filled, and only once.
+
+- **From a quote request, at placement.** When the customer places an order from the basket filled
+  by ordering an accepted quote request, and the order records that quote request (the same rules
+  that decide whether it does: the request still approved, used by no other order, in the
+  customer's organization, at least one agreed line still in the basket), the request's values —
+  as they are at that moment — are written with the order itself. They are part of its creation,
+  not a later edit. Nothing is carried when the order does not record a quote request, or while
+  the Quote Requests module is switched off.
+- **From a sales opportunity.** An order an administrator creates from an opportunity (**Create
+  order** on its *Links* tab) receives the opportunity's values once the CRM module has linked it
+  to that opportunity, in a separate change attributed to the **system**; the order's creation
+  stays attributed to the administrator. An order linked to an opportunity by hand receives nothing.
+- **Not the other way.** Cloning an order into a quote request carries no value.
+- **Nothing fails.** A value that cannot be carried is skipped, and the order is placed or linked
+  all the same.
+
+For an order placed on a customer's behalf, the `order.place_on_behalf` audit entry lists the
+carried keys as `carriedCustomFieldKeys`. A customer's own checkout writes no audit entry, as
+before. The carried values are on the order from the start, so subscribers of `order.created.v1`
+read them.
+
+### The system note
+
+When a value is skipped, the order's **Comments** tab holds one note by **System** for that
+placement or link, marked *Internal*: *Not carried from quote request …:* or *Not carried from
+sales opportunity …:*, followed by one line per skipped field — the name of the field it came from, as it
+read when it was skipped, and the reason (no such field on the order, a different type, a field visible to
+customers fed by an internal one, a value the field does not accept). Anybody who can open the
+order can read it; it shows no value.
+
+The note is never shown to the customer — not in the storefront and not on the customer's comments
+endpoint — and sends no notification. It has no author: `systemNote` on the admin comment reply
+(`GET /api/v1/admin/orders/:id/comments`) holds its structure — `kind`
+(`custom_field_carry_skipped`), `source` (`entityType`, `recordId`, `reference`) and `skipped`
+(`key`, `reason`, `label`) — and `body` holds an English sentence for any reader that does not
+translate it. Every other comment answers `systemNote: null`.
+
+## Custom-field filters
+
+An order custom field whose **Use as list filter** option is on (set on **Custom Fields**) is
+offered as a filter in the order list's advanced filters, labelled in your language: the text it
+contains, a number or date range, yes or no, or one or more options. An order without a value for
+the field never matches. Each custom-field filter is shown as a removable chip beside the other
+active filters, narrows the total and every page, and returns the list to its first page when it
+changes. The filters are in the page address, so a filtered list can be bookmarked or shared, and
+the **CSV export** exports the same orders.
+
+If the address names a filter that is no longer available — its option was switched off or the
+field deleted — the list says so by the field's name and offers **Remove this filter**; the CSV
+export is not offered until it is removed. API callers send the filters as `customFieldFilters` on
+`GET /api/v1/admin/orders` and `GET /api/v1/admin/orders/export`, and read the offered fields
+from `GET /api/v1/admin/orders/custom-field-filters` (`orders:read`). An inverted range (`min` above `max`, `from` after `to`) or an operator that does not apply to the field's type answers `400` `VALIDATION_FAILED`.
 
 ## Saved views
 
@@ -440,8 +539,10 @@ is **— Select a view —**, and two buttons beside it: **Save view** and
 
 - **What a view remembers.** Every filter on the order list — status, payment
   status, sales channel, payment method, delivery method, the date range, the
-  search text, the organization and customer names and the total range — plus
-  the sort and the visible columns. Choosing a view replaces all of them with
+  search text, the organization and customer names, the total range and the
+  custom-field filters — plus the sort and the visible columns. A custom-field
+  filter that is no longer available when the view is loaded is dropped, with a
+  notice naming it, and the rest of the view loads. Choosing a view replaces all of them with
   the view's values: a filter the view does not hold is cleared, anything you
   had changed and not saved is discarded, and the list goes back to its first
   page.
@@ -564,9 +665,128 @@ name a quote request.
 With the Quote Requests module switched off, orders are placed exactly as
 before and record no quote request.
 
+## Line groups
+
+An order can show its lines in **named groups** — *Hall A*, *Hall B* — with the
+lines without a group under **Other items**. Groups are presentation only: they
+change no price, quantity or total. An order gets them in one of two ways, and
+**never changes them afterwards**: no screen and no API edits a placed order's
+grouping.
+
+**From an accepted quote request.** When placement records the quote request
+the basket came from (see the previous section), the order copies the quote's
+groups in the same transaction. Each order line is matched to a quote line:
+first every line with the **same product, variant, agreed quantity and agreed
+unit price**, then by product, variant and price, then by product, variant and
+quantity, and finally by **product and variant** alone, each quote line used
+once. So a product split over two groups of the quote — 5 pieces in one, 3 in
+another, at one price — keeps each line in its group.
+A matched line takes the quote line's group and order; a line that matches
+nothing — added to the basket after the conversion, or changed so it no longer
+matches — goes under *Other items*, after the matched ones. A quote group that
+receives no line is not copied. When placement does not record the quote
+request, or the Quote Requests module is switched off, the order is placed
+without groups, otherwise exactly as before. A later change to the quote leaves
+the order's groups alone.
+
+**From the Create order screen.** An operator arranges the lines into groups
+before creating the order (see *The Create order screen*); the order is created
+with them in the same transaction, and a refused creation writes no group.
+Groups without a line are not created. **One product may be on several lines**
+— in two different groups, or twice in one: each request line becomes an order
+line of its own, in its own group, priced at its own quantity (a product's
+minimum order quantity is still judged on its total across its lines).
+`POST /api/v1/admin/orders` takes an optional `groups` list
+(`{ key, name }`, in display order, at most 50, names of 1 to 120 characters)
+and per item an optional `groupKey`. The grouping is recorded in the
+`order.place_on_behalf` audit entry (each group's name and line count); a
+buyer's own checkout stays unaudited, as before.
+
+**Where they are shown.** The admin order screen and the buyer's order page
+show each group as a headed section with its lines and a summary — item count,
+net, VAT and gross, adding up the rows above it — then *Other items*. An order
+without groups, and every order placed before groups existed, looks exactly as
+before. Every order reply — admin, customer and the external order API —
+carries `itemGroups` (`{ id, name, position }`) and, per line, `groupId` and
+`position`, lines in display order; an integration that ignores them keeps
+working.
+
+**What does not carry groups.** Invoices, returns, reorder (it fills a basket),
+*order again as a quote request*, the cart and checkout, e-mails, webhooks and
+the external order intake. There is no order PDF.
+
+## Order minimums at placement
+
+Placement applies the catalogue's minimum order quantities to every basket
+line — the product's minimum in pieces and each packaging unit's minimum in
+units, counted over every line of the product (the Catalog module's page
+defines both). It is the last word on every path that ends in an order:
+checkout, one-click buy, a reorder, a basket filled from a quote request, the
+admin's Create order and the external order API.
+
+- **Before any side effect.** The check runs inside the placement transaction
+  right after the basket is read — before the order value and credit checks,
+  the order number, and any stock or credit reservation. A refusal writes
+  nothing.
+- **What it answers.** A line whose product record is gone →
+  `404 PRODUCT_NOT_FOUND` with `details.cartItemIds`. A line below a minimum →
+  `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]`, one entry
+  per offending line (`cartItemId`, `productId`, `productName`, `kind`,
+  `minimum`, `packagingUnitName`). The sentence and the product names are in
+  the language the response is answered in: an administrator's stored
+  language, otherwise the request's `Accept-Language` (q-weights honoured),
+  otherwise the channel's default language.
+- **The checkout preview says the same first.** `POST /api/v1/orders/preview-total`
+  answers `belowMinimumLines[]` — the lines placement would refuse, with the
+  same exemptions; a line whose product is gone has `kind: 'product_unavailable'`
+  and no name or minimum. The storefront lists them and disables **Place
+  order**. The preview takes no lock, so under a race placement decides.
+- **A basket filled from an accepted quote request.** The Carts module exempts
+  each line seeded from the quote while its quantity equals the quote's.
+  Placement and the preview honour that exemption **only while the quote
+  request is still valid at that moment**: it exists, belongs to the buyer's
+  organization, is still `Approved` — not canceled or expired, its validity not
+  ended — no order records it yet, and the basket still holds at least one of
+  its lines at the agreed price. Otherwise every line is judged like any other.
+  The check and its lock run at the start of placement, so the exemption is
+  decided before anything is written. With the Quote Requests module switched
+  off, nothing can vouch for the quote and no line is exempt.
+  The preview's check is also published as `orderQuoteSourcePort`, which the
+  Carts module asks when a basket is submitted for approval, so submit judges a
+  quote-seeded line as the preview does; placement confirms the quote again.
+- **External order API** (`POST /api/v1/external/orders`) and admin Create
+  order build the basket from the request and judge each product's total over
+  the request's lines; a below-minimum request is refused whole, with
+  `details.lines[]` keyed by `index`. The request is judged on its own — the
+  basket it replaces counts toward nothing — and refused **before** the
+  customer's basket is touched, so a refused request leaves that basket exactly
+  as it was. The same holds for a line with no price or one sold on request
+  only: it is priced before the basket is replaced. Neither carries a packaging unit, so only
+  the pieces minimum applies there. **Both refuse more than 200 lines** with
+  `422 VALIDATION_FAILED`, `details.code = 'too_many_items'` — on the external
+  API this is checked first, before the `Idempotency-Key` header is required,
+  and leaves no idempotency record.
+
+## Returnable at purchase
+
+Each order line records whether its product was returnable when the order was
+placed (`order_items.returnable_at_purchase`), on every placement path. Later
+changes to the product's **Returnable** flag do not change it. A line whose
+product record or flag cannot be read at placement is recorded as **not
+returnable**, never left empty. Lines of orders placed before this column
+existed hold `null`, which the Returns module treats as returnable. The value
+reaches Returns through `OrderReturnContextPort` (`returnableAtPurchase` on each
+line); Returns reads no Orders table. Placement records it whether or not the
+Returns module is switched on.
+
+Migration `20261016T082022_orders_order_item_returnable_at_purchase.ts` adds
+the column (nullable).
+
 ## Settings
 
-`orders.min_order_value` (number, gates Checkout + admin create),
+`orders.min_order_value` (number, gates Checkout + admin create; an amount, so
+at most two decimal places — more is refused with `400 AMOUNT_PRECISION_EXCEEDED`),
 `orders.reorder_enabled` (boolean), `orders.confirmation_recipients`
 (string list) — all global or per-sales-channel. Plus per-org
 `order_confirmation_emails`. The confirmation email CCs the customer + org

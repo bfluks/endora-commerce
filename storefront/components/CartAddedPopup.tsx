@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
-import Link from 'next/link';
 import type { AddToCartResult } from '../lib/cartAddState';
+import { LocalizedLink } from '../lib/i18n/localized-link';
 
 /**
  * Confirmation popup shown after a PDP add-to-cart. Reacts to the
@@ -72,12 +72,12 @@ export function CartAddedPopup({
             >
               {continueLabel}
             </button>
-            <Link
+            <LocalizedLink
               href={cartHref}
               className="btn btn--dark h-[34px] px-3 text-[12px] no-underline"
             >
               {goToCartLabel}
-            </Link>
+            </LocalizedLink>
           </div>
         ) : null}
       </div>

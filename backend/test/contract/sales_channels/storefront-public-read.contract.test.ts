@@ -131,4 +131,61 @@ describe('storefront public sales-channel read', () => {
     });
     expect(r.statusCode).toBeGreaterThanOrEqual(400);
   });
+
+  // -- Feature 167: the derived URL languages (FR-004) ----------------------
+
+  async function createLanguageChannel(code: string, languages: string[], prefixDefaultLanguage: boolean): Promise<void> {
+    const em = h.em();
+    em.persist(
+      em.create(SalesChannel, {
+        code,
+        name: { 'pl-PL': code },
+        active: true,
+        systemDefault: false,
+        defaultLanguage: 'pl-PL',
+        defaultCurrency: 'PLN',
+        languages,
+        currencies: ['PLN'],
+        prefixDefaultLanguage,
+      }),
+    );
+    await em.flush();
+    await h.salesChannels.cache.invalidateAll();
+  }
+
+  async function read(code: string) {
+    const r = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/storefront/sales-channel',
+      headers: { 'x-sales-channel': code },
+    });
+    expect(r.statusCode).toBe(200);
+    const parsed = PublicSalesChannelResponseSchema.safeParse(r.json());
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    return parsed.data!.data;
+  }
+
+  it.each([true, false])('answers urlLanguages for pl-PL, en-US with the setting %s', async (on) => {
+    await createLanguageChannel(`url-two-${on}`, ['pl-PL', 'en-US'], on);
+    const data = await read(`url-two-${on}`);
+    expect(data.prefixDefaultLanguage).toBe(on);
+    expect(data.urlLanguages).toEqual([
+      { languageCode: 'pl-PL', prefix: 'pl', prefixed: on, isDefault: true },
+      { languageCode: 'en-US', prefix: 'en', prefixed: true, isDefault: false },
+    ]);
+    expect(data.urlLanguageAliases).toEqual([]);
+  });
+
+  it.each([true, false])('answers full-tag prefixes and the split alias for pl-PL, en-US, en-GB with the setting %s', async (on) => {
+    // `en-GB` is not seeded by the test server's dictionary; the read derives from
+    // whatever the channel row lists.
+    await createLanguageChannel(`url-three-${on}`, ['pl-PL', 'en-US', 'en-GB'], on);
+    const data = await read(`url-three-${on}`);
+    expect(data.urlLanguages.map((l) => [l.languageCode, l.prefix, l.prefixed])).toEqual([
+      ['pl-PL', 'pl', on],
+      ['en-US', 'en-us', true],
+      ['en-GB', 'en-gb', true],
+    ]);
+    expect(data.urlLanguageAliases).toEqual([{ alias: 'en', languageCodes: ['en-US', 'en-GB'] }]);
+  });
 });

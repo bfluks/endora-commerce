@@ -1,9 +1,9 @@
-import { redirect } from 'next/navigation';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { requestPasswordReset } from '../../../../lib/api/auth';
 import { StorefrontApiError } from '../../../../lib/api/client';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -32,7 +32,7 @@ export default async function PasswordResetRequestPage({
           If <strong>{params.email}</strong> matches an account, we just emailed a reset link.
         </p>
         <p className="b2b-auth__hint">
-          The link expires in 24 hours. <Link href="/login">Back to sign-in</Link>.
+          The link expires in 24 hours. <LocalizedLink href="/login">Back to sign-in</LocalizedLink>.
         </p>
       </div>
     );
@@ -53,7 +53,7 @@ export default async function PasswordResetRequestPage({
         </div>
       </form>
       <p className="b2b-auth__hint">
-        Remembered it? <Link href="/login">Sign in</Link>.
+        Remembered it? <LocalizedLink href="/login">Sign in</LocalizedLink>.
       </p>
     </div>
   );
@@ -76,7 +76,7 @@ async function requestAction(formData: FormData): Promise<void> {
     }
   }
   if (throttled !== null) {
-    redirect(`/password-reset/request?error=${encodeURIComponent(throttled)}`);
+    return await localeRedirect(`/password-reset/request?error=${encodeURIComponent(throttled)}`);
   }
-  redirect(`/password-reset/request?status=sent&email=${encodeURIComponent(email)}`);
+  return await localeRedirect(`/password-reset/request?status=sent&email=${encodeURIComponent(email)}`);
 }

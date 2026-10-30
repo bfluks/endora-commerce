@@ -14,7 +14,7 @@ import { makeGuardsBeforeValidationOnRoute } from './guards-before-validation.js
 import { registerErrorEnvelope } from './error-envelope.js';
 import {
   attachOpenApiAutoRegistration,
-  registerOpenApiRoutes,
+  provideApiDescription,
   type OpenApiMetadata,
 } from './openapi.js';
 import type { ErrorEnvelopeOptions } from './error-envelope.js';
@@ -193,7 +193,10 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
 
   registerErrorEnvelope(app, options.errorEnvelope);
   attachOpenApiAutoRegistration(app);
-  registerOpenApiRoutes(app, options.openApi);
+  // The document is provided here; the routes that serve it are gated and are
+  // mounted by `_lifecycle`, where the admin guard exists
+  // (`lifecycle/routes.api-description.ts`).
+  provideApiDescription(app, options.openApi);
 
   for (const modulePlugin of options.modules ?? []) {
     await modulePlugin(app);

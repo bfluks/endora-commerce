@@ -24,10 +24,12 @@ const PRODUCT_B = '22222222-2222-4222-8222-222222222222';
 const GONE = '33333333-3333-4333-8333-333333333333';
 const ASSET_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ASSET_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const CHANNEL = '44444444-4444-4444-8444-444444444444';
 
 interface Recorded {
   readonly statements: string[];
   readonly entityReads: string[];
+  readonly params?: unknown[][];
 }
 
 function roundTrips(recorded: Recorded): number {
@@ -48,11 +50,12 @@ function roundTrips(recorded: Recorded): number {
  */
 function fakeEm(recorded: Recorded, rowsFor: (sql: string) => unknown[]): () => EntityManager {
   const em = {
-    execute: async (sql: string) => {
+    execute: async (sql: string, params: unknown[] = []) => {
       if (/\bassets\b/i.test(sql)) {
         throw new Error(`catalog must not join assets_library's table: ${sql}`);
       }
       recorded.statements.push(sql);
+      recorded.params?.push(params);
       return rowsFor(sql);
     },
     find: async (entity: { name?: string }) => {
@@ -103,7 +106,7 @@ describe('catalog — listForProducts', () => {
       assetPort({}),
     );
 
-    const items = await service.listForProducts([PRODUCT_A, PRODUCT_B, GONE]);
+    const items = await service.listForProducts([PRODUCT_A, PRODUCT_B, GONE], null);
 
     expect(roundTrips(recorded)).toBe(1);
     expect(recorded.statements[0]).toMatch(/order by\s+gi\.product_id,\s*gi\.position asc/i);
@@ -118,7 +121,7 @@ describe('catalog — listForProducts', () => {
     const recorded: Recorded = { statements: [], entityReads: [] };
     const service = new GalleryService(fakeEm(recorded, () => []), undefined, assetPort({}));
 
-    await expect(service.listForProducts([GONE])).resolves.toEqual([]);
+    await expect(service.listForProducts([GONE], null)).resolves.toEqual([]);
     // `list` reaches for `Product` first; the batch read must not.
     expect(recorded.entityReads).toEqual([]);
   });
@@ -127,7 +130,7 @@ describe('catalog — listForProducts', () => {
     const recorded: Recorded = { statements: [], entityReads: [] };
     const service = new GalleryService(fakeEm(recorded, () => []), undefined, assetPort({}));
 
-    await expect(service.listForProducts([])).resolves.toEqual([]);
+    await expect(service.listForProducts([], null)).resolves.toEqual([]);
     expect(roundTrips(recorded)).toBe(0);
   });
 });
@@ -141,7 +144,7 @@ describe('catalog — baseImageUrls', () => {
       assetPort({ [ASSET_A]: 'https://cdn.test/a.png' }),
     );
 
-    const urls = await service.baseImageUrls([PRODUCT_A, PRODUCT_B]);
+    const urls = await service.baseImageUrls([PRODUCT_A, PRODUCT_B], null);
 
     expect(recorded.statements).toHaveLength(1);
     expect(recorded.statements[0]).toMatch(/gallery_item_labels/i);
@@ -156,7 +159,7 @@ describe('catalog — baseImageUrls', () => {
     const recorded: Recorded = { statements: [], entityReads: [] };
     const service = new GalleryService(fakeEm(recorded, () => []), undefined, assetPort({}));
 
-    const urls = await service.baseImageUrls([GONE, PRODUCT_A]);
+    const urls = await service.baseImageUrls([GONE, PRODUCT_A], null);
 
     expect([...urls.keys()]).toEqual([GONE, PRODUCT_A]);
     expect(urls.get(GONE)).toBeNull();
@@ -171,7 +174,7 @@ describe('catalog — baseImageUrls', () => {
       assetPort({}),
     );
 
-    await expect(service.baseImageUrls([PRODUCT_A])).resolves.toEqual(
+    await expect(service.baseImageUrls([PRODUCT_A], null)).resolves.toEqual(
       new Map([[PRODUCT_A, null]]),
     );
   });
@@ -186,7 +189,7 @@ describe('catalog — baseImageUrls', () => {
 
     // The statement filters on `label = 'base_image'`, so a product whose only
     // label is `thumbnail` contributes no row and reads as "no base image".
-    await expect(service.baseImageUrls([PRODUCT_A])).resolves.toEqual(
+    await expect(service.baseImageUrls([PRODUCT_A], null)).resolves.toEqual(
       new Map([[PRODUCT_A, null]]),
     );
     expect(recorded.statements[0]).not.toMatch(/thumbnail/i);
@@ -210,19 +213,20 @@ describe('catalog — baseImageUrls', () => {
       } as unknown as AssetReadPort,
     );
 
-    await service.baseImageUrls([PRODUCT_A, PRODUCT_B]);
+    await service.baseImageUrls([PRODUCT_A, PRODUCT_B], null);
 
     expect(batches).toEqual([[ASSET_A, ASSET_B]]);
   });
 });
 
 describe('catalog — the round-trip cost the batch read exists to remove', () => {
-  it('costs one round-trip for 500 products where `list` costs 1500', async () => {
+  it('costs one round-trip for 500 products where `list` costs 2000', async () => {
     const ids = Array.from({ length: 500 }, (_, i) => `product-${i}`);
 
     const batch: Recorded = { statements: [], entityReads: [] };
     await new GalleryService(fakeEm(batch, () => []), undefined, assetPort({})).listForProducts(
       ids,
+      CHANNEL,
     );
 
     const perProduct: Recorded = { statements: [], entityReads: [] };
@@ -230,7 +234,60 @@ describe('catalog — the round-trip cost the batch read exists to remove', () =
     for (const id of ids) await oneByOne.list(id);
 
     expect(roundTrips(batch)).toBe(1);
-    // `#assertProductExists` + `find(GalleryItem)` + `find(GalleryItemLabel)`.
-    expect(roundTrips(perProduct)).toBe(1500);
+    // `#assertProductExists` + `find(GalleryItem)` + `find(GalleryItemLabel)` + the
+    // item's hidden channels (feature 163, FR-076).
+    expect(roundTrips(perProduct)).toBe(2000);
+  });
+});
+
+/**
+ * Feature 163 (FR-076, owner decision MED-1 = A) — an image hidden in a channel reaches
+ * neither a feed of that channel (`listForProducts`) nor a comparison seen in it
+ * (`baseImageUrls`). Still one statement per batch; the hidden set and the channel's
+ * role holders are joined in it rather than read per product.
+ */
+describe('catalog — the batch reads in a channel', () => {
+  it('listForProducts leaves out the items hidden in the channel, in the same one statement', async () => {
+    const recorded: Recorded = { statements: [], entityReads: [], params: [] };
+    const service = new GalleryService(fakeEm(recorded, () => []), undefined, assetPort({}));
+
+    await service.listForProducts([PRODUCT_A], CHANNEL);
+
+    expect(roundTrips(recorded)).toBe(1);
+    expect(recorded.statements[0]).toMatch(/not exists[\s\S]*gallery_item_channel_hidden/i);
+    expect(recorded.params?.[0]).toContain(CHANNEL);
+  });
+
+  it('listForProducts naming no channel reads no hidden set (the global gallery)', async () => {
+    const recorded: Recorded = { statements: [], entityReads: [], params: [] };
+    const service = new GalleryService(fakeEm(recorded, () => []), undefined, assetPort({}));
+
+    await service.listForProducts([PRODUCT_A], null);
+
+    expect(recorded.statements[0]).not.toMatch(/gallery_item_channel_hidden/i);
+  });
+
+  it('baseImageUrls takes the channel holder of the role, else the global one, and none when it is hidden', async () => {
+    const recorded: Recorded = { statements: [], entityReads: [], params: [] };
+    const service = new GalleryService(
+      fakeEm(recorded, () => [{ product_id: PRODUCT_A, asset_id: ASSET_B }]),
+      undefined,
+      assetPort({ [ASSET_B]: 'https://cdn.test/b.png' }),
+    );
+
+    const urls = await service.baseImageUrls([PRODUCT_A, PRODUCT_B], CHANNEL);
+
+    expect(recorded.statements).toHaveLength(1);
+    const sql = recorded.statements[0]!;
+    expect(sql).toMatch(/gallery_item_channel_labels/i);
+    expect(sql).toMatch(/gallery_item_labels/i);
+    expect(sql).toMatch(/coalesce/i);
+    expect(sql).toMatch(/not exists[\s\S]*gallery_item_channel_hidden/i);
+    expect(sql).not.toMatch(/thumbnail/i);
+    expect(recorded.params?.[0]).toContain(CHANNEL);
+    expect([...urls]).toEqual([
+      [PRODUCT_A, 'https://cdn.test/b.png'],
+      [PRODUCT_B, null],
+    ]);
   });
 });

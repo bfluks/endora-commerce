@@ -50,7 +50,9 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 
 ## Command palette
 
-_None._
+| Action | Opens | Permission |
+| --- | --- | --- |
+| `open-carts` | `/carts` | `carts:read` |
 
 ## Settings
 

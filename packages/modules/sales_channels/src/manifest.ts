@@ -160,6 +160,11 @@ export const manifest = defineModuleManifest({
     { code: 'SALES_CHANNEL_ATTRIBUTION_IMMUTABLE' },
     { code: 'SALES_CHANNEL_CODE_IMMUTABLE' },
     { code: 'SALES_CHANNEL_HAS_ATTRIBUTIONS' },
+    // Feature 154 — the two refusals of the access rule. Raised by the kernel's
+    // access step and by the customer sign-in paths; owned here by the domain
+    // noun, as `INACTIVE_SALES_CHANNEL` is for the same platform thrower.
+    { code: 'SALES_CHANNEL_NOT_PERMITTED' },
+    { code: 'SALES_CHANNEL_SIGN_IN_REQUIRED' },
     { code: 'STALE_SALES_CHANNEL_WRITE' },
     { code: 'UNKNOWN_CURRENCY_CODE' },
     { code: 'UNKNOWN_LANGUAGE_CODE' },
@@ -183,6 +188,11 @@ export const manifest = defineModuleManifest({
      * row's; the label and description are the two strings it rendered
      * (`appShell.nav.salesChannels`, `appShell.palette.sub.storefrontChannels`),
      * moved into this module's own bundle.
+     *
+     * Keywords are matched in every admin language, so they carry both. The
+     * plural `kanały` is the screen's Polish name: matching is "query word ⊂
+     * keyword", so `kanał` alone left an English-language admin typing
+     * `kanały` with nothing.
      */
     {
       id: 'open-sales-channels',
@@ -191,7 +201,7 @@ export const manifest = defineModuleManifest({
       icon: 'Store',
       targetRoute: '/sales-channels',
       requiredPermission: 'sales_channels:read',
-      keywords: ['sales', 'channel', 'channels', 'kanał', 'sprzedaży'],
+      keywords: ['sales', 'channel', 'channels', 'kanał', 'kanały', 'sprzedaży'],
       weight: 160,
     },
     {

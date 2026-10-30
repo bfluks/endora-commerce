@@ -27,7 +27,20 @@ export interface NotificationMessageInput {
   params?: Record<string, string | number>;
 }
 
-export interface ListNotificationsInput {
+/**
+ * Whether the reader may see the `all_admins` broadcast audience (issue #518).
+ *
+ * The bell is a signed-in-admin surface: an administrator always reads and
+ * acknowledges their own `admin_user` rows. Broadcasts are gated on
+ * `admin:read`, which the route resolves and passes here — the service holds
+ * no permission check of its own. Required, not defaulted: a caller that
+ * forgot to ask must not be answered with the broadcasts.
+ */
+export interface BroadcastAccess {
+  includeBroadcasts: boolean;
+}
+
+export interface ListNotificationsInput extends BroadcastAccess {
   adminUserId: string;
   unread?: boolean;
   limit?: number;
@@ -86,6 +99,32 @@ export class AdminNotificationService {
   async record(input: RecordNotificationInput): Promise<AdminNotification> {
     // command-coverage-ignore: admin notification bookkeeping — system-generated
     // alert record / read-state, not an audited domain-state mutation.
+    const em = this.emFactory();
+    const entry = this.#create(em, input);
+    await em.persistAndFlush(entry);
+    await this.pruneStale(input.audience, input.targetAdminUserId ?? null);
+    return entry;
+  }
+
+  /**
+   * {@link record} on the **caller's** EntityManager: created and persisted
+   * into its unit of work, with no fork and no flush, so the entry commits or
+   * rolls back with the caller's transaction (`specs/165-task-management/`
+   * SC-004 — a reminder's delivery row and its bell entry are one write). The
+   * recipient's older entries are pruned by their next {@link record}.
+   */
+  recordWithin(em: EntityManager, input: RecordNotificationInput): AdminNotification {
+    // command-coverage-ignore: admin notification bookkeeping, persisted into the
+    // caller's unit of work — the caller's Command is what commits it.
+    const entry = this.#create(em, input);
+    em.persist(entry);
+    return entry;
+  }
+
+  /** One entry, checked and created on `em` — not persisted. */
+  #create(em: EntityManager, input: RecordNotificationInput): AdminNotification {
+    // command-coverage-ignore: admin notification bookkeeping — the entry both
+    // writers above persist; not an audited domain-state mutation.
     if (input.audience === 'admin_user' && !input.targetAdminUserId) {
       throw new Error(
         'AdminNotificationService.record: targetAdminUserId is required when audience="admin_user".',
@@ -105,8 +144,7 @@ export class AdminNotificationService {
         'AdminNotificationService.record: bodyMessage requires a body — the finished sentence shown when the message cannot be resolved.',
       );
     }
-    const em = this.emFactory();
-    const entry = em.create(AdminNotification, {
+    return em.create(AdminNotification, {
       audience: input.audience,
       targetAdminUserId: input.targetAdminUserId ?? null,
       kind: input.kind,
@@ -118,9 +156,6 @@ export class AdminNotificationService {
       titleMessage,
       bodyMessage,
     });
-    await em.persistAndFlush(entry);
-    await this.pruneStale(input.audience, input.targetAdminUserId ?? null);
-    return entry;
   }
 
   async listForAdmin(input: ListNotificationsInput): Promise<ListNotificationsResult> {
@@ -134,9 +169,14 @@ export class AdminNotificationService {
     // binding is prepended when the final params array is assembled below.
     const whereParams: (string | number | boolean | null)[] = [];
 
-    // Visible to this admin: their personal rows OR broadcasts.
+    const { includeBroadcasts } = input;
+
+    // Visible to this admin: their personal rows, and broadcasts when they may
+    // read them.
     whereParts.push(
-      `(n."audience" = 'all_admins' or (n."audience" = 'admin_user' and n."target_admin_user_id" = ?))`,
+      includeBroadcasts
+        ? `(n."audience" = 'all_admins' or (n."audience" = 'admin_user' and n."target_admin_user_id" = ?))`
+        : `(n."audience" = 'admin_user' and n."target_admin_user_id" = ?)`,
     );
     whereParams.push(input.adminUserId);
 
@@ -218,12 +258,16 @@ export class AdminNotificationService {
       ? this.serializeCursor({ createdAt: new Date(visibleRows[visibleRows.length - 1]!.createdAt), id: visibleRows[visibleRows.length - 1]!.id })
       : null;
 
-    const unreadCount = await this.countUnreadForAdmin(input.adminUserId);
+    const unreadCount = await this.countUnreadForAdmin(input.adminUserId, { includeBroadcasts });
 
     return { items, nextCursor, unreadCount };
   }
 
-  async markRead(notificationId: string, adminUserId: string): Promise<void> {
+  async markRead(
+    notificationId: string,
+    adminUserId: string,
+    access: BroadcastAccess,
+  ): Promise<void> {
     // command-coverage-ignore: admin notification bookkeeping — system-generated
     // alert record / read-state, not an audited domain-state mutation.
     const em = this.emFactory();
@@ -231,7 +275,7 @@ export class AdminNotificationService {
     if (!entry) {
       throw new NotificationNotFoundError(notificationId);
     }
-    if (!this.isVisibleToAdmin(entry, adminUserId)) {
+    if (!this.isVisibleToAdmin(entry, adminUserId, access.includeBroadcasts)) {
       throw new NotificationNotFoundError(notificationId);
     }
     if (entry.audience === 'admin_user') {
@@ -253,7 +297,7 @@ export class AdminNotificationService {
     await em.persistAndFlush(cursor);
   }
 
-  async markAllRead(adminUserId: string): Promise<number> {
+  async markAllRead(adminUserId: string, access: BroadcastAccess): Promise<number> {
     const em = this.emFactory();
     const knex = em.getConnection().getKnex();
     let count = 0;
@@ -272,6 +316,8 @@ export class AdminNotificationService {
       [adminUserId],
     )) as { rows: Array<{ id: string }> };
     count += personalUpdate.rows.length;
+
+    if (!access.includeBroadcasts) return count;
 
     // Broadcasts — insert per-admin read cursors for every visible unread broadcast.
     const broadcastInsert = (await knex.raw(
@@ -295,9 +341,23 @@ export class AdminNotificationService {
     return count;
   }
 
-  async countUnreadForAdmin(adminUserId: string): Promise<number> {
+  async countUnreadForAdmin(adminUserId: string, access: BroadcastAccess): Promise<number> {
     const em = this.emFactory();
     const knex = em.getConnection().getKnex();
+    if (!access.includeBroadcasts) {
+      const personal = (await knex.raw(
+        `
+        select count(*)::int as "count"
+          from "admin_notifications" n
+         where n."archived_at" is null
+           and n."audience" = 'admin_user'
+           and n."target_admin_user_id" = ?
+           and n."read_at" is null;
+      `,
+        [adminUserId],
+      )) as { rows: Array<{ count: number }> };
+      return personal.rows[0]?.count ?? 0;
+    }
     const sql = `
       select count(*)::int as "count"
         from "admin_notifications" n
@@ -369,8 +429,12 @@ export class AdminNotificationService {
     }
   }
 
-  private isVisibleToAdmin(entry: AdminNotification, adminUserId: string): boolean {
-    if (entry.audience === 'all_admins') return true;
+  private isVisibleToAdmin(
+    entry: AdminNotification,
+    adminUserId: string,
+    includeBroadcasts: boolean,
+  ): boolean {
+    if (entry.audience === 'all_admins') return includeBroadcasts;
     return entry.targetAdminUserId === adminUserId;
   }
 

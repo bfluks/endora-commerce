@@ -13,14 +13,34 @@
  * pulling a new runtime dependency.
  *
  * Invalidation: every write path on `PriceListService` calls
- * `invalidateAll()`. Coarse but correct — the resolver fans across
- * every active list, so any list mutation in principle affects every
- * tuple, and the cache is rebuilt within seconds of a quiet period.
- * Finer-grained invalidation can land later if profiling shows it
- * matters.
+ * `invalidateAll()` — through `PricingGeneration`, **after** the write
+ * commits, which also announces the bump to every other process (D-287
+ * P0). Coarse but correct — the resolver fans across every active list,
+ * so any list mutation in principle affects every tuple, and the cache
+ * is rebuilt within seconds of a quiet period.
+ *
+ * **A fill that began before an invalidation is not stored.** A
+ * resolution reads {@link PricingCache.generation} before its first
+ * statement and hands it back to `set`; if a write committed and
+ * invalidated in between, the answer it read is the pre-write one, and
+ * storing it would pin that price for a whole TTL. The caller still gets
+ * its answer — it is what the database said when it asked.
  *
  * Tests opt out by passing `{ ttlMs: 0 }` so each call goes through.
  */
+
+/**
+ * Feature 160 (D-287 P1, research R6) — the price-book engine's key: the
+ * pricing profile (which carries channel, currency, precedence version and the
+ * buyer-book vector) instead of the organization and group, so buyers who meet
+ * the same books share entries.
+ */
+export interface ProfilePricingCacheKey {
+  profileKey: string;
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+}
 
 export interface PricingCacheKey {
   productId: string;
@@ -40,21 +60,31 @@ interface CachedEntry<T> {
 export const DEFAULT_PRICING_CACHE_TTL_MS = 60_000;
 const DEFAULT_CAPACITY = 5_000;
 
-export class PricingCache<T> {
+export class PricingCache<T, K = PricingCacheKey> {
   private readonly ttlMs: number;
   private readonly capacity: number;
+  private readonly serialize: (key: K) => string;
   private readonly entries = new Map<string, CachedEntry<T>>();
   private hitCount = 0;
   private missCount = 0;
+  #generation = 0;
 
-  constructor(options: { ttlMs?: number; capacity?: number } = {}) {
+  constructor(
+    options: { ttlMs?: number; capacity?: number; serialize?: (key: K) => string } = {},
+  ) {
     this.ttlMs = options.ttlMs ?? DEFAULT_PRICING_CACHE_TTL_MS;
     this.capacity = options.capacity ?? DEFAULT_CAPACITY;
+    this.serialize = options.serialize ?? stableKey;
   }
 
-  get(key: PricingCacheKey): T | undefined {
+  /** Whether entries are kept at all (`ttlMs > 0`). */
+  get enabled(): boolean {
+    return this.ttlMs > 0;
+  }
+
+  get(key: K): T | undefined {
     if (this.ttlMs <= 0) return undefined;
-    const k = serializeKey(key);
+    const k = this.serialize(key);
     const entry = this.entries.get(k);
     if (!entry) {
       this.missCount += 1;
@@ -72,9 +102,20 @@ export class PricingCache<T> {
     return entry.value;
   }
 
-  set(key: PricingCacheKey, value: T): void {
+  /** Bumped by every {@link invalidateAll}; see the header. */
+  get generation(): number {
+    return this.#generation;
+  }
+
+  /**
+   * Store an answer. `generation` is the value of {@link generation} read
+   * before the resolution started; an answer that straddled an
+   * invalidation is dropped rather than stored.
+   */
+  set(key: K, value: T, generation?: number): void {
     if (this.ttlMs <= 0) return;
-    const k = serializeKey(key);
+    if (generation !== undefined && generation !== this.#generation) return;
+    const k = this.serialize(key);
     if (this.entries.has(k)) this.entries.delete(k);
     else if (this.entries.size >= this.capacity) {
       // Evict oldest insertion (Map iterates in insertion order).
@@ -85,6 +126,7 @@ export class PricingCache<T> {
   }
 
   invalidateAll(): void {
+    this.#generation += 1;
     this.entries.clear();
   }
 
@@ -93,14 +135,15 @@ export class PricingCache<T> {
   }
 }
 
-function serializeKey(key: PricingCacheKey): string {
-  return [
-    key.productId,
-    key.variantId ?? '',
-    key.quantity,
-    key.currencyCode,
-    key.salesChannelId,
-    key.organizationId ?? '',
-    key.customerGroupId ?? '',
-  ].join('|');
+/**
+ * The default serializer: every field of the key, in key-name order, so any
+ * flat key object serializes deterministically (feature 160 — the profile key
+ * and the profile memo key share the cache class with the legacy key).
+ */
+function stableKey(key: unknown): string {
+  const record = key as Record<string, unknown>;
+  return Object.keys(record)
+    .sort()
+    .map((name) => `${name}=${String(record[name] ?? '')}`)
+    .join('|');
 }

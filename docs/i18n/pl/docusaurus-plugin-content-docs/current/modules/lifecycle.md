@@ -99,7 +99,7 @@ import { defineModuleManifest, defineModuleSettingsManifest } from '@endora-comm
 export const manifest = defineModuleManifest({
   id: 'pricing',
   name: 'Pricing',
-  description: 'Customer-group pricing with brackets and display modes.',
+  description: 'Price books and price display modes.',
   version: '1.0.0',
   dependencies: ['settings', 'sales_channels'],
   settings: defineModuleSettingsManifest({
@@ -272,7 +272,10 @@ pnpm --filter backend run composer:generate
 
 Własny `package.json` pakietu modułu też jest generowany, innym poleceniem, a jego wynik zmienia
 deklaracje workspace — dlatego od razu uruchom instalację i zatwierdź razem z nim
-`pnpm-lock.yaml`:
+`pnpm-lock.yaml`. To samo polecenie dopisuje nowy pakiet do `backend/package.json` (a gdy
+pakiet zawiera `src/admin/`, także do `admin/package.json`) — nie dodawaj tych wpisów ręcznie.
+Zbuduj pakiet, zanim uruchomisz polecenie drugi raz: gdy pakiet ma już `package.json`,
+`manifests:generate` i `manifests:check` odrzucają go, dopóki nie istnieje jego `dist`.
 
 ```bash
 pnpm --filter backend run manifests:generate

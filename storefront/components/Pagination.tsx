@@ -1,6 +1,6 @@
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { tForLocale } from '../lib/i18n/messages';
+import { LocalizedLink } from '../lib/i18n/localized-link';
 
 /**
  * Cursor-style pagination — emits a "Next" link as a styled outline
@@ -26,13 +26,13 @@ export function Pagination(props: {
     <nav className="mt-6 flex flex-wrap items-center justify-between gap-3" aria-label="Pagination">
       <span className="text-[12px] text-muted" aria-hidden="true" />
       <div className="flex gap-1.5">
-        <Link
+        <LocalizedLink
           href={`${props.basePath}?${params.toString()}` as never}
           rel="next"
           className="btn btn--outline btn--sm"
         >
           {t('pagination.next')} <ChevRightIcon />
-        </Link>
+        </LocalizedLink>
       </div>
     </nav>
   );

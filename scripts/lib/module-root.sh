@@ -129,6 +129,11 @@ module_root_nested_checkouts() {
 # got away would match more than it was asked to. The trailing separator is what
 # makes `vendor/fork` not match `vendor/fork-of-ours`, and what lets a listing's
 # bare directory entry (`vendor/fork/`) match its own root.
+#
+# The list reaches awk through the environment, never `-v` (issue #315): BSD
+# awk, the one macOS ships, aborts on a newline in a `-v` value, and every list
+# of more than one is newline-separated. `ENVIRON` is POSIX and mawk reads it
+# too. `module_root_module_directories` passes its ids the same way.
 module_root_drop_nested_checkouts() {
   local roots
   roots="$(module_root_nested_checkouts)"
@@ -136,8 +141,8 @@ module_root_drop_nested_checkouts() {
     cat
     return 0
   fi
-  awk -v roots="$roots" '
-    BEGIN { total = split(roots, root, "\n") }
+  MODULE_ROOT_AWK_LIST="$roots" awk '
+    BEGIN { total = split(ENVIRON["MODULE_ROOT_AWK_LIST"], root, "\n") }
     {
       for (i = 1; i <= total; i++) {
         if (length(root[i]) > 0 && index($0, root[i] "/") == 1) next
@@ -237,8 +242,8 @@ module_root_module_directories() {
   find . \( "${prune[@]}" \) -prune -o -type f -name 'manifest.ts' -print 2>/dev/null |
     sed 's|^\./||' |
     module_root_drop_nested_checkouts |
-    awk -v ids="$ids" '
-      BEGIN { total = split(ids, id, "\n"); for (i = 1; i <= total; i++) registered[id[i]] = 1 }
+    MODULE_ROOT_AWK_LIST="$ids" awk '
+      BEGIN { total = split(ENVIRON["MODULE_ROOT_AWK_LIST"], id, "\n"); for (i = 1; i <= total; i++) registered[id[i]] = 1 }
       {
         depth = split($0, segment, "/")
         # The file itself is the last segment; a module directory is one of the

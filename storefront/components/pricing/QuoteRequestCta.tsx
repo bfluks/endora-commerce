@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { AddToRfqButton } from '../rfq/AddToRfqButton';
+import { LocalizedAnchor } from '../../lib/i18n/localized-link';
 
 /**
  * CTA replacement rendered when the resolved display mode is `none` (FR-041).
@@ -22,19 +23,26 @@ export function QuoteRequestCta(props: {
   label?: string;
   /** Hide the explanatory blurb shown above the form on the PDP. */
   withoutHint?: boolean;
+  /**
+   * Feature 155 (FR-032) — the product's pieces minimum: the PDP variant's quantity starts at
+   * it and the add never puts fewer pieces in the quote-request draft. `null`/absent = none.
+   */
+  minOrderQuantity?: number | null | undefined;
+  /** Request locale for the add button's copy and the minimum statement. */
+  locale?: string;
 }): ReactNode {
   const { productId, productSlug, productName, variant = 'pdp', unitPrice, label, withoutHint } =
     props;
 
   if (variant === 'card') {
     return (
-      <a
+      <LocalizedAnchor
         href={`/p/${encodeURIComponent(productSlug)}#quote`}
         className="inline-block font-mono text-[12px] text-accent underline"
         data-product-id={productId}
       >
         {label ?? 'Cena na zapytanie'}
-      </a>
+      </LocalizedAnchor>
     );
   }
 
@@ -51,6 +59,8 @@ export function QuoteRequestCta(props: {
         productName={productName ?? productSlug}
         unitPrice={unitPrice ?? null}
         withQuantity
+        minOrderQuantity={props.minOrderQuantity ?? null}
+        {...(props.locale ? { locale: props.locale } : {})}
       />
     </div>
   );

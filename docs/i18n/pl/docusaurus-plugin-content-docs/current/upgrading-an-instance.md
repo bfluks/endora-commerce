@@ -106,7 +106,8 @@ w ostrzeżeniu i uruchom `pnpm install`.
 
 Aktualizacja przesuwa pakiety, które Twoja instancja już deklaruje. Moduł, który pojawia się
 w wydaniu po raz pierwszy, do nich nie należy, więc po aktualizacji nie jest ani zainstalowany,
-ani widoczny na ekranie **Modules**. Żeby go mieć, zadeklaruj jego pakiet w głównym
+ani widoczny na ekranie **Modules** — chyba że wymaga go moduł zainstalowany w instancji: wtedy
+pierwszy krok `setup`, `endora generate`, sam go deklaruje i instaluje. Żeby mieć każdy inny, zadeklaruj jego pakiet w głównym
 `package.json` i uruchom `setup` — w katalogu głównym instancji:
 
 ```bash
@@ -1664,6 +1665,1669 @@ sekcji żadna instancja nie została zaktualizowana z `0.105.0` poleceniem
 `pnpm run upgrade 0.106.0` i w żadnym storefroncie utworzonym we wcześniejszym wydaniu nie
 wprowadzono trzech powyższych grup plików; kolejność kroków, wiersz dla proxy i zmiany w
 storefroncie nie były wypróbowane.
+
+### Po aktualizacji do wydania 0.107.0 {#after-0-107-0}
+
+`pnpm run upgrade 0.107.0` przenosi pakiety wydania z `0.106.0` i wykonuje jego migracje — piętnaście,
+w tym jedną należącą do nowego modułu szablonów dokumentów. Wydanie przynosi trzy pakiety, których
+wcześniej nie było — `@endora-commerce/mod-document-templates`, `@endora-commerce/mod-admin-search`
+i `@endora-commerce/llm-client` — i **jeden z nich nie jest opcjonalny**: instancja, która
+deklaruje `@endora-commerce/mod-invoices`, potrzebuje także
+`@endora-commerce/mod-document-templates`, a krok `setup` aktualizacji sam go deklaruje i instaluje. Wydanie nie dodaje żadnej zmiennej środowiskowej. Dodaje
+pięć uprawnień (`platform.api_description.read`, `document_templates:read`,
+`document_templates:write`, `admin_search:configure` i `cms.translate`) i przenosi uprawnienia
+importu i eksportu do modułów, do których należą dane.
+
+Najwięcej zmienia się w tym, kto może korzystać z kanału sprzedaży. Każdy kanał ma teraz
+przełącznik *Open to anonymous visitors*, który po aktualizacji jest włączony, a zalogowany klient
+jest obsługiwany w kanale tylko wtedy, gdy jego organizacja jest do tego kanału przypisana.
+Migracja danych tworzy te przypisania dla istniejących organizacji, więc nic się nie zmienia dla
+klienta, który składał zamówienia tam, gdzie kupuje — ale przypisania warto przejrzeć, zanim
+instancja znów przyjmie ruch. Koszyki należą do kanału, w którym zostały napełnione, złożenie
+zamówienia sprawdza ceny koszyka, opis API nie jest już publiczny, a kilka ekranów i odpowiedzi się
+zmienia. Ta sekcja mówi, co zrobić i w jakiej kolejności, a potem — co działa inaczej, osobno dla
+każdego czytelnika: [operatorów](#after-0-107-0-operators),
+[klientów API i integratorów](#after-0-107-0-api),
+[autorów modułów i modułów nakładkowych](#after-0-107-0-authors) oraz właściciela
+[istniejącego storefrontu](#after-0-107-0-storefront).
+
+#### Co zrobić i w jakiej kolejności {#after-0-107-0-steps}
+
+Przed aktualizacją:
+
+1. **Jeśli projektowano szablony faktur, zapisz, co zawierają.** Szablony faktur przeniesiono do
+   nowego modułu *Document templates* i nic nie jest przenoszone automatycznie:
+   `Migration20261017T075839InvoicesDropInvoiceTemplates` usuwa tabelę `invoice_templates`, a PDF-y
+   faktur — zarówno pobierane, jak i dołączane do e-maili — używają wbudowanego układu typu
+   dokumentu faktury (dawnego szablonu ogólnego), dopóki operator nie ustawi szablonu faktury jako
+   domyślnego w **Document templates**. Cofnięcie migracji odtwarza pustą tabelę, nie jej wiersze;
+   jedyną kopią jest kopia zapasowa bazy danych.
+2. **Odczytaj `assets.soft_delete_retention_days`** — *Soft-delete retention before hard-delete
+   (days)* w grupie *Storage* w **Ustawieniach**, domyślnie 30. Od tego wydania zasoby przeniesione
+   do kosza są trwale usuwane przez cogodzinne zadanie, gdy od ich usunięcia minie tyle dni, a
+   **pierwsze uruchomienia po aktualizacji usuwają każdy zasób, który leży w koszu dłużej**, do 500
+   na uruchomienie. Jeśli chcesz te zasoby zachować, wydłuż to ustawienie przed aktualizacją.
+   Wartość mniejsza niż jeden jest odczytywana jako jeden dzień.
+3. **W instancji z więcej niż jednym kanałem sprzedaży odczytaj `quote_requests.expiry_days`** —
+   *Auto-expire pending after (days)* na karcie Quote Requests w **Ustawieniach** — dla każdego
+   kanału, który ma własną wartość. Zadanie wygaszania trzyma się teraz wartości kanału danego
+   zapytania ofertowego, podczas gdy wcześniej stosowało wartość kanału domyślnego do wszystkich:
+   przy pierwszych uruchomieniach kanał z niższą wartością niż domyślna wygasza zaległe zapytania,
+   które były nieaktywne tak długo, a kanał ustawiony na `0` przestaje wygaszać.
+
+Sama aktualizacja:
+
+4. **Uruchom `pnpm run upgrade 0.107.0`.** `invoices` wymienia teraz `document_templates` wśród
+   `dependencies` w swoim manifeście i **jeśli instancja deklaruje `@endora-commerce/mod-invoices`**,
+   krok `setup` aktualizacji dodaje `@endora-commerce/mod-document-templates` do głównego
+   `package.json`, w wersji, w której zadeklarowana jest platforma, i instaluje go przed
+   czymkolwiek innym. Jego pierwszy krok, `endora generate`, pochodzi już z właśnie
+   zainstalowanego wydania i wypisuje wiersz:
+
+   ```text
+   declared @endora-commerce/mod-document-templates 0.107.0 in package.json — invoices needs document_templates (dependencies)
+   ```
+
+   Zatwierdź zmienione `package.json` i `pnpm-lock.yaml` razem z resztą aktualizacji. Jeśli krok
+   `setup` się nie zakończył, uruchom `pnpm run setup` ponownie — kontynuuje od tego miejsca.
+   Ręcznie musi go zadeklarować tylko instancja, w której `setup` pominięto albo która nie
+   uruchamia `generate`:
+
+   ```bash
+   pnpm add -w -E @endora-commerce/mod-document-templates@0.107.0
+   pnpm run setup
+   ```
+
+   Bez tego modułu wdrożenie, które składa `invoices`, odmawia uruchomienia i go wymienia:
+
+   ```text
+   This deployment will not boot: it composes modules whose declarations it does not satisfy.
+
+     document_templates — not shipped by this deployment, and it is needed:
+         invoices — dependencies
+   ```
+
+   Reszta opisu [Dodawanie modułu, który jest nowy w wydaniu](#adding-a-new-module) obowiązuje —
+   flagi i to, co uruchomić ponownie. *Document templates* startuje włączony i nie da się go
+   wyłączyć, dopóki włączony jest `invoices`. Pozostałe zależności dodane w wydaniu — `quote_requests`
+   od `price_lists` i `transactional_emails`, `invoices` i `api_keys` od `admin_roles`,
+   `assets_library` od `admin_users` — wskazują moduły, których nie da się wyłączyć i które każda
+   instancja już deklaruje, więc nie wymagają niczego.
+
+   Migracje, które wykonuje `setup`, w kolejności ich znaczników czasu:
+
+   | Migracja | Moduł | Co robi |
+   | --- | --- | --- |
+   | `Migration20261014T115049QuoteRequestsItemReferencePrice` | `quote_requests` | Trzy kolumny dopuszczające `null` w `quote_request_items` na cenę referencyjną |
+   | `Migration20261014T115053QuoteRequestsNegotiationPolicies` | `quote_requests` | Dwie tabele, `quote_request_org_policies` i `quote_request_account_policies` |
+   | `Migration20261014T170531CatalogProductListSavedViews` | `catalog` | Tabela `product_list_saved_views` |
+   | `Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews` | `quote_requests` | Tabela `quote_request_list_saved_views` |
+   | `Migration20261016T131148PriceListsPriceMatrixEntries` | `price_lists` | Tabela `price_list_matrix_entries` |
+   | `Migration20261016T172243PwaPushNotificationPreferences` | `pwa` | Tabela `push_notification_preferences` |
+   | `Migration20261017T071754DocumentTemplatesInit` | `document_templates` | Tabela `document_templates`, gdy moduł zostanie zadeklarowany |
+   | `Migration20261017T075839InvoicesDropInvoiceTemplates` | `invoices` | Usuwa `invoice_templates` — zob. krok 1 |
+   | `Migration20261017T142116QuoteRequestsQuoteRequestDocumentTemplate` | `quote_requests` | Kolumna `quote_requests.document_template_id` dopuszczająca `null` |
+   | `Migration20261017T142121QuoteRequestsQuoteRequestEventPdfSent` | `quote_requests` | Dopuszcza typ zdarzenia `pdf-sent` |
+   | `Migration20261018T074021CartsCartItemAgreedPrice` | `carts` | Trzy kolumny dopuszczające `null` w `cart_items` na uzgodnioną ilość i cenę z oferty |
+   | `Migration20261018T101912CoreSalesChannelsAnonymousAccess` | platforma | `sales_channels.anonymous_access boolean not null default true` |
+   | `Migration20261018T104644OrganizationsChannelAccessBackfill` | `organizations` | Przypisuje każdej organizacji jej kanały sprzedaży — zob. krok 7 |
+   | `Migration20261018T141739AssetsLibraryAssetVersionsPermalinks` | `assets_library` | Jedenaście kolumn w `assets`, dwie tabele na stałe linki i sprzątanie magazynu |
+   | `Migration20261019T043854CartsChannelBackfill` | `carts` | Zapisuje koszyk bez kanału w domyślnym kanale systemowym |
+
+   Instancja, która deklaruje `@endora-commerce/mod-admin-search`, nie wykonuje dla niego żadnej
+   migracji: moduł nie ma własnych tabel.
+
+Po aktualizacji, zanim instancja znów przyjmie ruch:
+
+5. **Nadaj ponownie uprawnienia do importu i eksportu.** Każda encja na ekranie Import / Export
+   wymaga teraz uprawnienia, które chroni te same wiersze w module, do którego należą, podczas gdy
+   wcześniej każda encja wymagała `catalog:write`:
+
+   | Encja | Eksport | Import |
+   | --- | --- | --- |
+   | `products`, `categories` | `catalog:read` | `catalog:write` |
+   | `stock` | `inventory:read` | `inventory:write` |
+   | `customers` | `customers:read` | — |
+   | `orders` | `orders:read` | — |
+
+   Rola, która eksportowała klientów, zamówienia lub stany magazynowe albo importowała stany na
+   podstawie `catalog:write`, potrzebuje `customers:read`, `orders:read`, `inventory:read` lub
+   `inventory:write` nadanych w **Admin roles** (`/admin-roles`). Rola z `catalog:read` może teraz
+   eksportować produkty i kategorie. Ekran i jego pozycja w menu bocznym otwierają się dla roli z
+   którymkolwiek kodem z tabeli, a karta każdej encji pokazuje tylko te kontrolki, na które rola
+   pozwala.
+6. **Nadaj `platform.api_description.read` tym, którzy czytają opis API.**
+   `GET /api/v1/_openapi.json` i `GET /api/v1/_docs` odpowiadają tylko administratorowi, którego
+   rola ma ten kod, albo kluczowi API wydanemu z tym kodem w zakresach; wszyscy inni dostają `401`
+   (brak sesji administratora i klucza) albo `403` (sesja lub klucz bez kodu). Rola administratora
+   platformy ma wszystkie uprawnienia i nie wymaga niczego. Skrypt lub proces budowania, który pobiera
+   dokument — generator klienta, test kontraktu — potrzebuje klucza API z zakresem
+   `platform.api_description.read`, wydanego przez administratora, który ma ten kod, i wysyła go tak
+   jak każdy klucz. W panelu administracyjnym dokument jest na nowym ekranie
+   **System → API description**.
+7. **Przejrzyj przypisania organizacji do kanałów sprzedaży i nie zamykaj żadnego kanału, dopóki
+   storefront nie zostanie zaktualizowany.** Po aktualizacji każdy kanał jest otwarty dla
+   niezalogowanych odwiedzających, tak jak każdy kanał był wcześniej, a zalogowany klient jest
+   obsługiwany w kanale tylko wtedy, gdy jego organizacja jest do tego kanału przypisana. Migracja
+   `Migration20261018T104644OrganizationsChannelAccessBackfill` przypisała każdej organizacji
+   domyślny kanał systemowy oraz każdy kanał, w którym ma co najmniej jedno zamówienie. W instancji
+   z jednym kanałem sprzedaży obejmuje to wszystkich i nic się nie zmienia. W instancji z kilkoma
+   kanałami **organizacja, której klienci korzystają z innego kanału, nie składając w nim
+   zamówienia** — zarejestrowana w drugim sklepie i bez zamówień albo wysyłająca tam tylko zapytania
+   ofertowe — dostaje teraz w tym kanale odmowę przy logowaniu, z komunikatem *„To konto nie ma
+   dostępu do tego sklepu.”* Otwórz każdą taką organizację w panelu administracyjnym i zaznacz kanał
+   w jej panelu **Kanały sprzedaży**. Potem zdecyduj dla każdego kanału, czy pozostaje otwarty dla
+   niezalogowanych odwiedzających — [Kanały sprzedaży i to, kto może z nich korzystać](#after-0-107-0-channel-access)
+   mówi, co oznacza każdy wybór — ale **wyłączaj *Open to anonymous visitors* dopiero wtedy, gdy
+   storefront ma pliki z części [W istniejącym storefroncie](#after-0-107-0-storefront)**, a w
+   domyślnym kanale systemowym dopiero wtedy, gdy wiesz, jak docierają wywołania zwrotne płatności i
+   przewoźników z modułów spoza wydania.
+8. **W storefroncie, który obsługuje więcej niż jeden kanał sprzedaży przez nagłówek
+   `X-Sales-Channel`**, a nie przez `SALES_CHANNEL_HOST_MAP`, zaktualizuj storefront, zanim klienci
+   znów zaczną napełniać koszyki. Koszyk należy teraz do kanału, w którym jest napełniany, a storefront
+   utworzony we wcześniejszym wydaniu wskazuje kanał tylko w tych wywołaniach backendu, które
+   przekazują go jawnie; każde inne wywołanie backend przypisuje sam — według mapy hostów, a bez niej
+   do domyślnego kanału systemowego. Do tego wydania nie miało to znaczenia dla koszyka, który
+   istniał w kanale domyślnym bez względu na sklep. Od teraz koszyk kanału domyślnego i koszyk
+   sklepu to dwa różne koszyki.
+9. **Sprawdź, kto może nadawać jakie uprawnienia.** Administrator nadaje teraz tylko uprawnienia,
+   które ma jego własna rola — w roli, w roli konta administratora, w zakresach klucza API — a rolę
+   tworzoną przez platformę lub moduł, w tym `platform_admin`, może zmienić tylko posiadacz
+   uprawnienia wieloznacznego `*`. Jeśli administrator z delegowanymi uprawnieniami zarządza rolami,
+   użytkownikami lub kluczami API dla innych, nadaj jego roli uprawnienia, które on rozdaje, albo
+   zostaw te zmiany posiadaczowi `*`.
+
+W dowolnym momencie:
+
+10. **Zdecyduj o powiadomieniach push dla ofert.** W sklepie z włączonymi powiadomieniami push
+    zapytania ofertowe teraz je wysyłają: gdy administrator tworzy zapytanie dla klienta, modyfikuje,
+    zatwierdza lub anuluje je i gdy zapytanie wygasa. Wcześniej nie wysyłały ich nigdy, choć
+    przełącznik istniał. Jeśli ich nie chcesz, wyłącz tę kategorię ustawieniem
+    `pwa.push_quote_status_enabled` na ekranie PWA.
+11. **Zainstaluj `@endora-commerce/mod-admin-search`, jeśli paleta poleceń ma znajdować rekordy** —
+    zamówienia, zapytania ofertowe, szanse sprzedaży, organizacje, klientów, produkty i kategorie.
+    Moduł jest opcjonalny; bez niego paleta znajduje ekrany i akcje jak dotąd. Zadeklaruj go tak, jak
+    opisuje [Dodawanie modułu, który jest nowy w wydaniu](#adding-a-new-module); startuje włączony.
+12. **Zbuduj własne moduły ponownie z tym wydaniem.** Kod, który implementuje lub konstruuje któryś z
+    portów i kształtów wymienionych w części
+    [Dla autorów modułów i modułów nakładkowych](#after-0-107-0-authors), nie skompiluje się, dopóki
+    nie zostanie zmieniony, a moduł, który odbiera wywołanie zwrotne dostawcy, ma deklarację do
+    dodania.
+13. **Zaktualizuj storefront** zgodnie z częścią [W istniejącym storefroncie](#after-0-107-0-storefront).
+    Bez tego zamówienie, strona produktu i logowanie działają jak wcześniej; zamknięte sklepy, ekran
+    braku dostępu, wybór powiadomień push, blokada negocjacji cen i język PDF-a porównania — nie.
+
+#### Dla operatorów {#after-0-107-0-operators}
+
+##### Kanały sprzedaży i to, kto może z nich korzystać {#after-0-107-0-channel-access}
+
+**Każdy kanał sprzedaży ma przełącznik *Open to anonymous visitors*** w formularzu kanału w
+**Sales channels**. Jest włączony w każdym istniejącym kanale i w każdym nowym.
+
+- **Włączony** — każdy może przeglądać sklep; zalogowany klient może z niego korzystać, gdy jego
+  organizacja jest przypisana do kanału.
+- **Wyłączony** — sklep obsługuje wyłącznie zalogowanych klientów. Zaktualizowany storefront z każdej
+  strony kieruje niezalogowanego odwiedzającego na stronę logowania z komunikatem, że sklep jest dla
+  zalogowanych klientów biznesowych; nie dostaje on niczego z katalogu, cen ani treści, mapa strony
+  sklepu jest pusta, jego `robots.txt` zabrania wszystkiego i nie wskazuje mapy strony, a jego
+  `llms.txt` podaje nazwę sklepu i mówi, że treść jest tylko dla zalogowanych klientów. Rejestracja
+  firmy pozostaje na stronie logowania, a zarejestrowana tam organizacja otrzymuje ten kanał — więc
+  przy automatycznej moderacji wchodzi każdy, kto zarejestruje firmę, a przy ręcznej nikt, dopóki
+  operator nie zatwierdzi organizacji. Samodzielna rejestracja klienta indywidualnego (B2C) nie jest
+  oferowana, a logowanie przez zewnętrznego dostawcę (Google, Microsoft) nie tworzy tam nowego konta.
+  Lista kanałów oznacza zamknięty kanał etykietą *Sign-in required*. Pokazywanie cen niezalogowanym
+  odwiedzającym to osobne ustawienie i ma znaczenie tylko w sklepie otwartym.
+
+Backend stosuje regułę do każdego żądania spoza `/api/v1/admin/`, gdy jego kanał zostanie wyznaczony:
+żądanie anonimowe w zamkniętym kanale dostaje `403 SALES_CHANNEL_SIGN_IN_REQUIRED`, a żądanie
+klienta — także administratora działającego jako klient — w kanale, do którego jego organizacja nie
+jest przypisana, `403 SALES_CHANNEL_NOT_PERMITTED`. Reguła nie dotyczy administratorów ani kluczy
+API. Kilka tras jest osiągalnych w każdym aktywnym kanale, bo wywołujący musi do nich dotrzeć, aby
+zostać klientem sklepu, albo nim nie jest: logowanie i wylogowanie, drugi składnik i logowanie przez
+zewnętrznego dostawcę, reset hasła, weryfikacja e-maila, rejestracja firmy, zaproszenia, tożsamość
+kanału, konfiguracja języków, słowniki czytane przez formularz rejestracji, polityka robotów i pliki
+dla robotów, pobieranie plików produktowych i linki newslettera w e-mailach.
+
+**To, które organizacje mogą korzystać z kanału, ustawia się w organizacji**, w nowym panelu
+**Kanały sprzedaży** na jej stronie: odczyt z `customers:read` lub `customers:manage`, zmiana z
+`customers:manage`. Organizacja zachowuje co najmniej jeden kanał. Każdy dodany lub usunięty kanał to
+jeden wiersz w dzienniku audytu, a zmiana obowiązuje od razu na serwerze, który ją wprowadził, i na
+każdym innym w ciągu 30 sekund. Klient, którego organizacja nie jest przypisana, dostaje odmowę przy
+logowaniu — hasłem, drugim składnikiem lub przez zewnętrznego dostawcę — zanim powstanie sesja;
+klient, któremu przypisanie usunięto w trakcie sesji, widzi w zaktualizowanym storefroncie ekran
+*Brak dostępu do tego sklepu* z listą sklepów, z których może korzystać, każdy jako link, gdy
+ustawienie **Storefront URL** kanału jest wypełnione.
+
+**Jaki kanał dostaje nowa organizacja.** Firma zarejestrowana w sklepie dostaje kanał tego sklepu;
+organizacja osobista utworzona przy rejestracji klienta indywidualnego lub logowaniu przez
+zewnętrznego dostawcę dostaje kanał, w którym odwiedzający się zarejestrował; organizacja utworzona w
+panelu administracyjnym dostaje kanały wybrane w formularzu; każda inna ścieżka tworzenia daje
+domyślny kanał systemowy. Przyjęcie zaproszenia nie zmienia żadnego przypisania. **New
+organization** (`/organizations/new`, przycisk na liście organizacji i akcja palety
+`new-organization`, `customers:manage`) tworzy organizację w panelu administracyjnym — zduplikowany
+NIP jest odrzucany, tak jak przy rejestracji.
+
+**Zanim zamkniesz domyślny kanał systemowy**, dowiedz się, gdzie docierają wywołania zwrotne
+dostawców. Powiadomienie bramki płatności, webhook przewoźnika czy adres powrotu od dostawcy
+przychodzą bez sesji i zwykle bez kanału, więc są żądaniem anonimowym w domyślnym kanale
+systemowym: jeśli moduł, który je odbiera, nie zadeklaruje trasy jako otwartej, po zamknięciu tego
+kanału dostają `403`, a powiadomienia dostawcy przestają docierać. `POST /api/v1/payments/receive` i
+`POST /api/v1/shipments/receive` są wywoływane z sesją administratora lub kluczem API, których
+reguła nie dotyczy; moduł bramki lub przewoźnika, który odbiera żądanie samego dostawcy, musi
+zadeklarować tę trasę, jak opisuje część
+[Dla autorów modułów i modułów nakładkowych](#after-0-107-0-authors).
+
+Zobacz [Otwieranie i zamykanie sklepu dla niezalogowanych odwiedzających](./modules/sales_channels/admin-usage.md#anonymous-access)
+oraz [Kanały sprzedaży](./modules/organizations.md#kanały-sprzedaży) na stronie modułu organizacji.
+
+##### Koszyki, ceny i składanie zamówień
+
+**Koszyk należy do sklepu, w którym jest napełniany.** Klient ma jeden aktywny koszyk na kanał
+sprzedaży, wyceniany, objęty promocjami i sprawdzany pod kątem „tylko na zapytanie” w tym kanale,
+podczas gdy wcześniej każdy koszyk był tworzony i wyceniany w domyślnym kanale systemowym. Token
+koszyka niezalogowanego odwiedzającego wskazuje koszyk tylko w jednym sklepie, a napełnianie koszyka
+w innym sklepie zaczyna nowy. Łączenie przy logowaniu łączy tylko koszyk anonimowy ze sklepu, w
+którym klient się loguje. Złożenie zamówienia z koszykiem innego kanału jest odrzucane z
+`422 ORDER_SALES_CHANNEL_MISMATCH`, zanim cokolwiek zostanie zarezerwowane lub zapisane, a koszyk
+zostaje zachowany. Migracja `Migration20261019T043854CartsChannelBackfill` zapisała każdy koszyk bez
+kanału w domyślnym kanale systemowym; jeśli klient miał już tam aktywny koszyk, koszyk bez kanału
+pozostaje bez zmian i nie jest już osiągalny. Zobacz
+[Jeden koszyk na sklep](./modules/carts.md#jeden-koszyk-na-sklep).
+
+**Cena pozycji koszyka jest zawsze ceną dla jej bieżącej ilości**, a złożenie zamówienia to
+sprawdza:
+
+- dodanie kolejnych sztuk produktu, zmiana ilości, łączenie koszyka przy logowaniu i ponowne
+  zamówienie zapisują cenę dla ilości wynikowej, więc próg ilościowy dotyczy zamawianej ilości, a
+  ponowne zamówienie jest wyceniane według dzisiejszych cen;
+- produkt, któremu cenę nadaje ani cennik, ani jego własna cena, jest odrzucany z
+  `422 CART_PRODUCT_UNPRICED`, podczas gdy wcześniej był dodawany po `0.00`; produkt sprzedawany
+  tylko na zapytanie jest odrzucany z `400 CART_PRODUCT_QUOTE_ONLY` niezależnie od tego, czy jest w
+  cenniku;
+- pozycja utworzona z zaakceptowanego zapytania ofertowego zachowuje uzgodnioną cenę tylko przy
+  uzgodnionej ilości, a przy każdej innej jest wyceniana z cennika. Koszyk przekształcony z oferty
+  **przed** tym wydaniem nie ma uzgodnionej ilości, więc jego pozycje są przy składaniu zamówienia
+  wyceniane z cennika; ponowne przekształcenie oferty przywraca uzgodnione ceny;
+- przy składaniu zamówienia pozycja, której zapisana cena nie jest już ceną, po jakiej można ją
+  zamówić, daje `409 CART_PRICE_CHANGED`. Nic nie jest zapisywane, koszyk jest aktualizowany, a
+  kupujący składa zamówienie ponownie po jego przejrzeniu. Istniejący storefront pokazuje tę odmowę
+  na stronie błędu zamówienia z kodem błędu przed zdaniem; zaktualizowany pokazuje samo zdanie.
+
+Zobacz [Ceny pozycji](./modules/carts.md#ceny-pozycji).
+
+**Tworzenie zamówienia w panelu administracyjnym używa wybranego kanału.**
+`POST /api/v1/admin/orders` sprawdza produkty względem asortymentu kanału zamówienia, a nie żądania
+administratora, i odrzuca nieistniejący kanał sprzedaży z `404`, podczas gdy wcześniej składał
+zamówienie w domyślnym kanale systemowym. Ekran **Create order** pokazuje *Items* i podsumowanie po
+wybraniu klienta i kanału, dodaje produkty przez wspólną przeglądarkę produktów (do 200 naraz) lub
+szybkie wyszukiwanie i mówi przy każdej pozycji, dlaczego produktu nie można zamówić: klient go nie
+widzi albo nie ma go w asortymencie kanału. Podgląd zamówienia również odrzuca nieznany kanał z
+`404`.
+
+##### Uprawnienia i to, kto może je nadawać
+
+- **Import i eksport** podlegają uprawnieniom modułów, do których należą dane — tabela jest w kroku 5.
+- **Opis API** odczytuje się z `platform.api_description.read` — krok 6. Nowy ekran
+  **System → API description** (`/api-description`, dostępny też w palecie poleceń) pokazuje tytuł,
+  wersję i liczbę punktów końcowych dokumentu, pobiera go jako JSON i otwiera interaktywną dokumentację
+  pod własnym adresem API. Strona dokumentacji ładuje z jsDelivr przypiętą wersję `swagger-ui-dist`,
+  `5.33.3`, z sumą integralności dla każdego pliku, podczas gdy wcześniej ładowała wersję aktualną
+  w danej chwili.
+- **Administrator nadaje tylko to, co ma jego rola.** Zapisanie roli z uprawnieniem, którego
+  wykonujący nie ma, albo zmiana roli, która już je ma, daje `403 ADMIN_ROLE_GRANT_EXCEEDED` z
+  listą kodów; rolę tworzoną przez platformę lub moduł zmienia tylko posiadacz `*` (w przeciwnym
+  razie `409 ADMIN_ROLE_PROTECTED`). Przypisanie roli daje `403 ADMIN_ROLE_GRANT_EXCEEDED`, jeśli
+  wykonujący nie ma każdego uprawnienia, które ona nadaje, a administratora, którego rola ma coś,
+  czego wykonujący nie ma, ten nie może edytować, ustawić mu hasła, dezaktywować ani usunąć
+  (`403 ADMIN_USER_OUTRANKS_ACTOR`). Klucz API jest wydawany tylko z zakresami, które ma rola
+  wydającego administratora (`403 API_KEY_SCOPE_NOT_HELD`).
+- **Nowe uprawnienia.** `document_templates:read` i `document_templates:write` (jednorazowy krok
+  przy pierwszym uruchomieniu nadaje pierwsze każdej roli z `invoices:read`, a każdej roli z
+  `invoices:write` także drugie, i zapisuje to w dzienniku audytu), `admin_search:configure` (po
+  których polach szuka wyszukiwanie globalne, gdy ten moduł jest zainstalowany), `cms.translate`
+  (akcja *Translate* w Page Builderze) i `platform.api_description.read`. `invoices:write` ma teraz
+  etykietę *Issue/correct invoices and configure invoicing*.
+
+##### Logowanie i konta
+
+- **Modułu `mfa` nie da się wyłączyć, dopóki administratorzy muszą używać drugiego składnika.**
+  Wyłączenie go na ekranie **Modules** daje `409 MFA_DEACTIVATION_BLOCKED`, dopóki włączone jest
+  `mfa.admin.totp_enforced`, i niczego nie zmienia; najpierw wyłącz ten wymóg. Ponowne włączenie
+  `mfa` nigdy nie jest odrzucane.
+- **Zmiana miejsca, do którego zapisane poświadczenie wysyła swoje sekrety, wymaga ponownego
+  wpisania sekretów.** Zapisanie poświadczenia ze zmienionym polem punktu końcowego — *Base URL*
+  modelu LLM, host SMTP — daje `422 CREDENTIAL_SECRET_REENTRY_REQUIRED`, chyba że każdy zapisany
+  sekret rekordu zostanie wpisany ponownie w tym samym zapisie; formularz oznacza te pola, gdy tylko
+  punkt końcowy zostanie zmieniony. Poświadczenie zapisane bez zmiany punktu końcowego zachowuje
+  swoje sekrety jak wcześniej.
+- **Logowanie klienta, drugi składnik klienta i prośby o reset hasła mają limity na konto**, tak jak
+  logowanie administratora: 50 błędnych haseł w 30 minut z urządzenia, na którym konto się nie
+  logowało, 10 z takiego, na którym się logowało; 20 błędnych kodów drugiego składnika w 30 minut,
+  10 ze znanego urządzenia; 5 próśb o reset na godzinę. Powyżej limitu odpowiedź to
+  `429 CUSTOMER_AUTHENTICATION_THROTTLED` z `Retry-After`. Udane logowanie ustawia plik cookie
+  `b2b_customer_device`, który oznacza znane urządzenie — istniejący storefront go nie przekazuje,
+  więc jego klienci są liczeni według pierwszego limitu, dopóki storefront nie zostanie
+  zaktualizowany. Prośba o nowy link resetujący unieważnia wcześniejsze, niewykorzystane.
+- **Logowanie przez zewnętrznego dostawcę podlega regułom logowania hasłem**, w storefroncie i w
+  panelu administracyjnym: kończy się tylko w przeglądarce, która je rozpoczęła, konto z drugim
+  składnikiem trafia na ekran drugiego kroku zamiast zostać zalogowane, a zablokowane konto klienta
+  dostaje odmowę z tym samym zdaniem co przy logowaniu hasłem. Sesja klienta, którego konto jest
+  zablokowane, usunięte lub nie istnieje, jest traktowana jak wylogowana.
+- **Błędny kod lub hasło na ekranach drugiego składnika po zalogowaniu nie wylogowuje już
+  administratora.** Potwierdzenie konfiguracji, wyłączenie drugiego składnika i ponowne generowanie
+  kodów odzyskiwania odpowiadają na błędny kod `403 MFA_INVALID_CODE`, a na błędne hasło
+  `403 CURRENT_PASSWORD_INVALID`; wcześniej odpowiadały `401`, które panel administracyjny traktuje
+  jak wygasłą sesję.
+
+##### Biblioteka mediów
+
+- **Nie można przesyłać plików HTML, XHTML, XML (w tym XSL) ani JavaScript**, niezależnie od
+  `assets.allowed_file_types`: `415 ASSET_UPLOAD_TYPE_NOT_ALLOWED`, według zadeklarowanego typu i
+  rozszerzenia. SVG jest nadal przyjmowany i zapisywany jako `image/svg+xml`. Plik tych typów
+  przesłany wcześniej pozostaje w bibliotece i jest serwowany do pobrania.
+- **Pliki są serwowane ze stałym nagłówkiem polityki treści** i `X-Content-Type-Options: nosniff`;
+  obrazy rastrowe, SVG, wideo, audio, PDF i zwykły tekst są wyświetlane w przeglądarce, każdy inny
+  typ jest pobierany. Prywatny zasób w S3 lub GCS jest przekierowywany do magazynu tylko z ważnym
+  podpisanym linkiem, tak jak zasób lokalny już był (w przeciwnym razie `403 ASSET_ACCESS_DENIED`).
+- **Plik zasobu można podmienić w miejscu**, z zachowaniem identyfikatora, folderu, etykiety,
+  widoczności, każdego odwołania i każdego wydanego już adresu; podmieniony plik można przywrócić
+  jako poprzednią wersję przez `assets.soft_delete_retention_days`. Zasób może mieć **stały link**,
+  serwowany pod `/assets/file/<permalink>`. Oba są w panelu zasobu, za uprawnieniem `assets.write`;
+  biblioteka jest też w palecie poleceń jako *Assets library*.
+- **Osadzane adresy zasobów mają `?v=<wersja treści>`**, więc podmieniony plik zostaje pobrany, a
+  osadzenie może być buforowane przez rok; `GET /assets/file/<id>` jest teraz wysyłany z
+  `Cache-Control: public, no-cache`. Strona CMS zbuforowana przed podmianą może przez maksymalnie
+  pięć minut serwować poprzednią wersję.
+- **Zasoby w koszu są trwale usuwane** po `assets.soft_delete_retention_days` — krok 2. Każde
+  uruchomienie zadania zapisuje jeden wiersz dziennika `assets_library.retention.sweep`.
+
+Zobacz [Które adresy są stałe](./modules/assets-library/index.md#które-adresy-są-stałe) oraz
+[Przechowywanie i trwałe usuwanie](./modules/assets-library/index.md#retention-and-purge).
+
+##### Dokumenty i PDF-y
+
+- **Document templates** (`document_templates`) to miejsce, w którym projektuje się układy PDF, w
+  Page Builderze, dla typu dokumentu i kanału sprzedaży, po jednym układzie na język. Obsługuje
+  fakturę, porównanie produktów i zapytanie ofertowe. Ekrany szablonów faktur przeniesiono tam:
+  `/invoices/templates` przekierowuje do nich, a PDF faktury wysyłany e-mailem jest teraz
+  generowany dokładnie tak jak pobierany. Zobacz [Document templates](./modules/document-templates.md).
+- **Ekran zapytania ofertowego oferuje *Export PDF* i *Send PDF to customer*** w każdym stanie,
+  dopóki szablony dokumentów są włączone. Wysyłka przesyła PDF na maksymalnie pięć adresów przez nowy
+  e-mail transakcyjny `quote_request_pdf`, edytowalny i wyłączalny jak każdy inny, i pojawia się w
+  historii oferty.
+- **PDF porównania** korzysta z szablonu, w języku, w którym kupujący przegląda sklep, jeśli kanał go
+  oferuje: kupujący przeglądający sklep po polsku dostaje teraz polski PDF.
+
+##### Zapytania ofertowe
+
+- **Każda pozycja oferty zapisuje cenę referencyjną** — ile klient zapłaciłby w zwykłym zamówieniu w
+  kanale zapytania — pokazywaną w panelu administracyjnym obok propozycji klienta i ceny uzgodnionej.
+  Koszyk przekształcony w zapytanie ofertowe nie zapisuje już swoich cen jako propozycji klienta.
+- **Blokada negocjacji cen dla klienta.** W organizacji (domyślnie dozwolone) oraz, jako nadpisanie,
+  na koncie klienta administrator decyduje, czy klienci mogą proponować ceny. Utworzenie lub edycja
+  szkicu z proponowaną ceną, gdy właścicielowi zapytania nie wolno, jest odrzucana z
+  `422 RFQ_PRICE_PROPOSAL_NOT_ALLOWED`. Panele wymagają `customers:read` do odczytu i
+  `customers:manage` do zmiany.
+- **Czytelna historia** na ekranie zapytania ofertowego, łącząca zapisy jednej decyzji i wskazująca,
+  kto działał.
+- **Przedstawiciel handlowy spoza organizacji zapytania dostaje `404`**, jak dla nieistniejącego
+  zapytania, podczas gdy wcześniej dostawał `403`.
+- **Najwyżej 200 pozycji** przy tworzeniu lub edycji szkicu przez klienta (powyżej `400`). Klient
+  może wielokrotnie edytować oczekujący szkic, dopóki administrator go nie zmodyfikuje, do 30 edycji
+  na minutę na zapytanie.
+
+##### Ceny, katalog i listy
+
+- **Cenniki zyskują macierz cen** (karta *Price matrix* cennika): jeden wpis wycenia produkt,
+  kategorię, wartość atrybutu, kategorię z wartością atrybutu albo wszystkie produkty, opcjonalnie
+  dla organizacji i przedziału ilości, ceną stałą lub rabatem procentowym. Wybór według atrybutu
+  używa atrybutów oznaczonych *Price list rules*. Zobacz [Cenniki](./modules/price_lists.md).
+- **Dodawanie produktów do cennika** otwiera wspólną przeglądarkę produktów i dodaje do 200 produktów
+  w jednym kroku. Systemowy cennik *Default* nadal nie przyjmuje produktów w ten sposób.
+- **Odczyty katalogu w storefroncie mogą być wyceniane w walucie kupującego**, jeśli kanał ją
+  obsługuje. W walucie innej niż domyślna waluta kanału produkt, któremu cenę nadaje tylko jego
+  własna cena, nie ma ceny na liście, zamiast pokazywać własną cenę w niewłaściwej walucie.
+- **Zapisane widoki** na liście produktów i liście zapytań ofertowych, a na liście zamówień zapis i
+  usuwanie przez okna dialogowe zamiast monitów przeglądarki. Dwa widoki jednego administratora na
+  jednej liście nie mogą różnić się tylko wielkością liter.
+- **Nowo utworzony produkt jest od razu wyszukiwalny**, bez pierwszej edycji.
+- **Listy CMS** — Pages, Blocks, Templates, Hooks — są w palecie poleceń.
+
+##### Powiadomienia, newsletter i AI
+
+- **Powiadomienia push o statusie.** Dwa ustawienia, `pwa.push_order_status_enabled` i
+  `pwa.push_quote_status_enabled` (domyślnie włączone, globalnie i dla kanału), włączają obie
+  kategorie; klient wybiera dla swojego konta w zaktualizowanym storefroncie. Powiadomienia o
+  zamówieniach są w języku kanału, nazywają status tak jak sklep i otwierają zamówienie.
+  Powiadomienia o ofertach zaczynają być wysyłane — krok 10.
+- **Śledzenie otwarć i kliknięć newslettera** włączają dwa nowe ustawienia,
+  `newsletter.tracking.opens_enabled` i `newsletter.tracking.clicks_enabled`, domyślnie wyłączone.
+  Gdy są wyłączone, kampanie są wysyłane bez śledzenia, jak wcześniej.
+- **Page Builder potrafi tłumaczyć** płótno karty języka lub zaznaczenie modelem LLM skonfigurowanym
+  w *Settings → Page Builder* (`cms.page_builder.translation.enabled`, domyślnie wyłączone), za
+  uprawnieniem `cms.translate`. Każde żądanie jest zapisywane w dzienniku audytu.
+- **Konfiguracje LLM obsługują DeepSeek i dowolny punkt końcowy zgodny z OpenAI** przez nowego
+  dostawcę *OpenAI-compatible (custom endpoint)*; każdy *Base URL* modelu LLM musi być bezwzględnym
+  adresem `http://` lub `https://`.
+
+##### Wszystko inne, co widzi operator
+
+- **Globalne wyszukiwanie w panelu administracyjnym**, gdy zainstalowano
+  `@endora-commerce/mod-admin-search` (krok 11): paleta szuka rekordów od minimalnej długości
+  (`admin_search.minimum_query_length`, domyślnie 3), a każdy typ podlega widoczności swojej listy w
+  panelu; `/global-search` pokazuje pełne wyniki. Zobacz [Admin search](./modules/admin-search.md).
+- **Ekran ustawień** nie pokazuje już wartości jednego kanału sprzedaży pod nagłówkiem innego, gdy
+  lista jeszcze się wczytywała w chwili zmiany „Editing for”.
+- **Menu boczne** pokazuje numer wydania w osobnej sekcji, pod logo.
+- **Podglądy e-maili** w edytorze e-maili i w podglądzie kampanii newslettera są rysowane w ramkach,
+  które nie uruchamiają skryptów.
+- **`order.cancelled.v1` jest emitowane** przy anulowaniu zamówienia, więc subskrybent napisany pod
+  to zdarzenie teraz działa.
+
+#### Dla klientów API i integratorów {#after-0-107-0-api}
+
+- **Opis API wymaga uprawnienia.** `GET /api/v1/_openapi.json` i `GET /api/v1/_docs` wymagają sesji
+  administratora, którego rola ma `platform.api_description.read`, albo klucza API z tym zakresem:
+  `401 UNAUTHORIZED` bez żadnego z nich, także z sesją klienta, `403 FORBIDDEN` bez kodu. Obie
+  odpowiedzi mają `Cache-Control: private, no-store`. `GET /api/v1/admin/api-description` serwuje
+  ten sam dokument w przestrzeni administracyjnej. `apiKeyScopeSchema` przyjmuje nowy zakres.
+- **Dostęp do kanału sprzedaży.** Każde żądanie storefrontu jest rozstrzygane po wyznaczeniu kanału:
+  `403 SALES_CHANNEL_SIGN_IN_REQUIRED` dla żądania anonimowego w zamkniętym kanale,
+  `403 SALES_CHANNEL_NOT_PERMITTED` dla klienta, którego organizacja nie jest przypisana, oba z
+  `details.channelCode`. `POST /api/v1/auth/customer/login` odpowiada tym drugim po poprawnym haśle
+  (błędne nadal daje najpierw `401`) i nie ustawia pliku cookie.
+  `GET /api/v1/storefront/sales-channel` zawiera `anonymousAccess`, a nowe
+  `GET /api/v1/storefront/sales-channel/access` mówi wywołującemu, czy może korzystać ze sklepu, a
+  klientowi z odmową — z których sklepów może; nigdy nie odmawia. Panel administracyjny:
+  `GET`/`PUT /api/v1/admin/organizations/:id/sales-channels`,
+  `GET /api/v1/admin/organizations/sales-channel-options`, `POST /api/v1/admin/organizations`;
+  `anonymousAccess` w kształtach administracyjnych kanału sprzedaży (przy tworzeniu domyślnie
+  `true`). `GET /api/v1/storefront/seo/crawler-files` zawiera opcjonalne `anonymousAccess` — brak
+  traktuj jako `true`.
+- **Koszyki per kanał.** Każda trasa koszyka storefrontu dotyczy koszyka kanału żądania; pozycja
+  koszyka innego kanału daje `404`. Złożenie zamówienia z koszykiem innego kanału daje
+  `422 ORDER_SALES_CHANNEL_MISMATCH`.
+- **Złożenie zamówienia sprawdza ceny.** `409 CART_PRICE_CHANGED` z `details.lines` — `productId`,
+  `variantId`, `quantity`, `previousUnitPrice`, `currentUnitPrice` (`null`, gdy pozycji nie można
+  już zamówić) i `currency`. Odczytaj koszyk ponownie i złóż zamówienie jeszcze raz. Dodanie
+  produktu bez ceny daje `422 CART_PRODUCT_UNPRICED`.
+- **Zamówienia w panelu administracyjnym.** `POST /api/v1/admin/orders` i
+  `POST /api/v1/admin/orders/preview` odpowiadają na nieznany `salesChannelId` `404 NOT_FOUND`.
+  Podgląd podaje dwa nowe powody niedostępności pozycji, `PRODUCT_NOT_VISIBLE_TO_CUSTOMER` i
+  `PRODUCT_NOT_IN_SALES_CHANNEL`, po jednym na pozycję w kolejności, jaką podaje
+  `ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE`; `messages[].code` pozostaje ciągiem znaków, więc
+  nieznany kod traktuj jako ogólne „niedostępne”.
+- **Import i eksport.** `GET /api/v1/admin/import-export/entities` wymienia tylko to, co wywołujący
+  może eksportować lub importować, każdą pozycję z `canExport` i `canImport`; trasy eksportu i
+  importu odpowiadają `403` bez uprawnienia danej encji, a `405` przy imporcie encji tylko do
+  eksportu, którą wywołujący może eksportować.
+- **Zmienione kody odpowiedzi.**
+  - Trasy samoobsługi drugiego składnika (`…/activate`, `…/disable`, `…/recovery-codes/regenerate`
+    pod `/api/v1/admin/account/mfa` i `/api/v1/account/mfa`) odpowiadają `403 MFA_INVALID_CODE` i
+    `403 CURRENT_PASSWORD_INVALID`, podczas gdy wcześniej odpowiadały `401`. Wyzwania przy
+    logowaniu zachowują `401`.
+  - Przedstawiciel handlowy spoza organizacji zapytania ofertowego dostaje `404` na każdej
+    administracyjnej trasie zapytań ofertowych.
+  - Żądanie ograniczone limitem odpowiada `429 RATE_LIMITED` w standardowej kopercie błędu, z
+    `Retry-After`, podczas gdy wcześniej odpowiadało `500 INTERNAL`.
+  - Treść, której serwer nie potrafi odczytać, daje `400` (pusta z
+    `Content-Type: application/json` lub niepoprawna), `413` (ponad limit rozmiaru) albo `415`
+    (brak parsera dla typu), każda z `VALIDATION_FAILED`, podczas gdy wcześniej dawała `500`.
+  - `PATCH /api/v1/admin/cms/hooks/:id/attachments/:blockId` dla bloku, który nie jest dołączony,
+    odpowiada `404 CMS_BLOCK_NOT_FOUND`.
+  - `POST /api/v1/admin/assets` z dwiema częściami plikowymi odpowiada `201` dla pierwszej z nich.
+- **Nowe odmowy.** `415 ASSET_UPLOAD_TYPE_NOT_ALLOWED` przy przesyłaniu HTML, XHTML, XML lub
+  JavaScript; `409 MFA_DEACTIVATION_BLOCKED` przy wyłączaniu `mfa`, gdy wymuszony jest TOTP
+  administratorów; `422 CREDENTIAL_SECRET_REENTRY_REQUIRED` (`details.fields`) przy zmianie punktu
+  końcowego poświadczenia bez jego sekretów; `403 ADMIN_ROLE_GRANT_EXCEEDED`,
+  `409 ADMIN_ROLE_PROTECTED`, `403 ADMIN_USER_OUTRANKS_ACTOR` i `403 API_KEY_SCOPE_NOT_HELD` z
+  reguły nadawania; `429 CUSTOMER_AUTHENTICATION_THROTTLED` i
+  `503 CUSTOMER_AUTHENTICATION_UNAVAILABLE` przy logowaniu klienta;
+  `422 RFQ_PRICE_PROPOSAL_NOT_ALLOWED`; oraz `400` dla ponad 200 pozycji przy tworzeniu lub edycji
+  szkicu zapytania ofertowego przez klienta.
+- **Przyjmowanie zdarzeń analitycznych.** `POST /api/v1/analytics/events` zapisuje tożsamość
+  wyznaczoną przez serwer — zalogowanego klienta, kanał żądania — i ignoruje `customerAccountId`,
+  `organizationId` i `salesChannelId` w treści, które nadal przechodzą walidację. Limit to 60 partii
+  na minutę na adres klienta.
+- **Linki śledzące newslettera** to `GET /api/v1/newsletter/open.gif?token=…` i
+  `GET /api/v1/newsletter/click?token=…&u=…`. Dawne formy ze ścieżką, do których podpisany token był
+  za długi, zostały usunięte.
+- **Adresy zasobów.** `url` i `storageUrl` zasobu publicznego zawierają `?v=<contentVersion>`;
+  stałą formą jest nowe `fileUrl`. Podsumowania i szczegóły zyskują `fileUrl`, `permalink`,
+  `permalinkUrl` i `contentVersion`; szczegóły zyskują `previousVersion`, `retentionDays` i
+  `replaceable`. Nowe trasy: `POST /api/v1/admin/assets/:id/replace`,
+  `POST …/previous-version/restore`, `PUT`/`DELETE …/permalink`,
+  `GET /api/v1/admin/assets/folders/:folderId/permalink-count`.
+- **Usunięte: API szablonów faktur.** `/api/v1/admin/invoice-templates` i jego trasy zostały
+  usunięte; użyj `/api/v1/admin/document-templates` z `documentType: 'invoices.invoice'`.
+- **Nowe w tym wydaniu**, wszystko addytywne: historia zapytania ofertowego
+  (`GET /api/v1/admin/quote-requests/:id/history`), negocjacja cen
+  (`…/organizations/:id/quote-price-negotiation`, `…/customers/:id/quote-price-negotiation`,
+  `GET /api/v1/quote-requests/price-negotiation`), PDF zapytania ofertowego
+  (`/api/v1/admin/quote-requests/:id/pdf`, `…/pdf/send`, `…/document-templates`,
+  `…/document-template`), macierz cen (`/api/v1/admin/price-lists-engine/:id/matrix`) i dodawanie
+  zbiorcze (`…/:id/products/bulk-add`), zapisane widoki
+  (`/api/v1/admin/catalog/products/list-views`, `/api/v1/admin/quote-requests/list-views`),
+  preferencje push (`GET`/`PUT /api/v1/storefront/pwa/preferences`), wyszukiwanie globalne
+  (`/api/v1/admin/global-search…`), tłumaczenie w Page Builderze
+  (`/api/v1/admin/cms/page-builder/translat…`), `?currency=` w odczytach katalogu oraz
+  `salesChannelId` w `GET /api/v1/admin/products/:id/resolved-price`, który teraz odpowiada `404`
+  dla kupującego, który nie istnieje albo którego przedstawiciel handlowy nie może widzieć.
+- **Zapisane widoki zamówień.** Pozycje mają `ownedByCaller` i `canModify`; nazwa zajęta przez inny
+  widok właściciela daje `409 ORDER_SAVED_VIEW_NAME_TAKEN`; `PATCH`, który niczego nie zmienia,
+  niczego nie zapisuje; identyfikator, który nie jest UUID, daje `404`; brak sesji administratora
+  daje `401`.
+
+#### Dla autorów modułów i modułów nakładkowych {#after-0-107-0-authors}
+
+**Zadeklaruj jako otwartą dla reguły dostępu do kanału każdą trasę, do której odwiedzający dociera
+przed zalogowaniem albo która przychodzi bez kanału storefrontu.** Dotyczy to tras logowania,
+rejestracji i odzyskiwania konta, linków w e-mailach, pobierania plików produktowych i — przypadku
+najłatwiejszego do przeoczenia — **wywołań zwrotnych dostawców płatności i przewoźników oraz
+adresów powrotu od dostawców**:
+
+```ts
+app.post(
+  '/api/v1/payments/acme/notify',
+  { config: { salesChannelAccess: 'open' } },
+  async (request, reply) => {
+    // Still resolved to a channel, and still behind this route's own guards.
+  },
+);
+```
+
+Bez tego trasa dostaje `403` w chwili, gdy operator zamknie kanał, do którego jest przypisywana — dla
+wywołania zwrotnego jest to domyślny kanał systemowy. Opcja jest otypowana w `FastifyContextConfig`
+Fastify przez barrel `./http` platformy. Pomija tylko krok dostępu: trasa nadal jest przypisywana do
+kanału i zachowuje własne warunki dostępu. Nie deklaruj jej na niczym, co pokazuje lub zmienia
+katalog, ceny, koszyk lub zamówienia sklepu. `SalesChannelAccessPort` (`salesChannelAccessPort`,
+`./kernel`) rozstrzyga regułę dla ścieżki, która nie ma jeszcze sesji. Zobacz
+[Dostęp do kanału: trasy, które muszą pozostać otwarte](./modules/sales_channels/developer-guide.md#dostęp-do-kanału-trasy-które-muszą-pozostać-otwarte).
+
+**Zmiany, po których kod się nie kompiluje albo nie składa.** Kod, który implementuje, konstruuje lub
+wywołuje którykolwiek z poniższych elementów, wymaga zmiany:
+
+| Co | Zmiana |
+| --- | --- |
+| `CartCustomerContext` (`@endora-commerce/contracts`) | `salesChannelId` jest **wymagane**: każdy wywołujący `CartReadPort` / `CartWritePort` wskazuje kanał, o którego koszyk chodzi |
+| `PersonalOrganizationProvisionInput` (`@endora-commerce/mod-organizations/ports`) | wymagane `salesChannelId: string \| null` |
+| `CatalogProductReadPort` | nowa wymagana metoda `listProductIdsByAttributeValue({ key, value, match })` |
+| `OrderReadPort` | nowa wymagana metoda `findStatusDefinition(code)` |
+| `DocumentRenderPort` | nowa wymagana metoda `listChoices({ documentType, salesChannelId })` |
+| `CartPlacementApplyPort` (`@endora-commerce/mod-carts/ports`) | nowe `findPriceDrift` i `refreshLinePrices` |
+| `CartService` | nowy wymagany argument konstruktora `ProductDisplayModePort` po `channelMembership`; `getOrCreateForAnon(em, token, salesChannelId)` zwraca `Cart \| null` |
+| `CartsDeps` | `cartCouponService`, `cartConversionService`, `pushLineToShoppingList` i `appendShoppingListToCart` są wymagane |
+| `PriceListTargetReads` | wymagane `catalogAttributeRead` — dla ręcznie budowanego `PriceListService` lub `PricingService` |
+| `MfaModuleOptions` | wymagane `customerChannelAccess` |
+| `AnalyticsIngestService.ingest` | wymagany `context` (`IngestContext`) |
+| `customerOrgResolver` (`mod-customer-accounts`) | odpowiada `{ organizationId, active }` lub `null`; aktualizuj razem z nim `mod-auth` |
+| `customerSocialLoginPort` | `resolveByEmail` odpowiada `{ id, organizationId, blocked }`, `autoCreate(email, { salesChannelId })` odpowiada `{ id, organizationId }` |
+| `AssetSummary`, `AssetDetail`, `AssetRecord` | nowe wymagane pola (`fileUrl`, `permalink`, `permalinkUrl`, `contentVersion`; `retentionDays`, `replaceable`) dla kodu, który je buduje |
+| `OrderSavedView` | wymagane `ownedByCaller` i `canModify` dla kodu, który go buduje |
+| `buildServer` | nie montuje już tras opisu API; w procesie czytaj `app.apiDescription()`, a `registerOpenApiRoutes` usunięto |
+
+**Nowe porty i punkty styku.** `BuyerLinePricePort` (`buyerLinePricePort`, z `price_lists`) — cena
+jednostkowa netto, jaką kupujący zapłaciłby za każdą pozycję w kanale; `ProductDisplayModePort`
+(`productDisplayModePort`); `MfaDeactivationGuardPort`; `CustomerAuthenticationThrottlePort` oraz,
+w `./kernel`, `AuthenticationAttemptThrottle`; `AdminSearchProviderRegistryPort`
+(`adminSearchProviderRegistry`) — dodaj dostawcę z haka startowego, który tylko wnosi wkład, aby
+rekordy modułu dało się znaleźć; `DocumentTypeRegistryPort` (`documentTypeRegistry`) i
+`DocumentRenderPort` (`documentRenderPort`) — rejestracja typu dokumentu i jego generowanie;
+`AdminRolePort.upsertByCode(input, { grantor })` — przekaż `grantor` dla zapisu wykonywanego w
+imieniu administratora; `createLlmAdapter` z `@endora-commerce/llm-client`, przeniesiony z
+`mod-prompt-actions`. `BlockDefinition` zyskuje opcjonalne ścieżki `translatable`, a blok bez nich
+nigdy nie jest wysyłany do modelu. Pole poświadczenia, które wskazuje, dokąd wysyłane są sekrety,
+deklaruje `endpoint: true`, chyba że jest polem `format: 'url'`, które liczy się domyślnie.
+
+**`order.cancelled.v1` jest emitowane**, a jego treść rośnie z `{ orderId }` do `orderId`,
+`organizationId`, `salesChannelId`, `from`, `actor`, `reason` i `businessId`. Pozostaje na
+wewnątrzprocesowej szynie zdarzeń; webhooki wychodzące nadal dostarczają anulowanie jako
+`order.status_changed.v1`.
+
+**Admin kit.** `ProductBrowserDialog`, `ProductBrowserTrigger` i `productSelectability`;
+`ModalDialog` i `SavedViewsControl`; `AssetUploader` zyskuje `upload` i `accept`. Ich teksty są w
+pakiecie `core` modułu `@endora-commerce/mod-i18n` w tym wydaniu.
+
+**Zależności równorzędne.** `mod-quote-requests` deklaruje `@fastify/rate-limit` (`^10`), które host
+platformy już rejestruje; `mod-cms` i `mod-prompt-actions` deklarują `@endora-commerce/llm-client`,
+który pnpm instaluje razem z nimi, tak jak inne zależności równorzędne.
+
+#### W istniejącym storefroncie {#after-0-107-0-storefront}
+
+**Istniejący storefront nie zmienia się przez aktualizację.** `endora new storefront` kopiuje
+wzorzec raz, a potem projekt należy do Ciebie; aktualizacja przenosi jego pakiety, których poniższe
+pliki potrzebują w wersji `0.107.0`. Dopóki jego pliki nie zostaną zaktualizowane, działa z
+zaktualizowanym backendem w sklepie otwartym dla niezalogowanych odwiedzających: katalog, koszyk,
+zamówienie i logowanie działają jak wcześniej, w granicach podanych przy każdej grupie. To, czego
+nie robi, opisano przy każdej grupie. Storefront do kopiowania utwórz tak, jak opisuje
+[Bloki modułów w istniejącym storefroncie](#storefront-block-renderers), i przejmuj grupy w tej
+kolejności. Tam, gdzie edytowano plik, nanieś jego różnicę ręcznie; `diff -ru` między Twoim
+storefrontem a nowym pokazuje każdą różnicę obok Twoich własnych zmian. Kilka plików należy do więcej
+niż jednej grupy — nową wersję weź raz.
+
+**1. Dostęp do kanału sprzedaży — wymagany, zanim jakikolwiek kanał zostanie zamknięty dla
+niezalogowanych odwiedzających, oraz w storefroncie, który obsługuje kilka kanałów przez
+`X-Sales-Channel`.** Storefront wskazuje swój kanał w każdym wywołaniu backendu, kieruje
+odwiedzającego zamkniętego sklepu na stronę logowania, pokazuje odmowę logowania i ekran braku
+dostępu oraz przestaje oferować rejestrację klienta indywidualnego w zamkniętym sklepie. Bez tego
+zamknięty sklep odpowiada na wywołania stron storefrontu `403`, a klient z odmową nie ma ekranu,
+który mówi dlaczego.
+
+- **nowe**: `components/ChannelAccessDenied.tsx`, `lib/api/channel-headers.ts`,
+  `lib/auth/sign-in-errors.ts`, `lib/channel/channel-header.ts`, `lib/channel/channel-identity.ts`,
+  `lib/channel/closed-store.ts`, `lib/actions/sign-out.ts`, `lib/dictionary/browser.ts`,
+  `lib/dictionary/types.ts`, `components/account/SignOutButton.tsx`, `lib/cart-action-failure.ts`;
+- **zmienione**: `middleware.ts` — oznacza `x-sales-channel` kanałem, który backend wyznacza dla
+  tego storefrontu, gdy nie zrobiło tego proxy, i kieruje odwiedzającego zamkniętego sklepu do
+  logowania; `app/layout.tsx`, `app/page.tsx`, `app/sitemap.ts`, `app/globals.css`;
+  `app/(auth)/login/page.tsx`, `app/(auth)/login/mfa/page.tsx`,
+  `app/(auth)/register-customer/page.tsx`; `app/(catalog)/c/[slug]/page.tsx`,
+  `app/(catalog)/catalog/page.tsx`, `app/(catalog)/p/[slug]/page.tsx`,
+  `app/(catalog)/search/page.tsx`; `app/compare/page.tsx`, `app/compare/share/[token]/page.tsx`;
+  `app/pwa/subscriptions/route.ts`; komponenty `CompareToggle`, `ComparisonTable`, `Header`,
+  `MfaCodeForm`, `ProductCard`, `ProductCardActions`, `ProductGrid`, `SearchAutocomplete`,
+  `SharedComparisonTable`, `SocialLoginButtons`, `analytics/AnalyticsProvider`,
+  `analytics/GtmProvider`, `inventory/NotifyWhenAvailableDialog` i `mobile/MobileSearchOverlay`;
+  oraz w `lib/`: `analytics/gtag.ts`, `analytics/gtm/dataLayer.ts`, `api/cart.ts`, `api/client.ts`,
+  `api/comparisons.ts`, `api/mutations.ts`, `api/newsletter.ts`, `api/pwa-server.ts`, `api/rfq.ts`,
+  `api/sales-channel.ts`, `api/search.ts`, `api/speculation-rules.ts`,
+  `dictionary/DictionaryProvider.tsx`, `dictionary/client.ts`, `i18n/messages.ts` i
+  `server-context.ts`. Ta sama zmiana dotyka `lib/seo/crawler-policy.ts` i
+  `lib/seo/crawler-file-response.ts`, które istnieją tylko w storefroncie, który przejął grupy SEO z
+  wydania 0.106.0; grupa 2 je zastępuje.
+
+Wzorzec pilnuje statycznym testem, by każde wywołanie backendu przechodziło przez pomocnika kanału;
+jeśli utrzymujesz testy storefrontu z `test/`, skopiuj je razem z plikami.
+
+**2. Pliki dla robotów w zamkniętym sklepie — zakłada trzy grupy SEO z wydania
+[0.106.0](#after-0-106-0-storefront) i grupę 1 powyżej.** Zastąp `lib/seo/crawler-policy.ts`,
+`lib/seo/crawler-file-response.ts`, `lib/seo/robots-txt.ts`, `lib/seo/llms-txt.ts` i
+`lib/seo/llms-txt-base.ts` oraz dodaj nową funkcję `renderClosedStoreRobotsTxt` do
+`lib/seo/robots-system-rules.ts` — reszta tego pliku, `ROBOTS_SYSTEM_RULES` z ewentualnymi Twoimi
+regułami, się nie zmienia. W zamkniętym sklepie `robots.txt` zabrania wtedy wszystkiego i nie wskazuje
+mapy strony, a `llms.txt` podaje nazwę sklepu i mówi, że treść jest tylko dla zalogowanych klientów;
+własne instrukcje i dodatkowa treść operatora są zachowane i wracają po otwarciu sklepu. Pliki
+otwartego sklepu się nie zmieniają.
+
+**3. Limity logowania klientów.** `lib/session.ts`, `lib/api/auth.ts`, `lib/api/mfa.ts` i
+`app/(auth)/password-reset/request/page.tsx`: storefront przekazuje plik cookie `b2b_customer_device`
+przy logowaniu, drugim kroku i prośbie o reset oraz zachowuje ten, który ustawia backend. Bez nich
+każda próba jest liczona według limitu urządzenia, na którym konto się nie logowało.
+
+**4. Wybór powiadomień push i wylogowanie.** `app/(account)/account/page.tsx`,
+`app/(account)/layout.tsx`, `components/account/SignOutButton.tsx`,
+`components/pwa/PushNotificationsToggle.tsx` (nowy), `components/pwa/PushPreferencesForm.tsx`
+(nowy), `components/pwa/PushOptIn.tsx`, `lib/api/pwa.ts` i `lib/api/pwa-server.ts`. Profil konta
+zyskuje wybór powiadomień o zamówieniach i ofertach oraz przełącznik wyłączający powiadomienia;
+wylogowanie zwalnia subskrypcję push przeglądarki. Bez nich klient dostaje obie kategorie, które
+oferuje operator.
+
+**5. Blokada negocjacji cen w szkicu zapytania ofertowego.** `app/(commerce)/quote-request/actions.ts`,
+`app/(commerce)/quote-request/page.tsx`, `components/rfq/RfqDraftView.tsx` i `lib/api/rfq.ts`. Bez
+nich klient z zablokowanymi propozycjami widzi pole propozycji i dostaje `422` przy wysłaniu
+propozycji.
+
+**6. Mniejsze poprawki.** `app/(commerce)/checkout/page.tsx` — strona błędu pokazuje zdanie
+backendu, także dla `CART_PRICE_CHANGED`, bez kodu na początku; `app/(catalog)/p/[slug]/page.tsx`,
+`lib/cart-action-failure.ts` i `lib/i18n/messages.ts` — strona produktu opisuje błędy koszyka w
+języku kupującego; `app/compare/page.tsx`, `components/ComparisonTable.tsx` i
+`lib/api/comparisons.ts` — PDF porównania jest zamawiany w wyświetlanym języku i z wyświetlanymi
+wierszami; `lib/api/catalog.ts` — odczyty katalogu w wybranej walucie; `components/Breadcrumbs.tsx`
+i `app/(catalog)/p/[slug]/page.tsx` — dane strukturalne produktu i ścieżki nawigacji renderowane
+przez `JsonLd`.
+
+Następnie uruchom `pnpm run typecheck`, `pnpm test` i `pnpm run build` i usuń katalog, z którego
+kopiowano. **Własny storefront**, który nie wywodzi się ze wzorca, musi zrobić trzy rzeczy, aby
+działać z zamkniętym sklepem: wskazywać swój kanał w każdym wywołaniu backendu, także z
+przeglądarki; kierować odwiedzającego do logowania przy `403 SALES_CHANNEL_SIGN_IN_REQUIRED`; oraz
+pokazywać `403 SALES_CHANNEL_NOT_PERMITTED`, odczytując z
+`GET /api/v1/storefront/sales-channel/access` sklepy, z których klient może korzystać.
+
+Jak dalece to sprawdzono: to, co mówi ta sekcja, pochodzi z opisów zmian (changesetów) wydania,
+sprawdzonych ze źródłami tego wydania — manifestami, migracjami, trasami i historią wzorcowego
+storefrontu między `v0.106.0` a `0.107.0`. W chwili pisania tej sekcji żadna instancja nie została
+zaktualizowana z `0.106.0` poleceniem `pnpm run upgrade 0.107.0`, do żadnej instancji deklarującej
+`mod-invoices` nie dodano po aktualizacji `mod-document-templates` i w żadnym storefroncie
+utworzonym we wcześniejszym wydaniu nie wprowadzono powyższych grup plików; kolejność kroków i
+zmiany w storefroncie nie były wypróbowane.
+
+### Po aktualizacji do wydania 0.108.0 {#after-0-108-0}
+
+`pnpm run upgrade 0.108.0` przenosi pakiety wydania z `0.107.0` i wykonuje jego migracje —
+dwadzieścia osiem, z czego dwanaście dotyczy nowego modelu cen i jego edytora, trzy poszerzają
+ceny jednostkowe do czterech miejsc po przecinku, a trzy zapisują, jak naliczono VAT i rabat.
+**Wydanie zastępuje
+sposób przechowywania i wyliczania cen w jednym kroku, bez okresu zgodności**: cenniki wcześniejszych
+wydań, z ich regułami stosowania (Application rule), listami produktów i przedziałami ilościowymi,
+stają się **cennikami w nowym modelu**, a produkt nie ma już własnej ceny. Ceny bazowe, które
+instancja naliczała z cennika *Default*, zostają zachowane; **każdy inny cennik aktualizacja
+usuwa** i nic go nie przenosi — jedynym wyjątkiem jest cennik, do którego przypięty jest feed
+produktowy: zostaje jako pusty, wygasły cennik (krok 3). Przeczytaj poniższe kroki, zanim
+uruchomisz polecenie. Pozostałe zmiany wydania następują w każdej części tej sekcji po zmianie cen:
+minimalne ilości zamówienia i produkty podlegające zwrotowi, grupy pozycji w zapytaniach ofertowych
+i zamówieniach, filtry list według pól niestandardowych i przenoszenie wartości pól
+niestandardowych między rekordami, ceny jednostkowe z czterema miejscami po przecinku od cennika
+po fakturę, edycja szans sprzedaży w miejscu, teksty produktów dla kanału
+sprzedaży w storefroncie, akcja operatora przygotowująca koszyk klienta z oferty oraz nowy moduł
+`admin_feedback`. Sekcja mówi, co zrobić i w jakiej kolejności, a potem — co działa inaczej dla
+[operatorów](#after-0-108-0-operators),
+[klientów API i integratorów](#after-0-108-0-api),
+[autorów modułów i modułów nakładkowych](#after-0-108-0-authors) oraz właściciela
+[istniejącego storefrontu](#after-0-108-0-storefront). Sam model opisuje strona
+[Cenniki](./modules/price_lists.md), a pełną listę tego, co usunięto, wraz z zamiennikami —
+[uwaga migracyjna](./modules/price_lists/developer-guide.md#upgrading-from-the-old-model-migration-note)
+w przewodniku dla deweloperów.
+
+#### Co zrobić i w jakiej kolejności {#after-0-108-0-steps}
+
+Przed aktualizacją:
+
+1. **Zapisz każdy cennik inny niż *Default*: jego ceny, kogo wyceniał i w których kanałach.**
+   `Migration20261022T111815PriceListsPriceBooksConversion` usuwa każdy cennik z regułą stosowania —
+   kontrakty grup klientów i organizacji, promocje, cenniki katalogowe — razem z listą produktów,
+   przedziałami, regułą i pozycjami macierzy cen, a potem usuwa stare tabele. Cennik, do którego
+   przypięty jest feed produktowy, zostaje zamiast tego wycofany z użycia (krok 3), ale jest pusty,
+   więc jego ceny i tak przepadają. To, co wyceniały, trzeba po aktualizacji wprowadzić ponownie jako
+   cenniki; kopia bazy danych z
+   [Zanim zaczniesz](#zanim-zaczniesz) jest jedyną kopią tych wierszy.
+2. **Zapisz cenę każdego produktu, który ma *Default unit price*, ale nie ma wiersza w cenniku
+   *Default*.** `Migration20261022T111811CatalogPriceFieldsRemoved` usuwa `defaultPrice` i `price`
+   z wartości atrybutów każdego produktu oraz kolumnę `product_variants.price_override`; żadne z nich
+   nie jest przenoszone. Produkt wyceniany tylko przez *Default unit price* po aktualizacji **nie ma
+   ceny** — koszyk odrzuca go z kodem `422 CART_PRODUCT_UNPRICED` — dopóki nie wpisze się dla niego
+   ceny bazowej. *Price override* wariantu nigdy nie był naliczany, więc jego usunięcie nie zmienia
+   żadnej ceny.
+3. **Feed produktowy przypięty do cennika innego niż *Default*: nic nie trzeba robić.** Feed
+   produktowy przypięty do cennika, który aktualizacja usuwa, pozostaje przypięty do wycofanej kopii
+   tego cennika: pustego, wygasłego cennika dla wszystkich, bez kanału sprzedaży i z tym samym id, o
+   nazwie `<name> (removed by the 0.108.0 upgrade)` (dawna nazwa jest skracana tak, by całość
+   mieściła się w 200 znakach). Strona feedu ostrzega, że jego cennik nie jest aktywny, a następne
+   generowanie feedu wycofuje opublikowany plik, więc link odpowiada tak, jakby feed nigdy nie
+   został wygenerowany — dopóki nie przypniesz feedu do cennika, który obowiązuje, albo go nie
+   odepniesz (krok 9). Wycofany cennik możesz usunąć, gdy przestanie być potrzebny; feed nadal do
+   niego przypięty ostrzega wtedy, że jego cennik już nie istnieje.
+4. **Jeśli Twoja integracja zapisuje ceny przez `priceListAdminPort`** — zwykle import cen
+   konektora PIM — przygotuj jej nową wersję: port został usunięty, a zastępuje go
+   `priceBookWritePort`. Konektor zbudowany dla starego portu nie może w tym wydaniu zapisywać cen.
+   Odpowiedniki metoda po metodzie są w
+   [uwadze migracyjnej](./modules/price_lists/developer-guide.md#upgrading-from-the-old-model-migration-note)
+   przewodnika dla deweloperów.
+
+Sama aktualizacja:
+
+5. **Uruchom `pnpm run upgrade 0.108.0`.** `setup` wykonuje migracje moduł po module, w kolejności
+   zależności modułów, a migracje jednego modułu — w kolejności ich znaczników czasu; dlatego każda
+   migracja `catalog`, w tym usunięcie pól cen, wykonuje się przed konwersją. Według modułów:
+
+   | Migracja | Moduł | Co robi |
+   | --- | --- | --- |
+   | `Migration20261016T082008CatalogOrderRules` | `catalog` | `products.min_order_quantity`, `products.returnable`, `product_packaging_units.min_order_units` |
+   | `Migration20261022T111811CatalogPriceFieldsRemoved` | `catalog` | Usuwa `product_variants.price_override`, `defaultPrice` i `price` — zob. krok 2 |
+   | `Migration20261022T182523CatalogAdminNameKeys` | `catalog` | Zapisane, zindeksowane klucze nazwy i wyszukiwania w panelu na `products` oraz rozszerzenie `pg_trgm` |
+   | `Migration20261019T103522CustomFieldsDefinitionListFilter` | `custom_fields` | `custom_field_definitions.list_filter`, `false` dla każdego istniejącego pola |
+   | `Migration20261020T110920CustomFieldsDefinitionCarryTo` | `custom_fields` | `custom_field_definitions.carry_to`, puste dla każdego istniejącego pola |
+   | `Migration20261016T082022OrdersOrderItemReturnableAtPurchase` | `orders` | `order_items.returnable_at_purchase`, może być `null` |
+   | `Migration20261020T172007OrdersOrderItemGroups` | `orders` | Tabela `order_item_groups`, `order_items.group_id` i `position` |
+   | `Migration20261021T164807OrdersOrderCommentSystemNote` | `orders` | `order_comments.system_note`, może być `null` |
+   | `Migration20261021T165247OrdersOrderItemsPriceSource` | `orders` | `order_items.price_source`, może być `null` |
+   | `Migration20261024T145147OrdersVatMethod` | `orders` | `orders.vat_method`, może być `null`; `per_rate` dla zamówienia złożonego w tym wydaniu, bez uzupełniania istniejących |
+   | `Migration20261025T031732OrdersUnitPriceFourPlaces` | `orders` | Poszerza `order_items.unit_price` do `numeric(14,4)` |
+   | `Migration20261018T122118QuoteRequestsItemPackagingUnitId` | `quote_requests` | `quote_request_items.packaging_unit_id`, może być `null` |
+   | `Migration20261020T171341QuoteRequestsQuoteRequestItemGroups` | `quote_requests` | Tabela `quote_request_item_groups`, `quote_request_items.group_id` i `position` |
+   | `Migration20261021T164808QuoteRequestsQuoteRequestEventCarrySkipped` | `quote_requests` | Dopuszcza typ zdarzenia `custom-field-carry-skipped` |
+   | `Migration20261025T031736QuoteRequestsUnitPriceFourPlaces` | `quote_requests` | Poszerza `quote_request_items.desired_unit_price`, `agreed_unit_price` i `reference_unit_price` do `numeric(14,4)` |
+   | `Migration20261020T131018PwaPreferencesOrganizationAttributionCheck` | `pwa` | Ograniczenie `CHECK` na `push_notification_preferences` |
+   | `Migration20261021T165244CartsCartItemsPriceSource` | `carts` | `cart_items.price_source`, może być `null` |
+   | `Migration20261025T031727CartsUnitPriceFourPlaces` | `carts` | Poszerza `cart_items.unit_price`, `recomputed_unit_price` i `agreed_unit_price` do `numeric(14,4)` |
+   | `Migration20261024T145631InvoicesVatSummary` | `invoices` | `invoices.vat_summary`, może być `null` — podsumowanie według stawek, z którym wystawiono dokument; bez uzupełniania istniejących |
+   | `Migration20261024T174052ReturnsCaseItemDiscount` | `returns` | `return_case_items.default_discount_amount`, `0` dla każdej istniejącej pozycji |
+   | `Migration20261023T195611ProductFeedsRunWithdrawalReason` | `product_feeds` | `product_feed_runs.withdrawal_reason`, może być `null` — dla generowania, które wycofało opublikowany plik |
+   | `Migration20261023T234605ProductFeedsPriceListFkDropped` | `product_feeds` | Usuwa `product_feeds_price_list_fk`, więc wycofany cennik można później usunąć; wykonuje się po konwersji |
+   | `Migration20261021T165239PriceListsPriceBooksExpand` | `price_lists` | Nagłówek cennika, zbiory odbiorców i kanałów, rozszerzone wiersze, wersja kolejności 1, tabele powierzchni cen |
+   | `Migration20261021T232310PriceListsPriceBooksVersion` | `price_lists` | `price_lists.version` i `ever_activated` |
+   | `Migration20261022T012134PriceListsPriceSurfaceGenerations` | `price_lists` | Generacje powierzchni cen |
+   | `Migration20261022T111815PriceListsPriceBooksConversion` | `price_lists` | Konwersja — zob. krok 1 i niżej |
+   | `Migration20261022T182527PriceListsProductLines` | `price_lists` | Tabela `price_list_product_lines`, wypełniona na podstawie zapisanych wierszy |
+   | `Migration20261023T152351PriceListsPriceSurfaceTargetedMarks` | `price_lists` | Tabela `price_profile_stale_products` i `price_profiles.revision` do odświeżania powierzchni cen tylko tam, gdzie to potrzebne |
+
+   Konwersja wykonuje się w jednej transakcji: tworzy jeden **cennik cen bazowych** na każdą walutę
+   użytą w przedziale cennika *Default* oraz na domyślną walutę platformy; zamienia każdy przedział
+   cennika *Default* w stały wiersz cennika cen bazowych swojej waluty; usuwa każdy inny cennik
+   poza tym, do którego odwołuje się jeszcze inna tabela — przypięty feed — który wycofuje z użycia
+   jako pusty, wygasły cennik z tym samym id (krok 3);
+   usuwa stare tabele i kolumny. `Migration20261022T182523CatalogAdminNameKeys` dodaje do
+   `products` cztery kolumny generowane, a każda z nich przepisuje tabelę pod blokadą wyłączną —
+   w pomiarze platformy 3,5–7 s na kolumnę przy 50 000 produktów — co jest jeszcze jednym powodem,
+   by API pozostało zatrzymane.
+
+Po aktualizacji, zanim instancja znów przyjmie ruch:
+
+6. **Upewnij się, że działa konsument kolejek.** Listy sortowane i filtrowane według ceny są
+   porządkowane według cen, które z wyprzedzeniem wylicza worker `price_lists.surface`; działa on w
+   procesie, który obsługuje kolejki (`BACKEND_ROLE` nieustawione, `all` albo `worker`) i ma
+   połączenie Redis dla kolejek — [Konsumenci kolejek](./operations/queue-consumers.md).
+   Aktualizacja niczego nie buduje: pierwsze żądanie sortowane według ceny w każdym kanale
+   sprzedaży i walucie rejestruje to, czego potrzebuje, i zleca to workerowi, a do czasu, aż worker
+   to zbuduje, dostaje domyślny porządek katalogu — z poprawnymi cenami na kartach produktów. Bez
+   konsumenta sortowanie według ceny nigdy nie porządkuje według ceny.
+7. **Sprawdź ceny bazowe.** Otwórz zakładkę *Pricing* kilku produktów: ceny pochodzące z cennika
+   *Default* są tam, dla każdej waluty. Wpisz cenę bazową każdego produktu z kroku 2.
+8. **Utwórz ponownie cenniki**, które zastępują cenniki z kroku 1, w **Cennikach** (`/price-lists`
+   albo ⌘K / CTRL+K → *Cenniki*). Cennik ma jedną walutę, zbiór kanałów sprzedaży, odbiorców —
+   wszystkich, wybrane grupy klientów albo wybrane organizacje — i linie; niczego nie wycenia,
+   dopóki nie zostanie aktywowany. *Wyjaśnienie ceny* (`/price-lists/explain`) pokazuje dla
+   kupującego i produktu, która linia zdecydowała o cenie.
+9. **Przypnij ponownie feedy z kroku 3 albo je odepnij** przez API feedów produktowych
+   (`PATCH /api/v1/admin/product-feeds/:id` z `priceListId` — id cennika albo `null`); w panelu nie
+   ma jeszcze do tego kontrolki (zgłoszenie #414). Przypnij każdy do cennika, który obowiązuje
+   kogokolwiek w kanale feedu: *Aktywny* albo *Zaplanowany* w swoich datach, przypisany do kanału feedu i dla wszystkich. Feed przypięty do
+   każdego innego cennika nie publikuje z niego żadnych cen — strona feedu mówi dlaczego — a jego
+   następne generowanie kończy się stanem *Wycofany* i wycofuje opublikowany plik, więc link
+   odpowiada tak jak dla feedu nigdy niewygenerowanego, dopóki cennik znów nie zacznie obowiązywać.
+   Wycofanie nie jest błędem: nie wywołuje powiadomienia i niczego nie dostarcza.
+10. **Oznacz produkty, które kupujący mogą zwracać.** `Migration20261016T082008CatalogOrderRules`
+    dodaje każdemu produktowi flagę **Podlega zwrotowi**, wyłączoną: pozycja zamówienia złożonego po
+    aktualizacji podlega zwrotowi tylko wtedy, gdy jej produkt podlegał zwrotowi w chwili złożenia
+    zamówienia, a zwrot (`kind: 'return'`) obejmujący każdą inną pozycję jest odrzucany z kodem
+    `422 RETURN_LINE_NOT_RETURNABLE`. Zamówienia złożone przed aktualizacją się nie zmieniają — ich
+    pozycje nie mają zapisanej wartości i nadal podlegają zwrotowi — a reklamacje nigdy nie są
+    ograniczane. Zaznacz produkty na liście produktów i użyj **Edycja masowa → Podlega zwrotowi →
+    Tak — podlega zwrotowi**; flaga jednego produktu jest na karcie **Zasady zamawiania** w jego
+    zakładce *Inventory*.
+
+W dowolnym momencie:
+
+11. **Nadaj `catalog:read` każdej roli, która ma `price_lists:write`.** Dodawanie linii produktów do
+    cennika korzysta z przeglądarki produktów katalogu, którą chroni `catalog:read`; edytor ról w
+    *Admin roles* (`/admin-roles`) pokazuje brak dla roli, która go nie ma, z dodaniem jednym
+    kliknięciem. Oba kody uprawnień cenników się nie zmieniły; ich etykiety brzmią teraz *View price
+    books and display modes* oraz *Edit price books, base prices and display modes*.
+12. **W instancji z danymi sklepu demonstracyjnego** uruchom `pnpm run cli demo reset`, a potem
+    `pnpm run cli demo seed`: konwersja usunęła dawne cenniki wersji demonstracyjnej, a ponowne
+    wczytanie przywraca jej ceny bazowe i cenniki przykładów ze strony
+    [Cenniki](./modules/price_lists.md).
+13. **Zdecyduj, czy dodać `admin_feedback`.** Wydanie wprowadza nowy pakiet
+    `@endora-commerce/mod-admin-feedback`, który pozwala administratorowi wysłać opinię twórcom
+    Endora Commerce przez link *Wyślij opinię* na pasku bocznym panelu. Żaden moduł od niego nie
+    zależy, więc aktualizacja go nie deklaruje; jak to zrobić, mówi sekcja [Dodawanie modułu, który
+    jest nowy w wydaniu](#adding-a-new-module). Po zadeklarowaniu jest **włączony i wysyła dane do
+    Endora** (`admin_feedback.relay_url`, domyślnie
+    `https://commerce.endora.software/api/platform-feedback/`): każda wiadomość zawiera wpisany
+    tekst, adres e-mail nadawcy i opcjonalny telefon, język i adres panelu, wydanie, na którym
+    działa instancja, jej skonfigurowany publiczny adres API oraz imię i nazwisko i id
+    administratora, który ją wysłał. Wyłącz moduł w **Ustawienia → Feedback**
+    (`admin_feedback.module_enabled`) albo wyczyść adres przekaźnika, jeśli instancja nie może
+    wysyłać danych do Endora. Instancja niczego nie zapisuje.
+14. **Oznacz pola niestandardowe, według których listy w panelu mają filtrować.** Listy zamówień,
+    zapytań ofertowych i szans sprzedaży oferują filtr dla każdego pola niestandardowego zamówienia,
+    zapytania ofertowego albo szansy sprzedaży, które ma włączoną nową opcję *Używaj jako filtra
+    listy*, a każde istniejące pole ma ją wyłączoną. Włącz ją w edytorze pola na `/custom-fields`,
+    który teraz pozwala edytować istniejące pola.
+15. **Podnieś `vite` i `nodemailer` we własnych manifestach.** Opcjonalny zakres peer powłoki
+    panelu dla `vite` to teraz `^7.3.7`; instancja, której człon panelu wciąż rozwiązuje wcześniejszy
+    `vite` 7, dostaje ostrzeżenie *unmet peer* ([Po zakończeniu](#po-zakończeniu)) — podnieś `vite`
+    w `admin/package.json` do `^7.3.7`. `mod-email` i `mod-newsletter` nadal przyjmują każdy
+    `nodemailer` 10, więc instancja zachowuje ten, który rozwiązała; platforma buduje się teraz z
+    `^10.1.4` (10.2.1 w jej pliku blokady), który zaostrza parsowanie adresów, usuwa dane
+    uwierzytelniające przy przekierowaniu do innego źródła i ogranicza pracę, jaką może wywołać jedna
+    wiadomość. Podnieś `nodemailer` tam, gdzie instancja go deklaruje, do `^10.1.4`, żeby mieć te
+    poprawki, a potem uruchom `pnpm install`.
+
+#### Dla operatorów {#after-0-108-0-operators}
+
+##### Ceny
+
+- **Cenniki działają w nowym modelu.** Pozycja paska bocznego *Cenniki* otwiera listę cenników; pole
+  *Default unit price* w edytorze produktu, kolumna *Price override* w tabeli wariantów i strefa
+  *Linked price lists* produktu zniknęły, a ceny bazowe produktu są w jego zakładce *Pricing*.
+  *Ustawienia cenowe* (⌘K / CTRL+K) zawierają tryby prezentacji, przełącznik pokazywania ceny
+  katalogowej obok ceny kupującego (`pricing.show_list_price`, domyślnie wyłączony) i kolejność cen,
+  tylko do odczytu.
+- **Jak ustalana jest cena** — cena bazowa, cena katalogowa dla wszystkich w kanale, cena
+  kontraktowa kupującego i cena promocyjna naliczana tylko wtedy, gdy jest niższa — opisuje strona
+  [Cenniki](./modules/price_lists.md), z przykładami.
+- **Zmiana ceny pojawia się na liście sortowanej według ceny w ciągu około pół sekundy** w
+  pomiarach platformy; zmiana, która sięga całego katalogu — linia dla wszystkich produktów albo
+  tylko dla wartości atrybutu, ponad 10 000 produktów naraz, zmiana kanału sprzedaży — trwa poniżej
+  około półtorej minuty przy mniej więcej 200 grupach kupujących z własnymi cennikami (zmierzono
+  85 s przy 202, na 50 000 produktów, wobec około 4,5 minuty przed zgłoszeniem #416). Ceny na
+  kartach produktów nigdy się nie opóźniają.
+- **Import produktów odrzuca plik z kolumną ceny** — `default_price`, `defaultPrice`, `price`,
+  `price_override` albo `priceOverride` — z kodem `400 PRICE_SET_IN_PRICE_BOOKS` i niczego nie
+  importuje. Ceny importuje się przez import CSV cenników albo konektorem PIM przez
+  `priceBookWritePort`.
+- **Zalogowany klient jest wyceniany według własnej grupy klientów**, gdy jego konto ma grupę inną
+  niż jego organizacja — na listach, na stronie produktu, w wyszukiwaniu i podpowiedziach, w
+  porównaniach, w koszyku i przy składaniu zamówienia. Koszyk pokazuje też cenę, jaką naliczy
+  złożenie zamówienia: pozycja z zaakceptowanej oferty pokazuje cenę uzgodnioną przy uzgodnionej
+  ilości, a pozycja, którą składanie zamówienia by odrzuciło, jest oznaczona jako niedostępna.
+- **Ponowne zamówienie pomija pozycje, których nic już nie wycenia** dla kupującego albo które są
+  sprzedawane tylko na zapytanie, i informuje o nich; wcześniej taka pozycja trafiała do koszyka w
+  cenie ze starego zamówienia, a koszyk był potem odrzucany przy składaniu zamówienia.
+
+##### Kwoty, VAT i faktury
+
+- **VAT jest liczony w jeden sposób na każdym dokumencie**: dla każdej stawki od sumy kwot netto w
+  tej stawce, z zaokrągleniem „połówkowym w górę” jeden raz, a kwota brutto to netto plus ten VAT
+  (art. 106e ust. 1 pkt 13–14 ustawy o VAT). Te same kwoty pokazują checkout, zamówienie, otwarta
+  przez nie płatność i proforma, faktura, korekta i zwrot. Koszyk z pozycjami w dwóch stawkach VAT
+  może kosztować o grosz więcej lub mniej niż przed aktualizacją: 29,50 w stawce 23 % z 4,30 w
+  stawce 5 % dawało 40,80 brutto, a daje 40,81 — tyle samo, ile mówi jego faktura. Kwota brutto
+  pozycji w zamówieniu, jego potwierdzeniu, na fakturze i na ekranach zamówień to **własne
+  zaokrąglenie pozycji** — 29,50 w stawce 23 % pokazuje 36,29 — podawane informacyjnie; VAT i sumy
+  to kwoty według stawek, więc kwoty brutto pozycji dokumentu mogą sumować się do grosza więcej
+  lub mniej niż jego suma.
+- **Faktury wystawione przed aktualizacją dla zamówień czynnych podatników VAT zawyżały kwotę netto,
+  VAT i brutto.** Przy wystawianiu kwota brutto każdej pozycji zamówienia była odczytywana jako jej
+  kwota netto i opodatkowana ponownie: pozycja 100,00 netto w stawce 23 % trafiała na fakturę jako
+  123,00 netto i 151,29 brutto. Aktualizacja zmienia sposób wystawiania faktur od teraz. **Nie
+  poprawia faktur już wystawionych, a platforma nie wystawia do nich korekt**; zachowują kwoty, z
+  którymi je wystawiono, a ich podsumowanie według stawek jest pokazywane tak, jak je wystawiono.
+- **Zamówienie złożone przed aktualizacją zachowuje to, co naliczyło.** Jego zwroty oddają to, co
+  zapisało i co zostało zapłacone. Faktura wystawiona do niego po aktualizacji liczy VAT według
+  stawek i może być o grosz wyższa od zapłaconej kwoty — 40,81 dla zamówienia, które naliczyło
+  40,80 — a jako zapłacone zapisuje tylko to, co zapłacono, więc grosz pokazuje jako należny
+  (*Do zapłaty: 0,01*), a nie jako zapłacony.
+- **Zwroty domyślnie oddają to, co zapłacono, łącznie ze wszystkich zwrotów zamówienia.** Każdy
+  zwrot oddaje wartość wszystkiego, co dotąd zwrócono, pomniejszoną o to, co oddały wcześniejsze
+  zwroty, więc żaden ciąg zwrotów nie odda więcej, niż naliczyło zamówienie, a zwrot całości oddaje
+  dokładnie tyle: dwa zwroty po jednej z dwóch sztuk po 29,50 w stawce 23 % oddają 36,29, a potem
+  36,28 (zapłacono 72,57), gdzie każdy oddawał 36,29. Reklamacja pozycji, której nie można zwrócić,
+  liczy się do tej samej sumy, a rabat na całe zamówienie jest odejmowany od tego, co oddaje zwrot
+  towaru — zamówienie naliczyło towar pomniejszony o rabat, więc zwrot całości oddaje tyle, nigdy
+  pełnej ceny towaru. Korekta uznaje tak samo: VAT towaru tak, jak naliczyła go faktura, a rabat na
+  osobnej pozycji, więc wszystkie korekty jednej faktury razem uznają dokładnie to, co naliczyła. Dla
+  zamówienia złożonego przed aktualizacją zwrot oddaje to, co naliczyło zamówienie, a korekta uznaje
+  dokładnie tyle.
+- **Rozliczenie sprawdza korektę, zanim przesunie jakiekolwiek pieniądze.** Odmowa — ta sama pozycja
+  zgłoszenia podana dwa razy, pozycja faktury, której korekta nie może dopasować, wyłączony moduł
+  `invoices` — zostawia zgłoszenie nierozliczone, bez zwrotu i bez uznania. Rozliczenie zwraca
+  wszystkie pozycje zgłoszenia: pozycja pominięta w żądaniu jest zwracana i uznawana w zapisanej
+  zatwierdzonej kwocie, więc zwrot i korekta zawsze się zgadzają. Dwa zwroty jednego zamówienia są
+  rozliczane jeden po drugim.
+- **Zamówienie zwrócone w całości przed wystawieniem faktury nie jest fakturowane.** Wystawienie
+  jego faktury VAT jest odrzucane — *Płatności za to zamówienie zostały w całości zwrócone przed
+  wystawieniem faktury, więc nie ma sprzedaży do zafakturowania.* — i nie pobiera numeru, a
+  automatyczne wystawianie po zmianie statusu zamówienia je pomija. Zamówienie zwrócone w części
+  jest fakturowane, a jako zapłacone wykazuje tylko to, co zostało zatrzymane.
+- **Kwota z więcej niż dwoma miejscami po przecinku jest odrzucana, a nie zaokrąglana** — koszt
+  dostawy, dopłata do metody płatności, zatwierdzona kwota zwrotu, koszt zwrotu, limit kredytowy,
+  wartość szansy sprzedaży oraz kwota stała, próg i minimalna wartość koszyka w promocji. Ekran
+  odpowiada komunikatem *Kwota może mieć najwyżej dwa miejsca po przecinku.* Cena jednostkowa nie
+  jest kwotą: zob. następną sekcję.
+
+##### Ceny jednostkowe z czterema miejscami po przecinku
+
+- **Ceny jednostkowe nie są już zaokrąglane do groszy w koszyku.** Cennik zawsze przechowywał
+  cztery miejsca po przecinku, ale do tego wydania koszyk zaokrąglał cenę do dwóch, przyjmując ją:
+  wkręt w cenie 0,0125 zł był liczony po 0,01 zł, więc 10 000 sztuk kosztowało 100,00 zł zamiast
+  125,00 zł, a wkręt po 0,0150 zł był liczony po 0,02 zł — o jedną trzecią za drogo. Cena
+  jednostkowa zachowuje teraz cztery miejsca, bez zaokrąglania, w pozycji koszyka, pozycji
+  zamówienia, pozycjach zapytania ofertowego i pozycji faktury.
+- **Zaokrąglana jest wartość pozycji.** Wartość netto pozycji to cena jednostkowa × ilość,
+  zaokrąglona raz, połówkowo w górę, do grosza: 0,0125 × 10 000 = 125,00, a 0,0150 × 3 = 0,045,
+  czyli 0,05. VAT pozostaje taki, jak opisano wyżej — dla każdej stawki od sumy wartości pozycji.
+  Zwroty i korekty liczą się, jak dotąd, z tego, co zamówienie zapisało i pobrało.
+- **Kolumny zostały poszerzone**: `cart_items.unit_price`, `recomputed_unit_price` i
+  `agreed_unit_price`, `order_items.unit_price` oraz `quote_request_items.desired_unit_price`,
+  `agreed_unit_price` i `reference_unit_price` mają teraz typ `numeric(14,4)`, jak cenniki i
+  `invoice_lines.unit_net_price`. Poszerzenie jest bezstratne: żadna zapisana wartość się nie
+  zmienia, a zamówienia złożone przed aktualizacją zachowują dwumiejscowe ceny, po których je
+  złożono.
+- **Cena jednostkowa pokazuje swoje znaczące miejsca, do czterech**: 0,0125 zł, 1,505 zł — oraz
+  dwa miejsca, gdy trzecie i czwarte są zerami (1,50 zł). Wartości pozycji i sumy zawsze mają dwa
+  miejsca. Dotyczy to panelu, storefrontu, kolumny *Cena netto* na fakturze PDF, oferty PDF i
+  e-maili. Feed produktowy nadal publikuje dwa miejsca.
+- **Uzgodnioną lub proponowaną cenę jednostkową w zapytaniu ofertowym można wpisać z czterema
+  miejscami po przecinku**; piąte jest odrzucane komunikatem *Cena jednostkowa może mieć najwyżej
+  cztery miejsca po przecinku.*
+- **Pozycja koszyka dodana przed aktualizacją** ma dwumiejscową cenę. Jeśli cena produktu ma
+  trzecie lub czwarte miejsce po przecinku, nie jest to już cena bieżąca i koszyk przelicza
+  pozycję przed złożeniem zamówienia — np. po 0,0125 zamiast 0,01.
+
+##### Minimalne ilości zamówienia i produkty podlegające zwrotowi
+
+- **Produkt może mieć minimalną ilość zamówienia** (w sztukach, dla produktów prostych i
+  konfigurowalnych), a jednostka opakowania — minimalną liczbę jednostek: karta **Zasady
+  zamawiania** w zakładce *Inventory* produktu i kolumna **Minimum (w jednostkach)** jego jednostek
+  opakowania. Istniejące produkty nie mają minimum, więc nic się nie zmienia, dopóki go nie
+  ustawisz. Minimum jest oceniane na sumie produktu ze wszystkich pozycji i wariantów koszyka.
+- **Gdzie jest egzekwowane.** Koszyk odrzuca dodanie albo zmianę, po której produkt byłby poniżej
+  minimum, a przesłanie koszyka do akceptacji, finalizacja zamówienia, zakup jednym kliknięciem, ponowne
+  zamówienie, *Utwórz zamówienie* w panelu i zewnętrzne API zamówień odrzucają koszyk poniżej
+  minimum. Pozycja z zaakceptowanego zapytania ofertowego jest zwolniona przy uzgodnionej ilości,
+  dopóki oferta jest ważna. Zapytanie ofertowe kupującego poniżej minimum jest odrzucane; to, które
+  tworzy albo modyfikuje operator, zostaje zapisane, a pozycja dostaje znaczek *Poniżej minimum*.
+  Import szybkiego zamówienia przez operatora oznacza takie wiersze jako ostrzeżenia, a import
+  kupującego je odrzuca. Zakup jednym kliknięciem zamawia minimalną ilość produktu zamiast 1.
+- **Zwroty uwzględniają flagę Podlega zwrotowi** (krok 10): zwrot pozycji, która nie podlegała
+  zwrotowi w chwili zakupu, jest odrzucany; reklamacja takiej pozycji jest przyjmowana z
+  zatwierdzoną kwotą zwrotu `0` wpisaną domyślnie, a sprawa oznacza ją jako *Bez prawa zwrotu przy
+  zakupie*.
+- **Limity.** *Utwórz zamówienie* w panelu, zewnętrzne API zamówień i budowanie szybkiego
+  zamówienia przyjmują najwyżej 200 pozycji; `quick_order.import_max_rows` jest ograniczane do
+  1–10 000 niezależnie od zapisanej wartości.
+
+##### Grupy pozycji w zapytaniach ofertowych i zamówieniach
+
+- **Pozycje zapytania ofertowego można układać w nazwane, uporządkowane grupy** w jego zakładce
+  *Modify* i na ekranie tworzenia, z podsumowaniem każdej grupy; *Podziel pozycję* przenosi część
+  ilości pozycji na nową pozycję, a jeden produkt może być na kilku pozycjach. Zamówienie złożone z
+  zaakceptowanej oferty przejmuje jej grupy, a *Utwórz zamówienie* w panelu ma ten sam edytor. Grup
+  zamówienia nie można zmienić po jego złożeniu. PDF oferty drukuje grupy jako sekcje, podobnie jak
+  każdy szablon dokumentu, którego tabela pozycji nie ma wybranego grupowania, także szablony
+  zapisane przed aktualizacją — jej domyślnym ustawieniem są teraz *Grupy z dokumentu*. Dokument
+  bez grup drukuje się jak wcześniej; wybierz *Bez grupowania* w edytorze szablonu, aby tabela
+  pozostała płaska niezależnie od dokumentu.
+
+##### Pola niestandardowe
+
+- **Filtry list** (krok 14) na listach zamówień, zapytań ofertowych i szans sprzedaży: zapisywane
+  w adresie, w zapisanych widokach i — na liście zamówień — w eksporcie CSV.
+- **Istniejące definicje można edytować** na `/custom-fields`: etykiety, *Wymagane*, *Używaj jako
+  filtra listy* i opcje pola wyboru; klucz i typ wartości pozostają stałe.
+- **Wartości mogą być przenoszone między rekordami.** Opcje *Przenoś wartość do: …* definicji
+  przenoszą jej wartości z zapytania ofertowego do złożonego z niego zamówienia i do jego szansy
+  sprzedaży, z zamówienia do jego szansy sprzedaży oraz z szansy sprzedaży do zapytania ofertowego
+  albo zamówienia, które administrator z niej tworzy — tylko do pustych pól. Wartość, której nie da
+  się przenieść, jest wymieniona w wewnętrznej notatce systemowej zamówienia albo w historii
+  zapytania ofertowego. Żadna istniejąca definicja niczego nie przenosi.
+- **Pola niestandardowe zapytań ofertowych podlegają modułowi `quote_requests`**: gdy jest
+  wyłączony, nie są wyświetlane ani zapisywalne na `/custom-fields`, a wracają bez zmian razem z
+  nim.
+- **Historia zmian szansy sprzedaży pokazuje wartości pól niestandardowych tylko roli z
+  uprawnieniem `custom_fields:read`.**
+
+##### Szanse sprzedaży
+
+- **Ekran szansy sprzedaży jest edytowany w miejscu** — tytuł, opis, przewidywana data
+  zamknięcia, osoba kontaktowa, kanał sprzedaży i wartości typowane, każde tam, gdzie jest
+  pokazywane — a opisy, notatki, wiadomości i opisy zdarzeń pisze się w edytorze tekstu
+  sformatowanego. Odwołanie do zamówienia pokazuje jego stan, sumę, datę i klienta.
+
+##### Zapytania ofertowe
+
+- **Akcja *Przygotuj koszyk klienta*** zatwierdzonego zapytania ofertowego umieszcza jego pozycje
+  w koszyku klienta, do którego należy, po uzgodnionych cenach, zastępując zawartość tego koszyka;
+  klient kończy zamówienie przy finalizacji. Wcześniejszy przycisk *Place order* wylogowywał
+  administratora.
+
+##### Teksty produktów w storefroncie
+
+- **Teksty produktu dla kanału sprzedaży trafiają do storefrontu.** Nazwa, opis, pola SEO i
+  wartości atrybutów zapisane dla kanału sprzedaży w edytorze zakresu produktu są tym, co pokazuje
+  strona produktu w storefroncie w tym kanale, a zapisana tam nazwa — tym, co pokazują karty list,
+  wyniki wyszukiwania i podpowiedzi.
+
+##### Opinie z panelu
+
+- **`admin_feedback`** (krok 13) dodaje *Wyślij opinię* obok numeru wydania na pasku bocznym, dla
+  każdego zalogowanego administratora, najwyżej pięć wiadomości na administratora w ciągu dziesięciu
+  minut.
+
+#### Dla klientów API i integratorów {#after-0-108-0-api}
+
+##### Ceny
+
+- **Dawne trasy cen w API administracyjnym zostały usunięte**: `/api/v1/admin/price-lists-engine/…`,
+  `/api/v1/admin/pricing/rule-targets/…`, `/api/v1/admin/products/:id/price-lists` i
+  `/api/v1/admin/products/:id/resolved-price`. Zastępuje je `/api/v1/admin/price-books/…`:
+  `GET ?productId=` dla cenników produktu i `POST /api/v1/admin/price-books/resolve` dla wyliczonej
+  ceny z wyjaśnieniem.
+- **Zapis katalogu, który podaje cenę, jest odrzucany**: `POST`/`PATCH
+  /api/v1/admin/catalog/products[/:id]` z `attributeValues.defaultPrice` albo
+  `attributeValues.price` oraz zapis wariantu z `priceOverride` zwracają
+  `400 PRICE_SET_IN_PRICE_BOOKS` i niczego nie zapisują. Ceny bazowe zapisuje się przez
+  `PUT /api/v1/admin/price-books/base-prices/:productId`.
+- **`GET /api/v1/storefront/products/:id/resolved-price` uczciwie opisuje produkt bez ceny**:
+  `baseListId`, `basePrice` i `quantityBracket` mają wszystkie wartość `null`, podczas gdy wcześniej
+  `baseListId` był pustym tekstem. Kwoty są tekstami dziesiętnymi
+  (`{ "amount": "199.0000", "currency": "PLN" }`), tak jak trasa zawsze je wysyłała. Odpowiedź
+  zawiera też `source` (który krok wycenił produkt), `compareAt` oraz — gdy sklep ją pokazuje —
+  `listPrice`.
+- **Kody błędów macierzy cen zniknęły** (`PRICE_MATRIX_ENTRY_NOT_FOUND`,
+  `PRICE_MATRIX_ENTRY_OVERLAP`, `PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE`, `PRICE_MATRIX_ENTRY_LIMIT`);
+  zastępują je kody cenników, `PRICE_BOOK_*` i `PRECEDENCE_CHANGE_UNAVAILABLE`.
+- **Feed produktowy przypięty do cennika** publikuje tylko wtedy, gdy cennik jest *Aktywny* albo
+  *Zaplanowany* w swoich datach, w kanale feedu i dla wszystkich. Generowanie feedu, którego cennik
+  nie obowiązuje, kończy się nowym stanem `withdrawn` z `withdrawalReason` (powód; `null` w każdym
+  innym generowaniu), czyści opublikowany plik, a publiczny URL odpowiada `404`; klient, który
+  obsługuje wyczerpująco każdy stan generowania, ma jeden przypadek więcej. Kod błędu
+  `price_list_unavailable`, którego nic nie zgłaszało, został usunięty. Feed w API administracyjnym (`GET /api/v1/admin/product-feeds`, `GET …/:id`)
+  zawiera `pinnedPriceBookWarning`: powód, dla którego cennik nie jest publikowany, albo `null`.
+- **`POST /api/v1/orders/:id/reorder`** zgłasza pozycję pominiętą, bo nic jej nie wycenia, z
+  `reason: 'no_price'` w `unavailableItems`.
+
+##### Kwoty i VAT
+
+- **Wpisana kwota pieniężna z więcej niż dwoma miejscami po przecinku zwraca
+  `400 AMOUNT_PRECISION_EXCEEDED`** (nowy kod) i nie jest zapisywana; wcześniej była zaokrąglana.
+  Dotyczy to pól: `cost` metody dostawy, `additionalPrice` metody płatności, `approvedRefundAmount` rozliczenia,
+  `returnCost` metody dostawy zwrotu, `amount` zwrotu zamówienia w panelu, `grantedAmount` limitu
+  kredytowego, `manualValue` szansy sprzedaży, `amount`, `spendStep`, `minCartSubtotal` promocji i
+  `value` promocji `amount_off`, a także `netTotal`, `taxTotal`, `grossTotal` i `paidTotal`
+  dokumentu sprzedaży z integracji ERP. `details` wskazuje każde pole z problemem
+  `AMOUNT_PRECISION_EXCEEDED`, a komunikat jest w języku czytelnika. Żądanie, które nie spełnia
+  także innych warunków, zwraca `400 VALIDATION_FAILED` z tym samym problemem wśród szczegółów.
+  Końcowe zera nie są znaczące (`"123.4500"` to 123,45); ciąg, który w ogóle nie jest liczbą
+  dziesiętną, zwraca `400 VALIDATION_FAILED` z problemem formatu.
+- **Cena jednostkowa ma do czterech miejsc po przecinku.** `desiredUnitPrice` i `agreedUnitPrice`
+  pozycji zapytania ofertowego (`POST /api/v1/quote-requests`, trasy tworzenia i `PATCH` w panelu)
+  przyjmują cztery miejsca; piąte zwraca `400 UNIT_PRICE_PRECISION_EXCEEDED` (nowy kod, *Cena
+  jednostkowa może mieć najwyżej cztery miejsca po przecinku.*), a `details` wskazuje pole.
+  Żądanie odrzucone jednocześnie za kwotę i za cenę jednostkową zwraca `400 VALIDATION_FAILED`.
+  Odpowiedzi niosą czteromiejscową cenę jednostkową: liczby (`unitPrice` pozycji koszyka i
+  zamówienia, `agreedUnitPrice`, `unitNetPrice` pozycji faktury) jako wartość — `0.0125` — a
+  napisy dziesiętne z czterema miejscami — `unitPrice` podglądu zamówienia w panelu to `"0.0125"`
+  lub `"29.4950"`, gdzie wcześniej było zaokrąglone do `"29.50"`; tak samo `previousUnitPrice` i
+  `currentUnitPrice` w `details.lines` odpowiedzi `409 CART_PRICE_CHANGED`. **Wartość pozycji to
+  `unitPrice × quantity`, zaokrąglona raz, połówkowo w górę, do dwóch miejsc**: licz ją w ten
+  sposób, a nie z ceny jednostkowej zaokrąglonej do dwóch miejsc. Zamówienie złożone przed
+  aktualizacją zachowuje dwumiejscowe ceny.
+- **VAT jest liczony dla każdej stawki od sumy kwot netto w tej stawce**, z jednym zaokrągleniem
+  „połówkowym w górę”: `taxTotal` i `total` zamówienia, podglądy w checkoucie i w panelu,
+  `vatSummary`, `taxTotal` i `grossTotal` faktury oraz kwoty korekty. `lineTotal` pozycji
+  zamówienia i `grossValue` pozycji faktury to własne zaokrąglenie pozycji,
+  `round(net × (1 + rate))`, i mogą sumować się do grosza więcej lub mniej niż suma. Kształty się nie
+  zmieniają. Zamówienie w dwóch stawkach może różnić się o grosz od tego samego koszyka sprzed
+  aktualizacji.
+- **`paidTotal` faktury to to, co zapłacono za zamówienie** — każda przechwycona płatność
+  pomniejszona o to, co z niej zwrócono, albo zapisana suma zamówienia, gdy jest ono oznaczone jako
+  opłacone bez przechwyconej płatności — nigdy własna kwota brutto faktury, więc `amountDue` może
+  wynosić `0.01` dla zamówienia sprzed aktualizacji. Zamówienie zwrócone częściowo przed wystawieniem
+  faktury dostaje fakturę, z zapłaconą kwotą równą temu, co zatrzymano.
+- **Zamówienie zwrócone w całości przed wystawieniem faktury nie jest fakturowane.** Gdy zwroty jego
+  płatności są równe temu, co pobrano, i pokrywają całą kwotę zamówienia, nie ma już sprzedaży do
+  udokumentowania: wystawienie faktury VAT zwraca `422 INVOICE_ORDER_REFUNDED` (*Płatności za to
+  zamówienie zostały w całości zwrócone przed wystawieniem faktury, więc nie ma sprzedaży do
+  zafakturowania. Niczego nie wystawiono.*) i nie pobiera numeru, a automatyczne wystawianie po
+  zmianie statusu zamówienia pomija je i zapisuje w logu
+  `[invoices] the order was not auto-invoiced: its payments were refunded in full`.
+- **Rozliczenie, które podaje tę samą pozycję zgłoszenia dwa razy, zwraca `400 VALIDATION_FAILED`**
+  (problem `duplicate_line`) i niczego nie przesuwa; rozliczenie, którego korekta zostałaby
+  odrzucona, jest odrzucane przed zwrotem.
+- **`totalRefundAmount` rozliczenia obejmuje wszystkie pozycje zgłoszenia**, nie tylko te z
+  `lines`: pozycja pominięta liczy się w zapisanej kwocie `approvedRefundAmount`, a korekta uznaje
+  te same pozycje. Rozliczenia jednego zamówienia wykonują się jedno po drugim; rozliczenie, które
+  czeka na inne dłużej niż 15 sekund, zwraca `409 VALIDATION_FAILED`
+  (`details.code: settlement_in_progress`), niczego nie przesuwa i można je ponowić.
+- **Korekta zamówienia z rabatem** uznaje towar według wartości z faktury, a rabat na ujemnej
+  pozycji 0 %; anulowana korekta nie liczy się już do kolejnych.
+- **Korekta odrzuca `total` wyższy od sumy jej pozycji** odpowiedzią `400 VALIDATION_FAILED`
+  (`details.code: correction_total_exceeds_lines`), a korekty jednej faktury uznają narastająco:
+  razem nigdy więcej, niż naliczyła.
+- **Faktury wystawione przed aktualizacją się nie zmieniają.** Faktura wystawiona dla zamówienia
+  czynnego podatnika VAT zawyża `netTotal`, `taxTotal` i `grossTotal` (netto każdej pozycji było
+  kwotą brutto pozycji zamówienia); jej podsumowanie według stawek jest pokazywane tak, jak ją
+  wystawiono.
+
+##### Minimalne ilości zamówienia i produkty podlegające zwrotowi
+
+- **Nowe odmowy.** `422 PRODUCT_BELOW_MINIMUM_QUANTITY` i
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` (`details.lines[]`) przy dodawaniu i zmianie pozycji
+  koszyka, `POST /api/v1/cart/submit-for-approval`, składaniu zamówienia, w zewnętrznym API
+  zamówień i przy zapisach zapytań ofertowych kupującego; `422 PACKAGING_UNIT_MISMATCH` dla pozycji
+  zapytania ofertowego, której jednostka opakowania nie należy do produktu;
+  `422 RETURN_LINE_NOT_RETURNABLE` z `POST /api/v1/returns` z `kind: 'return'`. Nazwa produktu w
+  takiej odmowie jest w języku, w którym udzielana jest odpowiedź — według kolejności `q` w
+  `Accept-Language`, a w przeciwnym razie w domyślnym języku kanału — podobnie jak nazwy pozycji w
+  `GET /api/v1/cart`, które nie są już domyślnie po angielsku.
+- **Limit 200 pozycji.** `POST /api/v1/admin/orders`, `POST /api/v1/admin/orders/preview`,
+  `POST /api/v1/external/orders` i budowanie szybkiego zamówienia odrzucają ponad 200 pozycji z
+  kodem `422 VALIDATION_FAILED`, `details: { code: 'too_many_items', maximum: 200 }`; w zewnętrznym
+  API jest to sprawdzane, zanim wymagany jest nagłówek `Idempotency-Key`.
+- **Nowe pola.** `minOrderQuantity` w podsumowaniach produktu, wyszukiwania i porównania;
+  `minOrderUnits` w jednostkach opakowania; `minOrderQuantity` i `belowMinimum` w pozycjach
+  koszyka; `belowMinimumLines[]` w `POST /api/v1/orders/preview-total`; `returnable` i
+  `notReturnableReason` w pozycjach `GET /api/v1/orders/:orderId/returnable`, którego
+  `eligible: false` z powodem `no_returnable_lines` nadal pozwala na reklamację. Zapis produktu w
+  panelu przyjmuje `minOrderQuantity` i `returnable`.
+- **`GET /api/v1/cart` odpowiada `5xx`**, gdy nie da się odczytać katalogu, zamiast koszyka bez
+  oznaczeń minimum.
+
+##### Grupy pozycji
+
+- **Każda odpowiedź z zamówieniem i zapytaniem ofertowym** zawiera `itemGroups` oraz `groupId` i
+  `position` każdej pozycji, a `items` są w kolejności wyświetlania — wcześniej odpowiedzi nie miały
+  określonej kolejności. Panelowe `POST`/`PATCH` zapytania ofertowego i `POST /api/v1/admin/orders`
+  przyjmują `groups` i `groupKey` pozycji. `POST /api/v1/admin/orders/preview` zwraca `taxRate`
+  każdej wycenionej pozycji.
+
+##### Pola niestandardowe
+
+- **Filtry list.** Lista zamówień w panelu i jej eksport CSV, lista zapytań ofertowych i lista
+  szans sprzedaży przyjmują `customFieldFilters` (JSON z kluczami pól niestandardowych); klucz,
+  którego lista nie oferuje, jest odrzucany z kodem `400 CUSTOM_FIELD_FILTER_UNAVAILABLE`. Pola
+  oferowane przez każdą listę są pod `GET /api/v1/admin/orders/custom-field-filters`,
+  `GET /api/v1/admin/quote-requests/custom-field-filters` i
+  `GET /api/v1/admin/crm/opportunities/custom-field-filters`. W
+  `GET /api/v1/admin/crm/opportunities` bez `cardValues=true` odwołanie `custom:` w `fieldFilters`
+  podlega teraz opcji filtra listy, a nie karcie tablicy.
+- **Definicje.** Definicje mają `listFilter` i `carryTo`; trzy odmowy 409, które dzieliły kod
+  `CUSTOM_FIELD_DEFINITION_INVALID`, mają teraz własne kody (`CUSTOM_FIELD_OPTION_IN_USE`,
+  `CUSTOM_FIELD_VALUE_TYPE_LOCKED`, `CUSTOM_FIELD_STORED_VALUES_EXIST`), a `PATCH` opcji zmienia
+  tylko podane w nim pola. Włączenie przenoszenia do pola, które nie może przyjąć wartości, jest
+  odrzucane z kodem `422 CUSTOM_FIELD_CARRY_INCOMPATIBLE`.
+- **Zapisy przenoszenia.** `GET /api/v1/admin/orders/:id/comments` zwraca dla każdego komentarza
+  `systemNote` (`null` dla zwykłego); odczyt komentarzy przez klienta nigdy nie zawiera notatki
+  systemowej. Historia zapytania ofertowego w panelu zyskuje wpis `custom_field_carry_skipped`.
+  Historia szansy sprzedaży pomija `customFieldValues` dla wywołującego bez `custom_fields:read`.
+
+##### Zapytania ofertowe
+
+- **`POST /api/v1/admin/quote-requests/:id/prepare-customer-basket`** (`rfqs:handle`) przygotowuje
+  koszyk klienta, do którego należy zatwierdzone zapytanie; panel nie wywołuje już klienckiej trasy
+  `convert-to-order`.
+
+##### Odczyty produktów w storefroncie
+
+- **`GET /api/v1/catalog/products/:idOrSlug`, `GET /api/v1/catalog/products` oraz wyniki i
+  podpowiedzi wyszukiwania** zwracają nadpisanie produktu dla kanału sprzedaży i języka żądania;
+  produkt bez nadpisania odpowiada dokładnie tak jak wcześniej.
+
+##### Opinie
+
+- **`POST /api/v1/admin/feedback`**, gdy moduł `admin_feedback` jest obecny: każdy zalogowany
+  administrator; `204`, gdy przekaźnik przyjmie wiadomość, `429 RATE_LIMITED`,
+  `502 ADMIN_FEEDBACK_DELIVERY_FAILED` albo `503 ADMIN_FEEDBACK_NOT_CONFIGURED`, gdy adres
+  przekaźnika jest pusty albo nie jest adresem `http(s)`.
+
+#### Dla autorów modułów i modułów nakładkowych {#after-0-108-0-authors}
+
+##### Ceny
+
+- **`priceListAdminPort` został usunięty; zastępuje go `priceBookWritePort`** — ceny bazowe dla
+  każdej waluty, wskazywane produktem i walutą zamiast id cennika, zapisywane jednym audytowanym
+  poleceniem.
+- **`@endora-commerce/contracts` nie zawiera już reguły stosowania ani dawnych kształtów cennika,
+  przedziałów i macierzy**, `ListingPrice` traci wariant `source: 'product'`, a `PriceListRecord` /
+  `PriceListReadPort` mają nowy kształt dla cenników. Każde usunięcie jest wymienione razem z
+  zamiennikiem w dzienniku zmian pakietu.
+- **Moduł nakładkowy, który dekoruje `pricingService`,** musi dekorować także zbiorcze punkty
+  wejścia (`resolveLinePrices`, `resolveListingPrices`), a nie tylko pojedyncze wywołania; koszyk,
+  kontrola przy składaniu zamówienia i ceny referencyjne zapytań wyceniają przez partię.
+- **Moduł, którego zdarzenia decydują o cenie,** podbija `PricingGeneration` jak dotąd;
+  `bump(change?)` przyjmuje teraz `SurfaceChange`, który mówi, co zmiana przesunęła, a podbicie bez
+  niego sprawia, że powierzchnia cen przebudowuje każdy profil.
+- **Własny port wyceny feedów** musi implementować `namedListPublishability` obok
+  `namedListPrices`, która przyjmuje teraz `salesChannelId` feedu.
+
+##### Arytmetyka kwot
+
+- **`@endora-commerce/contracts` zawiera arytmetykę kwot platformy**: `money-decimal`
+  (`roundHalfUp`, dokładne sumy i iloczyny, `vatByRate` — jedyna metoda VAT, dla każdej stawki od
+  sumy kwot netto — oraz jej odwrotność `netForGrossAtRate`) i `money-input` (`twoDecimalAmount`,
+  `twoDecimalAmountString`, `addAmountPrecisionIssue` i `ERROR_CODES.AMOUNT_PRECISION_EXCEEDED`).
+  Moduł nakładkowy, który liczy kwotę z ceny, używa ich zamiast `Number#toFixed(2)` czy
+  `Math.round(x * 100) / 100`, a nowe pole kwoty wpisywanej przez człowieka używa tego zawężenia.
+- **Cena jednostkowa jest przenoszona z czterema miejscami, a zaokrąglana jest wartość pozycji**
+  (decyzja właściciela z 25.10.2026). `@endora-commerce/contracts` dodaje `unitPriceHalfUp` (cena
+  jednostkowa z czterema miejscami, tak jak zapisuje ją `numeric(14,4)`), `unitPriceFractionDigits`
+  i `unitPriceDisplayText` (jedna reguła wyświetlania), `grossUnitPriceHalfUp`, a w `money-input`
+  `fourDecimalUnitPrice`, `fourDecimalUnitPriceString`, `isUnitPricePrecisionIssue` i
+  `ERROR_CODES.UNIT_PRICE_PRECISION_EXCEEDED`. Moduł nakładkowy, który zapisuje wyliczoną lub
+  wpisaną cenę jednostkową, zachowuje ją przez `unitPriceHalfUp` — nigdy `roundAmountHalfUp`, który
+  zaokrągla do dwóch miejsc — a pozycję liczy przez `lineAmountHalfUp(unit, quantity)`.
+  `formatMoney` w `@endora-commerce/admin-kit/lib` przyjmuje `{ unitPrice: true }`, a wartość
+  dokumentu rodzaju `money` — `unitPrice: true`, by pokazać cenę jednostkową według reguły.
+- **`OrderReturnContext` zyskuje `vatMethod`, `productsPaidTotal` (zapisane netto + podatek −
+  rabat) i `discountTotal`, a `OrderReturnContextLine` zyskuje `unitNetPrice` i `taxRate`**;
+  `paidLineAmount` to suma pozycji zapisana w zamówieniu. Implementacja `OrderReturnContextPort` w
+  module nakładkowym musi podawać te pola i czytać je z tego, co zamówienie zapisało, nigdy ich nie
+  przeliczając.
+- **`CorrectiveInvoicePort` zyskuje `validateCorrection(input)`**, które odrzuca to, co odrzuciłoby
+  `createCorrection`, niczego nie zapisując, a `CorrectiveInvoiceLine` zyskuje opcjonalne pole
+  `discount`; implementacja w module nakładkowym musi dostarczać tę metodę.
+- **Dwie nowe kolumny dopuszczające `null` zapisują, według której metody powstał dokument**:
+  `orders.vat_method` (`per_rate` od 0.108.0) i `invoices.vat_summary` (podsumowanie według stawek,
+  z którym wystawiono fakturę lub korektę). `null` oznacza dokument sprzed aktualizacji; nic nie
+  jest uzupełniane wstecz. Trzecia, `return_case_items.default_discount_amount` (domyślnie `0`),
+  zapisuje rabat, który niesie zwrot.
+
+##### Inne porty i kształty
+
+- **`CatalogProductReadPort`** zyskuje `listPackagingUnitsByProductIds`, a jego rekordy —
+  `minOrderQuantity`, `returnable` i `minOrderUnits`: typowana atrapa portu musi je dodać.
+- **`CartWritePort.addItems`** dodaje pozycje partiami do 200 (`onBelowMinimum`,
+  `replaceExisting`, `keepRepeatedLines`); nowy `OrderQuoteSourcePort` (`orderQuoteSourcePort`,
+  właściciel `orders`) mówi, czy pozycje koszyka pochodzące z oferty zachowują zwolnienie.
+- **Klucze odpowiedzi z wartością domyślną** (`itemGroups`, `groupId`, `position` oraz `groups` w
+  danych dokumentu oferty) sprawiają, że wywnioskowane typy ich wymagają: kod budujący literał
+  `QuoteRequest`, `QuoteRequestItem`, `Order`, `OrderItem` albo `QuoteRequestDocumentData` musi je
+  teraz podać. `adminPatchQuoteRequestSchema` i `adminCreateQuoteRequestSchema` są obiektami
+  z `.superRefine`, więc `.extend()` i `.omit()` nie są już na nich dostępne.
+- **`CustomFieldDefinitionRecord`** wymaga `carryTo`, a `CustomFieldEntityTypeInfo` ma
+  `carryTargets`; ręcznie budowana wartość ich potrzebuje. `customFieldListFilterPort` i
+  `customFieldCarryPort` są nowe.
+- **`request.responseLanguage()`** jest dostępne w każdym żądaniu kompozycji, która rejestruje
+  kopertę błędów; ponowna rejestracja koperty z innym resolverem języka zgłasza teraz wyjątek.
+- **Zapisane `grouping: null`** w tabeli pozycji szablonu dokumentu oznacza teraz *grupy z
+  dokumentu* (wcześniej: bez grupowania); tabela, która ma pozostać płaska, zapisuje
+  `{ by: 'none' }`.
+- **Warstwa panelu `mod-crm`** ma opcjonalne zależności równorzędne `@tiptap/react` i
+  `@tiptap/starter-kit` (`^3`), które aplikacja panelu już zawiera.
+
+#### W istniejącym storefroncie {#after-0-108-0-storefront}
+
+Trasy cen, które wywołuje storefront, zachowują swoje ścieżki, więc storefront utworzony we
+wcześniejszym wydaniu nadal pokazuje ceny. Czego nie pokazuje, dopóki nie przeniesie się do niego
+plików ze storefrontu wydania: własnej ceny wybranego wariantu na stronie produktu, ceny promocyjnej
+pokazanej jako przekreślona cena katalogowa obok *Twojej ceny*, ceny kupującego jako ceny
+porównawczej na kartach produktów i ceny katalogowej obok niższej ceny kupującego. Te pliki to
+`app/(catalog)/p/[slug]/page.tsx`, `app/page.tsx`, `components/ProductCard.tsx`,
+`components/PriceTag.tsx`, `components/VariantPicker.tsx`, `components/SearchAutocomplete.tsx`,
+`components/pricing/BaseSalePriceBlock.tsx`, `components/pricing/PdpPriceToggle.tsx`,
+`lib/api/pricing.ts` (gdzie `ResolvedPrice.baseListId` ma teraz typ `string | null`) i teksty cen w
+`lib/i18n/messages.ts`. Selektor wariantów wcześniejszego storefrontu pokazywał *Price override*
+wariantu; to pole nie jest już wysyłane, więc selektor nie pokazuje ceny wariantu, dopóki nie
+przeniesie się `VariantPicker.tsx`.
+
+Storefront wydania pokazuje też cenę jednostkową z jej znaczącymi miejscami, do czterech
+(`0,0125 zł`) — karty i wiersze produktów, strona produktu, koszyk, strony zamówienia i zapytania
+ofertowego — przez `formatMoney(…, { unitPrice: true })` i `grossUnitPriceFromNet` w
+`lib/i18n/money.ts`, i pozwala wpisać propozycję ceny z czterema miejscami. Storefront utworzony
+wcześniej pokazuje taką cenę zaokrągloną do dwóch miejsc, a koszyk nalicza cenę czteromiejscową:
+przenieś `lib/i18n/money.ts`, `components/ProductCard.tsx`, `components/ProductRow.tsx`,
+`components/PriceTag.tsx`, `components/VariantPicker.tsx`, `components/SearchAutocomplete.tsx`,
+`components/pricing/BaseSalePriceBlock.tsx`, `components/CartLine.tsx`,
+`components/orders/OrderItemRows.tsx`, `components/rfq/RfqDraftView.tsx`,
+`app/(account)/quote-requests/[id]/page.tsx` i `lib/analytics/ecommerce.ts`.
+
+Storefront wydania pokazuje też minimalne ilości zamówienia (strona produktu, karta, koszyk,
+finalizacja zamówienia, szybkie zamówienie, szkic zapytania ofertowego, lista zakupów), to, czy
+pozycja podlega zwrotowi, w formularzu zwrotu, oraz grupy pozycji oferty i zamówienia. Storefront
+utworzony wcześniej tego nie robi: jego kupujący trafiają na odmowy serwera —
+`422 PRODUCT_BELOW_MINIMUM_QUANTITY`, `422 RETURN_LINE_NOT_RETURNABLE` — z komunikatem serwera i
+widzą pozycje zamówienia albo oferty bez grup, w kolejności wyświetlania. Zmiany są we wzorcowym
+storefroncie między `v0.107.0` a `v0.108.0`: wymienia je `git diff v0.107.0 v0.108.0 -- storefront`
+w repozytorium platformy.
+
+Tę sekcję napisano 23, 24 i 25.10.2026 na podstawie gałęzi wydania zmiany cen
+(`feat/160-pricing-model-v2`) i gałęzi `master` od `v0.107.0`, sprawdzając opisy zmian
+(changesety) wydania z jego migracjami, manifestami, trasami i historią wzorcowego storefrontu. W chwili pisania żadna instancja nie została zaktualizowana
+poleceniem `pnpm run upgrade 0.108.0`; kolejność kroków i zmiany w storefroncie nie były
+wypróbowane.
+
+### Po aktualizacji do wydania 0.109.0 {#after-0-109-0}
+
+Każdy wpis poniżej jest samodzielny: przeczytaj te, które dotyczą używanych przez ciebie części
+platformy.
+
+#### Feedy produktowe: cena poniżej jednego grosza jest publikowana jako opakowanie {#after-0-109-0-feed-packs}
+
+- **Co się zmieniło.** Do tego wydania feed produktowy zaokrąglał każdą cenę do dwóch miejsc po
+  przecinku, więc produkt w cenie 0,0125 PLN trafiał do pliku jako 0,01 PLN, podczas gdy strona
+  produktu pokazywała 0,0125 zł — niezgodność ceny, za którą Google Merchant Center odrzuca
+  produkty. Cena z więcej niż dwoma znaczącymi miejscami po przecinku jest teraz publikowana jako
+  cena **opakowania** 10, 100, 1 000 albo 10 000 sztuk — najmniejszego, przy którym jest dokładna co
+  do grosza: 0,0125 PLN trafia do pliku jako 100 sztuk za 1,25 PLN (1,54 PLN w feedzie brutto przy
+  23 %). Wielkość opakowania trafia do pól opakowania szablonu. **Cena z dwoma miejscami po przecinku
+  jest publikowana dokładnie tak jak wcześniej**, bajt w bajt.
+- **Predefiniowany szablon Google Merchant Center dostaje trzy pola**, po `g:sale_price`:
+  `g:multipack`, `g:unit_pricing_measure` i `g:unit_pricing_base_measure`. Na istniejącej instancji
+  dodaje je do zainstalowanego szablonu migracja
+  `Migration20261025T145041ProductFeedsGoogleTemplatePackFields`. Dla każdego produktu z ceną co do
+  grosza są puste i pomijane w pliku.
+- **Produkt, którego szablon nie potrafi opublikować jako opakowania, jest pomijany w feedzie**,
+  podczas gdy wcześniej trafiał do niego z zaokrągloną ceną. Dotyczy to każdego takiego produktu w
+  feedzie na szablonie Meta, Amazon, eBay albo Allegro oraz w feedzie na własnej kopii szablonu
+  Google. Wynik generowania wymienia każdy z nich pod nowym powodem
+  `sub_cent_price_without_pack_field`. Co zrobić: po aktualizacji otwórz ostatnie generowanie każdego
+  feedu; jeśli ten powód się pojawia, a produkt powinien być w tym feedzie, dodaj do szablonu pole
+  powiązane ze źródłem *Wielkość opakowania (ceny poniżej grosza)* — w kopii szablonu Google jako
+  `g:multipack`, z `g:unit_pricing_measure` i `g:unit_pricing_base_measure` powiązanymi z dwoma
+  źródłami *opakowania jako liczby sztuk*. Generowanie, które pomija więcej niż połowę pozycji,
+  kończy się błędem `skip_threshold_exceeded` i dalej udostępnia poprzedni plik — który wciąż ma
+  zaokrąglone ceny — więc nie zostawiaj takiego błędu bez reakcji.
+- **Strona docelowa.** Strona produktu w storefroncie pokazuje cenę jednej sztuki. Zasady Google dla
+  opakowań zbiorczych wymagają, by strona docelowa pokazywała cenę opakowania, więc obserwuj
+  diagnostykę Merchant Center dla produktów publikowanych jako opakowania.
+- **Dla klientów API i integratorów**: `feedFieldSourceKindSchema` dostaje `pack_quantity`,
+  `pack_unit_pricing_measure` i `pack_unit_pricing_base_measure`, a `feedRunIssueReasonSchema` —
+  `sub_cent_price_without_pack_field` i `sub_cent_price_beyond_pack_limit`. Klient, który sprawdza
+  szablon, wyeksportowany dokument szablonu albo problemy generowania względem zamkniętej listy, musi
+  je przyjmować.
+- **Dla autorów modułów nakładkowych**: `FeedItemPrice` dostaje `taxRatePercent: number | null`, a
+  `ResolveFeedItemInput` — opcjonalne `templateFields`. Moduł nakładkowy, który zastępuje resolver pól
+  pozycji, dostaje oba i publikuje to, co sam zapisze: aby opublikować cenę poniżej grosza jako
+  opakowanie, stosuje tę samą regułę, z `feedPackQuantity` z `services/feed-pack.ts`.
+
+#### Oferty: rabat poniżej jednego grosza jest drukowany jako „—” {#after-0-109-0-quote-discount}
+
+- **W PDF-ie oferty** i w podglądzie edytora szablonów dokumentów rabat pozycji albo suma rabatów,
+  które są rzeczywiste, ale zaokrąglają się do 0,00 — na przykład 0,0001 PLN na sztuce przy trzech
+  sztukach — są drukowane jako „—” zamiast „0,00 zł”, które czytało się jako „brak rabatu”. Sama
+  kwota się nie zmienia, więc na dokumencie nadal wartość katalogowa − rabat = netto. Nic nie trzeba
+  robić.
+- **Na ekranie zapytania ofertowego w panelu administracyjnym** kolumna *Różnica* pokazuje różnicę
+  cen jednostkowych z jej znaczącymi miejscami, do czterech — −0,0001 PLN — zamiast zaokrąglać ją do
+  0,00.
+- **Dla autorów modułów i modułów nakładkowych**: wartość dokumentu rodzaju `money` może mieć
+  `belowMinorUnit: true`. `formatDocumentValue` drukuje ją jako „—”, a `sumDocumentValues` zachowuje
+  ten znacznik, gdy suma nadal wynosi zero; własny blok, który formatuje wartości inaczej, powinien
+  robić to samo.
+
+#### Faktury, płatności i sumy zamówień: zasady kwot ze zgłoszenia #428 {#after-0-109-0-money}
+
+**Dla operatorów.**
+
+- **Faktura uwzględnia każdy zwrot wykonany przed jej wystawieniem** (zgłoszenie #428). Do tego
+  wydania faktura VAT odejmowała od zapłaconej kwoty tylko zwroty zgłoszone przez bramkę płatności.
+  Teraz odejmuje także zwrot towaru rozliczony przelewem, dla zamówienia nieopłaconego przez bramkę,
+  oraz zwrot rozliczony uznaniem limitu kredytowego; zamówienie, które operator oznaczył jako
+  zwrócone, liczy się jako zwrócone w całości — bez pobranej płatności, a także z pobraną płatnością
+  zwróconą ręcznie (na przykład po anomalii zwrotu, niżej), nigdy nie dodając oznaczenia do zwrotu
+  przez bramkę, który już zapisano. Zamówienie zwrócone w ten
+  sposób w całości przed wystawieniem faktury **nie jest już fakturowane** — wystawienie zwraca
+  `422 INVOICE_ORDER_REFUNDED`, a automatyczne wystawianie je pomija i zapisuje powód w logu — a
+  zwrócone częściowo jest fakturowane tylko z zatrzymaną kwotą jako zapłaconą. Faktury wystawione
+  przed aktualizacją się nie zmieniają. Gdy moduł `returns` jest wyłączony, odejmowane są tylko
+  zwroty z bramki.
+- **Faktura nigdy nie pokazuje ujemnej kwoty do zapłaty** (zgłoszenie #428). Gdy zapłacono więcej niż
+  kwota brutto faktury, do zapłaty jest 0, a różnica jest pokazana jako **nadpłata** — wiersz na
+  ekranie faktury i linia *Nadpłata* na PDF. Szablon faktury edytowany przed aktualizacją też
+  drukuje tę linię, z etykietą *Nadpłata*; etykietę i przełącznik ukrywający linię ma blok
+  podsumowania w edytorze szablonów. Korekta, której kwota brutto jest ujemna, pokazuje teraz 0 do
+  zapłaty, a kwotę do zwrotu jako nadpłatę.
+- **Minimalna wartość zamówienia ma najwyżej dwa miejsca po przecinku** (zgłoszenie #428). Zapisanie
+  `orders.min_order_value` z większą liczbą miejsc jest odrzucane z `400 AMOUNT_PRECISION_EXCEEDED`,
+  jak każda inna wpisywana kwota; zapisana już wartość jest odczytywana jak dotąd. Nic nie trzeba
+  robić, chyba że jakiś skrypt zapisuje to ustawienie z większą liczbą miejsc.
+- **Kwota zwrotu z bramki z więcej niż dwoma miejscami po przecinku jest odrzucana, a nie
+  zaokrąglana** (zgłoszenie #428). Płatność zachowuje zwróconą kwotę i status, odmowa trafia do logu
+  z płatnością, zamówieniem, zgłoszoną kwotą i identyfikatorem zwrotu w bramce, a historia płatności
+  zawiera `providerDetails.refundAnomaly`. Webhook bramki i tak zostaje potwierdzony, więc nie jest
+  wysyłany ponownie: sprawdź taki zwrot w bramce i rozlicz go ręcznie.
+- **Podsumowanie grupy pozycji zamówienia liczy VAT tą samą metodą co zamówienie** (zgłoszenie
+  #428). Podsumowania grup na ekranie zamówienia w panelu brały kwotę brutto złożonego zamówienia
+  jako sumę wartości pozycji, z których każda jest zaokrąglona osobno, co mogło różnić się o grosz
+  od VAT liczonego według stawek, który zamówienie naliczyło. Teraz biorą VAT według stawek od sumy
+  kwot netto grupy; wartości pozycji pozostają takie jak dotąd.
+
+**Dla klientów API i integratorów.**
+
+- **Faktura zawiera `overpayment`, a `amountDue` nigdy nie jest ujemne** (zgłoszenie #428): w
+  `GET /api/v1/admin/invoices/:id` i każdej odpowiedzi ze szczegółami faktury `amountDue` to
+  `max(0, grossTotal − paidTotal)`, a nowe pole `overpayment` to `max(0, paidTotal − grossTotal)`.
+  Klient, który odczytywał ujemne `amountDue` jako nadpłatę, odczytuje teraz `overpayment`. Pole
+  scalające szablonu `{{var invoice.overpayment}}` jest nowe, obok `{{var invoice.amountDue}}`.
+- **`paidTotal` faktury wystawionej po aktualizacji odejmuje zwroty wykonane poza `payments`**, a
+  `POST /api/v1/admin/orders/:orderId/invoices` zwraca `422 INVOICE_ORDER_REFUNDED` dla zamówienia
+  zwróconego w ten sposób w całości — zob. punkt dla operatorów powyżej.
+- **Moduł bramki wywołujący `receivePaymentPort.reflectRefund` z więcej niż dwoma miejscami po
+  przecinku** dostaje `{ paymentId, changed: false }` i nic nie zostaje zapisane, podczas gdy
+  wcześniej kwota była zaokrąglana połówkowo w górę. Podawaj kwotę z bramki w jednostkach głównych,
+  z najwyżej dwoma miejscami po przecinku.
+
+**W istniejącym storefroncie.**
+
+Storefront z tego wydania bierze podsumowanie grupy pozycji na stronie zamówienia z VAT według
+stawek od kwot netto grupy (`orderSectionTotals` w `components/line-groups/GroupedLineRows.tsx`,
+wywoływane przez `components/orders/OrderItemRows.tsx`), podczas gdy wcześniejszy storefront sumuje
+wartości pozycji i może pokazać podsumowanie różniące się o grosz od VAT zamówienia. Przenieś te
+dwa pliki, aby to wyrównać; bez nich nic się nie psuje.
+
+Ten wpis został napisany 2026-10-25 na podstawie `master` w `9e43c3412` i gałęzi zgłoszenia #428
+(`fix/428-money-followups`). W chwili jej pisania żadna instancja nie była zaktualizowana do
+0.109.0.
+
+#### Kanały sprzedaży: flaga kanału publicznego zastąpiona trybami wyświetlania {#after-0-109-0-channel-prices}
+
+**Dla operatorów.**
+
+- **Co się zmieniło** (zgłoszenie #492). Kanał sprzedaży miał własną flagę widoczności cen
+  (`is_public`, nigdy niepokazywaną w panelu). Gdy była wyłączona — a tak było w każdym kanale
+  utworzonym w panelu, przez uzgadnianie kanału domyślnego przy starcie i w demonstracyjnym
+  *PL B2B VIP* — kanał nie wysyłał ceny **nikomu**, także zalogowanym kupującym. Flaga zniknęła. O
+  tym, czy oglądający widzi cenę, decydują wyłącznie tryby wyświetlania: *Ustawienia cenowe* dla
+  wszystkich kanałów, ekran *Ustawienia* dla jednego kanału oraz nadpisania organizacji, kategorii i
+  produktu.
+- **Co robi migracja.** `Migration20261028T173317CoreSalesChannelsRetireIsPublic` nadaje każdemu
+  kanałowi, który miał flagę wyłączoną, `pricing.unauthenticated_display_mode = none` jako własną
+  wartość tego kanału, więc jego niezalogowani odwiedzający nadal nie widzą cen, a następnie usuwa
+  kolumnę. Kanał, który miał już własną wartość tego ustawienia, zachowuje ją.
+- **Co zobaczysz.** W kanale, który miał flagę wyłączoną, **zalogowani kupujący widzą teraz ceny**
+  zgodnie ze swoim trybem wyświetlania i mogą sortować oraz filtrować po cenie. Jeśli nie tego
+  chcesz w danym kanale, ustaw jego *Default price display mode* (`pricing.default_display_mode`)
+  na *Żaden* na ekranie *Ustawienia* dla tego kanału albo ustaw nadpisanie dla właściwych
+  organizacji. Nadpisanie trybu dla produktu lub kategorii dotyczy także niezalogowanych
+  odwiedzających, tak jak dotąd, więc produkt nadpisany na *Tylko brutto* pokazuje w takim kanale
+  cenę gościom.
+- **Przed migracją** zatrzymaj procesy poprzedniego wydania: kolumna, którą czytają, jest usuwana.
+  Migracja odmawia bazie, która ma kanał z wyłączoną flagą, ale nie ma zarejestrowanego ustawienia
+  `pricing.unauthenticated_display_mode` (platforma nigdy na niej nie wystartowała); uruchom raz
+  poprzednie wydanie, aby ustawienia zostały zarejestrowane, i ponów migrację.
+
+**Dla klientów API i autorów modułów.** Żadna odpowiedź HTTP nie zawierała flagi, więc żadna nie
+zmienia kształtu; oglądający, którego tryb wyświetlania to `none`, dostaje odpowiedź opisaną w
+dokumentacji modułu `price_lists` (`resolvedPrice.displayMode: 'none'` i brak kwoty, gdzie taki
+kanał odpowiadał wcześniej `resolvedPrice: null`). W kodzie usunięto `SalesChannel.isPublic`,
+`CachedChannel.isPublic`, `ResolvedSearchChannel.isPublic` i `CatalogResolvedChannel.isPublic` —
+usuń je z obiektów, które budujesz — a klucz pamięci podręcznej kanałów zmienia się na
+`sales-channels:v4:`.
+
+Ten wpis został napisany 2026-10-28 na gałęzi zgłoszenia #492 (`fix/492-retire-ispublic`).
+
+#### Produkty: dwa statusy, Archiwizuj i Przywróć oraz dane per kanał i język {#after-0-109-0-product-status}
+
+To wydanie nadaje statusowi produktu, oknu publikacji, odbiorcom, kluczowi URL, tekstom SEO, galerii,
+załącznikom, nazwom jednostek opakowania i zasadom zamawiania wartość per kanał sprzedaży i per język
+oraz zmienia model statusu produktu. **Zmiana statusu jest niezgodna wstecz**; reszta tylko dodaje
+nowe możliwości.
+
+**Dla operatorów.**
+
+- **Status produktu to `active` albo `inactive`; `draft` znika.** Migracja wydania zamienia każdy
+  produkt `draft` i każde nadpisanie `draft` w kanale lub parze kanał × język na `inactive`, niczego
+  nie archiwizując. Nowe i zduplikowane produkty zaczynają jako `inactive`.
+- **`inactive` już nie archiwizuje.** Wyłącza produkt tam, gdzie jest ustawiony — produkt nie jest
+  wyświetlany na liście, wyszukiwany ani zamawiany, a jego strona odpowiada jak dla produktu, który
+  nie istnieje — i nic więcej. Archiwizacja to osobna akcja, **Archiwizuj** / **Przywróć**, w
+  edytorze produktu, zbiorczo na liście produktów i z asystenta AI panelu, za uprawnieniem
+  `catalog:write`.
+- **Każdy produkt, który w chwili aktualizacji jest `inactive`, pozostaje zarchiwizowany i wymaga
+  jawnego Przywróć.** Do tego wydania produkt archiwizowało się, ustawiając go jako `inactive`, więc
+  migracja zostawia takie produkty zarchiwizowane (z ich czasem archiwizacji albo, gdy go nie miały,
+  z czasem ostatniej zmiany). Ustawienie `active` **nie** przywraca produktu: otwórz kartę
+  **Zarchiwizowane** listy produktów (`/catalog/products/archived` albo **Zarchiwizowane produkty**
+  w palecie poleceń), zaznacz produkty, które mają wrócić do sprzedaży, i wybierz **Przywróć**.
+- **Zarchiwizowany produkt odpowiada „usunięty” (`410`) tylko kupującemu, który w przeciwnym razie
+  mógłby go zobaczyć** — w jego kanale, języku i grupie odbiorców; wszyscy inni dostają `404`
+  produktu nieistniejącego. Zarchiwizowanego produktu nie da się już dodać do koszyka ani umieścić
+  w zapytaniu ofertowym.
+- **Zapisany widok listy produktów, który używał statusu Draft**, otwiera się na karcie
+  **Wszystkie**, z informacją o tym.
+- **Po wdrożeniu na istniejącą bazę danych uruchom jedno przeindeksowanie wyszukiwarki na każdy
+  kanał sprzedaży** (strona akcji zbiorczych), aby indeks znał stan każdego produktu per kanał i
+  per język.
+
+**Dla klientów API i integratorów.**
+
+- `status` przyjmuje tylko `active` albo `inactive`. `draft` i dawny alias zapisu `archived` są
+  odrzucane z `400 VALIDATION_FAILED` — w `POST` / `PATCH /api/v1/admin/catalog/products`, w
+  aktualizacji zbiorczej, w `POST …/products/resolve-ids`, w zapisie kluczem API
+  `PUT /api/v1/catalog/products/by-sku/:sku` i w imporcie katalogu. Wyślij `inactive` tam, gdzie
+  wysyłano `draft`; aby zarchiwizować, wywołaj `POST /api/v1/admin/catalog/products/:id/archive`
+  (`…/restore`, aby przywrócić) albo aktualizację zbiorczą z `fields: { archived: true }` (`false`
+  przywraca) jako jedynym polem.
+- **Lista produktów w panelu:** `counts.archived` zastępuje `counts.draft` (`counts` to
+  `{ all, active, inactive, archived }`), a `archived=only` — filtr `status=archived`
+  (`archived=exclude|include|only`, domyślnie `exclude`; `includeArchived=1` nadal oznacza
+  `include`).
+- **`product.archived.v1`** oznacza „zarchiwizowany akcją Archiwizuj”, a nie „status zmieniony na
+  `inactive`”; Przywróć wysyła `product.updated.v1` z `changedFields: ['archivedAt']`.
+- **Zapytania ofertowe** odrzucają zarchiwizowany produkt: utworzenie i edycja przez operatora
+  odpowiadają `409 PRODUCT_ARCHIVED` z `details.productIds`, drogi klienta — `404` produktu
+  nieistniejącego.
+- Strony modułów Catalog i Quote requests opisują resztę — wartości per kanał i per język, klucze URL
+  i przekierowania oraz `404 PRODUCT_NOT_FOUND` zewnętrznego przyjmowania zamówień dla produktu,
+  którego organizacja klucza nie widzi w jego kanale.
+
+**Dla autorów modułów i modułów nakładkowych.**
+
+- **`productStatusSchema`** to `active | inactive`; `coerceProductStatusWrite` i
+  `productStatusWriteSchema` zostały usunięte — używaj `productStatusSchema`.
+- **`CatalogGalleryPort.listForProducts(productIds, channelId)`** i
+  **`CatalogGalleryPort.baseImageUrls(productIds, channelId)`** przyjmują wymagany `channelId`
+  (`string | null`): przekaż kanał sprzedaży, który obsługujesz, albo `null`, aby dostać dotychczasową,
+  globalną odpowiedź. Moduł nakładkowy implementujący port pomija elementy ukryte w tym kanale.
+- **`CatalogBulkImportPort`** ma nową wymaganą metodę `exportScopedStatuses()`.
+- **`ProductDetail`** ma wymagane pole `paths` (`productPagePathsSchema`): literał, który budujesz,
+  musi je zawierać.
+- **`seoMetaOverrideSchema.locale`** i **`cartViewLineSchema.productSlug`** mogą mieć wartość `null`.
+- **Nowa strefa panelu, `product.editor.seo.after`**, na końcu karty SEO edytora produktu. Jej
+  właściwości to `ProductEditorZoneProps` (`productId`). Link modułu `seo` do edytora metatagów jest
+  wkładem do tej strefy, więc moduł Catalog nie wymienia już `seo`:
+
+  ```ts
+  import { zoneComponent, type AdminContributions } from '@endora-commerce/admin-kit/contributions';
+
+  export const contributions: AdminContributions = {
+    zones: [
+      zoneComponent('product.editor.seo.after', () => import('./zones/ProductSeoNote.js'), {
+        requiredPermission: 'catalog:read',
+      }),
+    ],
+  };
+  ```
+
+  Wkład znika razem ze swoim modułem, a wkład, który zawiedzie, nie psuje całej karty.
+
+**W istniejącym storefroncie.** Storefront z tego wydania buduje kanoniczny link strony produktu i
+linki do wersji językowych z pola `paths` odpowiedzi, a na stronie produktu parametr `?lang=` z
+linku ma pierwszeństwo przed ciasteczkiem języka. Przenieś storefront z tego wydania, aby linki strony
+produktu korzystały z kluczy URL per język.
+
+Ten wpis został napisany 2026-10-27 na podstawie gałęzi specyfikacji `163-product-data-scopes`
+(`feat/163-product-data-scopes`).
+
+#### Sklep: język jest częścią adresu URL {#after-0-109-0-language-in-url}
+
+- **Co się zmieniło.** Adres strony sklepu wskazuje teraz jej język pierwszym segmentem
+  ścieżki — `/pl/p/wiertarka`, `/en/p/drill` — więc jeden adres oznacza jeden język dla każdego
+  odwiedzającego i każdej wyszukiwarki. Każdy język kanału dostaje wyliczony prefiks; ustawienie
+  kanału sprzedaży **Prefiks języka domyślnego w adresach URL** decyduje, czy język domyślny też
+  ma prefiks.
+- **Istniejące kanały zachowują swoje adresy.** Migracja aktualizacji
+  (`Migration20261029T152922CoreSalesChannelsPrefixDefaultLanguage`) ustawia to ustawienie na
+  **wyłączone** w każdym kanale istniejącym w chwili jej uruchomienia: adresy języka domyślnego
+  pozostają bez prefiksu (`/p/wiertarka`). Kanały utworzone później startują z **włączonym**.
+- **Pozostałe języki i tak dostają prefiksy.** Link do produktu w języku innym niż domyślny miał
+  postać `/p/<klucz>?lang=<język>`; teraz odpowiada trwałym przekierowaniem (308) na
+  `/<prefiks>/p/<klucz>`. Mapy witryny, feedy produktowe, linki kanoniczne i `hreflang` oraz
+  e-maile używają adresów z prefiksem.
+- **Aby wprowadzić prefiks także dla języka domyślnego**, otwórz *Kanały sprzedaży*, edytuj kanał
+  i włącz **Prefiks języka domyślnego w adresach URL**. Wszystkie adresy języka domyślnego
+  przechodzą wtedy pod jego prefiks; adres bez prefiksu jest przekierowywany (307) do języka
+  wskazanego przez `?lang=`, ciasteczko `lang` lub języki przeglądarki. Nic zaindeksowanego ani
+  zapisanego w zakładkach nie przestaje działać. Przeglądarki mogą pamiętać zapisane trwałe
+  przekierowanie do godziny po zmianie ustawienia.
+- **Strony CMS.** Nie można już zapisać strony, której slug zaczyna się od prefiksu języka kanału
+  (`en`, `pl/…`). Istniejąca jest oznaczona na liście stron CMS jako zasłonięta prefiksem języka:
+  zmień jej slug.
+- **Kod zewnętrzny** wywołujący `productPath` z `@endora-commerce/contracts` musi przekazać fakty
+  URL kanału: `productPath({ key, languageCode, channel })` zastępuje
+  `productPath({ key, languageCode, channelDefaultLanguage })`.
 
 ## Instancja niespójna od początku
 

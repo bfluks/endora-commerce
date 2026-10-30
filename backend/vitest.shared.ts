@@ -148,6 +148,10 @@ export function backendTestOptions(): NonNullable<UserConfig['test']> {
     environment: 'node',
     server: { deps: { external: [CONTRACTS_DIST] } },
     setupFiles: [
+      // First, so `DATABASE_URL` and `REDIS_URL` name this worker's own
+      // database and Redis index before anything else is imported. A no-op on
+      // a one-worker run and on a run with no services. See test/test-workers.ts.
+      './test/worker-services-setup.ts',
       './test/tenancy-setup.ts',
       // Issue #199 — the fork reports how close it is to its own heap limit
       // before it dies of it. See test/heap-headroom.ts.
@@ -157,6 +161,10 @@ export function backendTestOptions(): NonNullable<UserConfig['test']> {
       // delete it. Re-asserted per test file here; the measurements and the
       // reason this is not 74 edits are in test/pinned-secrets-setup.ts.
       './test/pinned-secrets-setup.ts',
+      // Issue #315 — macOS's temp directory is reached through a symlink, and
+      // a script spawned from it fails its own main guard. See
+      // test/realpath-tmpdir-setup.ts.
+      './test/realpath-tmpdir-setup.ts',
     ],
     // Forces DATABASE_URL → b2b_test, auto-creates the DB on first run, and
     // applies migrations — unless the run declared BACKEND_TEST_SERVICES=none,
@@ -164,9 +172,12 @@ export function backendTestOptions(): NonNullable<UserConfig['test']> {
     // in the parent process before any worker fork; workers inherit the env.
     // See test/global-setup.ts.
     globalSetup: ['./test/global-setup.ts'],
-    // Integration/contract tests share a single Postgres database. Running
-    // test files in parallel would race on truncate+seed — one worker at a
-    // time, so files execute serially.
+    // One worker here, and the complete suite's `vitest.config.ts` widens it.
+    // Files that share one Postgres database race on truncate+seed, so they
+    // can only run side by side when each worker has a database of its own —
+    // which `test/global-setup.ts` provisions for the complete suite, sized by
+    // `test/test-workers.ts`. The release-gate config keeps this default and
+    // the fast unit config sets its own.
     //
     // This was `poolOptions.forks.singleFork: true` until vitest 4 removed it,
     // and there is no exact successor. Under vitest 2 it meant **one** fork for
@@ -209,9 +220,9 @@ export function backendTestOptions(): NonNullable<UserConfig['test']> {
     // Both were inert for the same reason — `mergeConfig` concatenates the
     // first and skips a nullish override outright — and the CI log settles it:
     // `JUNIT report written to …/test-results.junit.xml` appears in every shard
-    // of 11478. Removing them changes nothing at runtime and is what lets this
-    // file be type-checked at all: it is outside `tsconfig.json`'s `include`,
-    // so `outputFile: undefined` had never been held to
+    // of 11478. Removing them changes nothing at runtime and is what let this
+    // file be type-checked at all: it was outside `tsconfig.json`'s `include`
+    // until issue #421, so `outputFile: undefined` had never been held to
     // `exactOptionalPropertyTypes` until a test imported this function.
     reporters: ['default', new RunCompletenessReporter()],
     ...(isCi

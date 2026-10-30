@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { listMyReturns } from '../../../lib/api/returns';
 import { getSessionCookie } from '../../../lib/session';
 import { formatMoney } from '../../../lib/i18n/money';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -19,14 +19,14 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
  */
 export default async function ReturnsListPage(): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/returns');
+  if (!session) return await localeRedirect('/login?next=/returns');
   const cases = await listMyReturns(session);
 
   return (
     <div className="b2b-auth max-w-[720px]">
       <h1>Returns &amp; complaints</h1>
       <p>
-        <Link href="/returns/new">Start a new return</Link>
+        <LocalizedLink href="/returns/new">Start a new return</LocalizedLink>
       </p>
       {cases.length === 0 ? (
         <p>You don&apos;t have any returns yet.</p>
@@ -53,7 +53,7 @@ export default async function ReturnsListPage(): Promise<ReactNode> {
                   {formatMoney(c.totalRefundAmount, c.currency)}
                 </td>
                 <td>
-                  <Link href={`/returns/${c.id}`}>Open</Link>
+                  <LocalizedLink href={`/returns/${c.id}`}>Open</LocalizedLink>
                 </td>
               </tr>
             ))}

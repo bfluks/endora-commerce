@@ -25,6 +25,9 @@ Zarządzanie użytkownikami i rolami wymaga uprawnienia `admin_users:manage`.
 | `PUT /api/v1/admin/admin-roles/:code` | Utworzenie lub aktualizacja roli według kodu; nieznane uprawnienia zwracają 400 `VALIDATION_FAILED` |
 | `DELETE /api/v1/admin/admin-roles/:id` | Usunięcie; odrzucane z 409 `ADMIN_ROLE_IN_USE`, gdy rola jest nadal przypisana do jakiegokolwiek użytkownika — **także usuniętego miękko**, bo jego przypisanie wraca po przywróceniu konta. Odpowiedź wskazuje, która grupa ma tę rolę (`details.code` to `assigned` albo `assigned_to_deleted`) i ilu jest takich użytkowników |
 | `GET /api/v1/admin/permissions` | Kanoniczny katalog uprawnień (moduł / kod / etykieta), z którego korzysta macierz uprawnień w panelu |
+| `GET /api/v1/admin/me/preferences` | Własne preferencje panelu administracyjnego zalogowanego administratora; kod uprawnienia nie jest potrzebny (zob. *Preferencje panelu administracyjnego*) |
+| `PATCH /api/v1/admin/me/preferences` | Zmiana jednej lub kilku z nich; niepoprawne żądanie jest odrzucane z 400 `VALIDATION_FAILED` i nic nie zostaje zapisane |
+| `POST /api/v1/admin/me/preferences/legacy-import` | Jednorazowe przeniesienie rozmiarów stron z przeglądarki; nigdy nie nadpisuje wartości zapisanej na serwerze |
 | `POST /api/v1/admin/organizations/:id/impersonate` | Rozpoczęcie logowania jako klient; przed wydaniem ciasteczka zapisuje wpis audytu `impersonation.start` |
 | `POST /api/v1/admin/impersonation/end` | Powrót do pierwotnej sesji administratora |
 
@@ -320,6 +323,75 @@ tych samych liczników przez port `adminAuthenticationThrottlePort`
 porównanie jednym wywołaniem `verify(attempt, check)`. Próba niesie adres
 klienta i zweryfikowaną wartość pliku cookie znanego urządzenia.
 
+## Preferencje panelu administracyjnego
+
+Układ panelu administracyjnego każdego administratora jest przechowywany na serwerze, razem z
+jego kontem: pozycje przypięte w pasku bocznym, zwinięte grupy paska, to, czy pasek jest zwinięty
+do ikon (tryb szyny), oraz liczba wierszy na stronie każdej listy. Układ podąża za administratorem
+do każdej przeglądarki i do zainstalowanej aplikacji, a nikt inny go nie widzi.
+
+### Dla operatorów
+
+- **Przypinanie pozycji** — wskaż pozycję paska bocznego albo przejdź do niej klawiaturą: za nią
+  pojawi się przycisk przypinania (z klawiatury to kolejny przystanek klawisza Tab po pozycji).
+  Po jego użyciu pozycja trafia na koniec sekcji **Przypięte** na górze paska; zostaje też w swoim
+  miejscu. Na telefonie i tablecie przycisk jest widoczny zawsze.
+- **Przypinanie z palety poleceń** (⌘K / Ctrl+K) — wynik, który otwiera pozycję paska bocznego,
+  ma obok siebie przycisk przypinania, a **Alt+Enter** (⌥↵ na Macu) przypina lub odpina
+  zaznaczony wynik. **Enter** nadal go otwiera. Paleta pozostaje otwarta z tym samym wyszukiwaniem.
+- **Odpinanie** — tym samym przyciskiem, w przypiętym wierszu albo w wierszu samej pozycji. W
+  zwiniętym pasku (trybie szyny) sekcja Przypięte jest pierwszą ikoną; jej wysuwane menu
+  wymienia przypięte pozycje, każdą z przyciskiem odpinania.
+- **Zmiana kolejności** — przeciągnij przypięty wiersz; albo ustaw fokus na jego uchwycie,
+  naciśnij spację, przesuń strzałkami i ponownie naciśnij spację (Escape anuluje); na ekranie
+  dotykowym użyj przycisków w górę i w dół. Każde przypięcie, odpięcie i przesunięcie jest
+  ogłaszane czytnikom ekranu.
+- **Przypięte pozycje, których nie możesz otworzyć, nie są pokazywane.** Gdy stracisz
+  uprawnienie wymagane przez pozycję albo jej moduł zostanie wyłączony, przypięcie znika
+  wszędzie — i wraca w to samo miejsce, gdy dostęp wróci. Nic nie jest usuwane.
+- **Gdy zmiany nie da się zapisać** (na przykład bez połączenia), działa ona dalej na tym ekranie,
+  a jeden komunikat pod górnym paskiem o tym informuje; zapis zostanie ponowiony, gdy wróci
+  połączenie albo strona wróci na pierwszy plan. Zamknij komunikat przyciskiem **Zamknij**.
+- **Po aktualizacji, która to wprowadziła**, każda lista otwiera się z rozmiarem strony wybranym
+  wcześniej w tej przeglądarce — zostaje on przeniesiony raz, chyba że na serwerze był już
+  zapisany — a pasek boczny otwiera się z rozwiniętymi grupami i niezwinięty, bo dawne wartości
+  w przeglądarce nie były przypisane do administratora. Zwiń go ponownie raz; od tej chwili
+  układ jest pamiętany wszędzie.
+
+### Dla programistów
+
+- **Przechowywanie.** Tabela `admin_user_preferences` (`AdminUserPreference`, encja globalna
+  platformy): jeden wiersz na administratora i preferencję, wartość jako `jsonb`; wiersze są
+  usuwane razem z wierszem administratora i zachowywane, gdy konto zostanie dezaktywowane lub
+  usunięte miękko.
+- **Zamknięty zbiór** to `ADMIN_PREFERENCE_KEYS` w `@endora-commerce/contracts`:
+  `sidebarPins` (cele, najwyżej 200, każdy jest trasą paska bocznego), `sidebarCollapsedGroups`
+  (klucze grup, najwyżej 32; sekcja Przypięte zwija się jako `pinned`), `sidebarRailMode`
+  (wartość logiczna) i `listPageSizes` (identyfikator listy → jedna z wartości 5, 10, 20, 50,
+  100, 500; najwyżej 128 list). Limity chronią serwer; nie są limitami produktu, a panel nigdy nie
+  odmawia przypięcia. Zapis jest ścisły (`adminPreferencesPatchSchema`): nieznany klucz, zły
+  kształt, duplikat lub wartość ponad limit to 400 `VALIDATION_FAILED` i nic nie zostaje
+  zapisane. Odczyt jest tolerancyjny: wartość, której późniejsze wydanie już nie rozumie, jest
+  zwracana tak, jak zapisano, a panel ją pomija.
+- **Trasy.** `GET` i `PATCH /api/v1/admin/me/preferences` oraz
+  `POST /api/v1/admin/me/preferences/legacy-import` wymagają sesji i żadnego kodu uprawnienia, a
+  żadna trasa nie przyjmuje identyfikatora administratora — więc nikt, także rola z symbolem
+  wieloznacznym, nie może odczytać ani zmienić preferencji innego administratora. `PATCH`
+  zastępuje każdą wskazaną preferencję paska bocznego i scala `listPageSizes` po liście (`null`
+  usuwa listę); import dodaje tylko listy, których serwer nie ma. Każda odpowiedź to cały
+  dokument. `GET /api/v1/admin/me` też zawiera `preferences`, więc panel otwiera się już
+  z przypięciami, zwiniętymi grupami i w trybie szyny; gdy nie da się ich odczytać, pole ma
+  wartość `null`, logowanie mimo to się udaje, a panel niczego nie zapisuje, dopóki późniejszy
+  odczyt się nie powiedzie.
+- **Na ekranie** `usePageSizePreference(scope)` z `@endora-commerce/admin-kit/lib` daje liście
+  zapamiętany rozmiar strony: wystarczy wybrać identyfikator listy (`'catalog-products'`). Dwa
+  ekrany o tym samym identyfikatorze dzielą jedną wartość. Wartość jest odczytywana przy otwarciu
+  listy, więc zmiana z innego urządzenia obowiązuje od następnego otwarcia.
+  `useAdminPreference(key)` i `useAdminPreferencesStatus()` odczytują i zapisują preferencje paska
+  bocznego; dostarcza je `AuthProvider`, więc nic więcej nie trzeba montować.
+- **Bez wpisu w dzienniku audytu.** To osobiste ustawienia interfejsu, a nie dane biznesowe:
+  zapisy nie przechodzą przez Command Bus i dziennik audytu ich nie rejestruje.
+
 ## Logowanie jako klient
 
 `impersonation-service.ts` realizuje wzorzec przełączenia użytkownika: rozpoczyna nową sesję
@@ -331,6 +403,9 @@ dzienniku audytu zarówno z `actorAdminUserId`, jak i z `impersonatedCustomerAcc
 
 `AdminUser` (e-mail, passwordHash, stan uwierzytelniania dwuskładnikowego, jedno `adminRoleId`,
 `status`, usunięcie miękkie przez `deletedAt`).
+
+`AdminUserPreference` (administrator, klucz preferencji, wartość `jsonb`, `updatedAt`) — zob.
+*Preferencje panelu administracyjnego*.
 
 `AdminRole` (kod, nazwa wyświetlana, JSONB `permissions[]`, `requiresTwoFactor`). Symbol
 wieloznaczny `*` służy wyłącznie do inicjalizacji platformy i jest odrzucany przez trasę zapisu

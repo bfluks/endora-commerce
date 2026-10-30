@@ -74,8 +74,12 @@ export interface BoardFieldFiltersProps {
   /** The fields the cards show — a filter is offered for each that has one of its own. */
   fields: readonly OpportunityBoardCardField[];
   filters: OpportunityFieldFilters;
-  /** One field's filter, whole; `null` when nothing of it is left. */
-  onChange: (ref: string, filter: OpportunityFieldFilter | null) => void;
+  /**
+   * One field's filter, from the one the owner holds now — not the one this
+   * render was given, which a change made in the same turn has already
+   * replaced (issue #418). `null` when nothing of it is left.
+   */
+  onChange: (ref: string, change: (previous: OpportunityFieldFilter) => OpportunityFieldFilter | null) => void;
   /** The Organization the board is filtered by — a contact person is chosen within one. */
   organizationId: string | null;
   /** `crm:write`: the contact-person list is read on that code. */
@@ -107,13 +111,16 @@ export function BoardFieldFilters(props: BoardFieldFiltersProps): ReactNode {
     const id = `${idPrefix}-${field.ref.replace(/[^A-Za-z0-9_]/g, '-')}`;
     const label = boardFieldLabel(field, language, t);
     const filter = filters[field.ref] ?? {};
-    const patch = (change: OpportunityFieldFilter): void => {
-      const next: Record<string, unknown> = { ...filter, ...change };
-      for (const [key, value] of Object.entries(next)) {
-        if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) delete next[key];
-      }
-      onChange(field.ref, Object.keys(next).length > 0 ? (next as OpportunityFieldFilter) : null);
-    };
+    const patch = (change: OpportunityFieldFilter): void =>
+      onChange(field.ref, (previous) => {
+        const next: Record<string, unknown> = { ...previous, ...change };
+        for (const [key, value] of Object.entries(next)) {
+          if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) delete next[key];
+        }
+        return Object.keys(next).length > 0 ? (next as OpportunityFieldFilter) : null;
+      });
+    /** The field's filter, whole, whatever it held. */
+    const replace = (whole: OpportunityFieldFilter | null): void => onChange(field.ref, () => whole);
 
     if (field.kind === 'text') {
       cells.push(
@@ -173,7 +180,7 @@ export function BoardFieldFilters(props: BoardFieldFiltersProps): ReactNode {
             id={id}
             value={filter.is === undefined ? '' : String(filter.is)}
             onChange={(event): void =>
-              onChange(field.ref, event.target.value === '' ? null : { is: event.target.value === 'true' })
+              replace(event.target.value === '' ? null : { is: event.target.value === 'true' })
             }
           >
             <option value="">{t('board.filter.any')}</option>
@@ -217,7 +224,7 @@ export function BoardFieldFilters(props: BoardFieldFiltersProps): ReactNode {
             {...(organizationId ? { organizationId } : {})}
             disabled={!organizationId}
             value={organizationId ? (filter.in?.[0] ?? null) : null}
-            onChange={(contactId): void => onChange(field.ref, contactId ? { in: [contactId] } : null)}
+            onChange={(contactId): void => replace(contactId ? { in: [contactId] } : null)}
             placeholder={t(organizationId ? 'board.filter.any' : 'board.filter.contactNeedsOrganization')}
             emptyMessage={t('opportunity.picker.contactEmpty')}
           />

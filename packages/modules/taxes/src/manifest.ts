@@ -108,6 +108,21 @@ export const manifest = defineModuleManifest({
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
   demo,
+  // Principle XVI (issue #510): the tax-rule table is this module's only admin
+  // screen and was reachable from the sidebar alone. Gated on `taxes:read`,
+  // the code its route and `GET /api/v1/admin/taxes` both enforce.
+  actions: [
+    {
+      id: 'open-taxes',
+      labelKey: 'actions.openTaxes.label',
+      descriptionKey: 'actions.openTaxes.description',
+      icon: 'Receipt',
+      targetRoute: '/taxes',
+      requiredPermission: 'taxes:read',
+      keywords: ['tax', 'taxes', 'vat', 'rate', 'podatek', 'podatki', 'stawka', 'stawki'],
+      weight: 300,
+    },
+  ],
   activation: {
     nonDeactivatable: true,
     reason:

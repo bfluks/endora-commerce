@@ -137,6 +137,18 @@ export const manifest = defineModuleManifest({
       keywords: ['promotion', 'new', 'create', 'discount', 'coupon'],
       weight: 251,
     },
+    // Issue #516 (Principle XVI): the named-rule library is a sidebar screen
+    // of its own, on the read code like the promotion list.
+    {
+      id: 'open-promotion-rules',
+      labelKey: 'actions.openPromotionRules.label',
+      descriptionKey: 'actions.openPromotionRules.description',
+      icon: 'PercentDiamond',
+      targetRoute: '/promotion-rules',
+      requiredPermission: PROMOTION_PERMISSIONS.READ,
+      keywords: ['promotion', 'rules', 'rule', 'conditions', 'reguły', 'reguła', 'promocja'],
+      weight: 252,
+    },
   ],
   activation: { settingCode: 'promotions.enabled', default: true },
 });

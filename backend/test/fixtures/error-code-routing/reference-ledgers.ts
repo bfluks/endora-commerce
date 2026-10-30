@@ -90,6 +90,31 @@ import type {
  * author of one claim is two answers waiting to disagree.
  */
 export const MINTED_ERROR_CODES: MintedErrorCodes = {
+  INVOICE_ORDER_REFUNDED: {
+    to: 'invoices',
+    reason:
+      'Minted by issue #417 (owner ruling of 2026-10-24) for the refusal an operator meets when ' +
+      'they issue a VAT invoice for an order whose payments were refunded in full before it was ' +
+      'invoiced: there is no sale left to document. The noun is the invoice, which `invoices` ' +
+      'owns, and `invoices` raises it; the automatic issuance skips the order and logs the code.',
+  },
+  AMOUNT_PRECISION_EXCEEDED: {
+    to: '_i18n',
+    reason:
+      'Minted by issue #417 (owner ruling of 2026-10-24) for a typed money amount with more than ' +
+      'two decimal places, which is refused rather than rounded on every money field. One code ' +
+      'for every module, so it sits in the platform block; its raiser is the error envelope, from ' +
+      'the Zod issue `money-input.ts` tags. `VALIDATION_FAILED` is not reused: the envelope never ' +
+      'translates that code, and the sentence has to tell the reader what to change.',
+  },
+  UNIT_PRICE_PRECISION_EXCEEDED: {
+    to: '_i18n',
+    reason:
+      'Minted by the owner ruling of 2026-10-25 for a typed unit price with more than four decimal ' +
+      'places: a unit price is carried at four places from the price book to the invoice line, so ' +
+      'the two-place sentence of `AMOUNT_PRECISION_EXCEEDED` would be false for it. One code for ' +
+      'every module, raised by the error envelope from the Zod issue `money-input.ts` tags.',
+  },
   ADMIN_AUTHENTICATION_THROTTLED: {
     to: 'admin_users',
     reason:
@@ -284,33 +309,75 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'The noun is the attachment and the one raise site is that route; the media library\'s ' +
       'own size limit keeps its own code.',
   },
-  PRICE_MATRIX_ENTRY_NOT_FOUND: {
+  PRICE_BOOK_CHANNEL_CURRENCY: {
     to: 'price_lists',
     reason:
-      'Minted with the price matrix (`specs/148-price-list-matrix-rules/`), which did not exist ' +
-      'when the prefix chain was deleted: the refusal of a matrix entry that is missing, on another list or outside the caller scope. ' +
-      'The noun is a matrix entry of a price list, the module\'s own entity (D-121 T1).',
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of a channel set naming a sales channel that does not offer the book\'s currency (FR-003). ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
   },
-  PRICE_MATRIX_ENTRY_OVERLAP: {
+  PRICE_BOOK_AUDIENCE_KIND: {
     to: 'price_lists',
     reason:
-      'Minted with the price matrix (`specs/148-price-list-matrix-rules/`), which did not exist ' +
-      'when the prefix chain was deleted: the refusal of an entry whose coordinates and quantity window overlap another entry. ' +
-      'The noun is a matrix entry of a price list, the module\'s own entity (D-121 T1).',
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of an audience set that mixes organizations and customer groups or names a member that does not exist or is out of scope (FR-002, A4). ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
   },
-  PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE: {
+  PRICE_BOOK_IMMUTABLE_FIELD: {
     to: 'price_lists',
     reason:
-      'Minted with the price matrix (`specs/148-price-list-matrix-rules/`), which did not exist ' +
-      'when the prefix chain was deleted: the refusal of an attribute that may not select prices (not flagged, wrong value type, per-language or per-channel). ' +
-      'The noun is a matrix entry of a price list, the module\'s own entity (D-121 T1).',
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal to change a book\'s currency or type, its audience kind once it has been active, or a base book\'s header (FR-004). ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
   },
-  PRICE_MATRIX_ENTRY_LIMIT: {
+  PRICE_BOOK_NOT_APPLICABLE: {
     to: 'price_lists',
     reason:
-      'Minted with the price matrix (`specs/148-price-list-matrix-rules/`), which did not exist ' +
-      'when the prefix chain was deleted: the refusal of one entry more than a price list may hold. ' +
-      'The noun is a matrix entry of a price list, the module\'s own entity (D-121 T1).',
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal to activate a book that would apply nowhere (no channel offering its currency) or to no one (no member). ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_ROW_OVERLAP: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of rows of one selection whose quantity windows overlap (FR-006); details name each row. ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_ROW_SHAPE: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of a row batch with rows that break a shape rule (FR-005 to FR-009); details name every failing row. ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_ROW_TARGET: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: a row naming a product, variant, category, SKU, path or attribute value that does not exist or cannot select prices. ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_ROW_LIMIT: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of a batch that would leave a book over its row limit. ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRICE_BOOK_STALE: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of a write made against an older version of the book (G5 of `specs/161-price-book-editor/`). ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
+  },
+  PRECEDENCE_CHANGE_UNAVAILABLE: {
+    to: 'price_lists',
+    reason:
+      'Minted with price books (`specs/160-pricing-model-v2/`), which did not exist when the ' +
+      'prefix chain was deleted: the refusal of every precedence write until the change flow ships (FR-023). ' +
+      'The noun is a price book, the module\'s own entity (D-121 T1).',
   },
   CRM_TAG_NAME_TAKEN: {
     to: 'crm',
@@ -325,6 +392,293 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'Minted with the `crm` module (`specs/143-crm-sales-opportunities/`, User Story 4), which ' +
       'did not exist when the prefix chain was deleted: the refusal to edit or delete an ' +
       'internal message on an Opportunity, which is immutable once sent, whoever asks.',
+  },
+  TASK_NOT_FOUND: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module (`specs/163-projects-and-tasks/`, Phase 2A), which did not ' +
+      'exist when the prefix chain was deleted: a Task that does not exist, or one whose context ' +
+      'the caller may not see — the two answer identically (FR-031).',
+  },
+  TASK_CONTEXT_INVALID: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module (`specs/163-projects-and-tasks/`, Phase 2A): a Task created ' +
+      'into a context whose type no present module has registered, or whose id the caller may ' +
+      'not see.',
+  },
+  TASK_ASSIGNEE_INVALID: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module (`specs/163-projects-and-tasks/`, Phase 2A): a Task assigned ' +
+      'to somebody who is not an active administrator.',
+  },
+  TASK_STATUS_UNKNOWN: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 2): a status change to a code the operator’s workflow does not hold.',
+  },
+  TASK_TRANSITION_FORBIDDEN: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 2): a status change the operator’s workflow does not permit from the Task’s current ' +
+      'status.',
+  },
+  TASK_TRANSITION_CONFLICT: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 2): a status change from a status the Task has since left.',
+  },
+  TASK_WORKFLOW_INVALID: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 4): a workflow configuration write that breaks a rule — one initial open status, a done ' +
+      'and a cancelled status, moves between known statuses, a free code, a category changed under ' +
+      'Tasks, a removal in use without a replacement. From Phase 11 also the priority list’s two ' +
+      'refusals of that shape (`priority_code_taken`, `priority_replacement_required`).',
+  },
+  TASK_STATUS_IN_USE_TOO_MANY: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 4): removing a status that more Tasks are in than one Command moves to its replacement; ' +
+      'from Phase 11 also a priority, `details.code: priority` keying its sentence.',
+  },
+  TASK_PRIVATE_READ_ONLY: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 2): a change to another administrator’s private Task by a holder of ' +
+      '`tasks:see_private`, who may only read and delete it.',
+  },
+  TASK_PRIORITY_UNKNOWN: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 3): a Task given a priority code the operator’s priority list does not hold.',
+  },
+  TASK_TAG_UNKNOWN: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 3): a Task given a tag id that does not exist.',
+  },
+  TASK_TAG_NAME_TAKEN: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 3): a Task tag created with a name already taken, case-insensitively.',
+  },
+  TASK_ATTACHMENT_REFUSED: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 3): a file refused as a Task attachment — over the size limit, or a document a browser would run.',
+  },
+  TASK_VIEW_NAME_TAKEN: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 5): a saved view of the Tasks list named as one its owner already has, case-insensitively.',
+  },
+  TASK_PARENT_CYCLE: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 7): a Task made a sub-task of itself or of one of its own descendants.',
+  },
+  TASK_HIERARCHY_TOO_DEEP: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 7): a parent change or a new sub-task that would nest sub-tasks deeper than five levels.',
+  },
+  TASK_LINK_INVALID: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 8): a record link to an Opportunity, an Order or a Quote Request whose owner is off, which ' +
+      'the caller may not read, or which does not exist — the three answer identically.',
+  },
+  TASK_REMINDER_INVALID: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 9): a reminder naming a recipient who is neither the caller nor an assignee, an eleventh ' +
+      'reminder on one Task, or a reminder relative to the due moment of a Task that has none.',
+  },
+  TASK_PRIVATE_ASSIGNEE: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 10): a private Task given an assignee other than its Creator, on create or on edit.',
+  },
+  TASK_ALREADY_PUBLISHED: {
+    to: 'tasks',
+    reason:
+      'Minted with the `tasks` module growing into Task management (`specs/165-task-management/`, ' +
+      'Phase 10): publishing a Task that is no longer a draft — publishing is one-way.',
+  },
+  PROJECT_NOT_FOUND: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, Phase 2B), which did not ' +
+      'exist when the prefix chain was deleted: a Project that does not exist, or one out of the ' +
+      'caller’s Organization reach or visibility — the three answer identically (FR-004, FR-020).',
+  },
+  PROJECT_HAS_LINKS: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a Project deleted while records are linked to it (FR-021).',
+  },
+  PROJECT_ORGANIZATION_OUT_OF_SCOPE: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'an Organization named on a Project that is outside the caller’s reach or does not exist — the two answer alike (FR-004).',
+  },
+  PROJECT_STAGE_CURRENT: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'the deletion of the Stage a Project is in (spec edge case).',
+  },
+  PROJECT_STAGE_LAST: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'the deletion of a Project’s only Stage — an open Project is always in one (spec edge case).',
+  },
+  PROJECT_MOVE_NOT_PERMITTED: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a Stage move the Project’s workflow does not permit, or a move, close or reopen its state does not allow (FR-011, FR-012).',
+  },
+  PROJECT_CHANGED: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a write naming a stale version of a Project — somebody changed it first (spec edge case "two users move at once").',
+  },
+  PROJECT_GUARD_REFUSED: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a Stage move, close or reopen refused by a guard another module or a deployment registered (FR-014).',
+  },
+  PROJECT_COMPLETION_NOT_PERMITTED: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a Project closed as completed from a Stage that does not permit completion (FR-010).',
+  },
+  PROJECT_LOSS_REASON_INVALID: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a Project closed as lost with a loss reason that does not exist or is archived (FR-005).',
+  },
+  PROJECT_MEMBER_INVALID: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 1): ' +
+      'a Member or listed person who is not an active administrator, or a Project Role that does not exist or is archived (FR-008).',
+  },
+  PROJECT_STAGE_HAS_TASKS: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 2): ' +
+      'deleting a Stage that holds Tasks (`data-model.md` §2.2).',
+  },
+  PROJECT_STAGE_GATE_OPEN_TASKS: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 2): ' +
+      'leaving or completing from a Stage whose completion gate is closed by open Tasks (FR-012).',
+  },
+  PROJECT_STAGE_TASKS_NOT_RETRYABLE: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 2): ' +
+      'creating a Stage\'s Tasks again where its last entry did not fail to create them (research R-8).',
+  },
+  PROJECT_TEMPLATE_NOT_FOUND: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 3): ' +
+      'a Template that does not exist, or an archived one named to create a Project from (research R-7).',
+  },
+  PROJECT_DICTIONARY_ENTRY_NOT_FOUND: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 4): ' +
+      'a Project Role or loss reason id that names no row, on a rename, archive, restore or delete.',
+  },
+  PROJECT_DICTIONARY_ENTRY_SYSTEM: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 4): ' +
+      'the deletion of a seeded Project Role or loss reason, which are renamable and archivable only (FR-007, `data-model.md` §2.1).',
+  },
+  PROJECT_DICTIONARY_ENTRY_IN_USE: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 4): ' +
+      'the deletion of a Project Role or loss reason a Project or a Template uses — archiving is how it stops being offered (US4 scenario 2).',
+  },
+  PROJECT_DICTIONARY_NAME_TAKEN: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 4): ' +
+      'a Project Role or loss reason given the default name another row of the same dictionary has, whatever its case.',
+  },
+  PROJECT_ORGANIZATION_IN_USE: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 6): ' +
+      'an Organization removed from a Project while a record of it is linked there (spec edge case).',
+  },
+  PROJECT_RECORD_NOT_FOUND: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 6): ' +
+      'a record to link that does not exist or is out of the caller’s reach — the two answer alike (FR-021).',
+  },
+  PROJECT_RECORD_ALREADY_LINKED: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 6): ' +
+      'a record linked to a Project while it already belongs to one, naming that one only to a caller who may see it (FR-021, US6 scenario 2).',
+  },
+  PROJECT_LINK_ORGANIZATION_MISMATCH: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 6): ' +
+      'a record linked to a Project that does not have the record’s Organization (FR-021).',
+  },
+  PROJECT_NOTE_NOT_AUTHOR: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 7): ' +
+      'a note of a Project edited or deleted by somebody other than its author, whatever they hold (FR-025).',
+  },
+  PROJECT_MESSAGE_IMMUTABLE: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 7): ' +
+      'a message of a Project edited or deleted — the thread is append-only, whoever asks (FR-025).',
+  },
+  PROJECT_ATTACHMENT_TOO_LARGE: {
+    to: 'projects',
+    reason:
+      'Minted with the `projects` module (`specs/163-projects-and-tasks/`, User Story 7): ' +
+      'an upload larger than the bound the attachment route reads into memory (FR-027), CRM’s rule.',
   },
   SEO_CRAWLER_TEXT_TOO_LARGE: {
     to: 'seo',
@@ -409,6 +763,30 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'price is not the price it may be ordered at now. The noun is the cart line\'s price, so ' +
       'the owner is `carts`, as for `CART_EMPTY`; the one raise site is `orders`\' `placeOrder`, ' +
       'after `carts` has brought the cart up to date.',
+  },
+  CMS_DUPLICATE_ANCHOR: {
+    to: 'cms',
+    reason:
+      'Minted by feature 163 (`specs/163-page-builder-marketing-pages/`) for the refusal a ' +
+      'content save meets when one anchor names two sections or headings of the same page ' +
+      'tree, so an in-page link could only ever reach the first. The noun is the Page Builder ' +
+      'canvas, which `cms` owns along with the rest of the `CMS_*` family.',
+  },
+  CMS_PAGE_PARENT_CYCLE: {
+    to: 'cms',
+    reason:
+      'Minted by feature 163 (`specs/163-page-builder-marketing-pages/`) for the refusal a ' +
+      'page update meets when its new parent would make the page its own ancestor, or nest ' +
+      'the tree deeper than eight levels, which the breadcrumb trail cannot walk. The noun is ' +
+      'a CMS page, which `cms` owns along with the rest of the `CMS_*` family.',
+  },
+  CMS_RESERVED_ANCHOR: {
+    to: 'cms',
+    reason:
+      'Minted by feature 163 (`specs/163-page-builder-marketing-pages/`) for the refusal a ' +
+      'content save meets when an anchor is one the storefront layout already renders as an ' +
+      'id, such as `main-content`, so the link would jump somewhere else. The noun is the ' +
+      'Page Builder canvas, which `cms` owns along with the rest of the `CMS_*` family.',
   },
   CMS_SLUG_RESERVED: {
     to: 'cms',
@@ -610,6 +988,267 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'Minted by feature 153 (`specs/153-quote-request-pdf-template/`, owner answer Q4, FR-097) for ' +
       'a Send PDF to customer every recipient of which the mail transport refused. The one raise ' +
       'site is `quote_requests`\' send Command.',
+  },
+  SALES_CHANNEL_SIGN_IN_REQUIRED: {
+    to: 'sales_channels',
+    reason:
+      'Minted by feature 154 (`specs/154-sales-channel-access/`, FR-005) for the refusal an ' +
+      'anonymous request earns on a sales channel closed to anonymous visitors. The thrower is the ' +
+      'kernel\'s access step in the channel resolver; the noun is the sales channel, so it is ' +
+      'declared by `sales_channels`, as `INACTIVE_SALES_CHANNEL` is for the same thrower (D-95.2).',
+  },
+  SALES_CHANNEL_NOT_PERMITTED: {
+    to: 'sales_channels',
+    reason:
+      'Minted by feature 154 (`specs/154-sales-channel-access/`, FR-005) for the refusal a ' +
+      'customer request earns on a sales channel its Organization is not assigned to — by the ' +
+      'kernel\'s access step, and by the customer sign-in paths. Owned by the domain noun, as ' +
+      '`INACTIVE_SALES_CHANNEL` is (D-95.2).',
+  },
+  ORDER_SALES_CHANNEL_MISMATCH: {
+    to: 'orders',
+    reason:
+      'Minted by feature 154 (`specs/154-sales-channel-access/`, FR-033) for the refusal order ' +
+      'placement earns when the basket it is handed belongs to another sales channel. The raise ' +
+      'site is `orders`\' placement; the noun is the order.',
+  },
+  ASSET_REPLACE_KIND_MISMATCH: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal of a replacement file whose kind (image, video, PDF, other) differs from the kind the asset already holds, so every page embedding it keeps rendering. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_LEGACY_CANNOT_REPLACE: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal to replace in place an asset whose file sits at an address the platform did not issue. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_REPLACE_CONFLICT: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal of a replace or a restore whose expected file versions no longer match the asset, because another write changed its file first. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_NO_PREVIOUS_VERSION: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal to restore a previous version of an asset that keeps none. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_PERMALINK_TAKEN: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal of a permalink another asset already holds. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_PERMALINK_PREVIOUSLY_USED: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal, until it is confirmed, of a permalink whose last holder was a different asset. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  ASSET_PERMALINK_INVALID: {
+    to: 'assets_library',
+    reason:
+      'Minted by feature 156 (`specs/156-asset-stable-url/`) for ' +
+      'the refusal of a permalink that breaks the shared permalink rule, the broken rule named by the `details.code` token. ' +
+      'The noun is the asset, its file and its permalink — `assets_library`\' own row — and every raise site is in that module.',
+  },
+  PRICE_SET_IN_PRICE_BOOKS: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 160 (`specs/160-pricing-model-v2/`, FR-043) for a product or variant ' +
+      'write — the admin create and update routes and the products import — that names the old ' +
+      '*default price* key or the variant price override. D-121 T1: the noun is the product\'s ' +
+      'own field, `catalog`\'s, so `catalog` owns the sentence; `import_export` raises it too, ' +
+      'from the products adapter.',
+  },
+  PRODUCT_BELOW_MINIMUM_QUANTITY: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 155 (`specs/155-catalog-order-constraints/`) for the refusal of an ' +
+      'order line whose product falls short of its minimum order quantity in pieces. D-121 T1: ' +
+      'the noun is the minimum, a column on `catalog`\'s product row, so `catalog` owns the ' +
+      'sentence although it raises nothing — the raisers are `carts` (adding and editing a ' +
+      'line), `orders` (placement, admin create, API intake) and `quote_requests` (create, ' +
+      'draft edit, resubmit), each of them reading the rule through the catalogue port.',
+  },
+  PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 155 beside `PRODUCT_BELOW_MINIMUM_QUANTITY`, for a line short of the ' +
+      'minimum number of units of its packaging unit. D-121 T1 decides it the way it decided ' +
+      '`PACKAGING_UNIT_NOT_FOUND`: a packaging unit is a row on `catalog`\'s product, and the ' +
+      'raisers — `carts`, `orders` and `quote_requests` — are callers reading that row.',
+  },
+  PACKAGING_UNIT_MISMATCH: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 155 for a quote-request line whose packaging unit is not one of its ' +
+      'product\'s units, by id or by name and base quantity. The noun is the packaging unit, ' +
+      '`catalog`\'s row (D-121 T1); the raiser is `quote_requests` on create and draft edit.',
+  },
+  RFQ_SALES_CHANNEL_NOT_ALLOWED: {
+    to: 'quote_requests',
+    reason:
+      'Minted by feature 163 (`specs/163-product-data-scopes/`, security review M1) for an ' +
+      'operator\'s quote request on a customer\'s behalf whose sales channel — the one it names, or ' +
+      'the one the admin request resolved when it names none (owner decision 2026-10-29 "A") — is not ' +
+      'one of the Organization\'s active channels. The noun is the quote request\'s channel, ' +
+      '`quote_requests`\' own column, and the one raise site is its admin create. ' +
+      '`SALES_CHANNEL_NOT_PERMITTED` is not reused: its sentence speaks to a signed-in buyer.',
+  },
+  FIELD_NOT_AT_SCOPE: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 168 (`specs/168-product-editor-scope-switcher/`, FR-012) for a scoped write ' +
+      'naming a field at a scope outside its scope set — a Channel × language value of the audience, ' +
+      'the window, the minimum order quantity, returnable or a non-text attribute. The noun is a ' +
+      'product field\'s scope set, `catalog`\'s rule; the raise sites are its save, copy, scopes PATCH ' +
+      'and scope write port. `VALIDATION_FAILED` is not reused: the body is well formed, and the ' +
+      'sentence has to name the levels the field accepts.',
+  },
+  SCOPED_VALUE_INVALID: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 168 (FR-062, FR-113) for a scoped write the one write encoding refuses for ' +
+      'what it means: an empty value on a required field, a single select or a boolean, `inherit` at ' +
+      'Global, a subject that is not the product\'s, a source with no own value to copy. The noun is a ' +
+      'product\'s scoped value, a `catalog` row; every raise site is a `catalog` write.',
+  },
+  GLOBAL_ONLY_FIELD: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 168 (FR-081) for a save that writes a global-only product field (SKU, ' +
+      'attribute set, categories, stock flags, download) at a Channel or Channel × language scope. ' +
+      'The noun is the product row, `catalog`\'s; the raise site is its scoped-values save.',
+  },
+  IMPORT_PROFILE_REQUIRED: {
+    to: 'import_export',
+    reason:
+      'Minted by feature 168 (FR-048) for a products import that names no import profile. The noun is ' +
+      'an import profile, an `import_export` row; the raise site is its products import route.',
+  },
+  IMPORT_PROFILE_NOT_FOUND: {
+    to: 'import_export',
+    reason:
+      'Minted by feature 168 (FR-048) for a profile id that names no import profile, on the profile ' +
+      'routes and the products import. The noun is an `import_export` row.',
+  },
+  IMPORT_PROFILE_NAME_TAKEN: {
+    to: 'import_export',
+    reason:
+      'Minted by feature 168 (R14) for a profile created or renamed to a name another profile holds, ' +
+      'compared case-insensitively. The noun is an `import_export` row; `CONFLICT` is not reused because ' +
+      'the sentence has to say the name is taken.',
+  },
+  SCOPE_INVALID: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 163 (`specs/163-product-data-scopes/`, FR-014) for a scoped write that ' +
+      'names a sales channel the product is not a member of, or a language that channel does ' +
+      'not offer. The noun is a product scope, a row `catalog` owns (D-121 T1), and every raise ' +
+      'site is one of its admin writes — scoped values, URL keys, media. `VALIDATION_FAILED` is ' +
+      'not reused: the body is well formed, and the sentence has to tell the operator to assign ' +
+      'the product or pick one of the channel\'s languages.',
+  },
+  SCOPE_INCOMPLETE: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 163 (FR-060) for the completeness gate in `refuse` mode: a status write ' +
+      'that would turn the product on at a (channel, language) still missing its name, a ' +
+      'required language-scoped attribute or its URL key. The noun is the product scope, ' +
+      '`catalog`\'s row, and the gate is `catalog`\'s own service.',
+  },
+  URL_KEY_TAKEN: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 163 (FR-070) for a URL-key write meeting another product\'s current key ' +
+      'in the same language. The noun is a product URL key, a `catalog` row; the one raise site ' +
+      'is its URL-key write. `VALIDATION_FAILED` is not reused: the key is well formed, and the ' +
+      'operator has to choose another one.',
+  },
+  URL_KEY_REDIRECT_TAKEOVER_REQUIRED: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 163 (FR-072) for a URL-key write meeting another product\'s redirect: ' +
+      'the operator must confirm that the other product loses it. The noun is a product URL ' +
+      'redirect, a `catalog` row, raised only by `catalog`\'s URL-key write.',
+  },
+  URL_REDIRECT_NOT_FOUND: {
+    to: 'catalog',
+    reason:
+      'Minted by feature 163 for deleting a URL redirect that is not the product\'s. The noun is ' +
+      'a product URL redirect, a `catalog` row; `NOT_FOUND` is not reused because the admin ' +
+      'needs to tell this apart from the product itself being gone.',
+  },
+  RETURN_LINE_NOT_RETURNABLE: {
+    to: 'returns',
+    reason:
+      'Minted by feature 155 (`specs/155-catalog-order-constraints/`) for the refusal of a ' +
+      '`return`-kind case that names an order line recorded as not returnable at purchase. ' +
+      'The noun is the return case and the policy reading the stamp is `returns`\' own — ' +
+      '`orders` only reports the stamp through `OrderReturnContextPort` — so `returns` owns ' +
+      'the sentence, and its `createCase` is the one raise site.',
+  },
+  CUSTOM_FIELD_FILTER_UNAVAILABLE: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`, FR-011) for the refusal ' +
+      'an admin list earns when it is asked to filter on a custom field it does not offer. The ' +
+      'noun is the definition and its list-filter attribute, and the deciding seam is ' +
+      '`custom_fields`\' list-filter port (D-121 T1). `orders`, `quote_requests` and `crm` raise ' +
+      'it from what that port answers, as the hosts raise `CUSTOM_FIELD_VALUE_INVALID`.',
+  },
+  CUSTOM_FIELD_OPTION_IN_USE: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`) for the refusal removing a ' +
+      'select option earns while records still hold it. It shared `CUSTOM_FIELD_DEFINITION_INVALID` ' +
+      'and an English message naming the raw value; the noun is the option, `custom_fields`\' own ' +
+      'row, and its admin routes are the raise site (D-121 T1).',
+  },
+  CUSTOM_FIELD_VALUE_TYPE_LOCKED: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`) for the refusal changing a ' +
+      'definition\'s value type earns while records hold values under its key. The noun is the ' +
+      'definition, raised from `custom_fields`\' admin routes (D-121 T1).',
+  },
+  CUSTOM_FIELD_STORED_VALUES_EXIST: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 157 (`specs/157-custom-fields-list-filters/`) for the refusal a ' +
+      'customer-visible definition earns over values a deleted field left under its key. The noun ' +
+      'is the definition, raised from `custom_fields`\' admin routes (D-121 T1).',
+  },
+  ADMIN_FEEDBACK_NOT_CONFIGURED: {
+    to: 'admin_feedback',
+    reason:
+      'Minted with the `admin_feedback` module (issue #379), which did not exist when the prefix ' +
+      'chain was deleted: the refusal to send feedback while the relay address is empty or not an ' +
+      'http(s) URL. The noun is the feedback, the module\'s one route.',
+  },
+  ADMIN_FEEDBACK_DELIVERY_FAILED: {
+    to: 'admin_feedback',
+    reason:
+      'Minted with the `admin_feedback` module (issue #379): the relay could not be reached in time, ' +
+      'refused the message or redirected. The noun is the feedback, the module\'s one route.',
+  },
+  CUSTOM_FIELD_CARRY_INCOMPATIBLE: {
+    to: 'custom_fields',
+    reason:
+      'Minted by feature 162 (`specs/162-custom-fields-value-carry/`, FR-003, FR-011) for turning ' +
+      'on a definition\'s carry option towards a target that cannot take its values, named by the ' +
+      '`details.code` token. The noun is the custom-field definition and its carry option, and the ' +
+      'judgement is `custom_fields`\' own definition Command (D-121 T1).',
   },
 };
 
@@ -1534,6 +2173,22 @@ export const PLATFORM_OWNED_ERROR_CODES: PlatformOwnedErrorCodes = {
       'The unqualified absence, named in fifty modules plus the platform\'s 404 fallback. ' +
       'Every module that owns an entity also owns a specific `*_NOT_FOUND`; what is left ' +
       'here is the case where the noun is not known at the point of the refusal.',
+  },
+  AMOUNT_PRECISION_EXCEEDED: {
+    tier: 'T3',
+    reason:
+      'A typed money amount with more than two decimal places (issue #417, owner ruling of ' +
+      '2026-10-24), refused on every money field a person or an integration enters — delivery ' +
+      'methods, payment methods, quote requests, returns, credit limits, promotions, orders and ' +
+      'invoices. The noun is the request\'s amount, which no one module owns, and the raiser is ' +
+      'the error envelope reading the Zod issue `money-input.ts` tags.',
+  },
+  UNIT_PRICE_PRECISION_EXCEEDED: {
+    tier: 'T3',
+    reason:
+      'A typed unit price with more than four decimal places (owner ruling of 2026-10-25) — a ' +
+      'quote\'s desired, agreed or proposed price. The noun is the request\'s unit price, which no ' +
+      'one module owns, and the raiser is the error envelope reading the Zod issue `money-input.ts` tags.',
   },
   UNAUTHORIZED: {
     tier: 'T3',

@@ -5,17 +5,17 @@
 // of any asset still pointed at by:
 //
 //   - blog_categories.main_image_asset_id    (column-level reference)
+//   - blog_posts.main_image_asset_id         (column-level reference, feature 163)
 //   - jsonb references inside blog_posts.content or
 //     blog_categories.description (Page Builder asset embeds)
 //
-// The jsonb edge uses `jsonb_path_exists` driven by the GIN index
-// `idx_blog_posts_content_refs` and the matching index on
-// `blog_categories.description` (created via the GIN's content path).
+// The jsonb edge walks each Page Builder document once and matches its
+// string values against the whole batch of asked ids (feature 166, R-6).
 
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
-  AssetReference,
   AssetReferenceDescriptor,
+  AssetReferenceHit,
   AssetReferenceRegistryPort,
 } from '@endora-commerce/contracts';
 
@@ -32,71 +32,86 @@ function blogMainImageReferenceDescriptor(
 ): AssetReferenceDescriptor {
   return {
     ownerModuleId: 'blog',
-    async findReferences(assetIds: string[]): Promise<AssetReference[]> {
+    async findReferences(assetIds: string[]): Promise<AssetReferenceHit[]> {
       if (assetIds.length === 0) return [];
       const em = emFactory();
       const placeholders = assetIds.map(() => '?').join(', ');
       const rows = (await em.execute(
-        `select id::text as id, slug
+        `select id::text as id, slug, 'blog_category' as kind, main_image_asset_id::text as asset_id
            from blog_categories
           where main_image_asset_id in (${placeholders})
+            and deleted_at is null
+         union all
+         select id::text as id, slug, 'blog_post' as kind, main_image_asset_id::text as asset_id
+           from blog_posts
+          where main_image_asset_id in (${placeholders})
             and deleted_at is null`,
-        [...assetIds],
-      )) as Array<{ id: string; slug: string }>;
-      return rows.map((r) => ({
-        kind: 'blog_category_main_image',
-        entityId: r.id,
-        label: `Blog category "${r.slug}"`,
-      }));
+        [...assetIds, ...assetIds],
+      )) as Array<{ id: string; slug: string; kind: string; asset_id: string }>;
+      return rows.map((r) =>
+        r.kind === 'blog_post'
+          ? {
+              assetId: r.asset_id,
+              kind: 'blog_post_main_image',
+              entityId: r.id,
+              label: `Blog post "${r.slug}"`,
+            }
+          : {
+              assetId: r.asset_id,
+              kind: 'blog_category_main_image',
+              entityId: r.id,
+              label: `Blog category "${r.slug}"`,
+            },
+      );
     },
   };
 }
 
+/**
+ * One statement for the whole batch (`specs/166-asset-reference-visibility/`
+ * research R-6): every string value of each document (`strict $.**` visits
+ * every level, array elements included) is matched against the asked ids, so
+ * a document is walked once however many ids are asked, and the matched value
+ * is the asset id each hit is tagged with. It used to be one statement per
+ * asked id. The ids travel as one `text[]` literal built from hex-and-dash
+ * characters only — `em.execute` formats a JavaScript array as a list, not as
+ * one array value.
+ */
 function blogContentTreeReferenceDescriptor(
   emFactory: () => EntityManager,
 ): AssetReferenceDescriptor {
   return {
     ownerModuleId: 'blog',
-    async findReferences(assetIds: string[]): Promise<AssetReference[]> {
-      if (assetIds.length === 0) return [];
-      const em = emFactory();
-      const out: AssetReference[] = [];
-      for (const aidRaw of assetIds) {
-        // The asset id is a UUID; this regex is a defensive pre-filter to
-        // keep the literal-injected jsonpath safe (the same idiom feature
-        // 014's CMS asset-references uses).
-        const aid = aidRaw.replace(/[^0-9a-fA-F-]/g, '');
-        const path = `'$.** ? (@ == "${aid}")'::jsonpath`;
+    async findReferences(assetIds: string[]): Promise<AssetReferenceHit[]> {
+      const ids = [
+        ...new Set(assetIds.map((raw) => raw.replace(/[^0-9a-fA-F-]/g, '')).filter((id) => id !== '')),
+      ];
+      if (ids.length === 0) return [];
+      const rows = (await emFactory().execute(
+        `with asked as (select unnest(?::text[]) as aid)
+         select distinct p.id::text as id, p.slug, 'blog_post' as kind, v.value #>> '{}' as asset_id
+           from blog_posts p
+           cross join lateral jsonb_path_query(p.content, 'strict $.**') as v(value)
+          where p.deleted_at is null
+            and jsonb_typeof(v.value) = 'string'
+            and v.value #>> '{}' in (select aid from asked)
+         union all
+         select distinct c.id::text as id, c.slug, 'blog_category' as kind, v.value #>> '{}' as asset_id
+           from blog_categories c
+           cross join lateral jsonb_path_query(c.description, 'strict $.**') as v(value)
+          where c.deleted_at is null
+            and c.description is not null
+            and jsonb_typeof(v.value) = 'string'
+            and v.value #>> '{}' in (select aid from asked)`,
+        [`{${ids.map((id) => `"${id}"`).join(',')}}`],
+      )) as Array<{ id: string; slug: string; kind: string; asset_id: string }>;
 
-        const rows = (await em.execute(
-          `select id::text as id, slug, 'blog_post' as kind
-             from blog_posts
-            where deleted_at is null
-              and jsonb_path_exists(content, ${path})
-           union all
-           select id::text as id, slug, 'blog_category' as kind
-             from blog_categories
-            where deleted_at is null
-              and description is not null
-              and jsonb_path_exists(description, ${path})`,
-        )) as Array<{ id: string; slug: string; kind: string }>;
-
-        for (const r of rows) {
-          const label =
-            r.kind === 'blog_post'
-              ? `Blog post "${r.slug}"`
-              : `Blog category description "${r.slug}"`;
-          out.push({
-            kind:
-              r.kind === 'blog_post'
-                ? 'blog_post_content'
-                : 'blog_category_description',
-            entityId: r.id,
-            label,
-          });
-        }
-      }
-      return out;
+      return rows.map((r) => ({
+        assetId: r.asset_id,
+        kind: r.kind === 'blog_post' ? 'blog_post_content' : 'blog_category_description',
+        entityId: r.id,
+        label: r.kind === 'blog_post' ? `Blog post "${r.slug}"` : `Blog category description "${r.slug}"`,
+      }));
     },
   };
 }

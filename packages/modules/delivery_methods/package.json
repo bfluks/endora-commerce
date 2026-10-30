@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-delivery-methods",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "sideEffects": false,
   "description": "Shipping/delivery method definitions and per-channel availability.",
@@ -55,7 +55,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
+    "build": "node ../../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.ui.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run"

@@ -1,11 +1,18 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
+import type {
+  ReportingTimeZonePort,
+  SettingWriteValidatorRegistryPort,
+} from '@endora-commerce/contracts';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
+import { lazyPort } from '@endora-commerce/platform/kernel';
+import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import { registerAnalyticsRoutes } from './routes.js';
 import { AnalyticsIngestService } from './services/analytics-ingest.service.js';
 import { AnalyticsQueryService } from './services/analytics-query.service.js';
 import { buildForwarderFromEnv, type AnalyticsForwarder } from './services/ga4-forwarder.js';
 import { AnalyticsEvent } from './entities/analytics-event.entity.js';
+import { createReportingTimeZonePort, createReportingTimeZoneValidator } from './services/reporting-time-zone.js';
 
 /**
  * `analytics` — the first wave-1 module whose conversion is only a conversion
@@ -45,6 +52,24 @@ export function registerModule(ctx: ModuleContext): void {
       .asFunction(({ emFactory }: AnalyticsCradle) => new AnalyticsQueryService(emFactory))
       .singleton(),
   });
+
+  // --- Reporting time zone (owner decisions 2026-10-27, #465) -------------------
+  /**
+   * `reportingTimeZonePort` — gated (`providePort`): a reader resolving it
+   * while this module is off gets `ModuleDisabledError`, so a reader decides
+   * this module's presence first and counts in `UTC` without it. The
+   * validator is a contribution into `settings`' registry, pushed at boot.
+   */
+  ctx.di.providePort<ReportingTimeZonePort>(
+    'reportingTimeZonePort',
+    ctx.asFunction(() => createReportingTimeZonePort(lazyPort<SettingsReadPort>(ctx, 'settingsReadPort'))).singleton(),
+  );
+  ctx.onBoot(() => {
+    lazyPort<SettingWriteValidatorRegistryPort>(ctx, 'settingWriteValidatorRegistry').register(
+      createReportingTimeZoneValidator(),
+    );
+  });
+  // --- end of Reporting time zone -----------------------------------------------
 
   ctx.routes(async (app) => {
     const { analyticsIngestService, analyticsQueryService, requireAdmin } =

@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-newsletter",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "sideEffects": false,
   "description": "Own-infrastructure newsletter: subscribers with tags + custom fields, campaigns, linear automations, email-safe templates and variables, engagement stats, and a configurable bulk-sending provider.",
@@ -47,7 +47,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
+    "build": "node ../../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.ui.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run"
@@ -109,7 +109,7 @@
     "echarts": "^6.1.0",
     "fastify": "^5.12.5",
     "ioredis": "^5.10.1",
-    "nodemailer": "^10.0.13",
+    "nodemailer": "^10.1.4",
     "react": "^19.2.5",
     "react-router-dom": "^7.18.2",
     "typescript": "^5.9.3",

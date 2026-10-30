@@ -2,14 +2,14 @@
  * The page sizes every paginated admin list offers.
  *
  * It is a module of its own because the **constant** is design-system and the
- * **preference** is application state. `usePageSizePreference` reads the signed-in
- * admin's id to key its `localStorage` entry, so it belongs to the admin application
- * and stays there (see the package README, *What Phase 1b does not publish*);
- * `PaginationFooter` only needs the list of numbers to render its dropdown. Splitting
- * them is what lets the footer be published without dragging the session with it, and
- * it keeps exactly one list: the admin's hook re-exports these names rather than
- * declaring a second array the dropdown and the validation could disagree about.
+ * **preference** is application state: `PaginationFooter` only needs the list of
+ * numbers to render its dropdown. Since feature 164 the array itself is declared in
+ * `@endora-commerce/contracts` (`ADMIN_LIST_PAGE_SIZE_OPTIONS`), because the server
+ * validates a stored page size against it and cannot import the kit. This file
+ * re-exports that one array under the kit's names, so the dropdown, the preference
+ * hook and the server cannot disagree (`admin/test/kit/admin-kit-identity.test.ts`).
  */
-export const PAGE_SIZE_OPTIONS = [5, 10, 20, 50, 100, 500] as const;
-
-export type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
+export {
+  ADMIN_LIST_PAGE_SIZE_OPTIONS as PAGE_SIZE_OPTIONS,
+  type AdminListPageSize as PageSizeOption,
+} from '@endora-commerce/contracts';

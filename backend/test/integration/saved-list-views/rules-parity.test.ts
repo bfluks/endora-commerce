@@ -9,9 +9,11 @@ import {
 import { OrderListViewService } from '../../../../packages/modules/orders/src/backend/services/order-list-view-service.js';
 import { ProductListViewService } from '../../../../packages/modules/catalog/src/backend/services/product-list-view-service.js';
 import { QuoteRequestListViewService } from '../../../../packages/modules/quote_requests/src/backend/services/quote-request-list-view-service.js';
+import { TaskListViewService } from '../../../../packages/modules/tasks/src/backend/services/saved-view-service.js';
 import { savedViewActor as orderSavedViewActor } from '../../../../packages/modules/orders/src/backend/saved-view-actor.js';
 import { savedViewActor as productSavedViewActor } from '../../../../packages/modules/catalog/src/backend/saved-view-actor.js';
 import { savedViewActor as quoteRequestSavedViewActor } from '../../../../packages/modules/quote_requests/src/backend/saved-view-actor.js';
+import { savedViewActor as taskSavedViewActor } from '../../../../packages/modules/tasks/src/backend/saved-view-actor.js';
 import { resolveTenantContext } from '@endora-commerce/platform/composition';
 import { runWithTenantContext, type TenantContext } from '../../../src/tenancy/tenant-context.js';
 
@@ -83,6 +85,12 @@ interface ListAdapter {
    * itself refuses the duplicate instead.
    */
   holdsLegacyDuplicates: boolean;
+  /**
+   * The unique index S8 expects the schema to answer with; `<table>_owner_name_key_uq`
+   * unless named. Tasks' migration (`specs/165-task-management/`) named it
+   * `task_list_saved_views_owner_name_unique` before it joined this table.
+   */
+  uniqueIndex?: string;
   make(emFactory: () => EntityManager, log: SpyLogger): SavedViewServiceUnderTest;
   /**
    * The list's route-side actor derivation: who is asking, read from the
@@ -153,6 +161,28 @@ const ADAPTERS: ListAdapter[] = [
       const id = randomUUID();
       await em.execute(
         `insert into quote_request_list_saved_views
+           (id, owner_admin_user_id, name, shared, filters, sort, visible_columns, created_at, updated_at)
+         values (?, ?, ?, ?, '{}'::jsonb, null, null, now(), now())`,
+        [id, row.ownerAdminUserId, row.name, row.shared],
+      );
+      return id;
+    },
+  },
+  {
+    // `specs/165-task-management/` R-13: the Tasks list and board, on the same rules.
+    label: 'tasks',
+    table: 'task_list_saved_views',
+    conflictCode: 'TASK_VIEW_NAME_TAKEN',
+    holdsLegacyDuplicates: false,
+    uniqueIndex: 'task_list_saved_views_owner_name_unique',
+    // Same narrow cast as the others': the Tasks list's `sort` and
+    // `visibleColumns` are optional, which no one input type shares exactly.
+    make: (emFactory, log) => new TaskListViewService(emFactory, log) as unknown as SavedViewServiceUnderTest,
+    actor: taskSavedViewActor,
+    async seedRaw(em, row) {
+      const id = randomUUID();
+      await em.execute(
+        `insert into task_list_saved_views
            (id, owner_admin_user_id, name, shared, filters, sort, visible_columns, created_at, updated_at)
          values (?, ?, ?, ?, '{}'::jsonb, null, null, now(), now())`,
         [id, row.ownerAdminUserId, row.name, row.shared],
@@ -309,7 +339,7 @@ describe('saved list views — one rule set for every list (spec 147)', () => {
       await adapter.seedRaw(em, { ownerAdminUserId: owner.adminUserId, name: `S8 unique ${run}`, shared: false });
       await expect(
         adapter.seedRaw(em, { ownerAdminUserId: owner.adminUserId, name: `s8 UNIQUE ${run}`, shared: false }),
-      ).rejects.toThrow(`${adapter.table}_owner_name_key_uq`);
+      ).rejects.toThrow(adapter.uniqueIndex ?? `${adapter.table}_owner_name_key_uq`);
     });
 
     it.runIf(adapter.holdsLegacyDuplicates)('S8 leaves a pre-existing duplicate alone when only `shared` changes', async () => {

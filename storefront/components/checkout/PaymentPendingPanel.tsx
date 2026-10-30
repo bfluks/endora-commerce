@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
 import { tForLocale } from '../../lib/i18n/messages';
 import { PaymentStatusPoller } from './PaymentStatusPoller';
+import { LocalizedAnchor, LocalizedLink } from '../../lib/i18n/localized-link';
 
 /**
  * The third answer to a gateway return (issue #287).
@@ -55,9 +55,9 @@ export function PaymentPendingPanel({
       )}
 
       <p className="b2b-auth__hint">
-        <a href={checkAgainUrl}>{t('checkout.paymentPending.checkAgain')}</a>
+        <LocalizedAnchor href={checkAgainUrl}>{t('checkout.paymentPending.checkAgain')}</LocalizedAnchor>
         {' · '}
-        <Link href={`/orders/${orderId}`}>{t('checkout.paymentPending.viewOrder')}</Link>
+        <LocalizedLink href={`/orders/${orderId}`}>{t('checkout.paymentPending.viewOrder')}</LocalizedLink>
       </p>
 
       {poll ? <PaymentStatusPoller nextUrl={poll.url} delayMs={poll.delayMs} /> : null}

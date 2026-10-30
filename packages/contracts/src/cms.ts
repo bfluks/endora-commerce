@@ -7,8 +7,10 @@
 // happens server-side in the CMS module.
 
 import { z } from 'zod';
+import { storefrontPagePath, type ChannelUrlFacts } from './storefront-language-path.js';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
 import { LlmProviderSchema } from './prompt-actions.js';
+import { cmsBrandTokensSchema } from './cms-brand.js';
 
 // ────────────────────────────────────────────────────────────────────
 // Domain primitives
@@ -18,6 +20,23 @@ const cmsCodeRe = /^[a-z0-9][a-z0-9._-]{0,178}[a-z0-9]$/;
 const cmsSlugRe = /^[a-z0-9](?:[a-z0-9/_-]{0,178}[a-z0-9])?$/;
 
 export const cmsPageStatusSchema = z.enum(['draft', 'published', 'archived']);
+
+/**
+ * One language's own name, slug and description of a CMS page
+ * (`specs/163-page-builder-marketing-pages/` R24, issue #521). Every field is
+ * optional: an absent or blank one inherits the page's own field, which stays
+ * the default for every language that does not override it.
+ */
+export const cmsPageTranslationSchema = z.object({
+  name: z.string().max(200).optional(),
+  slug: z.string().regex(cmsSlugRe).max(180).optional(),
+  description: z.string().optional(),
+});
+export type CmsPageTranslation = z.infer<typeof cmsPageTranslationSchema>;
+
+/** The per-language overrides of a CMS page, by BCP-47 language code (R24). */
+export const cmsPageTranslationsSchema = z.record(z.string().min(2), cmsPageTranslationSchema);
+export type CmsPageTranslations = z.infer<typeof cmsPageTranslationsSchema>;
 export type CmsPageStatus = z.infer<typeof cmsPageStatusSchema>;
 
 export const cmsContentEnvelopeSchema = z.object({
@@ -50,8 +69,38 @@ export const cmsPageSummarySchema = z.object({
   version: z.number().int(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
+  /**
+   * The breadcrumb parent (feature 163, FR-030). On the list too, so the
+   * editor's parent picker can leave out the page's own descendants; the
+   * `cms_page.update` Command stays the authority (`CMS_PAGE_PARENT_CYCLE`).
+   */
+  parentPageId: uuidSchema.nullable(),
+  /**
+   * Whether the page's public path starts with its parent's (R19D, T281):
+   * `false` keeps the flat `/<slug>` every page had before, so no stored page
+   * changes address. The resulting path is `cmsPagePublicPaths`'s answer.
+   */
+  parentPathInUrl: z.boolean(),
+  /**
+   * Feature 167 (FR-041) — present when the page's first slug segment is a storefront
+   * language prefix (or split alias) of a sales channel: `/<prefix>/…` is that
+   * language's page, so the page is not reachable at its own address there. Saves
+   * refuse such a slug; this marks a page that predates the language.
+   */
+  shadowedByLanguagePrefix: z
+    .object({ prefix: z.string(), channelCodes: z.array(z.string()) })
+    .optional(),
+  /**
+   * R24: the page's name, slug and description per language. `{}` — every
+   * language inherits the fields above, which is every page stored before it.
+   */
+  translations: cmsPageTranslationsSchema,
 });
 export type CmsPageSummary = z.infer<typeof cmsPageSummarySchema>;
+
+/** The breadcrumb colour scheme of a page (feature 163, FR-031). */
+export const cmsBreadcrumbsSchemeSchema = z.enum(['light', 'muted', 'dark']);
+export type CmsBreadcrumbsScheme = z.infer<typeof cmsBreadcrumbsSchemeSchema>;
 
 export const cmsPageDetailSchema = cmsPageSummarySchema.extend({
   meta: z
@@ -65,6 +114,15 @@ export const cmsPageDetailSchema = cmsPageSummarySchema.extend({
     )
     .nullable(),
   content: cmsContentEnvelopeSchema,
+  breadcrumbsVisible: z.boolean(),
+  breadcrumbsScheme: cmsBreadcrumbsSchemeSchema,
+  /**
+   * R21H (T355): the trail drawn over the page's first section instead of in
+   * a band above it. `false` (the default) keeps the band.
+   */
+  breadcrumbsOverlay: z.boolean(),
+  /** The page's sharing image, an `assets_library` asset id (feature 163, FR-033). */
+  shareImageAssetId: uuidSchema.nullable(),
 });
 export type CmsPageDetail = z.infer<typeof cmsPageDetailSchema>;
 
@@ -85,6 +143,21 @@ export const createCmsPageRequestSchema = z.object({
       }),
     )
     .optional(),
+  // Feature 163 (`contracts/storefront-and-admin-api.md` §2): optional on
+  // create and patch alike; an absent key leaves the column's default or value.
+  parentPageId: uuidSchema.nullable().optional(),
+  breadcrumbsVisible: z.boolean().optional(),
+  breadcrumbsScheme: cmsBreadcrumbsSchemeSchema.optional(),
+  /** R21H (T355): the trail over the first section. Absent = `false`. */
+  breadcrumbsOverlay: z.boolean().optional(),
+  shareImageAssetId: uuidSchema.nullable().optional(),
+  /** R19D (T281): serve the page under its parent's path. Absent = `false`. */
+  parentPathInUrl: z.boolean().optional(),
+  /**
+   * R24: per-language name, slug and description. Absent leaves the stored
+   * map; present replaces it whole. A key must be one of the page's languages.
+   */
+  translations: cmsPageTranslationsSchema.optional(),
 });
 export type CreateCmsPageRequest = z.infer<typeof createCmsPageRequestSchema>;
 
@@ -461,6 +534,13 @@ export const cmsPageBuilderDescriptorSchema = z.object({
   schemaVersion: z.number().int(),
   breakpoints: pageBuilderBreakpointsSchema.optional(),
   colorPalette: cmsColorPaletteSchema.optional(),
+  /**
+   * Feature 163 (research R-4) — the effective brand tokens for the channel the
+   * editor previews (`?salesChannelId=`), else the global set, so the canvas
+   * renders as the storefront does. Optional on the wire: a consumer reading
+   * only the earlier fields keeps working.
+   */
+  brandTokens: cmsBrandTokensSchema.optional(),
   components: z.array(
     z.object({
       name: z.string(),
@@ -528,6 +608,32 @@ export type CmsResolvedTemplate = CmsResolvedBlock;
 export const cmsResolvedPageSchema = z.object({
   id: uuidSchema,
   slug: z.string(),
+  /**
+   * The page's public path in the request's channel, without a leading slash
+   * (R19D, T282): its own slug, or — when it includes its parent's path — its
+   * ancestors' path and its slug. The page is canonical at `/<path>`; a
+   * storefront that resolved it under another address (the flat slug of a
+   * nested page) redirects there permanently.
+   *
+   * Optional only for an answer cached before the field existed, which was
+   * served at its `slug`; every answer composed since carries it.
+   */
+  path: z.string().optional(),
+  /**
+   * R24: the page's canonical URL in the served language — `cmsPageUrl` of
+   * `path`, so `?lang=` rides along for a language other than the channel's
+   * default. Built by the backend; the storefront redirects to it when it was
+   * asked under another address and composes no CMS URL of its own.
+   * Optional only for an answer cached before the field existed.
+   */
+  url: z.string().optional(),
+  /**
+   * R24: one URL per language the page can be served in (`languages`), each
+   * at that language's own path — the `hreflang` alternates. Optional on the
+   * same terms as `url`.
+   */
+  alternates: z.array(z.object({ language: z.string(), url: z.string() })).optional(),
+  /** The page name in the served language (R24: its override, else the page's). */
   name: z.string(),
   language: z.string(),
   meta: z.object({
@@ -541,6 +647,40 @@ export const cmsResolvedPageSchema = z.object({
     templates: z.record(z.string(), cmsResolvedTemplateSchema),
   }),
   assets: z.record(uuidSchema, cmsAssetEmbedResolutionSchema),
+  /**
+   * The breadcrumb trail for the request's channel (feature 163, data-model §5):
+   * root-first, without Home and without the page itself. An ancestor the
+   * channel does not serve, published and active, carries `slug: null` and
+   * renders as text (FR-030a).
+   *
+   * `path` (R19D, T282) is the ancestor's public path in this channel — what
+   * its link is built from, `/<path>`. It equals `slug` for a page that does
+   * not include its parent's path, and is `null` exactly when `slug` is.
+   * Optional on the same terms as the page's own `path`.
+   */
+  breadcrumbs: z.object({
+    visible: z.boolean(),
+    scheme: cmsBreadcrumbsSchemeSchema,
+    /**
+     * R21H (T355): the trail over the first section, not in a band above it.
+     * Optional: an answer cached before the field existed is read as `false`.
+     */
+    overlay: z.boolean().optional(),
+    trail: z.array(
+      z.object({ name: z.string(), slug: z.string().nullable(), path: z.string().nullable().optional() }),
+    ),
+  }),
+  /**
+   * The sharing image (feature 163, FR-033): the page's own
+   * `shareImageAssetId`, else `cms.default_share_image_asset_id` read for the
+   * request's channel, else `null`. A public URL, ready for `og:image`.
+   */
+  share: z.object({ imageUrl: z.string().nullable() }),
+  /**
+   * The languages this page can be served in (feature 163, FR-034), for
+   * `og:locale:alternate`. Includes the served `language`.
+   */
+  languages: z.array(z.string()),
 });
 export type CmsResolvedPage = z.infer<typeof cmsResolvedPageSchema>;
 
@@ -569,6 +709,16 @@ export type CmsResolvedHook = z.infer<typeof cmsResolvedHookSchema>;
  */
 export const cmsPageIndexEntrySchema = z.object({
   slug: z.string(),
+  /**
+   * The page's public path in this channel (R19D, T282) — what the URL is
+   * built from. Every answer since R19D carries it; a reader of an older
+   * backend falls back to `slug`.
+   */
+  path: z.string().optional(),
+  /** R24: the URL in the channel's default language — `cmsPageUrl` of `path`. */
+  url: z.string().optional(),
+  /** R24: the URL of every language the page is served in, the default one included. */
+  alternates: z.array(z.object({ language: z.string(), url: z.string() })).optional(),
   updatedAt: isoDateTimeSchema,
 });
 export type CmsPageIndexEntry = z.infer<typeof cmsPageIndexEntrySchema>;
@@ -609,6 +759,153 @@ export type CmsReservedSegmentsResponse = z.infer<typeof cmsReservedSegmentsResp
  */
 export function firstSlugSegment(slug: string): string {
   return slug.split('/').filter((segment) => segment.length > 0)[0]?.toLowerCase() ?? '';
+}
+
+/**
+ * How many slugs a public path may join — the page tree's own depth limit
+ * (`CMS_PAGE_TREE_MAX_DEPTH`, research R-18), so a well-formed tree always has
+ * its whole path and a stored chain that is too deep still terminates.
+ */
+export const CMS_PAGE_PATH_MAX_LEVELS = 8;
+
+/** One page as the public-path rule reads it, in one sales channel. */
+export interface CmsPagePathNode {
+  id: string;
+  /** The slug the channel serves the page under. */
+  slug: string;
+  parentPageId: string | null;
+  parentPathInUrl: boolean;
+}
+
+function trimSlashes(slug: string): string {
+  return slug.split('/').filter((segment) => segment.length > 0).join('/');
+}
+
+/**
+ * The public path of every page in one sales channel, without a leading slash
+ * (`specs/163-page-builder-marketing-pages/` R19D, T280).
+ *
+ * A page that does not include its parent's path is served at its own slug —
+ * every page stored before the option existed, unchanged. A page that does is
+ * served at its parent's public path, a `/`, and its own slug; the parent's
+ * path is computed by the same rule, so the prefix runs up the tree until an
+ * ancestor that did not opt in. It falls back to the page's own slug when the
+ * parent is not among `nodes` (the channel does not serve it), when the chain
+ * loops, or when it would join more than `CMS_PAGE_PATH_MAX_LEVELS` slugs —
+ * the write side refuses the last two, so the fallback answers only stored
+ * data that predates the refusal.
+ *
+ * **It lives here because three programs ask the question and must agree**:
+ * the backend resolving a path and refusing a duplicate, the page editor
+ * showing the address, and the storefront linking to it.
+ */
+export function cmsPagePublicPaths(nodes: Iterable<CmsPagePathNode>): Map<string, string> {
+  const byId = new Map<string, CmsPagePathNode>();
+  for (const node of nodes) byId.set(node.id, node);
+  const memo = new Map<string, { path: string; levels: number }>();
+  const flat = (node: CmsPagePathNode) => ({ path: trimSlashes(node.slug), levels: 1 });
+  // The pages being composed, child below parent, to recognise a stored loop.
+  const stack: string[] = [];
+
+  const visit = (node: CmsPagePathNode): { path: string; levels: number } => {
+    const known = memo.get(node.id);
+    if (known) return known;
+    const parent = node.parentPathInUrl && node.parentPageId ? byId.get(node.parentPageId) : undefined;
+    if (!parent) {
+      memo.set(node.id, flat(node));
+      return flat(node);
+    }
+    const loopStart = stack.indexOf(parent.id);
+    if (loopStart >= 0) {
+      // Every page on the loop is served at its own slug.
+      for (const id of stack.slice(loopStart)) memo.set(id, flat(byId.get(id)!));
+      memo.set(node.id, flat(node));
+      return flat(node);
+    }
+    stack.push(node.id);
+    const above = visit(parent);
+    stack.pop();
+    const marked = memo.get(node.id);
+    if (marked) return marked;
+    const own = trimSlashes(node.slug);
+    const result =
+      above.levels + 1 > CMS_PAGE_PATH_MAX_LEVELS
+        ? flat(node)
+        : { path: above.path.length > 0 ? `${above.path}/${own}` : own, levels: above.levels + 1 };
+    memo.set(node.id, result);
+    return result;
+  };
+
+  const paths = new Map<string, string>();
+  for (const node of byId.values()) paths.set(node.id, visit(node).path);
+  return paths;
+}
+
+/** What `cmsLocalizedPage` reads of a page: its own fields and its overrides. */
+export interface CmsLocalizablePage {
+  name: string;
+  slug: string;
+  description?: string | null;
+  languages: readonly string[];
+  /** Absent on a page read before R24. */
+  translations?: CmsPageTranslations | null;
+}
+
+/**
+ * A page's name, slug and description in one language
+ * (`specs/163-page-builder-marketing-pages/` R24, issue #521): each field the
+ * language overrides, else the page's own. A blank override inherits, and so
+ * does every override of a language the page does not declare — removing a
+ * language from a page keeps its overrides stored but stops them counting, so
+ * adding it back restores them.
+ *
+ * **It lives here because three programs ask the question and must agree**: the
+ * backend resolving and refusing a path, the page editor previewing the
+ * address, and the storefront through what the backend answers.
+ */
+export function cmsLocalizedPage(
+  page: CmsLocalizablePage,
+  language: string,
+): { name: string; slug: string; description: string | null } {
+  const own = page.languages.includes(language) ? page.translations?.[language] : undefined;
+  const pick = (value: string | undefined): string | undefined =>
+    value !== undefined && value.trim().length > 0 ? value : undefined;
+  return {
+    name: pick(own?.name) ?? page.name,
+    slug: pick(own?.slug) ?? page.slug,
+    description: pick(own?.description) ?? page.description ?? null,
+  };
+}
+
+export interface CmsPageUrlInput {
+  /** The page's public path in the language, with or without slashes. */
+  path: string;
+  /** The language the URL is for — already resolved against the page and channel. */
+  languageCode: string;
+  /**
+   * The channel's URL-language facts (feature 167, `specs/167-storefront-locale-path/`):
+   * its languages, default and *prefix the default language* setting.
+   */
+  channel: ChannelUrlFacts;
+}
+
+/**
+ * The storefront URL of a CMS page: `/<path>` in the language, under that language's
+ * path prefix (`/en/about`, or `/o-nas` for the default language of a channel that
+ * does not prefix it) — the rule `productPath` states for a product. A page's slug
+ * may differ in every language (R24), so the language travels with the URL as its
+ * prefix; 163 R24's interim `?lang=` is never appended (feature 167, OR-7).
+ *
+ * The backend calls it for every CMS URL it answers — the resolved page's canonical
+ * and alternates, the channel index.
+ */
+export function cmsPageUrl(input: CmsPageUrlInput): string {
+  const trimmed = trimSlashes(input.path);
+  return storefrontPagePath({
+    path: trimmed === '' ? '/' : `/${trimmed}`,
+    languageCode: input.languageCode,
+    channel: input.channel,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -701,6 +998,19 @@ export interface CmsPageRecord {
   archivedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  /** The breadcrumb parent (feature 163). Never part of the page's URL. */
+  parentPageId: string | null;
+  /**
+   * The languages the page has content in (feature 167): the sitemap lists the page
+   * under the prefix of each of these the channel serves. Absent — a record from a
+   * reader that predates it — every channel language.
+   */
+  languages?: readonly string[];
+  /**
+   * 163 R24: the page's per-language name, slug and description overrides — the
+   * sitemap lists each language at its own slug (`cmsLocalizedPage`). Absent: none.
+   */
+  translations?: CmsPageTranslations;
 }
 
 /**

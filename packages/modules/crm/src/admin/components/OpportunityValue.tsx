@@ -7,10 +7,13 @@ import type {
   OpportunityValueMode,
 } from '@endora-commerce/contracts';
 import { ApiError } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Badge, Button } from '@endora-commerce/admin-kit/ui';
+import { Alert, AlertDescription, Badge, Button, Input } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { crmApi } from '../api.js';
-import { errorMessage, moneyLabel } from '../lib/labels.js';
+import { errorMessage, moneyLabel, normaliseAmount } from '../lib/labels.js';
+import { useOpportunityUpdate } from '../lib/use-opportunity-update.js';
+import { InlineEdit } from './InlineEdit.js';
+import { useReturnHere } from '../lib/return-here.js';
 
 /** The reasons a counting document is left out that this screen has a sentence for. */
 const KNOWN_REASONS: ReadonlySet<string> = new Set(['currency_mismatch']);
@@ -31,8 +34,8 @@ export interface OpportunityValueProps {
  *
  * **Switching the mode is one press and loses nothing.** The typed estimate is
  * kept while the value is computed, shown beside it, and is back the moment the
- * mode is switched again; the amount itself is edited with the rest of the
- * details. The switch sends the version it was read at: when somebody changed
+ * mode is switched again. In manual mode the amount itself is edited where it
+ * is read (`specs/158-crm-opportunity-inline-editing/`, FR-001). The switch sends the version it was read at: when somebody changed
  * the Opportunity meanwhile it is read again and the operator is told, instead
  * of a mode being set on a state they have not seen.
  *
@@ -44,6 +47,7 @@ export interface OpportunityValueProps {
  * own screen; one this reader cannot see is named by its kind alone.
  */
 export function OpportunityValue(props: OpportunityValueProps): ReactNode {
+  const returnHere = useReturnHere();
   const { opportunity, canWrite, onChange, reload } = props;
   const t = useTranslation('crm');
   const headingId = useId();
@@ -52,6 +56,22 @@ export function OpportunityValue(props: OpportunityValueProps): ReactNode {
   const [notice, setNotice] = useState('');
 
   const computed = opportunity.valueMode === 'computed';
+  const update = useOpportunityUpdate(opportunity, onChange);
+  const figure = (
+    <p className="flex flex-wrap items-center gap-2">
+      <span className="text-xl font-semibold tabular-nums">
+        {moneyLabel(computed ? opportunity.computedValue : opportunity.manualValue, opportunity.currency)}
+      </span>
+      <Badge variant="outline" className="gap-1 font-normal">
+        {computed ? (
+          <Calculator aria-hidden="true" className="size-3.5" />
+        ) : (
+          <PencilLine aria-hidden="true" className="size-3.5" />
+        )}
+        {computed ? t('value.mode.computed') : t('value.mode.manual')}
+      </Badge>
+    </p>
+  );
 
   const switchTo = async (valueMode: OpportunityValueMode): Promise<void> => {
     setBusy(true);
@@ -86,7 +106,7 @@ export function OpportunityValue(props: OpportunityValueProps): ReactNode {
     const reason = KNOWN_REASONS.has(excluded.reason)
       ? t(`value.excluded.reason.${excluded.reason}`, { currency: opportunity.currency })
       : t('value.excluded.reason.other');
-    const to = excluded.kind === 'order' ? `/orders/${excluded.id}` : `/quote-requests/${excluded.id}`;
+    const to = returnHere(excluded.kind === 'order' ? `/orders/${excluded.id}` : `/quote-requests/${excluded.id}`);
     return (
       <>
         <span className="font-medium">
@@ -111,26 +131,45 @@ export function OpportunityValue(props: OpportunityValueProps): ReactNode {
   return (
     <div role="group" aria-labelledby={headingId} className="space-y-2" aria-busy={busy}>
       <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
-        <div className="space-y-0.5">
+        <div className="min-w-0 flex-1 space-y-0.5">
           <h3 id={headingId} className="text-xs font-normal text-muted-foreground">
             {t('value.title')}
           </h3>
-          <p className="flex flex-wrap items-center gap-2">
-            <span className="text-xl font-semibold tabular-nums">
-              {moneyLabel(
-                computed ? opportunity.computedValue : opportunity.manualValue,
-                opportunity.currency,
-              )}
-            </span>
-            <Badge variant="outline" className="gap-1 font-normal">
-              {computed ? (
-                <Calculator aria-hidden="true" className="size-3.5" />
-              ) : (
-                <PencilLine aria-hidden="true" className="size-3.5" />
-              )}
-              {computed ? t('value.mode.computed') : t('value.mode.manual')}
-            </Badge>
-          </p>
+          {/* A typed estimate is edited where it is read; a computed one is the documents'. */}
+          <InlineEdit<string>
+            label={t('value.title')}
+            labelVisible={false}
+            canEdit={canWrite && !computed}
+            display={figure}
+            initial={(): string => opportunity.manualValue ?? ''}
+            validate={(draft): string | null =>
+              draft.trim() !== '' && normaliseAmount(draft.trim()) === null
+                ? t('opportunity.create.error.value')
+                : null
+            }
+            unchanged={(draft): boolean =>
+              (draft.trim() === '' ? null : normaliseAmount(draft.trim())) === (opportunity.manualValue ?? null)
+            }
+            save={(draft): Promise<void> =>
+              update({ manualValue: draft.trim() === '' ? null : normaliseAmount(draft.trim()) })
+            }
+            editor={({ id, draft, setDraft, busy, errorId }): ReactNode => (
+              <div className="space-y-1">
+                <Input
+                  id={id}
+                  inputMode="decimal"
+                  value={draft}
+                  disabled={busy}
+                  aria-invalid={errorId !== undefined}
+                  aria-describedby={[`${id}-hint`, errorId].filter(Boolean).join(' ')}
+                  onChange={(event): void => setDraft(event.target.value)}
+                />
+                <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+                  {t('opportunity.edit.valueHint', { currency: opportunity.currency })}
+                </p>
+              </div>
+            )}
+          />
         </div>
         {canWrite ? (
           <Button

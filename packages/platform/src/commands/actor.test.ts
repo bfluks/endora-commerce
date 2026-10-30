@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { actorFromContext, resolveCommandActor } from './actor.js';
+import { withSystemScope, withSystemScopeActingFor } from '../tenancy/escape-hatch.js';
+import { getTenantContext } from '../tenancy/tenant-context.js';
 import {
   MissingTenantContextError,
   runWithTenantContext,
@@ -52,5 +54,20 @@ describe('command actor mapping (feature 054, FR-001 / Principle XI)', () => {
     runWithoutTenantContext(() => {
       expect(() => resolveCommandActor()).toThrow(MissingTenantContextError);
     });
+  });
+
+  it('a worker acting for the admin who queued the work records that admin (spec 163, S-W2)', async () => {
+    const actor = await withSystemScope('worker', () =>
+      withSystemScopeActingFor('admin-7', 'bulk operation op-1 for its requester', async () => {
+        expect(getTenantContext()?.mode).toBe('system');
+        return resolveCommandActor();
+      }),
+    );
+    expect(actor).toEqual({ actorAdminUserId: 'admin-7', impersonatedCustomerAccountId: null, kind: 'admin' });
+  });
+
+  it('refuses to act for nobody', async () => {
+    await expect(withSystemScopeActingFor('', 'reason', async () => 1)).rejects.toThrow();
+    await expect(withSystemScopeActingFor('admin-7', ' ', async () => 1)).rejects.toThrow();
   });
 });

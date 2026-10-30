@@ -1,11 +1,16 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
-import { formatMoney as formatMoneyShared } from '../../lib/i18n/money';
+import { useLocalizedPath } from '../../lib/i18n/localized-link';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { lineAmountHalfUp, moneySum, unitPriceDisplayText } from '@endora-commerce/contracts';
+import { formatMoney as formatMoneyShared, type FormatMoneyOptions } from '../../lib/i18n/money';
 import {
+  clampDraftQuantity,
   clearRfqDraft,
+  draftQuantityFloor,
+  draftQuantityOnBlur,
+  draftQuantityOnType,
   readRfqDraft,
   removeRfqDraftItem,
   setRfqDraftProposedPrice,
@@ -14,8 +19,12 @@ import {
   RFQ_DRAFT_STORAGE_KEY,
   type RfqDraftItem,
 } from '../../lib/rfqDraft';
-import { submitQuoteRequest } from '../../app/(commerce)/quote-request/actions';
+import { readDraftMinimums, submitQuoteRequest } from '../../app/(commerce)/quote-request/actions';
 import type { CreateRfqLine } from '../../lib/api/rfq';
+import { belowMinimumText } from '../../lib/cartMinimum';
+import { formatCount, minimumStatement } from '../../lib/orderMinimum';
+import { tForLocale } from '../../lib/i18n/messages';
+import { LocalizedLink, LocalizedAnchor } from '../../lib/i18n/localized-link';
 
 /**
  * Quote-request draft view — the cart-modelled "review & submit" page at
@@ -35,6 +44,13 @@ import type { CreateRfqLine } from '../../lib/api/rfq';
  * read-only, a note says sales will price the request, and the stored
  * proposals are not sent — they stay in the browser draft, untouched (spec
  * Assumption). The API refuses a proposal sent anyway (FR-022).
+ *
+ * Feature 155 (FR-032): the draft mirrors the cart for the pieces minimum. The draft stores no
+ * minimum (a line may predate one, US4 #14), so after hydration the view reads each product's
+ * **current** minimum through the `readDraftMinimums` server action; until it answers — or for
+ * a product it cannot read — a line has no floor beyond 1, and the API refusal at submission
+ * stays the binding rule. Submission is not blocked by a line below its minimum: the API's
+ * translated refusal names it, and the line already says so.
  */
 export function RfqDraftView(props: {
   locale: string;
@@ -44,12 +60,14 @@ export function RfqDraftView(props: {
   const t = strings(pl);
   const proposalsAllowed = props.priceProposalsAllowed;
   const router = useRouter();
+  const localize = useLocalizedPath();
 
   const [items, setItems] = useState<RfqDraftItem[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [minimums, setMinimums] = useState<Record<string, number | null>>({});
 
   useEffect(() => {
     const refresh = (): void => setItems(readRfqDraft());
@@ -66,17 +84,36 @@ export function RfqDraftView(props: {
     };
   }, []);
 
+  // Feature 155 — re-read the minimums whenever the set of products changes (an add in another
+  // tab included), not on every quantity edit. A stale answer is dropped on cleanup.
+  const slugKey = useMemo(
+    () => [...new Set(items.map((i) => i.slug).filter((s) => s !== ''))].sort().join('\n'),
+    [items],
+  );
+  useEffect(() => {
+    if (slugKey === '') return;
+    let cancelled = false;
+    readDraftMinimums(slugKey.split('\n'))
+      .then((answer) => {
+        if (!cancelled) setMinimums(answer);
+      })
+      .catch(() => {
+        // Minimums unknown: the lines keep a floor of 1 and the API judges at submission.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [slugKey]);
+
   const currency = items.find((i) => i.unitPrice)?.unitPrice?.currency ?? null;
   // A line counts as priced when the buyer proposed a price or the catalogue
   // carries one; the subtotal then uses the proposed price where given. A
   // locked buyer's proposals are not sent, so they are not counted either.
   const allPriced =
     items.length > 0 && items.every((i) => effectiveUnitPrice(i, proposalsAllowed) !== null);
+  // The sum of the line values, each `unit × quantity` rounded once (§10.18).
   const subtotal = allPriced
-    ? items.reduce(
-        (sum, i) => sum + (effectiveUnitPrice(i, proposalsAllowed) ?? 0) * i.quantity,
-        0,
-      )
+    ? Number(moneySum(items.map((i) => lineAmountHalfUp(effectiveUnitPrice(i, proposalsAllowed) ?? 0, i.quantity))))
     : null;
 
   const submit = async (): Promise<void> => {
@@ -93,14 +130,14 @@ export function RfqDraftView(props: {
         items: buildSubmitItems(items, proposalsAllowed),
       });
       if (!result.ok && result.reason === 'auth') {
-        window.location.href = '/login?next=/quote-request';
+        window.location.href = localize(`/login?next=${encodeURIComponent(localize('/quote-request'))}`);
         return;
       }
       if (!result.ok) {
         throw new Error(result.message || t.errorGeneric);
       }
       clearRfqDraft();
-      router.push(`/quote-requests/success?id=${result.id}`);
+      router.push(localize(`/quote-requests/success?id=${result.id}`));
     } catch (err) {
       setError(err instanceof Error ? err.message : t.errorGeneric);
       setSubmitting(false);
@@ -119,12 +156,12 @@ export function RfqDraftView(props: {
           <h1 className="m-0 mb-2 text-[22px] font-semibold text-fg">{t.heading}</h1>
           <p className="m-0 mb-[18px] text-[14px] text-muted">{t.empty}</p>
           <div className="flex justify-center gap-3">
-            <Link href="/catalog" className="btn btn--dark">
+            <LocalizedLink href="/catalog" className="btn btn--dark">
               {t.browseCatalog}
-            </Link>
-            <Link href="/quote-requests" className="btn btn--outline">
+            </LocalizedLink>
+            <LocalizedLink href="/quote-requests" className="btn btn--outline">
               {t.myRequests}
-            </Link>
+            </LocalizedLink>
           </div>
         </div>
       </div>
@@ -139,9 +176,9 @@ export function RfqDraftView(props: {
           <h1 className="m-0 text-[24px] font-semibold tracking-[-0.02em] text-fg">{t.heading}</h1>
           <p className="mt-1 text-[13px] text-muted">{t.subheading(items.length)}</p>
         </div>
-        <Link href="/quote-requests" className="btn btn--outline btn--sm">
+        <LocalizedLink href="/quote-requests" className="btn btn--outline btn--sm">
           {t.myRequests}
-        </Link>
+        </LocalizedLink>
       </header>
 
       {error ? (
@@ -167,8 +204,12 @@ export function RfqDraftView(props: {
               key={line.productId}
               line={line}
               t={t}
+              locale={props.locale}
+              minimum={minimums[line.slug] ?? null}
               proposalsAllowed={proposalsAllowed}
-              onQty={(q): void => setItems(setRfqDraftQuantity(line.productId, q))}
+              onQty={(q): void =>
+                setItems(setRfqDraftQuantity(line.productId, q, minimums[line.slug] ?? null))
+              }
               onProposedPrice={(p): void =>
                 setItems(setRfqDraftProposedPrice(line.productId, p))
               }
@@ -177,9 +218,9 @@ export function RfqDraftView(props: {
           ))}
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-[22px] py-[18px]">
-            <Link href="/catalog" className="btn btn--ghost">
+            <LocalizedLink href="/catalog" className="btn btn--ghost">
               ← {t.continueShopping}
-            </Link>
+            </LocalizedLink>
             <button
               type="button"
               onClick={(): void => {
@@ -283,6 +324,8 @@ export function LockedPricingNote({ t }: { t: Strings }): ReactNode {
 export function DraftLine({
   line,
   t,
+  locale = 'en-US',
+  minimum = null,
   proposalsAllowed,
   onQty,
   onProposedPrice,
@@ -290,6 +333,13 @@ export function DraftLine({
 }: {
   line: RfqDraftItem;
   t: Strings;
+  /** Request locale for the minimum's wording (feature 155). */
+  locale?: string;
+  /**
+   * Feature 155 (FR-032) — the product's current pieces minimum, read by the view; `null` while
+   * unknown or when there is none. The input floors at it and a line below it says so.
+   */
+  minimum?: number | null;
   proposalsAllowed: boolean;
   onQty: (q: number) => void;
   onProposedPrice: (price: number | null) => void;
@@ -300,7 +350,15 @@ export function DraftLine({
   // A locked buyer's stored proposal is neither shown nor counted (FR-021).
   const effectiveUnit = effectiveUnitPrice(line, proposalsAllowed);
   const currency = line.unitPrice?.currency ?? 'PLN';
-  const lineTotal = effectiveUnit !== null ? effectiveUnit * line.quantity : null;
+  const lineTotal = effectiveUnit !== null ? Number(lineAmountHalfUp(effectiveUnit, line.quantity)) : null;
+  // Feature 155 — the floor is the minimum itself, also for a line already below it: the input
+  // then reads as invalid (`aria-invalid`), "−" is off and "+" or the fix lifts it to the floor.
+  const floor = draftQuantityFloor(minimum);
+  const below = floor > 1 && line.quantity < floor;
+  const belowText = below ? belowMinimumText({ belowMinimum: { kind: 'pieces', minimum: floor } }, locale) : null;
+  const statement = !below ? minimumStatement({ minOrderQuantity: minimum }, null, locale) : null;
+  const belowId = `rfq-line-${line.productId}-minimum`;
+  const [qtyText, setQtyText] = useState<string | null>(null);
   return (
     <div className="grid grid-cols-[56px_1fr_130px_140px_120px_28px] items-center gap-[14px] border-b border-line px-[22px] py-[14px] last:border-b-0 max-[720px]:grid-cols-[56px_1fr_auto]">
       <div
@@ -316,39 +374,92 @@ export function DraftLine({
 
       <div className="flex min-w-0 flex-col gap-[2px]">
         {line.slug ? (
-          <a
+          <LocalizedAnchor
             href={`/p/${encodeURIComponent(line.slug)}`}
             className="line-clamp-2 text-[14px] font-semibold leading-[1.3] text-fg no-underline hover:underline"
           >
             {line.name}
-          </a>
+          </LocalizedAnchor>
         ) : (
           <span className="line-clamp-2 text-[14px] font-semibold leading-[1.3] text-fg">
             {line.name}
           </span>
         )}
         <span className="text-[11px] text-muted">
-          {line.unitPrice ? formatMoney(line.unitPrice.amount, line.unitPrice.currency) : t.onRequest}
+          {line.unitPrice ? formatMoney(line.unitPrice.amount, line.unitPrice.currency, { unitPrice: true }) : t.onRequest}
           {' / '}
           {t.unit}
         </span>
+        {statement ? <span className="text-[11px] text-muted">{statement}</span> : null}
+        {belowText ? (
+          <div className="mt-[2px] flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span id={belowId} className="inline-flex items-center gap-1 text-[12px] font-semibold text-warn">
+              <svg
+                viewBox="0 0 24 24"
+                width={13}
+                height={13}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+                <path d="M12 9v4" />
+                <path d="M12 17h.01" />
+              </svg>
+              {belowText}
+            </span>
+            <button
+              type="button"
+              onClick={(): void => onQty(floor)}
+              aria-describedby={belowId}
+              className="cursor-pointer rounded-sm border border-line bg-surface px-[8px] py-[2px] text-[12px] font-medium text-fg hover:border-line-strong hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-[720px]:min-h-[44px]"
+            >
+              {tForLocale(locale)('cart.line.setToMinimum').replace('{count}', formatCount(floor, locale))}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="qty__stepper" role="group" aria-label={t.qtyLabel}>
-        <button type="button" aria-label="−" title="−" onClick={(): void => onQty(Math.max(1, line.quantity - 1))}>
+        <button
+          type="button"
+          aria-label="−"
+          title="−"
+          disabled={line.quantity <= floor}
+          onClick={(): void => onQty(clampDraftQuantity(line.quantity - 1, minimum))}
+        >
           −
         </button>
         <input
           type="number"
-          min={1}
-          value={line.quantity}
+          min={floor}
+          value={qtyText ?? line.quantity}
           aria-label={t.qtyLabel}
+          {...(belowText ? { 'aria-invalid': true, 'aria-describedby': belowId } : {})}
           onChange={(e): void => {
-            const n = Number(e.target.value);
-            onQty(Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1);
+            // What was typed is kept as typed — "15" over a floor of 10 is not rewritten on the
+            // "1" — and saved as soon as it is a whole quantity at or above the floor; anything
+            // else is normalised on blur (Postel's Law).
+            setQtyText(e.target.value);
+            const typed = draftQuantityOnType(e.target.value, minimum);
+            if (typed !== null) onQty(typed);
+          }}
+          onBlur={(e): void => {
+            const settled = draftQuantityOnBlur(e.target.value, minimum, qtyText !== null);
+            if (settled !== null) onQty(settled);
+            setQtyText(null);
           }}
         />
-        <button type="button" aria-label="+" title="+" onClick={(): void => onQty(line.quantity + 1)}>
+        <button
+          type="button"
+          aria-label="+"
+          title="+"
+          onClick={(): void => onQty(clampDraftQuantity(line.quantity + 1, minimum))}
+        >
           +
         </button>
       </div>
@@ -362,10 +473,10 @@ export function DraftLine({
             <input
               type="number"
               min={0}
-              step="0.01"
+              step="0.0001"
               inputMode="decimal"
               value={line.proposedUnitPrice ?? ''}
-              placeholder={line.unitPrice ? line.unitPrice.amount.toFixed(2) : '—'}
+              placeholder={line.unitPrice ? unitPriceDisplayText(line.unitPrice.amount) : '—'}
               aria-label={t.proposedPriceLabel}
               className="w-full min-w-0 border-0 bg-transparent p-0 text-right font-mono text-[14px] text-fg outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
               onChange={(e): void => {
@@ -388,7 +499,7 @@ export function DraftLine({
           </span>
           <span className="py-[6px] text-right font-mono text-[14px] text-fg">
             {line.unitPrice
-              ? formatMoney(line.unitPrice.amount, line.unitPrice.currency)
+              ? formatMoney(line.unitPrice.amount, line.unitPrice.currency, { unitPrice: true })
               : t.onRequest}
           </span>
         </div>
@@ -423,17 +534,17 @@ function Breadcrumbs({ t }: { t: Strings }): ReactNode {
       aria-label="Breadcrumb"
       className="my-[8px] mb-[16px] flex gap-[6px] text-[13px] text-[color:var(--ink-500)]"
     >
-      <Link href="/" className="text-inherit">
+      <LocalizedLink href="/" className="text-inherit">
         {t.home}
-      </Link>
+      </LocalizedLink>
       <span aria-hidden="true">/</span>
       <span className="text-[color:var(--ink-900)]">{t.heading}</span>
     </nav>
   );
 }
 
-function formatMoney(amount: number, currency: string): string {
-  return formatMoneyShared(amount, currency);
+function formatMoney(amount: number, currency: string, options: FormatMoneyOptions = {}): string {
+  return formatMoneyShared(amount, currency, undefined, options);
 }
 
 export interface Strings {

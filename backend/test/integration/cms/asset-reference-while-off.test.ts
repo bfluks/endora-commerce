@@ -19,9 +19,11 @@ import { createRootContainer, registerValues } from '@endora-commerce/platform/c
 
 import { composeModules } from '@endora-commerce/platform/composition';
 
+import type { EntityManager } from '@mikro-orm/postgresql';
 import { AssetReferenceRegistry } from '../../../../packages/modules/assets_library/src/backend/services/reference-registry.js';
 
 import { AssetsLibraryService } from '../../../../packages/modules/assets_library/src/backend/services/assets-library.service.js';
+import { AssetVisibility } from '../../../../packages/modules/assets_library/src/backend/services/asset-visibility.js';
 
 import { LanguageReferenceRegistry } from '../../../../packages/modules/languages/src/backend/services/language-reference-registry.js';
 
@@ -103,16 +105,27 @@ describe('an asset a deactivated cms still references cannot be deleted (D-68)',
       emFactory: () => h.em(),
       adapters: h.assetsLibrary.adapters,
       referenceRegistry: registry,
+      // Feature 166: the library's visibility rule over the same registry, for the
+      // system actor — this test is about enumeration, which no reader narrows.
+      visibility: new AssetVisibility({
+        registry: registry,
+        isPresent: () => true,
+        permissions: () => ({ listPermissions: async () => [] }),
+        tenantContext: () => ({ actor: { kind: 'system' } }),
+      }),
       loadUploadPolicy: async () => ({ allowedTypes: ['*'], maxFileSizeMb: 0 }),
     });
   }
 
   /** Compose `cms` on its own and run its boot hooks, whatever its state. */
-  async function bootCmsInto(registry: AssetReferenceRegistry): Promise<void> {
+  async function bootCmsInto(
+    registry: AssetReferenceRegistry,
+    emFactory: () => EntityManager = () => h.em(),
+  ): Promise<void> {
     const { registerModule } = await import('../../../../packages/modules/cms/src/backend/index.js');
     const container = createRootContainer();
     registerValues(container, {
-      emFactory: () => h.em(),
+      emFactory,
       redis: h.redis,
       assetReferenceRegistry: registry,
       // `languages` owns `languageReferenceRegistry` and is not composed here,
@@ -161,6 +174,39 @@ describe('an asset a deactivated cms still references cannot be deleted (D-68)',
         references.map((reference) => reference.kind),
         'the refusal must be attributable to the CMS edge, not to some other holder',
       ).toContain('cms_body_embed');
+    });
+  });
+
+  // Feature 166, research R-6 — attribution holds while the owner is off:
+  // the registry honours the scanner, and a batch is answered in one statement
+  // per descriptor, each hit tagged with the asset it points at.
+  it('attributes a two-asset batch while the module is deactivated', async () => {
+    let statements = 0;
+    const counting = (): EntityManager =>
+      new Proxy(h.em(), {
+        get(target, prop) {
+          const value: unknown = Reflect.get(target, prop, target);
+          if (typeof value !== 'function') return value;
+          const fn = value as (...args: unknown[]) => unknown;
+          if (prop === 'execute') {
+            return (...args: unknown[]) => {
+              statements += 1;
+              return fn.apply(target, args);
+            };
+          }
+          return fn.bind(target);
+        },
+      });
+    const registry = new AssetReferenceRegistry();
+    const unused = randomUUID();
+
+    await withModuleOff('cms', 'deactivated', async () => {
+      await bootCmsInto(registry, counting);
+      const out = await registry.findReferencesMany([assetId, unused]);
+
+      expect(statements, 'one statement per descriptor for the whole batch').toBe(1);
+      expect(out.get(assetId)).toEqual([expect.objectContaining({ kind: 'cms_body_embed', assetId })]);
+      expect(out.get(unused)).toEqual([]);
     });
   });
 

@@ -31,7 +31,12 @@ import { effectiveState } from '../kernel/lifecycle/effective-state.js';
 export function registerModulePresenceStorefrontRoutes(app: FastifyInstance): void {
   app.get(
     '/api/v1/storefront/module-presence',
-    { schema: { response: { 200: StorefrontModulePresenceResponseSchema } } },
+    {
+      schema: { response: { 200: StorefrontModulePresenceResponseSchema } },
+      // Feature 154 — read by the sign-in pages of both UIs before anybody is
+      // signed in, so reachable whatever the sales-channel access rule decides.
+      config: { salesChannelAccess: 'open' },
+    },
     async (): Promise<StorefrontModulePresenceResponse> => ({
       modules: effectiveState
         .all()

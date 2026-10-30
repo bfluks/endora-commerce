@@ -262,15 +262,17 @@ describe('quoteRequestAmount', () => {
     ).toBe('0.50');
   });
 
-  it('rounds a figure with more than two places half up, once, on the sum', () => {
+  it('rounds each line value half up, once, and adds the rounded lines — as the quote desk does (§10.18)', () => {
     expect(quoteRequestAmount([{ quantity: 1, unitPrice: '0.005', currency: 'PLN' }])).toBe('0.01');
     expect(quoteRequestAmount([{ quantity: 3, unitPrice: '0.3333', currency: 'PLN' }])).toBe('1.00');
+    expect(quoteRequestAmount([{ quantity: 10_000, unitPrice: '0.0125', currency: 'PLN' }])).toBe('125.00');
+    // Two lines of 0.004 are 0.00 each; the quote's net is 0.00, so is its value.
     expect(
       quoteRequestAmount([
         { quantity: 1, unitPrice: '0.004', currency: 'PLN' },
         { quantity: 1, unitPrice: '0.004', currency: 'PLN' },
       ]),
-    ).toBe('0.01');
+    ).toBe('0.00');
   });
 
   it('takes a line with no price as nothing', () => {

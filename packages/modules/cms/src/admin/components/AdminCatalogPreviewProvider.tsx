@@ -1,7 +1,12 @@
 'use client';
 
 import { useMemo, type ReactNode } from 'react';
-import type { CatalogPreviewApi, CmsCategoryNode, CmsProductSummary } from '@endora-commerce/cms-components';
+import type {
+  CatalogPreviewApi,
+  CmsBlogPostCard,
+  CmsCategoryNode,
+  CmsProductSummary,
+} from '@endora-commerce/cms-components';
 import { CatalogPreviewProvider as CmsCatalogPreviewProvider } from '@endora-commerce/cms-components';
 import { apiClient } from '@endora-commerce/admin-kit/lib';
 import {
@@ -16,6 +21,8 @@ interface AdminProduct {
   slug: string;
   name: Record<string, string> | string;
   sku: string;
+  /** The per-language description, from which the card's summary is derived (T196). */
+  description?: Record<string, string> | string | null;
 }
 
 interface AdminCategory {
@@ -67,6 +74,77 @@ async function fetchAdminProducts(params: {
   return res.data;
 }
 
+interface AdminBlogPost {
+  id: string;
+  slug: string;
+  name: Record<string, string>;
+  publishedAt: string | null;
+  description: string | null;
+  mainImageAssetId?: string | null;
+  categoryIds: string[];
+}
+
+interface AdminBlogCategoryNode {
+  id: string;
+  slug: string;
+  name: Record<string, string>;
+  children?: AdminBlogCategoryNode[];
+}
+
+function flattenBlogCategories(nodes: AdminBlogCategoryNode[]): AdminBlogCategoryNode[] {
+  return nodes.flatMap((node) => [node, ...flattenBlogCategories(node.children ?? [])]);
+}
+
+/**
+ * The editor's preview of `blog.LatestPosts` (feature 163): the newest
+ * published posts through the admin blog API, which is not channel-scoped —
+ * as the product previews above. The admin API lists by last change, so a
+ * page of posts is read and ordered by publication here. Images come from the
+ * admin asset read. A missing `blog` (its admin API answers 404 or 503) fails
+ * the read, and the block shows its preview note.
+ */
+async function fetchAdminBlogPosts(query: { limit: number; categorySlug?: string }): Promise<CmsBlogPostCard[]> {
+  const categories = flattenBlogCategories(
+    (await apiClient.get<{ tree: AdminBlogCategoryNode[] }>('/api/v1/admin/blog/categories')).tree,
+  );
+  const bySlug = new Map(categories.map((category) => [category.slug, category]));
+  const byId = new Map(categories.map((category) => [category.id, category]));
+  const search = new URLSearchParams({ status: 'published', perPage: '100' });
+  if (query.categorySlug) {
+    const category = bySlug.get(query.categorySlug);
+    if (!category) return [];
+    search.set('categoryId', category.id);
+  }
+  const rows = (await apiClient.get<{ data: AdminBlogPost[] }>(`/api/v1/admin/blog/posts?${search.toString()}`)).data;
+  const newest = [...rows]
+    .sort((a, b) => (b.publishedAt ?? '').localeCompare(a.publishedAt ?? ''))
+    .slice(0, query.limit);
+  return Promise.all(
+    newest.map(async (post): Promise<CmsBlogPostCard> => {
+      const category = post.categoryIds.map((id) => byId.get(id)).find(Boolean) ?? null;
+      let mainImageUrl: string | null = null;
+      if (post.mainImageAssetId) {
+        try {
+          mainImageUrl = (await apiClient.get<{ data: { url: string } }>(`/api/v1/admin/assets/${post.mainImageAssetId}`)).data.url;
+        } catch {
+          mainImageUrl = null;
+        }
+      }
+      return {
+        id: post.id,
+        slug: post.slug,
+        name: pickAdminLocalizedName(post.name, post.slug),
+        publishedAt: post.publishedAt,
+        excerpt: post.description,
+        mainImageUrl,
+        primaryCategorySlug: category?.slug ?? null,
+        primaryCategoryName: category ? pickAdminLocalizedName(category.name, category.slug) : null,
+        url: `/blog/${post.slug}`,
+      };
+    }),
+  );
+}
+
 function createAdminCatalogPreviewApi(): CatalogPreviewApi {
   return {
     async fetchProductsBySlugs(slugs: string[]): Promise<CmsProductSummary[]> {
@@ -104,6 +182,8 @@ function createAdminCatalogPreviewApi(): CatalogPreviewApi {
       const res = await apiClient.get<{ data: AdminCategory[] }>('/api/v1/admin/catalog/categories');
       return buildCategoryTree(res.data);
     },
+
+    fetchBlogPosts: fetchAdminBlogPosts,
   };
 }
 

@@ -3,12 +3,12 @@ import {
   resolveAttribute,
   resolveAll,
   type AttributeDef,
-  type AttributeScope,
   type OverrideRow,
   type Resolved,
   type ResolveAllResult,
   type LanguageReadPort,
   type ResolverContext,
+  type ScopeLevel,
 } from '@endora-commerce/contracts';
 
 import type { Product } from '../entities/product.entity.js';
@@ -18,6 +18,35 @@ import {
   SYSTEM_ATTRIBUTE_SCOPES,
   type SystemAttributeKey,
 } from './system-attribute-scopes.js';
+
+/**
+ * The one read of `product_value_overrides`: every override row for a set of
+ * products, in one statement, bucketed by product id. `channelId` narrows the
+ * read to one sales channel's rows — what a storefront read needs (issue #384);
+ * without it every channel's rows come back, as the admin scope editor needs.
+ */
+export async function loadOverridesByProduct(
+  em: EntityManager,
+  args: { productIds: readonly string[]; channelId?: string },
+): Promise<Map<string, OverrideRow[]>> {
+  const out = new Map<string, OverrideRow[]>();
+  if (args.productIds.length === 0) return out;
+  const rows = await em.find(ProductValueOverride, {
+    productId: { $in: [...new Set(args.productIds)] },
+    ...(args.channelId !== undefined ? { channelId: args.channelId } : {}),
+  });
+  for (const r of rows) {
+    const list = out.get(r.productId) ?? [];
+    list.push({
+      attributeKey: r.attributeKey,
+      channelId: r.channelId,
+      languageCode: r.languageCode ?? null,
+      value: r.value,
+    });
+    out.set(r.productId, list);
+  }
+  return out;
+}
 
 /**
  * Feature 022 — backend wrapper around the pure resolver in
@@ -38,16 +67,10 @@ export class ProductValueResolverService {
     private readonly attributeRead?: CatalogAttributeReadService,
   ) {}
 
-  /** Load every override row for a product in one query. */
+  /** Load every override row for a product — every channel's — in one query. */
   async loadOverrides(productId: string): Promise<OverrideRow[]> {
-    const em = this.emFactory();
-    const rows = await em.find(ProductValueOverride, { productId });
-    return rows.map((r) => ({
-      attributeKey: r.attributeKey,
-      channelId: r.channelId,
-      languageCode: r.languageCode ?? null,
-      value: r.value,
-    }));
+    const byProduct = await loadOverridesByProduct(this.emFactory(), { productIds: [productId] });
+    return byProduct.get(productId) ?? [];
   }
 
   /** Resolve the platform's primary admin language. */
@@ -66,8 +89,8 @@ export class ProductValueResolverService {
     channelId: string | null,
     languageCode: string | null,
   ): Promise<ResolverContext> {
-    const primaryLanguage = await this.getPrimaryAdminLanguage();
-    return { channelId, languageCode, primaryLanguage };
+    // Feature 168 — no primary language any more: the Global value is one value (FR-014).
+    return { channelId, languageCode };
   }
 
   /**
@@ -112,7 +135,7 @@ export class ProductValueResolverService {
         sysKey === 'name' ? product.name : sysKey === 'description' ? product.description : null;
       defs.push({
         attributeKey: sysKey,
-        scope: SYSTEM_ATTRIBUTE_SCOPES[sysKey]!,
+        levels: ['G', 'C', 'CL'],
         baseline,
       });
     }
@@ -120,12 +143,9 @@ export class ProductValueResolverService {
     // User-defined attributes — baseline is product.attributeValues[key].
     for (const key of userAttrKeys) {
       const row = userAttrByKey.get(key);
-      const scope: AttributeScope = row
-        ? { channelScoped: row.channelScoped, languageScoped: row.languageScoped }
-        : { channelScoped: false, languageScoped: false };
       defs.push({
         attributeKey: key,
-        scope,
+        levels: row ? row.scopeLevels : ['G'],
         baseline: (product.attributeValues as Record<string, unknown>)[key],
       });
     }
@@ -141,7 +161,7 @@ export class ProductValueResolverService {
     baseline: unknown;
     overrides: readonly OverrideRow[];
     attributeKey: string;
-    scope: AttributeScope;
+    levels: readonly ScopeLevel[];
     ctx: ResolverContext;
   }): Resolved {
     return resolveAttribute(args);

@@ -3,7 +3,9 @@ import { Product } from './package-entities.js';
 import { Category } from './package-entities.js';
 import { AttributeSetAttribute } from './package-entities.js';
 import { createAttributeFixture } from '@endora-commerce/demo-composition';
-import { SalesChannel } from '@endora-commerce/platform/kernel';
+import { PRICING_SETTING_CODES } from '@endora-commerce/contracts';
+import { SalesChannel, Setting, SettingValue } from '@endora-commerce/platform/kernel';
+import { seedBasePriceSql } from './price-book-sql.js';
 
 // Feature 061 — attribute fixtures create the product-host Custom Field
 // definition + catalog extension pair; re-export the helpers so test files
@@ -32,7 +34,8 @@ export const SEED_PRODUCT_103_SKU = 'EXAMPLE-LARGE-003';
 /**
  * Minimum seed for US1 public catalog tests.
  *
- * - Two Sales Channels: `pl_retail` (public) and `pl_b2b_vip` (non-public).
+ * - Two Sales Channels: `pl_retail`, and `pl_b2b_vip` with its guest display
+ *   mode `none` (prices hidden until sign-in, issue #492).
  * - Three categories in a 2-level tree.
  * - Four ProductAttributes: `color` (filterable), `internal_sku_notes`
  *   (searchable but NOT filterable — used by T046 + T048 to prove the toggle
@@ -44,19 +47,41 @@ export const SEED_PRODUCT_103_SKU = 'EXAMPLE-LARGE-003';
  *   binds a new product to the default channel and this fixture did not, so a
  *   header-less request resolved a channel that sold nothing.
  */
+/**
+ * Issue #492 — the VIP channel hides prices from anonymous visitors through
+ * the display-mode chain, as the retiring migration and the demo set it:
+ * `pricing.unauthenticated_display_mode = none` for that channel alone. Its
+ * signed-in buyers see prices; it used to be non-public, which hid them too.
+ *
+ * Apart from {@link seedUs1Catalog} because the two run at different moments:
+ * the channels are seeded before the first module registers, and the setting
+ * row is written by the boot-time manifest reconciler after that — so this
+ * runs once the reconcile has, and a missing row is a broken harness, not a
+ * case to skip.
+ */
+export async function seedUs1CatalogSettings(em: EntityManager): Promise<void> {
+  const vip = await em.findOneOrFail(SalesChannel, { code: 'pl_b2b_vip' });
+  const guestMode = await em.findOneOrFail(Setting, {
+    code: PRICING_SETTING_CODES.UNAUTHENTICATED_DISPLAY_MODE,
+  });
+  const existing = await em.findOne(SettingValue, { setting: guestMode.id, salesChannel: vip.id });
+  if (existing === null) {
+    em.create(SettingValue, { setting: guestMode, salesChannel: vip, value: 'none' });
+    await em.flush();
+  }
+}
+
 export async function seedUs1Catalog(em: EntityManager): Promise<void> {
   // --- Sales Channels ----------------------------------------------------
   const retail = em.create(SalesChannel, {
     code: 'pl_retail',
     name: { 'pl-PL': 'PL Retail', 'en-US': 'PL Retail' },
-    isPublic: true,
     defaultLanguage: 'pl-PL',
     defaultCurrency: 'PLN',
   });
   const b2bVip = em.create(SalesChannel, {
     code: 'pl_b2b_vip',
     name: { 'pl-PL': 'PL B2B VIP', 'en-US': 'PL B2B VIP' },
-    isPublic: false,
     defaultLanguage: 'pl-PL',
     defaultCurrency: 'PLN',
   });
@@ -141,17 +166,13 @@ export async function seedUs1Catalog(em: EntityManager): Promise<void> {
     slug: 'example-simple-product',
     type: 'simple',
     status: 'active',
-    name: { 'en-US': 'Example simple product', 'pl-PL': 'Przykładowy produkt prosty' },
-    description: {
-      'en-US': 'Reference product used across US1 contract and integration tests.',
-      'pl-PL': 'Produkt referencyjny używany w testach US1.',
-    },
+    name: 'Example simple product',
+    description: 'Reference product used across US1 contract and integration tests.',
     visibility: 'public',
     attributeValues: {
       color: 'red',
       material: 'steel',
       certification: 'ISO9001',
-      defaultPrice: 19.99,
     },
   });
   const exampleB = em.create(Product, {
@@ -160,16 +181,12 @@ export async function seedUs1Catalog(em: EntityManager): Promise<void> {
     slug: 'example-blue-product',
     type: 'simple',
     status: 'active',
-    name: { 'en-US': 'Example blue product', 'pl-PL': 'Przykładowy produkt niebieski' },
-    description: {
-      'en-US': 'Another product used to test filter facets and search.',
-      'pl-PL': 'Produkt do testów filtrów i wyszukiwarki.',
-    },
+    name: 'Example blue product',
+    description: 'Another product used to test filter facets and search.',
     visibility: 'public',
     attributeValues: {
       color: 'blue',
       material: 'aluminium',
-      defaultPrice: 24.5,
     },
   });
   const exampleC = em.create(Product, {
@@ -178,15 +195,18 @@ export async function seedUs1Catalog(em: EntityManager): Promise<void> {
     slug: 'example-large-product',
     type: 'simple',
     status: 'active',
-    name: { 'en-US': 'Example large product', 'pl-PL': 'Przykładowy duży produkt' },
-    description: {
-      'en-US': 'Large-category product — category filter integration test coverage.',
-      'pl-PL': 'Produkt przypisany do dużych widżetów.',
-    },
+    name: 'Example large product',
+    description: 'Large-category product — category filter integration test coverage.',
     visibility: 'public',
-    attributeValues: { color: 'green', material: 'plastic', defaultPrice: 39 },
+    attributeValues: { color: 'green', material: 'plastic' },
   });
   await em.persistAndFlush([exampleSimple, exampleB, exampleC]);
+  // Feature 160 — the seed products' base prices, in the PLN base book. A
+  // product has no price of its own any more (FR-042); these are the figures
+  // the seed always priced them at, so every suite built on it keeps its prices.
+  await seedBasePriceSql(em, exampleSimple.id, '19.99');
+  await seedBasePriceSql(em, exampleB.id, '24.50');
+  await seedBasePriceSql(em, exampleC.id, '39.00');
 
   // --- Associations (M:N bridges authored via raw SQL to avoid a relation graph) ---
   const conn = em.getConnection();

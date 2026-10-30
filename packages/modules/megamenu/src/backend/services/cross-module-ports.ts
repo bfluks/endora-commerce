@@ -41,8 +41,11 @@ export interface MegamenuCrossModulePorts {
   readonly pages: Pick<CmsPageReadPort, 'findById'>;
   /** `cms` — a menu item's block target, and the tree a panel inlines. */
   readonly blocks: Pick<CmsBlockReadPort, 'findById' | 'findLocalizedById'>;
-  /** `assets_library` — the stored kind, which is what an item's target declares. */
-  readonly assets: Pick<AssetReadPort, 'findById'>;
+  /**
+   * `assets_library` — the stored kind, which is what an item's target declares,
+   * and whether the caller may see the asset at all (feature 166, FR-006).
+   */
+  readonly assets: Pick<AssetReadPort, 'findById' | 'visibleToCaller'>;
   /**
    * `assets_library` again, for the URL alone.
    *

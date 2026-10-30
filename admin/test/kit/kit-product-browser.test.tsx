@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AdminMe } from '@endora-commerce/admin-kit/lib';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { StrictMode, useState, type ReactElement, type ReactNode } from 'react';
-import { ADMIN_PRODUCT_SELECTION_MAX } from '@endora-commerce/contracts';
+import { ADMIN_PREFERENCES_DEFAULTS, ADMIN_PRODUCT_SELECTION_MAX } from '@endora-commerce/contracts';
 import { TranslationProvider } from '../../../packages/admin-shell/src/i18n/TranslationProvider';
 import type { Bundle } from '../../../packages/admin-shell/src/i18n/types';
 import { adminSession } from '../helpers/render-with-session';
@@ -70,7 +71,14 @@ interface Row extends Item {
   updatedAt: string;
 }
 
-function product(id: string, en: string, status: Item['status'], type: Item['type'], pl?: string): Row {
+function product(
+  id: string,
+  en: string,
+  status: Item['status'],
+  type: Item['type'],
+  pl?: string,
+  archivedAt: string | null = null,
+): Row {
   return {
     id,
     sku: `SKU-${id.toUpperCase()}`,
@@ -78,6 +86,7 @@ function product(id: string, en: string, status: Item['status'], type: Item['typ
     name: pl ? { 'en-US': en, 'pl-PL': pl } : { 'en-US': en },
     status,
     type,
+    archivedAt,
     updatedAt: '2026-10-01T00:00:00.000Z',
   };
 }
@@ -86,16 +95,21 @@ function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-/** g1 (active, grouped), d1, i1, then a01…a24 — 27 rows, 25 of them active. */
+/**
+ * g1 (active, grouped), p1 and i1 (inactive), then a01…a24 — 27 rows that are not
+ * archived, 25 of them active — and x1, an **active** product that is archived
+ * (feature 163: archived is its own axis, independent of status).
+ */
 const CATALOG: Row[] = [
   product('g1', 'Grouped set', 'active', 'grouped'),
-  product('d1', 'Draft widget', 'draft', 'simple'),
+  product('p1', 'Paused widget', 'inactive', 'simple'),
   product('i1', 'Old widget', 'inactive', 'simple'),
   ...Array.from({ length: 24 }, (_, i) =>
     i === 0
       ? product('a01', 'Widget 01', 'active', 'simple', 'Widżet 01')
       : product(`a${pad(i + 1)}`, `Widget ${pad(i + 1)}`, 'active', 'simple'),
   ),
+  product('x1', 'Retired widget', 'active', 'simple', undefined, '2026-10-20T00:00:00.000Z'),
 ];
 
 const PATH = '/api/v1/admin/catalog/products';
@@ -104,12 +118,16 @@ function serve(catalog: readonly Row[], url: string): unknown {
   const [path, query = ''] = url.split('?');
   expect(path).toBe(PATH);
   const params = new URLSearchParams(query);
+  // Feature 163 (R30.4) — the list's own rules: archived products are excluded by
+  // default, `archived=only` asks for them alone, and the legacy flag is not sent.
+  expect(params.has('includeArchived')).toBe(false);
+  const archivedMode = params.get('archived') ?? 'exclude';
   const status = params.get('status');
   const type = params.get('type');
   const q = (params.get('q') ?? '').toLowerCase();
   const page = Number(params.get('page'));
   const pageSize = Number(params.get('pageSize'));
-  const base = catalog.filter(
+  const matches = catalog.filter(
     (p) =>
       (type === null || p.type === type) &&
       (q === '' ||
@@ -117,15 +135,18 @@ function serve(catalog: readonly Row[], url: string): unknown {
         p.slug.includes(q) ||
         Object.values(p.name).some((n) => n.toLowerCase().includes(q))),
   );
+  const live = matches.filter((p) => p.archivedAt == null);
+  const archived = matches.filter((p) => p.archivedAt != null);
+  const base = archivedMode === 'only' ? archived : live;
   const filtered = base.filter((p) => status === null || p.status === status);
   return {
     data: filtered.slice(page * pageSize, (page + 1) * pageSize),
     pagination: { page, pageSize, total: filtered.length },
     counts: {
-      all: base.length,
-      active: base.filter((p) => p.status === 'active').length,
-      draft: base.filter((p) => p.status === 'draft').length,
-      inactive: base.filter((p) => p.status === 'inactive').length,
+      all: live.length,
+      active: live.filter((p) => p.status === 'active').length,
+      inactive: live.filter((p) => p.status === 'inactive').length,
+      archived: archived.length,
     },
   };
 }
@@ -143,12 +164,27 @@ function requestedUrls(): string[] {
 const ORDER_RULES: Rules = {
   initialStatus: 'active',
   blockedTypes: ['grouped', 'bundle'],
-  blockedStatuses: ['draft', 'inactive'],
+  blockedStatuses: ['inactive'],
+  blockArchived: true,
 };
 const PRICE_LIST_RULES: Rules = { initialStatus: 'all' };
 
 const SESSION = adminSession({ permissions: ['catalog:read'] });
-const PAGE_SIZE_KEY = `b2b-admin.page-size.catalog-products.${SESSION.adminUser.id}`;
+/**
+ * The page size the Product list and this picker share (`catalog-products`),
+ * seeded on the session as the server would send it (feature 164 moved it off
+ * `localStorage`).
+ */
+let catalogPageSize = 10;
+const sessionWithPageSize = (): AdminMe => ({
+  ...SESSION,
+  preferences: { ...ADMIN_PREFERENCES_DEFAULTS, listPageSizes: { 'catalog-products': catalogPageSize } },
+});
+/** The kit's own client, which the preferences store writes through. */
+const kitClient = (
+  await vi.importActual<typeof import('@endora-commerce/admin-kit/lib')>('@endora-commerce/admin-kit/lib')
+).apiClient;
+let preferencesPatch: ReturnType<typeof vi.spyOn>;
 
 interface HarnessProps {
   rules?: Rules;
@@ -198,7 +234,7 @@ function renderHarness(
   options: { language?: 'en' | 'pl'; permissions?: readonly string[]; strict?: boolean } = {},
 ): ReturnType<typeof render> {
   const language = options.language ?? 'en';
-  const session = options.permissions ? adminSession({ permissions: options.permissions }) : SESSION;
+  const session = options.permissions ? adminSession({ permissions: options.permissions }) : sessionWithPageSize();
   const wrapper = ({ children }: { children: ReactNode }): ReactElement => {
     const tree = (
       <TranslationProvider language={language} initialBundle={BUNDLES[language]}>
@@ -228,8 +264,8 @@ function rowCheckbox(name: string): HTMLInputElement {
 
 beforeEach(() => {
   getSpy.mockReset();
-  window.localStorage.clear();
-  window.localStorage.setItem(PAGE_SIZE_KEY, '10');
+  catalogPageSize = 10;
+  preferencesPatch = vi.spyOn(kitClient, 'patch').mockResolvedValue({ data: ADMIN_PREFERENCES_DEFAULTS });
 });
 
 afterEach(() => {
@@ -239,20 +275,24 @@ afterEach(() => {
 // ---------------------------------------------------------------- B1, B2, B4
 
 describe('requests and filters (B1, B2)', () => {
-  it('opens on rules.initialStatus, asking includeArchived=1 with the preference page size', async () => {
+  it('opens on rules.initialStatus, leaving archived products out, with the preference page size', async () => {
     useCatalog();
     const user = userEvent.setup();
     renderHarness(<Harness />);
     await openPicker(user);
 
-    expect(requestedUrls()[0]).toBe(`${PATH}?includeArchived=1&page=0&pageSize=10&status=active`);
+    expect(requestedUrls()[0]).toBe(`${PATH}?page=0&pageSize=10&status=active`);
     const active = screen.getByRole('tab', { name: /^Active/ });
     expect(active.getAttribute('aria-selected')).toBe('true');
     // Counts come from the response's `counts`.
     expect(within(active).getByText('25')).toBeTruthy();
     expect(within(screen.getByRole('tab', { name: /^All/ })).getByText('27')).toBeTruthy();
-    expect(within(screen.getByRole('tab', { name: /^Draft/ })).getByText('1')).toBeTruthy();
-    expect(within(screen.getByRole('tab', { name: /^Inactive/ })).getByText('1')).toBeTruthy();
+    expect(within(screen.getByRole('tab', { name: /^Inactive/ })).getByText('2')).toBeTruthy();
+    // Feature 163 — no Draft tab anywhere; a host that refuses archived products
+    // (the order) is not offered a tab of rows it could not tick.
+    expect(screen.queryByRole('tab', { name: /^Draft/ })).toBeNull();
+    expect(screen.queryByRole('tab', { name: /^Archived/ })).toBeNull();
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['All27', 'Active25', 'Inactive2']);
     expect(screen.getByRole('searchbox').getAttribute('placeholder')).toBe('Search SKU, slug, name…');
   });
 
@@ -261,11 +301,30 @@ describe('requests and filters (B1, B2)', () => {
     const user = userEvent.setup();
     renderHarness(<Harness rules={PRICE_LIST_RULES} />);
     await openPicker(user);
-    expect(requestedUrls()[0]).toBe(`${PATH}?includeArchived=1&page=0&pageSize=10`);
+    expect(requestedUrls()[0]).toBe(`${PATH}?page=0&pageSize=10`);
 
-    await user.click(screen.getByRole('tab', { name: /^Draft/ }));
-    await waitFor(() => expect(screen.getByText('Draft widget')).toBeTruthy());
-    expect(requestedUrls().at(-1)).toBe(`${PATH}?includeArchived=1&page=0&pageSize=10&status=draft`);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'All27',
+      'Active25',
+      'Inactive2',
+      'Archived1',
+    ]);
+    expect(screen.queryByText('Retired widget')).toBeNull();
+
+    await user.click(screen.getByRole('tab', { name: /^Inactive/ }));
+    await waitFor(() => expect(screen.getByText('Paused widget')).toBeTruthy());
+    expect(requestedUrls().at(-1)).toBe(`${PATH}?page=0&pageSize=10&status=inactive`);
+
+    // Archived is its own axis: `archived=only`, never a status value.
+    await user.click(screen.getByRole('tab', { name: /^Archived/ }));
+    await waitFor(() => expect(screen.getByText('Retired widget')).toBeTruthy());
+    expect(requestedUrls().at(-1)).toBe(`${PATH}?archived=only&page=0&pageSize=10`);
+    const row = screen.getByText('Retired widget').closest('tr')!;
+    expect(within(row).getByText('Active')).toBeTruthy();
+    // One Archived look across the browser, the list and the editor.
+    expect(within(row).getByText('Archived')).toHaveClass('b2b-badge', 'b2b-badge--warn');
+    // Not blocked by this host, so it can be ticked.
+    expect(rowCheckbox('Retired widget').disabled).toBe(false);
   });
 
   it('cycles the type filter through every type and back to all', async () => {
@@ -276,7 +335,7 @@ describe('requests and filters (B1, B2)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Type' }));
     await waitFor(() =>
-      expect(requestedUrls().at(-1)).toBe(`${PATH}?includeArchived=1&page=0&pageSize=10&type=simple`),
+      expect(requestedUrls().at(-1)).toBe(`${PATH}?page=0&pageSize=10&type=simple`),
     );
     expect(screen.getByRole('button', { name: 'Type: Simple' })).toBeTruthy();
     for (const label of ['Configurable', 'Grouped', 'Bundle', 'Virtual']) {
@@ -287,7 +346,7 @@ describe('requests and filters (B1, B2)', () => {
     // Unset, the chip reads as the Products list's does.
     expect(screen.getByRole('button', { name: 'Type' })).toBeTruthy();
     await waitFor(() =>
-      expect(requestedUrls().at(-1)).toBe(`${PATH}?includeArchived=1&page=0&pageSize=10`),
+      expect(requestedUrls().at(-1)).toBe(`${PATH}?page=0&pageSize=10`),
     );
   });
 
@@ -304,7 +363,7 @@ describe('requests and filters (B1, B2)', () => {
 
     await waitFor(() =>
       expect(requestedUrls().at(-1)).toBe(
-        `${PATH}?includeArchived=1&page=0&pageSize=10&status=active&q=widget+0`,
+        `${PATH}?page=0&pageSize=10&status=active&q=widget+0`,
       ),
     );
     const withQuery = requestedUrls().filter((u) => u.includes('q='));
@@ -325,15 +384,15 @@ describe('requests and filters (B1, B2)', () => {
     await screen.findByRole('dialog');
     await waitFor(() => expect(pending).toHaveLength(1));
 
-    await user.click(screen.getByRole('tab', { name: /^Draft/ }));
+    await user.click(screen.getByRole('tab', { name: /^Archived/ }));
     await waitFor(() => expect(pending).toHaveLength(2));
 
-    pending[1]!.resolve(); // the newer (draft) answer first
-    await waitFor(() => expect(screen.getByText('Draft widget')).toBeTruthy());
+    pending[1]!.resolve(); // the newer (archived) answer first
+    await waitFor(() => expect(screen.getByText('Retired widget')).toBeTruthy());
     pending[0]!.resolve(); // the stale "all" answer last
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByText('Grouped set')).toBeNull();
-    expect(screen.getByText('Draft widget')).toBeTruthy();
+    expect(screen.getByText('Retired widget')).toBeTruthy();
   });
 });
 
@@ -389,13 +448,13 @@ describe('pagination and selection (B4, B5)', () => {
 
     await user.click(screen.getByRole('button', { name: /Next/ }));
     await waitFor(() =>
-      expect(requestedUrls().at(-1)).toBe(`${PATH}?includeArchived=1&page=1&pageSize=10&status=active`),
+      expect(requestedUrls().at(-1)).toBe(`${PATH}?page=1&pageSize=10&status=active`),
     );
     await user.selectOptions(within(dialog).getByRole('combobox'), '20');
     await waitFor(() =>
-      expect(requestedUrls().at(-1)).toBe(`${PATH}?includeArchived=1&page=0&pageSize=20&status=active`),
+      expect(requestedUrls().at(-1)).toBe(`${PATH}?page=0&pageSize=20&status=active`),
     );
-    expect(window.localStorage.getItem(PAGE_SIZE_KEY)).toBe('10');
+    expect(preferencesPatch).not.toHaveBeenCalled();
   });
 
   it('keeps the selection across page, page-size and filter changes', async () => {
@@ -427,11 +486,11 @@ describe('pagination and selection (B4, B5)', () => {
     renderHarness(<Harness rules={{ ...ORDER_RULES, initialStatus: 'all' }} />);
     await openPicker(user);
 
-    // Page 0 of "All": g1 (grouped), d1 (draft), i1 (inactive), a01…a07.
+    // Page 0 of "All": g1 (grouped), p1 and i1 (inactive), a01…a07.
     await user.click(screen.getByRole('checkbox', { name: 'Select all selectable products on this page' }));
     expect(screen.getByText('7 selected')).toBeTruthy();
     expect(rowCheckbox('Grouped set').checked).toBe(false);
-    expect(rowCheckbox('Draft widget').checked).toBe(false);
+    expect(rowCheckbox('Paused widget').checked).toBe(false);
 
     await user.click(screen.getByRole('button', { name: /Next/ }));
     await waitFor(() => expect(screen.getByText('Widget 08')).toBeTruthy());
@@ -487,7 +546,7 @@ describe('footer, cap and reasons (B6, B7, B8)', () => {
       product(`b${String(i).padStart(3, '0')}`, `Bulk ${String(i).padStart(3, '0')}`, 'active', 'simple'),
     );
     useCatalog(big);
-    window.localStorage.setItem(PAGE_SIZE_KEY, '500');
+    catalogPageSize = 500;
     const user = userEvent.setup();
     renderHarness(<Harness rules={PRICE_LIST_RULES} />);
     await openPicker(user);
@@ -519,7 +578,7 @@ describe('footer, cap and reasons (B6, B7, B8)', () => {
 
     const cases: Array<[string, string]> = [
       ['Grouped set', 'Product group — pick its individual products'],
-      ['Draft widget', 'Not active — cannot be added'],
+      ['Paused widget', 'Not active — cannot be added'],
       ['Old widget', 'Not active — cannot be added'],
       ['Widget 02', 'Already added'],
     ];
@@ -623,6 +682,7 @@ describe('confirm (B6, B10)', () => {
       name: { 'en-US': 'Widget 01', 'pl-PL': 'Widżet 01' },
       status: 'active',
       type: 'simple',
+      archivedAt: null,
     });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });

@@ -1,12 +1,12 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { listRfqs, type RfqStatus, type RfqSummary } from '../../../lib/api/rfq';
 import { getSessionCookie } from '../../../lib/session';
 import { getServerContext } from '../../../lib/server-context';
 import { formatMoney } from '../../../lib/i18n/money';
 import { RfqValidityMeta } from '../../../components/rfq/RfqValidityMeta';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -31,7 +31,7 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
  */
 export default async function QuoteRequestsPage(): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/quote-requests');
+  if (!session) return await localeRedirect('/login?next=/quote-requests');
   const rfqs = await listRfqs(session);
   const { locale } = await getServerContext();
   // One instant for the whole table, so two rows dated a millisecond apart
@@ -49,9 +49,9 @@ export default async function QuoteRequestsPage(): Promise<ReactNode> {
         }}
       >
         <h1>Zapytania ofertowe</h1>
-        <Link href="/catalog" className="btn btn--outline btn--sm">
+        <LocalizedLink href="/catalog" className="btn btn--outline btn--sm">
           Przeglądaj katalog
-        </Link>
+        </LocalizedLink>
       </div>
 
       {rfqs.length === 0 ? (
@@ -98,12 +98,12 @@ export default async function QuoteRequestsPage(): Promise<ReactNode> {
                     />
                   </td>
                   <td>
-                    <Link
+                    <LocalizedLink
                       href={`/quote-requests/${r.id}`}
                       className="btn btn--outline btn--sm"
                     >
                       Szczegóły
-                    </Link>
+                    </LocalizedLink>
                   </td>
                 </tr>
               ))}

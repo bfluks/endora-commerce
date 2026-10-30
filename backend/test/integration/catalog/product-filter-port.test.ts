@@ -22,7 +22,7 @@ import { Product } from '../../helpers/package-entities.js';
  * the query itself:
  *
  *  1. **The sellable floor cannot be widened.** A filter that asks for a
- *     draft, a private, an archived or a soft-deleted product gets nothing —
+ *     switched-off, a private, an archived or a soft-deleted product gets nothing —
  *     the floor is conjoined by the owner, after the caller's filter.
  *  2. **The page is a keyset.** Ascending id, `afterId` strictly greater, so a
  *     catalogue that moves under a long walk cannot make it skip or repeat.
@@ -74,7 +74,7 @@ describe('catalogProductFilterPort — the sellable selection scan [integration]
       kind: 'group',
       op: 'or',
       children: [
-        { kind: 'condition', field: { kind: 'column', column: 'status' }, op: 'eq', values: ['draft'] },
+        { kind: 'condition', field: { kind: 'column', column: 'status' }, op: 'eq', values: ['inactive'] },
         { kind: 'condition', field: { kind: 'column', column: 'id' }, op: 'in', values: [ids['deleted']!, ids['archived']!, ids['private']!] },
       ],
     };
@@ -347,7 +347,7 @@ async function seedProducts(em: EntityManager): Promise<Record<string, string>> 
       slug: 'filter-active',
       status: 'active',
       visibility: 'public',
-      name: { 'en-US': 'Active' },
+      name: 'Active',
       attributeValues: { colour: 'teal' },
     }),
     second: em.create(Product, {
@@ -356,16 +356,16 @@ async function seedProducts(em: EntityManager): Promise<Record<string, string>> 
       slug: 'filter-second',
       status: 'active',
       visibility: 'public',
-      name: { 'en-US': 'Second' },
+      name: 'Second',
       attributeValues: { colour: 'ochre' },
     }),
-    draft: em.create(Product, {
+    off: em.create(Product, {
       ...base,
-      sku: 'FILTER-DRAFT',
-      slug: 'filter-draft',
-      status: 'draft',
+      sku: 'FILTER-OFF',
+      slug: 'filter-off',
+      status: 'inactive',
       visibility: 'public',
-      name: { 'en-US': 'Draft' },
+      name: 'Off',
     }),
     private: em.create(Product, {
       ...base,
@@ -373,7 +373,7 @@ async function seedProducts(em: EntityManager): Promise<Record<string, string>> 
       slug: 'filter-private',
       status: 'active',
       visibility: 'logged_in_only',
-      name: { 'en-US': 'Private' },
+      name: 'Private',
     }),
     archived: em.create(Product, {
       ...base,
@@ -381,7 +381,7 @@ async function seedProducts(em: EntityManager): Promise<Record<string, string>> 
       slug: 'filter-archived',
       status: 'active',
       visibility: 'public',
-      name: { 'en-US': 'Archived' },
+      name: 'Archived',
       archivedAt: new Date(),
     }),
     deleted: em.create(Product, {
@@ -390,7 +390,7 @@ async function seedProducts(em: EntityManager): Promise<Record<string, string>> 
       slug: 'filter-deleted',
       status: 'active',
       visibility: 'public',
-      name: { 'en-US': 'Deleted' },
+      name: 'Deleted',
       deletedAt: new Date(),
     }),
   };
@@ -412,14 +412,14 @@ async function seedSkus(
   const rows = skus.map((sku, index) =>
     em.create(Product, {
       type: 'simple' as const,
-      description: {},
+      description: null,
       attributeSetId: SET_ID,
       attributeValues: attributeValues[sku] ?? {},
       sku,
       slug: `literal-fixture-${index}`,
       status: 'active',
       visibility: 'public',
-      name: { 'en-US': sku },
+      name: sku,
     }),
   );
   await em.persistAndFlush(rows);
@@ -454,7 +454,7 @@ async function seedAudienceMatrix(em: EntityManager): Promise<AudienceMatrixRow[
   const rows = combinations.map((combination, index) =>
     em.create(Product, {
       type: 'simple' as const,
-      description: {},
+      description: null,
       attributeSetId: SET_ID,
       attributeValues: {},
       sku: `AUDIENCE-${combination.visibility.toUpperCase()}-${
@@ -464,7 +464,7 @@ async function seedAudienceMatrix(em: EntityManager): Promise<AudienceMatrixRow[
       status: 'active',
       visibility: combination.visibility,
       allowedOrganizationIds: combination.allowedOrganizationIds,
-      name: { 'en-US': `Audience ${index}` },
+      name: `Audience ${index}`,
     }),
   );
   await em.persistAndFlush(rows);

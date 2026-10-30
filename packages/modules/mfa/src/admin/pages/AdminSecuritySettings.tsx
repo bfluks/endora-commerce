@@ -14,6 +14,7 @@ import {
   Label,
 } from '@endora-commerce/admin-kit/ui';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
+import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 
 /**
  * Admin self-service 2FA (feature 042, US2). Lets the signed-in admin enable
@@ -29,9 +30,17 @@ interface MfaStatus {
 
 const BASE = '/api/v1/admin/account/mfa';
 
+/** What `POST {BASE}/setup` answers: the manual key, the URI, and a QR code of the URI as SVG. */
+interface MfaSetup {
+  secret: string;
+  otpauthUri: string;
+  qrSvg: string;
+}
+
 export default function AdminSecuritySettings(): ReactNode {
   const [status, setStatus] = useState<MfaStatus | null>(null);
-  const [setup, setSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
+  const t = useTranslation('mfa');
+  const [setup, setSetup] = useState<MfaSetup | null>(null);
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -63,9 +72,7 @@ export default function AdminSecuritySettings(): ReactNode {
 
   const startSetup = (): void =>
     void run(async () => {
-      const res = await apiClient.post<{ data: { secret: string; otpauthUri: string } }>(
-        `${BASE}/setup`,
-      );
+      const res = await apiClient.post<{ data: MfaSetup }>(`${BASE}/setup`);
       setSetup(res.data);
       setRecoveryCodes(null);
     });
@@ -166,6 +173,15 @@ export default function AdminSecuritySettings(): ReactNode {
           ) : setup ? (
             <form className="space-y-3" onSubmit={confirm}>
               <p className="text-sm">Add this account to your authenticator app:</p>
+              {/* An <img> of the server-drawn SVG, never inserted as markup. */}
+              <img
+                src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(setup.qrSvg)}`}
+                alt={t('security.setup.qrAlt')}
+                width={192}
+                height={192}
+                className="rounded border bg-white p-2"
+              />
+              <p className="text-sm text-muted-foreground">{t('security.setup.qrHint')}</p>
               <p className="break-all rounded bg-muted px-2 py-1 font-mono text-xs">{setup.otpauthUri}</p>
               <p className="text-sm">
                 Manual key: <code className="font-mono">{setup.secret}</code>

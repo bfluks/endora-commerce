@@ -31,7 +31,6 @@ describe('Megamenu language fallback (T053)', () => {
       defaultCurrency: 'PLN',
       active: true,
       systemDefault: false,
-      isPublic: true,
       status: 'active',
     });
     await em.persistAndFlush(channel);

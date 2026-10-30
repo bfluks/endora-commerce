@@ -44,12 +44,22 @@ import { afterAll, describe, expect, it } from 'vitest';
  * Exit 0 in (c) is load-bearing and is asserted as a number rather than as "not
  * a crash": a stale pipeline must not red for doing the right thing, and a red
  * there would be indistinguishable from a transfer that failed.
+ *
+ * **Skipped where GNU coreutils are not the userland** (issue #315). The script
+ * uses GNU `date -d` and `mv -T` on purpose — its target is the project's
+ * Debian host — so on macOS every case failed on the tooling rather than on the
+ * guard. CI runs on Linux, where the cases run.
  */
 
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const SCRIPT = join(REPO_ROOT, 'deploy/publish-docs.sh');
 
 const ROOTS: string[] = [];
+
+/** GNU `date` and `mv` answer `--version`; the BSD ones refuse the option. */
+const WITHOUT_GNU_COREUTILS = ['date', 'mv'].some(
+  (tool) => spawnSync(tool, ['--version'], { stdio: 'ignore' }).status !== 0,
+);
 
 afterAll(() => {
   for (const root of ROOTS) rmSync(root, { recursive: true, force: true });
@@ -111,7 +121,7 @@ function live(root: string): string {
   return readlinkSync(join(root, 'current'));
 }
 
-describe('publish-docs.sh publishes when it should', () => {
+describe.skipIf(WITHOUT_GNU_COREUTILS)('publish-docs.sh publishes when it should', () => {
   it('(a) proceeds when nothing has ever been published', () => {
     const root = fixture({ releases: ['old', 'new'], current: 'old' });
     const run = publish(root, 'new', '2026-09-23T10:00:00+00:00');
@@ -146,7 +156,7 @@ describe('publish-docs.sh publishes when it should', () => {
   });
 });
 
-describe('publish-docs.sh declines when a newer build is already live', () => {
+describe.skipIf(WITHOUT_GNU_COREUTILS)('publish-docs.sh declines when a newer build is already live', () => {
   it('(c) exits 0, says why, and leaves the newer release serving', () => {
     const root = fixture({
       releases: ['old', 'new'],
@@ -202,7 +212,7 @@ describe('publish-docs.sh declines when a newer build is already live', () => {
   });
 });
 
-describe('publish-docs.sh keeps five releases', () => {
+describe.skipIf(WITHOUT_GNU_COREUTILS)('publish-docs.sh keeps five releases', () => {
   it('(d) prunes seven down to the five most recent, and keeps the live one', () => {
     const releases = ['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7'];
     const root = fixture({ releases, current: 'r6' });
@@ -228,7 +238,7 @@ describe('publish-docs.sh keeps five releases', () => {
   });
 });
 
-describe('publish-docs.sh refuses what it cannot publish', () => {
+describe.skipIf(WITHOUT_GNU_COREUTILS)('publish-docs.sh refuses what it cannot publish', () => {
   /**
    * The other direction of exit 0. Declining a stale pipeline is a success;
    * being handed no release, or no way to order publications, is a defect in

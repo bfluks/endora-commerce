@@ -66,6 +66,7 @@ export interface MigrationRegistryEntry {
 }
 
 export type MigrationOrderErrorCode =
+  | 'missing-class'
   | 'unparsable-name'
   | 'duplicate-name'
   | 'duplicate-timestamp'
@@ -205,7 +206,24 @@ function parseEntries(
   const byModuleStamp = new Map<string, ParsedMigration>();
   const parsed: ParsedMigration[] = [];
 
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
+    // A registry entry whose class is `undefined` is a registry that imported a
+    // name its package's built `dist` does not export — in practice a `dist`
+    // that is stale or missing, since the generated registry is derived from
+    // the sources. Reading `.name` off it would be a TypeError that says
+    // nothing about the cause (issue #443).
+    // Only an absent class is this case: a fixture may stand a plain object
+    // carrying a `name` in for a class, and the naming checks below judge it.
+    if (entry.cls === undefined || entry.cls === null) {
+      throw new MigrationOrderError(
+        'missing-class',
+        `[migration-order] registry entry #${index} (module "${entry.moduleId}") carries ` +
+          `no migration class (got ${String(entry.cls)}). ` +
+          `The generated registry imports a class the module package's built output does ` +
+          `not export, which means its \`dist\` is stale or missing: run ` +
+          `\`pnpm run build:packages\` (or \`pnpm --filter <package> run build\`) and retry.`,
+      );
+    }
     const name = entry.cls.name;
     const match = MIGRATION_CLASS_RE.exec(name);
     if (!match) {

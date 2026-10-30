@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { uuidSchema } from './common.js';
 
 // Saved list views — the shapes every admin list's saved-view endpoints share
-// (orders, products, quote requests). Orders keeps its own exported names in
+// (orders, products, quote requests, tasks). Orders keeps its own exported names in
 // `orders.ts`, built on these.
 
 export const SAVED_LIST_VIEW_NAME_MAX = 160;
@@ -141,3 +141,21 @@ export const updateQuoteRequestSavedViewRequestSchema =
 export type UpdateQuoteRequestSavedViewRequest = z.infer<
   typeof updateQuoteRequestSavedViewRequestSchema
 >;
+
+// --- Tasks: filters, sort and column selection (`specs/165-task-management/` R-13)
+//
+// One view serves the list and the board: the board applies its filters and
+// ignores its sort. A saved value that no longer exists (a tag, a status, a
+// person) is dropped on apply; the list never answers 422 for it.
+
+export const createTaskSavedViewRequestSchema = z.object({
+  name: savedListViewNameSchema,
+  shared: z.boolean(),
+  filters: savedListViewFiltersSchema,
+  sort: savedListViewSortSchema.nullable().optional(),
+  visibleColumns: savedListViewColumnsSchema.nullable().optional(),
+});
+export type CreateTaskSavedViewRequest = z.infer<typeof createTaskSavedViewRequestSchema>;
+
+export const updateTaskSavedViewRequestSchema = createTaskSavedViewRequestSchema.partial();
+export type UpdateTaskSavedViewRequest = z.infer<typeof updateTaskSavedViewRequestSchema>;

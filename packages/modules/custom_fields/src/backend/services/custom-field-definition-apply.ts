@@ -1,14 +1,22 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
+  assessCustomFieldCarry,
   customFieldDefinitionSchema,
-  type CreateCustomFieldDefinitionRequest,
+  type CustomFieldAudience,
   type CustomFieldOptionDto,
+  type CustomFieldValueType,
   type SupportedEntityType,
   type UpdateCustomFieldDefinitionRequest,
 } from '@endora-commerce/contracts';
 import { CustomFieldDefinition } from '../entities/custom-field-definition.entity.js';
 import { CustomFieldOption } from '../entities/custom-field-option.entity.js';
-import { isSupportedEntityType } from './custom-field-registry.js';
+import type { CustomFieldDefinitionApplyCreateInput } from '../../ports/index.js';
+import {
+  carryTargetsOf,
+  isEntityTypeServed,
+  isSupportedEntityType,
+  offersListFilter,
+} from './custom-field-registry.js';
 
 /**
  * Transactional apply functions for custom-field definition/option writes
@@ -36,8 +44,16 @@ export class CustomFieldDefinitionError extends Error {
       | 'stored_values_exist'
       | 'option_in_use'
       | 'key_changed'
-      | 'invalid_key',
+      | 'invalid_key'
+      | 'list_filter_unsupported'
+      | 'carry_incompatible',
     message: string,
+    /**
+     * What a refusal's sentence names (feature 157): the field `key`, an
+     * option's `value` and `label`. A carry refusal (feature 162) adds its
+     * reason token as `code` and the missing option values as a list.
+     */
+    readonly details?: Readonly<Record<string, string | readonly string[]>>,
   ) {
     super(message);
     this.name = 'CustomFieldDefinitionError';
@@ -73,10 +89,150 @@ export function assertOptionsRule(valueType: string, options: CustomFieldOptionD
   }
 }
 
+/**
+ * `listFilter: true` only where the entity type's registry entry offers the
+ * option (feature 157); `false` and absence are always accepted.
+ */
+export function assertListFilterSupported(entityType: string, listFilter: boolean | undefined): void {
+  if (listFilter === true && !offersListFilter(entityType)) {
+    throw new CustomFieldDefinitionError(
+      'list_filter_unsupported',
+      `Fields of entity type "${entityType}" cannot be used as list filters.`,
+    );
+  }
+}
+
+/** One definition as a carry judgement reads it (feature 162). */
+export interface CarrySourceDefinition {
+  readonly entityType: SupportedEntityType;
+  readonly key: string;
+  readonly valueType: CustomFieldValueType;
+  readonly audience: CustomFieldAudience;
+  readonly options: ReadonlyArray<{ value: string }>;
+}
+
+function carryRefusal(
+  source: CarrySourceDefinition,
+  target: SupportedEntityType,
+  token: string,
+  message: string,
+  extra: Record<string, string | readonly string[]> = {},
+): CustomFieldDefinitionError {
+  return new CustomFieldDefinitionError('carry_incompatible', message, {
+    code: token,
+    targetEntityType: target,
+    key: source.key,
+    ...extra,
+  });
+}
+
+/**
+ * Judge the carry targets a definition write **adds** (feature 162, research
+ * R-4), on the Command's own transaction. Each must be offered by the source
+ * type's registry entry (`pair_unsupported`), have its owner module present
+ * (`target_unavailable`), and pass {@link assessCustomFieldCarry} against the
+ * same-key definition of the target type; the first reason refuses the write
+ * with `carry_incompatible`. A target already on is never passed here: a
+ * drifted carry stays as configured (FR-019).
+ */
+export async function assertCarryTargetsAccepted(
+  em: EntityManager,
+  source: CarrySourceDefinition,
+  added: readonly SupportedEntityType[],
+): Promise<void> {
+  const offered = carryTargetsOf(source.entityType);
+  for (const target of added) {
+    if (!offered.includes(target)) {
+      throw carryRefusal(
+        source,
+        target,
+        'pair_unsupported',
+        `Values of "${source.key}" cannot be carried to ${target}.`,
+      );
+    }
+    if (!isEntityTypeServed(target)) {
+      throw carryRefusal(
+        source,
+        target,
+        'target_unavailable',
+        `${target} is switched off, so values cannot be carried to it.`,
+      );
+    }
+    const targetDefinition = await em.findOne(CustomFieldDefinition, { entityType: target, key: source.key });
+    const targetOptions = targetDefinition
+      ? await em.find(CustomFieldOption, { definitionId: targetDefinition.id })
+      : [];
+    const [first] = assessCustomFieldCarry(
+      { valueType: source.valueType, audience: source.audience, options: source.options },
+      targetDefinition
+        ? { valueType: targetDefinition.valueType, audience: targetDefinition.audience, options: targetOptions }
+        : null,
+    );
+    if (first === undefined) continue;
+    switch (first.reason) {
+      case 'target_missing':
+        throw carryRefusal(
+          source,
+          target,
+          first.reason,
+          `No field with the key "${source.key}" exists on ${target}.`,
+        );
+      case 'value_type_mismatch':
+        throw carryRefusal(
+          source,
+          target,
+          first.reason,
+          `The field "${source.key}" on ${target} is ${first.targetValueType}, but this field is ${first.sourceValueType}.`,
+          { sourceValueType: first.sourceValueType, targetValueType: first.targetValueType },
+        );
+      case 'options_missing':
+        throw carryRefusal(
+          source,
+          target,
+          first.reason,
+          `The field "${source.key}" on ${target} lacks these options: ${first.missingOptionValues.join(', ')}.`,
+          {
+            missingOptionValues: first.missingOptionValues.join(', '),
+            missingOptionValueList: [...first.missingOptionValues],
+          },
+        );
+      case 'audience_mismatch':
+        throw carryRefusal(
+          source,
+          target,
+          first.reason,
+          `The field "${source.key}" on ${target} is visible to customers, but this field is internal.`,
+        );
+    }
+  }
+}
+
+/**
+ * The apply seam's own floor for `carryTo` (feature 162): a host writing
+ * through it may name only the pairs its type's registry entry offers. The
+ * compatibility judgement is the definition Commands' (above); a host-managed
+ * type offers no pair, so this refuses any carry a host names.
+ */
+function assertCarryPairsOffered(
+  entityType: string,
+  key: string,
+  carryTo: readonly SupportedEntityType[] | undefined,
+): void {
+  const offered = carryTargetsOf(entityType);
+  const unsupported = (carryTo ?? []).find((target) => !offered.includes(target));
+  if (unsupported !== undefined) {
+    throw new CustomFieldDefinitionError(
+      'carry_incompatible',
+      `Values of "${key}" cannot be carried to ${unsupported}.`,
+      { code: 'pair_unsupported', targetEntityType: unsupported, key },
+    );
+  }
+}
+
 /** Create a definition (+ its options for select types) on the caller's EM. */
 export async function applyCreateDefinition(
   em: EntityManager,
-  input: CreateCustomFieldDefinitionRequest,
+  input: CustomFieldDefinitionApplyCreateInput,
 ): Promise<CustomFieldDefinition> {
   // command-coverage-ignore: apply-seam primitive — mutates on the invoking Command's
   // transactional EM; the caller (custom_fields definition command or a host command,
@@ -86,6 +242,8 @@ export async function applyCreateDefinition(
     throw new CustomFieldDefinitionError('entity_type_unknown', `Unknown entity type "${input.entityType}".`);
   }
   assertOptionsRule(input.valueType, input.options);
+  assertListFilterSupported(input.entityType, input.listFilter);
+  assertCarryPairsOffered(input.entityType, input.key, input.carryTo);
   const existing = await em.findOne(CustomFieldDefinition, {
     entityType: input.entityType,
     key: input.key,
@@ -106,6 +264,8 @@ export async function applyCreateDefinition(
     audience: input.audience,
     sortOrder: input.sortOrder,
     config: input.config,
+    listFilter: input.listFilter ?? false,
+    carryTo: [...(input.carryTo ?? [])],
   });
   if (SELECT_TYPES.has(input.valueType)) {
     // Flush the definition first: options reference it by id (no ORM relation),
@@ -125,6 +285,12 @@ export async function applyUpdateDefinition(
 ): Promise<CustomFieldDefinition> {
   const def = await em.findOne(CustomFieldDefinition, { id });
   if (!def) throw new CustomFieldDefinitionError('not_found', `Custom field ${id} not found.`);
+  assertListFilterSupported(def.entityType, patch.listFilter);
+  assertCarryPairsOffered(
+    def.entityType,
+    def.key,
+    patch.carryTo?.filter((target) => !def.carryTo.includes(target)),
+  );
   // FR-010: changing valueType while values exist is rejected (probe binding).
   if (patch.valueType !== undefined && patch.valueType !== def.valueType && probes) {
     const inUse = await probes.hasStoredValues(em, def.entityType, def.key);
@@ -132,6 +298,7 @@ export async function applyUpdateDefinition(
       throw new CustomFieldDefinitionError(
         'value_type_locked',
         `Cannot change the value type of "${def.key}" while records hold values. Clear them first.`,
+        { key: def.key },
       );
     }
   }
@@ -142,6 +309,8 @@ export async function applyUpdateDefinition(
   if (patch.audience !== undefined) def.audience = patch.audience;
   if (patch.sortOrder !== undefined) def.sortOrder = patch.sortOrder;
   if (patch.config !== undefined) def.config = patch.config;
+  if (patch.listFilter !== undefined) def.listFilter = patch.listFilter;
+  if (patch.carryTo !== undefined) def.carryTo = [...patch.carryTo];
   return def;
 }
 
@@ -267,6 +436,7 @@ export async function applyDeleteOption(
       throw new CustomFieldDefinitionError(
         'option_in_use',
         `Option "${option.value}" is in use and cannot be removed.`,
+        { value: option.value, label: option.labelDefault },
       );
     }
   }

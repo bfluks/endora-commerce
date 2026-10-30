@@ -1,5 +1,309 @@
 # @endora-commerce/mod-assets-library
 
+## 0.108.0
+
+### Patch Changes
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- b8adc7f: Stable asset URLs: an asset's file can be replaced in place and its previous version restored, and soft-deleted assets and replaced files are now purged by a scheduled retention sweep.
+
+  **Behaviour change for operators.** Soft-deleted assets are now actually hard-deleted. An hourly
+  sweep removes at most 500 assets per run, oldest deletion first, once
+  `assets.soft_delete_retention_days` have passed since their deletion — the setting **read when the
+  sweep runs**, so a changed setting applies to assets already deleted, and the purge date the API
+  reports (`DELETE /api/v1/admin/assets/:id`, its repeat, and the read model's `purgeAfterAt`)
+  follows the current setting. The effective period is at least one day: `0` now means one day.
+  Kept previous versions are purged on the same rule, counted from when they were replaced. An
+  asset something still references is skipped and stays soft-deleted. **The first runs after
+  upgrading purge every asset soft-deleted longer ago than the period**; an operator who wants to
+  keep those assets lengthens the setting before upgrading. Each run writes one
+  `assets_library.retention.sweep` log line, also when nothing was due, and a storage object the
+  module stopped needing is retried by the sweep until it is gone.
+
+  **Behaviour change for consumers.** `AssetSummary.url` / `AssetDetail.url`, `AssetRecord.storageUrl`
+  (what the catalogue's product, gallery, attachment and Open Graph URLs come from) and
+  `assetReadPort.resolvePublicUrls` (product feeds) now carry `?v=<contentVersion>` for public
+  assets, and so does the transactional e-mail logo; signed private URLs, legacy rows and `data:`
+  values are unchanged, and so is the stored `storageUrl` of a row with no storage key — a URL no
+  adapter of this platform wrote. A replace changes the marker, so every embed picks up the new file and can be
+  cached for a year. The stable, unversioned form is `fileUrl` and `GET /api/v1/admin/assets/:id/url`,
+  and the new `AssetsLibraryService.resolveEmbedUrl(id)` answers the embed form. A CMS storefront page
+  cached before a replace keeps serving the previous marker for up to five minutes (the CMS page
+  cache's lifetime); that URL redirects to the current file when it is requested. A browser that
+  already holds the old `?v=` URL in its cache — it was served as immutable — can keep showing the
+  previous image until the CMS page cache has turned over and the page is reloaded. Clearing the CMS
+  page cache when an asset changes is tracked in #363.
+
+  **Behaviour change for the file URL.** `GET /assets/file/<id>` answers a public local asset with
+  `Cache-Control: public, no-cache` (it was `public, max-age=31536000, immutable`), so a replaced file
+  is picked up on the next request; the URLs the platform embeds carry `?v=<contentVersion>` and stay
+  cacheable for a year, and a `v` that is no longer current redirects (`302`, `no-store`) to the current
+  one. The route also answers `GET /assets/file/<permalink>` (one or more segments, matched
+  case-insensitively). A private asset is checked for a valid signature before anything else: without
+  one it answers `403` by id — also when it is soft-deleted, where it used to answer `410` — and `404`
+  by permalink, exactly as for a name that does not exist. Public cloud assets reached through the
+  route are redirected to their stable bucket URL. Redirects and error answers carry `no-store`,
+  `X-Content-Type-Options: nosniff` and a fixed content policy, whatever the stored type.
+
+  **Admin.** The asset detail drawer gains, all inside the drawer: the shareable link (the permalink
+  URL, or else the stable file URL — never the versioned one) with a copy button and a notice when the
+  asset is private; the permalink, validated as it is typed, with a confirmation before a set
+  permalink is changed or removed and before a name another asset used is taken; **Replace file**,
+  which accepts only the asset's own kind and confirms naming both files and how long the current one
+  stays restorable; the previous version with **Restore**; and a warning before deleting an asset that
+  has a permalink. Write controls need `assets.write`. The command palette (⌘K / CTRL+K) gains
+  "Assets library" ("Biblioteka zasobów"), named like the sidebar entry and also found by "media",
+  "media library" and "multimedia", opening the library for anyone holding `assets.read`.
+
+  **Database (one migration, owned by this module).**
+
+  - Eleven new columns on `assets`: `content_version` (backfilled with a random 12-character token
+    for every existing row, and given the same kind of random default for rows written by raw SQL),
+    `permalink`, and the nine `previous_*` columns of the one kept previous version.
+    A permalink is unique case-insensitively, and a previous version is recorded in full or not at
+    all (`previous_replaced_by` may stay empty for a system actor). Two partial indexes serve the
+    retention sweep.
+  - Two new tables, both platform-global and without foreign keys:
+    `asset_permalink_releases` (one row per permalink that stopped being held) and
+    `asset_object_cleanups` (storage objects still to delete).
+  - Rolling back drops all of it. Every asset keeps being served, because the stored file key does
+    not change.
+
+  **Responses.** Every asset summary and detail now answers `fileUrl` (the stable file URL, unsigned
+  even for a private asset), `permalink`, `permalinkUrl` (on the same public base as the file URL) and
+  `contentVersion`; `assetReadPort` records carry `contentVersion` and `permalink`. Every existing
+  member keeps its value.
+
+  **Replace a file in place.** `POST /api/v1/admin/assets/:id/replace` (`assets.write`, multipart, one
+  `file` part, an optional `expectedContentVersion` field before it) swaps an asset's file and keeps
+  everything else: the id, the folder, the label, the alternate text, the visibility, every reference
+  to it, its storage key and therefore every URL already handed out. It answers the updated detail,
+  with a new `contentVersion`. The write runs as the audited Command `asset.replace` (before and after:
+  filename, type, size, content version).
+
+  - The replacement passes the same size, type and content policy as an upload. The configured
+    maximum size now also applies to the bytes actually received — on an upload as well — so a
+    tightened limit takes effect without a restart. On an S3 asset a replacement above 5 GiB is
+    refused with `413` naming 5120 MB.
+  - An asset keeps its kind: an image is replaced by an image (an SVG counts), a video by a video, a
+    PDF by a PDF, and anything else by anything else, judged by what the new bytes are rather than the
+    declared type. A mismatch is `415 ASSET_REPLACE_KIND_MISMATCH` with `details.currentKind` and
+    `details.newKind`. A certificate stays a certificate. An admin's MIME override is cleared.
+  - Two replaces racing on the same version: one wins, the other gets `409 ASSET_REPLACE_CONFLICT`.
+    A soft-deleted asset answers `410`, a legacy row `409 ASSET_LEGACY_CANNOT_REPLACE`, an
+    unconfigured storage backend `503`. The asset's own backend is used, whatever the active one is.
+  - `expectedContentVersion` must come before the file part. Sent after it, the request answers
+    `400 VALIDATION_FAILED`, refused once the new bytes are staged and before anything is committed,
+    so nothing is replaced; it is never silently skipped.
+  - The replaced file is kept as the asset's previous version under a random, private storage key; a
+    further replace discards the one before. Staging and previous objects are recorded in
+    `asset_object_cleanups` before they exist, so a failed or interrupted replace leaves nothing that
+    is not either referenced or due for cleanup.
+  - A visibility change now takes the asset's row lock, as a replace does.
+  - The file route's `ETag` is now `"<id>-<contentVersion>"`: it changes when the file changes and no
+    longer when only the label or folder does.
+
+  **The previous version and its restore.** The asset detail now carries `previousVersion` — the
+  replaced file's name, type, size, content version, when and by whom it was replaced, and
+  `restorableUntil` (replaced at plus `assets.soft_delete_retention_days`) — or `null`, and
+  `retentionDays`, that setting as the sweep reads it in whole days, which the replace confirmation
+  names. `POST
+/api/v1/admin/assets/:id/previous-version/restore` (`assets.write`) swaps it back: the body names
+  both `expectedContentVersion` and `expectedPreviousContentVersion`, so a restore brings back
+  exactly the file the admin saw, and either one being out of date answers
+  `409 ASSET_REPLACE_CONFLICT`. The restored file keeps its own content version, so its old ETag and
+  cached copies are valid again; the file it replaces becomes the previous version with a fresh
+  retention period. Without a previous version the answer is `409 ASSET_NO_PREVIOUS_VERSION`. The
+  write runs as the audited Command `asset.restore_previous_version`. `assets_library` now declares
+  a dependency on `admin_users`, whose `adminUserReadPort` names the admin who replaced the file.
+
+  **Permalinks.** `PUT /api/v1/admin/assets/:id/permalink` (`{ permalink, confirmReuse? }`) and
+  `DELETE /api/v1/admin/assets/:id/permalink` (`assets.write`) set and remove an asset's
+  operator-chosen permalink, as the audited Commands `asset.permalink_set` and
+  `asset.permalink_remove`; setting the same value again, or removing none, writes nothing. A permalink
+  is checked by the shared rule (`400 ASSET_PERMALINK_INVALID` with `details.code`) and is unique
+  case-insensitively (`409 ASSET_PERMALINK_TAKEN` with the holder's id); a soft-deleted asset keeps
+  its permalink, and setting or removing it answers `410 ASSET_GONE` until the asset is restored. A permalink that was changed, removed or freed by a purge can be taken at once, but
+  when the asset that held it last was a **different** one the request answers
+  `409 ASSET_PERMALINK_PREVIOUSLY_USED` until `confirmReuse: true` is sent — links already printed with
+  that name will open the new asset — and the audit entry records which asset held it. The list
+  search (`q`) also matches permalinks.
+
+  **Files the library did not upload (owner ruling).** A row with no storage key — a file inserted
+  directly into the database, such as the demo data's inline `data:` images — is refused like a legacy
+  row: replace and restore answer `409 ASSET_LEGACY_CANNOT_REPLACE` instead of `503`. The asset detail
+  gains `replaceable` (false for both kinds of row), and the drawer offers no **Replace file** for them,
+  saying the new file has to be uploaded as a new asset.
+
+  **Folder delete names permalinked files (owner ruling).** The folder delete confirmation now says how
+  many files in the folder, at any depth, have a shareable link; the library moves a deleted folder's
+  files to the parent folder, so those links keep working. The count comes from the new
+  `GET /api/v1/admin/assets/folders/:folderId/permalink-count` (`assets.read`), which answers
+  `{ data: { permalinkedAssets } }` over live assets and `404 ASSET_FOLDER_NOT_FOUND` for an unknown
+  folder. The API option `deleteRecursively` of the folder delete moves the folder's assets to the
+  trash without confirmation, so their permalinks answer `410` until the assets are restored.
+
+  **Uploads take one file.** `POST /api/v1/admin/assets` now ignores a second file part and answers
+  `201` with the asset the first one created; it used to answer `400 ASSET_UPLOAD_NO_FILE`. The replace
+  route does the same.
+
+  **Storage failures.** A storage failure during an upload or a replace answers
+  `503 ASSET_STORAGE_UNAVAILABLE` with a generic, translated sentence instead of the adapter's own
+  text, which could name a path, a bucket or an endpoint; the adapter's error is logged with the
+  request.
+
+  **Junk names on the file route.** `GET /assets/file/<name>` answers a name no permalink can be — a
+  NUL byte, a character outside the permalink rule, more than 200 characters — with the same `404` as
+  an unused name, without querying the database.
+
+  **Retention floor.** `assets.soft_delete_retention_days` is now read as at least one day: `0`
+  (or anything below one) behaves as one day, so a deletion or a replaced file is never due at once.
+
+  **Storage.** Every storage backend can now copy one stored file over another on the server, and
+  the cloud backends write two more headers on the objects they store: `Cache-Control: no-cache` and a
+  `Content-Disposition` chosen by the serving policy — images, video, PDFs and plain text `inline`; SVG
+  and every type a browser would not just display as `attachment`. The ACL of a copied object is always
+  set explicitly from the asset's visibility. Objects stored before this release keep their headers
+  until they are next written.
+
+  **Error codes.** Seven new codes are declared with their English and Polish sentences:
+  `ASSET_REPLACE_KIND_MISMATCH`, `ASSET_LEGACY_CANNOT_REPLACE`, `ASSET_REPLACE_CONFLICT`,
+  `ASSET_NO_PREVIOUS_VERSION`, `ASSET_PERMALINK_TAKEN`, `ASSET_PERMALINK_PREVIOUSLY_USED` and
+  `ASSET_PERMALINK_INVALID` (with one sentence per reason the permalink rule names).
+
+  **Documentation.** The module page, in English and Polish, now says which URLs are stable and
+  when, and gains sections on replacing a file, permalinks, the previous version and its restore,
+  caching (with the CMS page-cache delay after a replace), cloud storage, operating a CDN in front
+  of the API or the bucket, and retention and purge; the soft-delete section now describes the
+  retention period as read when the sweep runs. The module map's summary line follows the page.
+
+### Patch Changes
+
+- 2a858cd: Uploaded files are stored and served under a stricter content policy, and private assets are checked before a storage redirect.
+
+  - Uploads of HTML, XHTML, XML (including XSL) and JavaScript files are refused with
+    `415 ASSET_UPLOAD_TYPE_NOT_ALLOWED`, judged by the declared MIME type and by the file extension,
+    regardless of `assets.allowed_file_types`. SVG uploads are still accepted and are always stored
+    as `image/svg+xml`.
+  - `GET /assets/file/:assetId` now sends `X-Content-Type-Options: nosniff` and a
+    `Content-Security-Policy` (`default-src 'none'; style-src 'unsafe-inline'; sandbox`, without
+    `sandbox` for PDFs) on every response, and serves only raster images, SVG, video, audio, PDF and
+    plain text `inline`; every other stored type is served as an `attachment`.
+  - For a `private` asset on S3 or GCS, the same route now requires a valid signed token before it
+    redirects to the storage URL, as it already did for local assets; without one it answers
+    `403 ASSET_ACCESS_DENIED`. URLs from `GET /api/v1/admin/assets/:id/url` are unaffected.
+
+- 1a89920: Make `assetsLibraryModule` honor `assets.soft_delete_retention_days` for single-asset and recursive-folder soft deletion. The setting is read when the purge runs, so a changed value applies to assets already deleted. Default to 30 days for missing, empty, non-numeric, negative or non-finite values, and treat any value below one day as one day — a stored `0` is read as 1 day.
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

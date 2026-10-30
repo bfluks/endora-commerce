@@ -33,6 +33,8 @@ export interface BoxStyledProps {
   previewTier?: BreakpointTier;
   /** Row section layout — used for nested layout CSS (`data-row-section`). */
   rowSection?: string;
+  /** Data attributes for the box element (feature 163, T131: an item's `data-pb-tags`). */
+  attributes?: Record<`data-${string}`, string>;
 }
 
 function appearanceStyle(
@@ -104,6 +106,7 @@ export function BoxStyled({
   cornerRadius,
   shadow,
   rowSection,
+  attributes,
 }: BoxStyledProps): React.ReactElement {
   const assets = useCmsRenderAssets();
   const mediaBaseUrl = useCmsRenderMediaBaseUrl();
@@ -134,6 +137,7 @@ export function BoxStyled({
       className={boxClasses || undefined}
       style={computed.style}
       {...(rowSection ? { 'data-row-section': rowSection } : {})}
+      {...(attributes ?? {})}
     >
       {computed.videoUrl ? (
         <video

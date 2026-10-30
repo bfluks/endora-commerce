@@ -37,6 +37,10 @@ Trasy dostępne tylko dla administratora organizacji są chronione po stronie se
 | `PATCH /api/v1/organizations/mine/addresses/:id` | klient | Aktualizacja |
 | `DELETE /api/v1/organizations/mine/addresses/:id` | klient | Usunięcie |
 | `GET /api/v1/admin/organizations` | administrator | Lista z `filter[status]` / `filter[vatStatus]` / `q` |
+| `POST /api/v1/admin/organizations` | administrator (`customers:manage`) | Utworzenie organizacji z jej kanałami sprzedaży (zob. *Kanały sprzedaży* niżej) |
+| `GET /api/v1/admin/organizations/sales-channel-options` | administrator (`customers:manage`) | Kanały oferowane w formularzu tworzenia |
+| `GET /api/v1/admin/organizations/:id/sales-channels` | administrator (`customers:read` lub `customers:manage`) | Kanały przypisane do organizacji i kanały, które można jej przypisać |
+| `PUT /api/v1/admin/organizations/:id/sales-channels` | administrator (`customers:manage`) | Zastąpienie przypisanych kanałów (`{ salesChannelIds }`, co najmniej jeden) |
 | `GET /api/v1/admin/organizations/:id` | administrator | Organizacja z listą członków (`updatedAt`, członkowie z `lastLoginAt`) |
 | `PATCH /api/v1/admin/organizations/:id` | administrator | Zmiana nazwy, `status` lub `vatStatus`; opcjonalne `expectedUpdatedAt` → `409 VERSION_CONFLICT`, gdy dane są nieaktualne |
 | `POST /api/v1/admin/organizations/:id/members/invite` | administrator | Zaproszenie e-mailem z rolą (z poziomu platformy) |
@@ -66,6 +70,51 @@ danych; powtórna rejestracja zwraca `409 ORGANIZATION_TAX_ID_EXISTS`.
 - **Ochrona ostatniego administratora** — zapisana w `role-service.ts#changeRole` i
   `invitation-service.ts#revoke`; nowe miejsca, w których „musi zostać co najmniej jeden
   administrator”, dodawaj właśnie tam.
+
+## Kanały sprzedaży
+
+Członkowie organizacji mogą logować się i kupować dokładnie w tych sklepach, których kanały
+sprzedaży są przypisane do organizacji. Brak przypisania oznacza brak dostępu; organizacja zawsze
+zachowuje co najmniej jeden kanał.
+
+- **Logowanie.** Członek, którego organizacja nie jest przypisana do sklepu, w którym się loguje,
+  dostaje odmowę `403 SALES_CHANNEL_NOT_PERMITTED` — *„To konto nie ma dostępu do tego sklepu.”* — po
+  sprawdzeniu hasła, a przed prośbą o drugi składnik i utworzeniem sesji. Logowanie przez
+  zewnętrznego dostawcę tożsamości jest odrzucane tak samo i wraca na stronę logowania sklepu z tym
+  komunikatem. Błędne hasło nadal dostaje najpierw `401`, więc odmowa nie zdradza niczego o
+  przypisaniach komuś, kto nie zna hasła.
+- **Zalogowany, gdy dostęp zostaje odebrany.** Następna strona członka w tym sklepie pokazuje ekran
+  *Brak dostępu do tego sklepu* z listą sklepów, z których może korzystać, i przyciskiem
+  wylogowania.
+
+### Kto dostaje który kanał
+
+| Jak powstaje organizacja | Przypisane kanały |
+| --- | --- |
+| Rejestracja firmy w storefroncie (`POST /api/v1/organizations/register`) | dokładnie kanał sklepu, w którym się zarejestrowała — także w sklepie zamkniętym dla niezalogowanych odwiedzających, gdzie o wejściu firmy decyduje moderacja |
+| Samodzielna rejestracja klienta indywidualnego (organizacja prywatna) | dokładnie kanał sklepu, w którym się zarejestrował; w sklepie zamkniętym dla niezalogowanych odwiedzających odrzucana |
+| *Nowa organizacja* w panelu administracyjnym | kanały wybrane w formularzu |
+| Każda inna ścieżka — logowanie przez zewnętrznego dostawcę tożsamości, które zakłada nowe konto, importy, dane demonstracyjne | domyślny kanał systemowy |
+
+Przyjęcie zaproszenia dodaje członka do istniejącej organizacji i nie zmienia żadnego z jej kanałów.
+
+Przy wprowadzeniu tej reguły każda istniejąca organizacja otrzymała domyślny kanał systemowy oraz
+każdy kanał, w którym miała już zamówienia.
+
+### W panelu administracyjnym
+
+- **Panel Kanały sprzedaży** — na stronie organizacji. Z uprawnieniem `customers:manage` to lista
+  wielokrotnego wyboru z przyciskiem **Zapisz kanały sprzedaży**; bez niego — lista tylko do odczytu.
+  Nieaktywne kanały są oznaczone *(nieaktywny)*, a domyślny kanał systemowy ma etykietę. Zapis pustego
+  wyboru jest odrzucany: *„Organizacja musi mieć przypisany co najmniej jeden kanał sprzedaży.”*
+  Każdy dodany lub usunięty kanał zapisuje jeden wpis w dzienniku audytu. Zmiana obowiązuje od razu na
+  serwerze, który ją zapisał, a na każdym innym serwerze w ciągu 30 sekund.
+- **Nowa organizacja** — przycisk na liście organizacji i akcja w palecie poleceń (⌘K / Ctrl+K),
+  widoczne z uprawnieniem `customers:manage`. Formularz pyta o nazwę, NIP, adres siedziby, status
+  (*Aktywna* lub *Oczekuje na weryfikację*) i kanały sprzedaży, z domyślnym kanałem systemowym
+  zaznaczonym na starcie. Utworzenie to jedno polecenie zapisywane w dzienniku audytu; po zapisie
+  otwiera się strona nowej organizacji. Członków zaprasza się z tej strony, gdy organizacja już
+  istnieje.
 
 ## Organizacja jako strona transakcji i jej moderacja
 
@@ -152,12 +201,21 @@ Wstępne sprawdzenie w storefroncie:
 
 ### Cenniki obowiązujące organizację i promocje dla organizacji
 
-`OrganizationEffectivePriceListsService.listApplicable(orgId)` korzysta z istniejącego
-`application-rule-evaluator` z modułu `price_lists`, aby wyliczyć wszystkie cenniki obecnie
-obowiązujące organizację, każdy z tablicą `reasons[]` (`direct_organization_match` /
-`customer_group_match` / `sales_channel_inheritance` / `segment_rule_match`). Wynik jest dostępny pod
-`GET /api/v1/admin/organizations/:id/applicable-price-lists` i wyświetlany jako tabela tylko do
-odczytu na stronie szczegółów organizacji w panelu.
+Strona szczegółów organizacji w panelu administracyjnym pokazuje, tylko do odczytu, **cenniki, które
+obecnie obowiązują organizację**: cenniki, których odbiorcy wskazują samą organizację, cenniki
+wskazujące którąś z jej organizacji nadrzędnych (dziedziczone w hierarchii) oraz cenniki jej grupy
+klientów. Każdy ma oznaczenie, jak dociera do organizacji — `direct_organization_match`,
+`ancestor_organization_match` albo `customer_group_match` — a cenniki dla wszystkich nie są
+wymieniane. O tym, który z nich wygrywa dla danego produktu, decyduje kolejność cen modułu
+`price_lists`; odnośnik **Wyjaśnij cenę dla tej organizacji** na tej samej stronie otwiera dla niej
+wyjaśnienie ceny.
+
+Dla programistów: `OrganizationEffectivePriceListsService.listApplicable(orgId)` pyta moduł
+`price_lists` przez `PriceListReadPort.listForOrganization({ organizationChain, customerGroupId })`
+(kontener `priceListReadPort`), przekazując łańcuch organizacji od najbliższej oraz jej własną grupę
+klientów. Odpowiedź jest dostępna pod `GET /api/v1/admin/organizations/:id/applicable-price-lists`.
+Gdy modułu `price_lists` nie ma, wywołanie jest odrzucane, zamiast zwracać pustą listę. Powody
+`sales_channel_inheritance` i `segment_rule_match` nie są już zwracane.
 
 Promocje: gdy promocja jest skierowana do konkretnej organizacji (`promotions.organization_id` jest
 ustawione), platforma stosuje ją tylko wtedy, gdy organizacja koszyka ma status `active`. Sprawdzenie

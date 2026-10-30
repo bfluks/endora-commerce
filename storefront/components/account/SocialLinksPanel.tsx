@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { tForLocale } from '../../lib/i18n/messages';
 import type { MfaSocialLink } from '../../lib/api/mfa';
+import { LocalizedAnchor } from '../../lib/i18n/localized-link';
 
 /**
  * The identities linked to this account, on the account security page
@@ -80,7 +81,7 @@ export function SocialLinksPanel({
             ) : (
               <p className="b2b-auth__hint">
                 {t('account.socialLinks.lastCredential')}{' '}
-                <a href="/password-reset/request">{t('account.socialLinks.setPassword')}</a>
+                <LocalizedAnchor href="/password-reset/request">{t('account.socialLinks.setPassword')}</LocalizedAnchor>
               </p>
             )}
           </li>

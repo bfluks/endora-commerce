@@ -939,6 +939,11 @@ const NOT_SOURCE = new Set(['node_modules', 'dist', '.next', 'build', 'coverage'
 
 /** The real filesystem behind {@link TestFileLister}. An unreadable directory contributes nothing. */
 export function nodeTestFileLister(): TestFileLister {
+  return nodeFileLister((entry) => /\.(?:test|spec)\.tsx?$/.test(entry));
+}
+
+/** Every file under a member whose name `matches`, skipping {@link NOT_SOURCE}. */
+function nodeFileLister(matches: (entry: string) => boolean): TestFileLister {
   const walk = (dir: string, found: string[]): string[] => {
     let entries: readonly string[];
     try {
@@ -956,7 +961,7 @@ export function nodeTestFileLister(): TestFileLister {
         continue;
       }
       if (directory) walk(path, found);
-      else if (/\.(?:test|spec)\.tsx?$/.test(entry)) found.push(path);
+      else if (matches(entry)) found.push(path);
     }
     return found;
   };
@@ -1303,5 +1308,237 @@ describe('which test files `tsc` reads', () => {
     expect(inSomeProgram.length).toBeGreaterThan(0);
 
     expect(testsOutsideTheTypeCheckProgram(members, listTests, readProgram)).toEqual([]);
+  });
+});
+
+/**
+ * *Which program owns each backend source file?* (2026-10-24, issue #421.)
+ *
+ * The backend type-check outgrew its CI heap cap twice in two months — 2048 ->
+ * 2560 -> 3072 MB — so it is split into more than one program, each named by a
+ * `-p` in `backend`'s own `typecheck` script. A split buys memory and costs an
+ * invariant nothing else holds: a directory that falls between the configs'
+ * `include` globs is type-checked by no `tsc` invocation and compiles green,
+ * which is issue #215's shape. The case above cannot see it, because its
+ * population is test files and the files a split strands are as likely to be a
+ * helper, a fixture or a script.
+ *
+ * So the population here is **every TypeScript file under the member**, and
+ * each must be a root of **exactly one** program. *None* is the silent hole.
+ * *More than one* is the other way a split goes wrong: `tsc` checks the file
+ * twice and the peak the split was for creeps back, which nothing reports.
+ * The predicate is the parsed `fileNames` of each configuration, the same seam
+ * as above, so it judges what `tsc` reads rather than what a glob looks like.
+ * Roots only, deliberately: a file reached through an import is checked as
+ * well, but deriving that needs a whole program — the 2 GB this split exists
+ * to avoid — and *checked by accident of an import* is not ownership.
+ */
+
+/**
+ * Paths under `backend/` that are a root of none of its programs, each with why.
+ *
+ * A key ending in `/` is a directory prefix; anything else is one exact path,
+ * relative to the member. **Two-way**: a key matching no file outside every
+ * program is `stale-ledger-entry`. Never add one to make a run pass — a new
+ * directory under `src`, `test` or `scripts` belongs in a program.
+ */
+const OUTSIDE_EVERY_BACKEND_PROGRAM: Readonly<Record<string, string>> = {
+  'acceptance/':
+    'Fixture packages an acceptance run installs as a third party would. Each carries its ' +
+    'own `tsconfig.json`, and the acceptance scripts compile it with that configuration ' +
+    '(`scripts/acceptance/package-schema.ts`, `block-renderers.ts`); in a backend program ' +
+    'they would be read with `paths` pointing at sources no installed consumer has.',
+};
+
+/** Whether a {@link OUTSIDE_EVERY_BACKEND_PROGRAM} key describes `relative`. */
+function ledgerKeyMatches(key: string, relative: string): boolean {
+  return key.endsWith('/') ? relative.startsWith(key) : relative === key;
+}
+
+/**
+ * Every TypeScript file under `member` that is a root of no type-check program,
+ * or of more than one.
+ *
+ * The programs are the member's own `typecheck` script's, read through
+ * {@link typeCheckConfigsOf}, so a third `-p` is in scope the day it is
+ * written. Findings name the file relative to the member.
+ */
+export function typeCheckProgramOwnership(
+  member: WorkspaceMember,
+  listSources: TestFileLister,
+  readProgram: TypeCheckProgramReader,
+  ledger: Readonly<Record<string, string>> = OUTSIDE_EVERY_BACKEND_PROGRAM,
+): readonly string[] {
+  const configs = typeCheckConfigsOf(member);
+  if (configs.length === 0) return [`no-typecheck-script ${member.name}`];
+
+  const findings: string[] = [];
+  const owners = new Map<string, string[]>();
+  for (const config of configs) {
+    const files = readProgram(member.dir, config);
+    if (files === null) {
+      findings.push(`unreadable-type-check-config ${member.name} ${config}`);
+      continue;
+    }
+    for (const file of files) owners.set(file, [...(owners.get(file) ?? []), config]);
+  }
+  // A configuration nobody could read has a file list nobody has seen, so no
+  // file can be judged against it — and every one would otherwise read as owned
+  // by nothing, burying the one finding that is true.
+  if (findings.length > 0) return findings;
+
+  const usedKeys = new Set<string>();
+  for (const file of listSources(member.dir)) {
+    const relative = file.slice(member.dir.length + 1);
+    const owning = owners.get(file) ?? [];
+    if (owning.length === 1) continue;
+    if (owning.length > 1) {
+      findings.push(`in-several-programs ${relative} (${owning.join(', ')})`);
+      continue;
+    }
+    const key = Object.keys(ledger).find((candidate) => ledgerKeyMatches(candidate, relative));
+    if (key === undefined) findings.push(`in-no-program ${relative}`);
+    else usedKeys.add(key);
+  }
+  for (const key of Object.keys(ledger)) {
+    if (!usedKeys.has(key)) findings.push(`stale-ledger-entry ${key}`);
+  }
+  return findings.sort();
+}
+
+/** The real filesystem's TypeScript sources under a member, declaration files included. */
+export function nodeTypeScriptSourceLister(): TestFileLister {
+  return nodeFileLister((entry) => /\.[cm]?tsx?$/.test(entry));
+}
+
+describe('which program owns each backend source file', () => {
+  const backend: WorkspaceMember = {
+    dir: '/repo/backend',
+    name: 'backend',
+    manifest: {
+      name: 'backend',
+      scripts: { typecheck: 'tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit' },
+    },
+  };
+  const EMPTY_LEDGER: Readonly<Record<string, string>> = {};
+  /** A reader answering from a fixed map of configuration -> root files. */
+  const programs =
+    (byConfig: Readonly<Record<string, readonly string[]>>): TypeCheckProgramReader =>
+    (_dir, config) =>
+      byConfig[config] ?? null;
+
+  it('reports a file that falls between the programs’ `include` globs', () => {
+    // The defect the split introduces: a new `test/e2e/` that neither config
+    // names compiles green because nothing compiles it.
+    const findings = typeCheckProgramOwnership(
+      backend,
+      () => ['/repo/backend/src/index.ts', '/repo/backend/test/e2e/a.test.ts'],
+      programs({ 'tsconfig.json': ['/repo/backend/src/index.ts'], 'test/tsconfig.json': [] }),
+      EMPTY_LEDGER,
+    );
+
+    expect(findings).toEqual(['in-no-program test/e2e/a.test.ts']);
+  });
+
+  it('reports a file both programs own', () => {
+    // The other way a split goes wrong: an `exclude` dropped from the first
+    // config checks the second's files twice, and the peak creeps back.
+    const shared = '/repo/backend/test/integration/a.test.ts';
+    const findings = typeCheckProgramOwnership(
+      backend,
+      () => [shared],
+      programs({ 'tsconfig.json': [shared], 'test/tsconfig.json': [shared] }),
+      EMPTY_LEDGER,
+    );
+
+    expect(findings).toEqual([
+      'in-several-programs test/integration/a.test.ts (tsconfig.json, test/tsconfig.json)',
+    ]);
+  });
+
+  it('is silent when every file has exactly one owner, across both programs', () => {
+    const findings = typeCheckProgramOwnership(
+      backend,
+      () => ['/repo/backend/src/index.ts', '/repo/backend/test/integration/a.test.ts'],
+      programs({
+        'tsconfig.json': ['/repo/backend/src/index.ts'],
+        'test/tsconfig.json': ['/repo/backend/test/integration/a.test.ts'],
+      }),
+      EMPTY_LEDGER,
+    );
+
+    expect(findings).toEqual([]);
+  });
+
+  it('reads an unreadable configuration as a finding and judges no file against it', () => {
+    const findings = typeCheckProgramOwnership(
+      backend,
+      () => ['/repo/backend/test/integration/a.test.ts'],
+      programs({ 'tsconfig.json': [] }),
+      EMPTY_LEDGER,
+    );
+
+    expect(findings).toEqual(['unreadable-type-check-config backend test/tsconfig.json']);
+  });
+
+  it('reports a member with no `typecheck` script', () => {
+    const findings = typeCheckProgramOwnership(
+      { ...backend, manifest: { name: 'backend', scripts: {} } },
+      () => ['/repo/backend/src/index.ts'],
+      programs({}),
+      EMPTY_LEDGER,
+    );
+
+    expect(findings).toEqual(['no-typecheck-script backend']);
+  });
+
+  it('honours a ledger key by prefix or exact path, and fails a stale one', () => {
+    const findings = typeCheckProgramOwnership(
+      backend,
+      () => ['/repo/backend/acceptance/fixture/src/a.ts', '/repo/backend/vitest.config.ts'],
+      programs({ 'tsconfig.json': [], 'test/tsconfig.json': [] }),
+      { 'acceptance/': 'why', 'vitest.config.ts': 'why', 'vitest.gone.ts': 'why' },
+    );
+
+    expect(findings).toEqual(['stale-ledger-entry vitest.gone.ts']);
+  });
+
+  it('lists declaration files and every TypeScript extension, and nothing under `node_modules`', () => {
+    const memberDir = mkdtempSync(join(tmpdir(), 'source-lister-'));
+    try {
+      mkdirSync(join(memberDir, 'src', 'node_modules'), { recursive: true });
+      for (const file of ['a.ts', 'b.tsx', 'c.mts', 'd.cts', 'e.d.ts', 'f.js', 'node_modules/g.ts']) {
+        writeFileSync(join(memberDir, 'src', file), '');
+      }
+
+      expect([...nodeTypeScriptSourceLister()(memberDir)].sort()).toEqual(
+        ['a.ts', 'b.tsx', 'c.mts', 'd.cts', 'e.d.ts'].map((file) => join(memberDir, 'src', file)),
+      );
+    } finally {
+      rmSync(memberDir, { recursive: true, force: true });
+    }
+  });
+
+  it('every TypeScript file under `backend/` is a root of exactly one of its programs', () => {
+    const root = findCheckoutRoot(process.cwd());
+    const member = workspaceMembers(root!, nodeWorkspaceFs()).find(
+      (candidate) => candidate.dir === join(root!, 'backend'),
+    );
+    const listSources = nodeTypeScriptSourceLister();
+    const readProgram = nodeTypeCheckProgramReader();
+
+    // Floors: the member was found, it has sources, and every program it
+    // builds read at least one file — a reader that had stopped resolving
+    // would otherwise turn the whole tree into `in-no-program`, or a config
+    // whose `include` matched nothing into a silent pass for the others.
+    expect(member).toBeDefined();
+    expect(listSources(member!.dir).length).toBeGreaterThan(0);
+    const configs = typeCheckConfigsOf(member!);
+    expect(configs.length).toBeGreaterThan(0);
+    for (const config of configs) {
+      expect(readProgram(member!.dir, config)?.length ?? 0, config).toBeGreaterThan(0);
+    }
+
+    expect(typeCheckProgramOwnership(member!, listSources, readProgram)).toEqual([]);
   });
 });

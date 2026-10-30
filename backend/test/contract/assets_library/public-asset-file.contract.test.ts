@@ -21,6 +21,8 @@ import { SalesChannel } from '@endora-commerce/platform/kernel';
 
 import { resolvePublicApiBaseUrl } from '../../../src/kernel/index.js';
 
+import { replaceAsset, runName } from '../../helpers/asset-replace-fixtures.js';
+
 
 /**
  * T037 — Contract test: GET /assets/file/:assetId (public + private + 410 + 404).
@@ -235,5 +237,95 @@ describe('public asset file (T037)', () => {
     });
     expect(r.statusCode).toBe(404);
     expect(r.json()).toMatchObject({ error: { code: 'ASSET_NOT_FOUND' } });
+  });
+
+  // -------------------------------------------------------------------------
+  // specs/156-asset-stable-url/ T055 — caching by URL form, the stale-marker
+  // redirect, and the signature checked before the deleted state.
+  // -------------------------------------------------------------------------
+
+  async function detailOf(id: string): Promise<{ contentVersion: string }> {
+    const r = await h.app.inject({ method: 'GET', url: `/api/v1/admin/assets/${id}`, cookies: adminCookie });
+    return (r.json() as { data: { contentVersion: string } }).data;
+  }
+
+  function expectRefusalHeaders(r: { headers: Record<string, unknown> }): void {
+    expect(r.headers['cache-control']).toBe('no-store');
+    expect(r.headers['x-content-type-options']).toBe('nosniff');
+  }
+
+  it('caches the bare URL as public, no-cache and the current-marker URL as immutable, ETag from the content version', async () => {
+    const id = await uploadOne('public');
+    const { contentVersion } = await detailOf(id);
+    const bare = await h.app.inject({ method: 'GET', url: `/assets/file/${id}` });
+    expect(bare.headers['cache-control']).toBe('public, no-cache');
+    expect(bare.headers['etag']).toBe(`"${id}-${contentVersion}"`);
+    const marked = await h.app.inject({ method: 'GET', url: `/assets/file/${id}?v=${contentVersion}` });
+    expect(marked.statusCode).toBe(200);
+    expect(marked.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+  });
+
+  it('after a replace, a stale marker redirects to the current one, keeping only download=1, and the old ETag gets the new bytes', async () => {
+    const id = await uploadOne('public');
+    const old = await detailOf(id);
+    const oldEtag = String((await h.app.inject({ method: 'GET', url: `/assets/file/${id}` })).headers['etag']);
+    const replaced = await replaceAsset(h, id, {
+      filename: `${runName()}.png`,
+      mime: 'image/png',
+      value: Buffer.concat([TINY_PNG, Buffer.from('as156')]),
+    });
+    expect(replaced.statusCode, replaced.body).toBe(200);
+    const current = await detailOf(id);
+
+    const stale = await h.app.inject({ method: 'GET', url: `/assets/file/${id}?v=${old.contentVersion}` });
+    expect(stale.statusCode).toBe(302);
+    expect(stale.headers['location']).toBe(`/assets/file/${id}?v=${current.contentVersion}`);
+    expectRefusalHeaders(stale);
+    const download = await h.app.inject({ method: 'GET', url: `/assets/file/${id}?v=${old.contentVersion}&download=1` });
+    expect(download.headers['location']).toBe(`/assets/file/${id}?v=${current.contentVersion}&download=1`);
+    const extra = await h.app.inject({
+      method: 'GET',
+      url: `/assets/file/${id}?v=${old.contentVersion}&token=a&exp=1&x=y`,
+    });
+    expect(extra.headers['location']).toBe(`/assets/file/${id}?v=${current.contentVersion}`);
+
+    const conditional = await h.app.inject({ method: 'GET', url: `/assets/file/${id}`, headers: { 'if-none-match': oldEtag } });
+    expect(conditional.statusCode).toBe(200);
+    expect(conditional.rawPayload.equals(Buffer.concat([TINY_PNG, Buffer.from('as156')]))).toBe(true);
+  });
+
+  it('answers 410 for a soft-deleted public asset, bare and with a marker', async () => {
+    const id = await uploadOne('public');
+    const { contentVersion } = await detailOf(id);
+    expect((await h.app.inject({ method: 'DELETE', url: `/api/v1/admin/assets/${id}`, cookies: adminCookie })).statusCode).toBe(200);
+    for (const url of [`/assets/file/${id}`, `/assets/file/${id}?v=${contentVersion}`]) {
+      const r = await h.app.inject({ method: 'GET', url });
+      expect(r.statusCode).toBe(410);
+      expectRefusalHeaders(r);
+    }
+  });
+
+  it('checks a soft-deleted private asset’s signature first: 403 without or with a tampered one, 410 with a valid one', async () => {
+    const id = await uploadOne('private');
+    const signed = await h.app.inject({ method: 'GET', url: `/api/v1/admin/assets/${id}/url`, cookies: adminCookie });
+    const url = new URL((signed.json() as { data: { url: string } }).data.url);
+    const token = url.searchParams.get('token')!;
+    const exp = url.searchParams.get('exp')!;
+    expect((await h.app.inject({ method: 'DELETE', url: `/api/v1/admin/assets/${id}`, cookies: adminCookie })).statusCode).toBe(200);
+
+    const without = await h.app.inject({ method: 'GET', url: `/assets/file/${id}` });
+    const tampered = await h.app.inject({ method: 'GET', url: `/assets/file/${id}?token=${'0'.repeat(64)}&exp=${exp}` });
+    const valid = await h.app.inject({ method: 'GET', url: `/assets/file/${id}?token=${token}&exp=${exp}` });
+    expect([without.statusCode, tampered.statusCode, valid.statusCode]).toEqual([403, 403, 410]);
+    expect(without.json()).toMatchObject({ error: { code: 'ASSET_ACCESS_DENIED' } });
+    expect(valid.json()).toMatchObject({ error: { code: 'ASSET_GONE' } });
+    for (const r of [without, tampered, valid]) expectRefusalHeaders(r);
+  });
+
+  it('answers 404 ASSET_NOT_FOUND for a name that is neither an id nor a permalink', async () => {
+    const r = await h.app.inject({ method: 'GET', url: '/assets/file/not-a-uuid-or-permalink' });
+    expect(r.statusCode).toBe(404);
+    expect(r.json()).toMatchObject({ error: { code: 'ASSET_NOT_FOUND' } });
+    expect(r.headers['cache-control']).toBe('no-store');
   });
 });

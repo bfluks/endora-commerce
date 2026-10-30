@@ -1,3 +1,4 @@
+import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
   AdminNotificationRecord,
   AdminNotificationRecordPort,
@@ -15,13 +16,20 @@ import type { AdminNotificationService } from './admin-notification-service.js';
  *
  * The adapter exists for the usual reason: `record` answers with the
  * `AdminNotification` entity, and the port answers with the record.
+ *
+ * `recordWithin` is the co-transactional twin (`specs/165-task-management/`
+ * SC-004): the entry is persisted into the caller's unit of work and commits
+ * with it.
  */
 export function createAdminNotificationRecordPort(
   getService: () => AdminNotificationService,
-): AdminNotificationRecordPort {
+): AdminNotificationRecordPort<EntityManager> {
   return {
     async record(input) {
       return toAdminNotificationRecord(await getService().record(input));
+    },
+    recordWithin(em, input) {
+      return toAdminNotificationRecord(getService().recordWithin(em, input));
     },
   };
 }

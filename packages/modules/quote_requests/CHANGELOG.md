@@ -1,5 +1,377 @@
 # @endora-commerce/mod-quote-requests
 
+## 0.108.0
+
+### Minor Changes
+
+- 0bd5a2b: Quote requests validate packaging units by id and apply minimum order quantities — refused for buyers, flagged for sales reps.
+
+  - **Behaviour change for API clients — packaging validation.** A customer line (create, draft edit, cart → quote request) may carry `packagingUnitId`; it must be a current unit of the line's product, and the server stores that unit's catalogue name and base quantity. A line sending a packaging name and base quantity without an id is accepted only when both match one of the product's units. Anything else is refused whole with `422 PACKAGING_UNIT_MISMATCH`, `details.lines[]` with `index` and `reason`; every failure of an id has the single reason `unknown_unit` (a name gives `name_unknown` or `base_quantity_mismatch`). **A buyer request with a non-matching packaging label is now refused, including a draft edit of an existing request whose stored label no longer matches a catalogue unit.** `packagingUnitId` is returned on the admin and customer reads.
+  - **Behaviour change for API clients — buyer writes refused below a minimum.** Customer create (`POST /api/v1/quote-requests`, also from the cart, quick order, a shopping list or an order clone), draft edit (`PATCH /api/v1/quote-requests/:id`) and resubmit answer `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]`. Order: hidden or unpublished products as unknown first, then packaging, then minimums. A draft edit does not refuse a line left unchanged; a line is matched to its stored row by the packaging unit's id first, so a unit renamed in the catalogue since does not make the line "changed" (it keeps its exemption and its stored reference price). Resubmit is judged as a new request; **a resubmit of a request whose product no longer exists now answers `404 PRODUCT_NOT_FOUND`**.
+  - **Product names in the response language.** The minimum and packaging refusals of a buyer's create (also from the cart, quick order and a shopping list), draft edit and resubmit name products in the language their sentence is written in (q-sorted `Accept-Language`, else the channel default); `createForCustomer` takes `options.language`.
+  - **Sales-rep writes warn.** Create on behalf, Modify, the admin's order clone and the admin quick-order build write below-minimum lines; `GET /api/v1/admin/quote-requests/:id` gives each such line `minimumWarning` (`{ kind, minimum, packagingUnitName? }`), shown as a _Below minimum_ badge on the quote request screen. It never reaches the customer read.
+  - `RfqCustomerPort.createForCustomer` accepts `options.minimums` (`'enforce' | 'warn'`).
+  - `mod-i18n`'s `core` bundle gains `rfq.detail.minimum.pieces`, `rfq.detail.minimum.packagingUnit` and `rfq.detail.minimum.packagingUnitUnnamed` in English and Polish.
+  - Migration `20261018T122118_quote_requests_item_packaging_unit_id.ts` adds `quote_request_items.packaging_unit_id`.
+
+- 73699ad: Custom-field filters on the admin Orders and Quote Requests lists. The fields marked as list filters appear among each list's filters, labelled in the operator's language, and are applied on the server. They are deep-linkable (`cf.<key>.<operator>` in the address), shown as removable chips and kept in saved views. A saved filter on a field that is no longer offered is dropped when the view is loaded, with a notice naming it. A filter the server refuses, for instance one carried in an old link, is reported by the field's name with a button that removes it. The Orders CSV export follows the same filters, and is not offered while a refused filter stands.
+- 252b54b: The admin Quote Request list accepts `customFieldFilters`, a JSON object of filters keyed by Quote Request custom-field key, applied on the server and combined as AND with the organization, status and assignment filters. A key the list does not offer is refused with 400 `CUSTOM_FIELD_FILTER_UNAVAILABLE` naming it; a malformed value, more than 10 keys or 100 chosen values, or the parameter given twice is 400 `VALIDATION_FAILED`. An operator that does not apply to a field's type, or an inverted range (a minimum above its maximum, a start date after its end), is refused with 400 `VALIDATION_FAILED` rather than ignored or answered empty.
+
+  `GET /api/v1/admin/quote-requests/custom-field-filters` (`rfqs:handle`) lists the Quote Request custom fields the list offers as filters.
+
+  The module's Quote Request custom-field definitions now follow its activation: while `quote_requests` is switched off they are neither offered, served nor writable on the custom-fields admin, and they return unchanged with it.
+
+- cf7a9c0: The Order and the Quote Request detail screens honour `?returnTo=`: opened with a path of the application, their _Back_ leads there and says only "Back" — the convention their create screens already had. Without it, _Back_ still leads to the list.
+- 1df7a5e: The Line items table prints a document's groups.
+
+  - **Contracts.** `DocumentCollectionDeclaration` gains an optional `sections(data)` answering `DocumentItemSection[]` (`{ key, kind: 'group' | 'ungrouped', label, itemIndexes, summary }`, with `documentItemSectionSchema` and `DOCUMENT_UNGROUPED_SECTION_KEY`); `isValidSectionPartition(sections, itemCount)` checks one. `itemsTableGroupingSchema` is now a union of `{ by: 'sections', otherItemsLabel, showItemCount }`, `{ by: 'none' }` and the existing field shape (with `by: 'field'` optional) — `itemsTableSectionsGroupingSchema`, `itemsTableNoGroupingSchema`, `itemsTableFieldGroupingSchema`; `itemsTableGroupingMode(raw)` reads a stored value. `documentCollectionDetailSchema` gains `sampleSections` (default `[]`). `documentSectionTexts(language)` answers the default _Other items_ heading and the plural item count in English and Polish.
+  - **Changed meaning of a stored `grouping: null`.** It meant _No grouping_; it now means **the document's groups**, which is also what an absent setting means. A document with no group prints exactly as before (the flat definition is unchanged), so this changes nothing until a document has groups — then every template, including those saved before this release, prints them without being edited. A table that must stay flat whatever the document says stores `{ by: 'none' }` (_No grouping_ in the editor).
+  - **Document templates.** In that mode, a document holding a group prints per section a heading row (the group's name, the item count when enabled), its rows and one subtotal row per totals row of the table over the section's totals, then _Other items_ and the document's totals. The renderer reads `sections()` once per collection per render; a host that throws, or answers a partition that does not cover its lines, is logged and the table prints flat. Route 2 serves `sampleSections`; the editor's _Grouping_ field offers _Document's groups_, _By field_ and _No grouping_, the _Other items_ heading and _Show item count_, and the canvas draws the sample's groups.
+  - **Quote requests.** The quote's `lines` collection declares its sections (`quoteLineSections`), each with the quote's totals rule over its own lines; the editor's sample quote has two groups and an ungrouped line.
+
+- c8aa175: Quote request lines can be arranged in named, ordered groups.
+
+  - **Admin API.** `PATCH /api/v1/admin/quote-requests/:id` and `POST /api/v1/admin/quote-requests` accept `groups` (`{ key, id?, name }`, in display order) and a per-line `groupKey`. A body with `groups` replaces the grouping (an `id` keeps a group across a rename; a stored group not named is deleted; its lines become ungrouped); a body with `items` and no `groups` keeps every paired line in its group; `groups` without `items` answers 400; a group id of another quote answers `422 VALIDATION_FAILED` at `groups.<i>.id`. The grouping is written under the existing row lock and recorded on the `quote_request.modify` / `quote_request.create_on_behalf` audit entry (`stateBefore.groups`, `stateAfter.groups` as `{ name, lineCount }`). A save that only regroups is an ordinary revision.
+  - **Replies.** Every quote reply answers `itemGroups` (admin: every group, empty ones included; customer: groups holding a line only) and each item's `groupId` and `position`, with `items` **in display order** — the reply read had no order before. The customer comparison may carry `{ kind: 'grouping' }`; the admin history lists the five new change kinds. Customer bodies accept no grouping (`PATCH` refuses `groups`; a create body's keys are stripped as before); a customer draft edit keeps every paired line's group; resubmission copies none.
+  - **One product on several lines.** A quote may hold one product and variant on several lines, in different groups or in one. Lines without an id pair with stored lines by group and quantity first (draft edits, API clients, revision comparisons); the customer comparison pairs revision lines one to one instead of by product, and an entry about a product on several lines names its group (`groupName`), as the admin history's line reference does. A `PATCH` line may carry `splitFromId`: a new line split off a stored line keeps its variant, packaging unit, proposal, note, currency and reference. The _Modify_ tab offers _Split line_; the create screen lets a product be added again and keys its price prefill by line.
+  - **Read port.** `quoteRequestReadPort.listItems` answers lines in display order with `position` and `group`.
+  - **PDF data.** The document data carries `groups` and each line's `groupId` / `position`, lines in display order; the quote PDF prints them as sections (see the document-sections changeset).
+  - **Admin screens.** The detail _Modify_ tab and the create screen group lines with the line groups editor, with a summary per group; _Overview_ shows the groups read-only.
+  - **Migration** `20261020T171341_quote_requests_quote_request_item_groups.ts` creates `quote_request_item_groups` and adds `quote_request_items.group_id` (on delete set null) and `position` (default 0, no backfill).
+  - `mod-i18n`'s `core` bundle gains `rfq.detail.history.change.{group_added,group_removed,group_renamed,line_group,line_order}`, `rfq.detail.history.ungrouped` and `rfq.detail.history.lineInGroup` in English and Polish.
+
+- 14bcf1d: Every consumer prices on price books (feature 160, D-287 P1), through the one batched resolution chain.
+
+  - **carts** — `cart_items.price_source` (migration `…_carts_cart_items_price_source`) records which tier priced a line (`agreed | base | catalogue | buyer | sale`). `CartLinePricing.orderablePrices` drops the product's own price step, passes the variant, and stores the source.
+  - **orders** — `order_items.price_source` (migration `…_orders_order_items_price_source`) is copied from the cart line at placement. The admin order preview and the external order intake price through `resolveLinePrices` instead of one `resolveLinePrice` per line; a line no price book prices is refused, with no `defaultPrice` fallback.
+  - **organizations** — the effective price lists of an organization are its effective **price books**: `PriceListReadPort.listForOrganization({ organizationChain, customerGroupId })` answers the books whose audience holds the organization, an ancestor or its group, each with `reason` and `depth`. Old: `listActive()` plus `evaluateApplicationRule` per list. New: one `listForOrganization` call.
+  - **product_feeds** — a feed pinned to a price book publishes that book's rows over the channel's catalogue price (`namedListPrices` takes the feed's `salesChannelId`); a product the book does not price is absent.
+  - **search** — hits and suggestions price through the batched listing resolution; suggestions pass the request currency.
+  - **quote_requests** — reference prices are resolved in the request's currency; the RFQ create prefill and the reference probe call `POST /api/v1/admin/price-books/resolve` instead of `GET /api/v1/admin/products/:id/resolved-price`.
+
+- b0e1abd: A custom-field value that was not carried is recorded with the field's label, so its history line can name the field.
+
+  - **`customFieldCarryPort`** names every skipped key with the **source** definition's label as
+    it reads at that moment — `label: { labelDefault, labels }` — a `target_missing` skip
+    included.
+  - **Records keep the label.** The Order system note (`systemNote.skipped`), the Quote Request
+    `custom-field-carry-skipped` event and its `custom_field_carry_skipped` history entry, and the
+    Sales Opportunity audit member `customFieldCarry.skipped` store each skip's label next to its
+    key and reason. It is a snapshot: renaming the field later does not change history. Skips
+    recorded earlier have no label and read as before.
+  - An administrator who cannot read custom-field definitions can now be shown which field was
+    not carried and why. The values themselves stay visible only to readers with
+    `custom_fields:read`.
+
+- 9e0d759: A Quote Request created from a Sales Opportunity receives the Opportunity's carried custom-field values.
+
+  - **`quoteRequestCustomFieldCarryPort`** (`CustomFieldCarryReceiverPort` from
+    `@endora-commerce/contracts`) carries a Sales Opportunity's values into a Quote Request's
+    **empty** fields in one `quote_request.custom_fields.carry` Command, attributed to the system.
+    A value the request already holds is kept. A missing request and one of another Organization
+    both answer `not-found`, and nothing is written; when nothing is carried and nothing skipped,
+    no audit entry is written.
+  - **History.** A value that cannot be carried is named in one `custom-field-carry-skipped` event
+    (new value of the `qre_event_type_check` constraint, migration
+    `Migration20261021T164808QuoteRequestsQuoteRequestEventCarrySkipped`), shown in
+    `GET /api/v1/admin/quote-requests/:id/history` as a `custom_field_carry_skipped` entry with
+    `customFieldCarry` (the source Opportunity and every skipped key with its reason). It is
+    admin-only: buyer replies leave the event out.
+
+- 56b075d: The _Place order_ action on an approved Quote Request in the Admin UI works. It posted to the storefront's `POST /api/v1/quote-requests/:id/convert-to-order`, which is customer-only: an administrator's session answered `401`, which the Admin UI reads as an expired session, so the operator was signed out — and an accepted call would have seeded the administrator's own basket.
+
+  `@endora-commerce/mod-quote-requests` adds `POST /api/v1/admin/quote-requests/:id/prepare-customer-basket`, behind the module's `rfqs:handle` permission and the sales-representative scope of the other admin actions. It puts the approved request's lines into the basket of the customer who owns the request, at the agreed unit prices — replacing what that basket held, exactly as the customer's own conversion does and under the same rules — and records `quote_request.prepare_customer_basket` in the audit log. The customer completes the order at checkout. `@endora-commerce/contracts` exports its response schema, `adminPrepareCustomerBasketResponseSchema` (`cartId`, `customerAccountId`, `itemCount`).
+
+  The Admin UI button calls it after a confirmation that names the replaced basket, and is labelled _Prepare the customer's basket_ (`@endora-commerce/mod-i18n`, English and Polish).
+
+- e6f3a78: A quote line's unit prices keep four decimal places (owner ruling of 2026-10-25). `quote_request_items.desired_unit_price`, `agreed_unit_price` and `reference_unit_price` are `numeric(14,4)` (`Migration20261025T031736QuoteRequestsUnitPriceFourPlaces`, lossless). A typed desired or agreed price is stored as typed, up to four places (`unitPriceText` now writes four places; a fifth is refused with `400 UNIT_PRICE_PRECISION_EXCEEDED`), a reference price is the resolver's four-place amount, and a cart line's four-place price handed over on conversion is a valid reference. The quote document marks its unit prices (`listUnitPrice`, `proposedUnitPrice`, `unitPrice`, `unitGrossPrice`, `unitDiscount`) as unit prices, carried at four places and printed with their significant places; a line's discount is its list value less its net. The admin screens show unit prices by the same rule, take a typed price at four places, and value a line as its unit price × quantity rounded once.
+
+### Patch Changes
+
+- ee26beb: Documentation for custom-field list filters, in English and Polish.
+
+  - `@endora-commerce/mod-custom-fields` ships its first documentation page: the records that take
+    custom fields, creating and editing a field and the limits of editing, the _Use as list
+    filter_ option, how each type filters, and the list APIs.
+  - The `orders`, `quote_requests` and `crm` pages describe the custom-field filters on their admin
+    lists. The `quote_requests` page also says that its fields follow the module's activation. The
+    `crm` page explains how the Opportunities list's filters differ from the board's card-field
+    filters.
+
+- 8d62ff8: Documentation only (feature 160, FR-048): the module pages describe how prices are determined with price books.
+
+  - `price_lists` ships three pages instead of one: _Price books_ (what a book is, base prices, the four resolution steps, the default precedence, variants, where prices appear, the demo's worked examples, permissions, known limitations and a migration note), _The price-book editor_ (every admin screen) and _Pricing for developers_ (data model, resolver, the batched read path, caching, the price surface, the admin and storefront API, the ports and the conversion from the old model).
+  - The pages of `catalog`, `carts`, `orders`, `organizations`, `product_feeds`, `quick_order`, `quote_requests` and `search` describe their prices as resolved from price books, with no product-owned price and no fallback. No code changes.
+
+- 87ac085: A price is rounded to two places the same way everywhere: half-up on its decimal digits.
+
+  - **`@endora-commerce/contracts`.** New `roundAmountHalfUp(value: string | number): string` — an amount at two places, half-up on its decimal digits (half away from zero when negative). A number is read as the shortest decimal that round-trips it.
+  - **`@endora-commerce/mod-carts`.** The basket line stores the resolver's four-place amount through `roundAmountHalfUp`, and the placement drift check (`storedPriceDiffers`) compares with it. `Number(amount).toFixed(2)` rounded the binary double, so a 9.0450 price was stored and charged as 9.04 while the card showed 9.05, and 1.0050 as 1.00 against 1.01.
+  - **`@endora-commerce/mod-orders`.** The admin order preview rounds its line prices the same way.
+  - **`@endora-commerce/mod-quote-requests`.** A quote line's stored reference price is rounded the same way.
+  - **`@endora-commerce/mod-product-feeds`.** Feed prices (`123.45 PLN`) are rounded the same way.
+
+- f367838: A resolver amount stays the decimal string `price_lists` answers with until it is rounded, and it is rounded only by the decimal helpers (`roundAmountHalfUp`, `grossAmountHalfUp`).
+
+  - **`@endora-commerce/mod-product-feeds`.** The feed's price ports carry decimal strings: `NamedListPriceResolver` and `SelectionPricePort` answer `Map<string, string>` (was `Map<string, number>`), `AnonymousPriceResolver` answers `{ amount: string; isSale }`, `NamedListPriceResolvers.one` answers `string | null`, and `FeedItemPrice.net` / `.gross` are strings (`gross` already rounded to two places). A custom item-field resolver or a decoration of these ports reads strings now; the file's figures do not change.
+  - **`@endora-commerce/mod-quote-requests`.** A quote line's reference price is rounded from the resolver's decimal string, not from a JS number; anything but a non-negative decimal stores no reference.
+  - **`@endora-commerce/mod-comparisons`.** The comparison PDF, its document table block and the admin comparison screen write a price at two places, half-up: a price of 9.0450 was shown as `9.045 PLN`, and 1900 as `1900 PLN`.
+
+- 93f873e: The admin quote request's Modify tab pre-fills an empty agreed unit price with the customer's current price rounded half-up on its decimal digits (`roundAmountHalfUp`), as a stored reference price is. It wrote `toFixed(2)` of the binary double, so a price of 9.0450 was offered as 9.04 and, once accepted, charged as 9.04 against the 9.05 the storefront shows. The current reference price the screen asks for is held at those two places too, and a price already defined on the request is written by the same rule.
+- 6f1e0ec: Custom-field carry review fixes.
+
+  - **`@endora-commerce/contracts`** — every string of `customFieldCarrySkipLabelSchema` is at most 200 characters (`CUSTOM_FIELD_CARRY_SKIP_LABEL_MAX`, new export); a longer `labelDefault` or per-locale label is refused.
+  - **`@endora-commerce/mod-custom-fields`** — the carry port cuts a skip's label snapshot to that limit, since a definition's per-locale labels are not capped, so every skip it plans parses.
+  - **`@endora-commerce/mod-quote-requests`** — the Opportunity → Quote Request carry takes the request's row `for update` and plans over the bag it re-reads under the lock, so an administrator's concurrent edit is never overwritten. A carry that fills a field still raises the request's `version`.
+
+- cec838d: The quote request's _History_ tab renders the `custom_field_carry_skipped` entry: under its title, the sales opportunity the values came from and one line per key not carried, with the reason, in English and Polish. A reason the screen has no sentence for reads "the value could not be carried", never its code.
+- f376a45: The admin quote request list's `totalAtAgreedPrice` and `totalAtCustomerPrice` are exact sums, through the customer list's helper `listTotal` (issue #417).
+- d34d96c: Quote amounts are computed in exact decimal arithmetic (issue #417). The rules are unchanged.
+
+  - **The quote document** (PDF lines and summary): a line's net, VAT and gross, the unit gross, the list value, the discounts and their percentage, and the summary's net, VAT (on the net total, at the quote's one rate) and gross are computed on decimals and rounded half-up once — 29.50 at 23 % printed a unit gross of 36.28, now 36.29.
+  - **Typed unit prices** — an operator's `agreedUnitPrice` and a buyer's `desiredUnitPrice` — are stored half-up on their decimal digits (new `unitPriceText`); `toFixed(2)` stored 1.005 as 1.00.
+  - **The admin screens**: the quote's net, VAT and gross (new `quoteTotals`, `quoteNet` in `admin/quote-totals.ts`), the section summaries and the reference difference are exact; 0.70 at 5 % showed a VAT of 0.03, now 0.04.
+
+- 2b8bd26: The quote request list's `totalAtCustomerPrice` and `totalAtAgreedPrice` are exact sums (issue #417, review of PR #423): 3 × 9.05 was published as `27.150000000000002`, now `27.15`. A typed `desiredUnitPrice` (`createQuoteRequestLineSchema`) and `agreedUnitPrice` (`adminCreateQuoteRequestLineSchema`, `adminPatchQuoteRequestLineSchema`) with more than two decimal places is refused with `400 AMOUNT_PRECISION_EXCEEDED` (`@endora-commerce/contracts`).
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+  - @endora-commerce/page-builder-core@0.108.0
+  - @endora-commerce/email-components@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- 70bb5e5: Customer draft edits and seller revisions keep line data they used to drop.
+
+  - **Behaviour change — at most 200 lines.** Customer create (`POST /api/v1/quote-requests`) and draft-edit (`PATCH /api/v1/quote-requests/:id`) bodies accept at most 200 lines; a longer list, accepted before, is now refused with `400` and nothing is written. A client that sends more must split the request.
+  - **Customer draft edits** (`PATCH /api/v1/quote-requests/:id`) are refused only once an administrator has modified the request (`409 RFQ_NOT_DRAFT`); a customer — or an organization administrator editing a colleague's draft — may now edit a pending draft repeatedly. An edit stores each line's packaging unit as sent. The route is rate-limited to 30 edits per minute per quote request (`429` beyond).
+  - **Seller revisions** (`PATCH /api/v1/admin/quote-requests/:id`) keep each surviving line's customer proposal, variant, line note, packaging unit and stored reference price unless the request changes them; `lineNote: null` clears a note. A line the seller adds has no packaging unit.
+  - **New peer dependency: `@fastify/rate-limit` (`^10`)**, needed for the route's rate-limit configuration. The platform host already registers it.
+
+- 70bb5e5: New `GET /api/v1/admin/quote-requests/:id/history` (gated by `rfqs:handle` and the sales-representative scope) and a rebuilt History tab on the admin quote-request screen. The stored events are turned into readable, translated entries: records of one decision are merged, every entry names the person who acted (an administrator by name and role, a customer user by name and e-mail, _System_ for expiry and completion), and a modification lists what changed against the previous revision — lines added and removed, quantity, agreed and proposed price, line note, header note and validity date. The reply reads the most recent 100 events and says `truncated: true` when older ones exist. Names are on the admin surface only.
+
+  An admin modification that changes the offer's validity date now records it in the `modified` event's payload as `validity`, and the customer's event payloads may carry that one key.
+
+- 70bb5e5: A per-customer **price negotiation lock**. An administrator decides whether customers may propose prices on quote requests — on the organization (allowed by default) and, as an override, on a customer account (_as organization_, _allowed_, _not allowed_). The effective value is the account's override, else the organization's value, else allowed.
+
+  - **Admin API**: `GET` / `PUT /api/v1/admin/organizations/:id/quote-price-negotiation` and `GET` / `PUT /api/v1/admin/customers/:id/quote-price-negotiation`. Reading follows `customers:read`, writing needs `customers:manage`; a sales representative reaches only organizations they may see (`404` otherwise). Every change is an audited Command with the old and new value.
+  - **Admin UI**: panels on the organization and customer screens, shown to roles with `customers:read`; the control is disabled without `customers:manage`. A role with `customers:manage` but not `customers:read` sees no panel.
+  - **Storefront API**: `GET /api/v1/quote-requests/price-negotiation` answers the signed-in customer's own effective value (`{ priceProposalsAllowed }`) and nothing else.
+  - **Enforcement**: a customer create or draft edit whose lines carry a proposed price — `0` included — while the request owner's value is _not allowed_ is refused with `422 RFQ_PRICE_PROPOSAL_NOT_ALLOWED` (translated) and writes nothing. The lock binds the request's **owner**, not the acting user: an organization administrator editing a colleague's draft is judged by the colleague's value. Cart conversion and resubmission carry no proposal and keep working. The seller's side and proposals already stored are not affected.
+  - While the module is switched off, the panels, the routes and the enforcement are absent; stored values are kept and apply again when it is switched back on.
+
+- 70bb5e5: Every quote line now stores a **reference price** — the net unit price, per base unit, that the request's customer would pay on a normal order on the request's sales channel — captured server-side on every customer write (storefront form, cart conversion, draft edit, resubmit, quick order, shopping list, order copy) and kept for the life of the request. The admin detail shows it per line beside the customer's proposal, their difference (amount and percentage) and the agreed price; a line with no stored reference shows the customer's current price on the request's channel, labelled as such. The Modify tab shows the same with a live difference, and prefills an empty agreed price with the customer's own price rather than the administrator's storefront price.
+
+  - **The module now depends on `price_lists`** (manifest `dependencies`): the reference is resolved through its `buyerLinePricePort`. `price_lists` cannot be switched off, so no activation control is affected.
+  - **For ERP and connector readers of `quoteRequestReadPort.listItems`: a line converted from a cart now has `desiredUnitPrice = null`.** The cart's unit price is its reference — read it from the new `referenceUnitPrice` / `referenceCurrency`.
+  - **Customer list totals**: `totalAtCustomerPrice` is `null` unless every line carries a proposal, the rule the admin list already applied. A cart-converted request therefore shows no customer-price total until it is priced.
+  - **Admin list totals**: the customer-price total no longer turns `null` at the seller's first revision — a revision now keeps each line's proposal.
+  - **CRM opportunity value**: a cart-converted request with no agreed price is valued `0` (it used to be valued at the cart prices recorded as proposals); a revised line the customer left unpriced is valued at the proposal carried from the customer's last draft edit until sales sets an agreed price.
+  - A client cannot supply a reference price: an unknown key in the customer body is stripped. A failure to resolve a price stores no reference and never blocks the request.
+
+- 70bb5e5: **A sales representative outside a quote request's organization now gets `404`, not `403`, on every admin quote-request route** — the detail, the new history and every action — the same answer as for an id that does not exist, so the response no longer reveals that the request exists. A client that branched on `403` for "not yours" should treat `404` as that case.
+- 05d0650: `quoteRequestReadPort` records now carry `salesChannelId`: the channel the quote request was
+  raised on, or `null` for one created outside a channel-resolved request.
+- bf9881f: Each module contributes its record type to admin global search (`@endora-commerce/mod-admin-search`).
+
+  | Package              | Record type                           | Fields offered (default in bold)                                                 | Permission                             |
+  | -------------------- | ------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------- |
+  | `mod-orders`         | `orders.order`                        | **number**, **organizationName**, **customer**, billingCompanyName, billingTaxId | `orders:read`                          |
+  | `mod-quote-requests` | `quote_requests.quote_request`        | **number**, **organizationName**, **customer**, customerNote                     | `rfqs:handle`                          |
+  | `mod-crm`            | `crm.opportunity`                     | **number**, **title**, **organizationName**, description                         | `crm:read`                             |
+  | `mod-organizations`  | `organizations.organization`          | **name**, **taxId**, legalName                                                   | `customers:read` or `customers:manage` |
+  | `mod-customers`      | `customers.customer`                  | **email**, **name**                                                              | `customers:read`                       |
+  | `mod-catalog`        | `catalog.product`, `catalog.category` | **sku**, **name**, slug, quickSearchAttributes; **name**, **slug**               | `catalog:read`                         |
+
+  Every provider applies its own admin list's visibility: sales representatives see only their
+  organizations' orders, quote requests, opportunities and customers; organizations follow the
+  Organizations list, with a representative's assigned organizations ranked first. Each module declares
+  a `contributes-to` edge on `adminSearchProviderRegistry`, so none of them depends on global search and
+  none loses its switch. `mod-quote-requests`, `mod-organizations`, `mod-customers` and `mod-catalog`
+  now declare `_i18n` in `dependencies` (status labels in the admin's language), and each module's
+  bundle gains `adminSearch.*` keys in English and Polish.
+
+- d571d8c: Quote request PDF: export and send to the customer (`specs/153-quote-request-pdf-template/`).
+
+  - The module registers the _Quote request_ document type (`quote_requests.quote_request`,
+    per-document selection) with four blocks (`QuoteHeader`, `QuoteParties`, `QuoteNotes`,
+    `QuoteDetails`), every general-purpose block, the line collection `lines` (list price, discounts,
+    net, VAT, gross, product attributes …) and a built-in layout in English and Polish.
+  - The quote request screen offers **Export PDF** and **Send PDF to customer** in every state while
+    document templates are switched on. The template chosen for a quote is remembered on it and
+    audited (`quote_request.set_document_template`); the language is chosen in the dialog.
+  - **Send PDF to customer** e-mails the PDF to up to five addresses (the requester preselected)
+    through the new transactional e-mail `quote_request_pdf`, editable and switchable like every
+    other, with an optional personal message; each send is audited
+    (`quote_request.send_document`) and shown on the quote's History.
+  - New admin routes under `/api/v1/admin/quote-requests/:id/`: `document-templates`,
+    `document-template`, `pdf`, `pdf/send`; new error codes `QUOTE_REQUEST_PDF_TOO_LARGE`,
+    `QUOTE_REQUEST_PDF_EMAIL_UNAVAILABLE`, `QUOTE_REQUEST_PDF_SEND_FAILED`.
+  - Schema: `quote_requests.document_template_id` (nullable, no foreign key) and the `pdf-sent`
+    event type. The module now depends on `transactional_emails`.
+
+- b96321c: Saved views on the admin Quote Request list (#290).
+
+  - The Quote Request list's toolbar carries the admin kit's saved-views control beside the column picker: a selector of the admin's own views and every shared view, _Save view_ and _Delete view_. A view is named, private or shared, and stores the list's visibility scope, organization, status selection, search text, sort and visible columns. Loading a view replaces all six and goes back to the first page; a status or column the list no longer offers is dropped, an empty column selection loads the default columns, an unknown sort loads _Newest_, and a view without a scope loads the viewer's default (_All_ for a platform admin, _My organizations_ otherwise). Any admin who can open the Quote Request list (`rfqs:handle`) can use it.
+  - Loading a view never widens what the loader sees: the list request that follows is the loader's own, narrowed to the organizations they reach, and a saved `scope: 'mine'` means the loader's assignments. A view stores an organization by id only, and the list never shows the name of an organization the loader cannot see — a captured organization outside their scope shows as an id prefix and an empty list.
+  - Four new routes, gated by `rfqs:handle` and by the module's presence: `GET` and `POST /api/v1/admin/quote-requests/list-views`, `PATCH` and `DELETE /api/v1/admin/quote-requests/list-views/{id}`. A view stores the list's filters, and optionally its sort (`{ field, dir }`) and visible columns; `null` for either means the list's default. `GET` returns the caller's own views and every shared view, ordered by name; every item carries `ownedByCaller` and `canModify`. Another admin's private view answers `404`; a shared view is modified or deleted only by its owner or a platform admin (any role except `sales_representative`), `403` otherwise. All four routes answer `401 UNAUTHORIZED` when no admin session resolves.
+  - A `PATCH` that changes nothing — an empty body, or every value as already stored — writes nothing and logs nothing; it answers `200` with the current view. It is still refused (`403`/`404`) to a caller who may not modify the view.
+  - `PATCH` and `DELETE` answer an `id` that is not a UUID with the same `404 NOT_FOUND` as a view that does not exist.
+  - While `quote_requests` is switched off, all four routes answer `503 MODULE_DISABLED` exactly as the Quote Request list does; saved views are kept and are served again once the module is back.
+  - Names are trimmed, 1–160 characters, without control or format characters. One admin cannot hold two views on the quote request list whose names differ only by letter case or surrounding spaces: `POST`, and a `PATCH` that changes the name, answer `409 RFQ_SAVED_VIEW_NAME_TAKEN` with a translated message (English and Polish). The rule binds the view's owner.
+  - New table `quote_request_list_saved_views`, created by the migration `Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews`, with a unique index on the owner and the lower-cased name.
+  - When a platform admin changes or deletes another admin's view, the `quote_requests` module logs one `info` record (`event: 'saved_view.updated' | 'saved_view.deleted'`, `list`, `viewId`, `ownerAdminUserId`, `actorAdminUserId`).
+
+  `@endora-commerce/contracts` gains the `ERROR_CODES.RFQ_SAVED_VIEW_NAME_TAKEN` member.
+
+### Patch Changes
+
+- b4fbb1c: **Create quote request** adds lines through **Browse products** — the admin kit's shared product
+  browser, many products at once — and a quick search by name or SKU beside it; the per-row product
+  search and **Add line** are gone. Draft and inactive products can be added; grouped and bundle
+  parents are shown with a reason and cannot; a product already on the request is marked as already
+  added. Each line shows name and SKU, an editable whole-number quantity (default 1), an editable
+  agreed unit price and remove.
+
+  The agreed unit price is prefilled from the customer's price lists through a queue with at most
+  four requests in flight, and a response is applied only while it still answers the line's current
+  product, quantity and customer. **A hand-typed agreed price is no longer overwritten** — before,
+  changing the quantity or the customer replaced it. A prefilled price answers one quantity, so
+  once the quantity is no longer a valid one that price is cleared and the line is marked. On a
+  customer change every price not typed by hand is cleared and resolved again for the new
+  customer, so it may become empty; lines added before a customer is chosen are prefilled once one
+  with an organization is.
+
+  **Incomplete lines block submit instead of being dropped**: a line with no agreed price or an
+  invalid quantity is marked and the request cannot be sent until it is fixed or removed; every line
+  on screen is sent. The running total counts the lines with both a valid quantity and a price.
+
+  The `core` bundle gains `rfqCreate.items.browse`, `rfqCreate.items.quickSearch`,
+  `rfqCreate.items.empty`, `rfqCreate.line.priceMissing` and `rfqCreate.line.quantityInvalid` in
+  English and Polish, and loses `rfqCreate.addItem`, which nothing reads any more.
+
+- 64aabf5: The customer draft-edit rate limit (`PATCH /api/v1/quote-requests/:id`, 30 edits per minute per quote request) is now counted after the customer guard and keyed on the customer as well as the request. An unauthenticated caller naming a request's id is answered `401` without consuming the owner's budget, and one customer's edits no longer spend another's. Only a well-formed request id enters the key; any other `:id` counts against one bucket per customer, so varying the path no longer mints a fresh budget.
+- 34f97ae: Callers of the cart ports name the basket's sales channel (`specs/154-sales-channel-access/`):
+  quick-order builds and one-click buy fill the basket of the request's channel (one-click now
+  always places on that channel), converting an approved quote request seeds the basket of the
+  request's channel (`RfqService.convertToOrder` takes the channel), and converting a shopping list
+  fills the basket of the request's channel (`ShoppingListService.convertToCart` takes the channel
+  as its fourth argument).
+- 53b3482: The Quote Request expiry sweep holds each request to `quote_requests.expiry_days` resolved for its own sales channel. It read the default channel's value and applied it to requests of every channel, so a channel set to `0` was not exempt and a channel with its own number of days was held to the default's. A request with no channel is held to the default channel's value, as before, and the `expired` history entry records the value that applied.
+
+  **On upgrading:** a channel that already has its own value starts following it on the sweep's first runs. A channel with a lower value than the default expires its backlog of requests that have been quiet that long, and a channel set to `0` stops expiring. Read the per-channel values of _Auto-expire pending after (days)_ before upgrading if that matters.
+
+  `@endora-commerce/mod-settings`: the setting's help text says so in English and Polish.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [ad55813]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+  - @endora-commerce/page-builder-core@0.107.0
+  - @endora-commerce/email-components@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

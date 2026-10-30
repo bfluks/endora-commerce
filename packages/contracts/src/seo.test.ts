@@ -364,6 +364,27 @@ describe('storefrontCrawlerFilesSchema', () => {
   });
 
   /**
+   * `anonymousAccess` — whether the channel is open to anonymous visitors
+   * (`specs/154-sales-channel-access/`). Additive: a backend older than it
+   * never sends it, and an answer without it still parses.
+   */
+  describe('anonymousAccess', () => {
+    it('is optional, and a boolean when it is there', () => {
+      expect(storefrontCrawlerFilesSchema.parse(FILES)).not.toHaveProperty('anonymousAccess');
+      for (const anonymousAccess of [true, false]) {
+        expect(storefrontCrawlerFilesSchema.parse({ ...FILES, anonymousAccess }).anonymousAccess).toBe(
+          anonymousAccess,
+        );
+      }
+      for (const anonymousAccess of ['false', 0, null, {}]) {
+        expect(storefrontCrawlerFilesSchema.safeParse({ ...FILES, anonymousAccess }).success).toBe(
+          false,
+        );
+      }
+    });
+  });
+
+  /**
    * `unreadable` — the members the backend could not read from what is stored
    * (`contracts/crawler-policy.md` §2.2). It is what lets `robots.txt` be
    * served while the channel's default robots is a value nobody can interpret:

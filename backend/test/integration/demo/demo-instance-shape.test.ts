@@ -42,7 +42,6 @@
  * variable that exists for exactly this case, a platform executed out of a
  * checkout against an instance laid out elsewhere.
  */
-import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -51,14 +50,14 @@ import { fileURLToPath } from 'node:url';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { migratedDatabase, type MigratedDatabase } from '../../helpers/migrated-database.js';
+
 const BACKEND_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const PACKAGE_ROOT = resolve(BACKEND_ROOT, '..', 'packages', 'demo-composition');
 
-/** Migrations, then five composed CLI runs. */
+/** A migrated database, then five composed CLI runs. */
 const SUITE_TIMEOUT_MS = 900_000;
 
-const RUN = randomBytes(4).toString('hex');
-const SHOP_DB = `dis_${RUN}_shop_test`;
 const INSTANCE_CLI = ['pnpm', 'exec', 'tsx', 'test/fixtures/demo/instance-shaped-cli.ts'];
 /** A default channel code an operator chose, as the paid demo's `pl_default`. */
 const CONFIGURED_CHANNEL_CODE = 'pl_default';
@@ -69,20 +68,6 @@ const DEMO_ROLE_HOLDERS: Readonly<Record<string, string>> = {
   'sales-rep@demo.local': 'sales_representative',
   'sales-rep-other@demo.local': 'sales_representative',
 };
-
-/** `DATABASE_URL`'s host, port and credentials, with the database replaced. */
-function dsnFor(database: string): string {
-  const declared = process.env['DATABASE_URL'];
-  if (declared === undefined || declared === '') {
-    throw new Error(
-      'demo instance shape: DATABASE_URL is not set. This test provisions its own throwaway ' +
-        'database from the running invocation’s DSN and cannot invent one.',
-    );
-  }
-  const url = new URL(declared);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
 
 async function run(
   label: string,
@@ -172,8 +157,9 @@ async function shopState(client: Client): Promise<ShopState> {
             join sales_channels ch on ch.id = scp.sales_channel_id
            where p.slug like 'demo-%' and ch.system_default)::text as sold,
          (select count(*) from megamenus)::text as menus,
-         (select count(distinct plp.product_id) from price_list_products plp
-            join products p on p.id = plp.product_id
+         (select count(distinct e.product_id) from price_list_matrix_entries e
+            join price_lists b on b.id = e.price_list_id and b.is_system
+            join products p on p.id = e.product_id
            where p.slug like 'demo-%')::text as priced`,
     )
   ).rows;
@@ -189,6 +175,7 @@ async function shopState(client: Client): Promise<ShopState> {
 
 describe('`demo seed` on a CLI-scaffolded instance', () => {
   const roots: string[] = [];
+  let database: MigratedDatabase | undefined;
   let shop: Client;
   let withoutReport: string;
   let without: ShopState;
@@ -198,18 +185,15 @@ describe('`demo seed` on a CLI-scaffolded instance', () => {
   let remainingDemoAdmins: number;
 
   beforeAll(async () => {
-    const admin = new Client({ connectionString: dsnFor('postgres') });
-    await admin.connect();
-    try {
-      await admin.query(`drop database if exists "${SHOP_DB}" with (force)`);
-      await admin.query(`create database "${SHOP_DB}"`);
-    } finally {
-      await admin.end();
-    }
-    const url = dsnFor(SHOP_DB);
-    await run('migration:up', ['pnpm', 'exec', 'tsx', 'src/db/migrate.ts', 'up'], {
-      DATABASE_URL: url,
+    // Exactly what `migration:up` from empty leaves — a clone of this run's
+    // template with its seeded channel withdrawn, because the first boot below
+    // is what has to create the channel, under the code the operator chose.
+    database = await migratedDatabase('dis', async (url) => {
+      await run('migration:up', ['pnpm', 'exec', 'tsx', 'src/db/migrate.ts', 'up'], {
+        DATABASE_URL: url,
+      });
     });
+    const url = database.url;
 
     const empty = emptyInstanceRoot();
     const installed = instanceRootWithComposition();
@@ -253,13 +237,7 @@ describe('`demo seed` on a CLI-scaffolded instance', () => {
   afterAll(async () => {
     if (shop !== undefined) await shop.end();
     for (const root of roots) rmSync(root, { recursive: true, force: true });
-    const admin = new Client({ connectionString: dsnFor('postgres') });
-    await admin.connect();
-    try {
-      await admin.query(`drop database if exists "${SHOP_DB}" with (force)`);
-    } finally {
-      await admin.end();
-    }
+    await database?.drop();
   }, SUITE_TIMEOUT_MS);
 
   describe('with no composition installed — the ordinary instance (D-216)', () => {

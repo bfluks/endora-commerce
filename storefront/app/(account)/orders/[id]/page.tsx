@@ -1,6 +1,4 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import {
   addOrderComment,
   cancelMyOrder,
@@ -15,6 +13,7 @@ import { retryOrderPayment } from '../../../../lib/api/payments';
 import { offersCancellation } from '../../../../lib/order-cancel';
 import { offersPaymentRetry, paymentRetryDestination } from '../../../../lib/payment-retry';
 import { getReturnable } from '../../../../lib/api/returns';
+import { orderReturnAction, type OrderReturnAction } from '../../../../lib/returns/returnForm';
 import { listMyOrderInvoices, invoiceDownloadUrl } from '../../../../lib/api/invoices';
 import { getSessionCookie } from '../../../../lib/session';
 import { getServerContext } from '../../../../lib/server-context';
@@ -22,9 +21,12 @@ import { StorefrontApiError } from '../../../../lib/api/client';
 import { formatMoney } from '../../../../lib/i18n/money';
 import { tForLocale } from '../../../../lib/i18n/messages';
 import { resolvePaymentReturnNotice } from '../../../../lib/orders/payment-return-notice';
+import { OrderItemRows } from '../../../../components/orders/OrderItemRows';
 import { PurchaseTracker } from '../../../../components/analytics/EcommerceTrackers';
 import { purchaseTrackingPayload } from '../../../../lib/analytics/purchase-eligibility';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -62,7 +64,7 @@ export default async function OrderConfirmationPage({
   const session = await getSessionCookie();
   const { id } = await params;
   const { payment: paymentReturn, error: actionError } = (await searchParams) ?? {};
-  if (!session) redirect(`/login?next=/orders/${id}`);
+  if (!session) return await localeRedirect(`/login?next=/orders/${id}`);
 
   let order;
   try {
@@ -129,15 +131,15 @@ export default async function OrderConfirmationPage({
   // platform decides it and sends the answer; see `lib/order-cancel.ts`.
   const canCancel = offersCancellation(order);
 
-  // Surface a return/complaint entry point directly on the order — only when the
-  // order is actually eligible (entered a completing status, items still
-  // returnable). Falls back to hidden on any error so the page never breaks.
-  let returnEligible = false;
+  // Surface a return/complaint entry point directly on the order — a return when
+  // any line is returnable, a complaint when none is (feature 155, FR-018/FR-021:
+  // `eligible: false` with `no_returnable_lines` still takes a complaint), nothing
+  // otherwise. Falls back to hidden on any error so the page never breaks.
+  let returnAction: OrderReturnAction | null = null;
   try {
-    const returnable = await getReturnable(session, id);
-    returnEligible = returnable.eligible;
+    returnAction = orderReturnAction(await getReturnable(session, id), order.id, locale);
   } catch {
-    returnEligible = false;
+    returnAction = null;
   }
 
   // Invoices attached to this order (feature 047). Hidden when none are ready.
@@ -209,10 +211,10 @@ export default async function OrderConfirmationPage({
             Order again → quote request
           </button>
         </form>
-        {returnEligible ? (
-          <Link href={`/returns/new?orderId=${order.id}`} className="btn btn--outline btn--sm">
-            Request return / complaint
-          </Link>
+        {returnAction ? (
+          <LocalizedLink href={returnAction.href} className="btn btn--outline btn--sm">
+            {returnAction.label}
+          </LocalizedLink>
         ) : null}
         {(invoices ?? []).map((inv) => (
           <a
@@ -225,9 +227,9 @@ export default async function OrderConfirmationPage({
             Download invoice {inv.number}
           </a>
         ))}
-        <Link href="/orders" className="btn btn--ghost btn--sm">
+        <LocalizedLink href="/orders" className="btn btn--ghost btn--sm">
           See all orders
-        </Link>
+        </LocalizedLink>
       </div>
 
       <h2 className="mt-10">Status</h2>
@@ -259,24 +261,7 @@ export default async function OrderConfirmationPage({
           </tr>
         </thead>
         <tbody>
-          {order.items.map((it) => (
-            <tr key={it.id}>
-              <td>
-                <Link href={`/p/${it.productId}`}>{it.productSnapshot.name}</Link>
-                <br />
-                <small className="text-subtle">
-                  SKU: {it.variantSnapshot?.sku ?? it.productSnapshot.sku}
-                </small>
-              </td>
-              <td>{it.quantity}</td>
-              <td>
-                {formatMoney(it.unitPrice, order.currency, locale)}
-              </td>
-              <td className="text-right">
-                {formatMoney(it.lineTotal, order.currency, locale)}
-              </td>
-            </tr>
-          ))}
+          <OrderItemRows order={order} locale={locale} />
         </tbody>
         <tfoot>
           <tr>
@@ -375,34 +360,34 @@ export default async function OrderConfirmationPage({
 async function addCommentAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
   const body = ((formData.get('body') as string) ?? '').trim();
   if (body) {
     try {
       await addOrderComment(session, id, body);
     } catch (err) {
-      const message = err instanceof StorefrontApiError ? err.message : 'Could not add comment.';
-      redirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
+      const message = err instanceof StorefrontApiError ? err.detail : 'Could not add comment.';
+      return await localeRedirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
     }
   }
-  redirect(`/orders/${id}`);
+  return await localeRedirect(`/orders/${id}`);
 }
 
 async function reorderAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
   let target = '/cart';
   try {
     const result = await reorderOrder(session, id);
     target = result.checkoutUrl || '/cart';
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not reorder.';
-    redirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
+    const message = err instanceof StorefrontApiError ? err.detail : 'Could not reorder.';
+    return await localeRedirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
   }
-  redirect(target);
+  return await localeRedirect(target);
 }
 
 /**
@@ -415,7 +400,7 @@ async function reorderAction(formData: FormData): Promise<void> {
 async function retryPaymentAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
   const { locale } = await getServerContext();
   const t = tForLocale(locale);
@@ -430,10 +415,10 @@ async function retryPaymentAction(formData: FormData): Promise<void> {
       )}`;
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : t('order.payment.retry.failed');
+      err instanceof StorefrontApiError ? err.detail : t('order.payment.retry.failed');
     target = `/orders/${id}?error=${encodeURIComponent(message)}`;
   }
-  redirect(target);
+  return await localeRedirect(target);
 }
 
 /**
@@ -448,30 +433,30 @@ async function retryPaymentAction(formData: FormData): Promise<void> {
 async function cancelOrderAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
   const { locale } = await getServerContext();
   const t = tForLocale(locale);
   try {
     await cancelMyOrder(session, id);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : t('order.cancel.failed');
-    redirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
+    const message = err instanceof StorefrontApiError ? err.detail : t('order.cancel.failed');
+    return await localeRedirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
   }
-  redirect(`/orders/${id}`);
+  return await localeRedirect(`/orders/${id}`);
 }
 
 async function reorderToQuoteAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
   try {
     const { ctx } = await getServerContext();
     await cloneOrderToQuote(session, id, ctx);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not create quote request.';
-    redirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
+    const message = err instanceof StorefrontApiError ? err.detail : 'Could not create quote request.';
+    return await localeRedirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
   }
-  redirect('/quote-requests');
+  return await localeRedirect('/quote-requests');
 }

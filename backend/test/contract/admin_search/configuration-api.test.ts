@@ -75,8 +75,10 @@ describe('admin global search — configuration API (spec 150)', () => {
     expect(valid.statusCode).toBe(403);
   });
 
-  it('lists the seven present record types with their offered fields and defaults', async () => {
+  it('lists the present record types with their offered fields and defaults', async () => {
     const view = await getView();
+    // The seven of this feature, then those later features contribute
+    // (`specs/163-projects-and-tasks/`: Projects and Tasks).
     expect(view.entities.map((e) => e.entityType)).toEqual([
       'orders.order',
       'quote_requests.quote_request',
@@ -85,6 +87,8 @@ describe('admin global search — configuration API (spec 150)', () => {
       'customers.customer',
       'catalog.product',
       'catalog.category',
+      'projects.project',
+      'tasks.task',
     ]);
     const orders = view.entities[0]!;
     expect(orders).toMatchObject({ label: 'Orders', enabled: true, customized: false });

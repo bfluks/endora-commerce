@@ -180,6 +180,25 @@ wszystkich kanałów albo własna wartość danego kanału — a nie wartość, 
 otrzymywał: pierwszy zapis odnotowuje `stored: false`, a nie wartość domyślną z manifestu.
 Ustawienie typu `secret` jest zapisywane jako `[redacted]` po obu stronach.
 
+## Informacje o sklepie
+
+Grupa **Shop information** (`shop`) zawiera dane o sklepie, które publikuje
+storefront: `shop.name`, `shop.address`, `shop.contact_email`,
+`shop.support_email`, `shop.phone`, `shop.contact_form_recipient_emails` oraz
+dwa ustawienia dla wyszukiwarek:
+
+| Ustawienie | Typ | Co to jest |
+| --- | --- | --- |
+| `shop.logo_asset_id` | `string` | **Shop logo** — publiczny obraz z biblioteki zasobów, wybierany w oknie wyboru zasobu. Puste oznacza brak logo. |
+| `shop.social_profiles` | `string_list` | **Social profiles** — pełne adresy `https://` profili organizacji w serwisach społecznościowych i innych witrynach, po jednym na wpis. Zapis zawierający inną wartość jest odrzucany z `422 VALIDATION_FAILED` i nic nie zostaje zapisane. |
+
+Storefront odczytuje je przez `GET /api/v1/storefront/shop-info`, które zwraca
+`logoUrl` (publiczny adres zasobu logo albo `null`, gdy ustawienie jest puste
+albo zasób zniknął lub nie jest publiczny) i `socialProfiles` (tylko wpisy
+`https:`). Publikuje oba w danych strukturalnych `Organization`, jako `logo` i
+`sameAs`, na stronie głównej i na każdej stronie CMS. Odczyt logo jest powodem,
+dla którego ten moduł zależy od `assets_library`.
+
 ## Dla modułów korzystających z ustawień — odczyt wartości
 
 Inne moduły wstrzykują `SettingsService` z kompozycji i odczytują wartości przez jedno API. Wynikiem

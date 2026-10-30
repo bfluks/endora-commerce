@@ -20,6 +20,7 @@ import { CmsCache } from '../../../../packages/modules/cms/src/backend/services/
 describe('CMS storefront cache (T096)', () => {
   let h: BackendServerHandle;
   let defaultChannelId: string;
+  let defaultPageChannel: string;
   let defaultChannelCode: string;
   const adminCookie = { b2b_session: 'stub-admin-session' };
 
@@ -28,6 +29,11 @@ describe('CMS storefront cache (T096)', () => {
     const channel = await h.em().findOneOrFail(SalesChannel, { systemDefault: true });
     defaultChannelId = channel.id;
     defaultChannelCode = channel.code;
+    // Feature 167 — a cached page is keyed by the channel's URL facts too.
+    defaultPageChannel = CmsCache.pageChannel(channel.code, {
+      prefixDefaultLanguage: channel.prefixDefaultLanguage,
+      languages: channel.languages.length > 0 ? channel.languages : [channel.defaultLanguage],
+    });
   });
 
   afterAll(async () => {
@@ -72,7 +78,7 @@ describe('CMS storefront cache (T096)', () => {
     });
     expect(publish.statusCode).toBe(200);
 
-    const cacheKey = CmsCache.pageKey(slug, defaultChannelCode, 'en-US');
+    const cacheKey = CmsCache.pageKey(slug, defaultPageChannel, 'en-US');
     expect(await h.redis.exists(cacheKey)).toBe(0);
 
     const first = await h.app.inject({

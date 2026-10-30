@@ -1,8 +1,10 @@
 #!/usr/bin/env tsx
 /**
  * Writes every module package's `package.json` from its layer inventory
- * (feature 080, T041), and the admin application's dependency on the module
- * packages whose `./admin` layer the generated registry imports (feature 091).
+ * (feature 080, T041), the admin application's dependency on the module
+ * packages whose `./admin` layer the generated registry imports (feature 091),
+ * and the backend application's dependency on every module package, whose
+ * manifest the generated manifest index imports (issue #445).
  *
  *   pnpm --filter backend run manifests:generate     # write
  *   pnpm --filter backend run manifests:check        # refuse drift, write nothing
@@ -116,7 +118,10 @@ async function main(): Promise<void> {
   // (feature 091): the generated admin registry names each contributing module
   // by bare specifier, and a bare specifier resolves only through a declared
   // dependency. It is written by the same command and refused by the same
-  // `--check` so the two cannot land apart.
+  // `--check` so the two cannot land apart. The backend's manifest joins it on
+  // the same terms (issue #445): the manifest index names every module package
+  // by bare specifier, and a module the backend does not declare is
+  // `ERR_MODULE_NOT_FOUND` at `overlay:check`.
   //
   // The `./tailwind.css` files join them on the same terms (feature 110, T123;
   // `admin-stylesheet-composition.md` R1.4): the declaration and the file it
@@ -168,6 +173,23 @@ async function main(): Promise<void> {
   // different walk from a different input, and one this run did not render is
   // #215's short walk.
   const renderedNames = new Set(run.rendered.map((artefact) => artefact.packageName));
+  // The `emitted-declarations` floor below refuses a package that has a
+  // manifest and no build — the state a module is in between its first
+  // `manifests:generate` (which the floor admits, see below) and its first
+  // build. The refusal is right, because what this run wrote for it is a
+  // fail-closed guess, but the read-size line alone does not say what to do
+  // about it, so name the packages and the command first.
+  const unbuiltManifested = run.unbuiltPackages.filter(
+    (name) => !run.newPackages.includes(name),
+  );
+  if (!check && unbuiltManifested.length > 0) {
+    process.stderr.write(
+      `${PREFIX} ${unbuiltManifested.length} package(s) have a manifest and no emitted ` +
+        `declarations, so D-181's derivation had nothing to read: ` +
+        `${unbuiltManifested.join(', ')}\n` +
+        `  Build them first (pnpm install, then pnpm run build:packages), and run this again.\n`,
+    );
+  }
   reportReadSize({
     prefix: PREFIX,
     files: run.filesRead + identity.filesRead,
@@ -211,7 +233,7 @@ async function main(): Promise<void> {
         covered:
           run.rendered.length -
           run.newPackages.length -
-          run.unbuiltPackages.filter((name) => !run.newPackages.includes(name)).length,
+          unbuiltManifested.length,
       },
     ],
   });

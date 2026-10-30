@@ -11,7 +11,7 @@ import { HttpError } from '@endora-commerce/platform/http';
 import { hashPassword, verifyPassword, verifyPasswordOrDummy } from '@endora-commerce/platform/kernel';
 import { CustomerAccount } from '../entities/customer-account.entity.js';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AuditPort, SalesChannelAccessPort } from '@endora-commerce/platform/kernel';
 import {
   ownCustomerSessionId,
   retireResetTokens,
@@ -74,6 +74,14 @@ export class CustomerAuthService {
      * `CUSTOMER_AUTHENTICATION_THROTTLED` before anything is looked up.
      */
     private readonly throttle?: CustomerAuthenticationThrottlePort,
+    /**
+     * Feature 154 — the kernel's sales-channel access rule. The sign-in route
+     * is open to the access step (a visitor of a closed store has to be able
+     * to sign in), so the rule is decided here: after the password and the
+     * blocked check, before a second factor is started or a session issued.
+     * Optional so a unit composition without it keeps working.
+     */
+    private readonly channelAccess?: Pick<SalesChannelAccessPort, 'assertCustomerMayUse'>,
   ) {}
 
   async login(input: {
@@ -128,6 +136,26 @@ export class CustomerAuthService {
         403,
         ERROR_CODES.ACCOUNT_BLOCKED,
         'This account has been blocked. Please contact support.',
+      );
+    }
+
+    // Feature 154 — the account may only sign in on a sales channel its
+    // Organization is assigned to. Decided after the password, so somebody
+    // without it learns nothing about assignments, and before anything is
+    // issued: a refused sign-in starts no second factor, creates no session and
+    // leaves `lastLoginAt` alone. No channel (a caller outside a request) is
+    // refused rather than waved through.
+    if (this.channelAccess) {
+      if (!input.salesChannelId) {
+        throw new HttpError(
+          403,
+          ERROR_CODES.SALES_CHANNEL_NOT_PERMITTED,
+          'This account does not have access to this store.',
+        );
+      }
+      await this.channelAccess.assertCustomerMayUse(
+        customer.organizationId ?? null,
+        input.salesChannelId,
       );
     }
 

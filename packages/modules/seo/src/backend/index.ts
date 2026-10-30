@@ -1,12 +1,15 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
   CatalogCategoryReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
+  CatalogProductUrlKeyReadPort,
   CmsPageReadPort,
   SeoMetaWritePort,
+  SeoProductMetaPort,
   SettingWriteValidatorRegistryPort,
 } from '@endora-commerce/contracts';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { lazyPort } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
@@ -29,6 +32,7 @@ import { registerSeoRoutes, type SeoRouteSettingsPort } from './routes.js';
 import { createCrawlerTextValidator } from './services/crawler-text-validator.js';
 import { SeoMetaOverride } from './entities/seo-meta-override.entity.js';
 import { SitemapCache } from './entities/sitemap-cache.entity.js';
+import { marksSitemapStale } from './services/sitemap-staleness.js';
 
 /**
  * `seo` — the sitemap that only read its setting in production (feature 072,
@@ -52,13 +56,16 @@ import { SitemapCache } from './entities/sitemap-cache.entity.js';
  * something stable to match — and a module should not have to know which of its
  * callers is a test.
  *
- * `auditLog` stops being optional: SEO overrides are admin writes, and an
- * optional audit sink defaults to not recording.
+ * SEO overrides are admin writes, and since feature 163 they run as Commands on
+ * the container's `commandBus` — one audit entry per request with the full row
+ * before and after — rather than through a hand-held audit sink.
  */
+
 
 export interface SeoCradle {
   readonly emFactory: () => EntityManager;
-  readonly auditLogService: AuditPort;
+  /** Every SEO override write is a Command (feature 163, analyze C1). */
+  readonly commandBus: CommandBus;
   readonly requireAdmin: RequireAdminFactory;
   readonly settingsReadPort: StorefrontAddressSettingsPort;
   /** Composition-specific sitemap tuning; `{}` in production. */
@@ -76,16 +83,18 @@ export function registerModule(ctx: ModuleContext): void {
 
     seoMetaResolver: ctx
       .asFunction(
-        ({ emFactory, auditLogService }: SeoCradle) =>
+        ({ emFactory, commandBus }: SeoCradle) =>
           new MetaTagResolverService(
             emFactory,
-            auditLogService,
+            commandBus,
             // Feature 075, Phase C. Never captured: the proxies resolve per
             // call, so a switched-off owner answers 503 `MODULE_DISABLED` at
             // the call rather than through a gate frozen at composition time.
             lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
             lazyPort<CatalogCategoryReadPort>(ctx, 'catalogCategoryReadPort'),
             lazyPort<CmsPageReadPort>(ctx, 'cmsPageReadPort'),
+            // Feature 163 — a channel-scoped override needs the product in the channel (FR-014).
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
           ),
       )
       .singleton(),
@@ -129,11 +138,32 @@ export function registerModule(ctx: ModuleContext): void {
             lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
             lazyPort<CatalogCategoryReadPort>(ctx, 'catalogCategoryReadPort'),
             lazyPort<CmsPageReadPort>(ctx, 'cmsPageReadPort'),
+            // Feature 163 — what is available to a crawler, per channel language.
+            lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
+            // Feature 163 — each product's URL key per channel language.
+            lazyPort<CatalogProductUrlKeyReadPort>(ctx, 'catalogProductUrlKeyReadPort'),
             sitemapOptions,
           ),
       )
       .singleton(),
   });
+
+  /**
+   * Feature 163 (R13) — product metadata per sales channel × language, for the
+   * product page `catalog` builds. `catalog` declares this edge `degrades-without`
+   * and probes `seo`'s presence before resolving it, so with `seo` off the page
+   * shows its derived metadata.
+   */
+  ctx.di.providePort<SeoProductMetaPort>(
+    'seoProductMetaPort',
+    ctx
+      .asFunction(({ seoMetaResolver }: SeoCradle): SeoProductMetaPort => ({
+        resolveForProduct: (input) => seoMetaResolver.resolveForProduct(input),
+        readScoped: (productId, scope) => seoMetaResolver.readScoped(productId, scope),
+        listScopesForProduct: (productId) => seoMetaResolver.listScopesForProduct(productId),
+      }))
+      .singleton(),
+  );
 
   ctx.di.providePort<SeoMetaWritePort>(
     'seoMetaWritePort',
@@ -151,6 +181,25 @@ export function registerModule(ctx: ModuleContext): void {
       }))
       .singleton(),
   );
+
+  /**
+   * Feature 163 (security review, carry 4) — a sitemap lists what an anonymous
+   * crawler may open now, so a change to that answer marks the cached documents
+   * stale: the scoped status, the publication window (the catalogue's window
+   * sweep emits `publicationWindow` for every bound it crosses), the audience and
+   * the URL keys, and the global status, archive and audience (`marksSitemapStale`,
+   * S-W1). `ctx.subscribe` gates the handler on this module's presence.
+   */
+  ctx.subscribe('product.updated.v1', async (payload) => {
+    const { changedFields } = payload as { changedFields?: readonly string[] };
+    if (!marksSitemapStale(changedFields)) return;
+    await ctx.cradle<SeoCradle>().seoSitemapService.markAllStale();
+  });
+  // S-W1 — an archived product leaves every sitemap (its `product.updated.v1`
+  // `['archivedAt']` does too; this one also covers an emitter that announces only it).
+  ctx.subscribe('product.archived.v1', async () => {
+    await ctx.cradle<SeoCradle>().seoSitemapService.markAllStale();
+  });
 
   ctx.routes(async (app) => {
     const { seoMetaResolver, seoSitemapService, seoCrawlerFilePreview, requireAdmin } =

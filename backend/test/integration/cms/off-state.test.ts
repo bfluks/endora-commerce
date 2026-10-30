@@ -1,11 +1,13 @@
-import { afterAll, beforeAll, describe, it } from 'vitest';
+import { randomUUID } from 'crypto';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DEFAULT_BRAND_TOKENS } from '@endora-commerce/contracts';
 import { CMS_PAGE_BUILDER_SETTING_CODES } from '@endora-commerce/mod-cms';
 import {
   setupBackendServer,
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { expectModuleAbsent } from '../../helpers/off-state.js';
+import { expectModuleAbsent, withModuleOff } from '../../helpers/off-state.js';
 
 /**
  * `cms` off-state — Constitution XVII item 6.
@@ -43,6 +45,16 @@ import { expectModuleAbsent } from '../../helpers/off-state.js';
  *    non-destructive: pages, blocks, templates and hook attachments stay, and
  *    the restored probes hold the routes to it.
  *
+ * **Brand tokens** (feature 163, T022) join the probes: the admin read and
+ * write and the storefront read go with the module, and come back with it
+ * because the harness's restoration assertion covers every probe. With `cms`
+ * off the storefront renders without `<style id="cmsb">`, so the fallbacks
+ * apply. Off is non-destructive: a stored `cms_brand_tokens` row survives the
+ * off/on cycle on both axes. The `open-cms-brand` palette action and the
+ * `/cms/brand` nav entry arrive with the brand screen (Phase 3c); the palette's
+ * off-state is `_admin_surfaces/batch-sixteen-palette-off-state.test.ts`'s
+ * question, as for every other `cms` action.
+ *
  * The **deactivated-while-platform-available** case is the first axis the
  * harness drives, and it is the one an operator actually creates: switching the
  * CMS off from `/platform/modules` never touches the lifecycle registry.
@@ -61,6 +73,69 @@ describe('cms off-state (Constitution XVII)', () => {
   });
 
   it('is absent from every surface while off, on both axes, and restored after', async () => {
+    // A stored set for a channel id no channel has: never read, and nobody
+    // else's, so it can be taken out again without touching real state.
+    const rowId = randomUUID();
+    await h.em().execute(
+      `insert into cms_brand_tokens (id, sales_channel_id, tokens, version) values (?, ?, ?::jsonb, 1)`,
+      [rowId, randomUUID(), JSON.stringify(DEFAULT_BRAND_TOKENS)],
+    );
+    try {
+      await expectCmsAbsent();
+      const survived = (await h.em().execute('select id from cms_brand_tokens where id = ?', [
+        rowId,
+      ])) as Array<{ id: string }>;
+      expect(survived, 'a brand-token row must survive the off/on cycle').toHaveLength(1);
+    } finally {
+      await h.em().execute('delete from cms_brand_tokens where id = ?', [rowId]);
+    }
+  });
+
+  // Feature 167 (T078) — the CMS slug reservation is the cms side of the language
+  // prefixes; with cms off nothing reserves, and the channels' languages and their
+  // derived URL languages are untouched: a channel language edit succeeds and the
+  // public channel read still answers the prefixes the storefront parses.
+  it('leaves channel language edits and the URL languages alone while off', async () => {
+    const code = `cms-off-167-${Date.now()}`;
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/sales-channels',
+      cookies: admin,
+      payload: {
+        code,
+        name: { 'en-US': 'cms off' },
+        languages: ['en-US'],
+        defaultLanguage: 'en-US',
+        currencies: ['PLN'],
+        defaultCurrency: 'PLN',
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    try {
+      await withModuleOff('cms', 'deactivated', async () => {
+        const patched = await h.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/admin/sales-channels/${code}`,
+          cookies: admin,
+          payload: { expectedVersion: 1, languages: ['en-US', 'pl-PL'] },
+        });
+        expect(patched.statusCode).toBe(200);
+        const identity = await h.app.inject({
+          method: 'GET',
+          url: '/api/v1/storefront/sales-channel',
+          headers: { 'x-sales-channel': code },
+        });
+        expect(identity.statusCode).toBe(200);
+        const data = (identity.json() as { data: { urlLanguages: Array<{ prefix: string }> } }).data;
+        expect(data.urlLanguages.map((l) => l.prefix)).toEqual(['en', 'pl']);
+      });
+    } finally {
+      await h.app.inject({ method: 'POST', url: `/api/v1/admin/sales-channels/${code}/deactivate`, cookies: admin });
+      await h.app.inject({ method: 'DELETE', url: `/api/v1/admin/sales-channels/${code}`, cookies: admin });
+    }
+  });
+
+  async function expectCmsAbsent(): Promise<void> {
     await expectModuleAbsent(h, 'cms', {
       routes: [
         { url: '/api/v1/admin/cms/pages', cookies: admin },
@@ -77,6 +152,16 @@ describe('cms off-state (Constitution XVII)', () => {
           cookies: admin,
           payload: { targetLanguage: 'en-US', sourceLanguage: null, context: 'cms', data: { root: {}, content: [] } },
         },
+        // Feature 163 — brand tokens: the admin read and write, and the
+        // storefront read the `<style id="cmsb">` tag is rendered from.
+        { url: '/api/v1/admin/cms/brand-tokens', cookies: admin },
+        {
+          method: 'PUT',
+          url: '/api/v1/admin/cms/brand-tokens',
+          cookies: admin,
+          payload: { scope: { kind: 'all' }, tokens: null, expectedVersion: 0 },
+        },
+        { url: '/api/v1/storefront/cms/brand-tokens', headers: channel },
       ],
       adminPresence: { cookies: admin },
       settingWrite: {
@@ -85,5 +170,5 @@ describe('cms off-state (Constitution XVII)', () => {
         cookies: admin,
       },
     });
-  });
+  }
 });

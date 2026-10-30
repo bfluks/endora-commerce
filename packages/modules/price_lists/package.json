@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-price-lists",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "sideEffects": false,
   "description": "Customer-group pricing, brackets, display modes, and rule-based engine.",
@@ -47,7 +47,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
+    "build": "node ../../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.ui.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run"
@@ -59,7 +59,9 @@
     "@mikro-orm/core": "^6",
     "@mikro-orm/migrations": "^6",
     "@mikro-orm/postgresql": "^6",
+    "bullmq": "^5",
     "fastify": "^5.11.0",
+    "ioredis": "^5",
     "lucide-react": "^1",
     "react": "^19",
     "react-router-dom": "^7",
@@ -88,7 +90,9 @@
     "@mikro-orm/postgresql": "^6.6.13",
     "@types/node": "^22.9.0",
     "@types/react": "^19.2.14",
+    "bullmq": "^5.76.1",
     "fastify": "^5.12.5",
+    "ioredis": "^5.10.1",
     "lucide-react": "^1.11.0",
     "react": "^19.2.5",
     "react-router-dom": "^7.18.2",

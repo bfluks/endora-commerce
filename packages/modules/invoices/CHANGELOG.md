@@ -1,5 +1,199 @@
 # @endora-commerce/mod-invoices
 
+## 0.108.0
+
+### Minor Changes
+
+- c8b20f6: An order refunded in full before it is invoiced is not invoiced (issue #417, owner ruling of 2026-10-24): there is no sale left to document. When the refunds of its captured payments equal what was captured and cover the whole order total, issuing a VAT invoice answers `422 INVOICE_ORDER_REFUNDED` and draws no number; the automatic issuance on an order status skips the order and logs the reason instead of failing. An order refunded in part is invoiced as before, with what was kept as paid. `ERROR_CODES` gains `INVOICE_ORDER_REFUNDED` (`@endora-commerce/contracts`), declared by `invoices` with an English and a Polish sentence.
+- e0ee513: Invoices compute every amount in exact decimal arithmetic, and price a line at its net (issue #417).
+
+  - **A line's net is `unitPrice × quantity`.** Issuance read the order line's `lineTotal` as the net, but `orders` stores that line's **gross** there, so every VAT-payer line was taxed twice: an order line of 100.00 net at 23 % was invoiced at 123.00 net and 151.29 gross. Invoices already issued are not rewritten; one issued for a VAT-payer order before this release overstates its net, VAT and gross and needs a correction.
+  - **A line's gross is `net × (1 + rate)` rounded half-up on the exact decimal product** (`grossFromNetHalfUp`); rounding the double made 29.50 at 23 % the gross 36.28 instead of 36.29. The per-rate rule is unchanged: a rate's VAT is the sum of its lines' grosses minus the sum of their nets.
+  - **A correction** caps, shares out, backs the net out of each gross and stores the unit net price (four places) in the same arithmetic: 0.15 over 8 pieces is stored as 0.0188, not 0.0187.
+  - `buildInvoiceLines` returns its totals as two-place strings (`netTotal`, `taxTotal`, `grossTotal`) and each line's stored amounts under `stored`; new `summarizeVat(lines)` and `vatSummaryRows(rows)` are the summary rule issuance and the read model share; new `correctionAmounts(total, originalGross, lines)`.
+
+- 161e9d3: Invoices store the summary they were issued with, record as paid what was captured, and correct cumulatively (issue #417, owner ruling and review of PR #423).
+
+  - **A line's `grossValue` is the line's own rounding**, `round(net × (1 + rate))`; the VAT and the totals stay per rate on the net sums, so the line grosses may differ from the gross total by a cent.
+  - **New nullable column `invoices.vat_summary`** (migration `Migration20261024T145631InvoicesVatSummary`, no backfill): issuance and a correction store the per-rate summary they were issued with, and the read model shows it. A document with none — issued before 0.108.0, or imported — is shown with the summary derived from its stored lines, as it was then. `readModelVatSummary(lines, stored)` decides by the stored summary, never by whether the totals reproduce.
+  - **`paidTotal` is what was paid for the order** — the paid, partially refunded and refunded payment attempts' amounts, through `payments`' `paymentReadPort` (a new `degrades-without` dependency); an order recorded as paid with nothing captured, or with `payments` absent, its stored total — never the invoice gross. An order placed before 0.108.0 that charged 40.80 and is invoiced now at 40.81 shows 0.01 as due.
+  - **A correction is cumulative over the corrections of one invoice**: per rate (per line for an invoice issued before 0.108.0) it credits the net of everything credited so far minus what earlier corrections credited, so all corrections together credit exactly the invoiced net and VAT; the cap is what remains of the invoice. A total above the sum of the correction's lines is refused with `400 VALIDATION_FAILED` (`details.code: correction_total_exceeds_lines`). `correctionAmounts` takes one `CorrectionInput` object.
+
+- 97617df: Invoices take VAT per rate on the sum of the nets at that rate, rounded half-up once, with gross = net + VAT (owner ruling of 2026-10-24, issue #417; `vatByRate`). This replaces a rate's VAT as the sum of its lines' rounded grosses minus their nets: three 0.02 lines at 23 % now carry 0.01 VAT, not 0.00. A line's stored `grossValue` is informational — its share of its rate's VAT added to its net — and the line grosses add up to the invoice gross; the per-line net is unchanged. A correction applies the same method: per rate, the net the credited gross came from (`netForGrossAtRate`) and the VAT on it, so a return refunded at what the invoice charged credits exactly the invoiced net and VAT. An invoice issued before this release is shown with the rule it was issued under (new `readModelVatSummary`); `summarizeVat` and `vatSummaryRows` are removed.
+
+### Patch Changes
+
+- f3598cd: A correction credits an order-level discount the way the invoice charged it (issue #417, review of PR #423). `CorrectiveInvoiceLine` gains an optional `discount` (`@endora-commerce/contracts`): the part of the order's discount the line's refund carries. The goods are credited at `amount + discount` at their VAT rate, and the discount comes back on a negative 0 % line mirroring the invoice's own discount line, so the correction totals the refund and credits the goods' VAT as charged: a full return of 100.00 net at 23 % with a 50.00 discount credits 123.00 of goods (23.00 VAT) and −50.00 of discount, 73.00 in all, where it credited 73.00 of goods with 13.65 VAT. Earlier corrections' discount lines stay out of the goods' cumulative nets.
+- 65daee2: An invoice's `paidTotal` is what was kept from what was captured for the order: each captured payment attempt's amount less its `refundedAmount`, summed once per attempt (issue #417, review of PR #423). An order refunded before invoicing records only what was kept (nothing, after a full refund); the invoice is still issued, since the sale happened and its return is a correction's to document. An order recorded as paid with no captured attempt still records its stored total; an overpayment is shown as it is.
+- cb35881: A settlement refunds and corrects one set of lines, and the settlements of one order run one at a time (issue #417, review of PR #423).
+
+  - **`@endora-commerce/mod-returns`**: the settlement's total covers every line of the case — a line the request leaves out counts at its stored `approvedRefundAmount`, as the correction already did — so a request naming one of two discounted lines no longer refunds 113.00 while its correction credits 246.00 of goods (46.00 VAT) less 20.00 of discount. A settlement takes the same per-order advisory lock as case creation, on a connection of its own, so two cases of one order settled at once no longer both read the same earlier corrections (2 × 0.03 at 23 % credited 0.02 VAT of the 0.01 invoiced). One that waits more than 15 seconds answers `409` (`details.code: settlement_in_progress`) with nothing moved.
+  - **`@endora-commerce/mod-invoices`**: `correctionAmounts` credits the goods at `amount + discount` and the discount back only when the correction credits exactly what its lines add up to; any other total is credited as goods in line order, with no discount line.
+
+- a4cd906: A correction that cannot be made never follows money that moved (issue #417, review of PR #423).
+
+  - `CorrectiveInvoicePort` gains `validateCorrection(input)` (`@endora-commerce/contracts`): it refuses, writing nothing, what `createCorrection` would refuse for the same input. `invoices` implements both from one preparation step.
+  - The returns settlement builds its correction once and validates it **before** the refund or the credit top-up; a refusal leaves the case in `received` with nothing moved. With `invoices` switched off, a settlement asking for a correction is refused before the credit, where it used to credit first and refuse after.
+  - A cancelled correction no longer counts against the cap or the cumulative nets of later corrections.
+
+- 9979afb: The one-time document template access grant no longer opens a system scope of its own at boot. It runs inside the system scope the platform already enters for every boot hook (`boot: invoices`), so each boot recorded a second `tenant.escape_hatch` entry for the same access, labelled with the `worker` entry point although only the boot ran it. What the grant writes, and when, is unchanged.
+- e6f3a78: Unit prices are shown by the one rule of the owner ruling of 2026-10-25: two places when the third and fourth are zero, otherwise the significant places, up to four (`0,0125 zł`, `1,50 zł`, `1,505 zł`); line values and totals keep two.
+
+  - `@endora-commerce/mod-invoices`: the invoice PDF's unit net price column (new `unitMoney` beside `money` in the PDF sections), the admin invoice screen and the template preview.
+  - `@endora-commerce/mod-carts`, `@endora-commerce/mod-customers`: the admin cart and the customer's cart history.
+  - `@endora-commerce/mod-comparisons`: a compared product's price on the screen, the canvas and the PDF (`1.50 PLN`, `0.0125 PLN`), where it was rounded to two places.
+  - `@endora-commerce/mod-crm`: an Opportunity's value of a linked Quote Request adds the quote's line values, each rounded to the cent once, as the quote desk does; it rounded only the sum.
+  - `@endora-commerce/cms-components`: the CMS product card's price; the package now depends on `@endora-commerce/contracts` for the rule.
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+  - @endora-commerce/page-builder-admin@0.108.0
+  - @endora-commerce/page-builder-core@0.108.0
+  - @endora-commerce/email-components@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- dd939be: **Breaking:** invoice templates moved into _Document templates_ (`specs/152-compare-pdf-template/`).
+  This is a breaking change released as `minor` because the package is in `0.x` (D-225).
+
+  - **Withdrawn API.** `GET/POST /api/v1/admin/invoice-templates`, `GET /api/v1/admin/invoice-templates/:id`,
+    `PUT /api/v1/admin/invoice-templates/:id/content/:language`,
+    `GET /api/v1/admin/invoice-templates/page-builder/config` and the two
+    `/api/v1/admin/invoice-templates/:id/preview` routes are removed. Use
+    `/api/v1/admin/document-templates` with `documentType: 'invoices.invoice'`:
+    `POST /api/v1/admin/document-templates` (create), `PUT …/:id/content/pl-PL` (save, with
+    `{ tree, expectedVersion }`), `POST …/:id/set-default`, `POST …/preview`,
+    `GET …/types/invoices.invoice/builder-config`.
+  - **No data is carried over.** The `invoice_templates` table is dropped by a migration; the
+    invoice document type's built-in layout (the former generic template) is used until an operator
+    sets an invoice template as default.
+  - **E-mailed invoice PDFs now follow the configured template**: the attachment of the invoice
+    e-mail is rendered exactly like the download. **PDF layouts can change** with this release.
+  - The module now depends on `document_templates` (which cannot be switched off while invoicing is
+    on) and `admin_roles`. A one-time, audited boot step gives every role holding `invoices:read`
+    the `document_templates:read` permission and every role holding `invoices:write` also
+    `document_templates:write`; it records itself in the hidden setting
+    `invoices.document_templates_grant_done` and never runs again.
+  - Removed: the `invoicePdfRenderer` container registration (invoice PDFs are produced by
+    `document_templates`' `documentRenderPort`), the `invoice-templates` palette action, and the
+    invoice template admin pages; `/invoices/templates` and `/invoices/templates/:id` redirect to
+    _Document templates_. `invoicePdfBlockRegistry` and its contributor contract are unchanged.
+  - `invoices:write` is relabelled _Issue/correct invoices and configure invoicing_.
+
+### Patch Changes
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [ad55813]
+- Updated dependencies [ad55813]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+  - @endora-commerce/page-builder-admin@0.107.0
+  - @endora-commerce/page-builder-core@0.107.0
+  - @endora-commerce/email-components@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

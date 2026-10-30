@@ -17,6 +17,7 @@ import {
 } from '../../../lib/catalog-price-query';
 import type { ProductListSort } from '@endora-commerce/contracts';
 import { seo } from './seo';
+import { localizedAlternates } from '../../../lib/i18n/navigation';
 
 /**
  * Indexable (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010/FR-012). The
@@ -25,9 +26,13 @@ import { seo } from './seo';
  * at the same canonical is what stops a crawler indexing them as separate
  * pages.
  */
-export const metadata: Metadata = {
-  alternates: { canonical: seo.route },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const alternates = await localizedAlternates(seo.route);
+  return {
+    // Feature 167 — canonical under the language prefix, with hreflang alternates.
+    alternates: { ...alternates, canonical: alternates.canonical },
+  };
+}
 
 interface PageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -128,6 +133,8 @@ export default async function CatalogPage({ searchParams }: PageProps): Promise<
             locale={locale}
             columns={3}
             view={query.view}
+            salesChannelCode={ctx.salesChannelCode}
+            more={products.pagination.hasMore}
           />
           <Pagination
             basePath="/catalog"

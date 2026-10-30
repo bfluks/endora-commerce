@@ -3,7 +3,9 @@ import {
   CORE_BLOCK_NAMES,
   ERROR_CODES,
   ITEMS_TABLE_BLOCK_NAME,
+  isValidSectionPartition,
   type DocumentItem,
+  type DocumentItemSection,
   type DocumentValue,
   type CoreBlockName,
   type DocumentBlockRenderer,
@@ -270,16 +272,29 @@ export class DocumentRenderer implements DocumentRenderPort {
           ),
         ).then((entries) => new Map<string, CollectionCatalogue>(entries)),
       ]);
-      // `items()` and `summary()` once per collection per render; a throw is
-      // the block's failure, so it is read inside `renderBlock`.
-      const lines = new Map<string, { items: DocumentItem[]; summary: Readonly<Record<string, DocumentValue>> }>();
+      // `items()`, `summary()` and `sections()` once per collection per
+      // render; a throw from the first two is the block's failure, so they are
+      // read inside `renderBlock`. Sections never fail a document (feature 159).
+      const lines = new Map<
+        string,
+        {
+          items: DocumentItem[];
+          summary: Readonly<Record<string, DocumentValue>>;
+          sections?: readonly DocumentItemSection[];
+        }
+      >();
       const linesOf = (key: string) => {
         let found = lines.get(key);
         if (!found) {
           const collection = registration.collections?.find((candidate) => candidate.key === key);
-          found = collection
-            ? { items: numberItems(collection.items(input.data)), summary: collection.summary?.(input.data) ?? {} }
-            : { items: [], summary: {} };
+          if (collection) {
+            const items = numberItems(collection.items(input.data));
+            const summary = collection.summary?.(input.data) ?? {};
+            const sections = this.sectionsOf(registration.code, collection, input.data, items.length);
+            found = { items, summary, ...(sections ? { sections } : {}) };
+          } else {
+            found = { items: [], summary: {} };
+          }
           lines.set(key, found);
         }
         return found;
@@ -345,6 +360,43 @@ export class DocumentRenderer implements DocumentRenderPort {
       language,
       requestedTemplateMissing,
     };
+  }
+
+  /**
+   * Feature 159 — a collection's sections, checked once per render
+   * (`specs/159-quote-request-item-groups/contracts/document-sections.md` §1).
+   * A host that throws, or answers a partition that does not cover its lines,
+   * is logged once and its tables print flat: the document never fails for it.
+   */
+  private sectionsOf<TData>(
+    documentType: string,
+    collection: NonNullable<AnyRegistration['collections']>[number],
+    data: TData,
+    itemCount: number,
+  ): readonly DocumentItemSection[] | undefined {
+    if (!collection.sections) return undefined;
+    let sections: readonly DocumentItemSection[];
+    try {
+      sections = collection.sections(data);
+    } catch (error) {
+      rethrowIfModuleDisabled(error);
+      this.log('[document_templates] a collection’s sections could not be read; the table prints flat', {
+        documentType,
+        collection: collection.key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+    if (!isValidSectionPartition(sections, itemCount)) {
+      this.log('[document_templates] a collection’s sections do not partition its lines; the table prints flat', {
+        documentType,
+        collection: collection.key,
+        sectionCount: sections.length,
+        itemCount,
+      });
+      return undefined;
+    }
+    return sections;
   }
 
   private async renderBlock(

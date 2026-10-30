@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { Breadcrumbs } from '../../components/Breadcrumbs';
 import { JsonLd } from '../../lib/seo/JsonLd';
+import { absoluteUrl } from '../../lib/seo/site-url';
 
 const STOREFRONT_ROOT = join(__dirname, '..', '..');
 const SCANNED = ['app', 'components', 'lib'];
@@ -43,7 +44,10 @@ describe('structured data blocks', () => {
     expect(script![1]).not.toContain('<');
     const parsed = JSON.parse(script![1]!) as { itemListElement: Array<{ name: string; item: string }> };
     expect(parsed.itemListElement[1]!.name).toBe('</script><img src=x onerror=alert(1)>');
-    expect(parsed.itemListElement[1]!.item).toBe('/p/x</script><script>alert(1)</script>');
+    // Feature 163 (T082): the item is absolute now (`absoluteUrl`), so the
+    // path arrives percent-encoded — still never a raw `<` inside the block.
+    expect(parsed.itemListElement[1]!.item).toBe(absoluteUrl('/p/x</script><script>alert(1)</script>'));
+    expect(parsed.itemListElement[1]!.item).not.toContain('<');
   });
 
   it('every application/ld+json block in the storefront is rendered through the JsonLd helper', () => {

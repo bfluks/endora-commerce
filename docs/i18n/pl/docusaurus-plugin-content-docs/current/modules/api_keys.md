@@ -36,6 +36,7 @@ Przy tworzeniu zakresy są sprawdzane względem typowanego katalogu w
 | `catalog:write` | Zapis PIM według SKU — **tylko klucze niepowiązane** |
 | `orders:read` | Odczyt zamówień przez zewnętrzne API — **tylko klucze powiązane** |
 | `orders:write` | Przyjmowanie zamówień przez zewnętrzne API — **tylko klucze powiązane** |
+| `platform.api_description.read` | Opis API — `GET /api/v1/_openapi.json` i `GET /api/v1/_docs` |
 
 Egzekwowanie nadal sprawdza tylko obecność zakresu na liście, więc dawne, dowolnie zapisane zakresy
 w istniejących kluczach nadal są odczytywane i egzekwowane — walidacji podlega tylko tworzenie.

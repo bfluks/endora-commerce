@@ -27,6 +27,9 @@
  * the `AdminRouteDeclaration` interface.
  */
 import { z } from 'zod';
+import type { ScopeRef } from './product-scope-model.js';
+import type { ScopedValuesData } from './product-scoped-values.js';
+import type { ScopedWriteOp } from './scoped-write-encoding.js';
 
 import { KnownIconNameSchema } from './admin-actions.js';
 import { blockNameRe } from './cms.js';
@@ -97,6 +100,11 @@ export const AdminNavSectionNameSchema = z.enum([
   // R-19): the CRM screens get a group of their own. The section is the
   // shell's, declared here and in `AppShell.tsx`; the `crm` module joins it.
   'crm',
+  // `specs/163-projects-and-tasks/` research R-16: Projects and Tasks get a
+  // group of their own, after CRM — they are not a sales or CRM sub-feature,
+  // and Tasks is meant for every module. The `projects` and `tasks` modules
+  // join it.
+  'work',
   'catalog',
   'inventory',
   'pricing',
@@ -263,6 +271,15 @@ export const AdminZoneNameSchema = z.enum([
    */
   'product.editor.channels',
   /**
+   * The product editor's SEO section at the editor scope (feature 168, FR-090…FR-092,
+   * `contracts/editor-ui.md` §5). Replaces 163's `product.editor.seo.after`.
+   *
+   * Mounted **once** per editor. Props: {@link ProductEditorSeoZoneProps}. `seo` contributes
+   * its fields here, staged into catalog's one Save; `catalog` renders the SEO tab only when the
+   * zone has a contributor, so with `seo` off there is no tab, no request and no error.
+   */
+  'product.editor.seo',
+  /**
    * Below the sales-channel editor's identity form.
    *
    * Mounted **once** per channel, and only for a channel that already exists —
@@ -359,6 +376,21 @@ export const AdminZoneNameSchema = z.enum([
    * `quote_requests` names no contributor and gains no edge.
    */
   'quote_request.detail.after',
+  /**
+   * The stack of panels an Opportunity's detail screen ends with.
+   *
+   * Mounted **once** per Opportunity, after the card that holds its tabs, on
+   * `order.detail.after`'s terms and for its reasons: every contribution
+   * renders its own card, the host puts no chrome around the zone, and an
+   * empty zone renders nothing at all, so the screen is identical to one
+   * without the member. Props: {@link OpportunityDetailZoneProps}, the
+   * Opportunity's id and nothing else (Z3).
+   *
+   * The first contributor is `projects`' Project panel
+   * (`specs/163-projects-and-tasks/contracts/admin-surfaces.md` §3); `crm`
+   * names no contributor and gains no edge.
+   */
+  'opportunity.detail.after',
   /**
    * The per-row action cell of the order detail's Delivery tab.
    *
@@ -512,6 +544,21 @@ export const AdminZoneNameSchema = z.enum([
    * contribution of that module, through the renderer's own presence filter.
    */
   'settings.setting.after',
+  /**
+   * The stack of panels a Task's detail screen ends with.
+   *
+   * Mounted **once** per Task, below the host's own cards, on
+   * `order.detail.after`'s terms and for its reasons: every contribution
+   * renders its own card, the host puts no chrome around the zone, and an
+   * empty zone renders nothing at all, so the screen is identical to one
+   * without the member. Props: {@link TaskDetailZoneProps}, the Task's id and
+   * nothing else (Z3).
+   *
+   * The first contributor is `projects`' Project panel
+   * (`specs/163-projects-and-tasks/contracts/admin-surfaces.md` §3); `tasks`
+   * names no contributor and gains no edge.
+   */
+  'task.detail.after',
 ])
 
 export type AdminZoneName = z.infer<typeof AdminZoneNameSchema>;
@@ -523,6 +570,26 @@ export type AdminZoneName = z.infer<typeof AdminZoneNameSchema>;
 /** A zone mounted once per product editor. */
 export interface ProductEditorZoneProps {
   readonly productId: string;
+}
+
+/**
+ * The product editor's SEO zone (feature 168, `contracts/editor-ui.md` §5): the editor scope,
+ * the SEO block of the scoped-values read, and the staging callback into catalog's one Save.
+ */
+export interface ProductEditorSeoZoneProps {
+  readonly productId: string;
+  readonly scope: ScopeRef;
+  /** "Global", "<channel>" or "<channel> · <language>", already translated. */
+  readonly scopeLabel: string;
+  /** The scope one level up, already translated; `null` at Global. */
+  readonly parentScopeLabel: string | null;
+  readonly view: ScopedValuesData['seo'];
+  /** The staged SEO cells, keyed by field (`title`, `description`, …). */
+  readonly staged: ReadonlyMap<string, ScopedWriteOp<string>>;
+  onStage(field: string, op: ScopedWriteOp<string> | undefined): void;
+  readonly readOnly: boolean;
+  /** Field → translated error message from the last save. */
+  readonly errors: Readonly<Record<string, string>>;
 }
 
 /**
@@ -649,6 +716,26 @@ export interface QuoteRequestDetailZoneProps {
 }
 
 /**
+ * A zone mounted once per Opportunity, at the end of its detail screen.
+ *
+ * The Opportunity's own id and nothing else: a contribution reads what it
+ * shows through routes of its own, and the host hands over none of its data.
+ */
+export interface OpportunityDetailZoneProps {
+  readonly opportunityId: string;
+}
+
+/**
+ * A zone mounted once per Task, at the end of its detail screen.
+ *
+ * The Task's own id and nothing else: a contribution reads what it shows
+ * through routes of its own, and the host hands over none of its data.
+ */
+export interface TaskDetailZoneProps {
+  readonly taskId: string;
+}
+
+/**
  * A zone mounted once per shipment attempt on the order detail's Delivery tab.
  *
  * Five props, and the last two are here **because a contribution matches on
@@ -752,8 +839,13 @@ export interface ProductEditorFieldZoneProps {
    */
   readonly fieldPath: string;
   /**
+   * Feature 168 (FR-106) — the editor scope the field is shown at. Optional: a contributor
+   * that ignores it keeps working.
+   */
+  readonly scope?: ScopeRef;
+  /**
    * The locales this field is edited in, or `null` for a field that is not
-   * language-scoped.
+   * language-scoped. Feature 168: the host passes `null` (protection is whole-field, FR-046).
    *
    * The host passes the set; a contributor that wants one control per locale
    * fans out over it. That is what collapses the two `LOCALES.map(...)` loops
@@ -796,18 +888,21 @@ export interface AdminZonePropsMap extends Record<AdminZoneName, object> {
   // places in one editor that both carry a product id carry the same shape.
   'product.editor.pricing.after': ProductEditorZoneProps;
   'product.editor.channels': ProductEditorZoneProps;
+  'product.editor.seo': ProductEditorSeoZoneProps;
   'sales_channel.editor.after': SalesChannelEditorZoneProps;
   'organization.detail.after': OrganizationDetailZoneProps;
   'customer.detail.after': CustomerDetailZoneProps;
   'order.detail.payment': OrderDetailZoneProps;
   'order.detail.after': OrderDetailZoneProps;
   'quote_request.detail.after': QuoteRequestDetailZoneProps;
+  'opportunity.detail.after': OpportunityDetailZoneProps;
   'order.shipment.row.actions': OrderShipmentRowZoneProps;
   'order.shipments.tab.actions': OrderShipmentsActionsZoneProps;
   'order.entry.tabs': OrderEntryTabsZoneProps;
   'ledger.section.tabs': LedgerSectionTabsZoneProps;
   'category.content.editor': CategoryContentEditorZoneProps;
   'settings.setting.after': SettingsSettingAfterZoneProps;
+  'task.detail.after': TaskDetailZoneProps;
 }
 
 /** The props of one zone, by name. */

@@ -8,7 +8,10 @@ import {
   type OrganizationDetailsPort,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
+import type { PriceSource } from '@endora-commerce/contracts';
 import type { PricingServiceContract } from './pricing-service.interface.js';
+import type { BookExplanation } from './book-resolver.js';
+import { effectiveCustomerGroupId } from './customer-group-rule.js';
 
 /**
  * How many lines one chunk resolves. Each chunk is one product read (an `IN`
@@ -35,7 +38,7 @@ export interface BuyerPriceChannelLookup {
 }
 
 export interface BuyerLinePriceServiceDeps {
-  pricingService: Pick<PricingServiceContract, 'resolveLinePrice'>;
+  pricingService: Pick<PricingServiceContract, 'resolveLinePrices'>;
   catalogProductRead: Pick<CatalogProductReadPort, 'findByIds'>;
   customerAccountRead: Pick<CustomerAccountReadPort, 'findById'>;
   organizationDetails: Pick<OrganizationDetailsPort, 'findById'>;
@@ -51,6 +54,10 @@ export interface BuyerLinePriceDetailedAnswer extends BuyerLinePriceAnswer {
    * the published `BuyerLinePriceAnswer` is not widened (D-77).
    */
   matrixEntryId: string | null;
+  /** Feature 160 — the tier that priced the line, the buyer price a charged sale undercut, and why (FR-020). */
+  source?: PriceSource | undefined;
+  compareAt?: string | null | undefined;
+  explanation?: BookExplanation | undefined;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -88,7 +95,11 @@ export class BuyerLinePriceService implements BuyerLinePricePort {
     return detailed.map(({ key, price }) => ({ key, price }));
   }
 
-  async resolveDetailed(query: BuyerLinePriceQuery): Promise<BuyerLinePriceDetailedAnswer[]> {
+  /** `explain` — the explainer route: every ranked runner-up per line, resolved past the answer cache. */
+  async resolveDetailed(
+    query: BuyerLinePriceQuery,
+    options: { explain?: boolean } = {},
+  ): Promise<BuyerLinePriceDetailedAnswer[]> {
     // The channel first: an unknown one is refused before anything is read.
     const salesChannel = await this.#channel(query.salesChannelId);
     if (query.lines.length === 0) return [];
@@ -116,7 +127,8 @@ export class BuyerLinePriceService implements BuyerLinePricePort {
     const organization = organizationId
       ? await this.deps.organizationDetails.findById(organizationId)
       : null;
-    const customerGroupId = customer?.customerGroupId ?? organization?.customerGroupId ?? null;
+    // The one rule (D-287 P0): the account's own group, else its organization's.
+    const customerGroupId = effectiveCustomerGroupId({ customer, organization });
     const currencyCode = query.currencyCode?.toUpperCase() ?? salesChannel.defaultCurrency;
 
     const answers: BuyerLinePriceDetailedAnswer[] = [];
@@ -126,25 +138,39 @@ export class BuyerLinePriceService implements BuyerLinePricePort {
         ...new Set(chunk.map((line) => line.productId)),
       ]);
       const byId = new Map(products.map((product) => [product.id, product]));
-      // Sequential within a chunk: the engine reads per line, and a chunk is
-      // the bound on how much one call may ask of the database at once.
-      for (const line of chunk) {
-        const product = byId.get(line.productId);
-        if (!product) {
+      // D-287 P0 — one batched resolution per chunk. It was one sequential
+      // `resolveLinePrice` per line (about seven statements each); a chunk is
+      // still the bound on how much one call may ask of the database at once.
+      // Keys are positional so two lines that share a caller key cannot
+      // overwrite each other's answer.
+      const priced = await this.deps.pricingService.resolveLinePrices({
+        lines: chunk.flatMap((line, index) => {
+          const product = byId.get(line.productId);
+          return product
+            ? [
+                {
+                  key: String(index),
+                  product,
+                  variantId: line.variantId ?? null,
+                  quantity: Math.max(1, line.quantity || 1),
+                },
+              ]
+            : [];
+        }),
+        context: {
+          organization: organization ?? null,
+          customerGroupId,
+          salesChannel,
+          currencyCode,
+        },
+        ...(options.explain ? { explain: true } : {}),
+      });
+      for (const [index, line] of chunk.entries()) {
+        if (!byId.has(line.productId)) {
           answers.push({ key: line.key, price: null, productFound: false, matrixEntryId: null });
           continue;
         }
-        const resolved = await this.deps.pricingService.resolveLinePrice({
-          product,
-          variantId: line.variantId ?? null,
-          context: {
-            quantity: Math.max(1, line.quantity || 1),
-            organization: organization ?? null,
-            customerGroupId,
-            salesChannel,
-            currencyCode,
-          },
-        });
+        const resolved = priced.get(String(index)) ?? null;
         answers.push({
           key: line.key,
           price: resolved
@@ -157,6 +183,9 @@ export class BuyerLinePriceService implements BuyerLinePricePort {
             : null,
           productFound: true,
           matrixEntryId: resolved?.matrixEntryId ?? null,
+          ...(resolved?.source !== undefined ? { source: resolved.source } : {}),
+          ...(resolved?.compareAt !== undefined ? { compareAt: resolved.compareAt } : {}),
+          ...(resolved?.explanation !== undefined ? { explanation: resolved.explanation } : {}),
         });
       }
     }

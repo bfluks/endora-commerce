@@ -3,6 +3,30 @@ import { randomUUID } from 'crypto';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
 import { registerBlogAssetReferences } from '../../../../packages/modules/blog/src/backend/services/blog-asset-references.js';
 import { AssetReferenceRegistry } from '../../../../packages/modules/assets_library/src/backend/services/reference-registry.js';
+import type { EntityManager } from '@mikro-orm/postgresql';
+
+/** Counts the statements a descriptor issues on the EntityManagers it is handed. */
+function countingEmFactory(emFactory: () => EntityManager): { emFactory: () => EntityManager; statements: () => number } {
+  let statements = 0;
+  return {
+    emFactory: () =>
+      new Proxy(emFactory(), {
+        get(target, prop) {
+          const value: unknown = Reflect.get(target, prop, target);
+          if (typeof value !== 'function') return value;
+          const fn = value as (...args: unknown[]) => unknown;
+          if (prop === 'execute') {
+            return (...args: unknown[]) => {
+              statements += 1;
+              return fn.apply(target, args);
+            };
+          }
+          return fn.bind(target);
+        },
+      }),
+    statements: () => statements,
+  };
+}
 
 const ASSET_A = '33333333-3333-3333-3333-333333333333';
 const ASSET_B = '44444444-4444-4444-4444-444444444444';
@@ -77,6 +101,21 @@ describe('blog asset references (T017 — registry descriptors)', () => {
     expect(blogRefs[0]!.label).toContain('guides');
   });
 
+  it('surfaces a Post whose main_image_asset_id matches (feature 163)', async () => {
+    const conn = db.em().getConnection();
+    const postId = randomUUID();
+    await conn.execute(
+      `insert into blog_posts (id, slug, name, main_image_asset_id, version, created_at, updated_at)
+       values (?, 'launch-notes', '{"en-US":"Launch notes"}'::jsonb, ?, 1, now(), now())`,
+      [postId, ASSET_A],
+    );
+    const refs = await registry.findReferences(ASSET_A);
+    const postRefs = refs.filter((r) => r.kind === 'blog_post_main_image');
+    expect(postRefs).toHaveLength(1);
+    expect(postRefs[0]!.entityId).toBe(postId);
+    expect(postRefs[0]!.label).toContain('launch-notes');
+  });
+
   it('surfaces a Post whose content tree contains the asset id', async () => {
     const conn = db.em().getConnection();
     const postId = randomUUID();
@@ -138,5 +177,53 @@ describe('blog asset references (T017 — registry descriptors)', () => {
     );
     const refs = await registry.findReferences(ASSET_A);
     expect(refs.filter((r) => r.kind === 'blog_category_main_image')).toEqual([]);
+  });
+
+  // Feature 166, research R-6 — both descriptors answer a batch in one
+  // statement each, every hit tagged with the asset it points at.
+  it('attributes a two-asset batch to each asset, one statement per descriptor', async () => {
+    const conn = db.em().getConnection();
+    const categoryId = randomUUID();
+    const postId = randomUUID();
+    const describedId = randomUUID();
+    const tree = (assetId: string) =>
+      JSON.stringify({
+        schema_version: 1,
+        languages: { 'en-US': { type: 'root', children: [{ type: 'image', props: { assetId } }] } },
+      });
+    await conn.execute(
+      `insert into blog_categories (id, slug, name, main_image_asset_id, version, created_at, updated_at)
+       values (?, 'r6-main', '{"en-US":"Main"}'::jsonb, ?, 1, now(), now())`,
+      [categoryId, ASSET_A],
+    );
+    await conn.execute(
+      `insert into blog_posts (id, slug, name, content, version, created_at, updated_at)
+       values (?, 'r6-post', '{"en-US":"Post"}'::jsonb, ?::jsonb, 1, now(), now())`,
+      [postId, tree(ASSET_B)],
+    );
+    await conn.execute(
+      `insert into blog_categories (id, slug, name, description, version, created_at, updated_at)
+       values (?, 'r6-described', '{"en-US":"Described"}'::jsonb, ?::jsonb, 1, now(), now())`,
+      [describedId, tree(ASSET_A)],
+    );
+    const unused = randomUUID();
+    const counted = countingEmFactory(() => db.em());
+    const batched = new AssetReferenceRegistry();
+    registerBlogAssetReferences(batched, counted.emFactory);
+
+    const out = await batched.findReferencesMany([ASSET_A, ASSET_B, unused]);
+
+    expect(counted.statements(), 'one statement per descriptor for the whole batch').toBe(2);
+    expect(out.get(ASSET_A)).toHaveLength(2);
+    expect(out.get(ASSET_A)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'blog_category_main_image', entityId: categoryId, assetId: ASSET_A }),
+        expect.objectContaining({ kind: 'blog_category_description', entityId: describedId, assetId: ASSET_A }),
+      ]),
+    );
+    expect(out.get(ASSET_B)).toEqual([
+      expect.objectContaining({ kind: 'blog_post_content', entityId: postId, assetId: ASSET_B }),
+    ]);
+    expect(out.get(unused)).toEqual([]);
   });
 });

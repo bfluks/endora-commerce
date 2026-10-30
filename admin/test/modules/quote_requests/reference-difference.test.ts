@@ -22,7 +22,12 @@ describe('referenceDifference', () => {
     expect(referenceDifference(132, 'PLN', ref(120))).toEqual({ amount: 12, percent: 10 });
   });
 
-  it('rounds both to two decimals', () => {
+  it('issue #430: keeps a sub-cent unit difference at its four places, as the unit prices are', () => {
+    expect(referenceDifference(0.0124, 'PLN', ref(0.0125))).toEqual({ amount: -0.0001, percent: -0.8 });
+    expect(referenceDifference(9.045, 'PLN', ref(9))).toEqual({ amount: 0.045, percent: 0.5 });
+  });
+
+  it('rounds the percentage to two decimals', () => {
     expect(referenceDifference(10.01, 'PLN', ref(3))).toEqual({ amount: 7.01, percent: 233.67 });
     expect(referenceDifference(1, 'PLN', ref(3))).toEqual({ amount: -2, percent: -66.67 });
   });
@@ -31,7 +36,8 @@ describe('referenceDifference', () => {
     const equal = referenceDifference(120, 'PLN', ref(120));
     expect(Object.is(equal?.amount, 0)).toBe(true);
     expect(Object.is(equal?.percent, 0)).toBe(true);
-    const tiny = referenceDifference(119.999, 'PLN', ref(120));
+    // Past a unit price's four places (§10.18) there is no difference left.
+    const tiny = referenceDifference(119.99999, 'PLN', ref(120));
     expect(Object.is(tiny?.amount, 0)).toBe(true);
   });
 
@@ -65,6 +71,14 @@ describe('signed formatting', () => {
     expect(f.signedPercent(-16.67)).toBe('−16.67 %');
     expect(f.signedPercent(10)).toBe('+10.00 %');
     expect(f.signedPercent(0)).toBe('0.00 %');
+  });
+
+  it('issue #430: a unit difference shows its significant places, up to four, never a 0.00 for a real one', () => {
+    const f = rfqNumberFormat('pl-PL');
+    expect(f.signedUnitAmount(-0.0001)).toBe('−0,0001');
+    expect(f.signedUnitAmount(0.045)).toBe('+0,045');
+    expect(f.signedUnitAmount(12)).toBe('+12,00');
+    expect(f.signedUnitAmount(0)).toBe('0,00');
   });
 });
 

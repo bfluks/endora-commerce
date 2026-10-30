@@ -1,3 +1,5 @@
 {
-  "nav.taxes.label": "Taxes"
+  "nav.taxes.label": "Taxes",
+  "actions.openTaxes.label": "Taxes",
+  "actions.openTaxes.description": "Manage tax rates and the rules they apply to"
 }

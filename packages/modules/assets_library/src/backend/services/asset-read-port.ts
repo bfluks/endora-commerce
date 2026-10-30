@@ -1,14 +1,17 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import type {
-  AssetBytes,
-  AssetByteStream,
-  AssetReadPort,
-  AssetRecord,
-  ObjectStorageBackendCode,
-  StorageBackendCode,
+import {
+  isAssetIdShaped,
+  type AssetBytes,
+  type AssetByteStream,
+  type AssetReadPort,
+  type AssetRecord,
+  type ObjectStorageBackendCode,
+  type StorageBackendCode,
 } from '@endora-commerce/contracts';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import { Asset } from '../entities/asset.entity.js';
+import { versionedAssetUrl } from './asset-urls.js';
+import type { AssetVisibility } from './asset-visibility.js';
 import type { StorageResolveUrlInput, StorageResolveUrlOutput } from './storage/storage-adapter.js';
 
 /**
@@ -38,6 +41,9 @@ export interface AssetStorageRegistry {
   ): Promise<{ resolveUrl(input: StorageResolveUrlInput): StorageResolveUrlOutput | Promise<StorageResolveUrlOutput> }>;
 }
 
+/** The slice of {@link AssetVisibility} the read model asks — declared so it can be unit-tested over a stub. */
+export type AssetVisibilityReader = Pick<AssetVisibility, 'hiddenAmong'>;
+
 /**
  * The row-level read model `assets_library` publishes (feature 075, Phase P).
  *
@@ -60,14 +66,46 @@ export class AssetReadService implements AssetReadPort {
      * permission gate that defaulted to permissive.
      */
     private readonly adapters: () => AssetStorageRegistry,
+    /**
+     * Which assets the ambient caller may see (feature 166) — the library's one
+     * evaluator, read per call. Required, for the reason `adapters` is.
+     */
+    private readonly visibility: () => AssetVisibilityReader,
+    /**
+     * `assets.soft_delete_retention_days` as read now — the reported purge date
+     * is `deletedAt` + this (specs/156-asset-stable-url/ owner ruling P1).
+     * Optional: a standalone consumer keeps the 30-day default.
+     */
+    private readonly loadRetentionDays: () => Promise<number> = async () => 30,
   ) {}
+
+  /**
+   * Which of these assets the ambient caller may see (feature 166, research
+   * R-13): the ids that exist, minus the ones {@link AssetVisibility} hides —
+   * one read and one evaluation per call, whatever the batch. A missing id and
+   * one that is not a uuid are absent, exactly as a hidden one is.
+   */
+  async visibleToCaller(assetIds: readonly string[]): Promise<ReadonlySet<string>> {
+    const candidates = [...new Set(assetIds.filter(isAssetIdShaped))];
+    if (candidates.length === 0) return new Set();
+    const rows = await this.emFactory().find(Asset, { id: { $in: candidates } }, { fields: ['id'] });
+    const existing = rows.map((row) => row.id);
+    if (existing.length === 0) return new Set();
+    const hidden = await this.visibility().hiddenAmong(existing);
+    return new Set(existing.filter((id) => !hidden.has(id)));
+  }
 
   async findById(id: string, options?: { liveOnly?: boolean }): Promise<AssetRecord | null> {
     const asset = await this.emFactory().findOne(Asset, {
       id,
       ...(options?.liveOnly ? { deletedAt: null } : {}),
     });
-    return asset ? toAssetRecord(asset) : null;
+    return asset ? toAssetRecord(asset, await this.retentionFor([asset])) : null;
+  }
+
+  /** Read the retention only when a soft-deleted row needs a purge date — once per batch. */
+  private async retentionFor(assets: readonly Asset[]): Promise<number | undefined> {
+    return assets.some((a) => a.deletedAt) ? this.loadRetentionDays() : undefined;
   }
 
   async findByIds(
@@ -79,7 +117,8 @@ export class AssetReadService implements AssetReadPort {
       id: { $in: [...ids] },
       ...(options?.liveOnly ? { deletedAt: null } : {}),
     });
-    return assets.map(toAssetRecord);
+    const retentionDays = await this.retentionFor(assets);
+    return assets.map((asset) => toAssetRecord(asset, retentionDays));
   }
 
   /**
@@ -120,7 +159,7 @@ export class AssetReadService implements AssetReadPort {
       // visibility, changes which of the two is doing the work, and a feed that
       // published an expiring link would not fail anywhere near this line.
       if (resolved.expiresAt !== null) continue;
-      out.set(asset.id, resolved.url);
+      out.set(asset.id, versionedAssetUrl(resolved.url, asset.contentVersion, asset.storageBackend));
     }
     return out;
   }
@@ -182,14 +221,26 @@ export class AssetReadService implements AssetReadPort {
   }
 }
 
-export function toAssetRecord(asset: Asset): AssetRecord {
+/**
+ * The published record. `purgeAfterAt` is `deletedAt` + `retentionDays` — the
+ * date the retention sweep uses — rather than the column stamped at deletion
+ * (owner ruling P1); 30 days when no retention is given.
+ */
+export function toAssetRecord(asset: Asset, retentionDays = 30): AssetRecord {
   return {
     id: asset.id,
     kind: asset.kind,
     filename: asset.filename,
     mimeType: asset.mimeType,
     sizeBytes: asset.sizeBytes,
-    storageUrl: asset.storageUrl,
+    // A URL that serves the current version: the stored URL plus its marker
+    // (specs/156-asset-stable-url/ research R-8); unchanged for legacy rows and
+    // `data:` values, which `orders` reads by prefix — and for a row with no
+    // storage key, whose stored URL no adapter of this platform wrote (every
+    // row the library stores has one; feature 013 backfilled the rest).
+    storageUrl: asset.storageLocator
+      ? versionedAssetUrl(asset.storageUrl, asset.contentVersion, asset.storageBackend)
+      : asset.storageUrl,
     altText: asset.altText ?? null,
     folderId: asset.folderId ?? null,
     visibility: asset.visibility,
@@ -197,10 +248,14 @@ export function toAssetRecord(asset: Asset): AssetRecord {
     storageBackend: asset.storageBackend,
     storageLocator: asset.storageLocator,
     pendingCleanup: asset.pendingCleanup,
-    purgeAfterAt: asset.purgeAfterAt ?? null,
+    purgeAfterAt: asset.deletedAt
+      ? new Date(asset.deletedAt.getTime() + retentionDays * 24 * 60 * 60 * 1000)
+      : null,
     mimeTypeOverridden: asset.mimeTypeOverridden,
     createdAt: asset.createdAt,
     updatedAt: asset.updatedAt,
     deletedAt: asset.deletedAt ?? null,
+    contentVersion: asset.contentVersion,
+    permalink: asset.permalink ?? null,
   };
 }

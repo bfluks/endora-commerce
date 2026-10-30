@@ -151,6 +151,29 @@ describe('invoices — corrective invoice from a return (US3)', () => {
     expect(Number(corr.total)).toBe(6648.15); // original gross, not 999999
   });
 
+  it('does not count a cancelled correction against the cap (#417, review of PR #423)', async () => {
+    const { orderId, itemIds } = await issueBaseInvoice();
+    const first = await issuedCorrection({
+      orderId,
+      lines: [{ orderItemId: itemIds[0], productName: 'Everything', quantity: 1, amount: 999999 }],
+      total: 999999,
+      currency: 'PLN',
+    });
+    const em = h.em().fork();
+    const cancelled = await em.findOneOrFail(Invoice, { id: first.invoiceId });
+    cancelled.status = 'cancelled';
+    await em.flush();
+    const second = await issuedCorrection({
+      orderId,
+      lines: [{ orderItemId: itemIds[0], productName: 'Everything', quantity: 1, amount: 1107 }],
+      total: 1107,
+      currency: 'PLN',
+    });
+    const corr = await h.em().fork().findOneOrFail(Invoice, { id: second.invoiceId });
+    // Counted, the cancelled 6648.15 would leave nothing to credit.
+    expect([corr.total, corr.netTotal, corr.taxTotal]).toEqual(['1107.00', '900.00', '207.00']);
+  });
+
   /**
    * Issue #131 — the correction mirrors the VAT rate of the line it corrects
    * (product ruling 2026-08-16), not the rate in force on the correction date

@@ -44,3 +44,18 @@ describe('clearScopedOverride', () => {
     expect(readScopedValue(value, 'base', 0)).toBe(8);
   });
 });
+
+/** `specs/163-page-builder-marketing-pages/` T170: a stored value without `base`, as the editor's field reads it. */
+describe('a value stored without base (T170)', () => {
+  it('reads the fallback below the first breakpoint that has a value', () => {
+    const stored = { desktop: 32 } as never;
+    expect(readScopedValue(stored, 'base', 0)).toBe(0);
+    expect(readScopedValue(stored, 'tablet', 0)).toBe(0);
+    expect(readScopedValue(stored, 'desktop', 0)).toBe(32);
+  });
+
+  it('writing the base or another breakpoint keeps the stored breakpoint', () => {
+    expect(writeScopedValue({ desktop: 32 } as never, 'base', 8, 0)).toEqual({ base: 8, desktop: 32 });
+    expect(writeScopedValue({ desktop: 32 } as never, 'tablet', 12, 0)).toEqual({ base: 0, tablet: 12, desktop: 32 });
+  });
+});

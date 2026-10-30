@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/cms-components",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "description": "Shared CMS Page Builder components — runtime contract between admin (editor) and storefront (renderer). Per Principle I, this is the canonical workspace home for the React components that Puck composes; backend modules contribute additional component types via the registry SPI in backend/src/modules/cms/services/page-builder-registry.ts.",
   "license": "MIT",
@@ -40,7 +40,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tailwindcss -i styles/cms-components.css -o dist/cms-components.css --minify",
+    "build": "node ../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json && tailwindcss -i styles/cms-components.css -o dist/cms-components.css --minify",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src",
     "test": "vitest run"
@@ -52,6 +52,7 @@
     "react-dom": "^19.0.0"
   },
   "dependencies": {
+    "@endora-commerce/contracts": "workspace:*",
     "@tiptap/core": "^3.31.3",
     "@tiptap/extension-color": "^3.31.3",
     "@tiptap/extension-highlight": "^3.31.3",

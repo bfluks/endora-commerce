@@ -12,6 +12,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { LockMode } from '@mikro-orm/core';
 import type { EntityManager } from '@mikro-orm/postgresql';
 
 import {
@@ -25,7 +26,9 @@ import {
 } from '@endora-commerce/contracts';
 
 import { HttpError } from '@endora-commerce/platform/http';
-import type { CommandBus } from '@endora-commerce/platform/commands';
+import type { Command, CommandBus } from '@endora-commerce/platform/commands';
+import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
+import { requireLinkableAsset } from './linkable-asset.js';
 import { Product } from '../entities/product.entity.js';
 import { GalleryItem } from '../entities/gallery-item.entity.js';
 import { GalleryItemLabel } from '../entities/gallery-item-label.entity.js';
@@ -54,6 +57,12 @@ export class GalleryService {
      * asset is refused rather than stored.
      */
     private readonly assets?: AssetReadPort,
+    /**
+     * Feature 163 (FR-014) — which channels the product is a member of. Unused since feature 168
+     * retired the per-channel media writes on this route; kept so the composition root's
+     * signature does not move before T041 rewrites the service.
+     */
+    _membership?: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>,
   ) {}
 
   #requireAssets(): AssetReadPort {
@@ -67,8 +76,9 @@ export class GalleryService {
 
   /**
    * Feature 054 — run a gallery-item write through the Command Bus. The item +
-   * audit are co-transactional; the raw-SQL LABEL writes stay AFTER the command
-   * (a gallery item with no labels is a valid state, so nothing is orphaned).
+   * audit are co-transactional. On `create` the raw-SQL label writes stay AFTER
+   * the command (a gallery item with no labels is a valid state, so nothing is
+   * orphaned); an update's labels run inside `product.media.update` (163, B-1).
    */
   async #audited<T>(
     action: string,
@@ -94,6 +104,9 @@ export class GalleryService {
     return this.#fetchAllForProduct(em, productId);
   }
 
+  // Feature 168 (`contracts/scoped-values-api.md` §6) — 163's `GET` / `PUT …/gallery/channel-roles`
+  // are retired: a role at C or C×L is the scoped field `galleryRole:<label>` of the save Command.
+
   /**
    * Feature 075 / D-87 — the batch half of {@link list}, for the callers that
    * walk a page or a whole sellable catalogue.
@@ -108,10 +121,23 @@ export class GalleryService {
    * since, and answering 404 for the batch would be answering about a different
    * question. And there are **no labels**: neither consumer reads them here, and
    * fetching them costs a second statement per batch.
+   *
+   * Feature 163 (FR-076, owner decision MED-1 = A) — `channelId` is the feed's channel:
+   * an item hidden there is left out, in the same statement. `null` = the global gallery.
    */
-  async listForProducts(productIds: readonly string[]): Promise<CatalogGalleryBatchItem[]> {
+  async listForProducts(
+    productIds: readonly string[],
+    channelId: string | null,
+  ): Promise<CatalogGalleryBatchItem[]> {
     if (productIds.length === 0) return [];
     const ids = [...new Set(productIds)];
+    const hiddenInChannel =
+      channelId === null
+        ? ''
+        : `and not exists (
+                select 1 from gallery_item_channel_hidden h
+                 where h.gallery_item_id = gi.id and h.sales_channel_id = ?
+              )`;
     // `em.execute`, not `em.getConnection().execute`, so a caller that opens a
     // transaction around this read sees its own uncommitted writes (issue #200).
     const rows = await this.emFactory().execute<
@@ -122,8 +148,9 @@ export class GalleryService {
               gi.position
          from gallery_items gi
         where gi.product_id in (${ids.map(() => '?').join(',')})
+          ${hiddenInChannel}
         order by gi.product_id, gi.position asc, gi.id asc`,
-      ids,
+      channelId === null ? ids : [...ids, channelId],
     );
     return rows.map((row) => ({
       productId: row.product_id,
@@ -151,20 +178,51 @@ export class GalleryService {
    * The map holds one entry per requested id. `null` covers three cases the
    * callers render identically — no label, no product, no asset row — and the
    * inner join it replaces collapsed all three the same way.
+   *
+   * Feature 163 (FR-076, owner decision MED-1 = A) — in `channelId` (the viewer's
+   * resolved channel) the role is held by the channel's own holder when it has one that
+   * is one of the product's items, else by the global holder, and by nobody when that
+   * holder is hidden there (`effectiveGallery`'s rule, in one statement). `null` = the
+   * global holder.
    */
-  async baseImageUrls(productIds: readonly string[]): Promise<Map<string, string | null>> {
+  async baseImageUrls(
+    productIds: readonly string[],
+    channelId: string | null,
+  ): Promise<Map<string, string | null>> {
     const urlByProduct = new Map<string, string | null>();
     for (const id of productIds) urlByProduct.set(id, null);
     if (urlByProduct.size === 0) return urlByProduct;
 
     const ids = [...urlByProduct.keys()];
+    const placeholders = ids.map(() => '?').join(',');
     const rows = await this.emFactory().execute<Array<{ product_id: string; asset_id: string }>>(
-      `select gil.product_id::text as product_id, gi.asset_id::text as asset_id
-         from gallery_item_labels gil
-         join gallery_items gi on gi.id = gil.gallery_item_id
-        where gil.label = 'base_image'
-          and gil.product_id in (${ids.map(() => '?').join(',')})`,
-      ids,
+      channelId === null
+        ? `select gil.product_id::text as product_id, gi.asset_id::text as asset_id
+             from gallery_item_labels gil
+             join gallery_items gi on gi.id = gil.gallery_item_id
+            where gil.label = 'base_image'
+              and gil.product_id in (${placeholders})`
+        : `select holder.product_id::text as product_id, gi.asset_id::text as asset_id
+             from (
+               select p.id as product_id,
+                      coalesce(
+                        (select cl.gallery_item_id
+                           from gallery_item_channel_labels cl
+                           join gallery_items ci on ci.id = cl.gallery_item_id and ci.product_id = cl.product_id
+                          where cl.product_id = p.id and cl.sales_channel_id = ? and cl.label = 'base_image'),
+                        (select gil.gallery_item_id
+                           from gallery_item_labels gil
+                          where gil.product_id = p.id and gil.label = 'base_image')
+                      ) as gallery_item_id
+                 from products p
+                where p.id in (${placeholders})
+             ) holder
+             join gallery_items gi on gi.id = holder.gallery_item_id
+            where not exists (
+                    select 1 from gallery_item_channel_hidden h
+                     where h.gallery_item_id = holder.gallery_item_id and h.sales_channel_id = ?
+                  )`,
+      channelId === null ? ids : [channelId, ...ids, channelId],
     );
     if (rows.length === 0) return urlByProduct;
 
@@ -193,10 +251,8 @@ export class GalleryService {
     const em0 = this.emFactory();
     await this.#assertProductExists(em0, productId);
 
-    const asset = await this.#requireAssets().findById(req.assetId);
-    if (!asset) {
-      throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Asset ${req.assetId} not found.`);
-    }
+    // A hidden file answers as a missing one (feature 166, FR-006).
+    const asset = await requireLinkableAsset(this.#requireAssets(), req.assetId);
     if (!ASSET_KINDS_GALLERY.has(asset.kind)) {
       throw new HttpError(
         400,
@@ -234,6 +290,61 @@ export class GalleryService {
     req: UpdateGalleryItemRequest,
     options: GalleryServiceOptions,
   ): Promise<GalleryItemDto> {
+    if (req.labels !== undefined) {
+      await this.#updateScoped(productId, itemId, req, options);
+    } else {
+      await this.#updatePosition(productId, itemId, req);
+    }
+    return (await this.#fetchOne(this.emFactory(), itemId))!;
+  }
+
+  /**
+   * Feature 163 (FR-076, FR-077) — an item write carrying alt text, the hidden set or
+   * the labels: the Command `product.media.update` (one audit entry: the item's
+   * position, alt text, hidden channels and labels before and after),
+   * `product.updated.v1` `['media']` after commit. A new hidden channel must be one the
+   * product is a member of (FR-014); removing one never asks (FR-015).
+   *
+   * Checkpoint F (B-1) — the labels are replaced on the Command's own `em`, under the
+   * product row lock and in its transaction, so a label conflict rolls the whole write
+   * back. With `?replace=true` a label taken from another item is that item's loss: the
+   * entry restores this item, not the other one's label.
+   */
+  async #updateScoped(
+    productId: string,
+    itemId: string,
+    req: UpdateGalleryItemRequest,
+    options: GalleryServiceOptions,
+  ): Promise<void> {
+    const requestedLabels = req.labels === undefined ? undefined : this.#normalizeAndValidateLabels(req.labels);
+    await this.#runMediaCommand(productId, async (em) => {
+      const item = await em.findOne(GalleryItem, { id: itemId, productId });
+      if (!item) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.GALLERY_ITEM_NOT_FOUND,
+          `Gallery item ${itemId} not found under Product ${productId}.`,
+        );
+      }
+      const labelsBefore = (await em.find(GalleryItemLabel, { galleryItemId: itemId })).map((l) => l.label);
+      const labelsAfter = requestedLabels ?? labelsBefore;
+      const before = itemProjection(item, labelsBefore);
+
+      if (req.position !== undefined) item.position = req.position;
+      const after = itemProjection(item, labelsAfter);
+      if (JSON.stringify(before) === JSON.stringify(after)) return null;
+      if (requestedLabels !== undefined && JSON.stringify(before['labels']) !== JSON.stringify(after['labels'])) {
+        await em.execute(`delete from gallery_item_labels where gallery_item_id = ?`, [itemId]);
+        if (requestedLabels.length > 0) {
+          await this.#applyLabels(em, productId, itemId, requestedLabels, options);
+        }
+      }
+      await em.flush();
+      return { before, after };
+    });
+  }
+
+  async #updatePosition(productId: string, itemId: string, req: UpdateGalleryItemRequest): Promise<void> {
     await this.#audited('gallery_item.update', itemId, async (em) => {
       const item = await em.findOne(GalleryItem, { id: itemId, productId });
       if (!item) {
@@ -247,18 +358,6 @@ export class GalleryService {
       if (req.position !== undefined) item.position = req.position;
       return { result: undefined, before, after: { position: item.position } };
     });
-
-    // Label replacement runs AFTER the item update (bridge-after-command).
-    if (req.labels !== undefined) {
-      const em = this.emFactory();
-      const labels = this.#normalizeAndValidateLabels(req.labels);
-      await em.execute(`delete from gallery_item_labels where gallery_item_id = ?`, [itemId]);
-      if (labels.length > 0) {
-        await this.#applyLabels(em, productId, itemId, labels, options);
-      }
-    }
-
-    return (await this.#fetchOne(this.emFactory(), itemId))!;
   }
 
   async delete(productId: string, itemId: string): Promise<void> {
@@ -277,36 +376,91 @@ export class GalleryService {
     });
   }
 
+  /**
+   * `PUT …/gallery/order` — the Command `product.media.update` (checkpoint F, S-4): the
+   * positions are written on the Command's `em`, under the product row lock and in one
+   * transaction, so a failure part-way leaves the old order. The audit entry carries
+   * the order before and after as `orderedGalleryItemIds`, the body that restores it;
+   * an order the gallery already has writes and announces nothing.
+   */
   async reorder(productId: string, orderedIds: string[]): Promise<void> {
-    const em = this.emFactory();
-    await this.#assertProductExists(em, productId);
-    // Verify all ids belong to this product.
-    const existing = await em.find(GalleryItem, { productId });
-    const existingIds = new Set(existing.map((i) => i.id));
-    if (
-      orderedIds.length !== existing.length ||
-      !orderedIds.every((id) => existingIds.has(id))
-    ) {
-      throw new HttpError(
-        400,
-        ERROR_CODES.VALIDATION_FAILED,
-        'orderedGalleryItemIds must cover every existing gallery item exactly once.',
-      );
-    }
-    // One UPDATE per row. `em.execute`, not `em.getConnection().execute`, so a
-    // caller that ever opens a transaction around this gets the whole reorder
-    // in it (issue #207). This comment used to claim the loop was transactional
-    // and it is not: `em` here is a bare fork, so a failure part-way through
-    // leaves the gallery in the order the successful updates put it.
-    for (let i = 0; i < orderedIds.length; i++) {
-      await em.execute(
-        `update gallery_items set position = ? where id = ?`,
-        [i, orderedIds[i]],
-      );
-    }
+    await this.#runMediaCommand(productId, async (em) => {
+      const existing = await em.find(GalleryItem, { productId }, { orderBy: { position: 'asc', id: 'asc' } });
+      const existingIds = new Set(existing.map((i) => i.id));
+      if (
+        orderedIds.length !== existing.length ||
+        new Set(orderedIds).size !== orderedIds.length ||
+        !orderedIds.every((id) => existingIds.has(id))
+      ) {
+        throw new HttpError(
+          400,
+          ERROR_CODES.VALIDATION_FAILED,
+          'orderedGalleryItemIds must cover every existing gallery item exactly once.',
+        );
+      }
+      const before = existing.map((i) => i.id);
+      const unchanged = existing.every((item, index) => item.id === orderedIds[index] && item.position === index);
+      if (unchanged) return null;
+      for (let i = 0; i < orderedIds.length; i++) {
+        await em.execute(`update gallery_items set position = ? where id = ?`, [i, orderedIds[i]]);
+      }
+      return { before: { orderedGalleryItemIds: before }, after: { orderedGalleryItemIds: [...orderedIds] } };
+    });
   }
 
   // -- INTERNALS -------------------------------------------------------------
+
+  /**
+   * The Command `product.media.update` on `productId` (feature 163): the product row is
+   * locked so concurrent media writes on one product serialise and each audit `before`
+   * is its true predecessor. `write` answers `null` when nothing changed — no audit
+   * row, no event.
+   */
+  async #runMediaCommand(
+    productId: string,
+    write: (em: EntityManager) => Promise<{ before: Record<string, unknown>; after: Record<string, unknown> } | null>,
+  ): Promise<void> {
+    const command: Command<{ changed: boolean }> = {
+      action: 'product.media.update',
+      objectType: 'product',
+      objectId: productId,
+      run: async ({ em }) => {
+        const product = await em.findOne(Product, { id: productId }, { lockMode: LockMode.PESSIMISTIC_WRITE });
+        if (!product) {
+          throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, `Product ${productId} not found.`);
+        }
+        const written = await write(em);
+        if (written === null) return { result: { changed: false }, skipAudit: true };
+        return {
+          result: { changed: true },
+          before: written.before,
+          after: { ...written.after, changedFields: ['media'] },
+        };
+      },
+      event: ({ changed }) =>
+        changed
+          ? {
+              eventName: 'product.updated.v1',
+              payload: {
+                eventId: randomUUID(),
+                occurredAt: new Date().toISOString(),
+                productId,
+                changedFields: ['media'],
+              },
+            }
+          : undefined,
+    };
+    if (this.commandBus) {
+      await this.commandBus.run(command);
+      return;
+    }
+    await this.emFactory().transactional(async (em) => {
+      await command.run({
+        em,
+        actor: { actorAdminUserId: null, impersonatedCustomerAccountId: null, kind: 'system' },
+      });
+    });
+  }
 
   async #assertProductExists(em: EntityManager, productId: string): Promise<void> {
     const product = await em.findOne(Product, { id: productId });
@@ -443,8 +597,15 @@ export class GalleryService {
       assetId: item.assetId,
       position: item.position,
       labels: [...labels].sort(),
+      altText: item.altText,
+      hidden: item.hidden,
       createdAt: item.createdAt.toISOString(),
       updatedAt: item.updatedAt.toISOString(),
     };
   }
+}
+
+/** The audit projection of one item's media write (FR-080): enough to restore it by re-sending. */
+function itemProjection(item: GalleryItem, labels: readonly GalleryLabel[]): Record<string, unknown> {
+  return { itemId: item.id, position: item.position, labels: [...labels].sort() };
 }

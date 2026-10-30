@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { unitPriceHalfUp } from '@endora-commerce/contracts';
 import { apiClient } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { useRfqNumberFormat } from './number-format.js';
@@ -82,22 +83,32 @@ export async function probeCustomerPrice(
   signal?: AbortSignal,
 ): Promise<ReferenceAmount | null> {
   try {
-    const params = new URLSearchParams({
-      customerAccountId: rfq.customerAccountId,
-      quantity: String(line.quantity > 0 ? line.quantity : 1),
-    });
-    if (rfq.salesChannelId) params.set('salesChannelId', rfq.salesChannelId);
-    if (line.variantId) params.set('variantId', line.variantId);
-    const res = await apiClient.get<{
-      data: { resolvedPrice: { amount: string; currency: string } | null };
+    // Feature 160 — the price explanation (`POST /api/v1/admin/price-books/resolve`),
+    // which replaced `GET /api/v1/admin/products/:id/resolved-price` with the same scope.
+    const res = await apiClient.post<{
+      data: Array<{ key: string; price: { amount: string; currency: string } | null }>;
     }>(
-      `/api/v1/admin/products/${line.productId}/resolved-price?${params.toString()}`,
+      '/api/v1/admin/price-books/resolve',
+      {
+        ...(rfq.salesChannelId ? { salesChannelId: rfq.salesChannelId } : {}),
+        buyer: { customerAccountId: rfq.customerAccountId },
+        lines: [
+          {
+            key: 'line',
+            productId: line.productId,
+            ...(line.variantId ? { variantId: line.variantId } : {}),
+            quantity: line.quantity > 0 ? line.quantity : 1,
+          },
+        ],
+      },
       signal ? { signal } : undefined,
     );
-    const resolved = res.data.resolvedPrice;
+    const resolved = res.data[0]?.price ?? null;
     if (!resolved) return null;
-    const amount = Number(resolved.amount);
-    return Number.isFinite(amount) ? { amount, currency: resolved.currency } : null;
+    // The resolver's four-place decimal, as a quote line stores a reference
+    // (owner ruling of 2026-10-25): unrounded, read as a decimal before it is
+    // a number (review 2, finding 3 of release 0.108.0).
+    return { amount: Number(unitPriceHalfUp(resolved.amount)), currency: resolved.currency };
   } catch {
     return null;
   }
@@ -125,7 +136,7 @@ export function ReferenceCell({
   return (
     <div className="space-y-0.5">
       <div className="tabular-nums">
-        {format.money(view.price.amount, view.price.currency)}
+        {format.unitMoney(view.price.amount, view.price.currency)}
       </div>
       <div className="flex flex-wrap gap-x-1 text-xs text-muted-foreground">
         <span>
@@ -158,7 +169,7 @@ export function DifferenceCell({
   return (
     <div className="space-y-0.5 tabular-nums">
       <div>
-        {format.signedAmount(difference.amount)} {currency}
+        {format.signedUnitAmount(difference.amount)} {currency}
       </div>
       <div className="text-xs text-muted-foreground">
         {difference.percent !== null ? format.signedPercent(difference.percent) : '—'}

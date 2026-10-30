@@ -233,6 +233,47 @@ export const manifest = defineModuleManifest({
         'than from a caught refusal. A link holds the Quote Request by value, so no table of ' +
         'that owner is referenced from this module\'s schema.',
     },
+    // `specs/163-projects-and-tasks/` FR-044 — one reference standard with
+    // Projects: a Task referred to in an Opportunity's text is resolved, and
+    // offered after `@@`, through `tasks`' read port. `tasks` is
+    // operator-switchable and must stay so with CRM on.
+    {
+      moduleId: 'tasks',
+      name: 'taskReadPort',
+      kind: 'degrades-without',
+      whenAbsent: 'References to Tasks show as unavailable and Tasks are not offered after @@.',
+      reason:
+        'Every call into this owner goes through `crm-tasks.ts`, whose callers — the reference ' +
+        'service and the `@@` document list — ask `isPresent()` in front of the gate: a Task ' +
+        'referred to resolves as unavailable and the Tasks group is left out, from that decision ' +
+        'rather than from a caught refusal. A reference holds the Task by value, so no table of ' +
+        'that owner is referenced from this module\'s schema.',
+    },
+    {
+      // `specs/165-task-management/` R-5: Projects became a reference kind of
+      // the shared grammar, which CRM's texts resolve and offer after `@@`.
+      moduleId: 'projects',
+      name: 'projectReadPort',
+      kind: 'degrades-without',
+      whenAbsent: 'References to Projects show as unavailable and Projects are not offered after @@.',
+      reason:
+        'Every call into this owner goes through `crm-projects.ts`, whose callers ask `isPresent()` ' +
+        'in front of the gate: a referenced Project renders as unavailable and the `@@` list offers ' +
+        'none. A reference holds its Project by value, so no table of that owner is referenced from ' +
+        "this module's schema.",
+    },
+    // Feature 162 — an Opportunity's custom-field values pushed into a Quote
+    // Request created from it (`specs/162-custom-fields-value-carry/`, R-16).
+    {
+      moduleId: 'quote_requests',
+      name: 'quoteRequestCustomFieldCarryPort',
+      kind: 'degrades-without',
+      whenAbsent: 'Values of Sales Opportunities are not carried into Quote Requests created from them',
+      reason:
+        'The one caller, `opportunity-document-carry.ts`, asks `isPresent()` before it reaches the ' +
+        'receiver, so a switched-off quote desk is never called and nothing is caught; there is ' +
+        'no Quote Request to carry into while the module is off, and nothing is replayed after.',
+    },
   ],
   settings,
   // Constitution XVII — the operator's activation control.
@@ -327,9 +368,11 @@ export const manifest = defineModuleManifest({
    * Sales Rep starts from it daily, the board, analytics — the one screen
    * that opens on a code of its own, so for a manager holding it the palette
    * would otherwise offer nothing of what that code is for — and the calendar,
-   * opened daily by everybody who holds `crm:read` (User Story 22). Curated, not a
-   * route dump — the workflow configuration is reached from the sidebar by the
-   * few who configure it.
+   * opened daily by everybody who holds `crm:read` (User Story 22). The tags and
+   * the workflow configuration joined them with issue #516: both are sidebar
+   * screens, and a sidebar entry the palette cannot find is the gap Principle
+   * XVI names. They open on `crm:configure`, so only the few who configure CRM
+   * see them.
    *
    * Each `requiredPermission` is the code the target route itself enforces
    * (`src/admin/index.ts`), so the palette never advertises a screen the
@@ -385,6 +428,26 @@ export const manifest = defineModuleManifest({
       requiredPermission: 'crm:read',
       keywords: ['crm', 'calendar', 'events', 'reminder', 'schedule', 'kalendarz', 'wydarzenia', 'przypomnienie', 'terminy'],
       weight: 324,
+    },
+    {
+      id: 'open-crm-tags',
+      labelKey: 'actions.openCrmTags.label',
+      descriptionKey: 'actions.openCrmTags.description',
+      icon: 'Tag',
+      targetRoute: '/crm/tags',
+      requiredPermission: 'crm:configure',
+      keywords: ['crm', 'tag', 'tags', 'label', 'labels', 'etykieta', 'etykiety'],
+      weight: 325,
+    },
+    {
+      id: 'open-crm-workflow',
+      labelKey: 'actions.openCrmWorkflow.label',
+      descriptionKey: 'actions.openCrmWorkflow.description',
+      icon: 'ListChecks',
+      targetRoute: '/crm/workflow',
+      requiredPermission: 'crm:configure',
+      keywords: ['crm', 'workflow', 'status', 'statuses', 'transitions', 'pipeline', 'przepływ', 'statusy', 'lejek'],
+      weight: 326,
     },
   ],
   /**

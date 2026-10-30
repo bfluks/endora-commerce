@@ -1,4 +1,5 @@
 import type {
+  ChannelUrlFacts,
   FeedFieldSourceKind,
   FeedFieldTransform,
   FeedPricePresentation,
@@ -33,15 +34,29 @@ export interface ResolvableTemplateField {
   readonly transformArg: string | null;
 }
 
-/** A resolved money amount for one item, already net/gross-aware. */
+/**
+ * A feed item's price: decimal strings — the resolver's amount as `price_lists`
+ * answers it, and the gross computed from it by `grossAmountHalfUp` — written
+ * to the file at two places by `roundAmountHalfUp` (review 2, finding 1 of
+ * release 0.108.0). Never a JS number: that is how binary rounding got in.
+ *
+ * A net with more than two significant places is not written that way: it is
+ * published as the price of a pack (issue #430, `feed-pack.ts`), whose gross is
+ * computed from the pack's net at `taxRatePercent`.
+ */
 export interface FeedItemPrice {
-  readonly net: number;
-  readonly gross: number;
+  readonly net: string;
+  readonly gross: string;
   /**
    * False when `TaxService` fell through to `{ rate: 0, source: 'none' }`. On a
    * gross feed that is a run **warning**, not a silent zero-VAT price (R12).
    */
   readonly taxResolved: boolean;
+  /**
+   * The rate `gross` was computed at, in percent (`23`); `null` on a net feed
+   * and when no tax rule matched (`gross` is then the net).
+   */
+  readonly taxRatePercent: number | null;
 }
 
 /**
@@ -54,11 +69,17 @@ export interface FeedItemSource {
   readonly variantId: string | null;
   /** The variant's SKU when this is a variant item, else the product's. */
   readonly sku: string;
+  /**
+   * The product's URL key in the feed's language — its effective key at (channel,
+   * language) from `catalogProductUrlKeyReadPort`, else the global slug (feature 167,
+   * FR-033).
+   */
   readonly slug: string;
   /** `products.type` — simple / configurable / grouped / bundle / virtual (FR-003). */
   readonly productType: string;
-  readonly name: Readonly<Record<string, string>>;
-  readonly description: Readonly<Record<string, string>>;
+  /** 168-shim: the Global texts; S2 feeds the effective texts at the feed's (C, L) (`effectiveTexts`). */
+  readonly name: string;
+  readonly description: string | null;
   readonly attributes: Readonly<Record<string, unknown>>;
   readonly customFields: Readonly<Record<string, unknown>>;
   readonly price: FeedItemPrice | null;
@@ -103,6 +124,11 @@ export interface FeedResolutionContext {
   readonly taxCountry: string | null;
   /** Storefront origin for the feed's channel; empty when none is configured. */
   readonly storefrontOrigin: string;
+  /**
+   * The channel's URL-language facts (feature 167): the `link` is the prefixed
+   * product path in the feed's language, composed by `productPath`.
+   */
+  readonly channelUrl: ChannelUrlFacts;
   readonly salesChannelId: string;
   readonly priceListId: string | null;
 }
@@ -125,6 +151,13 @@ export interface ResolvedFeedItem {
 
 export interface ResolveFeedItemInput {
   readonly fields: readonly ResolvableTemplateField[];
+  /**
+   * The whole template, when `fields` is only part of it — the editor preview
+   * resolves one field at a time. Whether a sub-cent price can be published as
+   * a pack depends on the template binding a `pack_quantity` field and on every
+   * price it publishes (issue #430). Defaults to `fields`.
+   */
+  readonly templateFields?: readonly ResolvableTemplateField[];
   readonly item: FeedItemSource;
   readonly context: FeedResolutionContext;
 }

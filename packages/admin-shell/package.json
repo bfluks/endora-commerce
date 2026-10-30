@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/admin-shell",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "description": "The admin application itself (feature 110, FR-016) — the router, the sidebar and palette shell, the sign-in screen and the host's own screens. An instance depends on it and holds only index.html, main.tsx, the configuration, the brand assets, the theme overrides and the generated contribution registry.",
   "license": "MIT",
@@ -28,7 +28,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src"
   },
@@ -43,7 +43,7 @@
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.18.2",
     "tailwindcss": "^4.2.4",
-    "vite": "^7.3.2"
+    "vite": "^7.3.7"
   },
   "peerDependenciesMeta": {
     "@tailwindcss/vite": {
@@ -72,6 +72,6 @@
     "react-dom": "^19.2.5",
     "react-router-dom": "^7.18.2",
     "typescript": "^5.9.3",
-    "vite": "^7.3.2"
+    "vite": "^7.3.7"
   }
 }

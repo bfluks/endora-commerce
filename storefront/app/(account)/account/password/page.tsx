@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { getSessionCookie } from '../../../../lib/session';
 import { changePassword } from '../../../../lib/api/account';
 import { StorefrontApiError } from '../../../../lib/api/client';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -23,7 +23,7 @@ export default async function ChangePasswordPage({
   searchParams: Promise<{ status?: string; error?: string }>;
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const params = await searchParams;
 
   return (
@@ -69,15 +69,15 @@ export default async function ChangePasswordPage({
 async function changePasswordAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const currentPassword = (formData.get('currentPassword') as string) ?? '';
   const newPassword = (formData.get('newPassword') as string) ?? '';
   try {
     await changePassword(session, currentPassword, newPassword);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not update your password.';
-    redirect(`/account/password?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : 'Could not update your password.';
+    return await localeRedirect(`/account/password?error=${encodeURIComponent(message)}`);
   }
-  redirect(`/account/password?status=updated`);
+  return await localeRedirect(`/account/password?status=updated`);
 }

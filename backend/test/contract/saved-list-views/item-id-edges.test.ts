@@ -16,6 +16,7 @@ const LISTS = [
   { label: 'orders', url: '/api/v1/admin/orders/list-views', body: { sort: { field: 'placedAt', dir: 'desc' } } },
   { label: 'catalog', url: '/api/v1/admin/catalog/products/list-views', body: {} },
   { label: 'quote_requests', url: '/api/v1/admin/quote-requests/list-views', body: {} },
+  { label: 'tasks', url: '/api/v1/admin/tasks/list-views', body: {} },
 ];
 
 describe('saved view item routes — missing ids (spec 147 QA)', () => {

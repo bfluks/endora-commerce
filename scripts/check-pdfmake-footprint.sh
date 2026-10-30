@@ -27,14 +27,11 @@ source "$SCRIPT_DIR/lib/read-size.sh"
 # not a tight budget.
 MAX_BYTES=$((32 * 1024 * 1024))
 
-# Both preconditions below used to `exit 0` with a "skipping" line. A gate that
+# The precondition below used to `exit 0` with a "skipping" line. A gate that
 # reports success when it measured nothing is indistinguishable from one that
 # measured and approved — the whole of issue #113 — so an unmeasurable run exits
-# 2: not clean (0), not over budget (1), but "this said nothing".
-if ! command -v du >/dev/null 2>&1; then
-  echo "[pdfmake-gate] du(1) is not available — refusing to report a vacuous pass." >&2
-  exit 2
-fi
+# 2: not clean (0), not over budget (1), but "this said nothing". A measurement
+# that is not a number exits 2 for the same reason.
 
 # pnpm hoists pdfmake into .pnpm/pdfmake@<version>/node_modules/pdfmake.
 # Fall back to a top-level node_modules path if the user has run a
@@ -61,9 +58,22 @@ fi
 # "under budget" and reports as a pass. The file count is what tells the two
 # apart. `self-reported`: nothing in the tree derives how many files a
 # dependency ships.
-read_size_report '[pdfmake-gate]' "$(find "$target" -type f | wc -l)" - self-reported
+# `tr -d ' '` because BSD `wc` pads its count, and the read line is parsed.
+read_size_report '[pdfmake-gate]' "$(find "$target" -type f | wc -l | tr -d ' ')" - self-reported
 
-actual=$(du -sb "$target" | awk '{print $1}')
+# The bytes of every file, summed by `wc -c` over their concatenation. It used
+# to be `du -sb`, which BSD `du` does not have (issue #315): on macOS the
+# pipeline answered an empty string, the comparison below errored inside its
+# own `if`, and the gate printed "OK — 0.0 MB". Plain `find`, `cat` and `wc`
+# mean the same thing on every userland, and anything that is still not a
+# number is refused rather than compared.
+actual=$(find "$target" -type f -exec cat {} + | wc -c | tr -d ' ')
+case "$actual" in
+  '' | *[!0-9]*)
+    echo "[pdfmake-gate] could not measure $target (got '$actual') — refusing to report a vacuous pass." >&2
+    exit 2
+    ;;
+esac
 if [ "$actual" -gt "$MAX_BYTES" ]; then
   human_actual=$(awk -v b="$actual" 'BEGIN{printf "%.1f MB", b/1048576}')
   human_max=$(awk -v b="$MAX_BYTES" 'BEGIN{printf "%.1f MB", b/1048576}')

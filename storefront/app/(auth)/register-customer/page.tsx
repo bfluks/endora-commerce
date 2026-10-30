@@ -1,5 +1,3 @@
-import { redirect } from 'next/navigation';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { registerStandaloneCustomer } from '../../../lib/api/auth';
 import { StorefrontApiError } from '../../../lib/api/client';
@@ -8,6 +6,8 @@ import { getServerContext } from '../../../lib/server-context';
 import { subscribeNewsletter } from '../../../lib/api/newsletter';
 import { NewsletterConsent } from '../../../components/newsletter/NewsletterConsent';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -31,7 +31,13 @@ export default async function RegisterCustomerPage({
 }): Promise<ReactNode> {
   const params = await searchParams;
   const orgRequired = params.orgRequired === '1';
-  const { ctx } = await getServerContext();
+  const { ctx, anonymousAccess } = await getServerContext();
+  // `specs/154-sales-channel-access/` — individual self-registration signs the
+  // new account in at once, which would be a way into a store that serves
+  // signed-in business customers only. The backend refuses it there; this
+  // page does not offer it. The middleware already sends anonymous visitors to
+  // the sign-in page; this catches a signed-in visitor arriving by link.
+  if (!anonymousAccess) return await localeRedirect('/login');
   const channelCode = ctx.salesChannelCode ?? 'default';
 
   return (
@@ -41,7 +47,7 @@ export default async function RegisterCustomerPage({
       {orgRequired ? (
         <div className="b2b-auth__error">
           Registration without an organization is currently disabled.{' '}
-          <Link href="/register">Register your organization</Link> instead.
+          <LocalizedLink href="/register">Register your organization</LocalizedLink> instead.
         </div>
       ) : params.error ? (
         <div className="b2b-auth__error">{params.error}</div>
@@ -82,7 +88,7 @@ export default async function RegisterCustomerPage({
         </div>
       </form>
       <p className="b2b-auth__hint">
-        Already have an account? <Link href="/login">Sign in</Link>.
+        Already have an account? <LocalizedLink href="/login">Sign in</LocalizedLink>.
       </p>
     </div>
   );
@@ -101,11 +107,11 @@ async function registerCustomerAction(formData: FormData): Promise<void> {
     });
   } catch (err) {
     if (err instanceof StorefrontApiError && err.code === 'REGISTRATION_REQUIRES_ORGANIZATION') {
-      redirect('/register-customer?orgRequired=1');
+      return await localeRedirect('/register-customer?orgRequired=1');
     }
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Registration failed. Please try again.';
-    redirect(`/register-customer?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : 'Registration failed. Please try again.';
+    return await localeRedirect(`/register-customer?error=${encodeURIComponent(message)}`);
   }
   // Newsletter consent (feature 048): subscribe the new account's email when the
   // consent checkbox was ticked. Never block registration on a subscribe failure.
@@ -124,5 +130,5 @@ async function registerCustomerAction(formData: FormData): Promise<void> {
   if (result.sessionCookieValue) {
     await setSessionCookie(result.sessionCookieValue);
   }
-  redirect('/account');
+  return await localeRedirect('/account');
 }

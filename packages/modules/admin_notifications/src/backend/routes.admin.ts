@@ -6,7 +6,7 @@ import { HttpError } from '@endora-commerce/platform/http';
 /**
  * Resolve the acting admin's id. Production decorates `request.actor` via the
  * auth plugin; the test harness decorates `request.testActor` — both shapes
- * are checked (the `admin:read` gate has already run).
+ * are checked (the signed-in-admin gate has already run).
  */
 function resolveAdminUserId(request: FastifyRequest): string {
   const r = request as FastifyRequest & {
@@ -29,13 +29,29 @@ const listQuerySchema = z.object({
   cursor: z.string().optional(),
 });
 
+/**
+ * The permission that admits the `all_admins` broadcast audience (issue #518).
+ * The bell itself needs none: every signed-in admin reads their own
+ * `admin_user` rows.
+ */
+export const BROADCAST_READ_PERMISSION = 'admin:read';
+
 export interface AdminNotificationsRoutesDeps {
   adminNotificationService: AdminNotificationService;
   requireAdmin: RequireAdminFactory;
+  /** Whether this admin holds `code` — `admin_roles`' capability check. */
+  hasPermission: (adminUserId: string, code: string) => Promise<boolean>;
 }
 
 /**
  * Routes for the admin notification bell (feature 026, US1).
+ *
+ * Gated on a signed-in admin and no permission code (issue #518): personal
+ * notifications are recorded for any administrator a Task or a CRM record
+ * names, whatever their role, so a role without `admin:read` must still be
+ * able to read and acknowledge them. `admin:read` decides one thing — whether
+ * the `all_admins` broadcasts are listed, counted and acknowledgeable — and is
+ * checked per request, so a role change takes effect on the next call.
  *
  * The list endpoint resolves per-admin `isRead` by joining
  * `admin_notification_reads` for `audience='all_admins'` rows. Read state
@@ -45,14 +61,16 @@ export async function registerAdminNotificationsRoutes(
   app: FastifyInstance,
   deps: AdminNotificationsRoutesDeps,
 ): Promise<void> {
-  const { adminNotificationService, requireAdmin } = deps;
-  const gate = requireAdmin('admin:read');
+  const { adminNotificationService, requireAdmin, hasPermission } = deps;
+  const includeBroadcasts = (adminUserId: string): Promise<boolean> =>
+    hasPermission(adminUserId, BROADCAST_READ_PERMISSION);
 
-  app.get('/api/v1/admin/notifications', { preHandler: gate }, async (request) => {
+  app.get('/api/v1/admin/notifications', { preHandler: requireAdmin() }, async (request) => {
     const adminUserId = resolveAdminUserId(request);
     const query = listQuerySchema.parse(request.query);
     const page = await adminNotificationService.listForAdmin({
       adminUserId,
+      includeBroadcasts: await includeBroadcasts(adminUserId),
       unread: query.unread,
       limit: query.limit,
       cursor: query.cursor ?? null,
@@ -82,11 +100,13 @@ export async function registerAdminNotificationsRoutes(
 
   app.post<{ Params: { id: string } }>(
     '/api/v1/admin/notifications/:id/read',
-    { preHandler: gate },
+    { preHandler: requireAdmin() },
     async (request, reply) => {
       const adminUserId = resolveAdminUserId(request);
       try {
-        await adminNotificationService.markRead(request.params.id, adminUserId);
+        await adminNotificationService.markRead(request.params.id, adminUserId, {
+          includeBroadcasts: await includeBroadcasts(adminUserId),
+        });
       } catch (err) {
         if (err instanceof NotificationNotFoundError) {
           throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Notification not found.');
@@ -97,9 +117,11 @@ export async function registerAdminNotificationsRoutes(
     },
   );
 
-  app.post('/api/v1/admin/notifications/mark-all-read', { preHandler: gate }, async (request) => {
+  app.post('/api/v1/admin/notifications/mark-all-read', { preHandler: requireAdmin() }, async (request) => {
     const adminUserId = resolveAdminUserId(request);
-    const markedCount = await adminNotificationService.markAllRead(adminUserId);
+    const markedCount = await adminNotificationService.markAllRead(adminUserId, {
+      includeBroadcasts: await includeBroadcasts(adminUserId),
+    });
     return { markedCount };
   });
 }

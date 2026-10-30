@@ -4,8 +4,10 @@ import { z } from 'zod';
 import type {
   CatalogAttributeReadPort,
   CatalogCategoryReadPort,
+  CatalogProductAvailabilityPort,
+  CatalogProductUrlKeyReadPort,
   CatalogProductReadPort,
-  ListingPricePort,
+  ListingPriceDetailPort,
   OrganizationDetailsPort,
   SettingsAdminAuditContext,
   SettingsAdminPort,
@@ -32,7 +34,7 @@ import { registerSearchAdminRoutes } from './routes.admin.js';
 import { SettingNotRegistered, SettingOutOfScopeForChannel } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { effectiveState } from '@endora-commerce/platform/kernel';
-import { enterSystemScope } from '@endora-commerce/platform/kernel';
+import { enterSystemScope, rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import {
   DEFAULT_INDEX_TASK_TIMEOUT_SECONDS,
   DEFAULT_REINDEX_INTERVAL_MINUTES,
@@ -96,6 +98,19 @@ export interface SearchModuleOptions {
    */
   catalogCategories: CatalogCategoryReadPort;
   /**
+   * Feature 163 — `catalog`'s availability answer: which channel members are
+   * effectively on in which channel language, with their effective window and
+   * audience (the indexer's documents), and which hits a caller may see at
+   * (channel, language) now (the query's hydration). Same binding `catalog`
+   * dependency as `catalogProducts`.
+   */
+  catalogAvailability: Pick<
+    CatalogProductAvailabilityPort,
+    'describeChannelAvailability' | 'filterAvailable' | 'effectiveOrderRules'
+  >;
+  /** Feature 163 (T113a, R28) — the effective URL key per channel language, for the result cards' links. */
+  catalogUrlKeys: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>;
+  /**
    * The `sales_channel_products` bridge, through the sanctioned accessor
    * (Constitution XII). Kernel-composed, so it is present for as long as the
    * platform is.
@@ -135,7 +150,7 @@ export interface SearchModuleOptions {
    * above covers the typeahead popup). A search hit is a listing and prices
    * through the same chain as the catalogue grid.
    */
-  listingPrices: ListingPricePort;
+  listingPrices: ListingPriceDetailPort;
   /**
    * `organizations`' read model — the customer group the pricing engine keys a
    * group-targeted list on. The enricher above already resolves it for the
@@ -223,6 +238,7 @@ export function searchModule(options: SearchModuleOptions): SearchModuleResult {
     products: options.catalogProducts,
     categories: options.catalogCategories,
     channelMembership: options.salesChannelMembership,
+    availability: options.catalogAvailability,
     resolveTaskTimeoutMs: resolveIndexTaskTimeoutMs,
   });
   // Handlers only: `backend.ts` registers them through `ctx.subscribe`, which
@@ -241,6 +257,8 @@ export function searchModule(options: SearchModuleOptions): SearchModuleResult {
     {},
     options.listingPrices,
     options.organizations,
+    options.catalogAvailability,
+    options.catalogUrlKeys,
   );
 
   // Settings-aware suggest config, with fallback to manifest defaults
@@ -370,6 +388,18 @@ export function searchModule(options: SearchModuleOptions): SearchModuleResult {
         const DISABLED_POLL_MS = 60_000;
         let timer: ReturnType<typeof setTimeout> | undefined;
         let stopped = false;
+        // Feature 163 (code review W1) — once per process, on the first tick
+        // the module is present: bring every existing channel index up to the
+        // settings this release's queries name (the availability fields
+        // filterable, `localizedNames` searchable). Without it an index built
+        // before the upgrade refuses every query's availability filter and the
+        // listing falls back to Postgres until an operator reindexes. Bounded:
+        // one settings read per channel index, an update only where a setting is
+        // missing. Here rather than in a boot hook, so it runs where the sweep
+        // runs (the process that runs this module's workers), behind the same
+        // presence decision and inside the same system scope, and a slow or
+        // absent engine delays nothing at boot.
+        let querySettingsChecked = false;
 
         const scheduleNext = (delayMs: number): void => {
           if (stopped) return;
@@ -406,6 +436,20 @@ export function searchModule(options: SearchModuleOptions): SearchModuleResult {
           void enterSystemScope(
             'search: periodic reindex sweep',
             async (): Promise<number> => {
+              if (!querySettingsChecked) {
+                querySettingsChecked = true;
+                try {
+                  const channels = await indexer.ensureQuerySettings(options.emFactory());
+                  if (channels.length > 0) {
+                    app.log.info({ channels }, 'search: brought pre-upgrade channel indexes up to the query settings');
+                  }
+                } catch (err) {
+                  rethrowIfModuleDisabled(err);
+                  // The listing already degrades to Postgres for an index that
+                  // refuses; the next process start tries again.
+                  app.log.warn({ err }, 'search: could not check the channel index settings');
+                }
+              }
               let minutes = 0;
               try {
                 minutes = await resolveReindexIntervalMinutes();

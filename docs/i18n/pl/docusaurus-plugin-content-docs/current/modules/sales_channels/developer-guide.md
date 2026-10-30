@@ -34,6 +34,76 @@ wywołaj `getByCode(code)` albo `getSystemDefault()`; typuj go jako `SalesChanne
 `@endora-commerce/platform/kernel`. Klasa `SalesChannelResolverService`, która za nim stoi, nie jest
 publikowana.
 
+## Dostęp do kanału: trasy, które muszą pozostać otwarte
+
+Każde żądanie `/api/v1/*` spoza ścieżek administracyjnych jest po wyznaczeniu kanału sprawdzane
+regułą dostępu do kanału: żądanie niezalogowane jest przyjmowane tylko w kanale otwartym dla
+niezalogowanych odwiedzających (w przeciwnym razie `403 SALES_CHANNEL_SIGN_IN_REQUIRED`), żądanie
+klienta tylko w kanale przypisanym do jego organizacji (w przeciwnym razie
+`403 SALES_CHANNEL_NOT_PERMITTED`). Żądania administratorów i kluczy API nie są sprawdzane. Twoja
+trasa jest więc w zamkniętym sklepie odrzucana, chyba że zadeklaruje inaczej.
+
+Trasa, której wywołujący nie jest kupującym w sklepie — albo musi do niej dotrzeć, żeby nim zostać —
+deklaruje to w samej trasie:
+
+```ts
+app.post(
+  '/api/v1/payments/acme/notify',
+  { config: { salesChannelAccess: 'open' } },
+  async (request, reply) => {
+    // Still resolved to a channel, and still behind this route's own guards.
+  },
+);
+```
+
+**Zadeklaruj to w każdym wywołaniu zwrotnym dostawcy, które odbiera Twój moduł** — powiadomieniu
+bramki płatności, webhooku statusu przewoźnika, adresie powrotu, na który dostawca przekierowuje
+przeglądarkę. Takie żądania przychodzą bez sesji i zwykle bez kanału storefrontu, więc są
+niezalogowanymi żądaniami w domyślnym kanale systemowym: gdy tylko operator zamknie ten kanał dla
+niezalogowanych odwiedzających, niezadeklarowane wywołanie zwrotne jest odrzucane z `403`, a
+powiadomienia dostawcy przestają docierać. To samo dotyczy linków w wiadomościach e-mail, które muszą
+działać dla kogoś niezalogowanego (potwierdzenie, wypisanie), oraz wszystkiego, czego formularz
+logowania lub rejestracji potrzebuje, zanim odwiedzający ma konto.
+
+Nie deklaruj tego w niczym, co pokazuje lub zmienia katalog, ceny, koszyk albo zamówienia sklepu —
+to właśnie chroni reguła. Samodzielna rejestracja klienta indywidualnego (B2C) celowo *nie* jest
+otwarta, bo od razu loguje odwiedzającego.
+
+`'open'` pomija wyłącznie krok dostępu. Żądanie nadal ma wyznaczany kanał (nieznany lub nieaktywny
+kanał nadal jest odrzucany), a własne zabezpieczenia trasy — `requireCustomer`, `requireAdmin`,
+sprawdzenie podpisu — nadal działają. W tym repozytorium zbiór otwartych tras utrzymuje
+`backend/test/contract/sales_channels/channel-access-open-routes.test.ts` względem rejestru
+`backend/test/helpers/channel-access-open-routes.ts`, który podaje uzasadnienie dla każdej trasy;
+dodanie otwartej trasy wymaga dodania jej wpisu w rejestrze.
+
+### Samodzielne sprawdzanie reguły
+
+Ścieżka, która tworzy sesję klienta poza wspólnymi trasami logowania, musi odmówić, zanim ją
+utworzy. Pobierz z kontenera `salesChannelAccessPort`, typowany jako `SalesChannelAccessPort` z
+`@endora-commerce/platform/kernel`:
+
+```ts
+const { salesChannelAccessPort } = ctx.cradle<YourCradle>();
+
+// Throws the 403 SALES_CHANNEL_NOT_PERMITTED refusal, with details.channelCode.
+await salesChannelAccessPort.assertCustomerMayUse(account.organizationId, channel.id);
+
+// Or read the decision, or the channels an Organization may use (cached).
+const decision = await salesChannelAccessPort.decide(actor, channel);
+const permitted = await salesChannelAccessPort.permittedChannelIds(organizationId);
+```
+
+Port dostarcza kernel; nie wymaga zależności w manifeście.
+
+### Gdzie są przechowywane przypisania
+
+Przypisaniem jest przypisanie `organization` kanału — tabela pośrednia
+`sales_channel_organizations` — zapisywane wyłącznie przez `salesChannelMembershipPort`, który
+przed zgłoszeniem zmiany usuwa też z pamięci podręcznej dostępu wpis organizacji. Przypisanie do
+pojedynczego klienta (`sales_channel_customer_accounts`) nie bierze udziału w dostępie: pozostaje
+zarejestrowane jako tabela pośrednia, a reguła go nie odczytuje ani nie zapisuje. Dostęp nadawaj,
+przypisując organizację klienta, nigdy przez zapis wiersza dla pojedynczego klienta.
+
 ## Dodawanie do modułu encji zależnej od kanału
 
 Zależność od kanału ma dwie warstwy:
@@ -144,6 +214,29 @@ miało usunąć. `EventBus` działa w procesie, więc druga instancja dochodzi d
 Odczyty przypisań idą bezpośrednio przez MikroORM (bez pamięci podręcznej); jeśli potrzebujesz ich
 szybciej, dodaj warstwę Redis z kluczem `(entityType, entityId)` i krótkim TTL — hooki są już na
 miejscu.
+
+## Adresy sklepu i prefiks języka {#storefront-urls}
+
+Każdy adres strony sklepu ma język jako pierwszy segment. Nigdy nie składaj go ręcznie —
+wyliczenie jest w `@endora-commerce/contracts`:
+
+- `channelUrlLanguages(channel)` / `channelUrlLanguageAliases(channel)` — wyliczony prefiks
+  każdego języka kanału (i aliasy rozdzielonych języków). `channel` to dowolne
+  `ChannelUrlFacts` (`languages`, `defaultLanguage`, `prefixDefaultLanguage`); spełnia je
+  kanał z pamięci podręcznej (`getResolvedChannel()`, `SalesChannelResolutionPort`).
+- `storefrontPagePath({ path, languageCode, channel })` — ścieżka logiczna (`/c/tools`,
+  `/verify?token=…`) pod prefiksem języka; rzuca wyjątek dla języka spoza kanału.
+- `storefrontPagePathFor({ path, channel, requestedLanguage })` — dla wiadomości: żądany
+  język, jeśli kanał go obsługuje, w przeciwnym razie język domyślny kanału; ścieżka logiczna,
+  gdy kanał nie jest znany. **Każdy e-mail, przekierowanie i feed z linkiem do strony sklepu
+  przechodzi przez tę funkcję albo `productPath`.**
+- `productPath({ key, languageCode, channel })` — strona produktu. Wcześniej przyjmowała
+  `channelDefaultLanguage` i dopisywała `?lang=`; teraz przyjmuje `channel` i nigdy nie
+  dopisuje `?lang=`. `productDefaultPath(key)` to adres `x-default` bez prefiksu.
+
+`GET /api/v1/storefront/sales-channel` zwraca `prefixDefaultLanguage`, `urlLanguages` i
+`urlLanguageAliases`, więc storefront headless nigdy ich nie wylicza sam. Kształty kanału w
+panelu mają `prefixDefaultLanguage`; zapisuje je audytowana komenda tożsamości kanału.
 
 ## Testowanie kodu zależnego od kanału
 

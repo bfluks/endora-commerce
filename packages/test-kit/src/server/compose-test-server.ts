@@ -62,6 +62,7 @@ import {
   composeModules,
   composeSalesChannelsKernel,
   composeSettingsKernel,
+  createCursorSeal,
   createRegistrationOwnership,
   createRootContainer,
   forkScopedEm,
@@ -367,6 +368,7 @@ export async function composeTestServer(
       emFactory: em,
       eventBus,
       redis,
+      redisSubscriber,
       auditLogService,
     });
     const settings = composeSettingsKernel({
@@ -426,6 +428,9 @@ export async function composeTestServer(
       // module-agnostic switch (`specs/134-paid-module-extraction/` research
       // D16). A harness runs none: every test process shares the queues.
       processRunsWorkers: false,
+      // Issue #497 — the cursor seal production keys with the session key. A
+      // harness pins its own, so a cursor issued on one request opens on the next.
+      cursorSeal: createCursorSeal('test-kit-cursor-seal'),
       ...options.values,
     });
 

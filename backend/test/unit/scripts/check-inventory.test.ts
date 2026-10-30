@@ -76,6 +76,7 @@ import {
   type EntryKind,
 } from '../../../scripts/check-entry-scope.js';
 import {
+  findPlaceholderSentences,
   findUnreachableSentences,
   findUntranslatedErrorCodes,
   nonDeclaringModules,
@@ -5964,6 +5965,40 @@ const CHECKS: readonly CheckEntry[] = [
             errorSentenceTree({ 'blog.en': { 'errors.COUPON_EXPIRED': 'It expired.' } }),
           ).filter((f) => f.kind === 'no-code').length,
       ),
+      // P5 (issue #441): a translation that is not a sentence in its own
+      // language. P1 counts any string as translated, which is how 137 Polish
+      // `Błąd: <code, lowercased>.` placeholders read as finished work. One
+      // proof per kind, each over a bundle pair entering at the top.
+      'sentence-placeholder': top(
+        () =>
+          findPlaceholderSentences(
+            errorSentenceTree({
+              'cms.en': { 'errors.BLOG_POST_NOT_FOUND': 'No such post.' },
+              'cms.pl': { 'errors.BLOG_POST_NOT_FOUND': 'Błąd: blog post not found.' },
+            }),
+          ).filter((f) => f.kind === 'placeholder').length,
+      ),
+      'sentence-same-as-english': top(
+        () =>
+          findPlaceholderSentences(
+            errorSentenceTree({
+              'cms.en': { 'errors.BLOG_POST_NOT_FOUND': 'No such post.' },
+              'cms.pl': { 'errors.BLOG_POST_NOT_FOUND': 'No such post.' },
+            }),
+          ).filter((f) => f.kind === 'same-as-english').length,
+      ),
+      // Issue #486: the same `placeholder` kind over the reference language,
+      // which is a different shape — the code in Title Case, matched
+      // case-sensitively — so a red Polish proof says nothing about it.
+      'sentence-placeholder-reference': top(
+        () =>
+          findPlaceholderSentences(
+            errorSentenceTree({
+              'cms.en': { 'errors.BLOG_POST_NOT_FOUND': 'Blog Post Not Found.' },
+              'cms.pl': { 'errors.BLOG_POST_NOT_FOUND': 'Nie znaleziono wpisu bloga.' },
+            }),
+          ).filter((f) => f.kind === 'placeholder' && f.language === 'en').length,
+      ),
       // The fourth fixture D-127 requires — a correctly-filed sentence, token
       // key included, yielding **zero** findings — cannot live here: a `red`
       // proof must come back non-zero. It is
@@ -11594,7 +11629,12 @@ describe('every red proof enters at the top of the analysis', () => {
       // three read the **manifests** against the platform's enumeration, which
       // is a population the other six never open, so none of them could go red
       // for any of these.
-      'backend/scripts/check-error-translations.ts': 9,
+      // Plus issue #441's two: P5's `placeholder` and `same-as-english`. P1
+      // counts any string as translated and P2 asks only where it is filed, so
+      // neither could go red for what a translation says.
+      // Plus issue #486's one: `placeholder` in the reference language, whose
+      // Title-Case shape the case-insensitive non-English rule never reaches.
+      'backend/scripts/check-error-translations.ts': 12,
       // Three shapes the read reaches the fallback through, four fabrications
       // the fallback performs; the two axes are independent, so the count is
       // their union rather than their product. Plus issue #275's five: three

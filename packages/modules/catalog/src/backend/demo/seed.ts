@@ -58,7 +58,6 @@ const COMPOSITES = [
     type: 'grouped',
     nameEn: 'Starter set (grouped)',
     descriptionEn: 'Starter set bundling two products with fixed quantities.',
-    price: 49.99,
   },
   {
     sku: 'DEMO-BUNDLE-0001',
@@ -66,7 +65,6 @@ const COMPOSITES = [
     type: 'bundle',
     nameEn: 'Configurable bundle',
     descriptionEn: 'Pick a color and quantity to configure your bundle.',
-    price: 99.99,
   },
   {
     sku: 'DEMO-VIRTUAL-0001',
@@ -74,7 +72,6 @@ const COMPOSITES = [
     type: 'virtual',
     nameEn: 'B2B Buyer Handbook (e-book)',
     descriptionEn: 'Digital e-book — instant download after purchase.',
-    price: 19.99,
     downloadUrl: 'https://example.test/b2b-buyer-handbook.pdf',
   },
 ] as const;
@@ -153,8 +150,8 @@ export async function seedDemo(
         slug: row.slug,
         type: 'simple',
         status: 'active',
-        name: { 'en-US': row.nameEn },
-        description: { 'en-US': row.descriptionEn },
+        name: row.nameEn,
+        description: row.descriptionEn,
         visibility: 'public',
         attributeValues: { ...row.attributeValues },
       }),
@@ -178,10 +175,10 @@ export async function seedDemo(
         slug: composite.slug,
         type: composite.type,
         status: 'active',
-        name: { 'en-US': composite.nameEn },
-        description: { 'en-US': composite.descriptionEn },
+        name: composite.nameEn,
+        description: composite.descriptionEn,
         visibility: 'public',
-        attributeValues: { defaultPrice: composite.price },
+        attributeValues: {},
         ...('downloadUrl' in composite ? { downloadUrl: composite.downloadUrl } : {}),
       }),
     );

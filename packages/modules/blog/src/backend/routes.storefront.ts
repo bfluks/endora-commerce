@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, blogPostsListQuerySchema } from '@endora-commerce/contracts';
 import { z } from 'zod';
 import { HttpError } from '@endora-commerce/platform/http';
 import { getResolvedChannel } from '@endora-commerce/platform/kernel';
@@ -29,6 +29,24 @@ export async function registerBlogStorefrontRoutes(
       throw new HttpError(404, ERROR_CODES.BLOG_DISABLED, 'Blog is disabled or not configured.');
     }
     return { data: resolved };
+  });
+
+  /**
+   * Feature 163 — the card list behind `blog.LatestPosts`, in the resolved
+   * channel only (Constitution XII): the channel comes from the resolver
+   * middleware, which falls back to the system default channel and never to
+   * every channel. `limit` above 24 is a 400 through the schema.
+   */
+  app.get('/api/v1/blog/posts', async (request) => {
+    const query = blogPostsListQuerySchema.parse(request.query ?? {});
+    const { language } = readContext(request);
+    const data = await deps.storefrontResolver.listPosts({
+      resolvedChannel: resolvedChannel(request),
+      ...(language !== undefined ? { language } : {}),
+      limit: query.limit,
+      ...(query.categorySlug !== undefined ? { categorySlug: query.categorySlug } : {}),
+    });
+    return { data };
   });
 
   app.get('/api/v1/blog/by-slug', async (request) => {

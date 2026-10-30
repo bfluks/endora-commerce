@@ -1,11 +1,11 @@
-import { redirect } from 'next/navigation';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { loginCustomer } from '../../../../../lib/api/auth';
 import { acceptInvitation } from '../../../../../lib/api/organization';
 import { StorefrontApiError } from '../../../../../lib/api/client';
 import { setSessionCookie } from '../../../../../lib/session';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -64,7 +64,7 @@ export default async function AcceptInvitationPage({
       </form>
       <p className="b2b-auth__hint">
         Wrong link? Ask your admin for a new invitation or{' '}
-        <Link href="/login">sign in</Link> if you already have an account.
+        <LocalizedLink href="/login">sign in</LocalizedLink> if you already have an account.
       </p>
     </div>
   );
@@ -78,16 +78,16 @@ async function acceptInvitationAction(formData: FormData): Promise<void> {
   const lastName = ((formData.get('lastName') as string) ?? '').trim();
   const password = (formData.get('password') as string) ?? '';
 
-  const redirectWithError = (message: string): never => {
+  const redirectWithError = async (message: string): Promise<never> => {
     const q = new URLSearchParams({ error: message });
     if (!token.trim()) {
-      redirect(`/login?${q.toString()}`);
+      return await localeRedirect(`/login?${q.toString()}`);
     }
-    redirect(`/invitations/${encodeURIComponent(token)}/accept?${q.toString()}`);
+    return await localeRedirect(`/invitations/${encodeURIComponent(token)}/accept?${q.toString()}`);
   };
 
   if (!token.trim()) {
-    redirectWithError('Invitation link is invalid.');
+    return await redirectWithError('Invitation link is invalid.');
   }
 
   try {
@@ -103,15 +103,14 @@ async function acceptInvitationAction(formData: FormData): Promise<void> {
     // Feature 042 — a 2FA-protected/enforced account must finish the second
     // step via the normal login flow.
     if (login.status !== 'authenticated' || !login.sessionCookieValue) {
-      redirectWithError('Account created. Please sign in to continue.');
-      return;
+      return await redirectWithError('Account created. Please sign in to continue.');
     }
     await setSessionCookie(login.sessionCookieValue);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not accept invitation. Try again.';
-    redirectWithError(message);
+      err instanceof StorefrontApiError ? err.detail : 'Could not accept invitation. Try again.';
+    return await redirectWithError(message);
   }
 
-  redirect('/account');
+  return await localeRedirect('/account');
 }

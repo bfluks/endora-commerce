@@ -1,9 +1,9 @@
-import { redirect } from 'next/navigation';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { confirmPasswordReset } from '../../../../lib/api/auth';
 import { StorefrontApiError } from '../../../../lib/api/client';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -34,7 +34,7 @@ export default async function PasswordResetConfirmPage({
         <h1>Password updated</h1>
         <p className="b2b-auth__success">You can now sign in with your new password.</p>
         <p>
-          <Link href="/login">Continue to sign-in</Link>.
+          <LocalizedLink href="/login">Continue to sign-in</LocalizedLink>.
         </p>
       </div>
     );
@@ -86,10 +86,10 @@ async function confirmAction(formData: FormData): Promise<void> {
     await confirmPasswordReset(token, newPassword);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not reset your password.';
-    redirect(
+      err instanceof StorefrontApiError ? err.detail : 'Could not reset your password.';
+    return await localeRedirect(
       `/password-reset/confirm?token=${encodeURIComponent(token)}&error=${encodeURIComponent(message)}`,
     );
   }
-  redirect(`/password-reset/confirm?status=done`);
+  return await localeRedirect(`/password-reset/confirm?status=done`);
 }

@@ -1,8 +1,8 @@
 {
-  "errors.COMPARISON_FULL": "Comparison Full.",
-  "errors.COMPARISON_NOT_FOUND": "Comparison Not Found.",
-  "errors.COMPARISON_EMPTY": "Comparison Empty.",
-  "errors.PDF_GENERATION_FAILED": "Pdf Generation Failed.",
+  "errors.COMPARISON_FULL": "The comparison is full. Remove a product from it to add another.",
+  "errors.COMPARISON_NOT_FOUND": "Comparison not found.",
+  "errors.COMPARISON_EMPTY": "The comparison is empty, so it cannot be exported.",
+  "errors.PDF_GENERATION_FAILED": "The PDF could not be generated. Try again later.",
   "error.load": "Failed to load.",
   "common.loading": "Loading…",
   "list.page.title": "Comparisons",

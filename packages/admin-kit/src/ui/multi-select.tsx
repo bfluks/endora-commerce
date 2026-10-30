@@ -17,6 +17,12 @@ export interface MultiSelectProps {
   placeholder: string;
   /** aria-label for the trigger button. */
   ariaLabel?: string;
+  /**
+   * The id of a visible label that names the trigger. Given, it replaces
+   * `ariaLabel`, so the name is the label the reader sees and not a second
+   * copy of it.
+   */
+  ariaLabelledBy?: string;
   className?: string;
   disabled?: boolean;
   /** Optional leading icon for the trigger (e.g. a Columns glyph). */
@@ -41,6 +47,7 @@ export function MultiSelect({
   onChange,
   placeholder,
   ariaLabel,
+  ariaLabelledBy,
   className,
   disabled = false,
   icon,
@@ -95,7 +102,8 @@ export function MultiSelect({
     <div ref={containerRef} className={cn('relative', className)}>
       <button
         type="button"
-        aria-label={ariaLabel ?? placeholder}
+        aria-label={ariaLabelledBy ? undefined : (ariaLabel ?? placeholder)}
+        aria-labelledby={ariaLabelledBy}
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}

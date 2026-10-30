@@ -1,8 +1,14 @@
 import { z } from 'zod';
-import { isoDateTimeSchema } from './common.js';
+import { calendarDateSchema, isoDateTimeSchema } from './common.js';
 import { collectionEnvelope, dataEnvelope } from './envelopes.js';
-import { customFieldValuesSchema } from './custom-fields.js';
+import { customFieldFilterSchema, customFieldValuesSchema } from './custom-fields.js';
 import type { QuoteRequestStatus } from './quote-requests.js';
+import { twoDecimalAmountString } from './money-input.js';
+import {
+  RecordReferenceSchema as OpportunityReferenceSchema,
+  recordReferenceTypeSchema,
+  type RecordReferenceType,
+} from './record-references.js';
 
 /**
  * CRM — Sales Opportunities (`specs/143-crm-sales-opportunities/`).
@@ -85,12 +91,13 @@ export const opportunityCommentKindSchema = z.enum(['note', 'message']);
 export type OpportunityCommentKind = z.infer<typeof opportunityCommentKindSchema>;
 
 /**
- * What a free text can refer to. `admin_user` is a person — a user of the Admin
- * UI, under the name the platform has for one everywhere else (the bell's
- * audience, `assignedAdminUserId`); `user` alone would also read as a customer.
+ * What a free text can refer to — the shared reference types of
+ * `record-references.ts` (`specs/163-projects-and-tasks/` research R-14): a
+ * Product, an Order, a person (`admin_user`), and since that feature a Quote
+ * Request and a Task. An alias, not a copy: CRM and Projects read one grammar.
  */
-export const opportunityReferenceTypeSchema = z.enum(['product', 'order', 'admin_user']);
-export type OpportunityReferenceType = z.infer<typeof opportunityReferenceTypeSchema>;
+export const opportunityReferenceTypeSchema = recordReferenceTypeSchema;
+export type OpportunityReferenceType = RecordReferenceType;
 
 /** The six `QuoteRequestStatus` values — a fixed union, unlike Order statuses. */
 export const QUOTE_REQUEST_STATUS_VALUES = [
@@ -115,24 +122,15 @@ const currencyCodeSchema = z
   .string()
   .regex(/^[A-Z]{3}$/, 'Currency must be an ISO 4217 code, e.g. PLN');
 
-/** Whether `YYYY-MM-DD` names a day the calendar has: `2026-02-31` and `2026-13-01` do not. */
-function isCalendarDate(value: string): boolean {
-  const [year = 0, month = 0, day = 0] = value.split('-').map(Number);
-  if (year < 1) return false;
-  const date = new Date(0);
-  date.setUTCFullYear(year, month - 1, day);
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-}
-
-const calendarDateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
-  .refine(isCalendarDate, 'Not a date of the calendar');
-
-/** A non-negative decimal held as a string, as `numeric(14,2)` money is everywhere. */
-const decimalAmountSchema = z
-  .string()
-  .regex(/^\d{1,12}(\.\d{1,2})?$/, 'Amount must be a non-negative decimal with at most two places');
+/**
+ * A non-negative decimal held as a string, as `numeric(14,2)` money is
+ * everywhere: the shape here, and more than two decimal places refused with the
+ * platform's one precision code (`money-input.ts`, issue #417).
+ */
+const decimalAmountSchema = twoDecimalAmountString(z.string(), {
+  pattern: /^\d{1,12}(\.\d+)?$/,
+  message: 'Amount must be a non-negative decimal with at most two places',
+});
 
 const isoTimestampSchema = z.string();
 
@@ -154,90 +152,27 @@ const statusNameSchema = z.record(z.string().min(2).max(16), z.string().min(1).m
 // ---------------------------------------------------------------------------
 
 /**
- * The reference-token grammar: `[[product:<uuid>]]`, `[[order:<uuid>]]`,
- * `[[admin_user:<uuid>]]`.
+ * The reference-token grammar: `[[<type>:<uuid>]]` for the five types of
+ * {@link opportunityReferenceTypeSchema}.
  *
- * Free text (`description`, a comment `body`) is stored as plain text carrying
- * these tokens. This is the one place the grammar is written; the backend
- * extracts with it and the admin's composer inserts with it. What a person
- * types to get one — `@`, `@@`, `@@@` — is the composer's and is never stored.
+ * Written once, in `record-references.ts` (`specs/163-projects-and-tasks/`
+ * research R-14, FR-044), and exported here under the names CRM has always
+ * exported — each an **alias** of the shared function or schema, never a copy,
+ * so CRM and Projects cannot drift. What a person types to get one — `@`, `@@`,
+ * `@@@` — is the composer's and is never stored.
  */
-const REFERENCE_TOKEN_SOURCE =
-  '\\[\\[(product|order|admin_user):([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\]\\]';
-
-export interface OpportunityReferenceToken {
-  type: OpportunityReferenceType;
-  id: string;
-}
-
-export function formatOpportunityReferenceToken(type: OpportunityReferenceType, id: string): string {
-  return `[[${type}:${id}]]`;
-}
-
-/** Every well-formed token in `text`, in first-appearance order, each target once. */
-export function extractOpportunityReferenceTokens(text: string): OpportunityReferenceToken[] {
-  const seen = new Set<string>();
-  const tokens: OpportunityReferenceToken[] = [];
-  // A fresh expression per call: a shared global one carries `lastIndex`.
-  for (const match of text.matchAll(new RegExp(REFERENCE_TOKEN_SOURCE, 'g'))) {
-    const type = match[1] as OpportunityReferenceType;
-    const id = (match[2] as string).toLowerCase();
-    const key = `${type}:${id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    tokens.push({ type, id });
-  }
-  return tokens;
-}
-
-/** A stretch of plain text, or one well-formed token, in the order they appear. */
-export type OpportunityReferenceTextPart =
-  | { kind: 'text'; text: string }
-  | ({ kind: 'reference' } & OpportunityReferenceToken);
-
-/**
- * `text` cut at its well-formed tokens, for a screen that shows each token as
- * a link: the parts, joined back, are the text. A malformed token stays text.
- */
-export function splitOpportunityReferenceText(text: string): OpportunityReferenceTextPart[] {
-  const parts: OpportunityReferenceTextPart[] = [];
-  let cursor = 0;
-  for (const match of text.matchAll(new RegExp(REFERENCE_TOKEN_SOURCE, 'g'))) {
-    const start = match.index ?? 0;
-    if (start > cursor) parts.push({ kind: 'text', text: text.slice(cursor, start) });
-    parts.push({
-      kind: 'reference',
-      type: match[1] as OpportunityReferenceType,
-      id: (match[2] as string).toLowerCase(),
-    });
-    cursor = start + match[0].length;
-  }
-  if (cursor < text.length) parts.push({ kind: 'text', text: text.slice(cursor) });
-  return parts;
-}
-
-/** The people a text mentions, each once, in first-appearance order. */
-export function mentionedAdminUserIds(text: string | null | undefined): string[] {
-  if (!text) return [];
-  return extractOpportunityReferenceTokens(text)
-    .filter((token) => token.type === 'admin_user')
-    .map((token) => token.id);
-}
-
-/**
- * A resolved reference, returned beside every free-text field. A target the
- * reader may not see, or that is gone, is `available: false` with no label.
- * A person has a `label` — their name — and never a `url`: the screen of an
- * administrator is `admin_users`', behind a permission of its own.
- */
-export const OpportunityReferenceSchema = z.object({
-  type: opportunityReferenceTypeSchema,
-  id: z.string().uuid(),
-  available: z.boolean(),
-  label: z.string().nullable(),
-  url: z.string().nullable(),
-});
-export type OpportunityReference = z.infer<typeof OpportunityReferenceSchema>;
+export {
+  extractRecordReferenceTokens as extractOpportunityReferenceTokens,
+  formatRecordReferenceToken as formatOpportunityReferenceToken,
+  mentionedAdminUserIds,
+  RecordReferenceOrderSchema as OpportunityReferenceOrderSchema,
+  RecordReferenceSchema as OpportunityReferenceSchema,
+  splitRecordReferenceText as splitOpportunityReferenceText,
+  type RecordReference as OpportunityReference,
+  type RecordReferenceOrder as OpportunityReferenceOrder,
+  type RecordReferenceTextPart as OpportunityReferenceTextPart,
+  type RecordReferenceToken as OpportunityReferenceToken,
+} from './record-references.js';
 
 // ---------------------------------------------------------------------------
 // §1 Opportunities
@@ -357,24 +292,17 @@ export type OpportunityBoardCardConfig = z.infer<typeof OpportunityBoardCardConf
 
 export const OpportunityBoardCardConfigResponseSchema = dataEnvelope(OpportunityBoardCardConfigSchema);
 
-/** A bound of a number or an amount, as a decimal string. */
-const fieldFilterNumberSchema = z.string().regex(/^-?\d{1,12}(\.\d{1,4})?$/, 'Not a decimal number');
-
 /**
  * One field's filter: the operators of every kind in one object. Which of them
- * apply is the field's kind to say; the others are ignored by the server.
+ * apply is the field's kind to say. The board ignores the others; the
+ * Opportunities list refuses them on a `custom:` reference with 400
+ * `VALIDATION_FAILED`, as it refuses an inverted range.
+ *
+ * The same object as the admin lists' custom-field filter
+ * (`specs/157-custom-fields-list-filters/`), so a board filter and a list
+ * filter read one grammar.
  */
-export const OpportunityFieldFilterSchema = z
-  .object({
-    contains: z.string().trim().min(1).max(200).optional(),
-    in: z.array(z.string().min(1).max(200)).min(1).max(50).optional(),
-    is: z.boolean().optional(),
-    min: fieldFilterNumberSchema.optional(),
-    max: fieldFilterNumberSchema.optional(),
-    from: calendarDateSchema.optional(),
-    to: calendarDateSchema.optional(),
-  })
-  .strict();
+export const OpportunityFieldFilterSchema = customFieldFilterSchema;
 export type OpportunityFieldFilter = z.infer<typeof OpportunityFieldFilterSchema>;
 
 export const OpportunityFieldFiltersSchema = z
@@ -417,7 +345,20 @@ const opportunityFilterShape = {
   tagId: repeatable(z.string().uuid()),
   createdFrom: calendarDateSchema.optional(),
   createdTo: calendarDateSchema.optional(),
-  /** §12c — filters on the fields the board card shows; a field that is not shown is ignored. */
+  /**
+   * §12c — filters on fields, in one of two modes.
+   *
+   * - On the board, and on the list with `cardValues=true` (a board lane's
+   *   continuation): the card rule — a field the card does not show is ignored.
+   * - On the list otherwise: a `custom:` reference is governed by the
+   *   definition's list-filter option — filtered when it is on, whether or not
+   *   the card shows the field, and refused with 400
+   *   `CUSTOM_FIELD_FILTER_UNAVAILABLE` when it is off; `builtin:` references
+   *   keep the card rule.
+   *
+   * `cardValues` is a mode switch, never a security boundary: both modes run in
+   * the same tenant-scoped, assignment-scoped statement.
+   */
   fieldFilters: fieldFiltersParamSchema,
 };
 
@@ -1011,6 +952,21 @@ export const OpportunityQuoteRequestLookupQuerySchema = z.object({
 export type OpportunityQuoteRequestLookupQuery = z.infer<
   typeof OpportunityQuoteRequestLookupQuerySchema
 >;
+
+/**
+ * `GET /crm/lookups/documents` — the `@@` document list of an Opportunity's
+ * texts (`specs/163-projects-and-tasks/` FR-044). The answer is the shared
+ * `RecordDocumentLookupResponse` (`record-references.ts`), the one Projects
+ * serves too. Orders and Quote Requests are those of the Opportunity's
+ * Organization — or, on the create form before there is an Opportunity, of the
+ * Organization chosen there; with neither, the list offers Tasks only.
+ */
+export const OpportunityDocumentLookupQuerySchema = z.object({
+  opportunityId: z.string().uuid().optional(),
+  organizationId: z.string().uuid().optional(),
+  q: lookupSearchSchema,
+});
+export type OpportunityDocumentLookupQuery = z.infer<typeof OpportunityDocumentLookupQuerySchema>;
 
 export const OpportunityQuoteRequestOptionSchema = z.object({
   id: z.string().uuid(),
@@ -1635,7 +1591,31 @@ export interface OpportunityReadPort {
   findById(id: string): Promise<OpportunityRecord | null>;
   findByDocument(kind: OpportunityDocumentKind, documentId: string): Promise<OpportunityRecord | null>;
   listOpenForOrganization(organizationId: string): Promise<OpportunityRecord[]>;
+  /**
+   * The Opportunities of `ids` in the caller's tenant scope, in no particular
+   * order — a missing or malformed id is simply absent. One query for a page of
+   * references (`specs/165-task-management/` R-5). Checks no permission: the
+   * caller checks `crm:read`, as for every other method.
+   */
+  findByIds(ids: readonly string[]): Promise<OpportunityRecord[]>;
+  /**
+   * Opportunities in the caller's tenant scope whose number or title contains
+   * `q` (case-insensitively; every one for an empty `q`), newest first, at most
+   * `limit` (≤ 20) — the Opportunities group of the `@@` list and the Tasks
+   * link picker (R-5, R-16).
+   */
+  search(query: OpportunitySearchQuery): Promise<OpportunityRecord[]>;
 }
+
+/** What `OpportunityReadPort.search` is asked. */
+export interface OpportunitySearchQuery {
+  q?: string;
+  /** At most {@link OPPORTUNITY_READ_PORT_SEARCH_MAX}. */
+  limit: number;
+}
+
+/** The most Opportunities one `OpportunityReadPort.search` answers. */
+export const OPPORTUNITY_READ_PORT_SEARCH_MAX = 20;
 
 /** Why a requested transition did not happen. */
 export const OPPORTUNITY_TRANSITION_REFUSALS = [

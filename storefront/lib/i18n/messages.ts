@@ -15,6 +15,7 @@ export type MessageKey =
   | 'a11y.navigating'
   | 'a11y.navigatingSlow'
   | 'nav.home'
+  | 'header.language'
   | 'nav.catalog'
   | 'nav.search'
   | 'nav.account'
@@ -25,6 +26,7 @@ export type MessageKey =
   | 'catalog.heading'
   | 'catalog.filters'
   | 'catalog.empty'
+  | 'catalog.emptyPageMore'
   | 'catalog.loadMore'
   | 'catalog.sort.priceAsc'
   | 'catalog.sort.priceDesc'
@@ -36,6 +38,10 @@ export type MessageKey =
   | 'catalog.price.unitNote'
   | 'product.outOfStock'
   | 'product.requestQuote'
+  | 'product.priceFromVariants'
+  | 'product.compareAtLabel'
+  | 'product.listPrice'
+  | 'product.yourPrice'
   | 'product.addToCart'
   | 'product.addToCartFailed'
   | 'product.oneClickFailed'
@@ -45,6 +51,113 @@ export type MessageKey =
   | 'product.tabs.attachments'
   | 'product.packaging.singlePiece'
   | 'product.packaging.pieces'
+  | 'product.minimum.pieces'
+  | 'product.minimum.units'
+  | 'product.minimum.addToCart'
+  // Feature 155, U4 — the buy controls, the quick-order page and the shopping-list quantity.
+  | 'common.quantity'
+  | 'product.buy.unit'
+  | 'product.quote.add'
+  | 'product.quote.added'
+  | 'product.cartPopup.added'
+  | 'product.cartPopup.goToCart'
+  | 'product.cartPopup.continue'
+  | 'product.cartPopup.close'
+  | 'card.list.add'
+  | 'card.list.remove'
+  | 'card.list.failed'
+  | 'card.cart.added'
+  | 'card.cart.failed'
+  | 'card.quote.added'
+  | 'compare.cart.adding'
+  | 'compare.cart.added'
+  | 'quickOrder.page.heading'
+  | 'quickOrder.page.introPrefix'
+  | 'quickOrder.page.introSuffix'
+  | 'quickOrder.page.template'
+  | 'quickOrder.page.dropzone'
+  | 'quickOrder.page.pasteLabel'
+  | 'quickOrder.page.preview'
+  | 'quickOrder.built.cart'
+  | 'quickOrder.built.goToCheckout'
+  | 'quickOrder.built.quote'
+  | 'quickOrder.built.viewQuotes'
+  | 'quickOrder.search.heading'
+  | 'quickOrder.search.hint'
+  | 'quickOrder.search.placeholder'
+  | 'quickOrder.search.none'
+  | 'quickOrder.search.add'
+  | 'quickOrder.col.sku'
+  | 'quickOrder.col.name'
+  | 'quickOrder.col.qty'
+  | 'quickOrder.col.line'
+  | 'quickOrder.col.variant'
+  | 'quickOrder.col.reason'
+  | 'quickOrder.col.raw'
+  | 'quickOrder.qtyFor'
+  | 'quickOrder.bar.recognised'
+  | 'quickOrder.bar.addToCart'
+  | 'quickOrder.preview.heading'
+  | 'quickOrder.preview.recognised'
+  | 'quickOrder.preview.invalid'
+  | 'quickOrder.preview.units'
+  | 'quickOrder.preview.truncated'
+  | 'quickOrder.preview.merged'
+  | 'quickOrder.preview.recognisedRows'
+  | 'quickOrder.preview.update'
+  | 'quickOrder.preview.remove'
+  | 'quickOrder.preview.addAll'
+  | 'quickOrder.preview.sendAsQuote'
+  | 'quickOrder.preview.noneMatched'
+  | 'quickOrder.preview.rejectedHeading'
+  | 'quickOrder.problem.no_input'
+  | 'quickOrder.problem.nothing_to_update'
+  | 'quickOrder.problem.nothing_to_remove'
+  | 'quickOrder.problem.nothing_to_build'
+  | 'quickOrder.problem.import_failed'
+  | 'quickOrder.problem.build_failed'
+  | 'shoppingList.qty.invalid'
+  | 'shoppingList.qty.save'
+  | 'order.minimum.below.pieces'
+  | 'order.minimum.below.units'
+  | 'order.minimum.below.unitsUnnamed'
+  | 'order.minimum.below.bare'
+  | 'cart.line.noLongerAvailable'
+  | 'cart.line.unknownProduct'
+  | 'cart.line.setToMinimum'
+  | 'cart.line.minimumHint'
+  | 'cart.line.quantityInvalid'
+  | 'cart.line.updateFailed'
+  | 'cart.line.removeFailed'
+  | 'cart.checkoutBlocked'
+  | 'cart.approvalBlocked'
+  | 'batchReport.more'
+  | 'cart.submitForApprovalFailed'
+  | 'cart.dropped.belowMinimum'
+  | 'cart.dropped.belowMinimumBare'
+  | 'checkout.belowMinimum.heading'
+  | 'checkout.belowMinimum.intro'
+  | 'checkout.belowMinimum.backToCart'
+  | 'checkout.belowMinimum.blocked'
+  | 'quickOrder.reason.sku_missing'
+  | 'quickOrder.reason.quantity_invalid'
+  | 'quickOrder.reason.product_not_found'
+  | 'quickOrder.reason.product_archived'
+  | 'quickOrder.reason.malformed_row'
+  | 'quickOrder.reason.variant_not_resolved'
+  | 'quickOrder.reason.variant_ambiguous'
+  | 'quickOrder.reason.row_limit_exceeded'
+  | 'quickOrder.reason.below_minimum'
+  | 'quickOrder.reason.below_minimumDetail'
+  | 'quickOrder.build.added'
+  | 'quickOrder.build.noneAdded'
+  | 'quickOrder.build.rejectedHeading'
+  | 'quickOrder.build.rejectedLine'
+  | 'quickOrder.build.openCart'
+  | 'shoppingList.skip.heading'
+  | 'shoppingList.skip.product_archived'
+  | 'shoppingList.skip.variant_unavailable'
+  | 'shoppingList.skip.product_not_found'
   | 'product.inStock'
   | 'product.stockBand.high'
   | 'product.stockBand.medium'
@@ -60,7 +173,6 @@ export type MessageKey =
   | 'product.backorder.hint'
   | 'product.variants.heading'
   | 'product.variants.sku'
-  | 'product.variants.priceOverride'
   | 'product.variants.stockLevel'
   | 'product.variants.outOfStock'
   | 'product.variants.selectThisVariant'
@@ -182,12 +294,34 @@ export type MessageKey =
   | 'quoteRequest.success.viewRequest'
   | 'quoteRequest.success.allRequests'
   | 'quoteRequest.success.continueShopping'
+  // Feature 159 — a document's line groups, read-only, and the comparison's
+  // notice that the arrangement changed.
+  | 'quoteRequest.diff.grouping'
+  | 'lineGroups.otherItems'
+  | 'lineGroups.summary.items.one'
+  | 'lineGroups.summary.items.few'
+  | 'lineGroups.summary.items.many'
+  | 'lineGroups.summary.items.other'
+  | 'lineGroups.summary.net'
+  | 'lineGroups.summary.vat'
+  | 'lineGroups.summary.gross'
   // Issue #193 — federated sign-in. Rendered only when `mfa` is present and the
   // provider is configured + enabled, so these never label a dead control.
   | 'auth.federated.groupLabel'
   | 'auth.federated.divider'
   | 'auth.federated.google'
   | 'auth.federated.microsoft'
+  // `specs/154-sales-channel-access/` — a store that serves signed-in customers
+  // only, an account whose Organization may not use this store, and the screen
+  // a signed-in buyer sees on a store their account is not assigned to.
+  | 'auth.login.signInRequired'
+  | 'auth.login.channelNotPermitted'
+  | 'access.signInRequired'
+  | 'access.denied.title'
+  | 'access.denied.body'
+  | 'access.denied.otherStores'
+  | 'access.denied.signOut'
+  | 'access.denied.contact'
   // Issue #194 — the linked-identities panel on the account security page.
   | 'account.socialLinks.heading'
   | 'account.socialLinks.intro'
@@ -228,6 +362,34 @@ export type MessageKey =
   | 'orders.paymentReturn.cancelled'
   | 'orders.paymentReturn.failed'
   | 'orders.actionFailed'
+  // Feature 155 (FR-021, FR-018) — the return form and the order's return action. A line may
+  // be not returnable, and an order with no returnable line still takes a complaint.
+  | 'returns.new.heading'
+  | 'returns.new.chooseOrder'
+  | 'returns.new.noOrders'
+  | 'returns.new.backToReturns'
+  | 'returns.new.chooseAnotherOrder'
+  | 'returns.new.freeReturnWindow'
+  | 'returns.new.kind.legend'
+  | 'returns.new.kind.return'
+  | 'returns.new.kind.complaint'
+  | 'returns.new.col.include'
+  | 'returns.new.col.product'
+  | 'returns.new.col.qty'
+  | 'returns.new.col.reason'
+  | 'returns.new.selectReason'
+  | 'returns.new.comment'
+  | 'returns.new.submit.return'
+  | 'returns.new.submit.complaint'
+  | 'returns.new.none.notCompleting'
+  | 'returns.new.none.fullyReturned'
+  | 'returns.new.none.windowPassed'
+  | 'returns.new.none.generic'
+  | 'returns.new.complaintOnly'
+  | 'returns.line.notReturnable'
+  | 'returns.line.remaining'
+  | 'orders.returnAction.return'
+  | 'orders.returnAction.complaint'
   // The validity deadline an operator sets on a quote request. !1137 made it a
   // rule — accept-revision answers 410 `RFQ_EXPIRED` and convert-to-order 410
   // `QUOTE_VALIDITY_ENDED` past it — while no storefront component rendered
@@ -254,14 +416,28 @@ export type MessageKey =
   | 'serviceUnavailable.body'
   | 'serviceUnavailable.reassurance'
   | 'serviceUnavailable.retry'
-  | 'serviceUnavailable.retryHint';
+  | 'serviceUnavailable.retryHint'
+  // Feature 163 (T095): the words a page-builder carousel speaks to assistive
+  // technology. `{n}` and `{m}` are filled in by the carousel.
+  | 'cms.carousel.label'
+  | 'cms.carousel.previous'
+  | 'cms.carousel.next'
+  | 'cms.carousel.slide'
+  | 'cms.carousel.goToSlide'
+  | 'cms.carousel.goToPage'
+  | 'cms.carousel.pause'
+  | 'cms.carousel.play'
+  | 'cms.carousel.filter'
+  | 'cms.carousel.filterAll'
+  | 'cms.carousel.filterCount';
 
-const MESSAGES: Record<string, Record<MessageKey, string>> = {
+export const MESSAGES: Record<string, Record<MessageKey, string>> = {
   'en-US': {
     'a11y.skipToContent': 'Skip to content',
     'a11y.navigating': 'Loading the next page.',
     'a11y.navigatingSlow': 'Still loading. The next page is taking longer than usual.',
     'nav.home': 'Home',
+    'header.language': 'Language',
     'nav.catalog': 'Catalog',
     'nav.search': 'Search',
     'nav.account': 'Account',
@@ -272,6 +448,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'catalog.heading': 'Catalog',
     'catalog.filters': 'Filters',
     'catalog.empty': 'No products match your filters.',
+    'catalog.emptyPageMore': 'No products on this page. More follow on the next page.',
     'catalog.loadMore': 'Load more',
     'catalog.sort.priceAsc': 'Price: lowest first',
     'catalog.sort.priceDesc': 'Price: highest first',
@@ -284,6 +461,10 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
       'Prices shown are your unit prices. Quantity discounts and promotions are applied in the cart.',
     'product.outOfStock': 'Out of stock',
     'product.requestQuote': 'Request a quote',
+    'product.priceFromVariants': 'from, depending on the variant',
+    'product.compareAtLabel': 'Your price',
+    'product.listPrice': 'List price',
+    'product.yourPrice': 'Your price',
     'product.addToCart': 'Add to cart',
     'product.addToCartFailed': 'Could not add the product to the cart.',
     'product.oneClickFailed': 'Could not place the order.',
@@ -293,6 +474,113 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'product.tabs.attachments': 'Attachments',
     'product.packaging.singlePiece': 'Single piece',
     'product.packaging.pieces': 'pcs',
+    'product.minimum.pieces': 'Minimum order: {count} pcs',
+    'product.minimum.units': 'Minimum order: {units} × {unit} = {count} pcs',
+    'product.minimum.addToCart': 'Add {count} pcs to cart',
+    'common.quantity': 'Quantity',
+    'product.buy.unit': 'Packaging unit',
+    'product.quote.add': 'Add to quote',
+    'product.quote.added': 'Added ✓',
+    'product.cartPopup.added': 'Product added to the cart.',
+    'product.cartPopup.goToCart': 'Go to cart',
+    'product.cartPopup.continue': 'Continue shopping',
+    'product.cartPopup.close': 'Close',
+    'card.list.add': 'Add to shopping list',
+    'card.list.remove': 'Remove from shopping list',
+    'card.list.failed': 'Could not change the list',
+    'card.cart.added': 'Added to cart',
+    'card.cart.failed': 'Could not add',
+    'card.quote.added': 'Added to quote',
+    'compare.cart.adding': 'Adding…',
+    'compare.cart.added': '✓ Added',
+    'quickOrder.page.heading': 'Quick order',
+    'quickOrder.page.introPrefix': 'Paste a CSV with ',
+    'quickOrder.page.introSuffix':
+      " headers (extra columns set variant attributes), or drag-drop a CSV / Excel file. We'll show you which rows match a real product before anything is added.",
+    'quickOrder.page.template': 'Download CSV template',
+    'quickOrder.page.dropzone': 'Drag a CSV or Excel file here, or click to choose',
+    'quickOrder.page.pasteLabel': '…or paste CSV',
+    'quickOrder.page.preview': 'Preview',
+    'quickOrder.built.cart': 'Cart built from your import.',
+    'quickOrder.built.goToCheckout': 'Go to checkout',
+    'quickOrder.built.quote': 'Quote request created',
+    'quickOrder.built.viewQuotes': 'View quote requests',
+    'quickOrder.search.heading': 'Find products',
+    'quickOrder.search.hint': 'Search by SKU, name, or a quick-searchable attribute and add items to your order.',
+    'quickOrder.search.placeholder': 'Search products…',
+    'quickOrder.search.none': 'No products matched "{query}".',
+    'quickOrder.search.add': 'Add',
+    'quickOrder.col.sku': 'SKU',
+    'quickOrder.col.name': 'Name',
+    'quickOrder.col.qty': 'Qty',
+    'quickOrder.col.line': 'Line',
+    'quickOrder.col.variant': 'Variant',
+    'quickOrder.col.reason': 'Reason',
+    'quickOrder.col.raw': 'Raw',
+    'quickOrder.qtyFor': 'Quantity for {sku}',
+    'quickOrder.bar.recognised': 'Recognised',
+    'quickOrder.bar.addToCart': 'Add {count} to cart',
+    'quickOrder.preview.heading': 'Preview',
+    'quickOrder.preview.recognised': 'recognised',
+    'quickOrder.preview.invalid': 'invalid',
+    'quickOrder.preview.units': 'units',
+    'quickOrder.preview.truncated': 'The file exceeded the import row limit — extra rows were rejected.',
+    'quickOrder.preview.merged': '{count} duplicate row(s) merged (quantities summed).',
+    'quickOrder.preview.recognisedRows': '{count} row(s) recognised — choose how to proceed.',
+    'quickOrder.preview.update': 'Update',
+    'quickOrder.preview.remove': 'Remove',
+    'quickOrder.preview.addAll': 'Add all to cart',
+    'quickOrder.preview.sendAsQuote': 'Send as quote request',
+    'quickOrder.preview.noneMatched': 'No rows matched the catalog.',
+    'quickOrder.preview.rejectedHeading': 'Rejected rows',
+    'quickOrder.problem.no_input': 'Provide a file or paste CSV.',
+    'quickOrder.problem.nothing_to_update': 'Nothing to update.',
+    'quickOrder.problem.nothing_to_remove': 'Nothing to remove.',
+    'quickOrder.problem.nothing_to_build': 'Nothing to build.',
+    'quickOrder.problem.import_failed': 'Import failed.',
+    'quickOrder.problem.build_failed': 'Could not build the cart or quote request.',
+    'shoppingList.qty.invalid': 'Enter a whole number from 1 to 9999.',
+    'shoppingList.qty.save': 'Save',
+    'order.minimum.below.pieces': 'Below the minimum ({count} pcs)',
+    'order.minimum.below.units': 'Below the minimum ({units} × {unit})',
+    'order.minimum.below.unitsUnnamed': 'Below the minimum ({units} packaging units)',
+    'order.minimum.below.bare': 'Below the minimum order quantity',
+    'cart.line.noLongerAvailable': 'No longer available',
+    'cart.line.unknownProduct': 'Product removed from the catalogue',
+    'cart.line.setToMinimum': 'Set to {count} pcs',
+    'cart.line.minimumHint': 'Minimum {count} pcs',
+    'cart.line.quantityInvalid': 'Enter a whole number. 0 removes the line.',
+    'cart.line.updateFailed': 'Could not update the quantity. Please try again.',
+    'cart.line.removeFailed': 'Could not remove the line. Please try again.',
+    'cart.checkoutBlocked': 'Change or remove the flagged lines to continue to checkout.',
+    'cart.approvalBlocked': 'Change or remove the flagged lines to submit the cart for approval.',
+    'batchReport.more': '+{count} more',
+    'cart.submitForApprovalFailed': 'Could not submit the cart for approval.',
+    'cart.dropped.belowMinimum': 'below the minimum order quantity (minimum {minimum})',
+    'cart.dropped.belowMinimumBare': 'below the minimum order quantity',
+    'checkout.belowMinimum.heading': 'These lines cannot be ordered yet',
+    'checkout.belowMinimum.intro': 'Change the quantity or remove the line in your cart, then come back to place the order.',
+    'checkout.belowMinimum.backToCart': 'Fix in cart',
+    'checkout.belowMinimum.blocked': 'Some lines are below the minimum order quantity or no longer available.',
+    'quickOrder.reason.sku_missing': 'SKU missing',
+    'quickOrder.reason.quantity_invalid': 'Invalid quantity',
+    'quickOrder.reason.product_not_found': 'Product not found',
+    'quickOrder.reason.product_archived': 'Product archived',
+    'quickOrder.reason.malformed_row': 'Malformed row',
+    'quickOrder.reason.variant_not_resolved': 'Variant not recognised',
+    'quickOrder.reason.variant_ambiguous': 'Variant ambiguous',
+    'quickOrder.reason.row_limit_exceeded': 'Over the row limit',
+    'quickOrder.reason.below_minimum': 'Below the minimum order quantity',
+    'quickOrder.reason.below_minimumDetail': "The product's total in this file is {total}, minimum {count} pcs",
+    'quickOrder.build.added': 'Cart built from your import: {added} of {total} lines added.',
+    'quickOrder.build.noneAdded': 'No lines were added to your cart.',
+    'quickOrder.build.rejectedHeading': 'Not added to the cart',
+    'quickOrder.build.rejectedLine': '{product} × {quantity} — {reason}',
+    'quickOrder.build.openCart': 'Open cart',
+    'shoppingList.skip.heading': 'Not added to the cart',
+    'shoppingList.skip.product_archived': 'Product archived',
+    'shoppingList.skip.variant_unavailable': 'Variant no longer available',
+    'shoppingList.skip.product_not_found': 'Product no longer available',
     'product.inStock': 'In stock',
     'product.stockBand.high': 'In stock — plenty',
     'product.stockBand.medium': 'In stock',
@@ -308,7 +596,6 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'product.backorder.hint': 'Currently out of stock — backorder available, dispatched as soon as the next batch arrives.',
     'product.variants.heading': 'Variants',
     'product.variants.sku': 'SKU',
-    'product.variants.priceOverride': 'Price',
     'product.variants.stockLevel': 'In stock',
     'product.variants.outOfStock': 'Out of stock',
     'product.variants.selectThisVariant': 'Currently selected',
@@ -428,11 +715,30 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'quoteRequest.success.viewRequest': 'View quote request',
     'quoteRequest.success.allRequests': 'All quote requests',
     'quoteRequest.success.continueShopping': 'Continue shopping',
+    'quoteRequest.diff.grouping': 'The arrangement of the lines changed.',
+    'lineGroups.otherItems': 'Other items',
+    'lineGroups.summary.items.one': '{count} item',
+    'lineGroups.summary.items.few': '{count} items',
+    'lineGroups.summary.items.many': '{count} items',
+    'lineGroups.summary.items.other': '{count} items',
+    'lineGroups.summary.net': 'net {amount}',
+    'lineGroups.summary.vat': 'VAT {amount}',
+    'lineGroups.summary.gross': 'gross {amount}',
     // Issue #193 — federated sign-in.
     'auth.federated.groupLabel': 'Other sign-in options',
     'auth.federated.divider': 'or',
     'auth.federated.google': 'Continue with Google',
     'auth.federated.microsoft': 'Continue with Microsoft',
+    'auth.login.signInRequired':
+      'This store is available to signed-in business customers. Sign in, or apply for a business account.',
+    'auth.login.channelNotPermitted': 'This account does not have access to this store.',
+    'access.signInRequired': 'This store is available to signed-in customers only. Please sign in.',
+    'access.denied.title': 'No access to this store',
+    'access.denied.body': 'Your account is not set up to buy in this store.',
+    'access.denied.otherStores': 'Stores you can use:',
+    'access.denied.signOut': 'Sign out',
+    'access.denied.contact':
+      'If you need to buy here, contact your organisation’s administrator or our sales team.',
     // Issue #194 — linked identities.
     'account.socialLinks.heading': 'Linked accounts',
     'account.socialLinks.intro':
@@ -471,6 +777,32 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'orders.paymentReturn.failed':
       'Your payment did not go through. Your order is placed and is still waiting for payment, so you can try again.',
     'orders.actionFailed': 'We could not complete that action.',
+    'returns.new.heading': 'Start a return or complaint',
+    'returns.new.chooseOrder': 'Choose the order the return or complaint is about:',
+    'returns.new.noOrders': 'You don\'t have any orders yet.',
+    'returns.new.backToReturns': '← Back to returns',
+    'returns.new.chooseAnotherOrder': '← Choose another order',
+    'returns.new.freeReturnWindow': 'This order is within the free-return window.',
+    'returns.new.kind.legend': 'What would you like to file?',
+    'returns.new.kind.return': 'Return',
+    'returns.new.kind.complaint': 'Complaint',
+    'returns.new.col.include': 'Include',
+    'returns.new.col.product': 'Product',
+    'returns.new.col.qty': 'Qty',
+    'returns.new.col.reason': 'Reason',
+    'returns.new.selectReason': 'Select…',
+    'returns.new.comment': 'Additional details (optional)',
+    'returns.new.submit.return': 'Submit return request',
+    'returns.new.submit.complaint': 'Submit complaint',
+    'returns.new.none.notCompleting': 'This order is not yet eligible for returns or complaints.',
+    'returns.new.none.fullyReturned': 'All items from this order have already been returned.',
+    'returns.new.none.windowPassed': 'This order can no longer be returned — the return window has ended.',
+    'returns.new.none.generic': 'This order is not eligible for returns.',
+    'returns.new.complaintOnly': 'No products in this order are returnable. You can still file a complaint about them.',
+    'returns.line.notReturnable': 'This product cannot be returned; a complaint is still possible.',
+    'returns.line.remaining': 'of {count}',
+    'orders.returnAction.return': 'Request return / complaint',
+    'orders.returnAction.complaint': 'File a complaint',
     'quoteRequests.validity.validUntil': 'Valid until ',
     'quoteRequests.validity.endedOn': 'Validity ended ',
     'quoteRequests.validity.acceptBlocked':
@@ -487,12 +819,24 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
       'Nothing has been lost. Your cart, your account and any order you have already placed are untouched.',
     'serviceUnavailable.retry': 'Try again',
     'serviceUnavailable.retryHint': 'It is usually worth trying again in about a minute.',
+    'cms.carousel.label': 'Carousel',
+    'cms.carousel.previous': 'Previous slide',
+    'cms.carousel.next': 'Next slide',
+    'cms.carousel.slide': '{n} of {m}',
+    'cms.carousel.goToSlide': 'Go to slide {n}',
+    'cms.carousel.goToPage': 'Go to page {n}',
+    'cms.carousel.pause': 'Pause autoplay',
+    'cms.carousel.play': 'Start autoplay',
+    'cms.carousel.filter': 'Filter',
+    'cms.carousel.filterAll': 'All',
+    'cms.carousel.filterCount': '{n} of {m} shown',
   },
   'pl-PL': {
-    'a11y.skipToContent': 'Przejdz do tresci',
+    'a11y.skipToContent': 'Przejdź do treści',
     'a11y.navigating': 'Wczytywanie następnej strony.',
     'a11y.navigatingSlow': 'Nadal wczytujemy. Następna strona ładuje się dłużej niż zwykle.',
-    'nav.home': 'Strona glowna',
+    'nav.home': 'Strona główna',
+    'header.language': 'Język',
     'nav.catalog': 'Katalog',
     'nav.search': 'Wyszukiwanie',
     'nav.account': 'Konto',
@@ -502,8 +846,9 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'nav.quoteRequest': 'Zapytanie',
     'catalog.heading': 'Katalog',
     'catalog.filters': 'Filtry',
-    'catalog.empty': 'Zaden produkt nie pasuje do filtrow.',
-    'catalog.loadMore': 'Pokaz wiecej',
+    'catalog.empty': 'Żaden produkt nie pasuje do filtrów.',
+    'catalog.emptyPageMore': 'Na tej stronie nie ma produktów. Kolejne są na następnej stronie.',
+    'catalog.loadMore': 'Pokaż więcej',
     'catalog.sort.priceAsc': 'Cena: od najniższej',
     'catalog.sort.priceDesc': 'Cena: od najwyższej',
     'catalog.price.heading': 'Cena',
@@ -514,7 +859,11 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'catalog.price.unitNote':
       'Pokazane ceny to Twoje ceny jednostkowe. Rabaty ilościowe i promocje naliczamy w koszyku.',
     'product.outOfStock': 'Brak w magazynie',
-    'product.requestQuote': 'Zapytaj o oferte',
+    'product.requestQuote': 'Zapytaj o ofertę',
+    'product.priceFromVariants': 'od, zależnie od wariantu',
+    'product.compareAtLabel': 'Twoja cena',
+    'product.listPrice': 'Cena katalogowa',
+    'product.yourPrice': 'Twoja cena',
     'product.addToCart': 'Dodaj do koszyka',
     'product.addToCartFailed': 'Nie udało się dodać produktu do koszyka.',
     'product.oneClickFailed': 'Nie udało się złożyć zamówienia.',
@@ -524,62 +873,167 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'product.tabs.attachments': 'Załączniki',
     'product.packaging.singlePiece': 'Pojedyncza sztuka',
     'product.packaging.pieces': 'szt.',
-    'product.inStock': 'Dostepny',
-    'product.stockBand.high': 'Duzo w magazynie',
-    'product.stockBand.medium': 'Sredni stan',
-    'product.stockBand.low': 'Malo na stanie',
-    'product.notify.cta': 'Powiadom o dostepnosci',
-    'product.notify.dialogTitle': 'Powiadomimy Cie, gdy produkt znow bedzie dostepny',
+    'product.minimum.pieces': 'Minimalne zamówienie: {count} szt.',
+    'product.minimum.units': 'Minimalne zamówienie: {units} × {unit} = {count} szt.',
+    'product.minimum.addToCart': 'Dodaj {count} szt. do koszyka',
+    'common.quantity': 'Ilość',
+    'product.buy.unit': 'Jednostka',
+    'product.quote.add': 'Dodaj do zapytania',
+    'product.quote.added': 'Dodano ✓',
+    'product.cartPopup.added': 'Produkt został dodany do koszyka.',
+    'product.cartPopup.goToCart': 'Przejdź do koszyka',
+    'product.cartPopup.continue': 'Kontynuuj zakupy',
+    'product.cartPopup.close': 'Zamknij',
+    'card.list.add': 'Dodaj do listy zakupowej',
+    'card.list.remove': 'Usuń z listy zakupowej',
+    'card.list.failed': 'Nie udało się zmienić listy',
+    'card.cart.added': 'Dodano do koszyka',
+    'card.cart.failed': 'Nie udało się dodać',
+    'card.quote.added': 'Dodano do zapytania',
+    'compare.cart.adding': 'Dodawanie…',
+    'compare.cart.added': '✓ Dodano',
+    'quickOrder.page.heading': 'Szybkie zamówienie',
+    'quickOrder.page.introPrefix': 'Wklej CSV z nagłówkami ',
+    'quickOrder.page.introSuffix': ' (dodatkowe kolumny ustawiają atrybuty wariantu) albo przeciągnij plik CSV / Excel. Zanim cokolwiek dodamy, pokażemy, które wiersze odpowiadają istniejącym produktom.',
+    'quickOrder.page.template': 'Pobierz szablon CSV',
+    'quickOrder.page.dropzone': 'Przeciągnij tutaj plik CSV lub Excel albo kliknij, aby go wybrać',
+    'quickOrder.page.pasteLabel': '…albo wklej CSV',
+    'quickOrder.page.preview': 'Pokaż podgląd',
+    'quickOrder.built.cart': 'Koszyk utworzony z importu.',
+    'quickOrder.built.goToCheckout': 'Przejdź do kasy',
+    'quickOrder.built.quote': 'Utworzono zapytanie ofertowe',
+    'quickOrder.built.viewQuotes': 'Zobacz zapytania ofertowe',
+    'quickOrder.search.heading': 'Znajdź produkty',
+    'quickOrder.search.hint': 'Szukaj po SKU, nazwie lub atrybucie szybkiego wyszukiwania i dodawaj pozycje do zamówienia.',
+    'quickOrder.search.placeholder': 'Szukaj produktów…',
+    'quickOrder.search.none': 'Żaden produkt nie pasuje do „{query}”.',
+    'quickOrder.search.add': 'Dodaj',
+    'quickOrder.col.sku': 'SKU',
+    'quickOrder.col.name': 'Nazwa',
+    'quickOrder.col.qty': 'Ilość',
+    'quickOrder.col.line': 'Wiersz',
+    'quickOrder.col.variant': 'Wariant',
+    'quickOrder.col.reason': 'Powód',
+    'quickOrder.col.raw': 'Dane z pliku',
+    'quickOrder.qtyFor': 'Ilość dla {sku}',
+    'quickOrder.bar.recognised': 'Rozpoznane',
+    'quickOrder.bar.addToCart': 'Dodaj do koszyka ({count})',
+    'quickOrder.preview.heading': 'Podgląd',
+    'quickOrder.preview.recognised': 'rozpoznane',
+    'quickOrder.preview.invalid': 'błędne',
+    'quickOrder.preview.units': 'szt.',
+    'quickOrder.preview.truncated': 'Plik przekroczył limit wierszy importu — nadmiarowe wiersze odrzucono.',
+    'quickOrder.preview.merged': 'Scalone powtórzone wiersze: {count} (ilości zsumowano).',
+    'quickOrder.preview.recognisedRows': 'Rozpoznane wiersze: {count} — wybierz, co dalej.',
+    'quickOrder.preview.update': 'Zmień',
+    'quickOrder.preview.remove': 'Usuń',
+    'quickOrder.preview.addAll': 'Dodaj wszystko do koszyka',
+    'quickOrder.preview.sendAsQuote': 'Wyślij jako zapytanie ofertowe',
+    'quickOrder.preview.noneMatched': 'Żaden wiersz nie pasuje do katalogu.',
+    'quickOrder.preview.rejectedHeading': 'Odrzucone wiersze',
+    'quickOrder.problem.no_input': 'Dodaj plik albo wklej CSV.',
+    'quickOrder.problem.nothing_to_update': 'Nie ma czego zmienić.',
+    'quickOrder.problem.nothing_to_remove': 'Nie ma czego usunąć.',
+    'quickOrder.problem.nothing_to_build': 'Nie ma z czego utworzyć koszyka ani zapytania.',
+    'quickOrder.problem.import_failed': 'Import nie powiódł się.',
+    'quickOrder.problem.build_failed': 'Nie udało się utworzyć koszyka ani zapytania ofertowego.',
+    'shoppingList.qty.invalid': 'Wpisz liczbę całkowitą od 1 do 9999.',
+    'shoppingList.qty.save': 'Zapisz',
+    'order.minimum.below.pieces': 'Poniżej minimum ({count} szt.)',
+    'order.minimum.below.units': 'Poniżej minimum ({units} × {unit})',
+    'order.minimum.below.unitsUnnamed': 'Poniżej minimum (jednostki opakowania: {units})',
+    'order.minimum.below.bare': 'Poniżej minimalnej ilości zamówienia',
+    'cart.line.noLongerAvailable': 'Produkt nie jest już dostępny',
+    'cart.line.unknownProduct': 'Produkt usunięty z katalogu',
+    'cart.line.setToMinimum': 'Ustaw {count} szt.',
+    'cart.line.minimumHint': 'Minimum {count} szt.',
+    'cart.line.quantityInvalid': 'Wpisz liczbę całkowitą. 0 usuwa pozycję.',
+    'cart.line.updateFailed': 'Nie udało się zmienić ilości. Spróbuj ponownie.',
+    'cart.line.removeFailed': 'Nie udało się usunąć pozycji. Spróbuj ponownie.',
+    'cart.checkoutBlocked': 'Zmień lub usuń oznaczone pozycje, aby przejść do kasy.',
+    'cart.approvalBlocked': 'Zmień lub usuń oznaczone pozycje, aby wysłać koszyk do akceptacji.',
+    'batchReport.more': '+{count} więcej',
+    'cart.submitForApprovalFailed': 'Nie udało się wysłać koszyka do akceptacji.',
+    'cart.dropped.belowMinimum': 'poniżej minimalnej ilości zamówienia (minimum {minimum})',
+    'cart.dropped.belowMinimumBare': 'poniżej minimalnej ilości zamówienia',
+    'checkout.belowMinimum.heading': 'Tych pozycji nie można jeszcze zamówić',
+    'checkout.belowMinimum.intro': 'Zmień ilość lub usuń pozycję w koszyku, a następnie wróć, aby złożyć zamówienie.',
+    'checkout.belowMinimum.backToCart': 'Popraw w koszyku',
+    'checkout.belowMinimum.blocked': 'Niektóre pozycje są poniżej minimalnej ilości zamówienia lub nie są już dostępne.',
+    'quickOrder.reason.sku_missing': 'Brak SKU',
+    'quickOrder.reason.quantity_invalid': 'Nieprawidłowa ilość',
+    'quickOrder.reason.product_not_found': 'Nie znaleziono produktu',
+    'quickOrder.reason.product_archived': 'Produkt zarchiwizowany',
+    'quickOrder.reason.malformed_row': 'Nieprawidłowy wiersz',
+    'quickOrder.reason.variant_not_resolved': 'Nie rozpoznano wariantu',
+    'quickOrder.reason.variant_ambiguous': 'Wariant niejednoznaczny',
+    'quickOrder.reason.row_limit_exceeded': 'Przekroczono limit wierszy',
+    'quickOrder.reason.below_minimum': 'Poniżej minimalnej ilości zamówienia',
+    'quickOrder.reason.below_minimumDetail': 'Łączna ilość produktu w tym pliku to {total}, minimum {count} szt.',
+    'quickOrder.build.added': 'Koszyk utworzony z importu: dodano {added} z {total} pozycji.',
+    'quickOrder.build.noneAdded': 'Do koszyka nie dodano żadnej pozycji.',
+    'quickOrder.build.rejectedHeading': 'Nie dodano do koszyka',
+    'quickOrder.build.rejectedLine': '{product} × {quantity} — {reason}',
+    'quickOrder.build.openCart': 'Otwórz koszyk',
+    'shoppingList.skip.heading': 'Nie dodano do koszyka',
+    'shoppingList.skip.product_archived': 'Produkt zarchiwizowany',
+    'shoppingList.skip.variant_unavailable': 'Wariant nie jest już dostępny',
+    'shoppingList.skip.product_not_found': 'Produkt nie jest już dostępny',
+    'product.inStock': 'Dostępny',
+    'product.stockBand.high': 'Dużo w magazynie',
+    'product.stockBand.medium': 'Średni stan',
+    'product.stockBand.low': 'Mało na stanie',
+    'product.notify.cta': 'Powiadom o dostępności',
+    'product.notify.dialogTitle': 'Powiadomimy Cię, gdy produkt znów będzie dostępny',
     'product.notify.emailLabel': 'Adres e-mail',
     'product.notify.submit': 'Powiadom mnie',
     'product.notify.submitting': 'Zapisywanie…',
-    'product.notify.success': 'Wyslemy e-mail gdy produkt bedzie ponownie dostepny.',
-    'product.notify.errorGeneric': 'Nie udalo sie zapisac — sprobuj ponownie.',
+    'product.notify.success': 'Wyślemy e-mail, gdy produkt będzie ponownie dostępny.',
+    'product.notify.errorGeneric': 'Nie udało się zapisać — spróbuj ponownie.',
     'product.notify.cancel': 'Anuluj',
-    'product.backorder.hint': 'Aktualnie brak na stanie — produkt mozna zamowic, wysylka po dotarciu kolejnej dostawy.',
+    'product.backorder.hint': 'Aktualnie brak na stanie — produkt można zamówić, wysyłka po dotarciu kolejnej dostawy.',
     'product.variants.heading': 'Warianty',
     'product.variants.sku': 'Kod',
-    'product.variants.priceOverride': 'Cena',
-    'product.variants.stockLevel': 'Dostepne',
-    'product.variants.outOfStock': 'Niedostepny',
+    'product.variants.stockLevel': 'Dostępne',
+    'product.variants.outOfStock': 'Niedostępny',
     'product.variants.selectThisVariant': 'Wybrany',
-    'product.links.related': 'Powiazane produkty',
-    'product.links.upSell': 'Moze Cie zainteresowac',
-    'product.links.crossSell': 'Dokup takze',
+    'product.links.related': 'Powiązane produkty',
+    'product.links.upSell': 'Może Cię zainteresować',
+    'product.links.crossSell': 'Dokup także',
     'product.links.seeAll': 'Zobacz wszystkie',
     'product.bundle.addToCart': 'Dodaj zestaw do koszyka',
     'product.bundle.requiredSlot': 'wymagane',
     'product.grouped.addBundleToCart': 'Dodaj zestaw do koszyka',
     'product.virtual.buyAndDownload': 'Kup i pobierz',
-    'product.virtual.digitalDelivery': 'Dostawa cyfrowa — dostep natychmiast po zakupie',
-    'search.placeholder': 'Szukaj produktow...',
-    'search.unavailable': 'Wyszukiwarka chwilowo niedostepna.',
-    'search.seeAllResults': 'Pokaz wszystkie wyniki',
+    'product.virtual.digitalDelivery': 'Dostawa cyfrowa — dostęp natychmiast po zakupie',
+    'search.placeholder': 'Szukaj produktów...',
+    'search.unavailable': 'Wyszukiwarka chwilowo niedostępna.',
+    'search.seeAllResults': 'Pokaż wszystkie wyniki',
     'common.searchAction': 'Szukaj',
-    'pagination.next': 'Nastepna strona',
+    'pagination.next': 'Następna strona',
     'product.attributes.tabTitle': 'Parametry produktu',
     'product.attributes.boolean.yes': 'Tak',
     'product.attributes.boolean.no': 'Nie',
     // Feature 036 — Kasa.
-    'checkout.success.title': 'Dziekujemy — Twoje zamowienie zostalo zlozone',
-    'checkout.success.orderNumberPrefix': 'Numer Twojego zamowienia: ',
-    'checkout.success.confirmationSent': 'Otrzymalismy je i wyslalismy e-mail z potwierdzeniem.',
+    'checkout.success.title': 'Dziękujemy — Twoje zamówienie zostało złożone',
+    'checkout.success.orderNumberPrefix': 'Numer Twojego zamówienia: ',
+    'checkout.success.confirmationSent': 'Otrzymaliśmy je i wysłaliśmy e-mail z potwierdzeniem.',
     'checkout.success.bankTransferHint':
-      'Prosimy o przelew z uzyciem numeru referencyjnego z faktury proforma, ktora wyslalismy e-mailem. Zaktualizujemy zamowienie po zaksiegowaniu wplaty.',
+      'Prosimy o przelew z użyciem numeru referencyjnego z faktury proforma, którą wysłaliśmy e-mailem. Zaktualizujemy zamówienie po zaksięgowaniu wpłaty.',
     'checkout.success.pickupHint':
-      'Platnosc przy odbiorze. Zadne dalsze czynnosci nie sa obecnie wymagane.',
+      'Płatność przy odbiorze. Żadne dalsze czynności nie są obecnie wymagane.',
     'checkout.success.creditLimitHint':
-      'Zamowienie zostalo rozliczone z limitu kredytowego Organizacji i jest obecnie przetwarzane.',
-    'checkout.success.viewOrder': 'Szczegoly zamowienia',
-    'checkout.success.allOrders': 'Wszystkie zamowienia',
+      'Zamówienie zostało rozliczone z limitu kredytowego Organizacji i jest obecnie przetwarzane.',
+    'checkout.success.viewOrder': 'Szczegóły zamówienia',
+    'checkout.success.allOrders': 'Wszystkie zamówienia',
     'checkout.success.continueShopping': 'Kontynuuj zakupy',
-    'checkout.failure.title': 'Nie udalo sie zlozyc zamowienia',
+    'checkout.failure.title': 'Nie udało się złożyć zamówienia',
     'checkout.failure.generic':
-      'Cos poszlo nie tak przy skladaniu zamowienia. Twoj koszyk zostal zachowany, mozesz sprobowac ponownie.',
+      'Coś poszło nie tak przy składaniu zamówienia. Twój koszyk został zachowany, możesz spróbować ponownie.',
     'checkout.failure.cartKept':
-      'Twoj koszyk pozostal bez zmian — nic nie zostalo obciazone, zamowienie nie zostalo utworzone.',
-    'checkout.failure.tryAgain': 'Sprobuj ponownie',
-    'checkout.failure.backToCart': 'Wroc do koszyka',
+      'Twój koszyk pozostał bez zmian — nic nie zostało obciążone, zamówienie nie zostało utworzone.',
+    'checkout.failure.tryAgain': 'Spróbuj ponownie',
+    'checkout.failure.backToCart': 'Wróć do koszyka',
     // Issue #287 — the buyer whose order exists.
     'checkout.paymentFailure.title.failed': 'Płatność nie doszła do skutku',
     'checkout.paymentFailure.title.cancelled': 'Płatność nie została dokończona',
@@ -604,16 +1058,16 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
       'Trwa to dłużej niż zwykle. Wyślemy e-mail, gdy tylko płatność zostanie potwierdzona; aktualny stan zawsze widać na stronie zamówienia.',
     'checkout.paymentPending.checkAgain': 'Sprawdź ponownie',
     'checkout.paymentPending.viewOrder': 'Zobacz szczegóły zamówienia',
-    'order.payment.retry.cta': 'Zaplac ponownie',
+    'order.payment.retry.cta': 'Zapłać ponownie',
     'order.payment.retry.hint':
-      'Platnosc nie doszla do skutku. Nic nie zostalo obciazone — mozesz oplacic to zamowienie ponownie.',
+      'Płatność nie doszła do skutku. Nic nie zostało obciążone — możesz opłacić to zamówienie ponownie.',
     'order.payment.retry.inProgress':
-      'Dla tego zamowienia trwa juz platnosc. Dokoncz ja na stronie platnosci albo poczekaj, az wygasnie, zanim rozpoczniesz nowa.',
-    'order.payment.retry.failed': 'Nie udalo sie rozpoczac platnosci. Sprobuj ponownie za chwile.',
-    'order.cancel.cta': 'Anuluj zamowienie',
+      'Dla tego zamówienia trwa już płatność. Dokończ ją na stronie płatności albo poczekaj, aż wygaśnie, zanim rozpoczniesz nową.',
+    'order.payment.retry.failed': 'Nie udało się rozpocząć płatności. Spróbuj ponownie za chwilę.',
+    'order.cancel.cta': 'Anuluj zamówienie',
     'order.cancel.hint':
-      'To zamowienie nie zostalo jeszcze oplacone i nie zaczelismy go realizowac, wiec mozesz je anulowac. Zarezerwowany towar wroci od razu na stan.',
-    'order.cancel.failed': 'Nie udalo sie anulowac tego zamowienia. Skontaktuj sie z nami, pomozemy.',
+      'To zamówienie nie zostało jeszcze opłacone i nie zaczęliśmy go realizować, więc możesz je anulować. Zarezerwowany towar wróci od razu na stan.',
+    'order.cancel.failed': 'Nie udało się anulować tego zamówienia. Skontaktuj się z nami, pomożemy.',
     'checkout.delivery.none':
       'Brak dostępnych metod dostawy dla Twojego konta w tym kanale sprzedaży.',
     'checkout.payment.none':
@@ -628,13 +1082,13 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'checkout.coupon.apply': 'Zastosuj',
     'checkout.coupon.appliedPrefix': 'Kupon ',
     'checkout.coupon.appliedSuffix': 'zastosowany — ',
-    'checkout.coupon.remove': 'Usun',
+    'checkout.coupon.remove': 'Usuń',
     'checkout.address.shippingTitle': 'Adres dostawy',
     'checkout.address.billingTitle': 'Adres rozliczeniowy',
-    'checkout.address.useSaved': 'Uzyj zapisanego adresu',
+    'checkout.address.useSaved': 'Użyj zapisanego adresu',
     'checkout.address.enterNew': 'Wpisz nowy adres',
     'checkout.address.sameAsShipping': 'Adres rozliczeniowy taki sam jak dostawy',
-    'checkout.address.recipientName': 'Imie i nazwisko odbiorcy',
+    'checkout.address.recipientName': 'Imię i nazwisko odbiorcy',
     'checkout.address.street': 'Ulica i numer',
     'checkout.address.postalCode': 'Kod pocztowy',
     'checkout.address.city': 'Miasto',
@@ -642,7 +1096,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'checkout.address.phone': 'Telefon (opcjonalnie)',
     'checkout.address.billingCompanyTitle': 'Dane firmy do rozliczenia',
     'checkout.address.billingCompanyHint':
-      'Domyslnie dane Twojej organizacji. Mozesz je nadpisac dla tego zamowienia.',
+      'Domyślnie dane Twojej organizacji. Możesz je nadpisać dla tego zamówienia.',
     'checkout.address.companyName': 'Nazwa firmy',
     'checkout.address.taxId': 'NIP',
     'checkout.shipping.title': 'Metoda dostawy',
@@ -650,20 +1104,39 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
       'Brak metody dostawy dostępnej dla Twojego konta w tym kanale sprzedaży.',
     'checkout.shipping.free': 'bezpłatnie',
     // Feature 008 — Quote Request success page.
-    'quoteRequest.success.title': 'Dziekujemy — Twoje zapytanie ofertowe zostalo zlozone',
+    'quoteRequest.success.title': 'Dziękujemy — Twoje zapytanie ofertowe zostało złożone',
     'quoteRequest.success.numberPrefix': 'Numer Twojego zapytania ofertowego: ',
     'quoteRequest.success.confirmationSent':
-      'Otrzymalismy je i wyslalismy e-mail z potwierdzeniem.',
+      'Otrzymaliśmy je i wysłaliśmy e-mail z potwierdzeniem.',
     'quoteRequest.success.nextStepsHint':
-      'Dzial sprzedazy przeanalizuje zapytanie i przygotuje oferte z cenami oraz warunkami. Powiadomimy Cie, gdy oferta bedzie gotowa.',
+      'Dział sprzedaży przeanalizuje zapytanie i przygotuje ofertę z cenami oraz warunkami. Powiadomimy Cię, gdy oferta będzie gotowa.',
     'quoteRequest.success.viewRequest': 'Zobacz zapytanie ofertowe',
     'quoteRequest.success.allRequests': 'Wszystkie zapytania ofertowe',
     'quoteRequest.success.continueShopping': 'Kontynuuj zakupy',
+    'quoteRequest.diff.grouping': 'Zmieniono układ pozycji.',
+    'lineGroups.otherItems': 'Pozostałe pozycje',
+    'lineGroups.summary.items.one': '{count} pozycja',
+    'lineGroups.summary.items.few': '{count} pozycje',
+    'lineGroups.summary.items.many': '{count} pozycji',
+    'lineGroups.summary.items.other': '{count} pozycji',
+    'lineGroups.summary.net': 'netto {amount}',
+    'lineGroups.summary.vat': 'VAT {amount}',
+    'lineGroups.summary.gross': 'brutto {amount}',
     // Issue #193 — federated sign-in.
     'auth.federated.groupLabel': 'Inne sposoby logowania',
     'auth.federated.divider': 'lub',
     'auth.federated.google': 'Kontynuuj przez Google',
     'auth.federated.microsoft': 'Kontynuuj przez Microsoft',
+    'auth.login.signInRequired':
+      'Ten sklep jest dostępny dla zalogowanych klientów biznesowych. Zaloguj się lub złóż wniosek o konto firmowe.',
+    'auth.login.channelNotPermitted': 'To konto nie ma dostępu do tego sklepu.',
+    'access.signInRequired': 'Ten sklep jest dostępny tylko dla zalogowanych klientów. Zaloguj się.',
+    'access.denied.title': 'Brak dostępu do tego sklepu',
+    'access.denied.body': 'Twoje konto nie ma uprawnień do zakupów w tym sklepie.',
+    'access.denied.otherStores': 'Sklepy, z których możesz korzystać:',
+    'access.denied.signOut': 'Wyloguj się',
+    'access.denied.contact':
+      'Jeśli chcesz kupować tutaj, skontaktuj się z administratorem swojej organizacji lub z naszym działem sprzedaży.',
     // Issue #194 — linked identities.
     'account.socialLinks.heading': 'Powiązane konta',
     'account.socialLinks.intro':
@@ -703,6 +1176,32 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     'orders.paymentReturn.failed':
       'Płatność nie doszła do skutku. Twoje zamówienie zostało złożone i nadal czeka na opłacenie, więc możesz spróbować ponownie.',
     'orders.actionFailed': 'Nie udało się wykonać tej operacji.',
+    'returns.new.heading': 'Zwrot lub reklamacja',
+    'returns.new.chooseOrder': 'Wybierz zamówienie, którego dotyczy zwrot lub reklamacja:',
+    'returns.new.noOrders': 'Nie masz jeszcze żadnych zamówień.',
+    'returns.new.backToReturns': '← Wróć do zwrotów',
+    'returns.new.chooseAnotherOrder': '← Wybierz inne zamówienie',
+    'returns.new.freeReturnWindow': 'To zamówienie mieści się w okresie bezpłatnego zwrotu.',
+    'returns.new.kind.legend': 'Co chcesz zgłosić?',
+    'returns.new.kind.return': 'Zwrot',
+    'returns.new.kind.complaint': 'Reklamacja',
+    'returns.new.col.include': 'Uwzględnij',
+    'returns.new.col.product': 'Produkt',
+    'returns.new.col.qty': 'Ilość',
+    'returns.new.col.reason': 'Powód',
+    'returns.new.selectReason': 'Wybierz…',
+    'returns.new.comment': 'Dodatkowe informacje (opcjonalnie)',
+    'returns.new.submit.return': 'Wyślij zgłoszenie zwrotu',
+    'returns.new.submit.complaint': 'Wyślij reklamację',
+    'returns.new.none.notCompleting': 'To zamówienie nie może jeszcze zostać zwrócone ani zareklamowane.',
+    'returns.new.none.fullyReturned': 'Wszystkie produkty z tego zamówienia zostały już zwrócone.',
+    'returns.new.none.windowPassed': 'Tego zamówienia nie można już zwrócić — minął termin zwrotu.',
+    'returns.new.none.generic': 'To zamówienie nie kwalifikuje się do zwrotu.',
+    'returns.new.complaintOnly': 'Żaden produkt z tego zamówienia nie podlega zwrotowi. Nadal możesz złożyć reklamację.',
+    'returns.line.notReturnable': 'Ten produkt nie podlega zwrotowi; reklamacja jest nadal możliwa.',
+    'returns.line.remaining': 'z {count}',
+    'orders.returnAction.return': 'Zgłoś zwrot / reklamację',
+    'orders.returnAction.complaint': 'Złóż reklamację',
     'quoteRequests.validity.validUntil': 'Ważne do ',
     'quoteRequests.validity.endedOn': 'Ważność zakończona ',
     'quoteRequests.validity.acceptBlocked':
@@ -719,6 +1218,17 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
       'Nic nie zginęło. Twój koszyk, konto i wszystkie złożone wcześniej zamówienia są nienaruszone.',
     'serviceUnavailable.retry': 'Spróbuj ponownie',
     'serviceUnavailable.retryHint': 'Zwykle warto spróbować ponownie za około minutę.',
+    'cms.carousel.label': 'Karuzela',
+    'cms.carousel.previous': 'Poprzedni slajd',
+    'cms.carousel.next': 'Następny slajd',
+    'cms.carousel.slide': '{n} z {m}',
+    'cms.carousel.goToSlide': 'Przejdź do slajdu {n}',
+    'cms.carousel.goToPage': 'Przejdź do strony {n}',
+    'cms.carousel.pause': 'Wstrzymaj automatyczne przewijanie',
+    'cms.carousel.play': 'Włącz automatyczne przewijanie',
+    'cms.carousel.filter': 'Filtruj',
+    'cms.carousel.filterAll': 'Wszystkie',
+    'cms.carousel.filterCount': 'Pokazano {n} z {m}',
   },
 };
 

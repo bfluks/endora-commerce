@@ -17,8 +17,11 @@ export const manifest = defineModuleManifest({
     'In-app notification feed surfaced in the admin top-nav bell. Generic so any module can write entries.',
   version: '1.0.0',
   // `auth` added with the conversion: the admin routes are gated by
-  // `requireAdmin`, which `auth` owns.
-  dependencies: ['admin_users', 'auth'],
+  // `requireAdmin`, which `auth` owns. `admin_roles` since issue #518: the
+  // bell asks its `permissionService` whether the reader holds `admin:read`,
+  // which admits the `all_admins` broadcasts. It depends on nothing, so the
+  // edge closes no cycle.
+  dependencies: ['admin_roles', 'admin_users', 'auth'],
   settings: {
     moduleCode: 'admin_notifications',
     groups: [{ code: 'admin_notifications', name: 'Admin notifications' }],
@@ -42,7 +45,15 @@ export const manifest = defineModuleManifest({
   // same reason `audit_log:read` and `integrations:manage` keep theirs: it is
   // the string the route checks, and `module` is what puts the row under the
   // right heading on the role matrix.
+  //
+  // Issue #518 narrowed what it grants: the bell answers every signed-in admin
+  // their own notifications with no code, and `admin:read` admits only the
+  // `all_admins` broadcasts — hence the label.
   permissions: [
-    { code: 'admin:read', module: 'admin_notifications', label: 'View admin notifications' },
+    {
+      code: 'admin:read',
+      module: 'admin_notifications',
+      label: 'View notifications sent to all admins',
+    },
   ],
 });

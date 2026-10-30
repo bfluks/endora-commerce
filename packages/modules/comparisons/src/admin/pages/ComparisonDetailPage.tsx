@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { ComparisonAdminDetail } from '@endora-commerce/contracts';
+import { unitPriceDisplayText, type ComparisonAdminDetail } from '@endora-commerce/contracts';
 import { ApiError } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import {
@@ -130,9 +130,9 @@ export default function ComparisonDetailPage(): ReactNode {
                 <TableHead>{t('detail.attribute')}</TableHead>
                 {detail.products.map((p) => (
                   <TableHead key={p.id}>
-                    <div>{localised(p.name)}</div>
+                    <div>{p.name /* 168-shim: the summary name is the effective string */}</div>
                     <div className="text-xs text-muted-foreground">
-                      {p.price ? `${p.price.amount} ${p.price.currency}` : '—'}
+                      {p.price ? `${unitPriceDisplayText(p.price.amount)} ${p.price.currency}` : '—'}
                     </div>
                   </TableHead>
                 ))}

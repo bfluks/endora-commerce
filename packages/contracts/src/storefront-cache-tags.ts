@@ -32,6 +32,31 @@ export const CMS_STOREFRONT_CACHE_TAGS = {
   hooks: 'cms:hook',
   /** One hook's reads. */
   hook: (code: string): string => `cms:hook:${code}`,
+  /**
+   * The brand-token read every storefront page is styled from (feature 163,
+   * research R-3). One tag for every channel's set: a write to any scope can
+   * change what an inheriting channel resolves.
+   */
+  brand: 'cms:brand',
+} as const;
+
+/**
+ * Feature 163 (T155 finding CACHE-1) — the storefront's product-page reads: the key
+ * resolve, the product detail and its links. Each carries the shared tag and the
+ * per-key tag of the key it was asked by — a URL key, the slug or the product id.
+ * `catalog` drops a product's per-key tags after every committed write that can change
+ * whether or where it is available. That matters more than for other content:
+ * Next keeps only a `200` in its Data Cache, so once a product becomes unavailable the
+ * time-based revalidation's `404` / `410` never replaces the cached `200`, and the
+ * page would go on showing it until something drops the entry by tag.
+ */
+export const CATALOG_PRODUCT_STOREFRONT_CACHE_TAGS = {
+  /** Every product-page read. */
+  product: 'catalog:product',
+  /** The reads asked by one key — a URL key, a slug or a product id. */
+  productKey: (key: string): string => `catalog:product:${key}`,
+  /** Next drops a tag longer than this. */
+  maxLength: 256,
 } as const;
 
 /** The resolved megamenu of a channel and language — it inlines CMS blocks. */
@@ -54,7 +79,15 @@ export const CMS_CONTENT_CHANGED_EVENT = 'cms.content_changed.v1';
  * reaches the storefront inlined into a page.
  */
 export type CmsContentChange =
-  | { readonly kind: 'page'; readonly slugs: readonly string[] }
+  | {
+      readonly kind: 'page';
+      readonly slugs: readonly string[];
+      /**
+       * A nested page's public path moved (feature 163, R19D). The path is
+       * written into the links of *other* pages, so every page read is stale.
+       */
+      readonly addressesMoved?: true;
+    }
   | { readonly kind: 'block'; readonly codes: readonly string[] }
   | { readonly kind: 'template' }
   | { readonly kind: 'hook'; readonly codes: readonly string[] };

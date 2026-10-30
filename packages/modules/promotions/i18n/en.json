@@ -3,6 +3,8 @@
   "actions.openPromotions.description": "Manage promotions, discounts, coupons, and rules",
   "actions.newPromotion.label": "New promotion",
   "actions.newPromotion.description": "Create a new promotion",
+  "actions.openPromotionRules.label": "Promotion rules",
+  "actions.openPromotionRules.description": "Build named rules and reuse them across promotions",
   "list.title": "Promotions",
   "list.new": "New promotion",
   "fields.name": "Name",

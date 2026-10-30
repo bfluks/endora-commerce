@@ -130,6 +130,39 @@ function declarationPathFor(root: string, deployment: string): string | null {
   return null;
 }
 
+/**
+ * The module ids **every** deployment of this instance declares in its
+ * `omittedModules` — the modules the platform will not ask any build of this
+ * tree to ship.
+ *
+ * Every, because the platform reads the declaration of the deployment it is
+ * composing: a module one deployment omits and another does not is a module
+ * the other one needs. A declaration this run cannot read omits nothing here,
+ * so its modules still count as needed — a module declared and not needed is a
+ * package installed for nothing, and the reverse is a boot that refuses.
+ */
+export function omittedByEveryDeployment(root: string): ReadonlySet<string> {
+  const perDeployment: ReadonlySet<string>[] = [];
+  for (const deployment of instanceDeployments(root)) {
+    const path = declarationPathFor(root, deployment);
+    let omitted = new Set<string>();
+    if (path !== null) {
+      try {
+        omitted = new Set(
+          readDivergenceDeclaration(readFileSync(path, 'utf8'), path).declaration.omittedModules.map(
+            (entry) => entry.moduleId,
+          ),
+        );
+      } catch {
+        // Unread: it omits nothing, which is the side that cannot fail a boot.
+      }
+    }
+    perDeployment.push(omitted);
+  }
+  const [first, ...rest] = perDeployment;
+  return new Set([...(first ?? [])].filter((id) => rest.every((omitted) => omitted.has(id))));
+}
+
 /** One deployment's rendered pair, and what the run could not read producing it. */
 export interface InstanceDivergence {
   readonly deployment: string;

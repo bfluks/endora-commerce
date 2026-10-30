@@ -3,6 +3,7 @@ import type {
   DocumentCollectionDetail,
   DocumentFieldDefinition,
   DocumentItem,
+  DocumentItemSection,
   DocumentValue,
 } from '@endora-commerce/contracts';
 
@@ -13,6 +14,8 @@ export interface CollectionView {
   readonly summaryFields: readonly DocumentFieldDefinition[];
   readonly sampleItems: readonly DocumentItem[];
   readonly sampleSummary: Readonly<Record<string, DocumentValue>>;
+  /** Feature 159 — the sample's sections; `[]` when the type declares none (an older server: absent). */
+  readonly sampleSections?: readonly DocumentItemSection[];
 }
 
 /**

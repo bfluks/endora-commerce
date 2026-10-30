@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/llm-client",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "description": "Provider-neutral LLM transport — fetch-based Anthropic, Google and OpenAI (and OpenAI-compatible) adapters with tool calling, shared by the modules that call a language model.",
   "license": "MIT",
@@ -28,7 +28,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src",
     "test": "vitest run"

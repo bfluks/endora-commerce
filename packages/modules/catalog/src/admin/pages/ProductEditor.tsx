@@ -1,27 +1,26 @@
 import {
-  forwardRef,
   useCallback,
   useEffect,
-  useImperativeHandle,
   useMemo,
   useRef,
   useState,
-  type DragEvent,
   type FormEvent,
   type ReactNode,
 } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
+  Archive,
+  ArchiveRestore,
   Trash2,
   ChevronLeft,
   Copy,
   Eye,
   FileText as FileTextIcon,
   Globe,
-  GripVertical,
   Image as ImageIcon,
   CircleDollarSign,
   Layers,
+  LayoutGrid,
   Link as LinkIcon,
   Paperclip,
   Save,
@@ -29,19 +28,33 @@ import {
   Store as StoreIcon,
   Warehouse as WarehouseIcon,
 } from 'lucide-react';
-import { ApiError, apiClient, useUnsavedChangesPrompt, toAbsoluteAssetUrl, cn } from '@endora-commerce/admin-kit/lib';
+import { ApiError, apiClient, useAuth, useUnsavedChangesPrompt, cn } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
-import { AssetPicker, StickyFormActions, TouchReorderButtons, CategoryTreePicker, ProductPicker } from '@endora-commerce/admin-kit/components';
+import { ModalDialog, StickyFormActions, CategoryTreePicker, ProductPicker } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { AdminZone, useAdminZone } from '@endora-commerce/admin-kit/zones';
-import type { AssetSummary, AssetDetail } from '@endora-commerce/contracts';
 import { ProductInventoryTab } from '../components/ProductInventoryTab.js';
 import { PackagingUnitsEditor } from '../components/PackagingUnitsEditor.js';
+import { ProductOrderRulesCard } from '../components/ProductOrderRulesCard.js';
 import { ProductAttributesTab } from '../components/ProductAttributesTab.js';
+import { ProductScopeOverview } from '../components/ProductScopeOverview.js';
+import { ProductUrlKeysPanel } from '../components/ProductUrlKeysPanel.js';
+import { GallerySection, type GallerySectionHandle } from '../components/ProductGallerySection.js';
+import { AttachmentsSection } from '../components/ProductAttachmentsSection.js';
+import { ArchivedPill, ProductStatusPill } from '../components/ProductStatusPills.js';
 import {
   ProductScopeEditor,
   type ProductScopeEditorHandle,
 } from '../components/ProductScopeEditor.js';
+import { checkWindowInputs, isoToLocalInput } from '../lib/product-scope-drafts.js';
+import {
+  describeIncompletePair,
+  getProductScopes,
+  isScopeIncomplete,
+  loadChannelNamer,
+  scopeSaveErrorMessage,
+} from '../lib/product-scopes-api.js';
+import type { ScopeWarning } from '@endora-commerce/contracts';
 
 const LOCALES = ['en-US', 'pl-PL'] as const;
 type Locale = (typeof LOCALES)[number];
@@ -54,14 +67,36 @@ const PRODUCT_TYPES = [
   'virtual',
 ] as const;
 const VISIBILITIES = ['public', 'logged_in_only', 'organization_restricted'] as const;
-const STATUSES = ['draft', 'active', 'inactive'] as const;
+const STATUSES = ['active', 'inactive'] as const;
+
+/**
+ * The tabs `?tab=` may open (review D3: the bulk scoped-status result links to
+ * `?tab=scopes`) — those every saved product shows. A type-dependent or zone-counted
+ * tab, or an unknown value, opens Details.
+ */
+const LINKABLE_TABS = new Set([
+  'details',
+  'attributes',
+  'pricing',
+  'media',
+  'inventory',
+  'attachments',
+  'links',
+  'scopes',
+  'seo',
+]);
 
 interface AdminProduct {
   id: string;
   sku: string;
   slug: string;
   type: 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
-  status: 'draft' | 'active' | 'inactive';
+  status: 'active' | 'inactive';
+  /**
+   * Set by Archive, cleared by Restore, and by nothing else:
+   * archived state is independent of `status` at every scope.
+   */
+  archivedAt?: string | null;
   name: Record<string, string>;
   description: Record<string, string>;
   visibility: 'public' | 'logged_in_only' | 'organization_restricted';
@@ -118,27 +153,50 @@ export function ProductEditor(): ReactNode {
     productId: id ?? '',
   });
 
+  // Archive / Restore write the catalogue (FR-019): an operator without
+  // `catalog:write` is not offered either.
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('catalog:write');
+
   const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  // Feature 163 (US6, G-2) — what the completeness check reported on the last Save.
+  const [gateWarning, setGateWarning] = useState<string | null>(null);
+  // The product's archived state, read with the product and
+  // moved only by the Archive / Restore actions below, never by Save.
+  const [archivedAt, setArchivedAt] = useState<string | null>(null);
+  const [archiveDialog, setArchiveDialog] = useState<'archive' | 'restore' | null>(null);
+  const [archiving, setArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const [categories, setCategories] = useState<AdminCategory[]>([]);
   const [sku, setSku] = useState('');
   const [type, setType] = useState<'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual'>('simple');
-  const [status, setStatus] = useState<'draft' | 'active' | 'inactive'>('draft');
+  const [status, setStatus] = useState<'active' | 'inactive'>('inactive');
   const [visibility, setVisibility] = useState<AdminProduct['visibility']>('public');
   const [name, setName] = useState<Record<Locale, string>>({ 'en-US': '', 'pl-PL': '' });
   const [description, setDescription] = useState<Record<Locale, string>>({
     'en-US': '',
     'pl-PL': '',
   });
-  const [defaultPrice, setDefaultPrice] = useState<string>('');
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState<string>('details');
+  const [searchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const linked = searchParams.get('tab');
+    return !isNew && linked !== null && LINKABLE_TABS.has(linked) ? linked : 'details';
+  });
   // Feature 002 (T034) — Attribute Set selector
   const [attributeSets, setAttributeSets] = useState<AdminAttributeSet[]>([]);
   const [attributeSetId, setAttributeSetId] = useState<string>('');
   // Editable attribute values keyed by attribute `key` (Attributes tab).
   const [attrValues, setAttrValues] = useState<Record<string, unknown>>({});
+  // Feature 163 (FR-023) — the global publication window, as `datetime-local`
+  // values in the operator's zone. `loadedWindow` is what the server holds, so
+  // the page PATCH carries the window only when it changed.
+  const [publishFrom, setPublishFrom] = useState('');
+  const [publishUntil, setPublishUntil] = useState('');
+  const [loadedWindow, setLoadedWindow] = useState({ from: '', until: '' });
+  const [windowError, setWindowError] = useState<'order' | 'invalidDate' | null>(null);
   // Feature 023 — imperative handle on the scope-editor so the page Save
   // can flush every pending channel-scoped override in a single PATCH.
   const scopeEditorRef = useRef<ProductScopeEditorHandle | null>(null);
@@ -157,17 +215,28 @@ export function ProductEditor(): ReactNode {
     visibility,
     name,
     description,
-    defaultPrice,
     categoryIds,
     attributeSetId,
     attrValues,
+    publishFrom,
+    publishUntil,
   });
+  // Review D4 — the gallery's staged edits are unsaved changes too. The gallery stays
+  // mounted once its tab is opened (hidden on the other tabs), so its staging survives a
+  // tab switch and the page Save still writes it.
+  const [galleryDirty, setGalleryDirty] = useState(false);
+  const [galleryOpened, setGalleryOpened] = useState(false);
+  useEffect(() => {
+    if (activeTab === 'media') setGalleryOpened(true);
+  }, [activeTab]);
   const dirty =
     !loading &&
-    initialSnapshotRef.current !== '' &&
-    currentSnapshot !== initialSnapshotRef.current;
+    ((initialSnapshotRef.current !== '' && currentSnapshot !== initialSnapshotRef.current) || galleryDirty);
   useUnsavedChangesPrompt(dirty);
 
+  // Read through a ref so a language switch does not re-load the product (and drop edits).
+  const tRef = useRef(t);
+  tRef.current = t;
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true);
     setError(null);
@@ -188,14 +257,15 @@ export function ProductEditor(): ReactNode {
         initialSnapshotRef.current = stableSnapshot({
           sku: '',
           type: 'simple',
-          status: 'draft',
+          status: 'inactive',
           visibility: 'public',
           name: { 'en-US': '', 'pl-PL': '' },
           description: { 'en-US': '', 'pl-PL': '' },
-          defaultPrice: '',
           categoryIds: [],
           attributeSetId: defaultSet?.id ?? '',
           attrValues: {},
+          publishFrom: '',
+          publishUntil: '',
         });
       }
       if (id) {
@@ -206,6 +276,7 @@ export function ProductEditor(): ReactNode {
         setSku(p.sku);
         setType(p.type);
         setStatus(p.status);
+        setArchivedAt(p.archivedAt ?? null);
         setVisibility(p.visibility);
         const loadedName = {
           'en-US': p.name['en-US'] ?? '',
@@ -217,12 +288,25 @@ export function ProductEditor(): ReactNode {
           'pl-PL': p.description['pl-PL'] ?? '',
         };
         setDescription(loadedDescription);
-        const price = (p.attributeValues['defaultPrice'] as number | undefined) ?? null;
-        const loadedPrice = price != null ? String(price) : '';
-        setDefaultPrice(loadedPrice);
         setAttrValues(p.attributeValues ?? {});
         setAttributeSetId(p.attributeSetId);
         setCategoryIds(p.categoryIds ?? []);
+        // Feature 163 — the global window is read from the scopes answer (the
+        // product answer does not carry it). A failed read leaves the fields
+        // empty and unchanged, so nothing is sent for them on save.
+        let loadedFrom = '';
+        let loadedUntil = '';
+        try {
+          const scopes = await getProductScopes(id);
+          loadedFrom = isoToLocalInput(scopes?.global?.publishFrom ?? null);
+          loadedUntil = isoToLocalInput(scopes?.global?.publishUntil ?? null);
+        } catch {
+          // Best effort — the rest of the editor stays usable.
+        }
+        setPublishFrom(loadedFrom);
+        setPublishUntil(loadedUntil);
+        setLoadedWindow({ from: loadedFrom, until: loadedUntil });
+        setWindowError(null);
         // Capture the loaded state as the clean baseline for dirty-tracking.
         initialSnapshotRef.current = stableSnapshot({
           sku: p.sku,
@@ -231,14 +315,15 @@ export function ProductEditor(): ReactNode {
           visibility: p.visibility,
           name: loadedName,
           description: loadedDescription,
-          defaultPrice: loadedPrice,
           categoryIds: p.categoryIds ?? [],
           attributeSetId: p.attributeSetId,
           attrValues: p.attributeValues ?? {},
+          publishFrom: loadedFrom,
+          publishUntil: loadedUntil,
         });
       }
     } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : 'Failed to load.');
+      setError(err instanceof ApiError ? err.envelope.error.message : tRef.current('productEditor.error.load'));
     } finally {
       setLoading(false);
     }
@@ -253,6 +338,7 @@ export function ProductEditor(): ReactNode {
       e.preventDefault();
       setError(null);
       setInfo(null);
+      setGateWarning(null);
       const trimmedName: Record<string, string> = {};
       const trimmedDescription: Record<string, string> = {};
       for (const l of LOCALES) {
@@ -260,21 +346,25 @@ export function ProductEditor(): ReactNode {
         if (description[l]) trimmedDescription[l] = description[l];
       }
       if (Object.keys(trimmedName).length === 0) {
-        setError('At least one locale name is required.');
+        setError(t('productEditor.error.nameRequired'));
         return;
       }
-      // Seed from the Attributes-tab edits; `defaultPrice` is a virtual
-      // attribute owned by the Details tab and re-applied just below.
+      // The Attributes-tab edits. A product has no price of its own: prices
+      // are set in price books (feature 160), so nothing else is added here.
       const attributeValues: Record<string, unknown> = { ...attrValues };
-      delete attributeValues['defaultPrice'];
-      if (defaultPrice.trim()) {
-        const v = Number(defaultPrice);
-        if (!Number.isFinite(v) || v < 0) {
-          setError('Default price must be a number ≥ 0.');
+      // Feature 163 (FR-023) — the window travels only when it changed, and
+      // a window that does not start before it ends is refused here, beside
+      // its fields, without a request.
+      let windowPatch: { publishFrom: string | null; publishUntil: string | null } | null = null;
+      if (publishFrom !== loadedWindow.from || publishUntil !== loadedWindow.until) {
+        const check = checkWindowInputs(publishFrom, publishUntil);
+        if (!check.ok) {
+          setWindowError(check.reason);
           return;
         }
-        attributeValues['defaultPrice'] = v;
+        windowPatch = { publishFrom: check.from, publishUntil: check.until };
       }
+      setWindowError(null);
       try {
         if (isNew) {
           const res = await apiClient.post<{ data: AdminProduct }>(
@@ -282,6 +372,9 @@ export function ProductEditor(): ReactNode {
             {
               sku,
               type,
+              // A new product is `inactive` unless the operator chose otherwise
+              // (FR-010, Q1-d); the selector's value is sent, not assumed.
+              status,
               name: trimmedName,
               description: trimmedDescription,
               categoryIds,
@@ -292,36 +385,75 @@ export function ProductEditor(): ReactNode {
           );
           navigate(`/catalog/products/${res.data.id}`);
         } else if (id) {
-          // Feature 023 — page-Save commits both the per-language baseline
-          // (carried by `trimmedName` / `trimmedDescription` via the existing
-          // PATCH) AND any pending channel-scoped override drafts held in
-          // the ProductScopeEditor panel. Run them in parallel; if the
-          // override flush rejects, the page PATCH still committed.
+          // Feature 023 — page-Save commits the per-language baseline (the product
+          // PATCH) and the drafts staged in the ProductScopeEditor panel and the
+          // gallery. Feature 163 (US6 #3): the PATCH goes first and alone — when the
+          // completeness gate refuses it (`422 SCOPE_INCOMPLETE`) nothing else is
+          // written, so "not saved, still in the form" is true of the whole change.
+          const saved = await apiClient.patch<{ data: AdminProduct; warnings?: ScopeWarning[] }>(
+            `/api/v1/admin/catalog/products/${id}`,
+            {
+              sku: sku.trim(),
+              status,
+              name: trimmedName,
+              description: trimmedDescription,
+              categoryIds,
+              attributeValues,
+              visibility,
+              ...(attributeSetId ? { attributeSetId } : {}),
+              ...(windowPatch ?? {}),
+            },
+          );
           await Promise.all([
-            apiClient.patch<{ data: AdminProduct }>(
-              `/api/v1/admin/catalog/products/${id}`,
-              {
-                sku: sku.trim(),
-                status,
-                name: trimmedName,
-                description: trimmedDescription,
-                categoryIds,
-                attributeValues,
-                visibility,
-                ...(attributeSetId ? { attributeSetId } : {}),
-              },
-            ),
             scopeEditorRef.current?.flushOverrides() ?? Promise.resolve(),
             galleryRef.current?.flushGallery() ?? Promise.resolve(),
           ]);
-          setInfo('Saved.');
+          // The status change was saved; where it switched the product on with values
+          // missing (`warn` mode) the page says what, by channel and language — instead
+          // of "Saved.", which would read as "nothing left to do".
+          const completeness = (saved.warnings ?? []).filter(
+            (w): w is Extract<ScopeWarning, { kind: 'completeness' }> => w.kind === 'completeness',
+          );
+          if (completeness.length > 0) {
+            const channelName = await loadChannelNamer(id);
+            setGateWarning(
+              t('productEditor.scopeControls.warning.incomplete', {
+                details: completeness.map((w) => describeIncompletePair(w, channelName, t)).join('; '),
+              }),
+            );
+          } else {
+            setInfo(t('productEditor.saved'));
+          }
           await refresh();
         }
       } catch (err) {
-        setError(err instanceof ApiError ? err.envelope.error.message : 'Save failed.');
+        if (id && isScopeIncomplete(err)) {
+          // `refuse` mode: nothing in this request was saved; the edits stay in the form.
+          const channelName = await loadChannelNamer(id);
+          setError(
+            scopeSaveErrorMessage(
+              err,
+              channelName,
+              t,
+              'productEditor.scopeControls.error.generic',
+              'productEditor.statusGate.refused',
+            ),
+          );
+          return;
+        }
+        const windowRefused =
+          err instanceof ApiError &&
+          (err.envelope.error as { details?: { field?: unknown } }).details?.field === 'window';
+        setError(
+          windowRefused
+            ? t('productEditor.error.publishWindow')
+            : err instanceof ApiError
+              ? err.envelope.error.message
+              : t('productEditor.error.save'),
+        );
       }
     },
-    [isNew, id, sku, status, type, name, description, categoryIds, defaultPrice, attrValues, attributeSetId, visibility, navigate, refresh],
+    [isNew, id, sku, status, type, name, description, categoryIds, attrValues, attributeSetId, visibility, navigate, refresh, publishFrom, publishUntil, loadedWindow, t],
   );
 
   const handleAttrChange = useCallback((key: string, value: unknown): void => {
@@ -330,8 +462,7 @@ export function ProductEditor(): ReactNode {
 
   // Swapping the Attribute Set drops the values whose keys are not in the
   // newly-selected set, so the save payload doesn't carry orphan keys left
-  // over from the previous set. `defaultPrice` / `price` are virtual keys
-  // owned by the Details tab (not bound to any set) and are always kept.
+  // over from the previous set.
   const handleAttributeSetChange = useCallback(
     async (newSetId: string): Promise<void> => {
       setAttributeSetId(newSetId);
@@ -344,7 +475,7 @@ export function ProductEditor(): ReactNode {
         setAttrValues((prev) => {
           const next: Record<string, unknown> = {};
           for (const [k, v] of Object.entries(prev)) {
-            if (allowed.has(k) || k === 'defaultPrice' || k === 'price') {
+            if (allowed.has(k)) {
               next[k] = v;
             }
           }
@@ -365,14 +496,14 @@ export function ProductEditor(): ReactNode {
       await apiClient.delete<void>(`/api/v1/admin/catalog/products/${id}`);
       navigate('/catalog/products');
     } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : 'Delete failed.');
+      setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.error.delete'));
     }
   }, [id, navigate, t]);
 
   const [duplicating, setDuplicating] = useState(false);
   const handleDuplicate = useCallback(async (): Promise<void> => {
     if (!id || duplicating) return;
-    if (!confirm('Duplicate this product? A draft copy will be created.')) return;
+    if (!confirm(t('productEditor.duplicateConfirm'))) return;
     setDuplicating(true);
     setError(null);
     try {
@@ -382,11 +513,38 @@ export function ProductEditor(): ReactNode {
       );
       navigate(`/catalog/products/${res.data.id}`);
     } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : 'Duplicate failed.');
+      setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.error.duplicate'));
     } finally {
       setDuplicating(false);
     }
-  }, [id, duplicating, navigate]);
+  }, [id, duplicating, navigate, t]);
+
+  // Archive / Restore take effect at once, through their own
+  // routes; they touch `archivedAt` only, so the form's unsaved edits (status
+  // included) are neither sent nor lost.
+  const handleArchiveAction = useCallback(async (): Promise<void> => {
+    if (!id || archiveDialog === null || archiving) return;
+    setArchiving(true);
+    setArchiveError(null);
+    try {
+      const res = await apiClient.post<{ data: AdminProduct }>(
+        `/api/v1/admin/catalog/products/${id}/${archiveDialog}`,
+        {},
+      );
+      setArchivedAt(res.data.archivedAt ?? null);
+      setInfo(t(archiveDialog === 'archive' ? 'productEditor.archive.done' : 'productEditor.restore.done'));
+      setError(null);
+      setArchiveDialog(null);
+    } catch (err) {
+      setArchiveError(
+        err instanceof ApiError
+          ? err.envelope.error.message
+          : t(archiveDialog === 'archive' ? 'productEditor.archive.failed' : 'productEditor.restore.failed'),
+      );
+    } finally {
+      setArchiving(false);
+    }
+  }, [id, archiveDialog, archiving, t]);
 
   if (loading)
     return (
@@ -398,7 +556,7 @@ export function ProductEditor(): ReactNode {
   const tabs: Array<{ id: string; label: string; icon: ReactNode; show: boolean }> = [
     { id: 'details', label: 'Details', icon: <FileTextIcon size={14} />, show: true },
     { id: 'attributes', label: 'Attributes', icon: <SlidersHorizontal size={14} />, show: !isNew },
-    { id: 'pricing', label: 'Pricing', icon: <CircleDollarSign size={14} />, show: !isNew },
+    { id: 'pricing', label: t('productEditor.tab.pricing'), icon: <CircleDollarSign size={14} />, show: !isNew },
     {
       id: 'variants',
       label: 'Variants',
@@ -427,6 +585,8 @@ export function ProductEditor(): ReactNode {
       icon: <StoreIcon size={14} />,
       show: !isNew && channelContributions.length > 0,
     },
+    // Feature 163 (US4) — channels × languages for this product, beside the channels it is in.
+    { id: 'scopes', label: t('productEditor.tab.scopes'), icon: <LayoutGrid size={14} />, show: !isNew },
     { id: 'seo', label: 'SEO', icon: <Globe size={14} />, show: !isNew },
   ];
   const visibleTabs = tabs.filter((t) => t.show);
@@ -444,7 +604,8 @@ export function ProductEditor(): ReactNode {
           </button>
           <div className="b2b-page-head__title">
             <span>{isNew ? 'New product' : pickName(name) || sku}</span>
-            {!isNew ? <StatusPill status={status} /> : null}
+            {!isNew ? <ProductStatusPill status={status} archived={Boolean(archivedAt)} /> : null}
+            {!isNew && archivedAt ? <ArchivedPill /> : null}
           </div>
           {!isNew ? (
             <div className="b2b-page-head__sub">
@@ -466,6 +627,20 @@ export function ProductEditor(): ReactNode {
               >
                 <Copy size={13} /> {duplicating ? 'Duplicating…' : 'Duplicate'}
               </button>
+              {/* Reversible, so not styled as danger. Restore lives in the archived
+                  notice, beside the sentence that explains it. */}
+              {canWrite && !archivedAt ? (
+                <button
+                  type="button"
+                  className="b2b-btn b2b-btn--default b2b-btn--sm"
+                  onClick={(): void => {
+                    setArchiveError(null);
+                    setArchiveDialog('archive');
+                  }}
+                >
+                  <Archive size={13} aria-hidden="true" /> {t('productEditor.action.archive')}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="b2b-btn b2b-btn--danger b2b-btn--sm"
@@ -496,6 +671,77 @@ export function ProductEditor(): ReactNode {
         <Alert variant="success" className="mb-4">
           <AlertDescription>{info}</AlertDescription>
         </Alert>
+      ) : null}
+      {/* Mounted before it has text, so the gate's warning is announced when it arrives. */}
+      <div role="status">
+        {gateWarning ? (
+          <Alert variant="warning" role="none" className="mb-4" data-testid="product-gate-warning">
+            <AlertDescription>{gateWarning}</AlertDescription>
+          </Alert>
+        ) : null}
+      </div>
+      {/* Said where the operator looks first: archived
+          means unavailable everywhere, whatever the status, and only Restore
+          brings the product back. A standing state, so `status`, not `alert`. */}
+      {!isNew && archivedAt ? (
+        <Alert variant="warning" role="status" className="mb-4" data-testid="product-archived-notice">
+          <AlertDescription>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="flex-1">
+                <strong>{t('productEditor.archived.title')}</strong>{' '}
+                {t('productEditor.archived.body')}
+              </span>
+              {canWrite ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={(): void => {
+                    setArchiveError(null);
+                    setArchiveDialog('restore');
+                  }}
+                >
+                  <ArchiveRestore size={13} aria-hidden="true" /> {t('productEditor.action.restore')}
+                </Button>
+              ) : null}
+            </div>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {archiveDialog !== null ? (
+        <ModalDialog
+          title={t(archiveDialog === 'archive' ? 'productEditor.archive.confirmTitle' : 'productEditor.restore.confirmTitle')}
+          onClose={(): void => setArchiveDialog(null)}
+          busy={archiving}
+          aria-describedby="product-archive-confirm-body"
+          footer={
+            <>
+              <Button type="button" variant="outline" disabled={archiving} onClick={(): void => setArchiveDialog(null)}>
+                {t('productEditor.archive.cancel')}
+              </Button>
+              <Button
+                type="button"
+                disabled={archiving}
+                aria-busy={archiving || undefined}
+                onClick={(): void => {
+                  void handleArchiveAction();
+                }}
+              >
+                {t(archiveDialog === 'archive' ? 'productEditor.archive.confirm' : 'productEditor.restore.confirm')}
+              </Button>
+            </>
+          }
+        >
+          <p id="product-archive-confirm-body" className="text-sm">
+            {t(archiveDialog === 'archive' ? 'productEditor.archive.confirmBody' : 'productEditor.restore.confirmBody')}
+          </p>
+          {archiveError ? (
+            <p role="alert" className="mt-3 text-sm text-destructive">
+              {archiveError}
+            </p>
+          ) : null}
+        </ModalDialog>
       ) : null}
 
       <div className="b2b-card">
@@ -560,6 +806,7 @@ export function ProductEditor(): ReactNode {
                     productId={id}
                     baselineName={name}
                     baselineDescription={description}
+                    globalStatus={status}
                     onBaselineNameChange={(next): void =>
                       setName({
                         'en-US': next['en-US'] ?? '',
@@ -651,32 +898,85 @@ export function ProductEditor(): ReactNode {
                       <Select
                         id="pstatus"
                         value={status}
+                        aria-describedby={
+                          !isNew && archivedAt ? 'pstatus-help pstatus-archived' : 'pstatus-help'
+                        }
                         onChange={(e): void =>
                           setStatus(e.target.value as AdminProduct['status'])
                         }
                       >
                         {STATUSES.map((s) => (
                           <option key={s} value={s}>
-                            {s}
+                            {t(`productEditor.statusValue.${s}`)}
                           </option>
                         ))}
                       </Select>
-                      <p className="b2b-help">{t('productEditor.field.status.help')}</p>
-                    </div>
-                    <div>
-                      <Label htmlFor="dp">{t('productEditor.field.defaultPrice')}</Label>
-                      <Input
-                        id="dp"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={defaultPrice}
-                        onChange={(e): void => setDefaultPrice(e.target.value)}
-                      />
-                      <p className="b2b-help">{t('productEditor.field.defaultPrice.help')}</p>
+                      <p id="pstatus-help" className="b2b-help">{t('productEditor.field.status.help')}</p>
+                      {/* O-5 — setting Active does not restore an archived product. */}
+                      {!isNew && archivedAt ? (
+                        <p id="pstatus-archived" className="b2b-help">
+                          {t('productEditor.field.status.archivedNote')}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
+
+                {/* Feature 163 (FR-023) — the global publication window. A channel
+                    may set its own in the scope controls above. No constraint
+                    attributes: the check is ours and translated, never a
+                    browser bubble. */}
+                {id ? (
+                  <div>
+                    <div className="b2b-label">{t('productEditor.field.publishWindow')}</div>
+                    <div className="b2b-row" style={{ gap: 12, flexWrap: 'wrap' }}>
+                      <div>
+                        <Label htmlFor="ppublish-from">{t('productEditor.field.publishFrom')}</Label>
+                        <Input
+                          id="ppublish-from"
+                          type="datetime-local"
+                          value={publishFrom}
+                          aria-describedby={windowError ? 'ppublish-help ppublish-error' : 'ppublish-help'}
+                          aria-invalid={windowError === 'invalidDate' ? true : undefined}
+                          onKeyDown={(e): void => {
+                            if (e.key === 'Enter') e.preventDefault();
+                          }}
+                          onChange={(e): void => {
+                            setPublishFrom(e.target.value);
+                            setWindowError(null);
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="ppublish-until">{t('productEditor.field.publishUntil')}</Label>
+                        <Input
+                          id="ppublish-until"
+                          type="datetime-local"
+                          value={publishUntil}
+                          aria-describedby={windowError ? 'ppublish-help ppublish-error' : 'ppublish-help'}
+                          aria-invalid={windowError ? true : undefined}
+                          onKeyDown={(e): void => {
+                            if (e.key === 'Enter') e.preventDefault();
+                          }}
+                          onChange={(e): void => {
+                            setPublishUntil(e.target.value);
+                            setWindowError(null);
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <p id="ppublish-help" className="b2b-help">
+                      {t('productEditor.field.publishWindow.help')}
+                    </p>
+                    {windowError ? (
+                      <p id="ppublish-error" role="alert" className="text-sm text-destructive" style={{ margin: 0 }}>
+                        {windowError === 'order'
+                          ? t('productEditor.scopeControls.window.invalidOrder')
+                          : t('productEditor.scopeControls.window.invalidDate')}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 {/* Feature 023 — on existing products the
                     ProductScopeEditor panel above is the sole editor for
@@ -765,9 +1065,9 @@ export function ProductEditor(): ReactNode {
                   product. A contributor with no binding over the product
                   renders nothing, which is every product until one is bound. */}
               <AdminZone name="product.editor.pricing.before" props={{ productId: id }} />
-              {/* Feature 091 / P7a — the end of the Pricing tab. `price_lists`
-                  contributes its linked-lists panel here; this screen used to
-                  import that panel by path. */}
+              {/* Feature 091 / P7a — the end of the Pricing tab. Feature 160
+                  removed `price_lists`' linked-lists panel with the old model;
+                  P2's base-price zone contributes here. */}
               <AdminZone name="product.editor.pricing.after" props={{ productId: id }} />
             </div>
           ) : null}
@@ -783,20 +1083,24 @@ export function ProductEditor(): ReactNode {
           ) : null}
 
           {activeTab === 'media' && id ? (
-            <>
-              <AdminZone
-                name="product.editor.field.after"
-                props={{ productId: id, fieldPath: 'gallery', languageCodes: null }}
-              />
-              <GallerySection ref={galleryRef} productId={id} />
-            </>
+            <AdminZone
+              name="product.editor.field.after"
+              props={{ productId: id, fieldPath: 'gallery', languageCodes: null }}
+            />
+          ) : null}
+          {(activeTab === 'media' || galleryOpened) && id ? (
+            <div hidden={activeTab !== 'media'}>
+              <GallerySection ref={galleryRef} productId={id} onDirtyChange={setGalleryDirty} />
+            </div>
           ) : null}
 
           {activeTab === 'inventory' && id ? (
             <div className="b2b-col" style={{ gap: 16 }}>
               <ProductInventoryTab productId={id} />
+              {/* Feature 155 — returnable for every type; the minimum gates itself (D5). */}
+              <ProductOrderRulesCard productId={id} productType={type} />
               {type === 'simple' || type === 'configurable' ? (
-                <PackagingUnitsEditor productId={id} />
+                <PackagingUnitsEditor productId={id} canWrite={canWrite} />
               ) : null}
             </div>
           ) : null}
@@ -817,41 +1121,34 @@ export function ProductEditor(): ReactNode {
             <AdminZone name="product.editor.channels" props={{ productId: id }} />
           ) : null}
 
-          {activeTab === 'seo' ? <SeoStub name={name} /> : null}
+          {activeTab === 'scopes' && id ? <ProductScopeOverview productId={id} /> : null}
+
+          {activeTab === 'seo' && id ? <ProductUrlKeysPanel productId={id} /> : null}
+          {activeTab === 'seo' && id ? (
+            // 168-shim: interim props until S3 mounts the SEO section at the editor scope (T125).
+            <AdminZone
+              name="product.editor.seo"
+              props={{
+                productId: id,
+                scope: { level: 'global' },
+                scopeLabel: '',
+                parentScopeLabel: null,
+                view: null,
+                staged: new Map(),
+                onStage: () => undefined,
+                readOnly: true,
+                errors: {},
+              }}
+            />
+          ) : null}
         </div>
       </div>
     </div>
   );
 }
 
-function StatusPill({ status }: { status: AdminProduct['status'] }): ReactNode {
-  const map = {
-    active: { cls: 'b2b-badge--success', label: 'Active' },
-    draft: { cls: 'b2b-badge--warn', label: 'Draft' },
-    inactive: { cls: '', label: 'Inactive' },
-  } as const;
-  const v = map[status];
-  return <span className={cn('b2b-badge', 'b2b-badge--dot', v.cls)}>{v.label}</span>;
-}
-
 function pickName(name: Record<string, string>): string {
   return name['en-US'] ?? Object.values(name)[0] ?? '';
-}
-
-function SeoStub({ name }: { name: Record<string, string> }): ReactNode {
-  const t = useTranslation('catalog');
-  return (
-    <div className="b2b-col" style={{ gap: 12 }}>
-      <div className="b2b-label">{t('productEditor.seo.title')}</div>
-      <div className="b2b-help" style={{ marginTop: 0 }}>
-        {t('productEditor.seo.description')}
-      </div>
-      <div>
-        <Label htmlFor="seo-title">{t('productEditor.seo.pageTitlePreview')}</Label>
-        <Input id="seo-title" defaultValue={pickName(name)} />
-      </div>
-    </div>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -865,7 +1162,6 @@ interface AdminVariant {
   parentProductId: string;
   sku: string;
   variantAttributeValues: Record<string, unknown>;
-  priceOverride: number | null;
   stockLevel: number | null;
   createdAt: string;
   updatedAt: string;
@@ -905,7 +1201,6 @@ function VariantsSection({ productId }: { productId: string }): ReactNode {
     async (input: {
       sku: string;
       attrs: string;
-      priceOverride: string;
       stockLevel: string;
     }): Promise<void> => {
       // attrs is a comma-separated list of `key=value` pairs.
@@ -921,9 +1216,6 @@ function VariantsSection({ productId }: { productId: string }): ReactNode {
           sku: input.sku,
           variantAttributeValues,
         };
-        if (input.priceOverride.trim()) {
-          payload['priceOverride'] = Number(input.priceOverride);
-        }
         if (input.stockLevel.trim()) {
           payload['stockLevel'] = Number(input.stockLevel);
         }
@@ -983,7 +1275,6 @@ function VariantsSection({ productId }: { productId: string }): ReactNode {
               <TableRow>
                 <TableHead>{t('productEditor.variants.column.sku')}</TableHead>
                 <TableHead>{t('productEditor.variants.column.attributes')}</TableHead>
-                <TableHead>{t('productEditor.variants.column.priceOverride')}</TableHead>
                 <TableHead>{t('productEditor.variants.column.stock')}</TableHead>
                 <TableHead className="w-[1%] whitespace-nowrap">{t('productEditor.variants.column.actions')}</TableHead>
               </TableRow>
@@ -997,7 +1288,6 @@ function VariantsSection({ productId }: { productId: string }): ReactNode {
                       .map(([k, val]) => `${k}=${String(val)}`)
                       .join(', ') || '—'}
                   </TableCell>
-                  <TableCell>{v.priceOverride ?? '—'}</TableCell>
                   <TableCell>{v.stockLevel ?? '—'}</TableCell>
                   <TableCell>
                     <Button
@@ -1027,19 +1317,17 @@ function CreateVariantInline({
   onCreate: (input: {
     sku: string;
     attrs: string;
-    priceOverride: string;
     stockLevel: string;
   }) => Promise<void>;
 }): ReactNode {
   const t = useTranslation('catalog');
   const [sku, setSku] = useState('');
   const [attrs, setAttrs] = useState('');
-  const [priceOverride, setPriceOverride] = useState('');
   const [stockLevel, setStockLevel] = useState('');
 
   return (
     <div
-      className="grid gap-3 md:grid-cols-5 border-t pt-4"
+      className="grid gap-3 md:grid-cols-4 border-t pt-4"
       role="group"
       aria-label={t('productEditor.variants.createTitle')}
     >
@@ -1057,17 +1345,6 @@ function CreateVariantInline({
         />
       </div>
       <div className="space-y-1">
-        <Label htmlFor="vprice">{t('productEditor.variants.field.priceOverride')}</Label>
-        <Input
-          id="vprice"
-          type="number"
-          step="0.01"
-          min="0"
-          value={priceOverride}
-          onChange={(e): void => setPriceOverride(e.target.value)}
-        />
-      </div>
-      <div className="space-y-1">
         <Label htmlFor="vstock">{t('productEditor.variants.field.stock')}</Label>
         <Input
           id="vstock"
@@ -1077,850 +1354,19 @@ function CreateVariantInline({
           onChange={(e): void => setStockLevel(e.target.value)}
         />
       </div>
-      <div className="md:col-span-5">
+      <div className="md:col-span-4">
         <Button
           type="button"
           onClick={() => {
-            void onCreate({ sku, attrs, priceOverride, stockLevel }).then(() => {
+            void onCreate({ sku, attrs, stockLevel }).then(() => {
               setSku('');
               setAttrs('');
-              setPriceOverride('');
               setStockLevel('');
             });
           }}
         >
           {t('productEditor.variants.action.add')}
         </Button>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Gallery section (T085) — admin CRUD for the Product's gallery items.
-// Foundation lacks an admin Asset upload endpoint, so for now the form
-// accepts an existing assetId; future work adds drag-and-drop on top of
-// an Assets module admin upload route.
-// ---------------------------------------------------------------------------
-
-const GALLERY_LABELS = ['base_image', 'small_image', 'thumbnail'] as const;
-type GalleryLabel = (typeof GALLERY_LABELS)[number];
-
-interface AdminGalleryItem {
-  id: string;
-  productId: string;
-  assetId: string;
-  position: number;
-  labels: GalleryLabel[];
-  asset?: { url: string; kind: string };
-}
-
-interface AdminProductImage {
-  id: string;
-  kind: string;
-  url: string;
-  altText: string | null;
-}
-
-export interface GallerySectionHandle {
-  /** Persist staged label + order edits. Called by the page-Save button. */
-  flushGallery: () => Promise<void>;
-}
-
-/** Immutable array move used by drag-and-drop / arrow reordering. */
-function moveGalleryItem<T>(items: T[], from: number, to: number): T[] {
-  if (to < 0 || to >= items.length || from === to) return items;
-  const next = items.slice();
-  const [moved] = next.splice(from, 1);
-  if (moved === undefined) return items;
-  next.splice(to, 0, moved);
-  return next;
-}
-
-const GallerySection = forwardRef<GallerySectionHandle, { productId: string }>(
-  function GallerySection({ productId }, ref): ReactNode {
-  const t = useTranslation('catalog');
-  const [items, setItems] = useState<AdminGalleryItem[]>([]);
-  const [images, setImages] = useState<AdminProductImage[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const dragIdRef = useRef<string | null>(null);
-  // Server-truth snapshot (id order + labels) used to diff the staged edits
-  // that the page-Save button flushes.
-  const baselineRef = useRef<string>('');
-
-  const snapshot = (list: AdminGalleryItem[]): string =>
-    JSON.stringify(list.map((g) => ({ id: g.id, labels: [...g.labels].sort() })));
-
-  const refresh = useCallback(async (): Promise<void> => {
-    setLoading(true);
-    setError(null);
-    try {
-      // Public PDP carries the resolved gallery (with asset urls) so
-      // admins see the same shape customers do; the admin GET returns
-      // bare ids without urls. The PDP also carries the product's flat
-      // `assets` (legacy product_assets) — the storefront renders those
-      // when the label-aware gallery is empty, so we surface them here
-      // too, otherwise a product whose images live on product_assets
-      // looks empty in the admin while showing fine on the storefront.
-      const res = await apiClient.get<{
-        data: {
-          gallery?: Array<{
-            id: string;
-            position: number;
-            labels: GalleryLabel[];
-            asset: { id: string; kind: string; url: string };
-          }>;
-          assets?: Array<{
-            id: string;
-            kind: string;
-            url: string;
-            altText?: string | null;
-          }>;
-        };
-      }>(`/api/v1/catalog/products/${productId}`);
-      const gallery = res.data.gallery ?? [];
-      const mapped = gallery
-        .slice()
-        .sort((a, b) => a.position - b.position)
-        .map((g) => ({
-          id: g.id,
-          productId,
-          assetId: g.asset.id,
-          position: g.position,
-          labels: g.labels,
-          asset: { url: g.asset.url, kind: g.asset.kind },
-        }));
-      setItems(mapped);
-      baselineRef.current = snapshot(mapped);
-      const assets = res.data.assets ?? [];
-      setImages(
-        assets
-          .filter((a) => a.kind === 'image' || a.kind === 'video')
-          .map((a) => ({
-            id: a.id,
-            kind: a.kind,
-            url: a.url,
-            altText: a.altText ?? null,
-          })),
-      );
-    } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.gallery.error.load'));
-    } finally {
-      setLoading(false);
-    }
-  }, [productId, t]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  // --- Staged label edits: each label lives on at most one item; assigning it
-  //     to one item strips it from every other (radio semantics). Persisted on
-  //     page Save, so no per-row Save button and no "already taken" error. ---
-  const assignLabel = useCallback((label: GalleryLabel, itemId: string): void => {
-    setInfo(null);
-    setItems((prev) =>
-      prev.map((it) => {
-        const without = it.labels.filter((l) => l !== label);
-        return { ...it, labels: it.id === itemId ? [...without, label] : without };
-      }),
-    );
-  }, []);
-
-  const clearLabel = useCallback((label: GalleryLabel): void => {
-    setInfo(null);
-    setItems((prev) => prev.map((it) => ({ ...it, labels: it.labels.filter((l) => l !== label) })));
-  }, []);
-
-  // --- Staged reorder (array order === display order). ---
-  const moveItem = useCallback((from: number, to: number): void => {
-    setInfo(null);
-    setItems((prev) => moveGalleryItem(prev, from, to));
-  }, []);
-
-  const handleDrop = useCallback((index: number): void => {
-    const draggedId = dragIdRef.current;
-    if (!draggedId) return;
-    setItems((prev) => {
-      const from = prev.findIndex((it) => it.id === draggedId);
-      return from < 0 || from === index ? prev : moveGalleryItem(prev, from, index);
-    });
-  }, []);
-
-  // --- Immediate CRUD (add / remove) — these hit the server directly and
-  //     re-load, which also resets the staged baseline. ---
-  const handleCreate = useCallback(
-    async (assetId: string): Promise<void> => {
-      setBusy(true);
-      try {
-        await apiClient.post(`/api/v1/admin/catalog/products/${productId}/gallery`, {
-          assetId,
-          labels: [],
-        });
-        setInfo(t('productEditor.gallery.success.add'));
-        await refresh();
-      } catch (err) {
-        setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.gallery.error.add'));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [productId, refresh, t],
-  );
-
-  const handleDelete = useCallback(
-    async (itemId: string): Promise<void> => {
-      if (!confirm(t('productEditor.gallery.removeConfirm'))) return;
-      setBusy(true);
-      try {
-        await apiClient.delete(`/api/v1/admin/catalog/products/${productId}/gallery/${itemId}`);
-        setInfo(t('productEditor.gallery.success.remove'));
-        await refresh();
-      } catch (err) {
-        setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.gallery.error.delete'));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [productId, refresh, t],
-  );
-
-  // --- Page-Save hook: flush staged label + order edits. Labels are patched
-  //     with `replace=true` so reassigning a label moves it atomically. ---
-  const flushGallery = useCallback(async (): Promise<void> => {
-    const baseline = JSON.parse(baselineRef.current || '[]') as Array<{ id: string; labels: string[] }>;
-    const baseLabels = new Map(baseline.map((b) => [b.id, [...b.labels].sort().join(',')]));
-    const changed = items.filter(
-      (it) => baseLabels.get(it.id) !== [...it.labels].sort().join(','),
-    );
-    for (const it of changed) {
-      await apiClient.patch(
-        `/api/v1/admin/catalog/products/${productId}/gallery/${it.id}?replace=true`,
-        { labels: it.labels },
-      );
-    }
-    const baseOrder = baseline.map((b) => b.id).join(',');
-    const curOrder = items.map((it) => it.id).join(',');
-    if (items.length > 0 && curOrder !== baseOrder) {
-      await apiClient.put(`/api/v1/admin/catalog/products/${productId}/gallery/order`, {
-        orderedGalleryItemIds: items.map((it) => it.id),
-      });
-    }
-    if (changed.length > 0 || curOrder !== baseOrder) {
-      await refresh();
-    }
-  }, [items, productId, refresh]);
-
-  useImperativeHandle(ref, () => ({ flushGallery }), [flushGallery]);
-
-  const disabled = busy || loading;
-
-  return (
-    <Card className="mt-4">
-      <CardHeader>
-        <CardTitle>{t('productEditor.gallery.title')}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {error ? (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        ) : null}
-        {info ? (
-          <Alert>
-            <AlertDescription>{info}</AlertDescription>
-          </Alert>
-        ) : null}
-
-        {!loading && images.length > 0 ? (
-          <div className="space-y-2">
-            <p className="text-sm font-medium">{t('productEditor.gallery.productImages.title')}</p>
-            <p className="text-xs text-muted-foreground">
-              {t('productEditor.gallery.productImages.hint')}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {images.map((img) =>
-                img.kind === 'video' ? (
-                  <video
-                    key={img.id}
-                    src={toAbsoluteAssetUrl(img.url)}
-                    className="h-20 w-20 rounded border object-cover"
-                    muted
-                  />
-                ) : (
-                  <img
-                    key={img.id}
-                    src={toAbsoluteAssetUrl(img.url)}
-                    alt={img.altText ?? ''}
-                    className="h-20 w-20 rounded border object-cover"
-                  />
-                ),
-              )}
-            </div>
-          </div>
-        ) : null}
-
-        {loading ? (
-          <p className="text-sm text-muted-foreground">{t('productEditor.loading')}</p>
-        ) : items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('productEditor.gallery.empty')}</p>
-        ) : (
-          <>
-            <p className="text-xs text-muted-foreground">{t('productEditor.gallery.dragHint')}</p>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-8" />
-                  <TableHead>{t('productEditor.gallery.column.preview')}</TableHead>
-                  {GALLERY_LABELS.map((label) => (
-                    <TableHead key={label} className="text-center">
-                      {t(`productEditor.gallery.label.${label}`)}
-                    </TableHead>
-                  ))}
-                  <TableHead>{t('productEditor.gallery.column.assetId')}</TableHead>
-                  <TableHead className="w-[1%] whitespace-nowrap text-right">
-                    {t('productEditor.gallery.column.actions')}
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((item, index) => (
-                  <GalleryRow
-                    key={item.id}
-                    item={item}
-                    index={index}
-                    total={items.length}
-                    disabled={disabled}
-                    onAssignLabel={assignLabel}
-                    onClearLabel={clearLabel}
-                    onMove={moveItem}
-                    onDragStart={(id) => {
-                      dragIdRef.current = id;
-                    }}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={handleDrop}
-                    onDragEnd={() => {
-                      dragIdRef.current = null;
-                    }}
-                    onPreview={setPreviewUrl}
-                    onDelete={handleDelete}
-                  />
-                ))}
-              </TableBody>
-            </Table>
-          </>
-        )}
-
-        <CreateGalleryItemInline disabled={disabled} onCreate={handleCreate} />
-      </CardContent>
-
-      {previewUrl ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('productEditor.gallery.preview.title')}
-          onClick={() => setPreviewUrl(null)}
-        >
-          <img
-            src={previewUrl}
-            alt={t('productEditor.gallery.preview.title')}
-            className="max-h-full max-w-full rounded shadow-lg"
-            onClick={(e) => e.stopPropagation()}
-          />
-          <button
-            type="button"
-            className="b2b-btn b2b-btn--sm"
-            style={{ position: 'fixed', top: 16, right: 16 }}
-            onClick={() => setPreviewUrl(null)}
-          >
-            {t('productEditor.gallery.preview.close')}
-          </button>
-        </div>
-      ) : null}
-    </Card>
-  );
-});
-
-function GalleryRow({
-  item,
-  index,
-  total,
-  disabled,
-  onAssignLabel,
-  onClearLabel,
-  onMove,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  onDragEnd,
-  onPreview,
-  onDelete,
-}: {
-  item: AdminGalleryItem;
-  index: number;
-  total: number;
-  disabled: boolean;
-  onAssignLabel: (label: GalleryLabel, itemId: string) => void;
-  onClearLabel: (label: GalleryLabel) => void;
-  onMove: (from: number, to: number) => void;
-  onDragStart: (itemId: string) => void;
-  onDragOver: (event: DragEvent<HTMLTableRowElement>) => void;
-  onDrop: (index: number) => void;
-  onDragEnd: () => void;
-  onPreview: (url: string) => void;
-  onDelete: (id: string) => void;
-}): ReactNode {
-  const t = useTranslation('catalog');
-  const url = item.asset?.url ? toAbsoluteAssetUrl(item.asset.url) : null;
-
-  return (
-    <TableRow
-      draggable={!disabled}
-      onDragStart={() => onDragStart(item.id)}
-      onDragOver={onDragOver}
-      onDrop={() => onDrop(index)}
-      onDragEnd={onDragEnd}
-    >
-      <TableCell className="w-8">
-        <span
-          className="inline-flex cursor-grab items-center text-muted-foreground"
-          title={t('productEditor.gallery.dragHint')}
-          aria-hidden
-        >
-          <GripVertical className="h-4 w-4" />
-        </span>
-      </TableCell>
-      <TableCell>
-        {url ? (
-          item.asset?.kind === 'video' ? (
-            <video src={url} className="h-12 w-12 rounded border object-cover" muted />
-          ) : (
-            <button
-              type="button"
-              className="block rounded border p-0"
-              title={t('productEditor.gallery.preview.open')}
-              onClick={() => onPreview(url)}
-            >
-              <img src={url} alt="" className="h-12 w-12 rounded object-cover" />
-            </button>
-          )
-        ) : (
-          <span className="text-muted-foreground text-xs">—</span>
-        )}
-      </TableCell>
-      {GALLERY_LABELS.map((label) => {
-        const checked = item.labels.includes(label);
-        return (
-          <TableCell key={label} className="text-center">
-            <input
-              type="radio"
-              name={`gallery-label-${label}`}
-              checked={checked}
-              disabled={disabled}
-              aria-label={t(`productEditor.gallery.label.${label}`)}
-              onChange={() => {}}
-              onClick={() =>
-                checked ? onClearLabel(label) : onAssignLabel(label, item.id)
-              }
-            />
-          </TableCell>
-        );
-      })}
-      <TableCell className="font-mono text-xs">{item.assetId.slice(0, 8)}…</TableCell>
-      <TableCell className="space-x-2 whitespace-nowrap text-right">
-        <TouchReorderButtons
-          disabled={disabled}
-          onMoveUp={() => onMove(index, index - 1)}
-          onMoveDown={() => onMove(index, index + 1)}
-          disableUp={index === 0}
-          disableDown={index === total - 1}
-        />
-        <Button
-          type="button"
-          size="sm"
-          variant="destructive"
-          disabled={disabled}
-          onClick={() => void onDelete(item.id)}
-        >
-          {t('productEditor.gallery.action.remove')}
-        </Button>
-      </TableCell>
-    </TableRow>
-  );
-}
-
-function CreateGalleryItemInline({
-  disabled,
-  onCreate,
-}: {
-  disabled: boolean;
-  onCreate: (assetId: string) => Promise<void>;
-}): ReactNode {
-  const t = useTranslation('catalog');
-  const [assetId, setAssetId] = useState('');
-
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickedFilename, setPickedFilename] = useState<string | null>(null);
-  const onPick = (a: AssetSummary | AssetDetail): void => {
-    setAssetId(a.id);
-    setPickedFilename(a.filename);
-    setPickerOpen(false);
-  };
-
-  return (
-    <div className="space-y-3 border-t pt-4" role="group" aria-label={t('productEditor.gallery.addTitle')}>
-      {pickerOpen ? (
-        <AssetPicker
-          acceptMimePrefix="image/"
-          allowUpload
-          onSelect={onPick}
-          onClose={() => setPickerOpen(false)}
-        />
-      ) : null}
-      <div className="grid gap-3 md:grid-cols-4">
-      <div className="space-y-1 md:col-span-3">
-        <Label htmlFor="gasset">{t('productEditor.gallery.field.asset')}</Label>
-        <div className="flex items-center gap-2">
-          <Input
-            id="gasset"
-            value={pickedFilename ?? assetId}
-            readOnly
-            placeholder={t('productEditor.gallery.field.noAsset')}
-          />
-          <Button type="button" variant="outline" size="sm" onClick={() => setPickerOpen(true)}>
-            {t('productEditor.gallery.action.pickOrUpload')}
-          </Button>
-        </div>
-      </div>
-      <div className="flex items-end">
-        <Button
-          type="button"
-          disabled={disabled || !assetId}
-          onClick={() => {
-            if (!assetId) return;
-            void onCreate(assetId).then(() => {
-              setAssetId('');
-              setPickedFilename(null);
-            });
-          }}
-        >
-          {t('productEditor.gallery.action.add')}
-        </Button>
-      </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Attachments section (T086) — admin CRUD for Product Attachments. The
-// Library picker (feature 013 / US1) replaces the manual UUID input; assets
-// are picked from the Library or uploaded inline.
-// ---------------------------------------------------------------------------
-
-interface AdminAttachmentType {
-  id: string;
-  code: string;
-  name: Record<string, string>;
-  position: number;
-}
-
-interface AdminAttachment {
-  id: string;
-  productId: string;
-  assetId: string;
-  attachmentTypeId: string;
-  name: string;
-  description: string | null;
-  position: number;
-  asset?: { url: string; filename: string; mimeType: string };
-  type?: { code: string; name: Record<string, string> };
-}
-
-function AttachmentsSection({ productId }: { productId: string }): ReactNode {
-  const t = useTranslation('catalog');
-  const [attachments, setAttachments] = useState<AdminAttachment[]>([]);
-  const [types, setTypes] = useState<AdminAttachmentType[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
-
-  const refresh = useCallback(async (): Promise<void> => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [detail, typesRes] = await Promise.all([
-        apiClient.get<{
-          data: {
-            attachments?: Array<{
-              id: string;
-              position: number;
-              name: string;
-              description: string | null;
-              type: { id: string; code: string; name: Record<string, string> };
-              asset: {
-                id: string;
-                kind: string;
-                url: string;
-                filename: string;
-                sizeBytes: number;
-                mimeType: string;
-              };
-            }>;
-          };
-        }>(`/api/v1/catalog/products/${productId}`),
-        apiClient.get<{ data: AdminAttachmentType[] }>(
-          '/api/v1/admin/catalog/attachment-types',
-        ),
-      ]);
-      const detailAttachments = detail.data.attachments ?? [];
-      setAttachments(
-        detailAttachments.map((a) => ({
-          id: a.id,
-          productId,
-          assetId: a.asset.id,
-          attachmentTypeId: a.type.id,
-          name: a.name,
-          description: a.description,
-          position: a.position,
-          asset: {
-            url: a.asset.url,
-            filename: a.asset.filename,
-            mimeType: a.asset.mimeType,
-          },
-          type: { code: a.type.code, name: a.type.name },
-        })),
-      );
-      setTypes(typesRes.data);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.attachments.error.load'));
-    } finally {
-      setLoading(false);
-    }
-  }, [productId, t]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const handleCreate = useCallback(
-    async (input: {
-      assetId: string;
-      attachmentTypeId: string;
-      name: string;
-      description: string;
-    }): Promise<void> => {
-      try {
-        await apiClient.post(`/api/v1/admin/catalog/products/${productId}/attachments`, {
-          assetId: input.assetId,
-          attachmentTypeId: input.attachmentTypeId,
-          name: input.name,
-          ...(input.description ? { description: input.description } : {}),
-        });
-        setInfo(t('productEditor.attachments.success.add'));
-        await refresh();
-      } catch (err) {
-        setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.attachments.error.add'));
-      }
-    },
-    [productId, refresh, t],
-  );
-
-  const handleDelete = useCallback(
-    async (attachmentId: string, name: string): Promise<void> => {
-      if (!confirm(t('productEditor.attachments.deleteConfirm', { name }))) return;
-      try {
-        await apiClient.delete(
-          `/api/v1/admin/catalog/products/${productId}/attachments/${attachmentId}`,
-        );
-        setInfo(t('productEditor.attachments.success.delete', { name }));
-        await refresh();
-      } catch (err) {
-        setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.attachments.error.delete'));
-      }
-    },
-    [productId, refresh, t],
-  );
-
-  return (
-    <Card className="mt-4">
-      <CardHeader>
-        <CardTitle>{t('productEditor.attachments.title')}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {error ? (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        ) : null}
-        {info ? (
-          <Alert>
-            <AlertDescription>{info}</AlertDescription>
-          </Alert>
-        ) : null}
-
-        {loading ? (
-          <p className="text-sm text-muted-foreground">{t('productEditor.loading')}</p>
-        ) : attachments.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('productEditor.attachments.empty')}</p>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('productEditor.attachments.column.type')}</TableHead>
-                <TableHead>{t('productEditor.attachments.column.name')}</TableHead>
-                <TableHead>{t('productEditor.attachments.column.description')}</TableHead>
-                <TableHead>{t('productEditor.attachments.column.file')}</TableHead>
-                <TableHead className="w-[1%] whitespace-nowrap">{t('productEditor.attachments.column.actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {attachments.map((att) => (
-                <TableRow key={att.id}>
-                  <TableCell>{att.type?.name['en-US'] ?? att.type?.code ?? '—'}</TableCell>
-                  <TableCell className="font-medium">{att.name}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {att.description ?? '—'}
-                  </TableCell>
-                  <TableCell>
-                    {att.asset?.url ? (
-                      <a
-                        href={att.asset.url}
-                        target="_blank"
-                        rel="noopener"
-                        className="text-xs underline"
-                      >
-                        {att.asset.filename}
-                      </a>
-                    ) : (
-                      '—'
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => void handleDelete(att.id, att.name)}
-                    >
-                      {t('productEditor.attachments.action.delete')}
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-
-        <CreateAttachmentInline types={types} onCreate={handleCreate} />
-      </CardContent>
-    </Card>
-  );
-}
-
-function CreateAttachmentInline({
-  types,
-  onCreate,
-}: {
-  types: AdminAttachmentType[];
-  onCreate: (input: {
-    assetId: string;
-    attachmentTypeId: string;
-    name: string;
-    description: string;
-  }) => Promise<void>;
-}): ReactNode {
-  const [assetId, setAssetId] = useState('');
-  const [attachmentTypeId, setAttachmentTypeId] = useState('');
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickedFilename, setPickedFilename] = useState<string | null>(null);
-  const t = useTranslation('catalog');
-
-  return (
-    <div className="space-y-3 border-t pt-4" role="group" aria-label={t('productEditor.attachments.addTitle')}>
-      {pickerOpen ? (
-        <AssetPicker
-          allowUpload
-          onSelect={(a): void => {
-            setAssetId(a.id);
-            setPickedFilename(a.filename);
-            setPickerOpen(false);
-          }}
-          onClose={() => setPickerOpen(false)}
-        />
-      ) : null}
-      <div className="grid gap-3 md:grid-cols-4">
-      <div className="space-y-1">
-        <Label htmlFor="aasset">{t('productEditor.attachments.field.asset')}</Label>
-        <div className="flex items-center gap-2">
-          <Input
-            id="aasset"
-            value={pickedFilename ?? assetId}
-            readOnly
-            placeholder={t('productEditor.attachments.field.noAsset')}
-          />
-          <Button type="button" variant="outline" size="sm" onClick={() => setPickerOpen(true)}>
-            {t('productEditor.attachments.action.pickOrUpload')}
-          </Button>
-        </div>
-      </div>
-      <div className="space-y-1">
-        <Label htmlFor="atype">{t('productEditor.attachments.field.type')}</Label>
-        <Select
-          id="atype"
-          value={attachmentTypeId}
-          onChange={(e): void => setAttachmentTypeId(e.target.value)}
-        >
-          <option value="">—</option>
-          {types.map((typ) => (
-            <option key={typ.id} value={typ.id}>
-              {typ.name['en-US'] ?? typ.code}
-            </option>
-          ))}
-        </Select>
-      </div>
-      <div className="space-y-1">
-        <Label htmlFor="aname">{t('productEditor.attachments.field.name')}</Label>
-        <Input
-          id="aname"
-          value={name}
-          onChange={(e): void => setName(e.target.value)}
-          placeholder={t('productEditor.attachments.field.namePlaceholder')}
-        />
-      </div>
-      <div className="space-y-1">
-        <Label htmlFor="adesc">{t('productEditor.attachments.field.description')}</Label>
-        <Input
-          id="adesc"
-          value={description}
-          onChange={(e): void => setDescription(e.target.value)}
-          placeholder={t('productEditor.attachments.field.descriptionPlaceholder')}
-        />
-      </div>
-      <div className="md:col-span-4">
-        <Button
-          type="button"
-          onClick={() => {
-            if (!assetId || !attachmentTypeId || !name) return;
-            void onCreate({ assetId, attachmentTypeId, name, description }).then(() => {
-              setAssetId('');
-              setPickedFilename(null);
-              setAttachmentTypeId('');
-              setName('');
-              setDescription('');
-            });
-          }}
-        >
-          {t('productEditor.attachments.action.add')}
-        </Button>
-      </div>
       </div>
     </div>
   );
@@ -1948,7 +1394,8 @@ interface AdminProductSummary {
   id: string;
   sku: string;
   slug: string;
-  status: 'draft' | 'active' | 'inactive';
+  status: 'active' | 'inactive';
+  archivedAt?: string | null;
   name: Record<string, string>;
 }
 
@@ -2102,14 +1549,16 @@ function ProductLinksSection({ productId }: { productId: string }): ReactNode {
                       {byKind[kind].map((link) => {
                         const target = targetsById.get(link.targetProductId);
                         const isMissing = !target;
+                        // `inactive` is plain off; archived is its own fact.
                         const isInactive = target?.status === 'inactive';
+                        const isArchived = target?.archivedAt != null;
                         return (
                           <TableRow key={link.id}>
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 <span
                                   className={
-                                    isMissing || isInactive ? 'text-muted-foreground' : ''
+                                    isMissing || isInactive || isArchived ? 'text-muted-foreground' : ''
                                   }
                                 >
                                   {target
@@ -2124,6 +1573,11 @@ function ProductLinksSection({ productId }: { productId: string }): ReactNode {
                                 {isInactive ? (
                                   <span className="rounded border px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">
                                     {t('productEditor.links.badge.inactive')}
+                                  </span>
+                                ) : null}
+                                {isArchived ? (
+                                  <span className="rounded border px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">
+                                    {t('productEditor.links.badge.archived')}
                                   </span>
                                 ) : null}
                               </div>

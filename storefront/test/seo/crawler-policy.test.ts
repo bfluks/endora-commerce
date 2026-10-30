@@ -971,6 +971,20 @@ describe('the crawler-files read', () => {
     expect(await h.reader.crawlerFiles('pl')).toEqual(VALUE);
   });
 
+  it('hands over whether the store is open to anonymous visitors, when the backend says', async () => {
+    for (const anonymousAccess of [false, true]) {
+      const h = harness(filesOk({ anonymousAccess }));
+      expect(await h.reader.crawlerFiles('trade')).toEqual({
+        kind: 'value',
+        value: { ...FILES, anonymousAccess },
+      });
+    }
+    // A backend older than the member says nothing, and nothing is invented.
+    const older = harness(filesOk());
+    const read = await older.reader.crawlerFiles('trade');
+    expect(read.kind === 'value' && 'anonymousAccess' in read.value).toBe(false);
+  });
+
   it('is fresh for a minute, then refetched once', async () => {
     const h = harness(filesOk());
     await h.reader.crawlerFiles('pl');
@@ -1155,6 +1169,12 @@ describe('isCrawlerFilesResponse agrees with the contract schema', () => {
     { data: { ...FILES, unreadable: [1] } },
     { data: { ...FILES, unreadable: ['policy', null] } },
     { data: { ...FILES, unreadable: { policy: true } } },
+    // `anonymousAccess` — optional, a boolean when it is there.
+    { data: { ...FILES, anonymousAccess: false } },
+    { data: { ...FILES, anonymousAccess: true } },
+    { data: { ...FILES, anonymousAccess: 'false' } },
+    { data: { ...FILES, anonymousAccess: null } },
+    { data: { ...FILES, anonymousAccess: 0 } },
     { data: { ...FILES, robotsTxtCustom: `${AT_LIMIT}a` } },
     { data: { ...FILES, llmsTxtAdditional: `${AT_LIMIT}a` } },
     { data: { ...FILES, robotsTxtCustom: null } },
@@ -1190,7 +1210,7 @@ describe('isCrawlerFilesResponse agrees with the contract schema', () => {
 
   it('accepts some fixtures and refuses others — the comparison is not vacuous', () => {
     const verdicts = FIXTURES.map((fixture) => isCrawlerFilesResponse(fixture));
-    expect(verdicts.filter(Boolean)).toHaveLength(7);
+    expect(verdicts.filter(Boolean)).toHaveLength(9);
     expect(verdicts.filter((verdict) => !verdict).length).toBeGreaterThan(15);
   });
 

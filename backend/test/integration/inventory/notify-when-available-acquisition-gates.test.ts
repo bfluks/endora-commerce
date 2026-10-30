@@ -4,6 +4,7 @@ import { ERROR_CODES } from '@endora-commerce/contracts';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Product } from '../../helpers/package-entities.js';
 import { OTHER_TEST_ORGANIZATION_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -75,8 +76,8 @@ describe('notify-when-available applies the audience and the channel gate every 
         slug: `notify-gate-${label}-${stamp}`,
         type: 'simple',
         status: 'active',
-        name: { 'en-US': `Notify gate probe ${label}` },
-        description: { 'en-US': 'Out of stock, so the notify-me path is reachable.' },
+        name: `Notify gate probe ${label}`,
+        description: 'Out of stock, so the notify-me path is reachable.',
         visibility: 'public',
         attributeValues: { defaultPrice: 10 },
         ...extra,
@@ -104,7 +105,6 @@ describe('notify-when-available applies the audience and the channel gate every 
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
     const elsewhere = em.create(SalesChannel, {
       code: `${code}-elsewhere`,
@@ -114,9 +114,10 @@ describe('notify-when-available applies the audience and the channel gate every 
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
     await em.persistAndFlush([channel, elsewhere]);
+    // Feature 154 — the buyer shops on both probe stores.
+    await addOrganizationChannels(h, TEST_ORGANIZATION_ID, [code, `${code}-elsewhere`]);
 
     const onProbe = [soldHereId, ownOrganizationId, otherOrganizationId, loggedInOnlyId];
     await em

@@ -28,7 +28,6 @@ describe('admin CMS Blocks contract (T051)', () => {
       defaultCurrency: 'PLN',
       active: true,
       systemDefault: false,
-      isPublic: true,
       status: 'active',
     });
     await em.persistAndFlush(plOnly);

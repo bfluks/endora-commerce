@@ -1,9 +1,9 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { getSuggestions, SearchSuggestError, type SuggestResponse } from '../../lib/api/search';
 import { toAbsoluteAssetUrl } from '../../lib/asset-url';
+import { LocalizedLink } from '../../lib/i18n/localized-link';
 
 const DEBOUNCE_MS = 200;
 
@@ -18,7 +18,8 @@ const DEBOUNCE_MS = 200;
 export function MobileSearchOverlay(props: {
   apiBaseUrl: string;
   locale: string;
-  salesChannelCode?: string;
+  /** Forwarded as `X-Sales-Channel`; required for the reason `SearchAutocomplete` gives. */
+  salesChannelCode: string | undefined;
   placeholder: string;
   seeAllResultsLabel: string;
   /** Category/brand shortcut pills (top departments from the megamenu). */
@@ -61,9 +62,7 @@ export function MobileSearchOverlay(props: {
           const next = await getSuggestions({
             apiBaseUrl: props.apiBaseUrl,
             q: trimmed,
-            ...(props.salesChannelCode !== undefined
-              ? { salesChannelCode: props.salesChannelCode }
-              : {}),
+            salesChannelCode: props.salesChannelCode,
             signal: ac.signal,
           });
           setResponse(next);
@@ -150,7 +149,7 @@ export function MobileSearchOverlay(props: {
                   Podpowiedzi
                 </div>
                 {suggestions.map((p) => (
-                  <Link
+                  <LocalizedLink
                     key={p.id}
                     href={`/p/${encodeURIComponent(p.slug)}`}
                     className="flex items-center gap-3 border-b border-line px-[16px] py-[11px]"
@@ -179,16 +178,16 @@ export function MobileSearchOverlay(props: {
                     <span className="text-subtle" aria-hidden="true">
                       <ArrowUpRightIcon />
                     </span>
-                  </Link>
+                  </LocalizedLink>
                 ))}
                 <div className="px-[16px] py-[16px]">
-                  <Link
+                  <LocalizedLink
                     href={seeAllHref}
                     className="btn btn--dark btn--block"
                     onClick={() => setOpen(false)}
                   >
                     <SearchIcon /> {props.seeAllResultsLabel}
-                  </Link>
+                  </LocalizedLink>
                 </div>
               </>
             ) : (
@@ -198,14 +197,14 @@ export function MobileSearchOverlay(props: {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {(props.quickLinks ?? []).map((q) => (
-                    <Link
+                    <LocalizedLink
                       key={q.href + q.label}
                       href={q.href}
                       className="inline-flex items-center rounded-full border border-line bg-surface px-[14px] py-[7px] text-[13px] text-fg-soft"
                       onClick={() => setOpen(false)}
                     >
                       {q.label}
-                    </Link>
+                    </LocalizedLink>
                   ))}
                 </div>
               </div>

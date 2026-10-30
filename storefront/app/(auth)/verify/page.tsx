@@ -1,8 +1,8 @@
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { verifyEmail } from '../../../lib/api/auth';
 import { StorefrontApiError } from '../../../lib/api/client';
 import type { Metadata } from 'next';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -42,7 +42,7 @@ export default async function VerifyPage({
     await verifyEmail(token);
     success = true;
   } catch (err) {
-    error = err instanceof StorefrontApiError ? err.message : 'Verification failed.';
+    error = err instanceof StorefrontApiError ? err.detail : 'Verification failed.';
   }
 
   return (
@@ -52,14 +52,14 @@ export default async function VerifyPage({
         <>
           <p className="b2b-auth__success">Your email is verified.</p>
           <p>
-            <Link href="/login">Sign in to continue</Link>.
+            <LocalizedLink href="/login">Sign in to continue</LocalizedLink>.
           </p>
         </>
       ) : (
         <>
           <p className="b2b-auth__error">{error}</p>
           <p className="b2b-auth__hint">
-            Need a new link? <Link href="/register">Register again</Link> or contact support.
+            Need a new link? <LocalizedLink href="/register">Register again</LocalizedLink> or contact support.
           </p>
         </>
       )}

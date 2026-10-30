@@ -1,5 +1,151 @@
 # @endora-commerce/mod-sales-channels
 
+## 0.108.0
+
+### Patch Changes
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- 248a9df: Channels carry _open to anonymous visitors_ (`anonymousAccess`) on the admin list, detail, create
+  (default open) and update, audited and versioned like every identity field.
+  `GET /api/v1/storefront/sales-channel` returns it and stays reachable on a closed channel. New
+  `GET /api/v1/storefront/sales-channel/access` tells the viewer whether it may use the store and,
+  for a refused customer, which active stores its Organization may use (with each store's
+  `sales_channels.storefront_url`); it is `private, no-store` and never refuses. The module declares
+  the `SALES_CHANNEL_SIGN_IN_REQUIRED` and `SALES_CHANNEL_NOT_PERMITTED` codes with English and
+  Polish sentences. Deleting a channel drops the access cache.
+- afaa86a: The channel form has an _Open to anonymous visitors_ control (on for a new channel) that saves
+  `anonymousAccess`, and the channel roster marks a channel closed to anonymous visitors with a
+  _Sign-in required_ badge. The `organization.detail.after` zone contribution is withdrawn: an
+  Organization's channels are edited in the `organizations` module's own _Sales channels_ panel.
+
+### Patch Changes
+
+- 649fe8d: Documentation for sales-channel access (`specs/154-sales-channel-access/`), shipped in each
+  package's `docs/` directory, English and Polish.
+
+  - `@endora-commerce/mod-sales-channels`: the access rule (anonymous visitors only on channels open
+    to them, customers only on channels assigned to their Organization), the _Open to anonymous
+    visitors_ option, `GET /api/v1/storefront/sales-channel/access`, and a corrected multi-storefront
+    section. The developer guide tells module authors to declare
+    `config: { salesChannelAccess: 'open' }` on every provider callback their module receives
+    (payment gateway notifications, carrier webhooks, provider return URLs) — such requests arrive
+    without a session and are refused on a store closed to anonymous visitors otherwise — and
+    describes `SalesChannelAccessPort`.
+  - `@endora-commerce/mod-organizations`: the _Sales channels_ panel, the _New organization_ screen,
+    which channel a new Organization gets, and that invitations change no channel.
+  - `@endora-commerce/mod-carts`: one basket per store, and the `ORDER_SALES_CHANNEL_MISMATCH`
+    refusal at order placement.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

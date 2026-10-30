@@ -5,6 +5,9 @@ import { getCurrentPlatformScope } from '../scope.js';
 import type { CachedChannel } from './sales-channels-cache.js';
 import type { SalesChannelResolverService } from './sales-channel-resolver.service.js';
 import type { AuditPort } from '../ports/audit.js';
+import type { SalesChannelAccessActor, SalesChannelAccessPort } from '../ports/sales-channel.js';
+import { salesChannelAccessRefusal } from './sales-channel-access-policy.js';
+import '../../http/sales-channel-access-option.js';
 
 /**
  * Sales-channel resolver middleware — feature 005 / T015.
@@ -36,6 +39,16 @@ import type { AuditPort } from '../ports/audit.js';
  * Every response carries `X-Sales-Channel: <resolvedCode>` so HTTP
  * caches and dev tools can see the effective channel.
  *
+ * **Access step** (feature 154, `contracts/channel-access-rule.md` §1). Once a
+ * channel is resolved — by any of the steps above, the fallback included — the
+ * request is decided against it: an anonymous request only on a channel open to
+ * anonymous visitors, a customer request (impersonation included) only on a
+ * channel assigned to the customer's Organization. Refused with 403
+ * `SALES_CHANNEL_SIGN_IN_REQUIRED` / `SALES_CHANNEL_NOT_PERMITTED`, the echo
+ * header still set. Skipped for `/api/v1/admin/*`, for a route declaring
+ * `config.salesChannelAccess: 'open'`, and for administrator and API-key actors
+ * (D5) — which is also why a bound API key, step 0, is never decided.
+ *
  * Paths that should bypass resolution entirely (e.g. health checks)
  * are excluded by the {@link SHOULD_RESOLVE} predicate so liveness
  * probes do not depend on the channel registry being available.
@@ -59,6 +72,11 @@ export interface SalesChannelResolverPluginOptions {
    * minimal test composition roots keep working.
    */
   auditLogService?: AuditPort;
+  /**
+   * Feature 154 — the access rule. Optional so a minimal composition without
+   * it keeps resolving; both composition roots pass it.
+   */
+  accessPolicy?: Pick<SalesChannelAccessPort, 'decide'>;
 }
 
 /**
@@ -121,6 +139,18 @@ export async function registerSalesChannelResolverMiddleware(
 
     const explicit = headerCode ?? queryCode;
 
+    /** Record the channel, echo it, and decide access on it (feature 154). */
+    const settle = async (channel: CachedChannel): Promise<void> => {
+      setResolvedChannel(channel);
+      reply.header(ECHO_HEADER, channel.code);
+      if (!options.accessPolicy || adminPath) return;
+      if (request.routeOptions?.config?.salesChannelAccess === 'open') return;
+      const actor = accessActorOf(request);
+      if (actor === null) return;
+      const decision = await options.accessPolicy.decide(actor, channel);
+      if (!decision.ok) throw salesChannelAccessRefusal(decision.code, channel.code);
+    };
+
     // Step 0 (feature 062) — a bound api key derives its channel from the
     // binding, fail closed: an explicit signal naming a different channel is
     // a 403, an unknown/inactive bound channel refuses, never a fallback.
@@ -165,8 +195,7 @@ export async function registerSalesChannelResolverMiddleware(
       if (!result.ok) {
         throw resolverErrorToHttp(result.error, result.code);
       }
-      setResolvedChannel(result.channel);
-      reply.header(ECHO_HEADER, result.channel.code);
+      await settle(result.channel);
       return;
     }
 
@@ -183,8 +212,7 @@ export async function registerSalesChannelResolverMiddleware(
         // signal.
         throw resolverErrorToHttp(result.error, result.code);
       }
-      setResolvedChannel(result.channel);
-      reply.header(ECHO_HEADER, result.channel.code);
+      await settle(result.channel);
       return;
     }
 
@@ -205,9 +233,30 @@ export async function registerSalesChannelResolverMiddleware(
     // resolver rather than one re-invented at each of the seventeen sites that
     // asked. Not caught here on purpose: propagating is the whole point.
     const fallback = await resolver.getSystemDefault();
-    setResolvedChannel(fallback);
-    reply.header(ECHO_HEADER, fallback.code);
+    await settle(fallback);
   });
+}
+
+/**
+ * The actor the access rule decides, or `null` for one it does not (an
+ * administrator, an API key — D5).
+ *
+ * An absent actor is anonymous: a composition that mounts no auth plugin
+ * decorates nothing, and anonymous is the fail-closed end. A customer's
+ * Organization is the session-derived one (FR-007); a missing one is `''`,
+ * which the rule refuses rather than reading as anonymous (FR-008).
+ */
+function accessActorOf(request: FastifyRequest): SalesChannelAccessActor | null {
+  const actor = request.actor as Actor | undefined;
+  if (actor === undefined || actor.kind === 'anonymous') return { kind: 'anonymous' };
+  if (actor.kind === 'customer') {
+    return {
+      kind: 'customer',
+      organizationId: actor.organizationId ?? '',
+      impersonatorAdminUserId: actor.impersonatorAdminUserId ?? null,
+    };
+  }
+  return null;
 }
 
 function readChannelCodeFromQuery(query: unknown): string | undefined {

@@ -140,6 +140,60 @@ describe('order responses parse with the published order schemas', () => {
     expect(disagreements(strictAdminOrdersList, body)).toEqual([]);
   });
 
+  // --- Feature 159 — line groups ------------------------------------------
+
+  it('an ungrouped order answers itemGroups [] and every line ungrouped at its position', () => {
+    const reply = placed as { itemGroups: unknown; items: Array<{ groupId: unknown; position: unknown }> };
+    expect(reply.itemGroups).toEqual([]);
+    expect(reply.items.map((item) => item.groupId)).toEqual(reply.items.map(() => null));
+    expect(reply.items.map((item) => item.position)).toEqual(reply.items.map((_, index) => index));
+  });
+
+  it('itemGroups and every line in display order, on the admin and the buyer replies (FR-087)', async () => {
+    const conn = h.em().getConnection();
+    const [line] = await conn.execute<Array<{ id: string; product_id: string }>>(
+      `select "id", "product_id" from "order_items" where "order_id" = ? order by "created_at", "id" limit 1`,
+      [orderId],
+    );
+    const groupId = '00000000-0000-4000-8000-000000159a01';
+    await conn.execute(
+      `insert into "order_item_groups" ("id", "order_id", "name", "position", "created_at") values (?, ?, 'Hall A', 0, now())`,
+      [groupId, orderId],
+    );
+    // Two lines in the group, written in reverse of their positions; the
+    // placed line stays ungrouped.
+    const second = '00000000-0000-4000-8000-000000159b02';
+    const first = '00000000-0000-4000-8000-000000159b01';
+    for (const [id, position] of [
+      [second, 1],
+      [first, 0],
+    ] as const) {
+      await conn.execute(
+        `insert into "order_items" ("id", "order_id", "product_id", "product_snapshot", "quantity", "unit_price", "tax_rate", "line_total", "group_id", "position", "created_at")
+         values (?, ?, ?, ?, 1, 10, 0.23, 12.3, ?, ?, now())`,
+        [id, orderId, line!.product_id, JSON.stringify({ sku: 'X', name: 'X', primaryAssetUrl: null }), groupId, position],
+      );
+    }
+    try {
+      for (const [url, options] of [
+        [`/api/v1/admin/orders/${orderId}`, ADMIN],
+        [`/api/v1/orders/${orderId}`, CUSTOMER],
+      ] as const) {
+        const res = await h.app.inject({ method: 'GET', url, ...options });
+        expect(res.statusCode, url).toBe(200);
+        const order = (res.json() as {
+          data: { itemGroups: unknown; items: Array<{ id: string; groupId: string | null; position: number }> };
+        }).data;
+        expect(order.itemGroups, url).toEqual([{ id: groupId, name: 'Hall A', position: 0 }]);
+        expect(order.items.map((item) => item.id), url).toEqual([first, second, line!.id]);
+        expect(order.items.map((item) => item.groupId), url).toEqual([groupId, groupId, null]);
+      }
+    } finally {
+      await conn.execute(`delete from "order_items" where "id" in (?, ?)`, [first, second]);
+      await conn.execute(`delete from "order_item_groups" where "id" = ?`, [groupId]);
+    }
+  });
+
   // --- Who reads which custom-field value ---------------------------------
   //
   // One order carrying a value under each case: a `customer` field, an

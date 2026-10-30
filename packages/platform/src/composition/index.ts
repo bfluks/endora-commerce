@@ -83,6 +83,11 @@ export {
   type ComposeAppOptions,
   type ComposedAppContext,
 } from './compose-app.js';
+// Issue #497 — the cursor seal both composition roots register as the
+// `cursorSeal` value. A module never builds one: it resolves the value and
+// declares the narrow shape it uses in its own cradle, which is why the
+// `CursorSeal` type is not here (R3.1a: no consumer outside the platform names it).
+export { createCursorSeal } from './cursor-seal.js';
 
 // --- http ---------------------------------------------------------------
 // What an entry point does with a refusal: print the sentence, exit 1

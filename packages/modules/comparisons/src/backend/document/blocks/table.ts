@@ -1,4 +1,9 @@
-import type { ComparisonAttributeRow, ComparisonProductSummary } from '@endora-commerce/contracts';
+import {
+  unitPriceDisplayText,
+  unitPriceFractionDigits,
+  type ComparisonAttributeRow,
+  type ComparisonProductSummary,
+} from '@endora-commerce/contracts';
 import { filterRowsByMode, localisedIn } from '../../services/comparison-pdf-shared.js';
 import { bool, color, num, str } from '../props.js';
 import type { ComparisonBlockRenderer } from '../types.js';
@@ -24,11 +29,17 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
   return out;
 }
 
+/** A product's price is a unit price: its significant places, up to four (owner ruling of 2026-10-25). */
 function money(amount: number, currency: string, language: string): string {
   try {
-    return new Intl.NumberFormat(language, { style: 'currency', currency }).format(amount);
+    return new Intl.NumberFormat(language, {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: unitPriceFractionDigits(amount),
+    }).format(amount);
   } catch {
-    return `${amount} ${currency}`;
+    return `${unitPriceDisplayText(amount)} ${currency}`;
   }
 }
 
@@ -54,7 +65,7 @@ export const comparisonTableBlock: ComparisonBlockRenderer = {
       if (bool(props, 'showImages', true) && image) {
         stack.push({ image, fit: [imageSize, imageSize], alignment: 'center', margin: [0, 0, 0, 4] });
       }
-      if (bool(props, 'showName', true)) stack.push({ text: localisedIn(product.name, language), bold: true });
+      if (bool(props, 'showName', true)) stack.push({ text: product.name, bold: true }); // 168-shim: the summary name is the effective string
       if (bool(props, 'showSku', false)) stack.push({ text: product.sku, color: '#475569' });
       if (bool(props, 'showPrice', true)) {
         stack.push({ text: product.price ? money(product.price.amount, product.price.currency, language) : emptyValue });

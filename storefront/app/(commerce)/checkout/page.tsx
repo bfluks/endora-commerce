@@ -1,6 +1,4 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { getSessionCookie, getAnonCartCookie, setAnonCartCookie } from '../../../lib/session';
 import {
   CART_UNAVAILABLE,
@@ -8,12 +6,19 @@ import {
   applyCartCoupon,
   clearCartCoupon,
   type CartCookieJar,
+  type CartSummary,
 } from '../../../lib/api/cart';
 import { listAddresses, createAddress } from '../../../lib/api/organization';
 import { listDeliveryMethods, listPaymentMethods } from '../../../lib/api/methods';
 import { CheckoutForm } from '../../../components/checkout/CheckoutForm';
 import { listCountries } from '../../../lib/api/dictionary';
-import { placeOrder } from '../../../lib/api/orders';
+import { placeOrder, previewOrderTotal } from '../../../lib/api/orders';
+import { BelowMinimumSummary } from '../../../components/checkout/BelowMinimumSummary';
+import {
+  canPlaceOrder,
+  checkoutBelowMinimumRows,
+  type CheckoutBelowMinimumLine,
+} from '../../../lib/cartMinimum';
 import { getMyCreditLimit } from '../../../lib/api/credit-limit';
 import { getResolvedQuickOrderDefaults } from '../../../lib/api/quick-order';
 import { CreditLimitWidget } from '../../../components/CreditLimitWidget';
@@ -36,6 +41,9 @@ import {
   ensureShippingAdapterDataOnFormData,
 } from '../../../lib/checkout/shipping-adapter-data';
 import type { Metadata } from 'next';
+import { lineAmountHalfUp } from '@endora-commerce/contracts';
+import { localeRedirect } from '../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -61,7 +69,7 @@ export default async function CheckoutPage({
   searchParams: Promise<{ error?: string; couponError?: string }>;
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/checkout');
+  if (!session) return await localeRedirect('/login?next=/checkout');
 
   const params = await searchParams;
   const jar: CartCookieJar = await readJar();
@@ -102,7 +110,7 @@ export default async function CheckoutPage({
     // that as "not logged in" and bounce to login with a return path, rather
     // than crashing the page with an unhandled UNAUTHORIZED error.
     if (err instanceof StorefrontApiError && err.status === 401) {
-      redirect('/login?next=/checkout');
+      return await localeRedirect('/login?next=/checkout');
     }
     throw err;
   }
@@ -119,7 +127,7 @@ export default async function CheckoutPage({
   // `carts` is not present (issue #132). There is nothing to check out, and the
   // cart page owns the copy that says so — sending the buyer there is one
   // absence explained in one place rather than two.
-  if (cartResult === CART_UNAVAILABLE) redirect('/cart');
+  if (cartResult === CART_UNAVAILABLE) return await localeRedirect('/cart');
   if (cartResult.newAnonCookie) await setAnonCartCookie(cartResult.newAnonCookie);
   const cart = cartResult.cart;
   const canTransact = me?.organization?.canTransact ?? true;
@@ -157,11 +165,6 @@ export default async function CheckoutPage({
   // (`delivery_methods` for one, `payment_methods` / `payments` for the other),
   // which `listDeliveryMethods` and `listPaymentMethods` degrade to the same
   // empty answer. Which reason wins is `placeOrderBlock`'s and not this page's.
-  const placeOrderBlockReason = placeOrderBlock({
-    canTransact,
-    deliveryMethodCount: deliveryMethods.length,
-    paymentMethodCount: paymentMethods.length,
-  });
   const tr = tForLocale(locale);
 
   if (cart.items.length === 0) {
@@ -170,11 +173,32 @@ export default async function CheckoutPage({
         <h1>Checkout</h1>
         <p>Your cart is empty — add a product before checking out.</p>
         <p>
-          <Link href="/catalog">Browse the catalog</Link>
+          <LocalizedLink href="/catalog">Browse the catalog</LocalizedLink>
         </p>
       </div>
     );
   }
+
+  // Feature 155 (FR-013, FR-036, FR-037) — the basket lines placement will refuse. The
+  // checkout preview is the authority here: it confirms a quote source is still valid before
+  // honouring a quote line's exemption, which the cart view takes at face value. It needs a
+  // delivery and a payment method, so it is asked with the ones the page preselects; the lines
+  // do not depend on which. A preview that cannot be read falls back to the cart view's own
+  // flags — advisory either way, since placement binds (contract §8).
+  const belowMinimumLines = await readBelowMinimumLines({
+    session,
+    ctx,
+    cart,
+    deliveryMethodId: preselectedId(deliveryMethods, defaults?.deliveryMethodId ?? null),
+    paymentMethodId: preselectedId(paymentMethods, defaults?.paymentMethodId ?? null),
+  });
+  const belowMinimumRows = checkoutBelowMinimumRows(belowMinimumLines, cart.items, locale);
+  const placeOrderBlockReason = placeOrderBlock({
+    canTransact,
+    deliveryMethodCount: deliveryMethods.length,
+    paymentMethodCount: paymentMethods.length,
+    belowMinimum: !canPlaceOrder({ belowMinimumLines }),
+  });
 
   // Feature 036 (US2) — the buyer may pick a saved address or enter a new one,
   // so an empty saved-address book no longer blocks checkout.
@@ -200,6 +224,7 @@ export default async function CheckoutPage({
         message={me?.organization?.moderationMessage ?? null}
       />
       {params.error ? <p className="b2b-auth__error">{params.error}</p> : null}
+      <BelowMinimumSummary id={BELOW_MINIMUM_SUMMARY_ID} rows={belowMinimumRows} locale={locale} />
 
       <CheckoutForm action={submitAction} className="b2b-auth__form">
         <AddressSection
@@ -270,7 +295,7 @@ export default async function CheckoutPage({
                 </td>
                 <td className="text-right">x {it.quantity}</td>
                 <td className="text-right">
-                  {formatMoney(it.unitPrice.amount * it.quantity, it.unitPrice.currency, locale)}
+                  {formatMoney(Number(lineAmountHalfUp(it.unitPrice.amount, it.quantity)), it.unitPrice.currency, locale)}
                 </td>
               </tr>
             ))}
@@ -308,22 +333,69 @@ export default async function CheckoutPage({
         </table>
 
         <div className="b2b-auth__actions items-center justify-between">
-          <Link
+          <LocalizedLink
             href="/cart"
             className="inline-flex items-center gap-2 rounded-sm border border-line bg-surface px-[16px] py-[10px] font-medium text-fg-soft transition-[background-color,border-color,color] duration-150 hover:border-line-strong hover:bg-surface-alt hover:text-[color:var(--ink-900)]"
           >
             ← Back to cart
-          </Link>
+          </LocalizedLink>
           <PlaceOrderButton
             blocked={placeOrderBlockReason}
             label="Place order"
             pendingLabel="Placing order…"
             title={blockTitle(placeOrderBlockReason, tr, me?.organization?.moderationMessage ?? null)}
+            describedBy={placeOrderBlockReason === 'below-minimum' ? BELOW_MINIMUM_SUMMARY_ID : undefined}
           />
         </div>
       </CheckoutForm>
     </div>
   );
+}
+
+const BELOW_MINIMUM_SUMMARY_ID = 'checkout-below-minimum';
+
+/** The method the checkout section preselects: the buyer's default when offered, else the first. */
+function preselectedId(methods: ReadonlyArray<{ id: string }>, preferredId: string | null): string | null {
+  if (preferredId !== null && methods.some((m) => m.id === preferredId)) return preferredId;
+  return methods[0]?.id ?? null;
+}
+
+/**
+ * Feature 155 — the preview's `belowMinimumLines`, or the cart view's own flags when the
+ * preview cannot be asked (no method to ask it with) or does not answer.
+ */
+async function readBelowMinimumLines(input: {
+  session: string;
+  ctx: Awaited<ReturnType<typeof getServerContext>>['ctx'];
+  cart: CartSummary;
+  deliveryMethodId: string | null;
+  paymentMethodId: string | null;
+}): Promise<CheckoutBelowMinimumLine[]> {
+  if (input.deliveryMethodId !== null && input.paymentMethodId !== null) {
+    const preview = await previewOrderTotal(
+      input.session,
+      { deliveryMethodId: input.deliveryMethodId, paymentMethodId: input.paymentMethodId },
+      input.ctx,
+    ).catch(() => null);
+    if (preview !== null) return preview.belowMinimumLines ?? [];
+  }
+  const lines: CheckoutBelowMinimumLine[] = [];
+  for (const item of input.cart.items) {
+    if (item.unavailable === true) {
+      lines.push({ cartItemId: item.id, productId: item.productId, kind: 'product_unavailable' });
+    } else if (item.belowMinimum) {
+      lines.push({
+        cartItemId: item.id,
+        productId: item.productId,
+        kind: item.belowMinimum.kind,
+        minimum: item.belowMinimum.minimum,
+        ...(item.belowMinimum.packagingUnitName !== undefined
+          ? { packagingUnitName: item.belowMinimum.packagingUnitName }
+          : {}),
+      });
+    }
+  }
+  return lines;
 }
 
 async function readJar(): Promise<CartCookieJar> {
@@ -406,7 +478,7 @@ async function buildPlaceOrderPayload(
 async function submitAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/checkout');
+  if (!session) return await localeRedirect('/login?next=/checkout');
 
   let order;
   try {
@@ -424,13 +496,13 @@ async function submitAction(formData: FormData): Promise<void> {
     // the buyer goes back to already holds the current prices.
     const message =
       err instanceof StorefrontApiError ? err.detail : 'Could not place the order.';
-    redirect(`/checkout/failure?reason=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/checkout/failure?reason=${encodeURIComponent(message)}`);
   }
   // Feature 036 — a gateway method returns a redirect next-action; send the
   // buyer to the gateway. Otherwise land on the Success Page, which shows the
   // customer-facing business Order ID.
   if (order.nextAction?.kind === 'redirect_to_gateway') {
-    redirect(order.nextAction.url);
+    return await localeRedirect(order.nextAction.url);
   }
   // Four more redirects used to stand here, one per gateway whose adapter
   // settles on a step of this platform's own rather than on a hosted page —
@@ -439,7 +511,7 @@ async function submitAction(formData: FormData): Promise<void> {
   // free storefront knows one gateway handover: the `redirect_to_gateway` next
   // action above, which is `orders`' own contract and names no vendor. A shop
   // that copies an inline gateway's fragment in re-adds its hop here.
-  redirect(`/checkout/success?id=${order.id}`);
+  return await localeRedirect(`/checkout/success?id=${order.id}`);
 }
 
 /**
@@ -451,22 +523,22 @@ async function submitAction(formData: FormData): Promise<void> {
 async function applyCouponAction(formData: FormData): Promise<void> {
   'use server';
   const jar = await readJar();
-  if (!jar.session && !jar.anon) redirect('/login?next=/checkout');
+  if (!jar.session && !jar.anon) return await localeRedirect('/login?next=/checkout');
   const code = ((formData.get('couponCode') as string | null) ?? '').trim();
-  if (!code) redirect('/checkout');
+  if (!code) return await localeRedirect('/checkout');
   const result = await applyCartCoupon(jar, code);
   if (result.outcome === 'rejected') {
-    redirect(`/checkout?couponError=${encodeURIComponent(couponRejectionMessage(result.reason))}`);
+    return await localeRedirect(`/checkout?couponError=${encodeURIComponent(couponRejectionMessage(result.reason))}`);
   }
-  redirect('/checkout');
+  return await localeRedirect('/checkout');
 }
 
 async function clearCouponAction(): Promise<void> {
   'use server';
   const jar = await readJar();
-  if (!jar.session && !jar.anon) redirect('/login?next=/checkout');
+  if (!jar.session && !jar.anon) return await localeRedirect('/login?next=/checkout');
   await clearCartCoupon(jar);
-  redirect('/checkout');
+  return await localeRedirect('/checkout');
 }
 
 /** Map the typed coupon-rejection reasons to a localized buyer message. */

@@ -1,4 +1,8 @@
-import type { CatalogCategoryReadPort, CatalogProductReadPort } from '@endora-commerce/contracts';
+import type {
+  CatalogCategoryReadPort,
+  CatalogProductAvailabilityPort,
+  CatalogProductReadPort,
+} from '@endora-commerce/contracts';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import type { BackendServerHandle } from './test-server.js';
 
@@ -21,15 +25,19 @@ export function searchIndexerNeighbourPorts(handle: BackendServerHandle): {
   products: CatalogProductReadPort;
   categories: CatalogCategoryReadPort;
   channelMembership: SalesChannelMembershipPort;
+  availability: CatalogProductAvailabilityPort;
 } {
   const cradle = handle.container.cradle as never as {
     catalogProductReadPort: CatalogProductReadPort;
     catalogCategoryReadPort: CatalogCategoryReadPort;
     salesChannelMembershipPort: SalesChannelMembershipPort;
+    catalogProductAvailabilityPort: CatalogProductAvailabilityPort;
   };
   return {
     products: cradle.catalogProductReadPort,
     categories: cradle.catalogCategoryReadPort,
     channelMembership: cradle.salesChannelMembershipPort,
+    // Feature 163 — the documents carry `catalog`'s availability projection.
+    availability: cradle.catalogProductAvailabilityPort,
   };
 }

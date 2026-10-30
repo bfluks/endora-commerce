@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { ResolvedMegamenu, ResolvedMenuItem } from '@endora-commerce/contracts';
 import { MegamenuMobileDrawer } from './MegamenuMobileDrawer';
 import { MegamenuPanel } from './MegamenuPanel';
+import { LocalizedAnchor } from '../../lib/i18n/localized-link';
 
 interface MegamenuProps {
   megamenu: ResolvedMegamenu | null;
@@ -44,9 +45,9 @@ function TopLevelTrigger({ item }: { item: ResolvedMenuItem }): ReactNode {
     'inline-flex h-12 items-center gap-2 px-4 text-sm font-medium text-foreground hover:text-primary';
   if (item.url) {
     return (
-      <a href={item.url} className={className}>
+      <LocalizedAnchor href={item.url} className={className}>
         {item.label}
-      </a>
+      </LocalizedAnchor>
     );
   }
   return <span className={className}>{item.label}</span>;

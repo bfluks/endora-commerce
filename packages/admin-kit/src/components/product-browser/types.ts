@@ -18,4 +18,11 @@ export interface ProductBrowserItem {
   name: Record<string, string>;
   status: ProductBrowserStatus;
   type: ProductBrowserType;
+  /**
+   * When the product was archived, `null` when it is not.
+   * Archived state is independent of `status`. Optional so a host building an item
+   * from a source without it (a line it already holds) need not invent one; absent
+   * reads as not archived.
+   */
+  archivedAt?: string | null | undefined;
 }

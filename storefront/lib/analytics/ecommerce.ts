@@ -1,5 +1,6 @@
 'use client';
 
+import { lineAmountHalfUp, moneySum } from '@endora-commerce/contracts';
 import { getGaConfig, trackGaEvent } from './gtag';
 import { emitActionEvents } from './collector';
 import { trackLinkedInConversions } from './linkedin/tag';
@@ -32,6 +33,20 @@ export interface GaLineItem {
 
 function enhanced(): boolean {
   return !!getGaConfig()?.enhancedEcommerce;
+}
+
+/**
+ * A line's value: `price × quantity` rounded half-up to the cent once — the
+ * line value is the rounding point of a unit price, which may carry four places
+ * (owner ruling of 2026-10-25): 0.0125 × 10 000 is 125.00.
+ */
+function lineValue(item: GaLineItem): number {
+  return Number(lineAmountHalfUp(item.price, item.quantity));
+}
+
+/** The sum of the lines' values. */
+function itemsValue(items: readonly GaLineItem[]): number {
+  return Number(moneySum(items.map((i) => lineAmountHalfUp(i.price, i.quantity))));
 }
 
 function ga4Item(item: GaLineItem): Record<string, string | number> {
@@ -68,7 +83,7 @@ export function trackAddToCart(item: GaLineItem): void {
   if (enhanced()) {
     trackGaEvent('add_to_cart', {
       currency: item.currency ?? 'USD',
-      value: item.price * item.quantity,
+      value: lineValue(item),
       items: JSON.stringify([ga4Item(item)]),
     });
   }
@@ -77,12 +92,12 @@ export function trackAddToCart(item: GaLineItem): void {
   trackMetaEvent('add_to_cart', {
     content_ids: [item.sku],
     content_type: 'product',
-    value: item.price * item.quantity,
+    value: lineValue(item),
     currency: item.currency ?? 'USD',
   });
   pushGtmEvent('add_to_cart', {
     currency: item.currency ?? 'USD',
-    value: item.price * item.quantity,
+    value: lineValue(item),
     items: JSON.stringify([ga4Item(item)]),
   });
 }
@@ -93,12 +108,12 @@ export function trackAddToQuoteRequest(item: GaLineItem): void {
   trackMetaEvent('add_to_quote_request', {
     content_ids: [item.sku],
     content_type: 'product',
-    value: item.price * item.quantity,
+    value: lineValue(item),
     currency: item.currency ?? 'USD',
   });
   pushGtmEvent('add_to_quote_request', {
     currency: item.currency ?? 'USD',
-    value: item.price * item.quantity,
+    value: lineValue(item),
     items: JSON.stringify([ga4Item(item)]),
   });
 }
@@ -114,7 +129,7 @@ export function trackBeginCheckout(items: GaLineItem[], currency = 'USD'): void 
   if (enhanced()) {
     trackGaEvent('begin_checkout', {
       currency,
-      value: items.reduce((sum, i) => sum + i.price * i.quantity, 0),
+      value: itemsValue(items),
       items: JSON.stringify(items.map(ga4Item)),
     });
   }
@@ -123,12 +138,12 @@ export function trackBeginCheckout(items: GaLineItem[], currency = 'USD'): void 
     content_ids: items.map((i) => i.sku),
     content_type: 'product',
     num_items: items.reduce((sum, i) => sum + i.quantity, 0),
-    value: items.reduce((sum, i) => sum + i.price * i.quantity, 0),
+    value: itemsValue(items),
     currency,
   });
   pushGtmEvent('begin_checkout', {
     currency,
-    value: items.reduce((sum, i) => sum + i.price * i.quantity, 0),
+    value: itemsValue(items),
     items: JSON.stringify(items.map(ga4Item)),
   });
 }

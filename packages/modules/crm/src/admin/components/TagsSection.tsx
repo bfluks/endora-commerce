@@ -4,7 +4,7 @@ import { Alert, AlertDescription } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { crmApi } from '../api.js';
 import { errorMessage } from '../lib/labels.js';
-import { TagChips, TagMultiSelect } from './TagPicker.js';
+import { TagChips, TagMultiSelect } from '@endora-commerce/admin-kit/components';
 
 export interface TagsSectionProps {
   opportunity: OpportunityDetail;
@@ -60,6 +60,7 @@ export function TagsSection(props: TagsSectionProps): ReactNode {
         <div className="max-w-sm">
           <TagMultiSelect
             ariaLabel={t('tags.change')}
+            loadTags={crmApi.listTags}
             selected={opportunity.tags.map((tag) => tag.id)}
             disabled={busy}
             onChange={(tagIds): void => void replace(tagIds)}

@@ -1,4 +1,4 @@
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import {
   activateMfa,
@@ -20,6 +20,7 @@ import {
   setMfaSetupCookie,
 } from '../../../lib/session';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../lib/i18n/navigation';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -40,7 +41,7 @@ export default async function SecurityPage({
   searchParams: Promise<{ step?: string; error?: string }>;
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/account/security');
+  if (!session) return await localeRedirect('/login?next=/account/security');
 
   // Constitution XVII item 5 — this whole page is `mfa`'s contribution to the
   // storefront, so it goes when the module does. Without this it kept offering
@@ -96,7 +97,7 @@ function StartPanel(): ReactNode {
 async function ConfirmPanel(): Promise<ReactNode> {
   const setup = await getMfaSetupCookie();
   if (!setup) {
-    redirect('/account/security');
+    return await localeRedirect('/account/security');
   }
   return (
     <section>
@@ -174,72 +175,72 @@ function RecoveryCodes({ codes }: { codes: string[] }): ReactNode {
 async function startAction(): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/account/security');
+  if (!session) return await localeRedirect('/login?next=/account/security');
   try {
     const { secret, otpauthUri } = await startMfaSetup(session);
     await setMfaSetupCookie({ secret, otpauthUri });
   } catch (err) {
-    redirect(`/account/security?error=${encodeURIComponent(errMsg(err))}`);
+    return await localeRedirect(`/account/security?error=${encodeURIComponent(errMsg(err))}`);
   }
-  redirect('/account/security?step=confirm');
+  return await localeRedirect('/account/security?step=confirm');
 }
 
 async function confirmAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/account/security');
+  if (!session) return await localeRedirect('/login?next=/account/security');
   const code = ((formData.get('code') as string) ?? '').trim();
   try {
     const { recoveryCodes } = await activateMfa(session, code);
     await clearMfaSetupCookie();
     await setMfaRecoveryFlash(recoveryCodes);
   } catch (err) {
-    redirect(`/account/security?step=confirm&error=${encodeURIComponent(errMsg(err))}`);
+    return await localeRedirect(`/account/security?step=confirm&error=${encodeURIComponent(errMsg(err))}`);
   }
-  redirect('/account/security');
+  return await localeRedirect('/account/security');
 }
 
 async function disableAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/account/security');
+  if (!session) return await localeRedirect('/login?next=/account/security');
   const code = ((formData.get('code') as string) ?? '').trim();
   try {
     await disableMfa(session, code);
   } catch (err) {
-    redirect(`/account/security?error=${encodeURIComponent(errMsg(err))}`);
+    return await localeRedirect(`/account/security?error=${encodeURIComponent(errMsg(err))}`);
   }
-  redirect('/account/security');
+  return await localeRedirect('/account/security');
 }
 
 async function regenerateAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/account/security');
+  if (!session) return await localeRedirect('/login?next=/account/security');
   const code = ((formData.get('code') as string) ?? '').trim();
   try {
     const { recoveryCodes } = await regenerateMfaRecoveryCodes(session, code);
     await setMfaRecoveryFlash(recoveryCodes);
   } catch (err) {
-    redirect(`/account/security?error=${encodeURIComponent(errMsg(err))}`);
+    return await localeRedirect(`/account/security?error=${encodeURIComponent(errMsg(err))}`);
   }
-  redirect('/account/security');
+  return await localeRedirect('/account/security');
 }
 
 async function unlinkSocialAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/account/security');
+  if (!session) return await localeRedirect('/login?next=/account/security');
   const provider = (formData.get('provider') as string) ?? '';
-  if (provider !== 'google' && provider !== 'microsoft') redirect('/account/security');
+  if (provider !== 'google' && provider !== 'microsoft') return await localeRedirect('/account/security');
   try {
     await unlinkMfaSocialIdentity(session, provider);
   } catch (err) {
     // The refusal lands here too — the backend has the last word on whether an
     // account may lose a link, and its sentence is already localized.
-    redirect(`/account/security?error=${encodeURIComponent(errMsg(err))}`);
+    return await localeRedirect(`/account/security?error=${encodeURIComponent(errMsg(err))}`);
   }
-  redirect('/account/security');
+  return await localeRedirect('/account/security');
 }
 
 function errMsg(err: unknown): string {

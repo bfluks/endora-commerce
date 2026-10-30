@@ -188,8 +188,8 @@ export interface ShellCheckFixture {
   ) => ShellRunResult;
   /**
    * A `pdfmake` install of `bytes` apparent size, for the footprint gate. The
-   * file is sparse, so a 40 MB fixture costs no disk — `du -sb` reports the
-   * apparent size, which is what the gate measures.
+   * file is sparse, so a 40 MB fixture costs no disk — the gate sums the
+   * files' bytes, which is the apparent size.
    *
    * `layout` picks which of the gate's two candidate paths the install lands
    * on. `hoisted` is what this repository actually has

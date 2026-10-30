@@ -86,8 +86,14 @@ export const mfaSetupTicketBodySchema = z.object({
 export const mfaSetupResponseSchema = z.object({
   /** base32 secret for manual entry. */
   secret: z.string().min(1),
-  /** otpauth:// URI for QR rendering on the client. */
+  /** otpauth:// URI — what an authenticator app enrols from. */
   otpauthUri: z.string().min(1),
+  /**
+   * The QR code of `otpauthUri`, as an SVG document drawn by the server
+   * (`specs/166-mfa-totp-hardening/`). Static markup with no script; render it
+   * as an image (e.g. a `data:image/svg+xml` URI), not as HTML.
+   */
+  qrSvg: z.string().min(1),
 });
 export type MfaSetupResponse = z.infer<typeof mfaSetupResponseSchema>;
 

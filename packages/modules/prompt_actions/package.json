@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-prompt-actions",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "sideEffects": false,
   "description": "Natural-language prompt mode for the admin command palette: interpret an operator instruction with an LLM, preview the plan, execute it through existing module services after explicit confirmation.",
@@ -41,7 +41,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ../../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src",
     "test": "vitest run"

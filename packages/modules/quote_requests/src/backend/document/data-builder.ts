@@ -5,9 +5,11 @@ import type {
   CatalogProductReadPort,
   CustomerAccountReadPort,
   CustomFieldDefinitionReadPort,
+  LineGroup,
   OrganizationDetailsPort,
   QuoteRequestDocumentData,
 } from '@endora-commerce/contracts';
+import { arrangeLineGroups, flattenSections } from '@endora-commerce/contracts';
 import type { SalesChannelResolutionPort } from '@endora-commerce/platform/kernel';
 import type { QuoteRequest } from '../entities/quote-request.entity.js';
 import type { QuoteRequestItem } from '../entities/quote-request-item.entity.js';
@@ -75,7 +77,9 @@ export type QuoteDocumentLine = Pick<
   | 'referenceCurrency'
   | 'lineCurrency'
   | 'lineNote'
->;
+> &
+  /** Feature 159 — absent reads as ungrouped at position 0. */
+  Partial<Pick<QuoteRequestItem, 'groupId' | 'position'>>;
 
 const BOOLEAN_TEXT: Readonly<Record<'en' | 'pl', readonly [string, string]>> = { en: ['Yes', 'No'], pl: ['Tak', 'Nie'] };
 
@@ -140,12 +144,20 @@ export class QuoteDocumentDataBuilder {
 
   async build(input: {
     readonly quote: QuoteDocumentQuote;
+    /** In storage order; arranged here into the display order (feature 159). */
     readonly lines: readonly QuoteDocumentLine[];
+    /** Feature 159 — the quote's stored groups; empty ones are not printed (D2). */
+    readonly groups?: readonly LineGroup[];
     readonly language: string;
     /** The customer's proposal per line from the submission record, where the row lost it (146 R4). */
     readonly proposals?: ReadonlyMap<string, number | null>;
   }): Promise<QuoteRequestDocumentData> {
-    const { quote, lines, language } = input;
+    const { quote, language } = input;
+    // Feature 159 (FR-011) — the one display order; only groups holding a line
+    // reach the document (D2, FR-034).
+    const sections = arrangeLineGroups(input.groups ?? [], input.lines);
+    const lines = flattenSections(sections);
+    const groups = sections.flatMap((section) => (section.group ? [section.group] : []));
     const productIds = [...new Set(lines.map((line) => line.productId))];
     const variantParents = [...new Set(lines.filter((line) => line.variantId).map((line) => line.productId))];
     const [organization, customer, rep, channel, taxRate, products, variants, attributes, definitions] =
@@ -217,6 +229,7 @@ export class QuoteDocumentDataBuilder {
       },
       salesRep: rep ? { name: fullName(rep.firstName, rep.lastName) ?? rep.email, email: rep.email } : null,
       details,
+      groups,
       lines: lines.map((line) => {
         const product = productById.get(line.productId);
         const variant = line.variantId ? variantById.get(line.variantId) : undefined;
@@ -236,6 +249,8 @@ export class QuoteDocumentDataBuilder {
           lineCurrency: line.lineCurrency,
           lineNote: line.lineNote ?? null,
           attributes: attributeValues(line),
+          groupId: groups.some((group) => group.id === line.groupId) ? (line.groupId ?? null) : null,
+          position: line.position ?? 0,
         };
       }),
     };

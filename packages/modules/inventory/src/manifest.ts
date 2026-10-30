@@ -345,6 +345,50 @@ export const manifest = defineModuleManifest({
       keywords: ['stock', 'inventory', 'warehouse', 'magazyn', 'zapasy'],
       weight: 230,
     },
+    // Issue #516 (Principle XVI): the four other sidebar screens were reachable
+    // from the sidebar alone. Each declares the code its route enforces —
+    // `inventory:read` for the three lists, `inventory:write` for the import
+    // wizard, whose only purpose is a write.
+    {
+      id: 'open-warehouses',
+      labelKey: 'actions.openWarehouses.label',
+      descriptionKey: 'actions.openWarehouses.description',
+      icon: 'Warehouse',
+      targetRoute: '/warehouses',
+      requiredPermission: 'inventory:read',
+      keywords: ['warehouse', 'warehouses', 'location', 'magazyn', 'magazyny'],
+      weight: 231,
+    },
+    {
+      id: 'open-low-stock',
+      labelKey: 'actions.openLowStock.label',
+      descriptionKey: 'actions.openLowStock.description',
+      icon: 'TrendingDown',
+      targetRoute: '/inventory/low-stock',
+      requiredPermission: 'inventory:read',
+      keywords: ['low stock', 'stock', 'threshold', 'reorder', 'niskie', 'stan', 'próg'],
+      weight: 232,
+    },
+    {
+      id: 'open-stock-notifications',
+      labelKey: 'actions.openStockNotifications.label',
+      descriptionKey: 'actions.openStockNotifications.description',
+      icon: 'Bell',
+      targetRoute: '/inventory/notifications',
+      requiredPermission: 'inventory:read',
+      keywords: ['notify', 'back in stock', 'availability', 'notifications', 'powiadomienia', 'dostępność'],
+      weight: 233,
+    },
+    {
+      id: 'import-stock',
+      labelKey: 'actions.importStock.label',
+      descriptionKey: 'actions.importStock.description',
+      icon: 'PackageOpen',
+      targetRoute: '/inventory/import',
+      requiredPermission: 'inventory:write',
+      keywords: ['import', 'stock', 'csv', 'upload', 'stany', 'magazyn'],
+      weight: 234,
+    },
   ],
 });
 

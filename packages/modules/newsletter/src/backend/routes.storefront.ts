@@ -27,6 +27,12 @@ export interface NewsletterStorefrontDeps {
   resolveDefaultChannelId: () => Promise<string | null>;
   /** Storefront base used for post-confirm/unsubscribe redirects. */
   storefrontBaseUrl: string;
+  /**
+   * Feature 167 (FR-034) — a storefront page path under the language prefix of the
+   * subscriber's channel (its default language: a subscriber records none). Absent,
+   * or for no subscriber: the logical path.
+   */
+  subscriberPagePath?: (subscriberId: string | null, path: string) => Promise<string>;
 }
 
 /**
@@ -38,6 +44,9 @@ export async function registerNewsletterStorefrontRoutes(
   app: FastifyInstance,
   deps: NewsletterStorefrontDeps,
 ): Promise<void> {
+  const pagePath = (subscriberId: string | null, path: string): Promise<string> =>
+    deps.subscriberPagePath ? deps.subscriberPagePath(subscriberId, path) : Promise.resolve(path);
+
   app.get('/api/v1/newsletter/status', async (request, reply) => {
     const { channel } = request.query as { channel?: string };
     const channelId = channel ? await deps.resolveChannelIdByCode(channel) : null;
@@ -63,23 +72,30 @@ export async function registerNewsletterStorefrontRoutes(
     return reply.send({ data: result });
   });
 
-  app.get('/api/v1/newsletter/confirm', async (request, reply) => {
+  // Feature 154 — the confirmation, unsubscribe and tracking links below are
+  // opened from an e-mail, with no storefront channel signal, so they are
+  // reachable whatever the sales-channel access rule decides.
+  app.get('/api/v1/newsletter/confirm', { config: { salesChannelAccess: 'open' } }, async (request, reply) => {
     const { token } = request.query as { token?: string };
     const claims = token ? deps.tokens.verify(token, 'confirm') : null;
     if (claims) await deps.subscribers.confirm(claims.id);
     const status = claims ? 'ok' : 'invalid';
-    return reply.redirect(`${deps.storefrontBaseUrl}/newsletter/confirm?status=${status}`);
+    const path = await pagePath(claims?.id ?? null, `/newsletter/confirm?status=${status}`);
+    return reply.redirect(`${deps.storefrontBaseUrl}${path}`);
   });
 
-  app.get('/api/v1/newsletter/unsubscribe', async (request, reply) => {
+  app.get('/api/v1/newsletter/unsubscribe', { config: { salesChannelAccess: 'open' } }, async (request, reply) => {
     const { token } = request.query as { token?: string };
-    const valid = token ? deps.tokens.verify(token, 'unsubscribe') !== null : false;
-    return reply.redirect(
-      `${deps.storefrontBaseUrl}/newsletter/unsubscribe?token=${encodeURIComponent(token ?? '')}&valid=${valid}`,
+    const claims = token ? deps.tokens.verify(token, 'unsubscribe') : null;
+    const valid = claims !== null;
+    const path = await pagePath(
+      claims?.id ?? null,
+      `/newsletter/unsubscribe?token=${encodeURIComponent(token ?? '')}&valid=${valid}`,
     );
+    return reply.redirect(`${deps.storefrontBaseUrl}${path}`);
   });
 
-  app.post('/api/v1/newsletter/unsubscribe', async (request, reply) => {
+  app.post('/api/v1/newsletter/unsubscribe', { config: { salesChannelAccess: 'open' } }, async (request, reply) => {
     const body = publicUnsubscribeRequestSchema.parse(request.body);
     const claims = deps.tokens.verify(body.token, 'unsubscribe');
     if (claims) await deps.subscribers.unsubscribe(claims.id, body.reason);
@@ -88,19 +104,22 @@ export async function registerNewsletterStorefrontRoutes(
   });
 
   // --- Engagement tracking (US6) -----------------------------------------
-  app.get('/api/v1/newsletter/o/:token.gif', { config: { streamingResponse: true } }, async (request, reply) => {
-    const { token } = request.params as { token: string };
-    const claims = deps.tokens.verify(token, 'open');
+  // The signed token travels in the query string: it is longer than the
+  // router's default path-parameter limit (`maxParamLength`, 100 characters),
+  // which answers 414 before a handler runs. The URLs are minted at send time
+  // by `services/engagement-tracking.ts`.
+  app.get('/api/v1/newsletter/open.gif', { config: { streamingResponse: true, salesChannelAccess: 'open' } }, async (request, reply) => {
+    const { token } = request.query as { token?: string };
+    const claims = typeof token === 'string' && token ? deps.tokens.verify(token, 'open') : null;
     if (claims) await deps.tracking.recordOpen(claims.id);
     reply.header('content-type', 'image/gif');
     reply.header('cache-control', 'no-store, no-cache, must-revalidate, private');
     return reply.send(TRACKING_PIXEL);
   });
 
-  app.get('/api/v1/newsletter/c/:token', async (request, reply) => {
-    const { token } = request.params as { token: string };
-    const { u } = request.query as { u?: string };
-    const claims = deps.tokens.verify(token, 'click');
+  app.get('/api/v1/newsletter/click', { config: { salesChannelAccess: 'open' } }, async (request, reply) => {
+    const { token, u } = request.query as { token?: string; u?: string };
+    const claims = typeof token === 'string' && token ? deps.tokens.verify(token, 'click') : null;
     if (!claims) {
       return reply.status(410).send({ error: { code: 'GONE', message: 'Invalid link.' } });
     }

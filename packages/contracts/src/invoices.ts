@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
+import { twoDecimalAmountString } from './money-input.js';
 
 /**
  * Invoices (FR-080 + feature 047-invoices-module). Produces proforma, VAT
@@ -122,7 +123,10 @@ export const invoiceSchema = z.object({
   taxTotal: z.number().finite(),
   grossTotal: z.number().finite(),
   paidTotal: z.number().finite(),
+  /** What is still to pay: `max(0, grossTotal − paidTotal)` — never negative (issue #428). */
   amountDue: z.number().finite(),
+  /** What was paid above the gross: `max(0, paidTotal − grossTotal)` (issue #428). */
+  overpayment: z.number().finite(),
   /** Legacy alias of grossTotal kept for back-compat with the original schema. */
   total: z.number().finite(),
   originalInvoiceId: uuidSchema.nullable(),
@@ -595,10 +599,12 @@ export const erpSaleDocumentUpsertInputSchema = z.object({
   saleDate: z.string().nullable().optional(),
   paymentDueDate: z.string().nullable().optional(),
   paymentMethod: z.string().max(64).nullable().optional(),
-  netTotal: z.string().nullable().optional(),
-  taxTotal: z.string().nullable().optional(),
-  grossTotal: z.string(),
-  paidTotal: z.string().optional(),
+  // An integration's amounts: decimal strings with at most two places (issue #417),
+  // trimmed first — surrounding whitespace was accepted before and is stored trimmed.
+  netTotal: twoDecimalAmountString(z.string().trim()).nullable().optional(),
+  taxTotal: twoDecimalAmountString(z.string().trim()).nullable().optional(),
+  grossTotal: twoDecimalAmountString(z.string().trim()),
+  paidTotal: twoDecimalAmountString(z.string().trim()).optional(),
   buyerSnapshot: invoiceBuyerSchema.nullable().optional(),
   attachments: z.array(erpSaleDocumentAttachmentInputSchema).optional(),
 });

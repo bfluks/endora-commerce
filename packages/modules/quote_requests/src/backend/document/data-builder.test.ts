@@ -151,6 +151,47 @@ describe('QuoteDocumentDataBuilder', () => {
     expect(data.lines[0]!.proposedUnitPrice).toBe(2.75);
   });
 
+  it('feature 159 — answers the lines in display order with their group, and only the groups holding a line', async () => {
+    const groups = [
+      { id: 'g-later', name: 'Later', position: 1 },
+      { id: 'g-first', name: 'First', position: 0 },
+      { id: 'g-empty', name: 'Empty', position: 2 },
+    ];
+    const data = await new QuoteDocumentDataBuilder(deps()).build({
+      quote: quote(),
+      groups,
+      lines: [
+        line({ id: 'u', groupId: null, position: 0 }),
+        line({ id: 'later-1', groupId: 'g-later', position: 1 }),
+        line({ id: 'later-0', groupId: 'g-later', position: 0 }),
+        line({ id: 'first', groupId: 'g-first', position: 0 }),
+      ],
+      language: 'en-US',
+    });
+    expect(data.lines.map((l) => l.id)).toEqual(['first', 'later-0', 'later-1', 'u']);
+    expect(data.lines.map((l) => [l.groupId, l.position])).toEqual([
+      ['g-first', 0],
+      ['g-later', 0],
+      ['g-later', 1],
+      [null, 0],
+    ]);
+    expect(data.groups).toEqual([
+      { id: 'g-first', name: 'First', position: 0 },
+      { id: 'g-later', name: 'Later', position: 1 },
+    ]);
+  });
+
+  it('feature 159 — an ungrouped quote keeps the order it was handed and carries no group', async () => {
+    const data = await new QuoteDocumentDataBuilder(deps()).build({
+      quote: quote(),
+      lines: [line({ id: 'b' }), line({ id: 'a' })],
+      language: 'en-US',
+    });
+    expect(data.lines.map((l) => l.id)).toEqual(['b', 'a']);
+    expect(data.groups).toEqual([]);
+    expect(data.lines.map((l) => l.groupId)).toEqual([null, null]);
+  });
+
   it('suggests the channel’s default language, or the system default channel’s for a quote with none', async () => {
     const builder = new QuoteDocumentDataBuilder(deps());
     expect(await builder.suggestedLanguage('ch-a')).toBe('pl-PL');

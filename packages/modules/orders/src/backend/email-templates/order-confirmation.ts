@@ -1,3 +1,4 @@
+import { unitPriceDisplayText } from '@endora-commerce/contracts';
 import type {
   EmailMailerSendInput,
   PaymentEmailRendererPort,
@@ -85,6 +86,11 @@ function money(value: string | number, currency: string): string {
   return `${Number(value).toFixed(2)} ${currency}`;
 }
 
+/** A unit price: its significant places, up to four (owner ruling of 2026-10-25). */
+function unitMoney(value: string | number, currency: string): string {
+  return `${unitPriceDisplayText(value)} ${currency}`;
+}
+
 function formatAddress(a: OrderConfirmationAddress, labels: OrderTotalsLabels): string {
   const lines: string[] = [];
   if (a.companyName) lines.push(a.companyName);
@@ -158,7 +164,7 @@ export function buildOrderConfirmationVariables(
         name: it.productSnapshot.name,
         sku: it.productSnapshot.sku,
         quantity: it.quantity,
-        unitPrice: money(it.unitPrice, currency),
+        unitPrice: unitMoney(it.unitPrice, currency),
         lineTotal: money(it.lineTotal, currency),
         /** Alias used by EmailOrderSummary price column. */
         price: money(it.lineTotal, currency),

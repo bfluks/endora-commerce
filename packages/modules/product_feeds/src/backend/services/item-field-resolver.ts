@@ -1,4 +1,13 @@
+import {
+  channelUrlLanguages,
+  grossAmountHalfUp,
+  lineAmountHalfUp,
+  productPath,
+  roundAmountHalfUp,
+  type ChannelUrlFacts,
+} from '@endora-commerce/contracts';
 import type { FeedRunIssueReason } from '@endora-commerce/contracts';
+import { feedPackQuantity, MAX_FEED_PACK_QUANTITY, packCountMeasure } from './feed-pack.js';
 import type { FeedItemField } from './serializers/serializer.interface.js';
 import type {
   FeedItemPrice,
@@ -48,35 +57,6 @@ function issue(
   return { severity, reason, outputName, detail };
 }
 
-/**
- * Walks the language chain: the feed's language, then its configured
- * fallbacks, then the platform default (which is the last entry the caller puts
- * in `languageFallbacks`). Any substitution is a run warning (FR-040).
- */
-function pickLocalized(
-  map: Readonly<Record<string, string>>,
-  context: FeedResolutionContext,
-): { value: string; substituted: boolean } {
-  const direct = map[context.languageCode];
-  if (typeof direct === 'string' && direct.trim() !== '') {
-    return { value: direct, substituted: false };
-  }
-  for (const code of context.languageFallbacks) {
-    const candidate = map[code];
-    if (typeof candidate === 'string' && candidate.trim() !== '') {
-      return { value: candidate, substituted: true };
-    }
-  }
-  // Last resort: any populated translation is better than skipping the item on
-  // a field the operator did not mark required.
-  for (const candidate of Object.values(map)) {
-    if (typeof candidate === 'string' && candidate.trim() !== '') {
-      return { value: candidate, substituted: true };
-    }
-  }
-  return { value: '', substituted: false };
-}
-
 /** Renders an arbitrary attribute / custom-field value as a feed string. */
 function stringifyValue(value: unknown): string {
   if (value === null || value === undefined) return '';
@@ -90,18 +70,32 @@ function stringifyValue(value: unknown): string {
 }
 
 /** `123.00 PLN` — the "amount currency" form both Google and Meta parse. */
-function formatMoney(amount: number, currencyCode: string): string {
-  return `${amount.toFixed(2)} ${currencyCode}`;
+function formatMoney(amount: string, currencyCode: string): string {
+  return `${roundAmountHalfUp(amount)} ${currencyCode}`;
+}
+
+/**
+ * The amount a price field publishes: the unit price, or — for a sub-cent
+ * price (issue #430) — the price of `packQuantity` units, which is exact at
+ * two places by the choice of the pack. Its gross is the gross of that pack's
+ * net, half-up, as a basket line of that many units is charged (§10.18).
+ */
+function publishedAmount(price: FeedItemPrice, context: FeedResolutionContext, packQuantity: number): string {
+  if (packQuantity === 1) return context.pricePresentation === 'gross' ? price.gross : price.net;
+  const net = lineAmountHalfUp(price.net, packQuantity);
+  if (context.pricePresentation !== 'gross' || price.taxRatePercent === null) return net;
+  return grossAmountHalfUp(net, price.taxRatePercent);
 }
 
 function priceValue(
   price: FeedItemPrice | null,
   context: FeedResolutionContext,
   outputName: string,
+  packQuantity: number,
 ): FieldOutcome {
   if (!price) return { value: '', issues: [] };
   const issues: ResolvedItemIssue[] = [];
-  const amount = context.pricePresentation === 'gross' ? price.gross : price.net;
+  const amount = publishedAmount(price, context, packQuantity);
   if (context.pricePresentation === 'gross' && !price.taxResolved) {
     // Never a silent zero-VAT price: the operator asked for gross, and no tax
     // rule matched, so the number on the offer is not what it claims to be.
@@ -158,6 +152,7 @@ function resolveSource(
   field: ResolvableTemplateField,
   item: FeedItemSource,
   context: FeedResolutionContext,
+  packQuantity: number,
 ): FieldOutcome {
   const none: FieldOutcome = { value: '', issues: [] };
   switch (field.sourceKind) {
@@ -173,21 +168,9 @@ function resolveSource(
       return { value: item.productType, issues: [] };
     case 'name':
     case 'description': {
-      const map = field.sourceKind === 'name' ? item.name : item.description;
-      const picked = pickLocalized(map, context);
-      return {
-        value: picked.value,
-        issues: picked.substituted
-          ? [
-              issue(
-                'warning',
-                'missing_translation',
-                field.outputName,
-                `No ${context.languageCode} value; used a fallback language.`,
-              ),
-            ]
-          : [],
-      };
+      // 168-shim: one string per item now (FR-014); the per-language pick moves to S2's reader.
+      const text = field.sourceKind === 'name' ? item.name : item.description;
+      return { value: text ?? '', issues: [] };
     }
     case 'brand': {
       const key = field.sourceKey ?? DEFAULT_BRAND_KEY;
@@ -203,9 +186,16 @@ function resolveSource(
       return { value: stringifyValue(raw), issues: [] };
     }
     case 'price':
-      return priceValue(item.price, context, field.outputName);
+      return priceValue(item.price, context, field.outputName, packQuantity);
     case 'sale_price':
-      return priceValue(item.salePrice, context, field.outputName);
+      return priceValue(item.salePrice, context, field.outputName, packQuantity);
+    case 'pack_quantity':
+      return { value: packQuantity > 1 ? String(packQuantity) : '', issues: [] };
+    case 'pack_unit_pricing_measure':
+    case 'pack_unit_pricing_base_measure':
+      // The base is the pack itself, so the unit price Google shows is the
+      // pack price, exact — `1,25 PLN / 100 ct`, never a rounded `0,01 PLN / 1 ct`.
+      return { value: packCountMeasure(packQuantity), issues: [] };
     case 'availability':
       if (item.inStock === null) return none;
       return { value: item.inStock ? 'in_stock' : 'out_of_stock', issues: [] };
@@ -226,10 +216,11 @@ function resolveSource(
           ],
         };
       }
-      return {
-        value: `${origin}/p/${item.slug}?lang=${encodeURIComponent(context.languageCode)}`,
-        issues: [],
-      };
+      // Feature 167 (FR-033, FR-034) — the product's own key in the feed's link
+      // language, under that language's path prefix; `productPath` is the one
+      // product URL composer.
+      const path = productPath({ key: item.slug, languageCode: feedLinkLanguage(context), channel: context.channelUrl });
+      return { value: `${origin}${path}`, issues: [] };
     }
     case 'image_link': {
       const first = item.imageUrls[0];
@@ -273,13 +264,79 @@ function requiredFailureReason(field: ResolvableTemplateField): FeedRunIssueReas
   return 'missing_required_field';
 }
 
+/**
+ * The pack every price of this item is published for (issue #430): 1 for a
+ * price with two significant places, else the largest pack any price the
+ * template publishes needs — the price and the sale price describe one offer,
+ * so they are of the same pack. A skip when the template cannot state a pack
+ * (it binds no `pack_quantity` field) or no pack of at most 10 000 is exact.
+ */
+function packFor(input: ResolveFeedItemInput): { quantity: number } | { skip: ResolvedItemIssue } {
+  const template = input.templateFields ?? input.fields;
+  let quantity = 1;
+  for (const field of template) {
+    const price =
+      field.sourceKind === 'price' ? input.item.price : field.sourceKind === 'sale_price' ? input.item.salePrice : null;
+    if (!price) continue;
+    const needed = feedPackQuantity(price.net);
+    const unitPrice = `${price.net} ${input.context.currencyCode}`;
+    if (needed === null) {
+      return {
+        skip: issue(
+          'skip',
+          'sub_cent_price_beyond_pack_limit',
+          field.outputName,
+          `The unit price ${unitPrice} has more than two decimal places, and no pack of up to ` +
+            `${MAX_FEED_PACK_QUANTITY} units makes it exact to the cent.`,
+        ),
+      };
+    }
+    if (needed > 1 && !template.some((f) => f.sourceKind === 'pack_quantity')) {
+      return {
+        skip: issue(
+          'skip',
+          'sub_cent_price_without_pack_field',
+          field.outputName,
+          `The unit price ${unitPrice} has more than two decimal places. It can be published only ` +
+            `as the price of a pack of ${needed}, and this template has no field bound to the pack size.`,
+        ),
+      };
+    }
+    quantity = Math.max(quantity, needed);
+  }
+  return { quantity };
+}
+
+/**
+ * The language a feed's product links are in (feature 167, FR-034): the feed's
+ * language when the channel serves it (exact tag, then primary subtag), else the
+ * channel's default language — a feed may be written in a language the channel has
+ * no pages in. Without channel facts, the feed's language.
+ */
+export function feedLinkLanguage(context: { languageCode: string; channelUrl?: ChannelUrlFacts | undefined }): string {
+  if (!context.channelUrl) return context.languageCode;
+  const languages = channelUrlLanguages(context.channelUrl);
+  const wanted = context.languageCode.toLowerCase();
+  return (
+    languages.find((l) => l.languageCode.toLowerCase() === wanted) ??
+    languages.find((l) => l.languageCode.split('-')[0]!.toLowerCase() === wanted.split('-')[0]) ??
+    languages.find((l) => l.isDefault)!
+  ).languageCode;
+}
+
 export function resolveFeedItem(input: ResolveFeedItemInput): ResolvedFeedItem {
   const fields: FeedItemField[] = [];
   const issues: ResolvedItemIssue[] = [];
   let skipReason: FeedRunIssueReason | null = null;
 
+  // Never a sub-cent price rounded to two places (issue #430): a pack, or no item.
+  const pack = packFor(input);
+  if ('skip' in pack) {
+    return { fields: [], issues: [pack.skip], skipped: true, skipReason: pack.skip.reason };
+  }
+
   for (const field of input.fields) {
-    const sourced = resolveSource(field, input.item, input.context);
+    const sourced = resolveSource(field, input.item, input.context, pack.quantity);
     let value = sourced.value;
     let carryIssues = sourced.issues;
 

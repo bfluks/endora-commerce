@@ -28,6 +28,7 @@ import {
   parseSortParam,
   priceControlsActive,
 } from '../../../../lib/catalog-price-query';
+import { localizedAlternates } from '../../../../lib/i18n/navigation';
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -49,9 +50,11 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const { ctx } = await getServerContext();
   const node = findCategory(await getCategoryTree(ctx), slug);
   if (!node) return { title: 'Not found', robots: { index: false, follow: false } };
+  // Feature 167 — canonical under the language prefix, hreflang alternates, x-default.
+  const alternates = await localizedAlternates(canonicalPath(seo.route, { slug: node.slug }));
   return {
     title: node.name,
-    alternates: { canonical: canonicalPath(seo.route, { slug: node.slug }) },
+    alternates: { ...alternates, canonical: alternates.canonical },
   };
 }
 
@@ -199,6 +202,8 @@ export default async function CategoryPage({ params, searchParams }: PageProps):
             locale={locale}
             columns={3}
             view={parsed.view}
+            salesChannelCode={ctx.salesChannelCode}
+            more={products.pagination.hasMore}
           />
           <Pagination
             basePath={`/c/${node.slug}`}

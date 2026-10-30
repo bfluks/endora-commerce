@@ -17,6 +17,7 @@ import {
 import { CompareAddToCartButton } from './CompareAddToCartButton';
 import { toAbsoluteAssetUrl } from '../lib/asset-url';
 import { tForLocale } from '../lib/i18n/messages';
+import { LocalizedAnchor } from '../lib/i18n/localized-link';
 
 /**
  * Comparison table — feature 007 / T032, restyled to match the Industria
@@ -40,9 +41,15 @@ import { tForLocale } from '../lib/i18n/messages';
  * `null` are skipped client-side.
  */
 export function ComparisonTable(props: {
-  /** The storefront's language — the PDF is printed in it (`specs/152-compare-pdf-template/` FR-032). */
+  /**
+   * The storefront's language — the PDF is printed in it
+   * (`specs/152-compare-pdf-template/` FR-032), and feature 155's minimum
+   * statement under "add to cart" is rendered in it.
+   */
   readonly locale?: string;
-} = {}): ReactNode {
+  /** The active sales channel, sent on the browser-side calls. Supplied by the page. */
+  readonly salesChannelCode: string | undefined;
+}): ReactNode {
   const locale = props.locale ?? 'en-US';
   const [view, setView] = useState<ComparisonOwnerView | null | 'loading'>('loading');
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +57,7 @@ export function ComparisonTable(props: {
 
   useEffect(() => {
     let cancelled = false;
-    getMyComparison()
+    getMyComparison(props.salesChannelCode)
       .then((v) => {
         if (!cancelled) setView(v);
       })
@@ -60,7 +67,7 @@ export function ComparisonTable(props: {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [props.salesChannelCode]);
 
   const visibleRows = useMemo<ComparisonAttributeRow[]>(() => {
     if (!view || view === 'loading') return [];
@@ -79,7 +86,7 @@ export function ComparisonTable(props: {
 
   const onRemove = async (productId: string): Promise<void> => {
     try {
-      const next = await removeProductFromCompare(productId);
+      const next = await removeProductFromCompare(productId, props.salesChannelCode);
       setView(next);
     } catch (err) {
       setError(toMessage(err));
@@ -88,7 +95,7 @@ export function ComparisonTable(props: {
 
   const onDelete = async (): Promise<void> => {
     try {
-      await deleteMyComparison();
+      await deleteMyComparison(props.salesChannelCode);
       setView(null);
     } catch (err) {
       setError(toMessage(err));
@@ -99,7 +106,7 @@ export function ComparisonTable(props: {
     const mode: ComparisonDisplayMode = next ? 'differences' : 'all';
     setView({ ...view, displayMode: mode });
     try {
-      const fresh = await setComparisonDisplayMode(mode);
+      const fresh = await setComparisonDisplayMode(mode, props.salesChannelCode);
       setView(fresh);
     } catch (err) {
       setError(toMessage(err));
@@ -122,7 +129,12 @@ export function ComparisonTable(props: {
           />
         </div>
         <div className="industria-compare-toolbar__right">
-          <ExportPdfButton disabled={view.products.length === 0} locale={locale} hideEmptyRows={hideEmpty} />
+          <ExportPdfButton
+            disabled={view.products.length === 0}
+            locale={locale}
+            hideEmptyRows={hideEmpty}
+            salesChannelCode={props.salesChannelCode}
+          />
           <CopyShareLinkButton shareToken={view.shareToken} />
           <button
             type="button"
@@ -150,12 +162,12 @@ export function ComparisonTable(props: {
                       )}
                     </div>
                     <div className="industria-cmp-card__sku">{p.sku}</div>
-                    <a
+                    <LocalizedAnchor
                       href={`/p/${p.slug}`}
                       className="industria-cmp-card__name"
                     >
                       {localised(p.name)}
-                    </a>
+                    </LocalizedAnchor>
                     <div className="industria-cmp-card__price">
                       {p.price
                         ? `${p.price.amount} ${p.price.currency}`
@@ -202,10 +214,12 @@ export function ComparisonTable(props: {
                     <CompareAddToCartButton
                       productId={p.id}
                       disabled={!p.available}
+                      minOrderQuantity={p.minOrderQuantity ?? null}
+                      locale={locale}
                     />
-                    <a href={`/p/${p.slug}`} className="btn btn--outline btn--sm">
+                    <LocalizedAnchor href={`/p/${p.slug}`} className="btn btn--outline btn--sm">
                       Karta produktu
-                    </a>
+                    </LocalizedAnchor>
                   </div>
                 </td>
               ))}
@@ -239,7 +253,12 @@ function Switch(props: {
   );
 }
 
-function ExportPdfButton(props: { disabled: boolean; locale: string; hideEmptyRows: boolean }): ReactNode {
+function ExportPdfButton(props: {
+  disabled: boolean;
+  locale: string;
+  hideEmptyRows: boolean;
+  salesChannelCode: string | undefined;
+}): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const t = tForLocale(props.locale);
@@ -249,7 +268,11 @@ function ExportPdfButton(props: { disabled: boolean; locale: string; hideEmptyRo
     setError(null);
     try {
       // The language the page is shown in and the rows it shows (FR-020, FR-032).
-      await exportComparisonPdf({ locale: props.locale, hideEmptyRows: props.hideEmptyRows });
+      await exportComparisonPdf({
+        locale: props.locale,
+        hideEmptyRows: props.hideEmptyRows,
+        channelCode: props.salesChannelCode,
+      });
     } catch {
       // FR-035 — the existing "PDF could not be generated" message, in the
       // buyer's language whatever the API answered in.

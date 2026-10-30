@@ -676,4 +676,55 @@ describe('ReceivePaymentHandler cross-module ports (feature 075 C-W3, feature 08
     expect(fullTransition.asked).toHaveLength(1);
     expect(fullTransition.asked[0]).toMatchObject({ to: 'on_hold', afterCommit: true });
   });
+
+  /**
+   * Issue #428 point 5 — a gateway refund amount with more than two decimal
+   * places is refused, never rounded: nothing about the payment's money or
+   * status moves, the order is not asked, the refusal is logged with the
+   * context an operator needs, and the payment is marked for manual attention.
+   * It answers normally rather than throwing, so the gateway's webhook is
+   * acknowledged and not redelivered forever.
+   */
+  it('refuses a refund amount with more than two decimal places and marks the payment', async () => {
+    const rows = { payment: paymentRow(), order: orderRow() };
+    rows.payment.status = 'paid';
+    rows.payment.refundedAmount = '5.00';
+    const em = transactionalEm(rows);
+    const port = paymentStatusPort(rows, em);
+    const transition = transitionPort(em);
+    const log = recordingLog();
+    const handler = new ReceivePaymentHandler(em.emFactory, readPort(methodRecord()), transition, port, log);
+
+    const result = await handler.reflectRefund({
+      paymentId: 'pay-1',
+      refundedAmount: 10.005,
+      currency: 'PLN',
+      fullyRefunded: true,
+      externalRefundId: 're_123',
+    });
+
+    expect(result).toEqual({ paymentId: 'pay-1', changed: false });
+    expect(rows.payment.refundedAmount).toBe('5.00');
+    expect(rows.payment.status).toBe('paid');
+    expect(port.calls).toEqual([]);
+    expect(transition.asked).toHaveLength(0);
+    expect(rows.payment.providerDetails).toMatchObject({
+      refundAnomaly: {
+        reason: 'amount_precision_exceeded',
+        reportedRefundedAmount: '10.005',
+        currency: 'PLN',
+        fullyRefunded: true,
+        externalRefundId: 're_123',
+      },
+    });
+    expect(log.warnings).toHaveLength(1);
+    expect(log.warnings[0]!.details).toMatchObject({
+      paymentId: 'pay-1',
+      orderId: 'ord-1',
+      reportedRefundedAmount: '10.005',
+      recordedRefundedAmount: '5.00',
+      currency: 'PLN',
+      externalRefundId: 're_123',
+    });
+  });
 });

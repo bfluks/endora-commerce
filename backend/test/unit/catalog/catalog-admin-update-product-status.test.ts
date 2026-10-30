@@ -7,17 +7,18 @@ import {
 } from '../../helpers/test-server.js';
 
 /**
- * Feature 022 / T002 — cross-field rule for the new `status` field on
- * `updateProduct`. Foundational unit test; pairs with the request-schema
- * extension in `packages/contracts/src/catalog.ts` (T004) and the service
- * branch in `catalog-admin.service.ts` (T006).
+ * Feature 022 / T002 — the `status` field on `updateProduct`.
  *
- * Tests run through the HTTP layer because the cross-field semantics
- * around `archivedAt` are encoded in `CatalogAdminService.updateProduct`
- * (feature 032: `inactive` replaces `archived`)
- * and the simplest fixture is the existing PATCH route.
+ * Feature 163, spec Session 2026-10-25 (T156c; FR-010, FR-019, O-5) — a status write
+ * never sets or clears `archivedAt`: `inactive` is plain off, `active` never restores,
+ * and archiving is the separate Archive / Restore action. This file used to assert the
+ * feature 022 / 032 cross-field rule (`inactive` archives, leaving it un-archives),
+ * which that session removed.
+ *
+ * Tests run through the HTTP layer, the simplest fixture being the existing PATCH
+ * route.
  */
-describe('Feature 022 — updateProduct.status cross-field rule', () => {
+describe('updateProduct.status never touches archivedAt (spec 163)', () => {
   let h: BackendServerHandle;
 
   beforeAll(async () => {
@@ -49,86 +50,49 @@ describe('Feature 022 — updateProduct.status cross-field rule', () => {
     return (res.json() as { data: { id: string } }).data.id;
   }
 
-  it('PATCH { status: "inactive" } sets archivedAt to a fresh timestamp', async () => {
-    const id = await createProduct('STATUS-INACT-001');
-    const before = Date.now();
+  async function patch(id: string, payload: Record<string, unknown>) {
     const res = await h.app.inject({
       method: 'PATCH',
       url: `/api/v1/admin/catalog/products/${id}`,
-      payload: { status: 'inactive' },
+      payload,
       cookies: adminCookie,
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as {
-      data: { status: string; archivedAt: string | null };
-    };
-    expect(body.data.status).toBe('inactive');
-    expect(body.data.archivedAt).not.toBeNull();
-    expect(new Date(body.data.archivedAt!).getTime()).toBeGreaterThanOrEqual(before);
+    return (res.json() as { data: { status: string; archivedAt: string | null; visibility: string } }).data;
+  }
+
+  it('PATCH { status: "inactive" } on an active product leaves archivedAt null', async () => {
+    const id = await createProduct('STATUS-INACT-001');
+    await patch(id, { status: 'active' });
+    const data = await patch(id, { status: 'inactive' });
+    expect(data.status).toBe('inactive');
+    expect(data.archivedAt).toBeNull();
   });
 
-  it('PATCH { status: "active" } on an inactive product clears archivedAt', async () => {
+  it('PATCH { status: "active" } on an archived product leaves it archived', async () => {
     const id = await createProduct('STATUS-REACT-001');
     const archive = await h.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/admin/catalog/products/${id}`,
-      payload: { status: 'inactive' },
+      method: 'POST',
+      url: `/api/v1/admin/catalog/products/${id}/archive`,
       cookies: adminCookie,
     });
     expect(archive.statusCode).toBe(200);
+    const archivedAt = (archive.json() as { data: { archivedAt: string | null } }).data.archivedAt;
+    expect(archivedAt).not.toBeNull();
 
-    // Then reactivate it.
-    const res = await h.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/admin/catalog/products/${id}`,
-      payload: { status: 'active' },
-      cookies: adminCookie,
-    });
-    expect(res.statusCode).toBe(200);
-    const body = res.json() as {
-      data: { status: string; archivedAt: string | null };
-    };
-    expect(body.data.status).toBe('active');
-    expect(body.data.archivedAt).toBeNull();
-  });
+    const data = await patch(id, { status: 'active' });
+    expect(data.status).toBe('active');
+    expect(data.archivedAt).toBe(archivedAt);
 
-  it('PATCH { status: "draft" } on an active product leaves archivedAt null', async () => {
-    const id = await createProduct('STATUS-DRAFT-001');
-    // First make it active so the transition is observable.
-    await h.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/admin/catalog/products/${id}`,
-      payload: { status: 'active' },
-      cookies: adminCookie,
-    });
-    const res = await h.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/admin/catalog/products/${id}`,
-      payload: { status: 'draft' },
-      cookies: adminCookie,
-    });
-    expect(res.statusCode).toBe(200);
-    const body = res.json() as {
-      data: { status: string; archivedAt: string | null };
-    };
-    expect(body.data.status).toBe('draft');
-    expect(body.data.archivedAt).toBeNull();
+    const off = await patch(id, { status: 'inactive' });
+    expect(off.archivedAt).toBe(archivedAt);
   });
 
   it('PATCH without status leaves status and archivedAt unchanged', async () => {
     const id = await createProduct('STATUS-NOOP-001');
-    const res = await h.app.inject({
-      method: 'PATCH',
-      url: `/api/v1/admin/catalog/products/${id}`,
-      payload: { visibility: 'logged_in_only' },
-      cookies: adminCookie,
-    });
-    expect(res.statusCode).toBe(200);
-    const body = res.json() as {
-      data: { status: string; archivedAt: string | null; visibility: string };
-    };
-    expect(body.data.status).toBe('draft'); // creation default
-    expect(body.data.archivedAt).toBeNull();
-    expect(body.data.visibility).toBe('logged_in_only');
+    const data = await patch(id, { visibility: 'logged_in_only' });
+    expect(data.status).toBe('inactive'); // creation default (Q1-d)
+    expect(data.archivedAt).toBeNull();
+    expect(data.visibility).toBe('logged_in_only');
   });
 });

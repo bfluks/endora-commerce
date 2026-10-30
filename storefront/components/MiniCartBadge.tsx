@@ -1,5 +1,5 @@
-import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { LocalizedLink } from '../lib/i18n/localized-link';
 
 /**
  * MiniCartBadge (feature 027 US1).
@@ -23,7 +23,7 @@ interface MiniCartBadgeProps {
 
 export function MiniCartBadge({ itemCount, label, ariaLabel }: MiniCartBadgeProps): ReactNode {
   return (
-    <Link
+    <LocalizedLink
       href="/cart"
       className="inline-flex items-center gap-1.5 text-fg-soft hover:text-fg"
       aria-label={ariaLabel}
@@ -38,7 +38,7 @@ export function MiniCartBadge({ itemCount, label, ariaLabel }: MiniCartBadgeProp
           {itemCount}
         </span>
       ) : null}
-    </Link>
+    </LocalizedLink>
   );
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ModuleManifest } from '@endora-commerce/contracts';
+import { DEFAULT_BRAND_TOKENS, type CmsBrandTokens, type ModuleManifest } from '@endora-commerce/contracts';
 import { contextAdmits } from '@endora-commerce/page-builder-core';
 import { PageBuilderRegistry } from './page-builder-registry.js';
 
@@ -386,5 +386,33 @@ describe('PageBuilderRegistry — document blocks stay out of the CMS palette (1
     expect(desc.categories?.filter((c) => c.contexts.includes('cms')).map((c) => c.titleKey)).toEqual([
       'blocks.category.layout',
     ]);
+  });
+});
+
+/**
+ * Feature 163 (T021, research R-4) — the descriptor carries the effective brand
+ * tokens for the channel the editor previews, so the canvas renders on-brand.
+ */
+describe('PageBuilderRegistry — brand tokens in the descriptor', () => {
+  it('serves the built-in defaults while no resolver is installed', async () => {
+    const desc = await new PageBuilderRegistry({ manifests: [] }).describe();
+    expect(desc.brandTokens).toEqual(DEFAULT_BRAND_TOKENS);
+  });
+
+  it('asks the resolver for the named channel, or for the global set', async () => {
+    const asked: Array<string | null> = [];
+    const channelSet: CmsBrandTokens = {
+      ...DEFAULT_BRAND_TOKENS,
+      colors: { ...DEFAULT_BRAND_TOKENS.colors, primary: '#0f766e' },
+    };
+    const reg = new PageBuilderRegistry({ manifests: [] });
+    reg.setBrandTokensResolver(async (salesChannelId) => {
+      asked.push(salesChannelId);
+      return salesChannelId === null ? DEFAULT_BRAND_TOKENS : channelSet;
+    });
+
+    expect((await reg.describe()).brandTokens).toEqual(DEFAULT_BRAND_TOKENS);
+    expect((await reg.describe({ salesChannelId: 'channel-1' })).brandTokens).toEqual(channelSet);
+    expect(asked).toEqual([null, 'channel-1']);
   });
 });

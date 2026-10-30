@@ -14,6 +14,7 @@ import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 import type { CommandBus, CommandEvent } from '@endora-commerce/platform/commands';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { Category } from '../entities/category.entity.js';
+import { requireLinkableAsset, type LinkableAssetReader } from './linkable-asset.js';
 
 /** Result of a category write closure: the entity + its audit snapshot. */
 interface CategoryWrite {
@@ -124,7 +125,19 @@ export class CategoryAdminService {
      * command's event itself, on commit.
      */
     private readonly events?: CategoryEventBus,
+    /**
+     * Feature 166 (FR-006) — `assets_library`'s read port, asked before a main
+     * image is linked. A write that names a new image without it fails closed.
+     */
+    private readonly assets?: LinkableAssetReader,
   ) {}
+
+  #requireAssets(): LinkableAssetReader {
+    if (!this.assets) {
+      throw new Error('CategoryAdminService: the asset read port is not wired — a main image cannot be linked.');
+    }
+    return this.assets;
+  }
 
   /** Validate + merge a custom-field patch, mapping validation errors to HTTP 422. */
   async #mergeCustomFields(
@@ -274,7 +287,15 @@ export class CategoryAdminService {
       if (input.slug !== undefined) cat.slug = input.slug;
       if (input.sortOrder !== undefined) cat.sortOrder = input.sortOrder;
       if (input.isActive !== undefined) cat.isActive = input.isActive;
-      if (input.mainImageAssetId !== undefined) cat.mainImageAssetId = input.mainImageAssetId;
+      if (input.mainImageAssetId !== undefined) {
+        // Feature 166 (FR-006) — a new image the caller may not see answers as
+        // a missing one. The one already linked is this category's own
+        // unrestricted reference, so it is visible and needs no question.
+        if (input.mainImageAssetId !== null && input.mainImageAssetId !== (cat.mainImageAssetId ?? null)) {
+          await requireLinkableAsset(this.#requireAssets(), input.mainImageAssetId);
+        }
+        cat.mainImageAssetId = input.mainImageAssetId;
+      }
       if (input.customFieldValues !== undefined) {
         cat.customFieldValues = await this.#mergeCustomFields(cat.customFieldValues ?? {}, input.customFieldValues);
       }

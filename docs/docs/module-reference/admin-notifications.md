@@ -29,6 +29,7 @@ An operator switches this module on and off on **/platform/modules**. The choice
 
 | Module | Binding | What it means |
 | --- | --- | --- |
+| `admin_roles` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `admin_users` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `auth` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 
@@ -36,7 +37,7 @@ An operator switches this module on and off on **/platform/modules**. The choice
 
 | Code | Label | Also needs |
 | --- | --- | --- |
-| `admin:read` | View admin notifications | — |
+| `admin:read` | View notifications sent to all admins | — |
 
 ## Command palette
 

@@ -48,6 +48,7 @@ export function SocialLoginButtons({
   locale,
   modulePresent,
   availableProviders,
+  salesChannelCode,
 }: {
   backendBaseUrl: string;
   next: string;
@@ -56,6 +57,13 @@ export function SocialLoginButtons({
   modulePresent: boolean | undefined;
   /** Providers that are configured AND enabled for this channel. */
   availableProviders: readonly FederatedProvider[] | undefined;
+  /**
+   * The active sales channel. The start link is a browser navigation, which
+   * carries no `X-Sales-Channel`, so the channel rides as `?salesChannel=` —
+   * the OAuth transaction records it and the callback applies that store's
+   * access rule (`specs/154-sales-channel-access/`).
+   */
+  salesChannelCode: string | undefined;
 }): ReactNode {
   const state: FederatedSignInState = resolveFederatedSignIn({
     modulePresent,
@@ -64,8 +72,12 @@ export function SocialLoginButtons({
   if (state.status !== 'ready') return null;
 
   const t = tForLocale(locale);
+  const channelParam =
+    salesChannelCode !== undefined && salesChannelCode !== ''
+      ? `&salesChannel=${encodeURIComponent(salesChannelCode)}`
+      : '';
   const href = (provider: FederatedProvider): string =>
-    `${backendBaseUrl}/api/v1/auth/customer/oauth/${provider}/start?next=${encodeURIComponent(next)}`;
+    `${backendBaseUrl}/api/v1/auth/customer/oauth/${provider}/start?next=${encodeURIComponent(next)}${channelParam}`;
 
   return (
     <div

@@ -34,7 +34,7 @@ utworzeniu; przechowywany jest wyłącznie jego skrót SHA-256.
 |---|---|---|
 | Tożsamość | Dane uwierzytelniające platformy (kontekst systemowy) | Działa **w imieniu jednej organizacji**, w jednym przypiętym kanale sprzedaży, przez wskazane techniczne konto klienta |
 | Typowe zastosowanie | Synchronizacja PIM, generowanie feedów | Integracja dystrybutora: katalog z cenami organizacji, składanie zamówień |
-| Odczyty katalogu | Ceny domyślne kanału; kanał z nagłówka `X-Sales-Channel`, hosta albo domyślny | Ceny obowiązujące organizację, dostępność i progi ilościowe; zawsze powiązany kanał |
+| Odczyty katalogu | Ceny kanału dla wszystkich (bez organizacji); kanał z nagłówka `X-Sales-Channel`, hosta albo domyślny | Ceny obowiązujące organizację, dostępność i progi ilościowe; zawsze powiązany kanał |
 | Ceny hurtowe / zamówienia | Odmowa (`403 API_KEY_NOT_BOUND`) | Dozwolone z odpowiednim zakresem |
 | Dozwolone zakresy | `catalog:read`, `catalog:write` | `catalog:read`, `orders:read`, `orders:write` (`catalog:write` jest zabronione dla kluczy powiązanych) |
 | Ważność | Opcjonalne `expiresAt` | Opcjonalne `expiresAt` |
@@ -47,10 +47,11 @@ utworzeniu — aby powiązać klucz inaczej, unieważnij go i utwórz nowy. Regu
 
 | Zakres | Klucz niepowiązany | Klucz powiązany |
 |---|---|---|
-| `catalog:read` | Odczyty zewnętrznego API katalogu (ceny domyślne kanału) i odczyty zestawów atrybutów PIM | Odczyty zewnętrznego API katalogu (ceny organizacji) i ceny hurtowe |
+| `catalog:read` | Odczyty zewnętrznego API katalogu (ceny kanału dla wszystkich) i odczyty zestawów atrybutów PIM | Odczyty zewnętrznego API katalogu (ceny organizacji) i ceny hurtowe |
 | `catalog:write` | Zapis produktu w PIM według SKU | Nie można przyznać (reguła tworzenia) |
 | `orders:read` | Nie można przyznać bez powiązania | Lista i szczegóły zamówień przez zewnętrzne API |
 | `orders:write` | Nie można przyznać bez powiązania | Składanie zamówień przez zewnętrzne API |
+| `platform.api_description.read` | Opis API (`GET /api/v1/_openapi.json`) | Opis API (`GET /api/v1/_openapi.json`) |
 
 ### Przypięcie kanału (klucze powiązane)
 
@@ -79,15 +80,16 @@ Wymagany zakres: `catalog:read`.
   `categorySlug`, `q` i `changedSince` (ISO 8601). Zwracana deterministycznie z PostgreSQL
   (`x-search-backend: postgres`).
 - `GET /api/v1/external/catalog/products/:idOrSlug` — szczegóły; dla kluczy powiązanych zawierają
-  `priceTiers` (progi ilościowe organizacji).
+  `priceTiers` (drabinę progów ilościowych organizacji: cenę przy każdej ilości, od której zaczyna
+  się próg jednego z cenników, które jej dotyczą).
 - `GET /api/v1/external/catalog/categories` — drzewo kategorii wyznaczonego kanału.
 
 Wywołujący z kluczem powiązanym widzą opublikowany asortyment powiązanego kanału dokładnie tak jak
 storefront; produkty wykluczone z kanału nie występują, a ich adresy szczegółów zwracają `404` — tak
 samo jak dla nieistniejących. Pozycje zwracane dla klucza powiązanego zawierają dodatkowo:
 
-- `price` — cenę jednostkową obowiązującą organizację przy ilości 1, obliczoną tym samym
-  mechanizmem cen co w koszyku (`null`, gdy nie da się jej wyznaczyć);
+- `price` — cenę jednostkową obowiązującą organizację przy ilości 1, obliczoną tą samą wyceną z
+  cenników co w koszyku (`null`, gdy żaden cennik nie wycenia produktu dla tej organizacji);
 - `priceUnavailable: true` — znacznik, gdy nie udało się wyznaczyć ceny organizacji;
 - `availability` — `{ band, inStock }`.
 
@@ -110,11 +112,16 @@ POST /api/v1/external/catalog/prices
 
 Odpowiedź zachowuje kolejność pozycji. Każda pozycja ma albo cenę (`amount`, `currency`, `isSale`,
 `bracketStartQuantity`, `priceListId`), albo `price: null` z `reason` równym
-`sku_not_in_assortment` lub `price_unavailable`. Braki w pojedynczych pozycjach to dane, a nie
+`sku_not_in_assortment` lub `price_unavailable`. `priceListId` to cennik, który wycenił pozycję, a
+`bracketStartQuantity` — ilość, od której zaczyna się jej próg ilościowy; nazwy pól pochodzą sprzed
+obecnych cenników i zostały zachowane dla zgodności. Pozycja wskazuje SKU produktu; SKU wariantu nie
+jest wyszukiwane i daje `sku_not_in_assortment`. Braki w pojedynczych pozycjach to dane, a nie
 błędy — zawsze dostajesz odpowiedź dla całego zestawu. Ponad 200 pozycji to `422 VALIDATION_FAILED`.
 
 Gwarancja: dla dowolnej pary `(sku, quantity)` zwrócona kwota jest równa, co do grosza, kwocie, którą
 koszyk i składanie zamówienia naliczyłyby powiązanej organizacji w powiązanym kanale przy tej ilości.
+Cena jest wyceniana dla organizacji i jej grupy klientów; własna grupa klientów powiązanego konta
+serwisowego, jeśli ją ma, nie jest tu stosowana.
 
 ## Idempotentne składanie zamówień
 
@@ -140,6 +147,12 @@ Idempotency-Key: acme-order-1001
   `billingAddress` bezpośrednio w treści.
 - Odrzucenie pojedynczych pozycji daje odpowiedź `422` dla całego zamówienia, z problemem przy
   każdej pozycji (`SKU_NOT_IN_ASSORTMENT`, `PRICE_UNAVAILABLE`); nic nie zostaje zapisane.
+- Pozycja, której SKU należy do asortymentu kanału, ale której produkt nie jest teraz dostępny dla
+  Twojej organizacji w tym kanale — wyłączony w kanale, zarchiwizowany, poza oknem publikacji albo
+  ograniczony do innych klientów — odrzuca całe zamówienie odpowiedzią `404 PRODUCT_NOT_FOUND`, bez nazwy
+  produktu; nic nie zostaje zapisane. To sprawdzenie następuje po sprawdzeniu pozycji, więc `422`
+  ma pierwszeństwo. Różnica między tymi odpowiedziami jest zamierzona: klucz jest powiązany z jedną
+  organizacją i jednym kanałem — Twoją własną integracją — a numery SKU są zwykle publiczne.
 - Odpowiedź po powodzeniu (`201`) to standardowa struktura zamówienia — taka sama jak w sesjach
   klientów. Zamówienia można śledzić przez `GET /api/v1/external/orders` i
   `GET /api/v1/external/orders/:id` (`orders:read`); identyfikatory spoza zakresu widoczności zwracają
@@ -183,5 +196,6 @@ ponawiania opisuje [przegląd integracji](./README.md)). Dla partnerów istotne 
 | `IDEMPOTENCY_KEY_REUSED` | 409 | Ten sam klucz idempotencji, inna treść |
 | `SKU_NOT_IN_ASSORTMENT` | 422 (dla pozycji) | SKU nie występuje w asortymencie powiązanego kanału |
 | `PRICE_UNAVAILABLE` | 422 (dla pozycji) | Nie da się wyznaczyć ceny dla organizacji |
+| `PRODUCT_NOT_FOUND` | 404 | Produkt z asortymentu nie jest teraz dostępny dla organizacji w kanale |
 | `STOCK_UNAVAILABLE` | 409 | Niewystarczający stan magazynowy przy składaniu zamówienia |
 | `FORBIDDEN` (`organization_cannot_transact`) | 423 | Organizacja jest zawieszona albo nie może składać zamówień |

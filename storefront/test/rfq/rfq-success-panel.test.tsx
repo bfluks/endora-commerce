@@ -24,7 +24,8 @@ describe('RfqSuccessPanel', () => {
     const html = renderToString(
       <RfqSuccessPanel businessId="RFQ-7" rfqId={rfqId} locale="pl-PL" />,
     );
-    expect(html).toContain('Dziekujemy');
+    // R19C (T269, deliberately changed): the Polish copy carries its diacritics.
+    expect(html).toContain('Dziękujemy');
     expect(html).toContain('Numer Twojego zapytania ofertowego');
     expect(html).not.toContain('Thank you');
   });

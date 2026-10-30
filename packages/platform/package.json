@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/platform",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "sideEffects": false,
   "endora": {
@@ -82,7 +82,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node ../../scripts/copy-package-assets.mjs --src src --out dist",
+    "build": "node ../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json && node ../../scripts/copy-package-assets.mjs --src src --out dist",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "lint": "eslint src",
     "test": "vitest run"

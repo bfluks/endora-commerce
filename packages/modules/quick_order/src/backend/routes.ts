@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
+  firstLanguageTag,
   quickOrderBuildRequestSchema,
   quickOrderImportRequestSchema,
   quickOrderSearchQuerySchema,
@@ -62,6 +63,9 @@ export async function registerQuickOrderRoutes(
       const result = await pipeline.run(parse, {
         maxRows,
         audience: productAudienceOf(request),
+        // Feature 163 — the channel this request resolved, named explicitly:
+        // a buyer paste is never answered by audience alone.
+        salesChannelId: getResolvedChannel(request).id,
       });
       return { data: result };
     },
@@ -74,7 +78,11 @@ export async function registerQuickOrderRoutes(
       const body = quickOrderBuildRequestSchema.parse(request.body);
       const ctx = resolveCustomerContext(request);
       const result = await buildService.build(
-        { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId },
+        {
+          customerAccountId: ctx.customerAccountId,
+          organizationId: ctx.organizationId,
+          salesChannelId: getResolvedChannel(request).id,
+        },
         {
           target: body.target,
           items: body.items.map((item) => ({
@@ -83,6 +91,10 @@ export async function registerQuickOrderRoutes(
             quantity: item.quantity,
           })),
         },
+        // Feature 155 — the buyer's build: no actor, so a quote request is
+        // judged by the buyer's rules (FR-012). Feature 163 — its quote lines'
+        // scope language is the request's tag, not the message language.
+        { language: await request.responseLanguage(), languageTag: firstLanguageTag(request.headers['accept-language']) },
       );
       return { data: result };
     },
@@ -119,13 +131,18 @@ export async function registerQuickOrderRoutes(
       limit: query.limit,
       salesChannelId: getResolvedChannel(request).id,
       organizationId: resolveCustomerContext(request).organizationId,
+      // Feature 163 — the request's language; `catalog` resolves it against
+      // the channel's own languages, so a product off in it is not a hit.
+      languageCode: firstLanguageTag(request.headers['accept-language']),
     });
 
     return {
       data: hits.map((hit) => ({
         productId: hit.productId,
         sku: hit.sku,
-        name: hit.name['en-US'] ?? Object.values(hit.name)[0] ?? hit.sku,
+        // Feature 163 (FR-017 a) — the Name the storefront shows here.
+        // Feature 168 — `hit.name` is the effective string at the search's (C, L).
+        name: hit.name || hit.sku,
         slug: hit.slug,
         status: hit.status,
         matchedOn: hit.matchedOn,

@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { setCartApprovalPolicy } from '../../../../../lib/api/cart';
 import { getSessionCookie, getAnonCartCookie } from '../../../../../lib/session';
 import { getMe } from '../../../../../lib/api/account';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../../lib/i18n/navigation';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -32,9 +32,9 @@ export default async function CartApprovalPolicyPage({
 }): Promise<ReactNode> {
   const params = await searchParams;
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const me = await getMe(session);
-  if (!me.organization) redirect('/account');
+  if (!me.organization) return await localeRedirect('/account');
   if (me.customerAccount.role !== 'organization_admin') {
     return (
       <>
@@ -92,7 +92,7 @@ async function applyPolicy(requiresCartApproval: boolean): Promise<void> {
   'use server';
   const session = await getSessionCookie();
   const anon = await getAnonCartCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   try {
     await setCartApprovalPolicy(
       {
@@ -104,7 +104,7 @@ async function applyPolicy(requiresCartApproval: boolean): Promise<void> {
   } catch (err) {
     const message =
       err instanceof Error ? err.message : 'Could not update the policy.';
-    redirect(`/organization/settings/cart-approval?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/organization/settings/cart-approval?error=${encodeURIComponent(message)}`);
   }
-  redirect(`/organization/settings/cart-approval?ok=${requiresCartApproval ? 'on' : 'off'}`);
+  return await localeRedirect(`/organization/settings/cart-approval?ok=${requiresCartApproval ? 'on' : 'off'}`);
 }

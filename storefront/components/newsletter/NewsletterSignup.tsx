@@ -1,6 +1,6 @@
-import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { getNewsletterStatus, subscribeNewsletter } from '../../lib/api/newsletter';
+import { localeRedirect } from '../../lib/i18n/navigation';
 
 /**
  * Reusable newsletter signup form (feature 048, US1). Server-action form that
@@ -24,7 +24,7 @@ export async function NewsletterSignup({
   async function action(formData: FormData): Promise<void> {
     'use server';
     const email = String(formData.get('email') ?? '').trim();
-    if (!email) redirect('/newsletter/subscribed?status=error');
+    if (!email) return await localeRedirect('/newsletter/subscribed?status=error');
     let status: 'pending' | 'active' = 'pending';
     try {
       const res = await subscribeNewsletter({
@@ -35,9 +35,9 @@ export async function NewsletterSignup({
       });
       status = res.status;
     } catch {
-      redirect('/newsletter/subscribed?status=error');
+      return await localeRedirect('/newsletter/subscribed?status=error');
     }
-    redirect(`/newsletter/subscribed?status=${status}`);
+    return await localeRedirect(`/newsletter/subscribed?status=${status}`);
   }
 
   return (

@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { getSessionCookie } from '../../../../lib/session';
 import { getMe } from '../../../../lib/api/account';
 import {
@@ -12,6 +11,7 @@ import {
 } from '../../../../lib/api/organization';
 import { StorefrontApiError } from '../../../../lib/api/client';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -37,7 +37,7 @@ export default async function MembersPage({
   searchParams: Promise<{ status?: string; error?: string; email?: string }>;
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const me = await getMe(session);
   if (me.customerAccount.role !== 'organization_admin') {
     return (
@@ -161,61 +161,61 @@ export default async function MembersPage({
 async function inviteAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const email = (formData.get('email') as string) ?? '';
   const role = (formData.get('role') as 'regular_user' | 'organization_admin') ?? 'regular_user';
   try {
     await inviteMember(session, { email, role });
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not send invitation.';
-    redirect(`/organization/members?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : 'Could not send invitation.';
+    return await localeRedirect(`/organization/members?error=${encodeURIComponent(message)}`);
   }
-  redirect(`/organization/members?status=invited&email=${encodeURIComponent(email)}`);
+  return await localeRedirect(`/organization/members?status=invited&email=${encodeURIComponent(email)}`);
 }
 
 async function changeRoleAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const memberId = (formData.get('memberId') as string) ?? '';
   const role = (formData.get('role') as 'regular_user' | 'organization_admin') ?? 'regular_user';
   try {
     await changeMemberRole(session, memberId, role);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not change role.';
-    redirect(`/organization/members?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : 'Could not change role.';
+    return await localeRedirect(`/organization/members?error=${encodeURIComponent(message)}`);
   }
-  redirect(`/organization/members`);
+  return await localeRedirect(`/organization/members`);
 }
 
 async function removeAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const memberId = (formData.get('memberId') as string) ?? '';
   try {
     await removeMember(session, memberId);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not remove member.';
-    redirect(`/organization/members?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : 'Could not remove member.';
+    return await localeRedirect(`/organization/members?error=${encodeURIComponent(message)}`);
   }
-  redirect(`/organization/members`);
+  return await localeRedirect(`/organization/members`);
 }
 
 async function revokeAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const invitationId = (formData.get('invitationId') as string) ?? '';
   try {
     await revokeInvitation(session, invitationId);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not revoke invitation.';
-    redirect(`/organization/members?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : 'Could not revoke invitation.';
+    return await localeRedirect(`/organization/members?error=${encodeURIComponent(message)}`);
   }
-  redirect(`/organization/members?status=revoked`);
+  return await localeRedirect(`/organization/members?status=revoked`);
 }

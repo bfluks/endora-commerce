@@ -33,6 +33,12 @@ interface CartApprovalBannerProps {
   rejectedReason: string | null;
   /** Server action — used only when policyOn && approvalStatus === 'not_required'. */
   submitForApprovalAction: (formData: FormData) => Promise<void>;
+  /**
+   * Feature 155, owner ruling 2026-10-18 — set while a cart line is below a minimum or its
+   * product is gone (`cartBlocksCheckout`): the submit button is disabled, with no form behind
+   * it, and this visible sentence is linked to it by `aria-describedby`.
+   */
+  linesBlockedNote?: string | null;
   /** Locale-aware strings. */
   strings: {
     pending: string;
@@ -48,6 +54,7 @@ export function CartApprovalBanner({
   policyOn,
   rejectedReason,
   submitForApprovalAction,
+  linesBlockedNote = null,
   strings,
 }: CartApprovalBannerProps): ReactNode {
   const base = 'mb-3 rounded-sm border px-[14px] py-[12px] text-[13px]';
@@ -79,11 +86,29 @@ export function CartApprovalBanner({
         role="status"
       >
         <span>{strings.policyOn}</span>
-        <form action={submitForApprovalAction}>
-          <button type="submit" className="btn btn--dark btn--sm">
-            {strings.submitButton}
-          </button>
-        </form>
+        {linesBlockedNote ? (
+          <div className="flex flex-col items-end gap-1">
+            <button
+              type="button"
+              className="btn btn--dark btn--sm"
+              disabled
+              aria-disabled
+              aria-describedby="cart-approval-banner-blocked"
+              style={{ opacity: 0.55, cursor: 'not-allowed' }}
+            >
+              {strings.submitButton}
+            </button>
+            <p id="cart-approval-banner-blocked" className="m-0 text-[12px] font-medium text-warn">
+              {linesBlockedNote}
+            </p>
+          </div>
+        ) : (
+          <form action={submitForApprovalAction}>
+            <button type="submit" className="btn btn--dark btn--sm">
+              {strings.submitButton}
+            </button>
+          </form>
+        )}
       </div>
     );
   }

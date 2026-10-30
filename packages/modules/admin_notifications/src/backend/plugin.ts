@@ -15,6 +15,8 @@ import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 export interface AdminNotificationsModuleOptions {
   emFactory: () => EntityManager;
   requireAdmin: RequireAdminFactory;
+  /** `admin_roles`' capability check; decides whether broadcasts are read (issue #518). */
+  hasPermission: (adminUserId: string, code: string) => Promise<boolean>;
   /** Cap of unread per audience before older entries auto-archive. Default 50. */
   maxUnreadPerAudience?: number;
 }
@@ -37,6 +39,7 @@ export function adminNotificationsModule(options: AdminNotificationsModuleOption
       await registerAdminNotificationsRoutes(app, {
         adminNotificationService,
         requireAdmin: options.requireAdmin,
+        hasPermission: options.hasPermission,
       });
     },
   };

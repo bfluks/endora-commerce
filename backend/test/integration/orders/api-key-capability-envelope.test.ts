@@ -143,7 +143,6 @@ describe('external order intake — org capability envelope (062 / T022)', () =>
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
     await em.persistAndFlush(channel);
     channelId = channel.id;

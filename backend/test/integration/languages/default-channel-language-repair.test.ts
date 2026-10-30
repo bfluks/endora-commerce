@@ -44,9 +44,9 @@ describe('languages — repairing a sales channel created with the bare `en` cod
     await em.execute(
       `insert into "sales_channels"
          ("id","code","name","languages","default_language","currencies","default_currency",
-          "active","system_default","version","is_public","status","created_at","updated_at")
+          "active","system_default","version","status","created_at","updated_at")
        values (gen_random_uuid(), ?, '{"en":"Fixture"}'::jsonb, ?::jsonb, ?, '["EUR"]'::jsonb, 'EUR',
-               true, false, ?, false, 'active', now(), now())`,
+               true, false, ?, 'active', now(), now())`,
       [code, JSON.stringify(languages), defaultLanguage, version],
     );
   }

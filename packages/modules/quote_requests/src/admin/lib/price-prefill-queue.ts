@@ -4,7 +4,9 @@
  *
  * Each line asks one question — "what does this customer pay for this product at
  * this quantity?" — and the answer is applied only while it is still the line's
- * question. Asking again for a product supersedes the earlier question, and
+ * question. Questions are keyed by the line (`key`), not by its product: one
+ * product may be on several lines (feature 159, research N-31), each asking at
+ * its own quantity. Asking again for a line supersedes its earlier question, and
  * `forget` (the line was removed) drops it; a superseded or dropped answer is
  * discarded whenever it arrives, so the order in which answers come back does
  * not matter. Staleness is decided by the identity of the request, not by its
@@ -16,7 +18,7 @@
  * is never sent.
  *
  * Pure on purpose: the page injects `fetch` (over
- * `GET /api/v1/admin/products/:id/resolved-price`) and `onResult` (which must
+ * `POST /api/v1/admin/price-books/resolve`) and `onResult` (which must
  * itself refuse to overwrite a hand-typed price — the operator may type one
  * while its question is in flight).
  */
@@ -24,25 +26,29 @@
 export const PRICE_PREFILL_MAX_IN_FLIGHT = 4;
 
 export interface PricePrefillRequest {
+  /** The line asking — the handle `onResult` and `forget` use. */
+  key: string;
   productId: string;
   quantity: number;
   customerId: string;
   organizationId: string;
+  /** Feature 163 — the channel the request is raised on; absent, the resolver's default. */
+  salesChannelId?: string | undefined;
 }
 
 export interface PricePrefillQueueOptions {
   /** The resolved amount, or `null` when no price resolves. A rejection counts as `null`. */
   fetch: (request: PricePrefillRequest) => Promise<string | null>;
-  /** Called with the answer to a line's current question only. */
-  onResult: (productId: string, amount: string | null) => void;
+  /** Called with the answer to a line's current question only, by the line's `key`. */
+  onResult: (key: string, amount: string | null) => void;
   maxInFlight?: number | undefined;
 }
 
 export interface PricePrefillQueue {
-  /** Ask (again) for a product's price; supersedes any earlier question for it. */
+  /** Ask (again) for a line's price; supersedes any earlier question of that line. */
   request: (request: PricePrefillRequest) => void;
-  /** The product's line is gone: its question, waiting or in flight, is dropped. */
-  forget: (productId: string) => void;
+  /** The line is gone: its question, waiting or in flight, is dropped. */
+  forget: (key: string) => void;
   /** Stop: nothing waiting is sent and no answer is applied. */
   dispose: () => void;
 }
@@ -53,19 +59,19 @@ interface Ticket {
 
 export function createPricePrefillQueue(options: PricePrefillQueueOptions): PricePrefillQueue {
   const maxInFlight = options.maxInFlight ?? PRICE_PREFILL_MAX_IN_FLIGHT;
-  /** The current question per product — the only one whose answer is applied. */
+  /** The current question per line — the only one whose answer is applied. */
   const latest = new Map<string, Ticket>();
   const waiting: Ticket[] = [];
   let inFlight = 0;
   let disposed = false;
 
-  const isCurrent = (ticket: Ticket): boolean => latest.get(ticket.request.productId) === ticket;
+  const isCurrent = (ticket: Ticket): boolean => latest.get(ticket.request.key) === ticket;
 
   const settle = (ticket: Ticket, amount: string | null): void => {
     inFlight -= 1;
     if (!disposed && isCurrent(ticket)) {
-      latest.delete(ticket.request.productId);
-      options.onResult(ticket.request.productId, amount);
+      latest.delete(ticket.request.key);
+      options.onResult(ticket.request.key, amount);
     }
     pump();
   };
@@ -86,12 +92,12 @@ export function createPricePrefillQueue(options: PricePrefillQueueOptions): Pric
     request(request) {
       if (disposed) return;
       const ticket: Ticket = { request: { ...request } };
-      latest.set(request.productId, ticket);
+      latest.set(request.key, ticket);
       waiting.push(ticket);
       pump();
     },
-    forget(productId) {
-      latest.delete(productId);
+    forget(key) {
+      latest.delete(key);
     },
     dispose() {
       disposed = true;

@@ -101,3 +101,86 @@ describe('textblockPaths', () => {
     expect(textblockPaths(doc)).toEqual([[0], [1, 0, 0], [2, 0], [3, 0, 0, 0]]);
   });
 });
+
+/**
+ * Feature 163, T163 — an icon inside a heading's inline rich text
+ * (`{type: 'inlineIcon', attrs: {name}}`) is one atomic `<n/>` tag: its name
+ * never reaches the translator, it may move within the sentence, and a
+ * translation that drops or repeats it is refused.
+ */
+describe('an inline icon (feature 163, T163)', () => {
+  const ICON = { type: 'inlineIcon', attrs: { name: 'sparkles' } };
+  const MARKED_ICON = { type: 'inlineIcon', attrs: { name: 'arrowRight' }, marks: [{ type: 'emphasis', attrs: { variant: 'accent' } }] };
+  const heading: TiptapNode = {
+    type: 'paragraph',
+    content: [ICON, { type: 'text', text: ' New ' }, { type: 'text', text: 'ideas', marks: [BOLD] }, MARKED_ICON],
+  };
+  const encoded = encodeInline(heading);
+
+  it('is one self-closing tag, without its name', () => {
+    expect(encoded.text).toBe('<0/> New <1>ideas</1><2/>');
+    expect(encoded.text).not.toContain('sparkles');
+  });
+
+  it('comes back as the same node, marks included, wherever the translation puts it', () => {
+    expect(decodeInline('<0/> Nowe <1>pomysły</1><2/>', encoded)).toEqual([
+      ICON,
+      { type: 'text', text: ' Nowe ' },
+      { type: 'text', text: 'pomysły', marks: [BOLD] },
+      MARKED_ICON,
+    ]);
+    expect(decodeInline('<1>Pomysły</1> <2/>nowe <0/>', encoded)).not.toBeNull();
+  });
+
+  it.each([
+    ['a dropped icon', ' Nowe <1>pomysły</1><2/>'],
+    ['a repeated icon', '<0/><0/> Nowe <1>pomysły</1><2/>'],
+    ['an icon used as a run', '<0>x</0> Nowe <1>pomysły</1><2/>'],
+  ])('rejects %s', (_label, translated) => {
+    expect(decodeInline(translated, encoded)).toBeNull();
+  });
+});
+
+/**
+ * Feature 163, T166 — an inline icon's size and vertical offset are attributes
+ * of the same atomic node: they never reach the translator and come back as
+ * they were, wherever the translation puts the icon.
+ */
+describe('an inline icon with a size and an offset (feature 163, T166)', () => {
+  const SIZED = { type: 'inlineIcon', attrs: { name: 'sparkles', size: '0.5em', offset: 0.35 } };
+  const heading: TiptapNode = { type: 'paragraph', content: [{ type: 'text', text: 'New ideas ' }, SIZED] };
+  const encoded = encodeInline(heading);
+
+  it('is one self-closing tag, without its name, size or offset', () => {
+    expect(encoded.text).toBe('New ideas <0/>');
+    for (const attribute of ['sparkles', '0.5em', '0.35']) expect(encoded.text).not.toContain(attribute);
+  });
+
+  it('comes back with its size and offset, wherever the translation puts it', () => {
+    expect(decodeInline('<0/> Nowe pomysły', encoded)).toEqual([SIZED, { type: 'text', text: ' Nowe pomysły' }]);
+  });
+});
+
+describe('an emphasis with a colour (feature 163, T175)', () => {
+  const COLOURED = { type: 'emphasis', attrs: { variant: 'gradient', color: 'token:primary' } };
+  const heading: TiptapNode = {
+    type: 'paragraph',
+    content: [
+      { type: 'text', text: 'Safety ' },
+      { type: 'text', text: 'built in', marks: [COLOURED] },
+    ],
+  };
+
+  it('is one numbered tag, without its variant or colour', () => {
+    const { text } = encodeInline(heading);
+    expect(text).toBe('Safety <0>built in</0>');
+    expect(text).not.toContain('primary');
+  });
+
+  it('comes back with its variant and colour, wherever the translation puts it', () => {
+    expect(decodeInline('<0>Wbudowane</0> bezpieczeństwo', encodeInline(heading))).toEqual([
+      { type: 'text', text: 'Wbudowane', marks: [COLOURED] },
+      { type: 'text', text: ' bezpieczeństwo' },
+    ]);
+  });
+});

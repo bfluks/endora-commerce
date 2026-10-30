@@ -181,7 +181,17 @@ describe('ProductPicker — rules, alreadyAddedIds, onPickProduct', () => {
 
   const ROWS = [
     { id: 'p-group', sku: 'GRP-1', slug: 'grp', name: { 'en-US': 'Grouped set' }, status: 'active', type: 'grouped' },
-    { id: 'p-draft', sku: 'DRF-1', slug: 'drf', name: { 'en-US': 'Draft widget' }, status: 'draft', type: 'simple' },
+    { id: 'p-off', sku: 'OFF-1', slug: 'off', name: { 'en-US': 'Paused widget' }, status: 'inactive', type: 'simple' },
+    // Feature 163 (FR-019) — archived whatever its status: refused for being archived.
+    {
+      id: 'p-archived',
+      sku: 'ARC-1',
+      slug: 'arc',
+      name: { 'en-US': 'Retired widget' },
+      status: 'active',
+      type: 'simple',
+      archivedAt: '2026-10-20T00:00:00.000Z',
+    },
     { id: 'p-added', sku: 'ADD-1', slug: 'add', name: { 'en-US': 'Added widget' }, status: 'active', type: 'simple' },
     { id: 'p-ok', sku: 'OK-1', slug: 'ok', name: { 'en-US': 'Plain widget', 'pl-PL': 'Zwykły widżet' }, status: 'active', type: 'simple' },
   ];
@@ -189,7 +199,8 @@ describe('ProductPicker — rules, alreadyAddedIds, onPickProduct', () => {
   const ORDER_RULES = {
     initialStatus: 'active' as const,
     blockedTypes: ['grouped', 'bundle'] as const,
-    blockedStatuses: ['draft', 'inactive'] as const,
+    blockedStatuses: ['inactive'] as const,
+    blockArchived: true,
   };
 
   function withSession(ui: ReactElement, permissions: readonly string[]): ReactElement {
@@ -223,9 +234,12 @@ describe('ProductPicker — rules, alreadyAddedIds, onPickProduct', () => {
     const group = screen.getByRole('option', { name: /Grouped set/ });
     expect(group.getAttribute('aria-disabled')).toBe('true');
     expect(group.textContent).toContain('Product group — pick its individual products');
-    const draft = screen.getByRole('option', { name: /Draft widget/ });
-    expect(draft.getAttribute('aria-disabled')).toBe('true');
-    expect(draft.textContent).toContain('Not active — cannot be added');
+    const off = screen.getByRole('option', { name: /Paused widget/ });
+    expect(off.getAttribute('aria-disabled')).toBe('true');
+    expect(off.textContent).toContain('Not active — cannot be added');
+    const archived = screen.getByRole('option', { name: /Retired widget/ });
+    expect(archived.getAttribute('aria-disabled')).toBe('true');
+    expect(archived.textContent).toContain('Archived — cannot be added');
     const added = screen.getByRole('option', { name: /Added widget/ });
     expect(added.getAttribute('aria-disabled')).toBe('true');
     expect(added.textContent).toContain('Already added');
@@ -244,6 +258,23 @@ describe('ProductPicker — rules, alreadyAddedIds, onPickProduct', () => {
       status: 'active',
       type: 'simple',
     });
+  });
+
+  it('a host that does not refuse archived products sees them selectable, labelled Archived beside the status', async () => {
+    getSpy.mockResolvedValue({ data: ROWS });
+    const user = userEvent.setup();
+    renderWithI18n(
+      withSession(
+        <ProductPicker mode="select" value={null} onChange={vi.fn()} rules={{ initialStatus: 'all' }} />,
+        ['catalog:read'],
+      ),
+      CORE,
+    );
+    await user.click(screen.getByRole('combobox'));
+    const archived = await screen.findByRole('option', { name: /Retired widget/ });
+    expect(archived.getAttribute('aria-disabled')).toBeNull();
+    expect(archived.textContent).toContain('ARC-1 · Archived');
+    expect(screen.getByRole('option', { name: /Paused widget/ }).textContent).toContain('OFF-1 · Inactive');
   });
 
   it('with rules and without catalog:read it is disabled with the hint', () => {
@@ -275,7 +306,7 @@ describe('ProductPicker — rules, alreadyAddedIds, onPickProduct', () => {
     for (const option of screen.getAllByRole('option')) {
       expect(option.getAttribute('aria-disabled')).toBeNull();
     }
-    expect(screen.getByRole('option', { name: /Draft widget/ }).textContent).toContain('DRF-1 · draft');
+    expect(screen.getByRole('option', { name: /Paused widget/ }).textContent).toContain('OFF-1 · inactive');
     expect(getSpy.mock.calls.at(-1)?.[0]).toBe('/api/v1/admin/catalog/products?page=0&pageSize=20');
   });
 

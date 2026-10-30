@@ -59,6 +59,7 @@
     "@endora-commerce/mod-payments": "workspace:*",
     "@endora-commerce/mod-price-lists": "workspace:*",
     "@endora-commerce/mod-product-feeds": "workspace:*",
+    "@endora-commerce/mod-projects": "workspace:*",
     "@endora-commerce/mod-promotions": "workspace:*",
     "@endora-commerce/mod-pwa": "workspace:*",
     "@endora-commerce/mod-quick-order": "workspace:*",
@@ -67,6 +68,7 @@
     "@endora-commerce/mod-sales-channels": "workspace:*",
     "@endora-commerce/mod-seo": "workspace:*",
     "@endora-commerce/mod-settings": "workspace:*",
+    "@endora-commerce/mod-tasks": "workspace:*",
     "@endora-commerce/mod-taxes": "workspace:*",
     "@endora-commerce/mod-transactional-emails": "workspace:*",
     "@endora-commerce/mod-webhooks": "workspace:*",
@@ -106,7 +108,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "jsdom": "^29.1.1",
     "typescript": "^5.9.3",
-    "vite": "^7.3.2",
+    "vite": "^7.3.7",
     "vitest": "^4.1.11"
   }
 }

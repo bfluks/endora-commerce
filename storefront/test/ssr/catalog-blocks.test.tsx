@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { CatalogPreviewProvider } from '@endora-commerce/cms-components/components/catalog-preview-context';
-import type { CatalogBlockData as ResolvedCatalogBlockData } from '@endora-commerce/cms-components/utils/catalog-block-data';
+import type { BlockData as ResolvedBlockData } from '@endora-commerce/cms-components/utils/block-data';
 import { BlockRenderScope } from '../../components/BlockRenderScope';
-import { CatalogBlockData } from '../../components/CatalogBlockData';
+import { BlockData } from '../../components/BlockData';
 import { PageBuilderRender } from '../../components/PageBuilderRender';
 import type { RequestContext } from '../../lib/api/client';
-import { resolveCatalogBlockDataFor } from '../../lib/page-builder/catalog-block-data';
+import { resolveBlockDataFor } from '../../lib/page-builder/block-data';
 
 /**
  * Catalogue blocks on a CMS page are part of the server-rendered HTML.
@@ -138,11 +138,11 @@ function inScope(children: ReactElement): string {
 
 /** The page as the storefront renders it: resolved on the server, then handed to the blocks. */
 async function renderResolved(document: Record<string, unknown>, ctx: RequestContext = CTX): Promise<string> {
-  const data = await resolveCatalogBlockDataFor([document], ctx);
+  const data = await resolveBlockDataFor([document], ctx);
   return renderWith(document, data);
 }
 
-function renderWith(document: Record<string, unknown>, data: ResolvedCatalogBlockData): string {
+function renderWith(document: Record<string, unknown>, data: ResolvedBlockData): string {
   return inScope(
     <CatalogPreviewProvider data={data}>
       <PageBuilderRender data={document} />
@@ -205,7 +205,7 @@ describe('a catalogue block given its data', () => {
   it('resolves a whole page through the server component the page renderer mounts', async () => {
     stubBackend();
     const document = documentOf(BLOCKS.heading, BLOCKS.grid, BLOCKS.categoryList);
-    const element = await CatalogBlockData({
+    const element = await BlockData({
       documents: [document],
       ctx: CTX,
       children: <PageBuilderRender data={document} />,
@@ -250,7 +250,7 @@ describe('the reads behind a page of catalogue blocks', () => {
 
   it('carries the sales channel, the language and the currency of the request on every read', async () => {
     stubBackend();
-    await resolveCatalogBlockDataFor([page], CTX);
+    await resolveBlockDataFor([page], CTX);
 
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls) {
@@ -267,7 +267,7 @@ describe('the reads behind a page of catalogue blocks', () => {
 
   it('asks for each product once, for the category tree once, and for a listing with its own filter', async () => {
     stubBackend();
-    await resolveCatalogBlockDataFor([page], CTX);
+    await resolveBlockDataFor([page], CTX);
 
     const paths = calls.map((call) => call.url.replace('http://api.test', '')).sort();
     expect(paths).toEqual([
@@ -280,7 +280,7 @@ describe('the reads behind a page of catalogue blocks', () => {
 
   it('reads anonymously, and from the shared cache, for a visitor with no session', async () => {
     stubBackend();
-    await resolveCatalogBlockDataFor([page], CTX);
+    await resolveBlockDataFor([page], CTX);
 
     for (const call of calls) {
       expect(headerOf(call, 'Cookie')).toBeUndefined();
@@ -290,7 +290,7 @@ describe('the reads behind a page of catalogue blocks', () => {
 
   it('reads the priced products as the signed-in buyer, and stores none of those answers', async () => {
     stubBackend();
-    await resolveCatalogBlockDataFor([page], { ...CTX, viewerSession: 'buyer-session' });
+    await resolveBlockDataFor([page], { ...CTX, viewerSession: 'buyer-session' });
 
     const priced = calls.filter((call) => call.url.includes('/catalog/products'));
     expect(priced).toHaveLength(3);
@@ -303,7 +303,7 @@ describe('the reads behind a page of catalogue blocks', () => {
 
   it('hands the page only the fields a block renders', async () => {
     stubBackend();
-    const data = await resolveCatalogBlockDataFor([documentOf(BLOCKS.card)], CTX);
+    const data = await resolveBlockDataFor([documentOf(BLOCKS.card)], CTX);
 
     const serialised = JSON.stringify(data);
     expect(serialised).toContain('Cordless Drill 18V');
@@ -313,7 +313,7 @@ describe('the reads behind a page of catalogue blocks', () => {
 
   it('makes no request at all for a page with no catalogue block', async () => {
     stubBackend();
-    const data = await resolveCatalogBlockDataFor([documentOf(BLOCKS.heading)], CTX);
+    const data = await resolveBlockDataFor([documentOf(BLOCKS.heading)], CTX);
 
     expect(data).toEqual({});
     expect(calls).toEqual([]);

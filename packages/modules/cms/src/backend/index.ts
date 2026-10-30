@@ -30,7 +30,8 @@ import { CmsPageReadService } from './services/cms-page-read-port.js';
 import { lazyPort, type ModuleContext } from '@endora-commerce/platform/kernel';
 import { effectiveState } from '@endora-commerce/platform/kernel';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
-import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { RequireAdminFactory, SalesChannelResolutionPort } from '@endora-commerce/platform/kernel';
+import { channelLanguagePrefixes } from './services/channel-language-prefixes.js';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 import { StorefrontRevalidator } from '@endora-commerce/platform/http';
@@ -41,6 +42,7 @@ import { createAssetEmbedResolver } from './services/asset-embed-resolver.js';
 import { registerCmsAssetReferences } from './services/asset-references.js';
 import { registerCmsLanguageReferences } from './services/cms-language-reference.js';
 import { CmsBlock } from './entities/cms-block.entity.js';
+import { CmsBrandTokens } from './entities/cms-brand-tokens.entity.js';
 import { CmsHookBlockAttachment } from './entities/cms-hook-block-attachment.entity.js';
 import { CmsHook } from './entities/cms-hook.entity.js';
 import { CmsPage } from './entities/cms-page.entity.js';
@@ -184,6 +186,9 @@ export interface CmsCradle {
 
 const breakpointSchema = z.number().int().positive();
 
+/** `cms.default_share_image_asset_id` — an asset id, or `''` while unset. */
+const shareImageSettingSchema = z.string();
+
 /**
  * The reserved-segments Setting as it comes off the store.
  *
@@ -287,11 +292,18 @@ export function registerModule(ctx: ModuleContext): void {
           // is not the only one caching CMS content: `megamenu` inlines a
           // block's tree into a menu payload and can learn that the block moved
           // from nowhere else. The bus is read per change, never captured.
-          publishContentChange: (change) => {
-            ctx.cradle<CmsCradle>().eventBus.emit(CMS_CONTENT_CHANGED_EVENT, {
-              eventId: randomUUID(),
-              occurredAt: new Date().toISOString(),
-              ...change,
+          //
+          // R19C (T271): dispatched in a bus scope, so the write awaits its
+          // handlers — the storefront revalidation below among them — and the
+          // request after a save or a publish reads the new content.
+          publishContentChange: async (change) => {
+            const bus = ctx.cradle<CmsCradle>().eventBus;
+            await bus.run(async () => {
+              bus.emit(CMS_CONTENT_CHANGED_EVENT, {
+                eventId: randomUUID(),
+                occurredAt: new Date().toISOString(),
+                ...change,
+              });
             });
           },
           // Feature 096, T209/T210. The declarations are fixed at composition;
@@ -305,6 +317,9 @@ export function registerModule(ctx: ModuleContext): void {
           // a captured guard would keep admitting requests after `auth` goes.
           requireAdmin: (permission) => async (req, reply) =>
             ctx.cradle<CmsCradle>().requireAdmin(permission)(req, reply),
+          // Feature 163 — a committed brand-token write drops the storefront's
+          // `cms:brand` entries. Read per call, like the bus above.
+          revalidateStorefront: (tags) => ctx.cradle<CmsCradle>().cmsStorefrontRevalidator.revalidate(tags),
           // Feature 151 (research R11). Everything is read per request: the
           // three settings through the store (platform-wide, D-41's `null`),
           // presence of `credentials` before its port is touched, and the port
@@ -407,6 +422,14 @@ export function registerModule(ctx: ModuleContext): void {
          * that state anyway: the manifest declares `defaultValue: []`, so the
          * store answers the empty list without an error.
          */
+        // Feature 167 (FR-040) — every channel's language prefixes and split aliases,
+        // asked per save through the kernel's channel port, so a language added to a
+        // channel reserves its prefix at once.
+        result.handle.setLanguagePrefixesResolver(async () =>
+          channelLanguagePrefixes(
+            await lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort').listAll(),
+          ),
+        );
         result.handle.setReservedSlugSegmentsResolver(async () => {
           const { settingsReadPort } = ctx.cradle<CmsCradle>();
           return settingsReadPort.get(
@@ -424,6 +447,29 @@ export function registerModule(ctx: ModuleContext): void {
         result.handle.setAssetResolver(async (assetId) =>
           ctx.cradle<CmsCradle>().cmsAssetResolver(assetId),
         );
+
+        /**
+         * Feature 163 (FR-033) — the default sharing image, read for the
+         * **request's** channel the storefront route resolved (Constitution
+         * XII), so a channel may carry its own. The manifest declares `''`, so
+         * an unset value answers without an error; a settings store the
+         * platform refuses to serve is not that and goes through, while any
+         * other failure costs the page its image rather than the page.
+         */
+        result.handle.setDefaultShareImageResolver(async (salesChannelId) => {
+          const { settingsReadPort } = ctx.cradle<CmsCradle>();
+          try {
+            const assetId = await settingsReadPort.get(
+              CMS_SETTING_CODES.DEFAULT_SHARE_IMAGE_ASSET_ID,
+              salesChannelId,
+              shareImageSettingSchema,
+            );
+            return assetId.trim().length > 0 ? assetId.trim() : null;
+          } catch (err) {
+            rethrowIfModuleDisabled(err);
+            return null;
+          }
+        });
 
         return result;
       })
@@ -564,12 +610,17 @@ export function registerModule(ctx: ModuleContext): void {
    * the module — a switched-off `cms` has no write route to publish from, and
    * no storefront surface left to refresh.
    *
-   * Not awaited: the save has already answered, and the storefront being slow
-   * or absent is not the operator's problem to wait on.
+   * Handed back to the bus (R19C, T271): the write dispatches the change in a
+   * bus scope and awaits it, so a save or a publish answers once the storefront
+   * has dropped the tags and the next storefront request reads the new
+   * content — before, the first request after a publish could still be served
+   * the previous render. The revalidator never throws and gives up on a slow
+   * storefront after its timeout, so an absent storefront delays a save by at
+   * most that and never fails it.
    */
   ctx.subscribe(CMS_CONTENT_CHANGED_EVENT, (payload) => {
     const change = payload as EventBase & CmsContentChange;
-    void ctx.cradle<CmsCradle>().cmsStorefrontRevalidator.revalidate(storefrontTagsFor(change));
+    return ctx.cradle<CmsCradle>().cmsStorefrontRevalidator.revalidate(storefrontTagsFor(change));
   });
 
   ctx.routes(async (app) => {
@@ -612,6 +663,7 @@ export function registerModule(ctx: ModuleContext): void {
  */
 export const entities = [
   CmsBlock,
+  CmsBrandTokens,
   CmsHookBlockAttachment,
   CmsHook,
   CmsPage,

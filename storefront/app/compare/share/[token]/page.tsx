@@ -23,7 +23,7 @@ export default async function SharedComparePage(props: {
   params: Promise<{ token: string }>;
 }): Promise<ReactNode> {
   const { token } = await props.params;
-  const { locale } = await getServerContext();
+  const { locale, ctx } = await getServerContext();
   const t = tForLocale(locale);
   return (
     <div className="mx-auto max-w-[1360px] px-[24px]" style={{ paddingTop: 24, paddingBottom: 56 }}>
@@ -43,7 +43,7 @@ export default async function SharedComparePage(props: {
           </p>
         </div>
       </div>
-      <SharedComparisonTable token={token} locale={locale} />
+      <SharedComparisonTable token={token} locale={locale} salesChannelCode={ctx.salesChannelCode} />
     </div>
   );
 }

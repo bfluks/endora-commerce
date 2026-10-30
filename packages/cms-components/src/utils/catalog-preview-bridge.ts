@@ -1,3 +1,4 @@
+import type { CmsBlogPostCard } from '../schema/blog-types.js';
 import type { CmsCategoryNode, CmsProductSummary } from '../schema/catalog-types.js';
 
 export interface CatalogPreviewApi {
@@ -8,6 +9,11 @@ export interface CatalogPreviewApi {
     limit?: number;
   }) => Promise<CmsProductSummary[]>;
   fetchCategoryTree: () => Promise<CmsCategoryNode[]>;
+  /**
+   * The editor's read of `blog.LatestPosts` (feature 163). Optional: an editor
+   * without it previews the block through the public list API.
+   */
+  fetchBlogPosts?: (query: { limit: number; categorySlug?: string }) => Promise<CmsBlogPostCard[]>;
 }
 
 let previewApiGetter: (() => CatalogPreviewApi | null) | null = null;

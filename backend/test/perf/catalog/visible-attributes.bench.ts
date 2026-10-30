@@ -141,8 +141,8 @@ describe.skipIf(!shouldRun)('catalog visibleAttributes — p95 latency', () => {
         slug: `bench-product-${i}`,
         type: 'simple',
         status: 'active',
-        name: { 'en-US': `Bench product ${i}` },
-        description: { 'en-US': 'Perf bench fixture.' },
+        name: `Bench product ${i}`,
+        description: 'Perf bench fixture.',
         visibility: 'public',
         attributeValues: values,
         attributeSetId: DEFAULT_SET_ID,
@@ -172,7 +172,6 @@ describe.skipIf(!shouldRun)('catalog visibleAttributes — p95 latency', () => {
     const resolvedChannel = {
       id: def.id,
       code: def.code,
-      isPublic: def.isPublic,
       defaultCurrency: def.defaultCurrency,
       defaultLanguage: def.defaultLanguage,
     };

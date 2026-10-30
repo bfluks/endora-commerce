@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   ERROR_CODES,
@@ -17,6 +18,7 @@ import { TEST_ADMIN_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.j
 import { CrmOpportunityAttachment } from '../../helpers/package-entities.js';
 import { AssetReferenceRegistry } from '../../../../packages/modules/assets_library/src/backend/services/reference-registry.js';
 import { AssetsLibraryService } from '../../../../packages/modules/assets_library/src/backend/services/assets-library.service.js';
+import { AssetVisibility } from '../../../../packages/modules/assets_library/src/backend/services/asset-visibility.js';
 import {
   CRM_ADMIN,
   CRM_API,
@@ -193,6 +195,8 @@ describe('crm attachments', () => {
           // The number, not the title: whoever is deleting a file in the
           // library need not be somebody who may read the Opportunity.
           label: `Sales opportunity ${opportunity.number}`,
+          // The asset the reference points at (feature 166, research R-6).
+          assetId: file.id,
         },
       ]);
       // The library itself refuses, through its own admin API.
@@ -227,6 +231,14 @@ describe('crm attachments', () => {
           emFactory: () => h.em(),
           adapters: h.assetsLibrary.adapters,
           referenceRegistry: own,
+          // Feature 166: the library's visibility rule over the same registry, for the
+          // system actor — this test is about enumeration, which no reader narrows.
+          visibility: new AssetVisibility({
+            registry: own,
+            isPresent: () => true,
+            permissions: () => ({ listPermissions: async () => [] }),
+            tenantContext: () => ({ actor: { kind: 'system' } }),
+          }),
           loadUploadPolicy: async () => ({ allowedTypes: ['*'], maxFileSizeMb: 0 }),
         });
 
@@ -374,5 +386,77 @@ describe('crm attachments', () => {
       expect(row?.url).toMatch(/[?&]download=1(&|$)/);
       expect(row?.url).toMatch(/[?&]token=/);
     });
+  });
+
+  /**
+   * FR-006 (`specs/166-asset-reference-visibility/` research R-13, F-19): a file
+   * the library hides from the caller is not there to attach. Here it is held
+   * by **another** module's record — a private Task of somebody else, which a
+   * reader holding `tasks:read` without `tasks:see_private` may not see — so
+   * CRM's own holder check cannot see it; and one of the two is **public**, so
+   * the refusal must come before the private-file one to give the missing-file
+   * sentence.
+   */
+  describe('attaching a file the library hides from the caller (feature 166, FR-006)', () => {
+    const privateTask = randomUUID();
+    let reader: Seeded;
+
+    beforeAll(async () => {
+      reader = await seedCrmSalesRep(h.em(), [TEST_ORGANIZATION_ID], ['crm:read', 'crm:write', 'tasks:read', 'assets.read']);
+      await h
+        .em()
+        .getConnection()
+        .execute(
+          `insert into "tasks" ("id", "number", "title", "created_by_admin_user_id", "is_private") values (?, ?, 'Private', ?, true)`,
+          [privateTask, `T-F6-${privateTask.slice(0, 8)}`, TEST_ADMIN_ID],
+        );
+    });
+
+    afterAll(async () => {
+      reader?.undo();
+      await h.em().getConnection().execute(`delete from "tasks" where "id" = ?`, [privateTask]);
+    });
+
+    it.each(['private', 'public'] as const)(
+      'refuses a %s file held only by a Task the caller may not see — the missing-file 422',
+      async (visibility) => {
+        const own = await createCrmOpportunity(h);
+        const file = await asset({ visibility });
+        await h
+          .em()
+          .getConnection()
+          .execute(`insert into "task_attachments" ("task_id", "asset_id", "added_by_admin_user_id") values (?, ?, ?)`, [
+            privateTask,
+            file.id,
+            TEST_ADMIN_ID,
+          ]);
+
+        const base = `/opportunities/${own.id}/attachments`;
+        const hidden = await call('POST', base, { assetId: file.id }, reader.cookies);
+        const missing = await call('POST', base, { assetId: randomUUID() }, reader.cookies);
+        expect(missing.statusCode, missing.body).toBe(422);
+        expect(hidden.statusCode, hidden.body).toBe(422);
+        const shape = (body: string) => {
+          const { requestId: _requestId, ...rest } = (JSON.parse(body) as { error: Record<string, unknown> }).error;
+          return rest;
+        };
+        expect(shape(hidden.body)).toEqual(shape(missing.body));
+        expect(shape(hidden.body)).toMatchObject({
+          code: ERROR_CODES.VALIDATION_FAILED,
+          message: 'The file does not exist in the media library.',
+        });
+        expect(await list(own.id)).toEqual([]);
+
+        // The control: the Platform administrator sees the Task, so the file is there to attach
+        // — and is then refused for what it is (a public file), not for being missing.
+        const forAdmin = await call('POST', base, { assetId: file.id });
+        if (visibility === 'private') {
+          expect(forAdmin.statusCode, forAdmin.body).toBe(201);
+        } else {
+          expect(forAdmin.statusCode, forAdmin.body).toBe(422);
+          expect(forAdmin.json().error.message).not.toBe('The file does not exist in the media library.');
+        }
+      },
+    );
   });
 });

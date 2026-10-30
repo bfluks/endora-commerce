@@ -609,7 +609,7 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
       `select id from sales_channels where system_default limit 1`,
     );
     const salesChannelId = channel!.id;
-    const [priceList] = await query<{ id: string }>(`select id from price_lists limit 1`);
+    const [priceList] = await query<{ id: string }>(`select id from price_lists where is_system limit 1`);
     const [warehouse] = await query<{ id: string }>(
       `select id from warehouses where code <> 'pl-krk' order by created_at limit 1`,
     );
@@ -625,10 +625,25 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
       role: 'regular_user',
     });
     await add('organization_sales_rep_assignments', { organization_id: organizationId });
-    await add('sales_channel_organizations', {
-      organization_id: organizationId,
-      sales_channel_id: salesChannelId,
-    });
+    // Feature 154 — the demo seed binds its organisation to the default channel
+    // itself (the buyer could not shop without it), so for the demo the row is
+    // already there: it is tracked rather than written a second time.
+    const [bound] = await query<{ present: number }>(
+      `select 1 as present from sales_channel_organizations
+       where organization_id = $1 and sales_channel_id = $2`,
+      [organizationId, salesChannelId],
+    );
+    if (bound) {
+      tracked.get(owner)!.push({
+        table: 'sales_channel_organizations',
+        where: { organization_id: organizationId, sales_channel_id: salesChannelId },
+      });
+    } else {
+      await add('sales_channel_organizations', {
+        organization_id: organizationId,
+        sales_channel_id: salesChannelId,
+      });
+    }
     await add('sales_channel_customer_accounts', {
       customer_account_id: customerAccountId,
       sales_channel_id: salesChannelId,
@@ -670,7 +685,9 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
       target_id: organizationId,
       mode: 'net_only',
     });
-    await add('price_list_assignments', {
+    // Feature 160 — an operator's price book naming the organisation in its
+    // audience set (the member row cascades with the organisation).
+    await add('price_list_audience_members', {
       organization_id: organizationId,
       price_list_id: priceList!.id,
     });
@@ -919,10 +936,122 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
     });
   }
 
-  /** Every usage counter of `promotions`, as `<scope type> <scope key>` → count. */
+  /**
+   * A Project of one tenant, with a Stage, a Task in it and what an
+   * administrator hangs on it — written in one transaction, because an open
+   * Project must have a current Stage by the time it commits
+   * (`projects_open_has_current_stage`, deferred).
+   *
+   * `organizations` is who the Project is for, each row tracked as the owner
+   * given beside it; an empty list is an internal Project.
+   */
+  async function aProject(
+    owner: Owner,
+    organizations: ReadonlyArray<readonly [Owner, string]>,
+  ): Promise<string> {
+    const add = (table: string, given: Record<string, unknown>): Promise<string> =>
+      insert(owner, table, given);
+    await db.query('begin');
+    try {
+      const projectId = await add('projects', { state: 'open', visibility: 'inherit' });
+      const stageId = await add('project_stages', {
+        project_id: projectId,
+        position: 0,
+        color: '#336699',
+      });
+      await db.query(`update projects set current_stage_id = $1 where id = $2`, [stageId, projectId]);
+      for (const [organizationOwner, organizationId] of organizations) {
+        await insert(organizationOwner, 'project_organizations', {
+          project_id: projectId,
+          organization_id: organizationId,
+        });
+      }
+      await add('project_members', { project_id: projectId });
+      await add('project_comments', { project_id: projectId, kind: 'note' });
+      await add('project_stage_entries', { project_id: projectId, to_stage_id: stageId, kind: 'enter' });
+      await add('tasks', {
+        status: 'todo',
+        context_type: 'project',
+        context_id: projectId,
+        context_group_id: stageId,
+      });
+      await db.query('commit');
+      return projectId;
+    } catch (error) {
+      await db.query('rollback');
+      throw error;
+    }
+  }
+
+  /**
+   * Projects an administrator opened for the demo organisation, for the real
+   * customer, for both at once, and for nobody (feature 163).
+   *
+   * `project_organizations.organization_id` is `on delete restrict`, so the
+   * demo's Project refuses the organisation's deletion; its Task names it by a
+   * bare `uuid` and would be left naming a Project that is gone. The Project
+   * the two organisations share is the real customer's as much as the demo's:
+   * it stays, and only what is the demo organisation's on it — its place on
+   * the Project and the link to its record — goes.
+   */
+  async function useProjects(demo: Tenant, real: Tenant): Promise<void> {
+    for (const [owner, tenant] of [
+      ['demo', demo],
+      ['real', real],
+    ] as const) {
+      const projectId = await aProject(owner, [[owner, tenant.organizationId]]);
+      await insert(owner, 'project_links', {
+        project_id: projectId,
+        record_kind: 'order',
+        record_id: tenant.orderId,
+        organization_id: tenant.organizationId,
+      });
+      await insert(owner, 'project_references', {
+        project_id: projectId,
+        source_kind: 'description',
+        target_type: 'order',
+        target_id: tenant.orderId,
+      });
+    }
+    const sharedId = await aProject('real', [
+      ['real', real.organizationId],
+      ['demo', demo.organizationId],
+    ]);
+    for (const [owner, tenant] of [
+      ['demo', demo],
+      ['real', real],
+    ] as const) {
+      const [quote] = await query<{ id: string }>(
+        `select id from quote_requests where organization_id = $1 limit 1`,
+        [tenant.organizationId],
+      );
+      await insert(owner, 'project_links', {
+        project_id: sharedId,
+        record_kind: 'quote_request',
+        record_id: quote!.id,
+        organization_id: tenant.organizationId,
+      });
+    }
+    // An internal Project: a predicate that matched "no organisation" would take it.
+    await aProject('nobody', []);
+  }
+
+  /**
+   * Every usage counter of the operator's promotion, as `<scope type> <scope
+   * key>` → count.
+   *
+   * Of **that promotion**, not of the table: `setupBackendServer` does not
+   * truncate `promotion_usage_counters`, so counters other files left on this
+   * database are still there, and which ones depends on which files ran here
+   * first. A counter's key is the promotion id, alone for the `global` scope
+   * and followed by `:` for every other, so the promotion's own are exactly
+   * the keys below — and the assertion is still "only those", over them.
+   */
   async function promotionCounters(): Promise<Record<string, number>> {
     const rows = await query<{ scope_type: string; scope_key: string; count: number }>(
-      `select scope_type, scope_key, count from promotion_usage_counters`,
+      `select scope_type, scope_key, count from promotion_usage_counters
+        where scope_key = $1 or starts_with(scope_key, $1 || ':')`,
+      [operatorPromotionId],
     );
     return Object.fromEntries(
       rows.map((row) => [`${row.scope_type} ${row.scope_key}`, Number(row.count)]),
@@ -941,7 +1070,7 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
       `select id from sales_channels where system_default limit 1`,
     );
     const salesChannelId = channel!.id;
-    const [priceList] = await query<{ id: string }>(`select id from price_lists limit 1`);
+    const [priceList] = await query<{ id: string }>(`select id from price_lists where is_system limit 1`);
     const token = (): string => randomBytes(12).toString('hex');
 
     // A guest's cart and comparison.
@@ -962,7 +1091,8 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
     await add('webhooks', {});
     await add('api_keys', {});
     await add('promotions', {});
-    await add('price_list_assignments', { price_list_id: priceList!.id });
+    // Feature 160 — an operator's channel binding of a price book.
+    await add('sales_channel_price_lists', { sales_channel_id: salesChannelId, price_list_id: priceList!.id });
     // An administrator's session names no customer account.
     await add('sessions', {});
     // Documents that name an order and no organisation of their own.
@@ -1063,6 +1193,12 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
   let demoRowsStillThere: string[];
   let realRowsMissing: string[];
   let demoOrganizationsAfterReset: number;
+/** Feature 154 — the demo organisation's sales channels after seeding, by code. */
+let demoChannelsAfterSeed: string[];
+/** Feature 154 — its channel rows once the reset has run. */
+let demoChannelRowsAfterReset: number;
+/** The system-default channel's code after seeding. */
+let demoDefaultChannelCode: string;
   let reservedAfterReset: Record<string, number>;
   let reseeded: DemoRun;
   let orderAfterReseed: string;
@@ -1116,10 +1252,22 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
     // The demo is used, and so is the instance around it.
     demoOrderId = await buyOnCredit();
     const demoIs = await demoTenant(demoOrderId);
+    demoDefaultChannelCode = (
+      await query<{ code: string }>(`select code from sales_channels where system_default`)
+    )[0]!.code;
+    demoChannelsAfterSeed = (
+      await query<{ code: string }>(
+        `select sc.code from sales_channel_organizations sco
+         join sales_channels sc on sc.id = sco.sales_channel_id
+         where sco.organization_id = $1 order by sc.code`,
+        [demoIs.organizationId],
+      )
+    ).map((row) => row.code);
     await useEverythingElse('demo', demoIs);
     const real = await realTenant();
     await useEverythingElse('real', real);
     await useWithoutAnOrganization(real);
+    await useProjects(demoIs, real);
     const [channel] = await query<{ id: string }>(
       `select id from sales_channels where system_default limit 1`,
     );
@@ -1245,6 +1393,14 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
     demoRowsStillThere = await trackedRows('demo', true);
     realRowsMissing = await trackedRows('real', false);
     nobodysRowsMissing = await trackedRows('nobody', false);
+    demoChannelRowsAfterReset = Number(
+      (
+        await query<{ n: string }>(
+          `select count(*)::text as n from sales_channel_organizations where organization_id = $1`,
+          [demoIs.organizationId],
+        )
+      )[0]!.n,
+    );
     demoOrganizationsAfterReset = Number(
       (
         await query<{ n: string }>(
@@ -1433,6 +1589,11 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
     expect(demoOrderId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  it('assigns the demo organisation the system-default sales channel when it seeds it (feature 154)', () => {
+    // The demo's retail store adopts the instance's system-default channel.
+    expect(demoChannelsAfterSeed).toEqual([demoDefaultChannelCode]);
+  });
+
   describe.each(['orders', 'organizations', 'products'])(
     'a reset refused by a foreign key onto %s',
     (parent) => {
@@ -1535,6 +1696,10 @@ describe('demo reset on a demo that has been used (issue #143)', () => {
 
     it('removes the demo organisation', () => {
       expect(demoOrganizationsAfterReset).toBe(0);
+    });
+
+    it("removes the demo organisation's sales-channel assignment with it (feature 154)", () => {
+      expect(demoChannelRowsAfterReset).toBe(0);
     });
 
     it('leaves no column anywhere naming a row it deleted, beyond the kept records', () => {

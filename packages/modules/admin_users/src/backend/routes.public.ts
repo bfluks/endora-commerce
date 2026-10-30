@@ -49,7 +49,12 @@ export async function registerAdminPublicRoutes(
 
   app.post(
     '/api/v1/auth/admin/login',
-    { schema: { body: adminLoginRequestSchema } },
+    {
+      schema: { body: adminLoginRequestSchema },
+      // Feature 154 — reachable whatever the sales-channel access rule decides:
+      // an operator signs in anonymously, whatever the default channel's flag.
+      config: { salesChannelAccess: 'open' },
+    },
     async (request, reply) => {
       const body = adminLoginRequestSchema.parse(request.body);
       const knownDevice = readKnownDevice(request);
@@ -84,7 +89,8 @@ export async function registerAdminPublicRoutes(
     },
   );
 
-  app.post('/api/v1/auth/admin/logout', async (request, reply) => {
+  // Feature 154 — reachable whatever the sales-channel access rule decides.
+  app.post('/api/v1/auth/admin/logout', { config: { salesChannelAccess: 'open' } }, async (request, reply) => {
     const cookies = (request as { cookies?: Record<string, string | undefined> }).cookies;
     const raw = cookies?.[ADMIN_SESSION_COOKIE_NAME];
     if (raw) {

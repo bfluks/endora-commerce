@@ -220,6 +220,11 @@ export const PLATFORM_OWNED_NAMES: ReadonlySet<string> = new Set([
   // `newsletter` would take it out of the judged population and leave the
   // declaration reading as an `unread-input`.
   'newsletterTokenSecret',
+  // What a listing seals a cursor with when its next position may name a row
+  // the client must not learn about (issue #497). The platform's, for the same
+  // reason as the key above: it is derived from `SESSION_COOKIE_SECRET`, an
+  // input the platform declares, and its value expression names no module.
+  'cursorSeal',
   // `configurationTypeRegistry` left this list in T143a. It read "the root
   // creates and populates it", and the second half stopped being true: each
   // configuration type is declared by the module that owns it, from that
@@ -232,6 +237,12 @@ export const PLATFORM_OWNED_NAMES: ReadonlySet<string> = new Set([
   'settingsChannelResolver',
   'salesChannelResolutionPort',
   'salesChannelMembershipPort',
+  // Feature 154 — the sales-channel access rule (`SalesChannelAccessPort`) and
+  // the invalidating half of its per-Organization cache, both composed off
+  // `composeSalesChannelsKernel` and contributed by both roots. The rule is a
+  // property of channel resolution, which no module owns.
+  'salesChannelAccessPort',
+  'salesChannelAccessCache',
   // The channel cache the kernel resolver reads through. Composed by the root
   // via `composeSalesChannelsKernel` (T110), because channel resolution backs
   // every channel-scoped read and must not be gated on any one module.
@@ -587,6 +598,9 @@ export const CAPTURABLE_NAMES: ReadonlySet<string> = new Set([
   // read from the environment, not a gate, so capturing one cannot outlive a
   // module being switched off.
   'newsletterTokenSecret',
+  // The cursor seal (issue #497): a plain object built from the session key,
+  // not a gate, so capturing it cannot outlive a module being switched off.
+  'cursorSeal',
 ]);
 
 /**
@@ -1063,6 +1077,12 @@ export const CONTRIBUTION_POLICY_STATED: Readonly<Record<string, 'skip' | 'honou
   // when the owner is back. `owners()` stays presence-blind
   // (`specs/143-crm-sales-opportunities/`, research R-27).
   'webhooks:webhookEventRegistry': 'skip',
+  // Skipped, and fail-closed: `TaskContextRegistry.present` / `presentFor`
+  // leave out a descriptor whose owner is not effectively present, asked on
+  // every read, so the Tasks of that context are hidden from every list, count
+  // and read by id — and return unchanged, without a restart, when the owner is
+  // back. Nothing is deleted (`specs/163-projects-and-tasks/`, research R-9).
+  'tasks:taskContextRegistry': 'skip',
 };
 
 /**

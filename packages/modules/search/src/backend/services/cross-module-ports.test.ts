@@ -58,6 +58,8 @@ function productRecord(id: string): CatalogProductRecord {
     lowStockThresholdMode: 'cumulative',
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: null,
+    returnable: false,
   };
 }
 
@@ -191,19 +193,27 @@ describe('search — the catalog and organizations reads go through ports', () =
       },
     } as unknown as OrganizationDetailsPort;
 
-    const seen: Array<{ productId: string; organizationId: string | null }> = [];
+    // D-287 P0 — the popup prices its hits in one batched call; it was one
+    // `resolveEngine` per hit.
+    const seen: Array<{ productIds: string[]; organizationId: string | null; customerAccountId: string | null }> = [];
     const pricingService: SuggestionPriceResolverPort = {
-      resolveEngine: async (input) => {
+      resolveListingPriceDetails: async (input) => {
         seen.push({
-          productId: input.product.id,
+          productIds: input.products.map((p) => p.id),
           organizationId: input.context.organization?.id ?? null,
+          customerAccountId: input.context.customerAccountId ?? null,
         });
-        return {
-          base: { bracket: { amount: '12.00' } },
-          sale: null,
-          displayMode: 'net_only',
-          currencyCode: 'PLN',
-        };
+        return new Map(
+          input.products.map((p) => [
+            p.id,
+            {
+              price: { source: 'price_list', amount: '12.00', currency: 'PLN', priceListId: 'l', isSale: false },
+              basePrice: { amount: '12.00', currency: 'PLN' },
+              salePrice: null,
+              displayMode: 'net_only',
+            },
+          ]),
+        );
       },
     };
 
@@ -216,15 +226,16 @@ describe('search — the catalog and organizations reads go through ports', () =
     const items = [{ id: 'p1' }, { id: 'p2' }] as unknown as ProductSummary[];
     const out = await enrich(items, {
       organizationId: 'org-1',
+      customerAccountId: 'cust-1',
       resolvedChannel: { id: 'ch-1', defaultCurrency: 'PLN' },
     } as never);
 
     expect(askedProductIds).toEqual([['p1', 'p2']]);
     expect(askedOrgIds).toEqual(['org-1']);
     expect(seen).toEqual([
-      { productId: 'p1', organizationId: 'org-1' },
-      { productId: 'p2', organizationId: 'org-1' },
+      { productIds: ['p1', 'p2'], organizationId: 'org-1', customerAccountId: 'cust-1' },
     ]);
+    expect(out.map((i) => i.priceDisplayMode)).toEqual(['net_only', 'net_only']);
     expect(out.map((i) => i.basePrice)).toEqual([
       { amount: '12.00', currency: 'PLN' },
       { amount: '12.00', currency: 'PLN' },
@@ -247,12 +258,13 @@ describe('search — the catalog and organizations reads go through ports', () =
       catalogProducts: products,
       organizations,
       pricingService: {
-        resolveEngine: async () => ({
-          base: { bracket: null },
-          sale: null,
-          displayMode: 'net_only',
-          currencyCode: 'PLN',
-        }),
+        resolveListingPriceDetails: async (input) =>
+          new Map(
+            input.products.map((p) => [
+              p.id,
+              { price: { source: 'none' }, basePrice: null, salePrice: null, displayMode: 'net_only' },
+            ]),
+          ),
       },
     });
 

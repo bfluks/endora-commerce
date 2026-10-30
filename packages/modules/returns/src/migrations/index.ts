@@ -24,13 +24,16 @@
 
 import { Migration20260625T144227ReturnsInit } from './20260625T144227_returns_init.js';
 import { Migration20260817T203206ReturnsRefundCorrectiveInvoiceOutcome } from './20260817T203206_returns_refund_corrective_invoice_outcome.js';
+import { Migration20261024T174052ReturnsCaseItemDiscount } from './20261024T174052_returns_case_item_discount.js';
 
 export const migrations = [
   Migration20260625T144227ReturnsInit,
   Migration20260817T203206ReturnsRefundCorrectiveInvoiceOutcome,
+  Migration20261024T174052ReturnsCaseItemDiscount,
 ];
 
 export {
   Migration20260625T144227ReturnsInit,
   Migration20260817T203206ReturnsRefundCorrectiveInvoiceOutcome,
+  Migration20261024T174052ReturnsCaseItemDiscount,
 };

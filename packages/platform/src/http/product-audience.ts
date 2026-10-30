@@ -55,7 +55,13 @@ export function productAudienceOf(request: FastifyRequest): ProductAudience {
   const actor = request.actor as Actor | undefined;
   if (!actor) return ANONYMOUS_PRODUCT_AUDIENCE;
   if (actor.kind === 'customer') {
-    return { organizationId: actor.organizationId ?? null, authenticated: true };
+    // D-287 P0 — the account rides along for pricing (its own customer group);
+    // visibility never reads it.
+    return {
+      organizationId: actor.organizationId ?? null,
+      authenticated: true,
+      customerAccountId: actor.customerAccountId,
+    };
   }
   if (actor.kind === 'api_key') {
     return { organizationId: actor.organizationId ?? null, authenticated: true };
@@ -64,8 +70,12 @@ export function productAudienceOf(request: FastifyRequest): ProductAudience {
 }
 
 /**
- * Marks a response whose prices were resolved for a specific buying
- * organisation as private and unstorable.
+ * Marks a response that was derived for an identified caller as private and
+ * unstorable — prices resolved for a buying organisation, and (feature 163)
+ * any answer the audience rule gave an authenticated caller: a
+ * `logged_in_only` product is listed, counted and priced for a signed-in
+ * buyer with no Organization and not for the public, so that response is the
+ * caller's too.
  *
  * The catalogue's public reads are the platform's most cacheable responses:
  * before this existed, `GET /api/v1/catalog/products` and the product detail
@@ -75,8 +85,9 @@ export function productAudienceOf(request: FastifyRequest): ProductAudience {
  * holding one would hand one buyer's negotiated figure to the next caller of
  * the same URL — a worse defect than quoting everybody the channel price.
  *
- * So the header is set on **exactly** the responses that changed, and the
- * anonymous one is left byte-for-byte and header-for-header as it was: it is
+ * So the header is set on **exactly** the responses that can differ from the
+ * public one — an authenticated caller's, or one naming an organisation — and
+ * the anonymous one is left byte-for-byte and header-for-header as it was: it is
  * still the canonical answer a crawler indexes and the one the storefront's ISR
  * window caches (Principle VII). `no-store` rather than `private, max-age=0`
  * because there is no revalidation story here worth the ambiguity — a
@@ -94,6 +105,6 @@ export function markPersonalisedPricing(
   reply: FastifyReply,
   audience: ProductAudience,
 ): void {
-  if (audience.organizationId === null) return;
+  if (!audience.authenticated && audience.organizationId === null) return;
   reply.header('cache-control', 'private, no-store');
 }

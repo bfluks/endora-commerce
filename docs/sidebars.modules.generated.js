@@ -143,6 +143,7 @@ const modules = [
       'modules/catalog/attachments',
       'modules/catalog/gallery-and-labels',
       'modules/catalog/product-links',
+      'modules/catalog/url-keys-and-redirects',
       'module-reference/catalog',
     ],
   },
@@ -151,6 +152,7 @@ const modules = [
     label: 'CMS', key: 'cms',
     link: { type: 'doc', id: 'modules/cms/index' },
     items: [
+      'modules/cms/brand',
       'modules/cms/extending-page-builder',
       'module-reference/cms',
     ],
@@ -195,7 +197,14 @@ const modules = [
       'module-reference/currencies',
     ],
   },
-  { type: 'doc', id: 'module-reference/custom-fields', label: 'custom_fields', key: 'custom_fields' },
+  {
+    type: 'category',
+    label: 'custom_fields', key: 'custom_fields',
+    link: { type: 'doc', id: 'modules/custom_fields' },
+    items: [
+      'module-reference/custom-fields',
+    ],
+  },
   {
     type: 'category',
     label: 'customer_accounts', key: 'customer_accounts',
@@ -237,6 +246,14 @@ const modules = [
     ],
   },
   { type: 'doc', id: 'module-reference/email', label: 'email', key: 'email' },
+  {
+    type: 'category',
+    label: 'Feedback', key: 'admin_feedback',
+    link: { type: 'doc', id: 'modules/admin-feedback' },
+    items: [
+      'module-reference/admin-feedback',
+    ],
+  },
   {
     type: 'category',
     label: 'Google Analytics', key: 'google_analytics',
@@ -370,9 +387,11 @@ const modules = [
   { type: 'doc', id: 'module-reference/pim-connector', label: 'pim_connector', key: 'pim_connector' },
   {
     type: 'category',
-    label: 'price_lists', key: 'price_lists',
+    label: 'Price books', key: 'price_lists',
     link: { type: 'doc', id: 'modules/price_lists' },
     items: [
+      'modules/price_lists/price-book-editor',
+      'modules/price_lists/developer-guide',
       'module-reference/price-lists',
     ],
   },
@@ -382,6 +401,14 @@ const modules = [
     link: { type: 'doc', id: 'modules/product_feeds' },
     items: [
       'module-reference/product-feeds',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'projects', key: 'projects',
+    link: { type: 'doc', id: 'modules/projects' },
+    items: [
+      'module-reference/projects',
     ],
   },
   {
@@ -480,6 +507,14 @@ const modules = [
     link: { type: 'doc', id: 'modules/shopping_lists' },
     items: [
       'module-reference/shopping-lists',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'tasks', key: 'tasks',
+    link: { type: 'doc', id: 'modules/tasks' },
+    items: [
+      'module-reference/tasks',
     ],
   },
   {

@@ -10,11 +10,13 @@
 import type {
   DisplayMode,
   ListingPrice,
+  ListingPriceDetail,
   ListingPriceOrderChunk,
   ListingPriceOrderQuery,
   ListingPriceViewerContext,
 } from '@endora-commerce/contracts';
-import type { PriceBracketRow } from './price-bracket-resolver.js';
+import type { PinnedPriceBookPublishability, PriceSource } from '@endora-commerce/contracts';
+import type { BookExplanation } from './book-resolver.js';
 
 /**
  * The product a price is resolved for, as this engine reads it (feature 075
@@ -24,8 +26,9 @@ import type { PriceBracketRow } from './price-bracket-resolver.js';
  * one specifier: this module could not compile without `catalog`, and the
  * contract an overlay decoration is written against named a class the overlay
  * had no business seeing. The engine reads exactly two fields — the id it keys
- * every bracket lookup on, and the legacy price attribute the listing chain
- * falls back to — so those two are what it asks for.
+ * every row lookup on, and the attribute values a price-book attribute row
+ * matches (D-287 §5.9) — so those two are what it asks for. A product carries
+ * no price of its own (feature 160, FR-042).
  *
  * Narrowing is what makes this a cut rather than a rename: a `Product` entity
  * and a `CatalogProductRecord` are both assignable here, and nothing wider is
@@ -33,7 +36,7 @@ import type { PriceBracketRow } from './price-bracket-resolver.js';
  */
 export interface PricedProductRef {
   id: string;
-  /** JSONB `{ attributeKey: value }` — the legacy `defaultPrice` / `price`. */
+  /** JSONB `{ attributeKey: value }` — what an attribute row of a price book matches. */
   attributeValues: Record<string, unknown>;
 }
 
@@ -62,10 +65,34 @@ export interface PricingResolutionInput {
     organization?: PricingOrganizationRef | null;
     /** Feature 040 — customer's direct group overrides the org's (R6). */
     customerGroupId?: string | null;
+    /**
+     * D-287 P0 — the signed-in customer account. The engine reads its own
+     * customer group (when it belongs to `organization`) and applies the one
+     * rule, `customerGroupId ?? account's group ?? organization's group`
+     * (`effectiveCustomerGroupId`).
+     */
+    customerAccountId?: string | null;
     /** The request's resolved sales channel (only `id` + `defaultCurrency` read). */
     salesChannel: { id: string; defaultCurrency: string };
     currencyCode?: string;
   };
+}
+
+/**
+ * One quantity tier of a resolved price, as {@link PricingEngineResult} carries
+ * it: the book that priced it, its window and its amount (a 4 dp decimal
+ * string). Feature 160 kept the shape `resolveEngine` callers read; the row it
+ * describes is a price-book row, whose id is `matrixEntryId`.
+ */
+export interface PriceBracketRow {
+  priceListId: string;
+  productId: string;
+  currencyCode: string;
+  minQuantity: number;
+  maxQuantity: number | null;
+  amount: string;
+  /** The price-book row that priced the line. */
+  matrixEntryId?: string;
 }
 
 export interface PricingEngineResult {
@@ -73,6 +100,12 @@ export interface PricingEngineResult {
   sale: { listId: string; listName: string; bracket: PriceBracketRow } | null;
   displayMode: DisplayMode;
   currencyCode: string;
+  /** Feature 160 — the tier that priced the charged line (price-book engine only). */
+  source?: PriceSource | null;
+  /** Feature 160 — the buyer price a charged sale undercut. */
+  compareAt?: string | null;
+  /** Feature 160 (G9) — the catalogue price beside a lower buyer price, when `pricing.show_list_price` is on. */
+  listPrice?: { amount: string; currency: string };
 }
 
 export interface PricingLineResult {
@@ -88,6 +121,19 @@ export interface PricingLineResult {
    * contract: the published `LinePriceResult` is deliberately not widened (D-77).
    */
   matrixEntryId?: string | null;
+  /**
+   * Feature 160 (D-287 P1) — which tier priced the line (FR-030); set by the
+   * price-book engine. `isSale` is `source === 'sale'`.
+   */
+  source?: PriceSource;
+  /** Feature 160 — the buyer price a charged sale undercut (FR-015). */
+  compareAt?: string | null;
+  /**
+   * Feature 160 — why this price (FR-020): tier, cell, book, row, reference and
+   * precedence version. Internal to this module's contract, like
+   * `matrixEntryId`; the published `LinePriceResult` does not carry it.
+   */
+  explanation?: BookExplanation;
 }
 
 /**
@@ -101,9 +147,36 @@ export interface ListingPricesInput {
     organization?: PricingOrganizationRef | null;
     /** Feature 040 — customer's direct group overrides the org's (R6). */
     customerGroupId?: string | null;
+    /** D-287 P0 — see {@link PricingResolutionInput}. */
+    customerAccountId?: string | null;
     salesChannel: { id: string; defaultCurrency: string };
     currencyCode?: string;
   };
+}
+
+/** One line of {@link LinePricesInput}. */
+export interface PricingLineRequest {
+  /** The answer's map key; unique per call. */
+  key: string;
+  product: PricedProductRef;
+  variantId?: string | null;
+  quantity: number;
+}
+
+/**
+ * D-287 P0 — many lines, each at its own quantity, for one buyer: the cart,
+ * the placement drift check, a quote's reference prices, the external bulk
+ * price request.
+ */
+export interface LinePricesInput {
+  lines: readonly PricingLineRequest[];
+  context: Omit<PricingResolutionInput['context'], 'quantity'>;
+  /**
+   * The admin explainer only: each line's explanation lists every ranked
+   * runner-up rather than the capped list, and the resolution bypasses the
+   * answer cache (review 3 of release 0.108.0, B1).
+   */
+  explain?: boolean;
 }
 
 export interface PricingServiceContract {
@@ -121,28 +194,62 @@ export interface PricingServiceContract {
    */
   resolveListingPrices(input: ListingPricesInput): Promise<Map<string, ListingPrice>>;
   /**
-   * The lowest-quantity bracket amount on one **named** price list, per
-   * product, for callers that use a list verbatim rather than resolving it
-   * (a product feed pinned to a list — feature 067, FR-020). Products with no
-   * bracket on that list are absent from the map.
+   * D-287 P0 — `resolveListingPrices` plus the base / sale / display-mode split,
+   * from the same single resolution, for the surfaces that render it (product
+   * detail, home-page cards, typeahead). Every requested product gets an entry.
+   */
+  resolveListingPriceDetails(input: ListingPricesInput): Promise<Map<string, ListingPriceDetail>>;
+  /**
+   * D-287 P0 — `resolveLinePrice` for many lines in one call, in a number of
+   * statements that does not grow with the lines. Answers, key by key, exactly
+   * what one `resolveLinePrice` per line answers
+   * (`backend/test/integration/price_lists/line-prices-batch.test.ts`). Every
+   * requested key gets an entry; `null` is "nothing applies".
    *
-   * It exists so that reading a named list is a port call rather than a raw
-   * `select` against `price_list_price_brackets` from another module: the
-   * table is this module's, and the port is what makes an absent owner refuse
-   * instead of a feed publishing prices the platform is not serving.
+   * On this interface because it is what an overlay decorates: a deployment
+   * that overrides line pricing has to override the batch too, or the cart
+   * would price by the core while checkout priced by the overlay.
+   */
+  resolveLinePrices(input: LinePricesInput): Promise<Map<string, PricingLineResult | null>>;
+  /**
+   * The quantity-1 price of each product on one **named** price book, for
+   * callers that use a book verbatim rather than resolving the buyer's (a
+   * product feed pinned to a book — feature 067 FR-020, feature 160 FR-029):
+   * the book's rows over the channel's catalogue price. Products the book does
+   * not price are absent from the map, and the map is empty while the book does
+   * not publish (see {@link namedListPublishability}).
+   *
+   * It exists so that reading a named book is a port call rather than a raw
+   * `select` against this module's tables from another module: the port is
+   * what makes an absent owner refuse instead of a feed publishing prices the
+   * platform is not serving.
    */
   namedListPrices(input: {
     priceListId: string;
     currencyCode: string;
     productIds: readonly string[];
+    /** Feature 160 — the feed's channel (required on price books). */
+    salesChannelId?: string;
   }): Promise<Map<string, string>>;
   /**
-   * Feature 062 — distinct bracket start quantities (ascending) across every
-   * ACTIVE price list for a (product, currency). The external catalog detail
+   * Feature 160 (FR-029, owner ruling 2026-10-23) — whether a book pinned to a
+   * feed on this channel and currency publishes prices now, and why not: it
+   * must be `active` or `scheduled` inside its schedule window, bound to the
+   * channel (a base book is channel-independent) and for everyone.
+   */
+  namedListPublishability(input: {
+    priceListId: string;
+    currencyCode: string;
+    salesChannelId: string;
+  }): Promise<PinnedPriceBookPublishability>;
+  /**
+   * Feature 062, renamed by feature 160 (was `listBracketMinQuantities`) —
+   * distinct starting quantities (ascending) of the rows and base tiers that
+   * can apply to a (product, variant?, currency). The external catalog detail
    * probes `resolveLinePrice` at each returned quantity to build the caller
    * org's effective tier ladder without re-implementing resolution.
    */
-  listBracketMinQuantities(productId: string, currencyCode: string): Promise<number[]>;
+  listTierStarts(productId: string, currencyCode: string, variantId?: string | null): Promise<number[]>;
   /**
    * Feature 086 — the catalogue in resolved-unit-price order, for one viewer,
    * one chunk at a time. Published as the `ListingPriceOrderPort` slice of the

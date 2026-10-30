@@ -11,11 +11,22 @@ export function ProductGrid(props: {
   columns?: 3 | 4;
   /** Render mode — `grid` (cards) or `list` (rows). Defaults to `grid`. */
   view?: 'grid' | 'list';
+  /** The active sales channel, handed to each card's browser-side calls. */
+  salesChannelCode: string | undefined;
+  /**
+   * The listing has more after this page (`pagination.hasMore`). A price-sorted
+   * or price-filtered page that ran out of its scan budget can be empty and
+   * still have more, so an empty page says the products continue rather than
+   * that nothing matches.
+   */
+  more?: boolean;
 }): ReactNode {
   const t = tForLocale(props.locale);
   if (props.products.length === 0) {
     return (
-      <p className="py-[40px] text-center text-muted">{t('catalog.empty')}</p>
+      <p className="py-[40px] text-center text-muted">
+        {t(props.more ? 'catalog.emptyPageMore' : 'catalog.empty')}
+      </p>
     );
   }
   if (props.view === 'list') {
@@ -38,7 +49,7 @@ export function ProductGrid(props: {
     <ul className={cls}>
       {props.products.map((p) => (
         <li key={p.id}>
-          <ProductCard product={p} locale={props.locale} />
+          <ProductCard product={p} locale={props.locale} salesChannelCode={props.salesChannelCode} />
         </li>
       ))}
     </ul>

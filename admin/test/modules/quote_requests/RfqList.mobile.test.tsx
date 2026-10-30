@@ -94,7 +94,10 @@ beforeEach(() => {
   getSpy.mockReset();
   // Feature 147: the page's saved-views control asks for its views too.
   getSpy.mockImplementation(async (path: string) =>
-    path.startsWith('/api/v1/admin/quote-requests/list-views') ? { data: [] } : RFQ_LIST,
+    path.startsWith('/api/v1/admin/quote-requests/list-views') ||
+    path.startsWith('/api/v1/admin/quote-requests/custom-field-filters')
+      ? { data: [] }
+      : RFQ_LIST,
   );
 });
 

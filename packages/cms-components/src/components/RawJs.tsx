@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { type ComponentConfig, type PuckComponent } from '@puckeditor/core';
-import { withHideOn } from '@endora-commerce/page-builder-core';
+import { withHideOn, createToggleField } from '@endora-commerce/page-builder-core';
 import type { RawJsProps } from '../schema/component-types.js';
 import { BoxStyled } from './box-styles.js';
 import {
@@ -48,14 +48,7 @@ const rawJsConfig: ComponentConfig<RawJsProps> = {
   label: 'Raw JS',
   fields: {
     script: { type: 'textarea', label: 'JavaScript (trusted admin)' },
-    runOnce: {
-      type: 'radio',
-      label: 'Run once',
-      options: [
-        { label: 'Yes', value: true },
-        { label: 'No', value: false },
-      ],
-    },
+    runOnce: createToggleField({ label: 'Run once', defaultValue: true }),
     margin: BOX_MARGIN_FIELD,
     padding: BOX_PADDING_FIELD,
     border: BOX_BORDER_FIELD,

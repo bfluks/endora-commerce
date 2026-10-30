@@ -44,7 +44,9 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 
 ## Paleta poleceń
 
-_Brak._
+| Akcja | Otwiera | Uprawnienie |
+| --- | --- | --- |
+| `open-security` | `/security` | — |
 
 ## Ustawienia
 

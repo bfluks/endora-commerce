@@ -1,15 +1,27 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  BulkImportReport,
-  BulkImportRowError,
-  CatalogBulkImportPort,
-  CategoryImportRow,
-  ProductImportRow,
+import type { EntityManager } from '@mikro-orm/postgresql';
+import {
+  scopedStatusColumn,
+  toScopeChannel,
+  type BulkImportReport,
+  type BulkImportRowError,
+  type CatalogBulkImportPort,
+  type CategoryImportRow,
+  type ProductImportRow,
+  type ProductStatus,
+  type ScopeRef,
+  type ScopedStatusExport,
+  sameLanguage,
 } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
+import type { EventBus } from '@endora-commerce/platform/events';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
+import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Category } from '../entities/category.entity.js';
 import { Product } from '../entities/product.entity.js';
+import { ProductChannelScope } from '../entities/product-channel-scope.entity.js';
+import { ProductChannelLanguageScope } from '../entities/product-channel-language-scope.entity.js';
+import { loadScopeRows, writeScopedStatus } from './product-scopes.service.js';
 
 /**
  * Bulk import of catalogue rows (feature 075, D-74).
@@ -60,7 +72,46 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
      * write becomes `catalog`'s.
      */
     private readonly salesChannelMembership?: SalesChannelMembershipPort,
+    /**
+     * Feature 163 (FR-092) — the scoped-status columns: the export reads the scope
+     * rows, and an import that changed a product's scoped status announces it
+     * (`product.updated.v1` `['scopedStatus']`, after commit). Optional for the
+     * compositions that import no scoped status.
+     */
+    private readonly scoped?: {
+      emFactory: () => EntityManager;
+      eventBus?: Pick<EventBus, 'emit'>;
+    },
   ) {}
+
+  /** Feature 163 (FR-092) — every channel's scope columns, and each product's overrides in them. */
+  async exportScopedStatuses(): Promise<ScopedStatusExport> {
+    if (!this.scoped) throw new Error('CatalogBulkImportService: the scoped-status export is not wired.');
+    const em = this.scoped.emFactory();
+    const channels = await em.find(SalesChannel, {}, { orderBy: { code: 'asc' } });
+    const columns: ScopedStatusExport['columns'] = [];
+    const codeById = new Map<string, string>();
+    for (const channel of channels) {
+      codeById.set(channel.id, channel.code);
+      columns.push({ channelCode: channel.code, languageCode: null });
+      for (const languageCode of toScopeChannel(channel).languages) {
+        columns.push({ channelCode: channel.code, languageCode });
+      }
+    }
+    const values: ScopedStatusExport['values'] = {};
+    const put = (productId: string, column: string, status: ProductStatus): void => {
+      (values[productId] ??= {})[column] = status;
+    };
+    for (const row of await em.find(ProductChannelScope, { status: { $ne: null } })) {
+      const code = codeById.get(row.salesChannelId);
+      if (code && row.status) put(row.productId, scopedStatusColumn(code, null), row.status);
+    }
+    for (const row of await em.find(ProductChannelLanguageScope, {})) {
+      const code = codeById.get(row.salesChannelId);
+      if (code) put(row.productId, scopedStatusColumn(code, row.languageCode), row.status);
+    }
+    return { columns, values };
+  }
 
   async importCategories(rows: readonly CategoryImportRow[]): Promise<BulkImportReport> {
     if (rows.length === 0) return { imported: 0, errors: [] };
@@ -141,7 +192,7 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
   async importProducts(rows: readonly ProductImportRow[]): Promise<BulkImportReport> {
     if (rows.length === 0) return { imported: 0, errors: [] };
 
-    return this.commandBus.run<BulkImportReport>({
+    const outcome = await this.commandBus.run<{ report: BulkImportReport; scopedChanged: string[] }>({
       action: 'catalog.products.import',
       objectType: 'product',
       objectId: randomUUID(),
@@ -156,25 +207,143 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
         for (const [index, row] of rows.entries()) {
           if (!bySku.has(row.sku)) errors.push({ index, reason: `unknown sku: ${row.sku}` });
         }
-        if (errors.length > 0) return { result: { imported: 0, errors }, skipAudit: true };
+        // Feature 163 (FR-092) — the scoped-status cells, validated with the rest:
+        // the whole-file rule is unchanged, one rejected row applies nothing.
+        const scoped = errors.length > 0 ? null : await this.#planScopedStatus(em, rows, bySku, errors);
+        if (errors.length > 0 || scoped === null) {
+          return { result: { report: { imported: 0, errors }, scopedChanged: [] }, skipAudit: true };
+        }
 
         for (const row of rows) {
           const product = bySku.get(row.sku);
           if (!product) continue;
           if (row.status !== undefined) product.status = row.status;
           if (row.visibility !== undefined) product.visibility = row.visibility;
-          if (row.name !== undefined) product.name = { ...product.name, ...row.name };
-          if (row.description !== undefined) {
-            product.description = { ...product.description, ...row.description };
+          // 168-shim: the Global name and description cells only; every other scoped cell, and the
+          // per-cell refusals of the write encoding, are T083 / T084's (after US2's save service).
+          for (const cell of row.cells ?? []) {
+            if (cell.scope.level !== 'global') continue;
+            if (cell.field === 'name' && cell.op.op === 'set') product.name = String(cell.op.value);
+            if (cell.field === 'description') {
+              if (cell.op.op === 'set') product.description = String(cell.op.value);
+              else if (cell.op.op === 'empty') product.description = null;
+            }
           }
         }
+        const scopedChanged = await scoped.apply();
         await em.flush();
 
         return {
-          result: { imported: rows.length, errors: [] },
-          after: { rows: rows.length },
+          result: { report: { imported: rows.length, errors: [] }, scopedChanged },
+          after: { rows: rows.length, ...(scopedChanged.length > 0 ? { scopedStatusProducts: scopedChanged.length } : {}) },
         };
       },
     });
+
+    // After commit: a scoped status reaches search, the sitemap and webhooks
+    // through the same event an operator's scope write emits (R10).
+    for (const productId of outcome.scopedChanged) {
+      const payload = {
+        eventId: randomUUID(),
+        occurredAt: new Date().toISOString(),
+        productId,
+        changedFields: ['scopedStatus'],
+      };
+      this.scoped?.eventBus?.emit('product.updated.v1', payload);
+    }
+    return outcome.report;
+  }
+
+  /**
+   * Validates every scoped-status cell into `errors` (FR-014: a value for a
+   * channel the product is not in, or a language the channel does not offer, is
+   * refused; an empty cell — use inherited — is always accepted, FR-015) and
+   * answers the write to run once the whole file is valid, or `null` when a row
+   * was refused. The write answers the ids of the products whose scoped status
+   * changed.
+   */
+  async #planScopedStatus(
+    em: EntityManager,
+    rows: readonly ProductImportRow[],
+    bySku: ReadonlyMap<string, Product>,
+    errors: BulkImportRowError[],
+  ): Promise<{ apply: () => Promise<string[]> } | null> {
+    // 168-shim: the status cells at Channel / Channel × language (`ProductImportRow.cells`), as 163's
+    // scoped-status columns were; `NULL` is refused (a status takes no empty value), `INHERIT` removes.
+    const cells = rows.flatMap((row, index) =>
+      (row.cells ?? [])
+        .filter((cell) => cell.field === 'status' && cell.scope.level !== 'global')
+        .map((cell) => ({ index, row, cell })),
+    );
+    if (cells.length === 0) return { apply: async () => [] };
+    if (!this.salesChannelMembership) {
+      throw new Error('CatalogBulkImportService: scoped status needs the channel-membership accessor.');
+    }
+    const channelIdOf = (scope: ScopeRef): string => (scope.level === 'global' ? '' : scope.channelId);
+    const channelIds = [...new Set(cells.map(({ cell }) => channelIdOf(cell.scope)))];
+    // 168-shim: a products file still names channels by code (in `channelId`) until T081.
+    const isUuid = (value: string): boolean => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+    const channels = await em.find(SalesChannel, {
+      $or: [{ id: { $in: channelIds.filter(isUuid) } }, { code: { $in: channelIds.filter((id) => !isUuid(id)) } }],
+    });
+    const byId = new Map<string, ReturnType<typeof toScopeChannel>>();
+    for (const channel of channels) {
+      byId.set(channel.id, toScopeChannel(channel));
+      byId.set(channel.code, toScopeChannel(channel));
+    }
+    const productIds = [...new Set(cells.map(({ row }) => bySku.get(row.sku)!.id))];
+    const members = new Map<string, Set<string>>();
+    for (const channel of byId.values()) {
+      members.set(channel.id, new Set(await this.salesChannelMembership.filterEntityIdsInChannel(channel.id, 'product', productIds)));
+    }
+
+    const writes: Array<{ productId: string; channelId: string; languageCode: string | null; status: ProductStatus | null }> = [];
+    for (const { index, row, cell } of cells) {
+      const product = bySku.get(row.sku)!;
+      const channelId = channelIdOf(cell.scope);
+      const requestedLanguage = cell.scope.level === 'channel_language' ? cell.scope.languageCode : null;
+      const channel = byId.get(channelId);
+      const column = `status@${channelId}${requestedLanguage === null ? '' : `/${requestedLanguage}`}`;
+      if (!channel) {
+        errors.push({ index, reason: `${column}: unknown sales channel` });
+        continue;
+      }
+      if (cell.op.op === 'empty') {
+        errors.push({ index, reason: `${column}: not_emptyable` });
+        continue;
+      }
+      const status = cell.op.op === 'set' ? (cell.op.value as ProductStatus) : null;
+      const languageCode =
+        requestedLanguage === null
+          ? null
+          : (channel.languages.find((code) => sameLanguage(code, requestedLanguage)) ?? requestedLanguage);
+      if (status !== null) {
+        if (!members.get(channel.id)?.has(product.id)) {
+          errors.push({ index, reason: `${column}: the product is not in the sales channel` });
+          continue;
+        }
+        if (languageCode !== null && !channel.languages.includes(languageCode)) {
+          errors.push({ index, reason: `${column}: the sales channel does not offer ${requestedLanguage}` });
+          continue;
+        }
+      }
+      writes.push({ productId: product.id, channelId: channel.id, languageCode, status });
+    }
+    if (errors.length > 0) return null;
+
+    return {
+      // C-W3 — the scopes write's own row writers, inside this import's single
+      // transaction and its single audit row.
+      apply: async () => {
+        const changed = new Set<string>();
+        const rows = await loadScopeRows(em, productIds);
+        for (const write of writes) {
+          const scope = { channelId: write.channelId, languageCode: write.languageCode };
+          if (writeScopedStatus(em, rows, write.productId, scope, write.status)) changed.add(write.productId);
+        }
+        return [...changed];
+      },
+    };
   }
 }
+

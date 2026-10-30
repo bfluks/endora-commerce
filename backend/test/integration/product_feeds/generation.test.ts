@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PriceList, PriceListPriceBracket, PriceListProduct } from '../../helpers/package-entities.js';
+import { seedPriceBookSql } from '../../helpers/price-book-sql.js';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -21,7 +21,7 @@ import { FeedArtefact, FeedRun, ProductFeed } from '../../helpers/package-entiti
  *
  * Three things are proved here that no unit test can:
  *  - the **eligibility floor** is server-side and not expressible in a rule:
- *    draft, inactive, archived, non-public and other-channel products are
+ *    inactive, archived, non-public and other-channel products are
  *    absent no matter what the operator asked for (FR-026, Principle XII);
  *  - prices come from the named list when there is one, and from the anonymous
  *    channel resolution when there is not (FR-020);
@@ -39,8 +39,8 @@ describe('product feed generation [integration]', () => {
   let retailChannelId: string;
   let vipChannelId: string;
   let namedListId: string;
+  let unboundListId: string;
 
-  const DRAFT_ID = '00000000-0000-4000-8000-0000000f0001';
   const INACTIVE_ID = '00000000-0000-4000-8000-0000000f0002';
   const ARCHIVED_ID = '00000000-0000-4000-8000-0000000f0003';
   const PRIVATE_ID = '00000000-0000-4000-8000-0000000f0004';
@@ -67,7 +67,6 @@ describe('product feed generation [integration]', () => {
 
     // --- Products that must never appear, whatever the selection rule says ---
     const ineligible = [
-      { id: DRAFT_ID, sku: 'FEED-DRAFT', slug: 'feed-draft', status: 'draft' as const },
       { id: INACTIVE_ID, sku: 'FEED-INACTIVE', slug: 'feed-inactive', status: 'inactive' as const },
       { id: ARCHIVED_ID, sku: 'FEED-ARCHIVED', slug: 'feed-archived', status: 'active' as const },
       { id: PRIVATE_ID, sku: 'FEED-PRIVATE', slug: 'feed-private', status: 'active' as const },
@@ -86,8 +85,8 @@ describe('product feed generation [integration]', () => {
         slug: row.slug,
         type: 'simple',
         status: row.status,
-        name: { 'en-US': row.sku },
-        description: { 'en-US': row.sku },
+        name: row.sku,
+        description: row.sku,
         visibility: row.id === PRIVATE_ID ? 'logged_in_only' : 'public',
         ...(row.id === ALLOWLISTED_ID ? { allowedOrganizationIds: [ALLOWED_ORG_ID] } : {}),
         ...(row.id === ARCHIVED_ID ? { archivedAt: new Date() } : {}),
@@ -98,7 +97,7 @@ describe('product feed generation [integration]', () => {
     const conn = em.getConnection();
     // Everything except the VIP-only product belongs to the retail channel, so
     // "absent" cannot be explained away by missing membership.
-    for (const id of [DRAFT_ID, INACTIVE_ID, ARCHIVED_ID, PRIVATE_ID, ALLOWLISTED_ID]) {
+    for (const id of [INACTIVE_ID, ARCHIVED_ID, PRIVATE_ID, ALLOWLISTED_ID]) {
       await conn.execute(
         `insert into sales_channel_products (sales_channel_id, product_id) values (?,?)`,
         [retailChannelId, id],
@@ -109,43 +108,10 @@ describe('product feed generation [integration]', () => {
       [vipChannelId, VIP_ONLY_ID],
     );
 
-    // --- Price lists -------------------------------------------------------
-    // The anonymous/default list every channel resolves to when a feed names
-    // none, and a named list a feed can point at verbatim (FR-020).
+    // --- Price books -------------------------------------------------------
+    // The catalogue book every channel resolves to when a feed names none, and
+    // a named book a feed can point at verbatim (FR-020).
     //
-    // Catch-all, *not* `isSystem` (issue #50): what makes this the list the
-    // anonymous resolution lands on is `{kind:'all'}` plus `status: 'active'`,
-    // and the flag was never read on this path. It marks the platform's one
-    // seeded `Default` row, which is now a database singleton — a fixture
-    // claiming it left a second system row behind for the next file to trip on.
-    const defaultList = em.create(PriceList, {
-      code: 'feed_default',
-      name: 'Feed default list',
-      currency: 'PLN',
-      type: 'base',
-      status: 'active',
-      applicationRule: { kind: 'all' },
-      modifiedAt: new Date(),
-    });
-    const namedList = em.create(PriceList, {
-      code: 'feed_named',
-      name: 'Feed named list',
-      currency: 'PLN',
-      type: 'base',
-      status: 'active',
-      // Deliberately unreachable by the anonymous resolution: it names an
-      // organization nobody is. A feed that points AT this list must still use
-      // it verbatim (FR-020), which is precisely the distinction under test.
-      applicationRule: {
-        kind: 'criterion',
-        type: 'organization',
-        values: ['00000000-0000-4000-8000-0000000000ff'],
-      },
-      modifiedAt: new Date(),
-    });
-    await em.persistAndFlush([defaultList, namedList]);
-    namedListId = namedList.id;
-
     // `ALLOWLISTED_ID` is priced deliberately: without a price the row would be
     // skipped as `missing_required_field` and its absence from the document
     // would prove nothing about the allow-list (issue #259).
@@ -156,29 +122,31 @@ describe('product feed generation [integration]', () => {
       VIP_ONLY_ID,
       ALLOWLISTED_ID,
     ];
-    // Assignments first, then brackets: the bracket table cascades off
-    // `price_list_products`, and MikroORM batches inserts by entity type.
-    for (const productId of priced) {
-      for (const list of [defaultList, namedList]) {
-        em.create(PriceListProduct, { priceListId: list.id, productId });
-      }
-    }
-    await em.flush();
-    for (const productId of priced) {
-      for (const [list, amount] of [
-        [defaultList, '100.0000'],
-        [namedList, '55.0000'],
-      ] as const) {
-        em.create(PriceListPriceBracket, {
-          priceListId: list.id,
-          productId,
-          currencyCode: 'PLN',
-          minQuantity: 1,
-          amount,
-        });
-      }
-    }
-    await em.flush();
+    await seedPriceBookSql(em, {
+      name: 'Feed default book',
+      audience: 'everyone',
+      rows: priced.map((productId) => ({ productId, fixed: '100.0000' })),
+    });
+    // Deliberately unreachable by the anonymous resolution: it is on the
+    // retail channel — a pinned book must be, to publish (FR-029, owner ruling
+    // 2026-10-23) — but outranked there by the default book (priority −1
+    // against 0). A feed that points AT this book must still use it verbatim
+    // (FR-020), which is precisely the distinction under test.
+    namedListId = await seedPriceBookSql(em, {
+      name: 'Feed named book',
+      audience: 'everyone',
+      channelIds: [retailChannelId],
+      rows: priced.map((productId) => ({ productId, fixed: '55.0000' })),
+    });
+    await conn.execute(`update "price_lists" set "priority" = -1 where "id" = ?`, [namedListId]);
+    // A book a feed can be pinned to and that publishes nothing: on no channel
+    // (a state only a raw write reaches — activation refuses it).
+    unboundListId = await seedPriceBookSql(em, {
+      name: 'Feed unbound book',
+      audience: 'everyone',
+      channelIds: [],
+      rows: priced.map((productId) => ({ productId, fixed: '44.0000' })),
+    });
 
     const templates = await h.app.inject({
       method: 'GET',
@@ -239,7 +207,6 @@ describe('product feed generation [integration]', () => {
         expect(document).toContain(sku);
       }
       for (const sku of [
-        'FEED-DRAFT',
         'FEED-INACTIVE',
         'FEED-ARCHIVED',
         'FEED-PRIVATE',
@@ -331,6 +298,16 @@ describe('product feed generation [integration]', () => {
       const document = await readArtefact(feedId);
       expect(document).toContain('55.00 PLN');
       expect(document).not.toContain('100.00 PLN');
+    });
+
+    it('publishes no prices from a pinned book that does not apply on the feed’s channel (FR-029, owner ruling 2026-10-23)', async () => {
+      const feedId = await createFeed({ priceListId: unboundListId });
+      const run = await h.productFeeds.generation.generateNow(feedId, { trigger: 'manual' });
+      // Withdrawn, not walked: `pinned-book-withdrawal.test.ts` holds the rest.
+      expect(run.status).toBe('withdrawn');
+      expect(run.withdrawalReason).toBe('not_on_channel');
+      expect(run.emittedCount).toBe(0);
+      expect(run.artefactId ?? null).toBeNull();
     });
 
     it('falls back to the anonymous channel resolution when no list is named', async () => {

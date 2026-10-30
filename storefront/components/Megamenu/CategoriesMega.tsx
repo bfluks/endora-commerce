@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ResolvedMegamenu, ResolvedMenuItem } from '@endora-commerce/contracts';
+import { LocalizedAnchor } from '../../lib/i18n/localized-link';
 
 interface CategoriesMegaProps {
   megamenu: ResolvedMegamenu | null;
@@ -53,9 +54,9 @@ export function CategoriesMega({ megamenu }: CategoriesMegaProps): ReactNode {
 
   if (items.length === 0) {
     return (
-      <a href="/catalog" className="industria-nav__btn">
+      <LocalizedAnchor href="/catalog" className="industria-nav__btn">
         <MenuIcon /> Wszystkie kategorie <ChevDownIcon />
-      </a>
+      </LocalizedAnchor>
     );
   }
 
@@ -92,22 +93,22 @@ export function CategoriesMega({ megamenu }: CategoriesMegaProps): ReactNode {
               <ul className="industria-mega__list">
                 {items.map((item, i) => (
                   <li key={item.id}>
-                    <a
+                    <LocalizedAnchor
                       href={item.url ?? '/catalog'}
                       onMouseEnter={() => queueActive(i)}
                       onFocus={() => setActiveNow(i)}
                       aria-current={i === active ? 'true' : undefined}
                     >
                       {item.label}
-                    </a>
+                    </LocalizedAnchor>
                   </li>
                 ))}
                 <li>
-                  <a href="/catalog">
+                  <LocalizedAnchor href="/catalog">
                     <span style={{ color: 'var(--brand-700)', fontFamily: 'var(--font-sans)' }}>
                       Wszystkie kategorie →
                     </span>
-                  </a>
+                  </LocalizedAnchor>
                 </li>
               </ul>
             </div>
@@ -121,7 +122,7 @@ export function CategoriesMega({ megamenu }: CategoriesMegaProps): ReactNode {
                     <ul className="industria-mega__list" key={ci}>
                       {col.map((sub) => (
                         <li key={sub.id}>
-                          <a href={sub.url ?? '/catalog'}>{sub.label}</a>
+                          <LocalizedAnchor href={sub.url ?? '/catalog'}>{sub.label}</LocalizedAnchor>
                         </li>
                       ))}
                     </ul>
@@ -130,7 +131,7 @@ export function CategoriesMega({ megamenu }: CategoriesMegaProps): ReactNode {
               ) : (
                 <ul className="industria-mega__list">
                   <li>
-                    <a href={activeItem.url ?? '/catalog'}>Przeglądaj {activeItem.label} →</a>
+                    <LocalizedAnchor href={activeItem.url ?? '/catalog'}>Przeglądaj {activeItem.label} →</LocalizedAnchor>
                   </li>
                 </ul>
               )}
@@ -142,9 +143,9 @@ export function CategoriesMega({ megamenu }: CategoriesMegaProps): ReactNode {
                 <LightningIcon />
                 <h4>Quick Order — 200+ pozycji w 30 s</h4>
                 <p>Wklej listę SKU + ilości z ERP/CSV i utwórz zamówienie jednym kliknięciem.</p>
-                <a href="/quick-order" className="industria-mega__promo__cta">
+                <LocalizedAnchor href="/quick-order" className="industria-mega__promo__cta">
                   Otwórz Quick Order <ArrowRightIcon />
-                </a>
+                </LocalizedAnchor>
               </div>
             </div>
           </div>

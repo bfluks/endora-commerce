@@ -37,7 +37,6 @@ describe('Megamenu dictionary boundary', () => {
       defaultCurrency: 'PLN',
       active: true,
       systemDefault: false,
-      isPublic: false,
       status: 'active',
     });
     await em.persistAndFlush(channel);

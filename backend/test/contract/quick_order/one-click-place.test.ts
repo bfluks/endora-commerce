@@ -1,5 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import {
+  ERROR_CODES,
+  type CartWritePort,
+  type CatalogProductReadPort,
+  type OrderPlacementPort,
+} from '@endora-commerce/contracts';
+import {
+  buyerChannelIds,
+  createMinimumProduct,
+  minimumFixtureRun,
+  setProductMinimum,
+  type MinimumProductFixture,
+} from '../../helpers/order-minimum-fixture.js';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -15,10 +27,12 @@ import {
   seedSuspendedOrganization,
 } from '../../helpers/seed-commerce.js';
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
-import { TEST_CUSTOMER_ID } from '../../helpers/test-actors.js';
-import { Address } from '../../helpers/package-entities.js';
+import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { Address, Product } from '../../helpers/package-entities.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Order, OrderItem } from '../../helpers/package-entities.js';
+import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 
 /**
  * Issue #64 — one-click buy places an order, and refuses a suspended
@@ -216,6 +230,8 @@ describe('POST /api/v1/quick-order/one-click — placement', () => {
     });
     expect(created.statusCode).toBe(201);
     const channelBId = (created.json() as { id: string }).id;
+    // Feature 154 — the buyer shops on channel B as well.
+    await addOrganizationChannels(h, TEST_ORGANIZATION_ID, ['one-click-channel-b']);
 
     // The basket's assortment gate narrows to the request's channel, so the
     // product has to be published there before it can be bought there.
@@ -282,5 +298,201 @@ describe('POST /api/v1/quick-order/one-click — placement', () => {
     } finally {
       await setOneClickEnabledForDefaultChannel(true);
     }
+  });
+
+  /**
+   * Feature 155, Phase 9 (T067) — US4 #2: one-click without a quantity orders
+   * the product's minimum; an explicit quantity below it is refused by the add
+   * path; and with the add path replaced by a double that admits the line
+   * unchecked, placement still refuses it [F3].
+   *
+   * The seeded product 101 carries the minimum only inside the case that needs
+   * a real placement (it has stock), and gets its previous value back.
+   */
+  describe('155 — order minimums', () => {
+    const RUN = minimumFixtureRun();
+    let A: MinimumProductFixture;
+    /** Kept in the basket across a refused one-click. */
+    let K: MinimumProductFixture;
+    /** Visible and sold, but with no price: refused at the write step (`CART_PRODUCT_UNPRICED`). */
+    let U: MinimumProductFixture;
+    const CTX = { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID };
+    /** The system default's: the route resolves it for a request naming no channel. */
+    let channelId: string;
+    /** The buyer's basket of that channel (`specs/154-sales-channel-access/`). */
+    const basketCtx = () => ({ ...CTX, salesChannelId: channelId });
+
+    const cradle = () =>
+      h.container.cradle as unknown as {
+        orderPlacementPort: OrderPlacementPort;
+        cartWritePort: CartWritePort;
+        catalogProductReadPort: CatalogProductReadPort;
+        quickOrderOneClickService: object;
+      };
+
+    const orderCount = async () => {
+      const em = h.em();
+      em.clear();
+      return em.count(Order, { placedByCustomerAccountId: TEST_CUSTOMER_ID }, { filters: false });
+    };
+
+    beforeAll(async () => {
+      const em = h.em();
+      channelId = await systemDefaultSalesChannelId(em);
+      A = await createMinimumProduct(em, {
+        sku: `QOC-A-${RUN}`,
+        nameEn: `Anchor ${RUN}`,
+        namePl: `Kotwa ${RUN}`,
+        minOrderQuantity: 10,
+        channelIds: await buyerChannelIds(em),
+      });
+      K = await createMinimumProduct(em, {
+        sku: `QOC-K-${RUN}`,
+        nameEn: `Keep ${RUN}`,
+        namePl: `Zachowaj ${RUN}`,
+        channelIds: await buyerChannelIds(em),
+      });
+      U = await createMinimumProduct(em, {
+        sku: `QOC-U-${RUN}`,
+        nameEn: `Unpriced ${RUN}`,
+        namePl: `Bez ceny ${RUN}`,
+        channelIds: await buyerChannelIds(em),
+      });
+      await em.nativeUpdate(Product, { id: { $in: [K.id, U.id] } }, { manageStock: false });
+      await em.nativeUpdate(Product, { id: U.id }, { attributeValues: {} });
+      // Feature 160 — unpriced means no base-book row (the fixture writes one).
+      await em.getConnection().execute(`delete from "price_list_matrix_entries" where "product_id" = ?`, [U.id]);
+      await setOneClickEnabledForDefaultChannel(true);
+    }, 60_000);
+
+    /** The customer's basket: every line of every cart of theirs that is still active. */
+    const basket = async () => {
+      const rows = await h
+        .em()
+        .getConnection()
+        .execute<Array<{ product_id: string; quantity: number }>>(
+          `select ci.product_id, ci.quantity from cart_items ci join carts c on c.id = ci.cart_id
+            where c.customer_account_id = ? and c.status = 'active'`,
+          [TEST_CUSTOMER_ID],
+        );
+      return rows.map((r) => `${r.product_id}:${r.quantity}`).sort();
+    };
+
+    const seedBasket = async () => {
+      await cradle().cartWritePort.replaceItemsForCustomer(basketCtx(), [
+        { productId: K.id, quantity: 3, unitPrice: '10.00', currency: 'PLN' },
+      ]);
+      const before = await basket();
+      expect(before).toEqual([`${K.id}:3`]);
+      return before;
+    };
+
+    /**
+     * Round C (item 1) — one-click used to clear the basket and then add the
+     * line, so a line the add path refused left the buyer an empty basket. The
+     * line now goes through `addItems` with `replaceExisting`, which clears only
+     * once nothing is left to refuse the line for.
+     */
+    it('one-click below the minimum is refused 422 and the basket is still K × 3', async () => {
+      const before = await seedBasket();
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/quick-order/one-click',
+        cookies: COOKIE,
+        payload: { productId: A.id, quantity: 5 },
+      });
+      expect(res.statusCode, res.body).toBe(422);
+      expect((res.json() as { error: { code: string } }).error.code).toBe(
+        ERROR_CODES.PRODUCT_BELOW_MINIMUM_QUANTITY,
+      );
+      expect(await basket()).toEqual(before);
+    });
+
+    it('one-click on an unpriced product is refused and the basket is still K × 3', async () => {
+      const before = await seedBasket();
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/quick-order/one-click',
+        cookies: COOKIE,
+        payload: { productId: U.id, quantity: 1 },
+      });
+      expect(res.statusCode, res.body).toBe(422);
+      expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.CART_PRODUCT_UNPRICED);
+      expect(await basket()).toEqual(before);
+    });
+
+    it('US4 #2 — one-click without a quantity orders the minimum (10), not 1', async () => {
+      const em = h.em();
+      const previous = (await em.findOneOrFail(Product, { id: SEED_PRODUCT_101_ID }, { filters: false })).minOrderQuantity ?? null;
+      await setProductMinimum(em, SEED_PRODUCT_101_ID, 10);
+      try {
+        const res = await h.app.inject({
+          method: 'POST',
+          url: '/api/v1/quick-order/one-click',
+          cookies: COOKIE,
+          payload: { productId: SEED_PRODUCT_101_ID },
+        });
+        expect(res.statusCode, res.body).toBe(201);
+        const orderId = (res.json() as { data: { order: { id: string } } }).data.order.id;
+        const lookup = h.em();
+        lookup.clear();
+        const items = await lookup.find(OrderItem, { orderId });
+        expect(items.map((i) => [i.productId, i.quantity])).toEqual([[SEED_PRODUCT_101_ID, 10]]);
+      } finally {
+        await setProductMinimum(h.em(), SEED_PRODUCT_101_ID, previous);
+      }
+    });
+
+    it('US4 #2 — one-click with an explicit 5 is refused by the add path', async () => {
+      const before = await orderCount();
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/quick-order/one-click',
+        cookies: COOKIE,
+        payload: { productId: A.id, quantity: 5 },
+      });
+      expect(res.statusCode, res.body).toBe(422);
+      expect((res.json() as { error: { code: string } }).error.code).toBe(
+        ERROR_CODES.PRODUCT_BELOW_MINIMUM_QUANTITY,
+      );
+      expect(await orderCount()).toBe(before);
+    });
+
+    it('the placement backstop — with addItems replaced by a double that admits A × 5, placement still refuses [F3]', async () => {
+      const OneClickService = cradle().quickOrderOneClickService.constructor as new (
+        ...args: unknown[]
+      ) => { place(ctx: unknown, input: unknown, salesChannelId: string): Promise<unknown> };
+      const realCart = cradle().cartWritePort;
+      const uncheckedCart = {
+        addItems: async (_actor: unknown, lines: Array<{ productId: string; quantity: number }>) => ({
+          ...(await realCart.replaceItemsForCustomer(
+            basketCtx(),
+            lines.map((line) => ({ productId: line.productId, quantity: line.quantity, unitPrice: '10.00', currency: 'PLN' })),
+          )),
+          outcomes: [],
+        }),
+      };
+      const preferences = {
+        resolveForCustomer: async () => ({
+          shippingAddressId: SEED_ADDRESS_DELIVERY_ID,
+          billingAddressId: SEED_ADDRESS_BILLING_ID,
+          deliveryMethodId: SEED_DELIVERY_METHOD_ID,
+          paymentMethodId: SEED_PAYMENT_METHOD_ID,
+        }),
+      };
+      const oneClick = new OneClickService(
+        preferences,
+        uncheckedCart,
+        cradle().orderPlacementPort,
+        async () => true,
+        cradle().catalogProductReadPort,
+      );
+      const before = await orderCount();
+      await expect(oneClick.place(CTX, { productId: A.id, quantity: 5 }, channelId)).rejects.toMatchObject({
+        statusCode: 422,
+        code: ERROR_CODES.PRODUCT_BELOW_MINIMUM_QUANTITY,
+      });
+      expect(await orderCount()).toBe(before);
+    });
   });
 });

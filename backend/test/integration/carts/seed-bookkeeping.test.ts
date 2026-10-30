@@ -7,6 +7,7 @@ import {
 import { Cart } from '../../helpers/package-entities.js';
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 import { cartWritePortOf } from '../../helpers/orders-neighbour-ports.js';
 
 /**
@@ -21,7 +22,8 @@ import { cartWritePortOf } from '../../helpers/orders-neighbour-ports.js';
  */
 describe('carts — a seeded basket is a basket somebody just used', () => {
   let h: BackendServerHandle;
-  const CTX = { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID };
+  /** The basket of the system-default channel — the one a request naming none uses. */
+  let CTX: { customerAccountId: string; organizationId: string; salesChannelId: string };
   const LINE = { productId: SEED_PRODUCT_101_ID, quantity: 2, unitPrice: '11.25', currency: 'PLN' };
 
   const basket = async () => {
@@ -32,6 +34,11 @@ describe('carts — a seeded basket is a basket somebody just used', () => {
 
   beforeAll(async () => {
     h = await setupBackendServer();
+    CTX = {
+      customerAccountId: TEST_CUSTOMER_ID,
+      organizationId: TEST_ORGANIZATION_ID,
+      salesChannelId: await systemDefaultSalesChannelId(h.em()),
+    };
   });
 
   afterAll(async () => {
@@ -54,5 +61,23 @@ describe('carts — a seeded basket is a basket somebody just used', () => {
     expect((await basket()).lastActivityAt.getTime()).toBeGreaterThanOrEqual(before - 1000);
     // What the port answers is the row as written, not the row as first read.
     expect(seeded.cart.lastActivityAt.getTime()).toBeGreaterThanOrEqual(before - 1000);
+  });
+
+  /**
+   * Feature 159 (research N-31) — a quote may hold one product on several lines
+   * (in different groups), and the seed writes them in one flush. The basket is
+   * read by creation time, so lines sharing one came back in random-id order.
+   */
+  it('reads a seed of repeated lines back in seed order, every time', async () => {
+    const quantities = [5, 3, 7, 1, 4, 2, 6, 9];
+    for (let round = 0; round < 3; round += 1) {
+      const seeded = await cartWritePortOf(h).replaceItemsForCustomer(
+        CTX,
+        quantities.map((quantity) => ({ ...LINE, quantity })),
+      );
+      expect(seeded.items.map((item) => item.quantity)).toEqual(quantities);
+      const read = await cartWritePortOf(h).replaceItemsForCustomer(CTX, quantities.map((quantity) => ({ ...LINE, quantity })));
+      expect(read.items.map((item) => item.quantity)).toEqual(quantities);
+    }
   });
 });

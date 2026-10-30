@@ -357,6 +357,7 @@ export function registerModule(ctx: ModuleContext): void {
             // `MODULE_DISABLED` at the seam rather than half a set of defaults.
             defaultPreferencePort: lazyPort<DefaultPreferencePort>(ctx, 'defaultPreferencePort'),
             storefrontBaseUrl: cradle().storefrontBaseUrl,
+            linkChannel: () => cradle().salesChannelResolutionPort.getSystemDefault(),
             requireAdmin: (permission) => async (req, reply) =>
               cradle().requireAdmin(permission)(req, reply),
             requireCustomer: (req, reply) => cradle().requireCustomer(req, reply),

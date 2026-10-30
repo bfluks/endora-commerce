@@ -1,11 +1,11 @@
-import { redirect } from 'next/navigation';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { registerOrganization } from '../../../lib/api/auth';
 import { StorefrontApiError } from '../../../lib/api/client';
 import { Hook } from '../../../components/Hook';
 import { CountryPicker } from '../../../lib/dictionary/pickers/CountryPicker';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -41,7 +41,7 @@ export default async function RegisterPage({
             that email to activate your account.
           </p>
           <p className="b2b-auth__hint">
-            Already verified? <Link href="/login">Sign in</Link>.
+            Already verified? <LocalizedLink href="/login">Sign in</LocalizedLink>.
           </p>
         </div>
         <Hook code="register.bottom" />
@@ -128,7 +128,7 @@ export default async function RegisterPage({
           </div>
         </form>
         <p className="b2b-auth__hint">
-          Already have an account? <Link href="/login">Sign in</Link>.
+          Already have an account? <LocalizedLink href="/login">Sign in</LocalizedLink>.
         </p>
       </div>
       <Hook code="register.bottom" />
@@ -161,8 +161,8 @@ async function registerAction(formData: FormData): Promise<void> {
     });
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Registration failed. Please try again.';
-    redirect(`/register?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : 'Registration failed. Please try again.';
+    return await localeRedirect(`/register?error=${encodeURIComponent(message)}`);
   }
-  redirect(`/register?status=pending&email=${encodeURIComponent(email)}`);
+  return await localeRedirect(`/register?status=pending&email=${encodeURIComponent(email)}`);
 }

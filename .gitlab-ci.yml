@@ -267,6 +267,32 @@ quality:
     # only when the container can no longer grow. Do **not** raise this number
     # past ~2816 while the container is 3 GB: above that the named error is
     # lost and the job starts failing as a SIGKILL instead.
+    #
+    # **2026-10-24: reached, raised to 3072** (D-287 release, PR #419). Under
+    # Node 22.20 the single program died at 2560 and passed at 2816 and 3072
+    # (tsc `Memory used` 2.74 GB, 6791 files, 3.51M instantiations).
+    #
+    # **2026-10-24: split, lowered to 2560** (issue #421), the lever above pulled
+    # before the next raise rather than after it: `backend` type-checks two
+    # programs, both named by `-p` in its `typecheck` script —
+    # `backend/tsconfig.json` (`src`, `scripts`, `test/unit` and the shared test
+    # helpers) and `backend/test/tsconfig.json` (`test/contract`,
+    # `test/integration`, `test/perf`). Their roots are the old program's 2123
+    # plus the four `vitest*.ts` configurations, which no program read before,
+    # and `test/unit/harness/workspace-resolution.test.ts` holds every `.ts`
+    # file under `backend/` to exactly one of them, which is the missing
+    # invariant named above. Bracketed under Node 22.20 the same way:
+    # the first dies at 1664 and passes at 1792 (5283 files), the second dies at
+    # 1920 and passes at 2048 (5368 files, 3.19M instantiations) — a requirement
+    # of ~2048 against ~2816 before, 27% off. 2560 keeps ~512 MB over the larger
+    # one and ~1150 MB under the container's usable ~3840. The cost is wall
+    # time: 64-65 s for the single program at 3072 against 89-92 s for both at
+    # 2560, because each program loads the ~3500 files they share (`src` and
+    # the declarations it reaches). Three programs — the second split into
+    # `contract`+`perf` and `integration` — were measured and not taken: the
+    # largest still needs 1792 (dies at 1664), 256 MB less for another ~35 s.
+    # When 2560 is reached again, re-bracket both programs first; the next
+    # split is `test/integration`, the largest single directory.
     NODE_OPTIONS: --max-old-space-size=2560
   before_script:
     # `node:22.18-slim` carries no git, and `check:release-intent` below asks

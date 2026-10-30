@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactElement } from 'react';
 import type { ComponentConfig, Config } from '@puckeditor/core';
-import type { ComparisonDocumentData } from '@endora-commerce/contracts';
+import { unitPriceDisplayText, type ComparisonDocumentData } from '@endora-commerce/contracts';
 import { createColorField } from '@endora-commerce/page-builder-core';
 import { useBlockRenderEnvironment, useDocumentSample } from '@endora-commerce/page-builder-core/contributions';
 
@@ -86,10 +86,10 @@ function Table(props: Props): ReactElement {
           <th style={cell}>{str(props['attributeColumnLabel'])}</th>
           {products.map((product) => (
             <th key={product.id} style={cell}>
-              {flag(props['showName'], true) ? <div>{pick(product.name, language)}</div> : null}
+              {flag(props['showName'], true) ? <div>{product.name /* 168-shim: Global text */}</div> : null}
               {flag(props['showSku'], false) ? <div style={note}>{product.sku}</div> : null}
               {flag(props['showPrice'], true) ? (
-                <div>{product.price ? `${product.price.amount} ${product.price.currency}` : empty}</div>
+                <div>{product.price ? `${unitPriceDisplayText(product.price.amount)} ${product.price.currency}` : empty}</div>
               ) : null}
               {flag(props['showAvailability'], false) ? (
                 <div style={note}>{str(props[product.available ? 'availableText' : 'unavailableText'])}</div>

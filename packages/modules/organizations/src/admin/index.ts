@@ -4,9 +4,11 @@
  *
  * **This module is a zone *host*, and the busiest one in the feature.**
  * `OrganizationDetail.tsx` renders `organization.detail.after`, the member P7b
- * published for it, and **four** modules contribute there: `sales_channels`'
- * channel membership at 100, `price_lists`' display-mode override at 200,
- * `quick_order`'s ordering defaults at 300 and `carts`' approval policy at 400.
+ * published for it, and modules contribute there: `price_lists`' display-mode
+ * override at 200, `quick_order`'s ordering defaults at 300 and `carts`'
+ * approval policy at 400. `sales_channels`' channel membership at 100 left in
+ * feature 154: the Organization's sales channels are this module's own panel
+ * now, behind the customer permissions.
  * The publication is what freed this directory to move —
  * `check:admin-registrations` counts routes and nav entries and a zone is
  * neither, so a host may move whether or not its contributors have.
@@ -44,6 +46,16 @@ import type { AdminContributions } from '@endora-commerce/admin-kit/contribution
  */
 const READ_PERMISSION: readonly [string, string] = ['customers:read', 'customers:manage'];
 
+/**
+ * The code that opens *New organization* (feature 154). The screen's only
+ * purpose is `POST /api/v1/admin/organizations`, which enforces
+ * `customers:manage`, so the route asks for the code the write demands — the
+ * split `sales_channels`' `/sales-channels/new` ships. This module's own
+ * `new-organization` palette action declares the same code, which is what
+ * `check:action-route-permissions` holds the pair to.
+ */
+const CREATE_PERMISSION = 'customers:manage';
+
 /** The module's landing route: the organization roster. */
 const ROUTE_PATH = '/organizations';
 
@@ -54,6 +66,13 @@ export const contributions: AdminContributions = {
       component: () => import('./pages/OrganizationsList.js'),
       requiredPermission: [...READ_PERMISSION],
       index: true,
+    },
+    {
+      // Declared ahead of `/:id`; `<Routes>` ranks the static segment first
+      // whatever the order, and the order says so without that knowledge.
+      path: `${ROUTE_PATH}/new`,
+      component: () => import('./pages/OrganizationCreate.js'),
+      requiredPermission: CREATE_PERMISSION,
     },
     {
       path: `${ROUTE_PATH}/:id`,

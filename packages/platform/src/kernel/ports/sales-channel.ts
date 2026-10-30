@@ -167,3 +167,58 @@ export interface SalesChannelMembershipPort {
 
 /** The channel resolved for the current scoped execution, or `null` outside HTTP. */
 export type ResolvedChannel = CachedChannel;
+
+/**
+ * The outcome of the sales-channel access rule (`specs/154-sales-channel-access/`,
+ * `contracts/channel-access-rule.md` §2).
+ */
+export type SalesChannelAccessDecision =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly code: 'SALES_CHANNEL_SIGN_IN_REQUIRED' | 'SALES_CHANNEL_NOT_PERMITTED';
+    };
+
+/**
+ * Who the rule is asked about. Administrators and API keys are not evaluated
+ * (owner decision D5), so they have no member here. An impersonated customer is
+ * a customer: impersonation reproduces the customer's view.
+ */
+export type SalesChannelAccessActor =
+  | { readonly kind: 'anonymous' }
+  | {
+      readonly kind: 'customer';
+      /** Session-derived, never client-supplied. `''` when the account has none. */
+      readonly organizationId: string;
+      readonly impersonatorAdminUserId?: string | null;
+    };
+
+/**
+ * Kernel port — the sales-channel access rule (feature 154). Registered by both
+ * composition roots as `salesChannelAccessPort`, ungated, like
+ * `salesChannelMembershipPort`; a consumer resolves it lazily and types on this.
+ *
+ * The rule itself runs in the channel resolver for every non-administrative
+ * request. This port is for the paths that must decide it **before** a request
+ * exists for the session in question — a sign-in, a second factor, a federated
+ * callback — and for the storefront's access read, which reports the decision
+ * instead of refusing.
+ */
+export interface SalesChannelAccessPort {
+  /** The channel ids an Organization may use (cached). An empty set when it has none. */
+  permittedChannelIds(organizationId: string): Promise<ReadonlySet<string>>;
+  /**
+   * The rule: an anonymous request only on a channel open to anonymous visitors;
+   * a customer only on a channel assigned to its Organization.
+   */
+  decide(
+    actor: SalesChannelAccessActor,
+    channel: Pick<CachedChannel, 'id' | 'code' | 'anonymousAccess'>,
+  ): Promise<SalesChannelAccessDecision>;
+  /**
+   * {@link decide} for a customer, throwing the 403 `SALES_CHANNEL_NOT_PERMITTED`
+   * refusal (with `details.channelCode`) — for sign-in paths, which must refuse
+   * before a session is created.
+   */
+  assertCustomerMayUse(organizationId: string | null, channelId: string): Promise<void>;
+}

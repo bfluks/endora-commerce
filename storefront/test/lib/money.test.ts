@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { moneyByMode, DEFAULT_VAT_RATE } from '../../lib/i18n/money';
+import { formatMoney, moneyByMode, DEFAULT_VAT_RATE } from '../../lib/i18n/money';
 
 /**
  * Unit contract for `moneyByMode` — the single place that turns a net `Money`
@@ -48,5 +48,54 @@ describe('moneyByMode', () => {
 
   it('exposes the Polish VAT default', () => {
     expect(DEFAULT_VAT_RATE).toBe(0.23);
+  });
+});
+
+/**
+ * `specs/pricing/worked-examples.md` §10.16 — the storefront shows a resolver
+ * amount half-up on its decimal digits (`Intl.NumberFormat` rounds the
+ * shortest decimal of the number half-expand), which is the figure the cart
+ * stores and the order charges: 9.0450 is 9,05 and 1.0050 is 1,01.
+ */
+describe('formatMoney — an x.xx50 amount is shown half-up', () => {
+  it.each([
+    ['9.0450', /^9,05\s*zł$/],
+    ['1.0050', /^1,01\s*zł$/],
+    ['2.6750', /^2,68\s*zł$/],
+  ])('%s', (amount, shown) => {
+    expect(formatMoney(Number(amount), 'PLN', 'pl-PL')).toMatch(shown);
+  });
+});
+
+/**
+ * Owner ruling of 2026-10-25 (§10.18) — a unit price (a product's price, a cart
+ * or order line's unit price) shows its significant places, up to four, and at
+ * least two; a line value or a total always shows two.
+ */
+describe('formatMoney — the unit-price display rule', () => {
+  it.each([
+    [0.0125, /^0,0125\s*zł$/],
+    [1.5, /^1,50\s*zł$/],
+    [1.505, /^1,505\s*zł$/],
+    [9.045, /^9,045\s*zł$/],
+  ])('unit price %s', (amount, shown) => {
+    expect(formatMoney(amount, 'PLN', 'pl-PL', { unitPrice: true })).toMatch(shown);
+  });
+
+  it('an amount keeps two places', () => {
+    expect(formatMoney(0.0125, 'PLN', 'pl-PL')).toMatch(/^0,01\s*zł$/);
+  });
+});
+
+describe('moneyByMode — a unit price and its gross', () => {
+  it('a sub-cent net unit price shows four places, and its gross is carried to four (0.015375 → 0,0154)', () => {
+    const r = moneyByMode({ amount: 0.0125, currency: 'PLN' }, 'both', 'pl-PL', DEFAULT_VAT_RATE, { unitPrice: true });
+    expect(r.primary).toMatch(/^0,0125\s*zł$/);
+    expect(r.secondary).toMatch(/^0,0154\s*zł$/);
+  });
+
+  it('a two-place net unit price keeps its gross at two places (§10.16 G1)', () => {
+    const r = moneyByMode({ amount: 29.5, currency: 'PLN' }, 'gross_only', 'pl-PL', DEFAULT_VAT_RATE, { unitPrice: true });
+    expect(r.primary).toMatch(/^36,29\s*zł$/);
   });
 });

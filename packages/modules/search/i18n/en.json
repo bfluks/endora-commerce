@@ -1,10 +1,10 @@
 {
-  "errors.QUERY_TOO_SHORT": "Query Too Short.",
-  "errors.QUERY_TOO_LONG": "Query Too Long.",
-  "errors.LIMIT_OUT_OF_RANGE": "Limit Out Of Range.",
-  "errors.SEARCH_BACKEND_UNAVAILABLE": "Search Backend Unavailable.",
-  "errors.PHRASE_REQUIRED": "Phrase Required.",
-  "errors.PHRASE_TOO_LONG": "Phrase Too Long.",
-  "errors.RESULT_COUNT_INVALID": "Result Count Invalid.",
+  "errors.QUERY_TOO_SHORT": "The search phrase is too short.",
+  "errors.QUERY_TOO_LONG": "The search phrase is too long.",
+  "errors.LIMIT_OUT_OF_RANGE": "The result limit is outside the allowed range.",
+  "errors.SEARCH_BACKEND_UNAVAILABLE": "Search is temporarily unavailable. Try again later.",
+  "errors.PHRASE_REQUIRED": "Enter a search phrase.",
+  "errors.PHRASE_TOO_LONG": "The search phrase is too long.",
+  "errors.RESULT_COUNT_INVALID": "The number of results is invalid.",
   "errors.LLM_CONFIG_INCOMPLETE": "LLM search configuration is incomplete."
 }

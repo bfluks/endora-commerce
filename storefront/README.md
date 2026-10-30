@@ -45,3 +45,24 @@ what `Dockerfile` puts in the image.
 
 `THEMING.md` is the guide: a token theme per sales channel with no rebuild, and what a fork of
 this directory keeps and gives up.
+
+## Language in the URL path (feature 167)
+
+Every page URL names its language as its first segment (`/pl/p/wiertarka`, `/en/p/drill`).
+The route tree has no `[lang]` segment: `middleware.ts` parses the prefix against the channel's
+URL languages (answered by `GET /api/v1/storefront/sales-channel`), answers the 307/308 language
+redirects, and rewrites the request to the unprefixed route with the language on
+`x-storefront-language` (`getServerContext().locale`).
+
+- **Never write a root-relative internal path by hand.** Use `LocalizedLink` (instead of
+  `next/link`), `LocalizedAnchor` / `LocalizedForm` (plain `<a>` / `<form action>`),
+  `useLocalizedPath()` in client code, and `localizedPath()` / `localeRedirect()` /
+  `localePermanentRedirect()` in server code (`lib/i18n/localized-link.tsx`,
+  `lib/i18n/navigation.ts`). The lint rule in `eslint.config.js` refuses a literal `href="/…"`,
+  `redirect('/…')`, `router.push('/…')` or `NextResponse.redirect(new URL('/…'))` with the
+  message *"Internal storefront paths go through LocalizedLink / localizedPath / localeRedirect"*.
+- `usePathname()` returns the prefixed browser path; compare routes on
+  `stripLocalePrefix(pathname, state)`.
+- Language-neutral paths are never prefixed: `/api`, `/pwa`, `/offline`,
+  `/service-unavailable` and files (`LANGUAGE_NEUTRAL_SEGMENTS` in `app/reserved-segments.ts`).
+- Indexable pages declare their alternates with `localizedAlternates(logicalPath)`.

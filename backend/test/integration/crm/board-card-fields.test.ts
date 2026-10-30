@@ -82,9 +82,12 @@ describe('crm board card fields — filters, values and cost (User Story 19)', (
     filters: Record<string, unknown> | null,
     cookies: Record<string, string> = CRM_ADMIN,
   ): Promise<string[]> => {
+    // A board lane continued in the list — what the board page asks for. Without
+    // `cardValues=true` a `custom:` filter follows the list-filter option rather
+    // than the card (`specs/157-custom-fields-list-filters/` FR-011a).
     const response = await h.app.inject({
       method: 'GET',
-      url: `${CRM_API}/opportunities${tail(filters)}`,
+      url: `${CRM_API}/opportunities${tail(filters, '&cardValues=true')}`,
       cookies,
     });
     expect(response.statusCode, response.body).toBe(200);

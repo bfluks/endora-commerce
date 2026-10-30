@@ -1,0 +1,264 @@
+import { describe, expect, it, vi } from 'vitest';
+import { ModuleDisabledError } from '@endora-commerce/platform/kernel';
+import { getTenantContext } from '@endora-commerce/platform/tenancy';
+import {
+  ensureStageAlertSchedule,
+  runStageAlertJob,
+  stageAlertTick,
+  STAGE_ALERT_EVERY_MS,
+  STAGE_ALERT_QUEUE,
+  STAGE_ALERT_SCHEDULER_ID,
+  startStageAlerts,
+} from './stage-alert-worker.js';
+
+/**
+ * BullMQ, stood in for: what is held here is what this module hands it — the
+ * queue's name, the schedule, the one-at-a-time consumer — not what it does
+ * with them, and a unit test opens no connection.
+ */
+const bull = vi.hoisted(() => ({
+  queues: [] as Array<{ name: string; upsertJobScheduler: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }>,
+  workers: [] as Array<{ name: string; processor: () => Promise<unknown>; options: Record<string, unknown> }>,
+}));
+vi.mock('bullmq', () => ({
+  Queue: class {
+    readonly upsertJobScheduler = vi.fn(async () => undefined);
+    readonly close = vi.fn(async () => undefined);
+    constructor(readonly name: string) {
+      bull.queues.push(this);
+    }
+  },
+  Worker: class {
+    constructor(
+      readonly name: string,
+      readonly processor: () => Promise<unknown>,
+      readonly options: Record<string, unknown>,
+    ) {
+      bull.workers.push(this);
+    }
+  },
+}));
+
+const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() });
+
+describe('projects stage deadline alert worker', () => {
+  it('names a queue BullMQ accepts', () => {
+    expect(STAGE_ALERT_QUEUE).toBe('projects-stage-alerts');
+    expect(STAGE_ALERT_QUEUE).not.toContain(':');
+  });
+
+  it.each([
+    ['the process runs none', { processRunsWorkers: false, moduleQueueRedis: {} as never }],
+    ['the composition offers no connection', { processRunsWorkers: true, moduleQueueRedis: undefined }],
+  ])('builds no consumer and installs no schedule where %s', async (_where, host) => {
+    const attach = vi.fn();
+    const onClose = vi.fn();
+    const started = await startStageAlerts({
+      tick: async () => undefined,
+      isPresent: () => true,
+      hasWork: async () => true,
+      attach,
+      onClose,
+      ...host,
+    });
+    expect(started).toBe(false);
+    expect(attach).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('where the process consumes queues: one consumer through the seam, one tick at a time, and the schedule installed', async () => {
+    bull.queues.length = 0;
+    bull.workers.length = 0;
+    const attach = vi.fn();
+    const closers: Array<() => Promise<void>> = [];
+    const tick = vi.fn(async () => undefined);
+    const redis = {} as never;
+
+    const started = await startStageAlerts({
+      tick,
+      isPresent: () => true,
+      hasWork: async () => true,
+      processRunsWorkers: true,
+      moduleQueueRedis: redis,
+      attach,
+      onClose: (close) => closers.push(close),
+    });
+
+    expect(started).toBe(true);
+    expect(bull.queues.map((queue) => queue.name)).toEqual([STAGE_ALERT_QUEUE]);
+    expect(bull.workers.map((worker) => worker.name)).toEqual([STAGE_ALERT_QUEUE]);
+    // The consumer reaches the platform's worker seam, which is what stops it with the module.
+    expect(attach).toHaveBeenCalledTimes(1);
+    expect(attach).toHaveBeenCalledWith(bull.workers[0]);
+    expect(bull.workers[0]?.options).toMatchObject({ connection: redis, concurrency: 1 });
+    // Without the schedule nothing ever ticks: no alert would be delivered at all.
+    expect(bull.queues[0]?.upsertJobScheduler).toHaveBeenCalledTimes(1);
+    expect(bull.queues[0]?.upsertJobScheduler).toHaveBeenCalledWith(
+      STAGE_ALERT_SCHEDULER_ID,
+      { every: STAGE_ALERT_EVERY_MS },
+      { name: 'sweep', data: {} },
+    );
+    // What BullMQ invokes is the tick, and nothing but it.
+    await bull.workers[0]?.processor();
+    expect(tick).toHaveBeenCalledTimes(1);
+    // The queue's own connection is closed with the application.
+    expect(closers).toHaveLength(1);
+    await closers[0]?.();
+    expect(bull.queues[0]?.close).toHaveBeenCalledTimes(1);
+  });
+
+  describe('an idle tick opens no scope (issue #120)', () => {
+    /** Every escape-hatch record the default sink printed while `run` ran. */
+    const escapeHatchLines = async (run: () => Promise<unknown>): Promise<string[]> => {
+      const lines: string[] = [];
+      const write = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+        const line = String(chunk);
+        if (line.includes('tenant.escape_hatch')) lines.push(line);
+        return true;
+      });
+      try {
+        await run();
+      } finally {
+        write.mockRestore();
+      }
+      return lines;
+    };
+    const scopeOf = () => getTenantContext()?.actor.kind;
+
+    it('asks whether an alert is due outside any tenant context, and stops there when none is', async () => {
+      const asked: Array<string | undefined> = [];
+      const tick = vi.fn(async () => undefined);
+      const processor = () =>
+        runStageAlertJob({
+          tick,
+          isPresent: () => true,
+          hasWork: async () => {
+            asked.push(scopeOf());
+            return false;
+          },
+        });
+
+      const lines = await escapeHatchLines(async () => {
+        await processor();
+        await processor();
+        await processor();
+      });
+
+      expect(asked).toEqual([undefined, undefined, undefined]);
+      expect(tick).not.toHaveBeenCalled();
+      expect(lines).toEqual([]);
+    });
+
+    it('a tick with an alert due runs the pass in a system scope and reports the entry, as before', async () => {
+      const seen: Array<string | undefined> = [];
+      const processor = () =>
+        runStageAlertJob({
+          tick: async () => {
+            seen.push(scopeOf());
+          },
+          isPresent: () => true,
+          hasWork: async () => true,
+        });
+
+      const lines = await escapeHatchLines(processor);
+
+      expect(seen).toEqual(['system']);
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] as string)).toMatchObject({
+        msg: 'tenant.escape_hatch',
+        scope: 'system',
+        reason: 'projects: deliver due stage deadline alerts',
+        entryPoint: 'worker',
+      });
+    });
+
+    it('a question that cannot be answered counts as yes — the pass runs, scope and record included', async () => {
+      const tick = vi.fn(async () => undefined);
+      const processor = () =>
+        runStageAlertJob({
+          tick,
+          isPresent: () => true,
+          hasWork: async () => {
+            throw new Error('connection refused');
+          },
+        });
+
+      const lines = await escapeHatchLines(processor);
+
+      expect(tick).toHaveBeenCalledTimes(1);
+      expect(lines).toHaveLength(1);
+    });
+
+    it('a module that is off asks its tables nothing', async () => {
+      const hasWork = vi.fn(async () => true);
+      const tick = vi.fn(async () => undefined);
+
+      const lines = await escapeHatchLines(() => runStageAlertJob({ tick, isPresent: () => false, hasWork }));
+
+      expect(hasWork).not.toHaveBeenCalled();
+      expect(tick).not.toHaveBeenCalled();
+      expect(lines).toEqual([]);
+    });
+  });
+
+  it('installs one schedule, every fifteen minutes, whose job carries nothing', async () => {
+    const upsertJobScheduler = vi.fn(async () => undefined);
+    await ensureStageAlertSchedule({ upsertJobScheduler } as never);
+    expect(upsertJobScheduler).toHaveBeenCalledWith(
+      STAGE_ALERT_SCHEDULER_ID,
+      { every: STAGE_ALERT_EVERY_MS },
+      { name: 'sweep', data: {} },
+    );
+    expect(STAGE_ALERT_EVERY_MS).toBe(15 * 60_000);
+  });
+
+  it('one tick is one pass', async () => {
+    const sweep = vi.fn(async () => ({}) as never);
+    await stageAlertTick({ alerts: { sweep }, isPresent: () => true, log: logger() as never })();
+    expect(sweep).toHaveBeenCalledTimes(1);
+    // The pass reads its own clock: a tick hands it none.
+    expect(sweep).toHaveBeenCalledWith();
+  });
+
+  it('does nothing at all while the module is off — presence is decided before the work', async () => {
+    const sweep = vi.fn(async () => ({}) as never);
+    let present = false;
+    const tick = stageAlertTick({ alerts: { sweep }, isPresent: () => present, log: logger() as never });
+    await tick();
+    expect(sweep).not.toHaveBeenCalled();
+    present = true;
+    await tick();
+    expect(sweep).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a failed pass and does not fail the job — the next tick is the retry', async () => {
+    const log = logger();
+    const tick = stageAlertTick({
+      alerts: {
+        sweep: async () => {
+          throw new Error('database is away');
+        },
+      },
+      isPresent: () => true,
+      log: log as never,
+    });
+    await expect(tick()).resolves.toBeUndefined();
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn.mock.calls[0]?.[0]).toMatchObject({ error: 'database is away' });
+  });
+
+  it('never swallows a module switched off underneath a delivery', async () => {
+    const log = logger();
+    const tick = stageAlertTick({
+      alerts: {
+        sweep: async () => {
+          throw new ModuleDisabledError('admin_notifications');
+        },
+      },
+      isPresent: () => true,
+      log: log as never,
+    });
+    await expect(tick()).rejects.toBeInstanceOf(ModuleDisabledError);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+});

@@ -11,7 +11,7 @@ import { randomUUID } from 'crypto';
 @GlobalEntity()
 @Entity({ tableName: 'gallery_items' })
 export class GalleryItem {
-  [OptionalProps]?: 'id' | 'position' | 'createdAt' | 'updatedAt';
+  [OptionalProps]?: 'id' | 'position' | 'altText' | 'hidden' | 'createdAt' | 'updatedAt';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -25,6 +25,18 @@ export class GalleryItem {
 
   @Property({ type: 'integer' })
   position: number = 0;
+
+  /**
+   * Feature 168 (data-model §6) — the Global alt text; `null` = none (the asset's own alt text is
+   * the derived fallback). Channel and Channel × language values live in
+   * `gallery_item_scope_overrides`.
+   */
+  @Property({ type: 'text', nullable: true })
+  altText: string | null = null;
+
+  /** Feature 168 — hidden at Global. */
+  @Property({ type: 'boolean' })
+  hidden: boolean = false;
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

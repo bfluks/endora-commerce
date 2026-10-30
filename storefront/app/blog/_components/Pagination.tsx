@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 interface PaginationProps {
   basePath: string;
@@ -22,13 +22,13 @@ export function Pagination({ basePath, page, totalPages }: PaginationProps): Rea
       className="mt-8 flex items-center justify-center gap-2 text-sm"
     >
       {page > 1 ? (
-        <Link
+        <LocalizedLink
           href={`${basePath}?page=${page - 1}`}
           rel="prev"
           className="rounded border border-[--line] px-3 py-1 hover:bg-[--surface-alt]"
         >
           ← Previous
-        </Link>
+        </LocalizedLink>
       ) : null}
       {pages.map((p, i) =>
         p === '…' ? (
@@ -36,7 +36,7 @@ export function Pagination({ basePath, page, totalPages }: PaginationProps): Rea
             …
           </span>
         ) : (
-          <Link
+          <LocalizedLink
             key={p}
             href={`${basePath}?page=${p}`}
             className={`min-w-[2.5rem] rounded border px-2 py-1 text-center font-mono ${
@@ -46,17 +46,17 @@ export function Pagination({ basePath, page, totalPages }: PaginationProps): Rea
             }`}
           >
             {p}
-          </Link>
+          </LocalizedLink>
         ),
       )}
       {page < totalPages ? (
-        <Link
+        <LocalizedLink
           href={`${basePath}?page=${page + 1}`}
           rel="next"
           className="rounded border border-[--line] px-3 py-1 hover:bg-[--surface-alt]"
         >
           Next →
-        </Link>
+        </LocalizedLink>
       ) : null}
     </nav>
   );

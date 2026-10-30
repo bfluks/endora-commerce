@@ -37,6 +37,12 @@ import { Migration20260820T100201OrdersNewToPaidTransition } from './20260820T10
 import { Migration20260821T131145OrdersPurchaseConversionMarker } from './20260821T131145_orders_purchase_conversion_marker.js';
 import { Migration20260824T080000OrdersDeliveryPointSnapshot } from './20260824T080000_orders_delivery_point_snapshot.js';
 import { Migration20261003T201537OrdersOrderTransitionEffects } from './20261003T201537_orders_order_transition_effects.js';
+import { Migration20261016T082022OrdersOrderItemReturnableAtPurchase } from './20261016T082022_orders_order_item_returnable_at_purchase.js';
+import { Migration20261020T172007OrdersOrderItemGroups } from './20261020T172007_orders_order_item_groups.js';
+import { Migration20261021T164807OrdersOrderCommentSystemNote } from './20261021T164807_orders_order_comment_system_note.js';
+import { Migration20261021T165247OrdersOrderItemsPriceSource } from './20261021T165247_orders_order_items_price_source.js';
+import { Migration20261024T145147OrdersVatMethod } from './20261024T145147_orders_vat_method.js';
+import { Migration20261025T031732OrdersUnitPriceFourPlaces } from './20261025T031732_orders_unit_price_four_places.js';
 
 export const migrations = [
   Migration20260611T140355OrdersBusinessId,
@@ -54,6 +60,12 @@ export const migrations = [
   Migration20260821T131145OrdersPurchaseConversionMarker,
   Migration20260824T080000OrdersDeliveryPointSnapshot,
   Migration20261003T201537OrdersOrderTransitionEffects,
+  Migration20261016T082022OrdersOrderItemReturnableAtPurchase,
+  Migration20261020T172007OrdersOrderItemGroups,
+  Migration20261021T164807OrdersOrderCommentSystemNote,
+  Migration20261021T165247OrdersOrderItemsPriceSource,
+  Migration20261024T145147OrdersVatMethod,
+  Migration20261025T031732OrdersUnitPriceFourPlaces,
 ];
 
 export {
@@ -72,4 +84,10 @@ export {
   Migration20260821T131145OrdersPurchaseConversionMarker,
   Migration20260824T080000OrdersDeliveryPointSnapshot,
   Migration20261003T201537OrdersOrderTransitionEffects,
+  Migration20261016T082022OrdersOrderItemReturnableAtPurchase,
+  Migration20261020T172007OrdersOrderItemGroups,
+  Migration20261021T164807OrdersOrderCommentSystemNote,
+  Migration20261021T165247OrdersOrderItemsPriceSource,
+  Migration20261024T145147OrdersVatMethod,
+  Migration20261025T031732OrdersUnitPriceFourPlaces,
 };

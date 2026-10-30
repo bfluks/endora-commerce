@@ -34,7 +34,6 @@ const ctx = {
   resolvedChannel: {
     id: '00000000-0000-4000-8000-000000000000',
     code: 'pl_retail',
-    isPublic: true,
     defaultCurrency: 'PLN',
     defaultLanguage: 'pl-PL',
   },

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
 import type { BlogResolvedTagRef } from '@endora-commerce/contracts';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 const BLOG_PREFIX = '/blog';
 
@@ -9,13 +9,13 @@ export function TagChipStrip({ tags }: { tags: BlogResolvedTagRef[] }): ReactNod
   return (
     <div className="flex flex-wrap gap-2">
       {tags.map((tag) => (
-        <Link
+        <LocalizedLink
           key={tag.id}
           href={`${BLOG_PREFIX}/tag/${tag.code}`}
           className="inline-flex items-center rounded-full border border-[--line] bg-[--surface-alt] px-3 py-1 text-xs font-medium text-[--ink-700] transition hover:bg-[--surface]"
         >
           #{tag.name}
-        </Link>
+        </LocalizedLink>
       ))}
     </div>
   );

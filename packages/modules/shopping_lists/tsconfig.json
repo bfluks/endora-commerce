@@ -25,9 +25,8 @@
   "include": ["src/**/*"],
   // A co-located test would be compiled into `dist` and would import `vitest`,
   // a devDependency — an unresolvable specifier in every consumer's install.
-  // Under Ruling A of `specs/084-small-f4-package-layout/` a package may own
-  // its unit tests and T045 defers that split, so this module's tests stay in
-  // `backend/test/`. The patterns stay so that adding one back is a test that
-  // does not run rather than a package that does not install.
+  // The package's co-located unit tests (`src/**/*.test.ts`, run by its own
+  // `vitest.config.ts`) import `vitest`, a devDependency no consumer installs,
+  // so they stay out of the emitted program.
   "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"]
 }

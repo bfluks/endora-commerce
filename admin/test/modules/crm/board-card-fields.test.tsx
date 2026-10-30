@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useLocation } from 'react-router-dom';
 import type {
@@ -479,6 +479,55 @@ describe('OpportunityBoardPage — the fields a card shows', () => {
     await waitFor(() => expect(lastFieldFilters(LIST_PATH)).toMatchObject({ 'custom:vip': { is: true } }));
     const listCall = getSpy.mock.calls.map(([url]) => url as string).filter((url) => url.startsWith(LIST_PATH)).at(-1);
     expect(listCall).toContain('cardValues=true');
+  });
+
+  /**
+   * Issue #418: two boxes whose typing pause ends in the same turn, with no
+   * render between them. Each change is applied to the address as it stands —
+   * the second does not write over the first with the filters of the render
+   * before it. Typed under a faked clock so both pauses end on one tick, every
+   * run.
+   */
+  describe('two filters whose typing pauses end together', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function typeTogether(changes: ReadonlyArray<[label: string, value: string]>): Promise<void> {
+      vi.useFakeTimers();
+      for (const [label, value] of changes) fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      vi.useRealTimers();
+    }
+
+    it('keeps both when they are filters of two fields', async () => {
+      await renderBoard();
+      await typeTogether([
+        ['Competitor', 'acme'],
+        [en('board.filter.min', { label: 'Seats' }), '5'],
+      ]);
+      await waitFor(() =>
+        expect(lastFieldFilters()).toEqual({
+          'custom:competitor': { contains: 'acme' },
+          'custom:seats': { min: '5' },
+        }),
+      );
+      expect(address()).toContain('f.custom:competitor.contains=acme');
+      expect(address()).toContain('f.custom:seats.min=5');
+    });
+
+    it('keeps both when they are the lowest and the highest of one field', async () => {
+      await renderBoard();
+      await typeTogether([
+        [en('board.filter.min', { label: 'Seats' }), '5'],
+        [en('board.filter.max', { label: 'Seats' }), '9'],
+      ]);
+      await waitFor(() => expect(lastFieldFilters()).toEqual({ 'custom:seats': { min: '5', max: '9' } }));
+      expect(address()).toContain('f.custom:seats.min=5');
+      expect(address()).toContain('f.custom:seats.max=9');
+    });
   });
 
   it('opens an address that carries filters with them applied, and Clear empties it', async () => {

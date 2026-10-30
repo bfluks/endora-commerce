@@ -1,11 +1,11 @@
 'use client';
 
-import Link from 'next/link';
 import { Fragment, useState, type ReactNode } from 'react';
 import type { ResolvedMegamenu, ResolvedMenuItem } from '@endora-commerce/contracts';
 import { MenuAsset } from './MenuAsset';
 import { MenuButton } from './MenuButton';
 import { MenuCmsBlockEmbed } from './MenuCmsBlockEmbed';
+import { LocalizedLink, LocalizedAnchor } from '../../lib/i18n/localized-link';
 
 interface MegamenuMobileDrawerProps {
   megamenu: ResolvedMegamenu;
@@ -74,7 +74,7 @@ export function MegamenuMobileDrawer({ megamenu, account }: MegamenuMobileDrawer
             <ul key={stack.length} className="m-drawer__level mm__list">
               {currentLevel && currentLevel.url ? (
                 <li>
-                  <Link href={currentLevel.url} className="mm__row feat" onClick={reset}>
+                  <LocalizedLink href={currentLevel.url} className="mm__row feat" onClick={reset}>
                     <span className="mm__row__ic">
                       <LayersIcon />
                     </span>
@@ -82,7 +82,7 @@ export function MegamenuMobileDrawer({ megamenu, account }: MegamenuMobileDrawer
                       <b>Wszystkie: {currentLevel.label}</b>
                       <span>Zobacz wszystko →</span>
                     </span>
-                  </Link>
+                  </LocalizedLink>
                 </li>
               ) : null}
               {items.map((item) => (
@@ -97,9 +97,9 @@ export function MegamenuMobileDrawer({ megamenu, account }: MegamenuMobileDrawer
                   <b>Quick Order</b>
                 </span>
                 <p>Wklej listę SKU + ilości z ERP/CSV i utwórz zamówienie w 30 sekund.</p>
-                <Link href="/quick-order" className="mm__promo__cta" onClick={reset}>
+                <LocalizedLink href="/quick-order" className="mm__promo__cta" onClick={reset}>
                   Otwórz Quick Order <ArrowRightIcon />
-                </Link>
+                </LocalizedLink>
               </div>
             ) : null}
           </div>
@@ -108,25 +108,25 @@ export function MegamenuMobileDrawer({ megamenu, account }: MegamenuMobileDrawer
             <div className="mm__foot">
               {account ? (
                 <>
-                  <Link href="/account" className="mm__login" onClick={reset}>
+                  <LocalizedLink href="/account" className="mm__login" onClick={reset}>
                     <span className="mm__login__av">{account.initials}</span>
                     <span className="min-w-0">
                       <b>{account.name}</b>
                       <span>{account.subtitle}</span>
                     </span>
-                  </Link>
-                  <Link href="/account" className="btn btn--ghost btn--sm" onClick={reset}>
+                  </LocalizedLink>
+                  <LocalizedLink href="/account" className="btn btn--ghost btn--sm" onClick={reset}>
                     <UserIcon /> Konto
-                  </Link>
+                  </LocalizedLink>
                 </>
               ) : (
-                <Link
+                <LocalizedLink
                   href="/login"
                   className="btn btn--outline btn--sm w-full justify-center"
                   onClick={reset}
                 >
                   <UserIcon /> Zaloguj się
-                </Link>
+                </LocalizedLink>
               )}
             </div>
           ) : null}
@@ -164,7 +164,7 @@ function renderRow(
       }
       if (!item.url) return null;
       return (
-        <a href={item.url} className="mm__row" onClick={onNavigate}>
+        <LocalizedAnchor href={item.url} className="mm__row" onClick={onNavigate}>
           <span className="mm__row__ic">
             <RowIcon item={item} />
           </span>
@@ -175,7 +175,7 @@ function renderRow(
           <span className="mm__row__chev">
             <ArrowUpRightIcon />
           </span>
-        </a>
+        </LocalizedAnchor>
       );
     case 'button':
       return (

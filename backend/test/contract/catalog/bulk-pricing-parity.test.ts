@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Organization } from '../../helpers/package-entities.js';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, type LinePricesPort, type OrgLinePricePort } from '@endora-commerce/contracts';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -17,8 +17,8 @@ import { Product } from '../../helpers/package-entities.js';
 import { CustomerAccount } from '../../helpers/package-entities.js';
 import { AuditLogEntry } from '@endora-commerce/platform/kernel';
 import { hashPassword } from '@endora-commerce/platform/kernel';
-import { PriceListService } from '../../../../packages/modules/price_lists/src/backend/services/price-list-service.js';
-import { neighbourReadPorts } from '../../helpers/price-list-neighbour-ports.js';
+import { seedPriceBookSql } from '../../helpers/price-book-sql.js';
+import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
 
 /**
  * Feature 062 / T015 — bulk pricing parity (SC-001).
@@ -138,6 +138,8 @@ describe('External bulk pricing parity with cart pricing (062 / T015, SC-001)', 
       },
     });
     await em.persistAndFlush(orgB);
+    // Feature 154 — Organization B shops on the stores the harness seeds.
+    await bindOrganizationsToFixtureChannelsSql(em, [ORG_B_ID]);
     const customerB = em.create(CustomerAccount, {
       id: CUSTOMER_B_ID,
       organizationId: ORG_B_ID,
@@ -173,8 +175,8 @@ describe('External bulk pricing parity with cart pricing (062 / T015, SC-001)', 
       slug: 'parity-shared-product',
       type: 'simple',
       status: 'active',
-      name: { 'en-US': 'Parity shared product' },
-      description: { 'en-US': '' },
+      name: 'Parity shared product',
+      description: '',
       visibility: 'public',
       manageStock: false,
       attributeValues: {},
@@ -184,8 +186,8 @@ describe('External bulk pricing parity with cart pricing (062 / T015, SC-001)', 
       slug: 'parity-bracketless-product',
       type: 'simple',
       status: 'active',
-      name: { 'en-US': 'Parity bracketless product' },
-      description: { 'en-US': '' },
+      name: 'Parity bracketless product',
+      description: '',
       visibility: 'public',
       manageStock: false,
       attributeValues: {},
@@ -195,8 +197,8 @@ describe('External bulk pricing parity with cart pricing (062 / T015, SC-001)', 
       slug: 'parity-foreign-product',
       type: 'simple',
       status: 'active',
-      name: { 'en-US': 'Parity foreign-channel product' },
-      description: { 'en-US': '' },
+      name: 'Parity foreign-channel product',
+      description: '',
       visibility: 'public',
       manageStock: false,
       attributeValues: {},
@@ -214,43 +216,23 @@ describe('External bulk pricing parity with cart pricing (062 / T015, SC-001)', 
       ],
     );
 
-    // Two org-targeted price lists with DIFFERENT bracket ladders.
-    const priceLists = new PriceListService(() => h.em(), undefined, undefined, undefined, neighbourReadPorts(() => h.em()));
-    const listA = await priceLists.create({
-      name: 'Parity list org A',
-      type: 'base',
-      applicationRule: {
-        kind: 'criterion',
-        type: 'organization',
-        values: [TEST_ORGANIZATION_ID],
-      },
-    });
-    await priceLists.addProduct(listA.id, shared.id);
-    await priceLists.replaceBrackets(listA.id, shared.id, {
-      PLN: [
-        { minQuantity: 1, maxQuantity: 9, amount: '111.00' },
-        { minQuantity: 10, maxQuantity: null, amount: '99.00' },
+    // Two organization price books with DIFFERENT tier ladders.
+    await seedPriceBookSql(em, {
+      name: 'Parity book org A',
+      audience: { organizations: [TEST_ORGANIZATION_ID] },
+      rows: [
+        { productId: shared.id, minQuantity: 1, fixed: '111.00' },
+        { productId: shared.id, minQuantity: 10, fixed: '99.00' },
       ],
     });
-    await priceLists.activate(listA.id);
-
-    const listB = await priceLists.create({
-      name: 'Parity list org B',
-      type: 'base',
-      applicationRule: {
-        kind: 'criterion',
-        type: 'organization',
-        values: [ORG_B_ID],
-      },
-    });
-    await priceLists.addProduct(listB.id, shared.id);
-    await priceLists.replaceBrackets(listB.id, shared.id, {
-      PLN: [
-        { minQuantity: 1, maxQuantity: 9, amount: '88.00' },
-        { minQuantity: 10, maxQuantity: null, amount: '77.00' },
+    await seedPriceBookSql(em, {
+      name: 'Parity book org B',
+      audience: { organizations: [ORG_B_ID] },
+      rows: [
+        { productId: shared.id, minQuantity: 1, fixed: '88.00' },
+        { productId: shared.id, minQuantity: 10, fixed: '77.00' },
       ],
     });
-    await priceLists.activate(listB.id);
 
     keyOrgA = await mint({
       name: 'Parity key org A',
@@ -346,6 +328,29 @@ describe('External bulk pricing parity with cart pricing (062 / T015, SC-001)', 
     expect((foreign as { reason: string }).reason).toBe('sku_not_in_assortment');
     expect(unknown!.price).toBeNull();
     expect((unknown as { reason: string }).reason).toBe('sku_not_in_assortment');
+  });
+
+  it('prices a multi-line request in one batched resolution, not one per line (D-287 P0)', async () => {
+    const pricing = (h.container.cradle as unknown as { pricingService: OrgLinePricePort & LinePricesPort }).pricingService;
+    const batch = vi.spyOn(pricing, 'resolveLinePrices');
+    const single = vi.spyOn(pricing, 'resolveLinePrice');
+    try {
+      const bulk = await bulkPrice(keyOrgA, [
+        { sku: 'PAR-SHARED-001', quantity: 1 },
+        { sku: 'PAR-SHARED-001', quantity: 10 },
+        { sku: 'PAR-NOBRACKET-002', quantity: 3 },
+        { sku: 'PAR-SHARED-001', quantity: 25 },
+      ]);
+      expect(bulk.statusCode).toBe(200);
+      expect(bulk.data!.map((line) => (line.price ? Number(line.price.amount) : null))).toEqual([
+        111, 99, null, 99,
+      ]);
+      expect(batch).toHaveBeenCalledTimes(1);
+      expect(single).not.toHaveBeenCalled();
+    } finally {
+      batch.mockRestore();
+      single.mockRestore();
+    }
   });
 
   it('more than 200 lines ⇒ 422 VALIDATION_FAILED', async () => {

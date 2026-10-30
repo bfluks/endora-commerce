@@ -48,10 +48,13 @@ function sourceOf(relativePath: string): string {
  * the one that would go red if somebody "tightened" the declaration by copying
  * a neighbour's code.
  *
- * The palette half of Principle XVII item 5 is proved server-side, in
- * `backend/test/integration/mfa/module-owned-surface-off-state.test.ts`: this
- * module declares no action, and that file asserts the manifest and the registry
- * agree about it in both states rather than omitting the question.
+ * **Issue #510 gave the module a sidebar entry and a palette action** (Principle
+ * XVI): an admin could not find where to switch two-factor authentication on.
+ * The sidebar half of the off-state is driven below, with the same no-code
+ * assertion as the route; the palette half of Principle XVII item 5 is proved
+ * server-side, in
+ * `backend/test/integration/mfa/module-owned-surface-off-state.test.ts`,
+ * because the server resolves the Actions group.
  */
 
 let presentModules = new Set<string>(['mfa']);
@@ -136,6 +139,7 @@ const bundle = {
     'app.moduleScreenLoading',
     'app.notFound',
   ]),
+  ...passthroughBundle('mfa', ['nav.security.label']),
 };
 
 function renderAt(path: string): RenderResult {
@@ -157,6 +161,11 @@ function renderAt(path: string): RenderResult {
  */
 const screenIsRendered = (): boolean =>
   screen.queryAllByText(/Two-factor authentication/).length > 0;
+
+/** Every sidebar link's `href`, in rendered order. */
+function sidebarHrefs(): (string | null)[] {
+  return [...document.querySelectorAll('.b2b-sidebar a')].map((a) => a.getAttribute('href'));
+}
 
 /** The admin's own unknown-path answer, rendered by `ModuleRoute`'s gate. */
 const notFoundIsRendered = (): boolean => screen.queryAllByText(/app\.notFound/).length > 0;
@@ -211,14 +220,36 @@ describe('mfa owns its admin surface, and its proof is the route', () => {
   });
 });
 
+describe('mfa is in the sidebar, for every admin while present (issue #510)', () => {
+  it('contributes its entry to an operator holding no code, labelled in its own namespace', () => {
+    // No code, as for the route: every admin manages their own second factor.
+    presentModules = new Set(['mfa']);
+    permissions = new Set();
+    renderAt('/');
+    expect(sidebarHrefs()).toContain('/security');
+    expect(screen.getByRole('link', { name: /nav\.security\.label/ })).toBeTruthy();
+  });
+
+  it('withdraws the entry while the module is absent, and restores it after', () => {
+    permissions = new Set();
+    presentModules = new Set();
+    const off = renderAt('/');
+    expect(sidebarHrefs()).not.toContain('/security');
+    off.unmount();
+
+    presentModules = new Set(['mfa']);
+    renderAt('/');
+    expect(sidebarHrefs()).toContain('/security');
+  });
+});
+
 describe('the shell no longer names mfa by hand', () => {
-  it('has no host route for the module, and never had a nav entry', () => {
+  it('has no host route for the module, and no hand-written nav entry', () => {
     // The evidence that the conversion converted something. `App.tsx` is one of
     // the two registries 11 of the last 12 module additions edited; it no longer
     // mentions this module, and the screen is still there. `AppShell.tsx` is
-    // asserted too even though this module has no sidebar row — that absence is
-    // the module's shape, and asserting it keeps a later batch from adding one
-    // by hand instead of declaring it.
+    // asserted too: the sidebar row is the module's declaration (issue #510),
+    // and asserting the shell's silence keeps it from being added by hand.
     const app = sourceOf('../packages/admin-shell/src/App.tsx');
     const shell = sourceOf('../packages/admin-shell/src/components/AppShell.tsx');
     expect(app).not.toContain('AdminSecuritySettings');
@@ -235,13 +266,14 @@ describe('the shell no longer names mfa by hand', () => {
     expect(registry).not.toContain('packages/modules');
   });
 
-  it('declares one lazily-loaded route and no nav entry', async () => {
-    // FR-013, and the declaration this whole file is about. `nav` being absent
-    // is the module's contribution set saying so, which is what Ruling 1 asks a
-    // nav-less batch member's test to derive rather than assert by omission.
+  it('declares one lazily-loaded route and one nav entry, neither gated on a code', async () => {
+    // FR-013, and the declaration this whole file is about. The nav entry
+    // (issue #510) points at the route and, like it, carries no code.
     const { contributions } = await import('@endora-commerce/mod-mfa/admin');
     expect(contributions.routes?.map((route) => route.path)).toEqual(['/security']);
-    expect(contributions.nav ?? []).toEqual([]);
+    expect((contributions.nav ?? []).map((entry) => [entry.to, entry.requiredPermission])).toEqual([
+      ['/security', undefined],
+    ]);
     expect(typeof contributions.routes?.[0]?.component).toBe('function');
     expect(contributions.routes?.[0]?.requiredPermission).toBeUndefined();
     const loaded = await contributions.routes![0]!.component();

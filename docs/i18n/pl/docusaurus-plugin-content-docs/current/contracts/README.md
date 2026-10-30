@@ -8,7 +8,7 @@ title: Kontrakty API
 Platforma udostępnia jedno, udokumentowane API HTTP, projektowane zgodnie z podejściem API-first. API jest opisane w dwóch uzupełniających się miejscach:
 
 1. **Dokument OpenAPI na żywo** pod `GET /api/v1/_openapi.json`
-   (przeglądarka HTML pod `GET /api/v1/_docs`). To **źródło prawdy** o działającym
+   (interaktywna dokumentacja pod `GET /api/v1/_docs`). To **źródło prawdy** o działającym
    API — jest generowany przy starcie ze schematów Zod w `@endora-commerce/contracts`, którymi
    Fastify sam waliduje żądania, więc nie może różnić się od działającego serwera.
 2. **Opisy kontraktów dla poszczególnych domen**, wymienione w sekcji
@@ -20,14 +20,27 @@ Platforma udostępnia jedno, udokumentowane API HTTP, projektowane zgodnie z pod
 
 ## OpenAPI na żywo
 
-W środowisku deweloperskim:
+Opis API jest dostępny dla administratorów, których rola administracyjna ma uprawnienie
+`platform.api_description.read` (*Odczyt opisu API*), oraz dla kluczy API wydanych z zakresem
+`platform.api_description.read`. Każdy inny dostaje `401 UNAUTHORIZED` (brak sesji
+administratora i klucza API) albo `403 FORBIDDEN` (administrator lub klucz bez tego kodu).
+Administrator platformy nadaje uprawnienie na ekranie **Role**; klucz z tym zakresem może wydać
+tylko administrator, który sam je ma.
+
+- **W panelu administracyjnym** — **System → Opis API** (albo ⌘K / CTRL+K, *Opis API*) pokazuje
+  tytuł, wersję i liczbę endpointów dokumentu, pozwala pobrać go jako JSON i otwiera w nowej karcie
+  interaktywną dokumentację (`GET /api/v1/_docs`, Swagger UI). Dokumentację serwuje samo API i
+  korzysta ona z Twojej sesji administratora.
+- **Z integracji** — wyślij klucz jako token bearer:
 
 ```bash
 pnpm run dev:infra && pnpm --filter backend run dev
-# in another shell:
-curl http://localhost:3001/api/v1/_openapi.json | jq .info
-open  http://localhost:3001/api/v1/_docs           # Swagger UI in the browser
+# in another shell, with a key issued with the platform.api_description.read scope:
+curl -H "Authorization: Bearer sk_live_…" http://localhost:3001/api/v1/_openapi.json | jq .info
 ```
+
+Strona dokumentacji wczytuje Swagger UI z jsDelivr w dokładnie przypiętej wersji
+`swagger-ui-dist`, z sumą kontrolną Subresource Integrity dla obu plików.
 
 Każda trasa Fastify jest przy starcie automatycznie dodawana do dokumentu przez hook
 `onRoute` w `packages/platform/src/http/openapi.ts`; moduły mogą uzupełnić schemat dowolnej trasy, wywołując bezpośrednio

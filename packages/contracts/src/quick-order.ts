@@ -43,6 +43,8 @@ export const quickOrderRejectionReasonSchema = z.enum([
   'variant_not_resolved',
   'variant_ambiguous',
   'row_limit_exceeded',
+  /** Feature 155 — the product's total across the file is below its pieces minimum (P1). */
+  'below_minimum',
 ]);
 export type QuickOrderRejectionReason = z.infer<typeof quickOrderRejectionReasonSchema>;
 
@@ -73,6 +75,17 @@ export const recognizedQuickOrderItemSchema = z.object({
   quantity: z.number().int().positive(),
   /** Other source lines merged into this one (duplicate SKU, summed qty). */
   mergedFromLines: z.array(z.number().int().positive()).optional(),
+  /**
+   * Feature 155 — operator's import only: the product's file total is below its pieces
+   * minimum. The row stays recognised; the build judges it.
+   */
+  warning: z
+    .object({
+      reason: z.literal('below_minimum'),
+      minimum: z.number().int().positive(),
+      productTotal: z.number().int().nonnegative(),
+    })
+    .optional(),
 });
 export type RecognizedQuickOrderItem = z.infer<typeof recognizedQuickOrderItemSchema>;
 
@@ -80,6 +93,10 @@ export const rejectedQuickOrderItemSchema = z.object({
   line: z.number().int().positive(),
   raw: z.string(),
   reason: quickOrderRejectionReasonSchema,
+  /** Feature 155 — on `below_minimum`: the product's pieces minimum. */
+  minimum: z.number().int().positive().optional(),
+  /** Feature 155 — on `below_minimum`: the file total the verdict used. */
+  productTotal: z.number().int().nonnegative().optional(),
 });
 export type RejectedQuickOrderItem = z.infer<typeof rejectedQuickOrderItemSchema>;
 
@@ -88,6 +105,8 @@ export const quickOrderImportSummarySchema = z.object({
   rejectedCount: z.number().int().nonnegative(),
   mergedCount: z.number().int().nonnegative(),
   truncated: z.boolean(),
+  /** Feature 155 — operator's import only: recognised rows carrying a `warning`. */
+  warningCount: z.number().int().nonnegative().optional(),
 });
 export type QuickOrderImportSummary = z.infer<typeof quickOrderImportSummarySchema>;
 
@@ -110,6 +129,14 @@ export const quickOrderBuildLineSchema = z.object({
 });
 export type QuickOrderBuildLine = z.infer<typeof quickOrderBuildLineSchema>;
 
+/**
+ * Feature 155 (FR-038, research R20) — the most items a build accepts, either target.
+ * Enforced by `QuickOrderBuildService.build` as its first step (`422 VALIDATION_FAILED`,
+ * `details: { code: 'too_many_items', maximum }`), deliberately not by a schema `.max()`,
+ * which would answer 400.
+ */
+export const QUICK_ORDER_BUILD_MAX_ITEMS = 200;
+
 export const quickOrderBuildRequestSchema = z.object({
   target: quickOrderTargetSchema,
   items: z.array(quickOrderBuildLineSchema).min(1),
@@ -124,6 +151,25 @@ export const quickOrderBuildResponseSchema = z.object({
   quoteRequestId: uuidSchema.optional(),
   /** Customer-facing business Quote Request ID (shown in confirmations). */
   quoteRequestBusinessId: z.string().optional(),
+  /**
+   * Feature 155 — target `cart`: the lines not added because they would leave their
+   * product below a minimum (R8). Always present for target `cart`; absent otherwise.
+   */
+  rejected: z
+    .array(
+      z.object({
+        productId: uuidSchema,
+        variantId: uuidSchema.nullable(),
+        quantity: z.number().int().positive(),
+        productName: z.string(),
+        reason: z.literal('below_minimum'),
+        kind: z.enum(['pieces', 'packaging_unit']),
+        minimum: z.number().int().positive(),
+        /** Feature 155 — on a `packaging_unit` refusal: the unit's name, so the report can say which. */
+        packagingUnitName: z.string().optional(),
+      }),
+    )
+    .optional(),
 });
 export type QuickOrderBuildResponse = z.infer<typeof quickOrderBuildResponseSchema>;
 
@@ -144,7 +190,7 @@ export const quickOrderSearchResultSchema = z.object({
   sku: z.string(),
   name: z.string(),
   slug: z.string(),
-  status: z.enum(['draft', 'active', 'inactive']),
+  status: z.enum(['active', 'inactive']),
   matchedOn: z.array(quickOrderSearchMatchSchema).optional(),
 });
 export type QuickOrderSearchResult = z.infer<typeof quickOrderSearchResultSchema>;

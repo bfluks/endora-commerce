@@ -61,4 +61,12 @@ export const MIGRATOR_DRIVING_TESTS: readonly MigratorDrivingTest[] = [
       'reverts again to assert down() restores the legacy shape. The migration itself is ' +
       'the thing under test, so there is no double to drive instead.',
   },
+  {
+    path: 'test/integration/tasks/migration.test.ts',
+    reason:
+      'Feature 165 upgrade proof: runs the tasks task_management migration down to the 163 ' +
+      'schema, seeds 163-shaped Tasks (every status, single assignees), runs it up and asserts ' +
+      'the statuses and assignees survive, then down again to assert the single assignee comes ' +
+      'back. The migration is the thing under test.',
+  },
 ];

@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { addReturnComment, getMyReturn } from '../../../../lib/api/returns';
 import { getSessionCookie } from '../../../../lib/session';
 import { StorefrontApiError } from '../../../../lib/api/client';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -24,20 +24,20 @@ export default async function ReturnDetailPage({
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
   const { id } = await params;
-  if (!session) redirect(`/login?next=/returns/${id}`);
+  if (!session) return await localeRedirect(`/login?next=/returns/${id}`);
 
   let detail;
   try {
     detail = await getMyReturn(session, id);
   } catch (err) {
-    if (err instanceof StorefrontApiError && err.status === 404) redirect('/returns');
+    if (err instanceof StorefrontApiError && err.status === 404) return await localeRedirect('/returns');
     throw err;
   }
 
   async function addComment(formData: FormData): Promise<void> {
     'use server';
     const s = await getSessionCookie();
-    if (!s) redirect(`/login?next=/returns/${id}`);
+    if (!s) return await localeRedirect(`/login?next=/returns/${id}`);
     const body = String(formData.get('body') ?? '').trim();
     if (body) {
       await addReturnComment(s, id, body);
@@ -50,7 +50,7 @@ export default async function ReturnDetailPage({
   return (
     <div className="b2b-auth max-w-[720px]">
       <p>
-        <Link href="/returns">← Back to returns</Link>
+        <LocalizedLink href="/returns">← Back to returns</LocalizedLink>
       </p>
       <h1>{detail.rmaNumber ?? 'Return case'}</h1>
       <p>

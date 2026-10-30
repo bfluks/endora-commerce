@@ -43,7 +43,8 @@ export type ComparisonRowClass = z.infer<typeof comparisonRowClassSchema>;
 export const comparisonProductSummarySchema = z.object({
   id: uuidSchema,
   sku: z.string(),
-  name: multilingualStringSchema,
+  /** Feature 168 (`contracts/readers.md` §2) — the name effective at the comparison's (channel, language). */
+  name: z.string(),
   slug: z.string(),
   type: z.enum(['simple', 'configurable', 'grouped', 'bundle', 'virtual']),
   /**
@@ -65,6 +66,8 @@ export const comparisonProductSummarySchema = z.object({
    */
   available: z.boolean(),
   addedAt: z.string().datetime(),
+  /** Feature 155 — the product's pieces minimum; `null` = none (simple / configurable only). */
+  minOrderQuantity: z.number().int().positive().nullable().optional(),
 });
 export type ComparisonProductSummary = z.infer<typeof comparisonProductSummarySchema>;
 

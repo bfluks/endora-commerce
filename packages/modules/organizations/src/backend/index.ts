@@ -31,7 +31,7 @@ import type {
   VatValidator,
   DictionaryReferenceRegistryPort,
 } from '@endora-commerce/contracts';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AuditPort, SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
@@ -478,6 +478,14 @@ export function registerModule(ctx: ModuleContext): void {
             dictionaryValidator: lazyPort<DictionaryValidator>(ctx, 'dictionaryValidator'),
             mailer: lazyPort<EmailMailerPort>(ctx, 'emailMailer'),
             templateEmail: lazyPort<TemplateEmailPort>(ctx, 'templateEmailPort'),
+            // Feature 154 — kernel-provided; binds a registered Organization to
+            // the channel of the store it registered on (the system default
+            // without one) in its creating step, and backs the admin *Sales
+            // channels* endpoints and the admin create.
+            salesChannelMembership: lazyPort<SalesChannelMembershipPort>(
+              ctx,
+              'salesChannelMembershipPort',
+            ),
             storefrontBaseUrl: cradle().storefrontBaseUrl,
             exposeTestProbe: cradle().organizationsExposeTestProbe,
             requireAdmin: (permission) => async (req, reply) =>
@@ -501,17 +509,13 @@ export function registerModule(ctx: ModuleContext): void {
             ),
             effectivePriceListsService: new OrganizationEffectivePriceListsService({
               emFactory,
-              // D-48 — this was `?? 'default'`, a channel *code* landing in
-              // `ResolutionContext.salesChannelId`, which the price-list
-              // evaluator compares against channel **uuids**. On the fallback
-              // branch every `salesChannel` criterion therefore evaluated false
-              // and the panel reported channel-scoped lists as not applying.
-              // The branch cannot be taken, so the fallback goes with it.
-              resolveDefaultSalesChannelId: async () =>
-                (await cradle().salesChannelResolutionPort.getSystemDefault()).id,
-              // Feature 075, Phase C — `price_lists`' own `listActive`, where
-              // this service used to run `em.find(PriceList, …)` against that
-              // module's table and spell the status filter itself.
+              // Feature 160 — the chain pricing reads (this module's own
+              // inheritance service), passed to `listForOrganization`.
+              resolveOrgChain: (organizationId) =>
+                cradle().organizationInheritancePort.priceListOrgChain(organizationId),
+              // Feature 075, Phase C; feature 160 — `price_lists`' own answer
+              // (`listForOrganization`), where this service used to evaluate the
+              // old Application rule itself.
               priceListRead: lazyPort<PriceListReadPort>(ctx, 'priceListReadPort'),
             }),
             taxIdValidationService: new OrganizationTaxIdValidationService({
@@ -576,6 +580,7 @@ export function registerModule(ctx: ModuleContext): void {
               ),
             },
             auditLogService,
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
           );
           return {
             ensureForCustomerAccount: async (customerAccountId) =>
@@ -623,6 +628,10 @@ export function registerModule(ctx: ModuleContext): void {
               ),
             },
             auditLogService,
+            // Feature 154 — the personal Organization is bound to the
+            // registering store's channel (the system default without one) in
+            // the provisioning transaction.
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
           );
           return {
             provisionFor: async (em, input) => {

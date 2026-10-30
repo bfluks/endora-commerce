@@ -4,12 +4,12 @@ import { HttpError } from '@endora-commerce/platform/http';
 import { Cart } from '../entities/cart.entity.js';
 import { CartItem } from '../entities/cart-item.entity.js';
 import type {
+  CartDroppedLineReason,
   CatalogProductReadPort,
   QuoteRequestReadPort,
   RfqCustomerContext,
   RfqCustomerPort,
 } from '@endora-commerce/contracts';
-import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { productIdsInRequestChannel } from '@endora-commerce/platform/kernel';
 import type { CartService, CustomerContext as CartCustomerContext } from './cart-service.js';
@@ -43,7 +43,9 @@ import type { CartService, CustomerContext as CartCustomerContext } from './cart
 export interface CartDroppedLine {
   productId: string;
   productName: string;
-  reason: 'not_purchasable' | 'out_of_stock' | 'no_price_in_customer_list' | 'removed_by_conversion';
+  reason: CartDroppedLineReason;
+  /** Feature 155 — the minimum a `below_minimum` line missed. */
+  minimum?: number;
 }
 
 export interface ConvertToQrResult {
@@ -75,13 +77,12 @@ export class CartConversionService {
     private readonly catalogProducts: CatalogProductReadPort,
     /**
      * The sanctioned bridge accessor (Constitution XII) — and on this seam it
-     * is what keeps the *reason* honest (issue #259). `CartService.addItem`
-     * refuses an out-of-channel line by itself, but this method catches every
-     * `HttpError` from it and reports one dropped-line reason,
-     * `no_price_in_customer_list`. A line the channel does not sell has nothing
-     * to do with the buyer's price list, so it is narrowed here instead and
-     * falls into the `not_purchasable` branch — where a line whose product has
-     * gone already lands.
+     * is what keeps the *reason* honest (issue #259). A line the channel does
+     * not sell has nothing to do with the buyer's price list, so it is narrowed
+     * here, before the batch, into the `not_purchasable` branch — where a line
+     * whose product has gone already lands. The batch's own resolver refuses
+     * such a line with the same `404`, which maps to the same reason
+     * (feature 155, R12.5).
      */
     private readonly channelMembership: SalesChannelMembershipPort,
   ) {}
@@ -94,6 +95,12 @@ export class CartConversionService {
     cart: Cart,
     ctx: RfqCustomerContext,
     note?: string,
+    /**
+     * The language a refusal names a product in (feature 155, D3/D4), and the
+     * request's language tag the lines' scope language is resolved from
+     * (feature 163, `CreateForCustomerOptions.languageTag`).
+     */
+    options: { language?: string; languageTag?: string } = {},
   ): Promise<ConvertToQrResult> {
     // command-coverage-ignore: the durable write is the RFQ (RfqService
     // .createForCustomer, audited as quote_request.create); this only marks the
@@ -104,6 +111,23 @@ export class CartConversionService {
       throw new HttpError(422, ERROR_CODES.CART_EMPTY, 'cart_empty');
     }
 
+    // Feature 155 (FR-026, research R13.1) — a packaging line travels by its
+    // unit's id, and only while the unit still exists: the quote request takes
+    // the unit's name and base quantity from the catalogue, so the cart's
+    // snapshot is no longer sent. One read over the buyer's own cart lines; a
+    // line whose unit has gone is sent as plain pieces, its quantity (already
+    // base pieces) unchanged.
+    const packagedProductIds = Array.from(
+      new Set(items.filter((it) => it.packagingUnitId).map((it) => it.productId)),
+    );
+    const liveUnitIds = new Set(
+      packagedProductIds.length > 0
+        ? (await this.catalogProducts.listPackagingUnitsByProductIds(packagedProductIds)).map(
+            (unit) => `${unit.productId}:${unit.id}`,
+          )
+        : [],
+    );
+
     const rfq = await this.rfqService.createForCustomer(
       ctx,
       {
@@ -112,11 +136,8 @@ export class CartConversionService {
           productId: it.productId,
           ...(it.variantId ? { variantId: it.variantId } : {}),
           quantity: it.quantity,
-          // Feature 043 — carry the packaging-unit snapshot so the RFQ line
-          // shows "<name> (Paleta)" like the cart did.
-          ...(it.packagingUnitName ? { packagingUnitName: it.packagingUnitName } : {}),
-          ...(it.packagingUnitBaseQuantity != null
-            ? { packagingUnitBaseQuantity: it.packagingUnitBaseQuantity }
+          ...(it.packagingUnitId && liveUnitIds.has(`${it.productId}:${it.packagingUnitId}`)
+            ? { packagingUnitId: it.packagingUnitId }
             : {}),
           // No `desiredUnitPrice`: the cart price is not something the buyer
           // proposed (feature 146, FR-008).
@@ -128,6 +149,11 @@ export class CartConversionService {
         // would have cost without negotiation. `unitPrice` is the net price
         // per base piece, the basis every quote price is compared on (T12).
         lineReferencePrices: items.map((it) => ({ amount: it.unitPrice, currency: it.currency })),
+        ...(options.language ? { language: options.language } : {}),
+        // Feature 163 — the lines are asked about at the basket's channel, in
+        // the request's scope language (the basket's own `basketScopeLanguage`).
+        ...(options.languageTag ? { languageTag: options.languageTag } : {}),
+        ...(cart.salesChannelId ? { salesChannelId: cart.salesChannelId } : {}),
       },
     );
 
@@ -156,15 +182,29 @@ export class CartConversionService {
   /**
    * Quote Request → Cart. Creates a fresh `active` cart (or returns the
    * existing one) for the buyer, appends the QR's lines with re-resolved
-   * prices (via `CartService.addItem`, which already routes through the
-   * pricing resolver when wired), and surfaces a list of dropped lines.
+   * prices through the cart's batch add, and surfaces a list of dropped lines.
    *
    * The QR's `desiredUnitPrice` is intentionally dropped — the cart's
    * unit prices come from the customer's current price list.
+   *
+   * Feature 155 (research R8, R12.5) — the lines go in as **one batch**
+   * (`addItems`, `'report'`), so a product's lines are judged together with the
+   * cart against its minimum, and each line's outcome is mapped:
+   *   - `below_minimum` → dropped `below_minimum` with the `minimum`;
+   *   - `failed` with a `404` — the product is no longer visible to this buyer,
+   *     not in the channel, or its unit is gone — → `not_purchasable`, the
+   *     reason an unknown product already gets, so a hidden product is
+   *     indistinguishable from one that does not exist (FR-035, threat F1);
+   *   - any other `failed` (quote-only, no price, line cap) →
+   *     `no_price_in_customer_list`.
+   * Every dropped line is named from the buyer's own quote request, never from
+   * the catalogue.
    */
   async createCartFromQuoteRequest(
     qrId: string,
     ctx: CartCustomerContext,
+    /** The request's language, which the batch names a refused product in (feature 155). */
+    options: { language?: string } = {},
   ): Promise<CreateCartFromQrResult> {
     const qr = await this.quoteRequests.findById(qrId);
     if (!qr) {
@@ -191,54 +231,57 @@ export class CartConversionService {
         .map((p) => [p.id, p]),
     );
 
-    const droppedLines: CartDroppedLine[] = [];
-    let appendedLineCount = 0;
-    let targetCart: Cart | null = null;
-
-    for (const qrItem of qrItems) {
-      const product = productById.get(qrItem.productId);
-      if (!product) {
-        droppedLines.push({
+    const dropped = new Map<number, CartDroppedLine>();
+    const nameOf = (qrItem: (typeof qrItems)[number]): string => qrItem.productName ?? qrItem.productId;
+    const batch: Array<{ position: number; qrItem: (typeof qrItems)[number] }> = [];
+    for (const [position, qrItem] of qrItems.entries()) {
+      if (!productById.has(qrItem.productId)) {
+        dropped.set(position, {
           productId: qrItem.productId,
-          productName: qrItem.productName ?? qrItem.productId,
+          productName: nameOf(qrItem),
           reason: 'not_purchasable',
         });
         continue;
       }
-      try {
-        const result = await this.cartService.addItem(
-          { customer: ctx },
-          {
-            productId: qrItem.productId,
-            ...(qrItem.variantId ? { variantId: qrItem.variantId } : {}),
-            quantity: qrItem.quantity,
-          },
-        );
-        targetCart = result.cart;
-        appendedLineCount += 1;
-      } catch (err) {
-        // The tolerance is per line and it is right: one unpriceable product
-        // must not abort a twenty-line conversion, and the buyer is told which
-        // lines were dropped and why.
-        //
-        // `rethrowIfModuleDisabled` is its first line because `addItem` reaches
-        // `catalog`'s and `price_lists`' gated ports, and `ModuleDisabledError`
-        // **is** an `HttpError` — so the `instanceof` test below would let a
-        // switched-off pricing engine through as "no price in your list" for
-        // every line, which is issue #124's defect wearing a per-line report.
-        rethrowIfModuleDisabled(err);
-        // CartService throws an HttpError when the product is quote-only
-        // (displayMode='none') or no resolver match — both translate to
-        // `no_price_in_customer_list` for the storefront banner.
-        if (err instanceof HttpError) {
-          droppedLines.push({
-            productId: qrItem.productId,
-            productName: qrItem.productName ?? qrItem.productId,
-            reason: 'no_price_in_customer_list',
-          });
+      batch.push({ position, qrItem });
+    }
+
+    let appendedLineCount = 0;
+    let targetCart: { id: string } | null = null;
+    if (batch.length > 0) {
+      // `addItems` always throws `ModuleDisabledError` itself — a switched-off
+      // pricing engine is never reported as "no price in your list" for every
+      // line (issue #124) — so there is no `catch` here.
+      const result = await this.cartService.addItems(
+        { customer: ctx },
+        batch.map(({ qrItem }) => ({
+          productId: qrItem.productId,
+          ...(qrItem.variantId ? { variantId: qrItem.variantId } : {}),
+          quantity: qrItem.quantity,
+        })),
+        { onLineError: 'report', ...(options.language ? { language: options.language } : {}) },
+      );
+      targetCart = result.cart;
+      for (const outcome of result.outcomes) {
+        const entry = batch[outcome.index];
+        if (!entry) continue;
+        const { position, qrItem } = entry;
+        if (outcome.status === 'added') {
+          appendedLineCount += 1;
           continue;
         }
-        throw err;
+        dropped.set(position, {
+          productId: qrItem.productId,
+          productName: nameOf(qrItem),
+          ...(outcome.status === 'below_minimum'
+            ? { reason: 'below_minimum' as const, minimum: outcome.minimum }
+            : {
+                reason:
+                  outcome.error.status === 404
+                    ? ('not_purchasable' as const)
+                    : ('no_price_in_customer_list' as const),
+              }),
+        });
       }
     }
 
@@ -248,6 +291,9 @@ export class CartConversionService {
       targetCart = await this.cartService.getOrCreateForCustomer(ctx);
     }
 
+    const droppedLines = Array.from(dropped.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([, line]) => line);
     return { cartId: targetCart.id, appendedLineCount, droppedLines };
   }
 }

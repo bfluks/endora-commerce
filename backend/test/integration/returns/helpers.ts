@@ -54,14 +54,28 @@ export interface SeededOrder {
   itemIds: string[];
 }
 
+/** One seeded order line — feature 155 lets a test choose the quantity and the placement stamp. */
+export interface SeededOrderLine {
+  quantity: number;
+  name?: string;
+  productId?: string;
+  /**
+   * The line's `returnable_at_purchase` (feature 155, FR-016a). Omitted or
+   * `null` = a line placed before the feature, which `returns` treats as
+   * returnable (FR-025).
+   */
+  returnableAtPurchase?: boolean | null;
+}
+
 /**
  * Seed a completed order owned by the test customer with two lines
- * (quantities 3 and 1). `status` defaults to `completed` so the order is
- * return-eligible; pass `new` to exercise the not-eligible path.
+ * (quantities 3 and 1), or with `lines` when given. `status` defaults to
+ * `completed` so the order is return-eligible; pass `new` to exercise the
+ * not-eligible path.
  */
 export async function seedReturnableOrder(
   em: EntityManager,
-  opts: { status?: string; salesChannelId?: string } = {},
+  opts: { status?: string; salesChannelId?: string; lines?: readonly SeededOrderLine[] } = {},
 ): Promise<SeededOrder> {
   const order = em.create(Order, {
     organizationId: TEST_ORGANIZATION_ID,
@@ -88,6 +102,23 @@ export async function seedReturnableOrder(
     placedAt: new Date(),
   });
   await em.persistAndFlush(order);
+
+  if (opts.lines) {
+    const items = opts.lines.map((line, i) =>
+      em.create(OrderItem, {
+        orderId: order.id,
+        productId: line.productId ?? randomUUID(),
+        productSnapshot: { sku: `SKU-${i + 1}`, name: line.name ?? `Line ${i + 1}`, primaryAssetUrl: null },
+        quantity: line.quantity,
+        unitPrice: '10.00',
+        taxRate: '0.0000',
+        lineTotal: (10 * line.quantity).toFixed(2),
+        returnableAtPurchase: line.returnableAtPurchase ?? null,
+      }),
+    );
+    await em.persistAndFlush(items);
+    return { orderId: order.id, itemIds: items.map((it) => it.id) };
+  }
 
   const item1 = em.create(OrderItem, {
     orderId: order.id,

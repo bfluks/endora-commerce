@@ -55,12 +55,15 @@ export {
 } from './chrome/PageBuilderHeaderActions.js';
 export type { ApplyTemplateOption } from './chrome/PageBuilderHeaderActions.js';
 export {
+  createFileAssetField,
   createImageAssetField,
   createImageSourceField,
   createImageUrlField,
   createSlideImageField,
   createVideoAssetField,
+  AdminImagePicker,
   inputClassName,
+  pickedImageFromAsset,
   pickerButtonClass,
 } from './chrome/AssetPickers.js';
 export type { SlideImageValue } from './chrome/AssetPickers.js';
@@ -71,6 +74,7 @@ export {
   createProductSlugsField,
 } from './chrome/CatalogPickers.js';
 export { PageBuilderColorPaletteProvider } from './chrome/ColorPaletteProvider.js';
+export { PageBuilderFieldText, pageBuilderFieldTextBundleKey } from './chrome/FieldTextProvider.js';
 export { ColorPaletteModal } from './chrome/ColorPaletteModal.js';
 export {
   getPageBuilderColorPalette,
@@ -87,3 +91,22 @@ export type {
   PageBuilderEditorLayoutProps,
   PageBuilderEditorSettingsPanel,
 } from './chrome/PageBuilderEditorLayout.js';
+// Feature 163 — the shared fields of the reshaped blocks (research R-9, R-11):
+// one `LinkValue` field, the `ButtonSpec[]` list and the `ResponsiveImage`
+// field. `createButtonLinkSlugField` is `cms`' old slug-only link target, moved
+// here from `cms`' admin components (feature 163, T016) and kept until `cms.Button` and
+// `cms.Hero` are reshaped onto `createLinkField`.
+export {
+  LINK_KINDS,
+  LinkFieldControl,
+  createButtonLinkSlugField,
+  createLinkField,
+} from './chrome/LinkField.js';
+export type { LinkFieldControlProps, LinkFieldOptions } from './chrome/LinkField.js';
+export { DEFAULT_BUTTON_SPEC, createButtonListField, createButtonSpecField } from './chrome/ButtonListField.js';
+export type { ButtonListFieldOptions, ButtonSpecFieldOptions } from './chrome/ButtonListField.js';
+export { ResponsiveImageControl, ResponsiveRatioControl, createResponsiveImageField } from './chrome/ResponsiveImageField.js';
+export type { ResponsiveImageControlProps, ResponsiveRatioControlProps } from './chrome/ResponsiveImageField.js';
+export { listPageBuilderLinkPages } from './chrome/cms-page-builder-api.js';
+// Feature 163, R17 (T220): a post listing's blog category, picked from the blog's categories.
+export { BlogCategoryFieldControl, createBlogCategorySlugField, flattenBlogCategories } from './chrome/BlogCategoryPicker.js';

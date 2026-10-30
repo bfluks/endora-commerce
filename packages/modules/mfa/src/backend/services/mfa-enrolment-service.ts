@@ -41,7 +41,7 @@ export class MfaEnrolmentService {
   async setup(
     subject: MfaSubjectRef,
     accountLabel: string,
-  ): Promise<{ secret: string; otpauthUri: string }> {
+  ): Promise<{ secret: string; otpauthUri: string; qrSvg: string }> {
     const em = this.emFactory();
     const active = await em.findOne(MfaEnrolment, {
       subjectType: subject.subjectType,
@@ -59,7 +59,7 @@ export class MfaEnrolmentService {
     });
     for (const p of pendings) em.remove(p);
 
-    const { secret, otpauthUri } = generateSecret(accountLabel);
+    const { secret, otpauthUri, qrSvg } = generateSecret(accountLabel);
     const enc = this.cipher.encrypt(secret);
     const enrolment = em.create(MfaEnrolment, {
       subjectType: subject.subjectType,
@@ -72,7 +72,7 @@ export class MfaEnrolmentService {
     em.persist(enrolment);
     this.#audit(em, 'mfa.setup', subject);
     await em.flush();
-    return { secret, otpauthUri };
+    return { secret, otpauthUri, qrSvg };
   }
 
   /** Confirm the pending enrolment with a live code; issue recovery codes. */
@@ -219,24 +219,30 @@ export class MfaEnrolmentService {
       const secret = this.decryptSecret(active);
       const step = verifyTotpStep(secret, normalised);
       if (step === null) return { ok: false };
-      // Replay guard — a step at or before the last accepted one is rejected.
-      if (active.lastAcceptedStep != null && Number(active.lastAcceptedStep) >= step) {
-        return { ok: false };
-      }
-      active.lastAcceptedStep = String(step);
-      await em.flush();
-      return { ok: true, factor: 'totp' };
+      // Replay guard — a step at or before the last accepted one is refused.
+      // The comparison and the advance are one statement (166 FR-004): read,
+      // compare and write back let two requests carrying the same code at the
+      // same moment both read the old step, and both through.
+      const accepted = await em.nativeUpdate(
+        MfaEnrolment,
+        {
+          id: active.id,
+          status: 'active',
+          $or: [{ lastAcceptedStep: null }, { lastAcceptedStep: { $lt: String(step) } }],
+        },
+        { lastAcceptedStep: String(step) },
+      );
+      return accepted > 0 ? { ok: true, factor: 'totp' } : { ok: false };
     }
 
-    const rc = await em.findOne(MfaRecoveryCode, {
-      enrolmentId: active.id,
-      codeHash: hashRecoveryCode(normalised),
-      usedAt: null,
-    });
-    if (!rc) return { ok: false };
-    rc.usedAt = new Date();
-    await em.flush();
-    return { ok: true, factor: 'recovery' };
+    // Spent by one statement that only succeeds while the code is unused
+    // (166 FR-005), for the reason above.
+    const spent = await em.nativeUpdate(
+      MfaRecoveryCode,
+      { enrolmentId: active.id, codeHash: hashRecoveryCode(normalised), usedAt: null },
+      { usedAt: new Date() },
+    );
+    return spent > 0 ? { ok: true, factor: 'recovery' } : { ok: false };
   }
 
   private decryptSecret(enrolment: MfaEnrolment): string {

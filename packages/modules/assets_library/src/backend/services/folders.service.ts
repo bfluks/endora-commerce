@@ -12,11 +12,21 @@ import { Asset } from '../entities/asset.entity.js';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { AssetReferenceRegistry } from './reference-registry.js';
+import type { AssetVisibility } from './asset-visibility.js';
+import { assetIdsAmong, idNotAmong } from './asset-id-sets.js';
 
 export class FoldersService {
   constructor(
     private readonly emFactory: () => EntityManager,
     private readonly referenceRegistry: AssetReferenceRegistry,
+    /**
+     * Which assets the ambient caller may see
+     * (`specs/166-asset-reference-visibility/` R-10): a folder's counts leave
+     * out what the caller may not see, and a deleted folder moves those assets
+     * to its parent rather than refusing over them or deleting them. An
+     * unrestricted caller is hidden nothing, without a read.
+     */
+    private readonly visibility: Pick<AssetVisibility, 'hiddenAmong' | 'exclusionFor'>,
     private readonly auditLog?: AuditPort,
     private readonly loadRetentionDays: () => Promise<number> = async () => 30,
   ) {}
@@ -153,6 +163,17 @@ export class FoldersService {
     return this.toDto(f, children.map((c) => c.id));
   }
 
+  /**
+   * Delete a folder (`contracts/admin-api.md` §1.1). The assets the caller may
+   * not see — of the folder for `cancel` and `moveContentsToParent`, of the
+   * subtree for `deleteRecursively` — are answered as if they were not there
+   * and **re-homed** to the deleted folder's parent (the root when it has
+   * none), in the same flush as the delete and its audit row, which names them
+   * in `stateBefore.rehomedAssetIds` (`specs/166-asset-reference-visibility/`
+   * R-10). For an unrestricted caller nothing is hidden, and every strategy
+   * behaves as before — except that `deleteRecursively` now really refuses
+   * over referenced assets (R-6, #535).
+   */
   async deleteFolder(
     id: string,
     strategy: 'cancel' | 'moveContentsToParent' | 'deleteRecursively',
@@ -160,39 +181,25 @@ export class FoldersService {
     const em = this.emFactory();
     const f = await em.findOne(AssetFolder, { id });
     if (!f) throw new HttpError(404, ERROR_CODES.ASSET_FOLDER_NOT_FOUND, `Folder ${id} not found.`);
-    // Audit persists on `em`; only committed by the flush in whichever strategy
-    // branch actually deletes (a `cancel`/refs-blocked path throws before flush).
-    this.#audit(em, 'asset_folder.delete', f.id, { name: f.name, strategy }, null);
-
-    const childFolders = await em.find(AssetFolder, { parentId: id });
-    const directAssets = await em.find(Asset, { folderId: id });
-
-    if (strategy === 'cancel' && (childFolders.length > 0 || directAssets.length > 0)) {
-      throw new HttpError(
-        409,
-        ERROR_CODES.ASSET_FOLDER_NOT_EMPTY,
-        `Folder is not empty (${childFolders.length} sub-folder(s), ${directAssets.length} asset(s)).`,
-      );
-    }
-
-    if (strategy === 'moveContentsToParent') {
-      for (const cf of childFolders) cf.parentId = f.parentId ?? null;
-      for (const a of directAssets) a.folderId = f.parentId ?? null;
-      await em.flush();
-      em.remove(f);
-      await em.flush();
-      return { deletedFolderId: id };
-    }
+    const parentId = f.parentId ?? null;
+    // Persisted on `em` and committed only by the flush of the branch that
+    // actually deletes (a refusal throws before any flush).
+    const audit = (rehomedAssetIds: readonly string[]) =>
+      this.#audit(em, 'asset_folder.delete', f.id, { name: f.name, strategy, rehomedAssetIds: [...rehomedAssetIds] }, null);
 
     if (strategy === 'deleteRecursively') {
-      // Walk the subtree, gather every asset id, check refs all-or-nothing.
-      const subtreeIds = await this.collectSubtreeAssetIds(em, id);
-      if (subtreeIds.length > 0) {
-        const refs = await this.referenceRegistry.findReferencesMany(subtreeIds);
-        const blocking: string[] = [];
-        for (const [aid, list] of refs.entries()) {
-          if (list.length > 0) blocking.push(aid);
-        }
+      // Every asset of the subtree, soft-deleted ones included: a hidden one is
+      // re-homed whatever its state, so the folder's removal never leaves it
+      // somewhere the caller chose without knowing it.
+      const subtree = await this.collectSubtreeAssets(em, id);
+      const hidden = await this.visibility.hiddenAmong(subtree.map((a) => a.id));
+      const rehomed = subtree.filter((a) => hidden.has(a.id));
+      const toDelete = subtree.filter((a) => !hidden.has(a.id) && !a.deletedAt).map((a) => a.id);
+      // References are checked for real, all-or-nothing, over what the caller
+      // sees. A hidden asset is referenced by definition, and is re-homed.
+      if (toDelete.length > 0) {
+        const refs = await this.referenceRegistry.findReferencesMany(toDelete);
+        const blocking = toDelete.filter((aid) => (refs.get(aid) ?? []).length > 0);
         if (blocking.length > 0) {
           throw new HttpError(
             409,
@@ -202,36 +209,77 @@ export class FoldersService {
           );
         }
       }
-      // Soft-delete all assets in subtree.
       const retentionDays = await this.loadRetentionDays();
       const now = new Date();
       const purgeAt = new Date(now.getTime() + retentionDays * 24 * 60 * 60 * 1000);
-      for (const aid of subtreeIds) {
+      for (const aid of toDelete) {
         const a = await em.findOneOrFail(Asset, { id: aid });
         a.deletedAt = now;
         a.purgeAfterAt = purgeAt;
       }
-      // Delete sub-folders bottom-up by setting parent_id NULL on every
-      // intermediate, then removing.
+      for (const a of rehomed) a.folderId = parentId;
       const folders = await this.collectSubtreeFolders(em, id);
       for (const sub of folders) {
         em.remove(sub);
       }
       em.remove(f);
+      audit(rehomed.map((a) => a.id));
       await em.flush();
-      return { deletedFolderId: id, softDeletedAssetIds: subtreeIds };
+      return { deletedFolderId: id, softDeletedAssetIds: toDelete };
     }
 
-    // strategy === 'cancel' and folder is empty — straight delete.
+    const childFolders = await em.find(AssetFolder, { parentId: id });
+    const directAssets = await em.find(Asset, { folderId: id });
+    const hidden = await this.visibility.hiddenAmong(directAssets.map((a) => a.id));
+    const rehomed = directAssets.filter((a) => hidden.has(a.id));
+
+    if (strategy === 'moveContentsToParent') {
+      // As before: every asset, hidden or not, goes to the parent.
+      for (const cf of childFolders) cf.parentId = parentId;
+      for (const a of directAssets) a.folderId = parentId;
+      audit(rehomed.map((a) => a.id));
+      await em.flush();
+      em.remove(f);
+      await em.flush();
+      return { deletedFolderId: id };
+    }
+
+    // strategy === 'cancel': a folder whose only assets the caller may not see
+    // is empty for them; the refusal counts what they see.
+    const visibleCount = directAssets.length - rehomed.length;
+    if (childFolders.length > 0 || visibleCount > 0) {
+      throw new HttpError(
+        409,
+        ERROR_CODES.ASSET_FOLDER_NOT_EMPTY,
+        `Folder is not empty (${childFolders.length} sub-folder(s), ${visibleCount} asset(s)).`,
+      );
+    }
+    for (const a of rehomed) a.folderId = parentId;
     em.remove(f);
+    audit(rehomed.map((a) => a.id));
     await em.flush();
     return { deletedFolderId: id };
   }
 
-  private async collectSubtreeAssetIds(
-    em: EntityManager,
-    rootId: string,
-  ): Promise<string[]> {
+  /**
+   * How many live assets in the folder's subtree, at any depth, have a
+   * permalink — named by the folder delete confirmation (owner ruling S4,
+   * specs/156-asset-stable-url/).
+   */
+  async countPermalinkedAssets(id: string): Promise<number> {
+    const em = this.emFactory();
+    const f = await em.findOne(AssetFolder, { id });
+    if (!f) throw new HttpError(404, ERROR_CODES.ASSET_FOLDER_NOT_FOUND, `Folder ${id} not found.`);
+    const folderIds = await this.collectSubtreeFolderIds(em, id);
+    const where = { folderId: { $in: folderIds }, deletedAt: null, permalink: { $ne: null } };
+    // A file the caller may not see is not counted
+    // (`specs/166-asset-reference-visibility/` R-10): the list's exclusion,
+    // scoped to the files this count could include.
+    const hidden = await this.visibility.exclusionFor((candidates) => assetIdsAmong(em.fork(), where, candidates));
+    return em.count(Asset, hidden.length > 0 ? { $and: [where, idNotAmong(hidden)] } : where);
+  }
+
+  private async collectSubtreeFolderIds(em: EntityManager, rootId: string): Promise<string[]> {
     const folderIds: string[] = [rootId];
     const queue: string[] = [rootId];
     while (queue.length > 0) {
@@ -242,12 +290,13 @@ export class FoldersService {
         queue.push(c.id);
       }
     }
-    const assets = await em.find(
-      Asset,
-      { folderId: { $in: folderIds }, deletedAt: null },
-      { fields: ['id'] },
-    );
-    return assets.map((a) => a.id);
+    return folderIds;
+  }
+
+  /** Every asset of the subtree, soft-deleted ones included. */
+  private async collectSubtreeAssets(em: EntityManager, rootId: string): Promise<Asset[]> {
+    const folderIds = await this.collectSubtreeFolderIds(em, rootId);
+    return em.find(Asset, { folderId: { $in: folderIds } });
   }
 
   private async collectSubtreeFolders(

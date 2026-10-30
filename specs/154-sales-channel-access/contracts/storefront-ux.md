@@ -50,7 +50,8 @@ empty sitemap when the catalogue read is refused.
 Login server action: `StorefrontApiError.code === 'SALES_CHANNEL_NOT_PERMITTED'` → form error
 `auth.login.channelNotPermitted`: en "This account does not have access to this store." / pl "To
 konto nie ma dostępu do tego sklepu." Same mapping for the MFA step and for
-`/login?error=sales_channel_not_permitted` (federated).
+`/login?error=sales_channel_not_permitted` (federated). `/login?error=sales_channel_sign_in_required` (a federated
+sign-up refused on a store closed to anonymous visitors) shows `auth.login.signInRequired`.
 
 ## §4 Signed in, not permitted
 

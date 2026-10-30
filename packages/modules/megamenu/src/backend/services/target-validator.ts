@@ -6,11 +6,24 @@
 // scope, Asset matches an expected kind) live here so the unit test can
 // stub them without booting a server.
 
-import { ERROR_CODES, type MegamenuItem } from '@endora-commerce/contracts';
+import { ERROR_CODES, type AssetRecord, type MegamenuItem } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { MegamenuCrossModulePorts } from './cross-module-ports.js';
 
 const externalUrlRe = /^(?:https?:\/\/|tel:|mailto:)/i;
+
+/**
+ * The asset an item may link, or `null` — for a missing asset and for one the
+ * library hides from the caller alike (`specs/166-asset-reference-visibility/`
+ * FR-006, review T055 F-2). A menu item is an unrestricted reference: linking a
+ * hidden file would show it to every library reader, and refusing it any other
+ * way than a missing one would say that it exists.
+ */
+async function findLinkableAsset(ports: MegamenuCrossModulePorts, assetId: string): Promise<AssetRecord | null> {
+  const asset = await ports.assets.findById(assetId);
+  if (!asset) return null;
+  return (await ports.assets.visibleToCaller([asset.id])).has(asset.id) ? asset : null;
+}
 
 /**
  * Validates a single MegamenuItem against the cross-module ports. Throws
@@ -58,7 +71,7 @@ export async function validateTarget(
   ) {
     const iconAssetId = item.target.iconAssetId;
     if (iconAssetId) {
-      const icon = await ports.assets.findById(iconAssetId);
+      const icon = await findLinkableAsset(ports, iconAssetId);
       if (icon?.kind !== 'image') {
         throw new HttpError(
           400,
@@ -114,7 +127,7 @@ export async function validateTarget(
     }
     case 'asset': {
       if ('assetId' in item.target) {
-        const asset = await ports.assets.findById(item.target.assetId);
+        const asset = await findLinkableAsset(ports, item.target.assetId);
         if (asset?.kind !== item.target.kind) {
           throw new HttpError(
             400,

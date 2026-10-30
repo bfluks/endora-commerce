@@ -5,7 +5,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { render } from '@testing-library/react';
 import { Puck, usePuck, type Config } from '@puckeditor/core';
-import { countBlockNames, isNamespaced, ownerOf } from '@endora-commerce/page-builder-core';
+import { countComponentNames, isNamespaced, ownerOf } from '@endora-commerce/page-builder-core';
 import {
   defaultPageBuilderConfig,
   withMissingBlockPlaceholders,
@@ -82,12 +82,12 @@ function storedDocument(known: string): Record<string, unknown> {
 const KNOWN_BLOCK = Object.keys(COMPONENTS).sort()[0]!;
 
 /**
- * The names a stored document carries, through the one structural walk this
- * repository has (`countBlockNames`) — the same call the editor makes, so the
- * test and the editor cannot come to disagree about which nodes exist.
+ * The names a stored document carries, through the editors' structural walk
+ * (`countComponentNames`) — the same call the editor makes, so the test and the
+ * editor cannot come to disagree about which nodes exist.
  */
 function storedNames(document: unknown): string[] {
-  return [...countBlockNames(document).keys()];
+  return [...countComponentNames(document).keys()];
 }
 
 function renderPlaceholder(config: Config, name: string): string {
@@ -205,5 +205,35 @@ describe('admin degradation for a block whose owner is absent (FR-019, FR-020)',
       'utf8',
     );
     expect(source).toContain('withMissingBlockPlaceholders');
+    // Feature 163, T197: through the components walk, never the migration's every-`type` walk.
+    expect(source).toContain('countComponentNames(editorData)');
+    expect(source).not.toContain('countBlockNames(');
+  });
+
+  // Feature 163, T197: a rich text's TipTap nodes and marks carry a `type` and no
+  // `props`; each used to come back from the merge as a "(missing renderer)" block.
+  it('merges no placeholder for the TipTap nodes of a hero body or a rich-content block', () => {
+    const tiptap = {
+      type: 'doc',
+      content: [
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Title', marks: [{ type: 'emphasis' }] }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Body' }, { type: 'hardBreak' }, { type: 'inlineIcon', attrs: { name: 'star' } }] },
+        { type: 'image', attrs: { src: 'https://cdn.example.com/a.png', alt: '' } },
+        { type: 'readMore', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'More' }] }] },
+      ],
+    };
+    const stored = {
+      root: { props: {} },
+      content: [
+        { type: 'cms.Hero', props: { id: 'hero', body: tiptap } },
+        { type: 'cms.RichContent', props: { id: 'rich', content: tiptap } },
+      ],
+      zones: {},
+    };
+    const merged = withMissingBlockPlaceholders(defaultPageBuilderConfig, storedNames(stored));
+    expect(merged).toBe(defaultPageBuilderConfig);
+    for (const name of ['doc', 'paragraph', 'text', 'heading', 'image', 'hardBreak', 'inlineIcon', 'readMore', 'emphasis']) {
+      expect(merged.components, name).not.toHaveProperty(name);
+    }
   });
 });

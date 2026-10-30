@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import type {
-  ResolvedMeta,
-  SeoEntityType,
-  SitemapChannelStatus,
-  UpsertSeoMetaOverrideRequest,
-} from '@endora-commerce/contracts';
+import { useSearchParams } from 'react-router-dom';
+import type { SeoEntityType, SitemapChannelStatus } from '@endora-commerce/contracts';
 import { ApiError, apiBaseUrl, apiClient, formatDateTime } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
+import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, PageHeader, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
 import { CategorySelect, ProductPicker } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { SeoMetaScopeEditor } from './SeoMetaScopeEditor.js';
 
 interface SitemapListEnvelope {
   data: SitemapChannelStatus[];
@@ -19,18 +16,6 @@ interface RegenerateEnvelope {
     generatedAt: string;
     urlCount: number;
     byteSize: number;
-  };
-}
-interface MetaEnvelope {
-  data: {
-    resolved: ResolvedMeta;
-    override: {
-      title: string | null;
-      description: string | null;
-      ogTitle: string | null;
-      ogDescription: string | null;
-      ogImageUrl: string | null;
-    } | null;
   };
 }
 
@@ -266,58 +251,34 @@ function SitemapCard(): ReactNode {
   );
 }
 
+function isEntityType(value: string | null): value is SeoEntityType {
+  return value !== null && (ENTITY_TYPES as readonly string[]).includes(value);
+}
+
+/** A product and a category are addressed by a UUID; nothing else names one. */
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isEntityId(value: string | null): value is string {
+  return value !== null && UUID_SHAPE.test(value);
+}
+
 function MetaEditorCard(): ReactNode {
   const t = useTranslation('core');
   const [entityType, setEntityType] = useState<SeoEntityType>('product');
   const [entityId, setEntityId] = useState('');
-  const [locale, setLocale] = useState('en-US');
-  const [meta, setMeta] = useState<MetaEnvelope['data'] | null>(null);
-  const [draft, setDraft] = useState<UpsertSeoMetaOverrideRequest>({ locale: 'en-US' });
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async (): Promise<void> => {
-    if (!entityId.trim()) return;
-    setBusy(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const res = await apiClient.get<MetaEnvelope>(
-        `/api/v1/admin/seo/meta/${entityType}/${entityId}?locale=${encodeURIComponent(locale)}`,
-      );
-      setMeta(res.data);
-      setDraft({
-        locale,
-        title: res.data.override?.title ?? null,
-        description: res.data.override?.description ?? null,
-        ogTitle: res.data.override?.ogTitle ?? null,
-        ogDescription: res.data.override?.ogDescription ?? null,
-        ogImageUrl: res.data.override?.ogImageUrl ?? null,
-      });
-    } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : t('seo.meta.error.load'));
-      setMeta(null);
-    } finally {
-      setBusy(false);
-    }
-  }, [entityType, entityId, locale, t]);
-
-  const save = useCallback(async (): Promise<void> => {
-    if (!entityId.trim()) return;
-    setBusy(true);
-    setError(null);
-    setMessage(null);
-    try {
-      await apiClient.put(`/api/v1/admin/seo/meta/${entityType}/${entityId}`, draft);
-      setMessage(t('seo.meta.info.saved'));
-      await load();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : t('seo.meta.error.save'));
-    } finally {
-      setBusy(false);
-    }
-  }, [entityType, entityId, draft, load, t]);
+  // Feature 163 (owner decision UX-4 = A) — `?entityType=product&entityId=<id>` opens the
+  // screen on that entity; the product editor's SEO link points here. Read on mount and
+  // on every navigation that changes them; an unknown type is ignored. The address is
+  // anybody's to write, so an id that is not a UUID is ignored too and sends nothing —
+  // it would otherwise become a path segment of the editor's admin requests (S-M1).
+  const [searchParams] = useSearchParams();
+  const linkedType = searchParams.get('entityType');
+  const linkedId = searchParams.get('entityId');
+  useEffect(() => {
+    if (!isEntityType(linkedType) || !isEntityId(linkedId)) return;
+    setEntityType(linkedType);
+    setEntityId(linkedId);
+  }, [linkedType, linkedId]);
 
   return (
     <Card>
@@ -325,17 +286,6 @@ function MetaEditorCard(): ReactNode {
         <CardTitle>{t('seo.meta.title')}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {error ? (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        ) : null}
-        {message ? (
-          <Alert variant="success">
-            <AlertDescription>{message}</AlertDescription>
-          </Alert>
-        ) : null}
-
         <div className="flex flex-wrap items-end gap-2">
           <Select
             className="w-auto"
@@ -366,120 +316,10 @@ function MetaEditorCard(): ReactNode {
               />
             )}
           </div>
-          <Input
-            className="w-24"
-            value={locale}
-            onChange={(e): void => setLocale(e.target.value)}
-            placeholder={t('seo.meta.field.locale')}
-          />
-          <Button
-            variant="outline"
-            onClick={(): void => {
-              void load();
-            }}
-            disabled={busy || !entityId.trim()}
-          >
-            {t('seo.meta.load')}
-          </Button>
         </div>
 
-        {meta ? (
-          <>
-            <Card className="bg-muted/30">
-              <CardHeader>
-                <CardTitle className="text-sm">
-                  {t('seo.meta.resolvedTitle', { source: meta.resolved.source })}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableBody>
-                    <TableRow>
-                      <TableHead className="w-40">{t('seo.meta.field.title')}</TableHead>
-                      <TableCell>{meta.resolved.title}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableHead className="w-40">{t('seo.meta.field.description')}</TableHead>
-                      <TableCell>{meta.resolved.description}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableHead className="w-40">{t('seo.meta.field.ogTitle')}</TableHead>
-                      <TableCell>{meta.resolved.openGraph.title}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableHead className="w-40">{t('seo.meta.field.ogDescription')}</TableHead>
-                      <TableCell>{meta.resolved.openGraph.description}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableHead className="w-40">{t('seo.meta.field.ogImage')}</TableHead>
-                      <TableCell className="font-mono text-xs">
-                        {meta.resolved.openGraph.image ?? '—'}
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-
-            <h3 className="text-sm font-semibold">{t('seo.meta.overrideHeading')}</h3>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label>{t('seo.meta.field.title')}</Label>
-                <Input
-                  value={draft.title ?? ''}
-                  onChange={(e): void =>
-                    setDraft((d) => ({ ...d, title: e.target.value || null }))
-                  }
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>{t('seo.meta.field.description')}</Label>
-                <Input
-                  value={draft.description ?? ''}
-                  onChange={(e): void =>
-                    setDraft((d) => ({ ...d, description: e.target.value || null }))
-                  }
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>{t('seo.meta.field.ogTitle')}</Label>
-                <Input
-                  value={draft.ogTitle ?? ''}
-                  onChange={(e): void =>
-                    setDraft((d) => ({ ...d, ogTitle: e.target.value || null }))
-                  }
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>{t('seo.meta.field.ogDescription')}</Label>
-                <Input
-                  value={draft.ogDescription ?? ''}
-                  onChange={(e): void =>
-                    setDraft((d) => ({ ...d, ogDescription: e.target.value || null }))
-                  }
-                />
-              </div>
-              <div className="space-y-2 md:col-span-2">
-                <Label>{t('seo.meta.field.ogImageUrl')}</Label>
-                <Input
-                  type="url"
-                  value={draft.ogImageUrl ?? ''}
-                  onChange={(e): void =>
-                    setDraft((d) => ({ ...d, ogImageUrl: e.target.value || null }))
-                  }
-                />
-              </div>
-            </div>
-
-            <Button
-              disabled={busy}
-              onClick={(): void => {
-                void save();
-              }}
-            >
-              {busy ? t('seo.meta.saving') : t('seo.meta.saveOverride')}
-            </Button>
-          </>
+        {entityId.trim() ? (
+          <SeoMetaScopeEditor key={`${entityType}:${entityId}`} entityType={entityType} entityId={entityId} />
         ) : null}
       </CardContent>
     </Card>

@@ -96,5 +96,9 @@
   "policy.turnedOn": "Zatwierdzanie koszyka jest teraz wymagane w tej organizacji.",
   "policy.turnedOff": "Zatwierdzanie koszyka nie jest już wymagane; oczekujące koszyki zostały zwolnione.",
   "policy.loadError": "Nie udało się wczytać zasady zatwierdzania koszyka.",
-  "policy.saveError": "Nie udało się zaktualizować zasady."
+  "policy.saveError": "Nie udało się zaktualizować zasady.",
+
+  "nav.carts.label": "Koszyki",
+  "actions.openCarts.label": "Koszyki",
+  "actions.openCarts.description": "Przeglądaj koszyki klientów i ich status akceptacji"
 }

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
 import type { BlogProductCard } from '@endora-commerce/contracts';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 export function RelatedProductsStrip({
   products,
@@ -13,7 +13,7 @@ export function RelatedProductsStrip({
       <h2 className="mb-4 text-2xl font-semibold text-[--ink-700]">Related products</h2>
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         {products.map((product) => (
-          <Link
+          <LocalizedLink
             key={product.id}
             href={`/p/${product.slug}`}
             className="group flex flex-col overflow-hidden rounded-lg border border-[--line] bg-[--surface] transition hover:shadow-lg"
@@ -43,7 +43,7 @@ export function RelatedProductsStrip({
                 </span>
               ) : null}
             </div>
-          </Link>
+          </LocalizedLink>
         ))}
       </div>
     </section>

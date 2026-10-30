@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { getRfqById } from '../../../../lib/api/rfq';
 import { getSessionCookie } from '../../../../lib/session';
 import { getServerContext } from '../../../../lib/server-context';
 import { StorefrontApiError } from '../../../../lib/api/client';
 import { RfqSuccessPanel } from '../../../../components/rfq/RfqSuccessPanel';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
 
 /**
  * Quote Request Success Page (feature 008). Reached after a buyer submits a
@@ -26,15 +26,15 @@ export default async function QuoteRequestSuccessPage({
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
   const { id } = await searchParams;
-  if (!session) redirect('/login?next=/quote-requests');
-  if (!id) redirect('/quote-requests');
+  if (!session) return await localeRedirect('/login?next=/quote-requests');
+  if (!id) return await localeRedirect('/quote-requests');
 
   let rfq;
   try {
     rfq = await getRfqById(session, id);
   } catch (err) {
     if (err instanceof StorefrontApiError && err.status === 404) {
-      redirect('/quote-requests');
+      return await localeRedirect('/quote-requests');
     }
     throw err;
   }

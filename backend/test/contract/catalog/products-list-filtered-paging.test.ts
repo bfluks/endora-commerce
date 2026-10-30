@@ -9,6 +9,7 @@ import {
 import { OTHER_TEST_ORGANIZATION_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { Category, Product } from '../../helpers/package-entities.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
+import { seedOtherTestOrganization } from '../../helpers/seed-organizations.js';
 
 /**
  * Issue #151 — the storefront product list narrowed a page **after** cutting it.
@@ -292,6 +293,10 @@ describe('GET /api/v1/catalog/products — a page is cut from the rows that matc
 
   beforeAll(async () => {
     h = await setupBackendServer();
+    // Feature 154 — the other-organisation buyer shops only if its Organization
+    // exists and is assigned the store; seeded before any request so no empty
+    // permitted-channel set is cached for it.
+    await seedOtherTestOrganization(h.em());
     const em = h.em();
     const conn = em.getConnection();
 
@@ -329,8 +334,8 @@ describe('GET /api/v1/catalog/products — a page is cut from the rows that matc
         slug: f.sku.toLowerCase(),
         type: 'simple',
         status: 'active',
-        name: { 'en-US': `Issue 151 product ${f.index}` },
-        description: { 'en-US': 'Paging fixture.' },
+        name: `Issue 151 product ${f.index}`,
+        description: 'Paging fixture.',
         visibility: f.visibility,
         allowedOrganizationIds: f.allowedOrganizationIds,
         attributeValues: f.attributeValues,

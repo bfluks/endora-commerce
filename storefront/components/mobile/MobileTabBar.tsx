@@ -1,9 +1,10 @@
 'use client';
 
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { loadCartItemCount } from '../../lib/cartCount';
+import { LocalizedLink, useUrlLanguageState } from '../../lib/i18n/localized-link';
+import { stripLocalePrefix } from '../../lib/i18n/locale-path';
 
 /**
  * Feature 044 / US1 — fixed bottom tab bar (Industria Mobile design §01).
@@ -30,6 +31,7 @@ export function MobileTabBar(props: {
   };
 }): ReactNode {
   const pathname = usePathname();
+  const urlState = useUrlLanguageState();
   const [count, setCount] = useState<number>(props.cartItemCount ?? 0);
 
   useEffect(() => {
@@ -88,10 +90,11 @@ export function MobileTabBar(props: {
   return (
     <nav className="m-tabbar" aria-label="Mobile">
       {tabs.map((tab) => {
-        const active = tab.match(pathname);
+        // Feature 167 — match the logical path, not the prefixed browser path.
+        const active = tab.match(stripLocalePrefix(pathname, urlState));
         const isCart = tab.href === '/cart';
         return (
-          <Link
+          <LocalizedLink
             key={tab.href}
             href={tab.href}
             className={'m-tabbar__item' + (active ? ' is-active' : '')}
@@ -104,7 +107,7 @@ export function MobileTabBar(props: {
             ) : null}
             <span aria-hidden="true">{tab.icon}</span>
             <span>{tab.label}</span>
-          </Link>
+          </LocalizedLink>
         );
       })}
     </nav>

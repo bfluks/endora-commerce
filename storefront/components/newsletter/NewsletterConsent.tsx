@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
 import type { RequestContext } from '../../lib/api/client';
 import { getCmsBlockByCode } from '../../lib/api/cms';
 import { getNewsletterStatus } from '../../lib/api/newsletter';
 import { PageBuilderRender } from '../PageBuilderRender';
+import { LocalizedLink } from '../../lib/i18n/localized-link';
 
 /**
  * Newsletter-consent checkbox for the registration form (feature 048). The
@@ -32,7 +32,7 @@ export async function NewsletterConsent({
         ) : (
           <>
             Yes, I would like to receive the newsletter and marketing emails. See our{' '}
-            <Link href="/privacy-policy">Privacy Policy</Link>.
+            <LocalizedLink href="/privacy-policy">Privacy Policy</LocalizedLink>.
           </>
         )}
       </span>

@@ -8,6 +8,7 @@ import {
   upsertAdminRoleRequestSchema,
   type AdminAuthenticationThrottlePort,
   type AdminRolePort,
+  type AdminPreferences,
   type AdminRoleRecord,
   type PermissionCataloguePort,
   type PermissionReadPort,
@@ -18,6 +19,7 @@ import type { AdminUser } from './entities/admin-user.entity.js';
 import type { TwoFactorEnrolmentReader } from './services/two-factor-enrolments.js';
 import type { RequireAdminFactory, SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { readIdleLogoutMinutes } from './services/idle-logout-policy.js';
+import type { AdminPreferenceService } from './services/admin-preference-service.js';
 
 /**
  * Admin user + role CRUD (T193 / FR-080..FR-083). All gated by
@@ -51,6 +53,11 @@ export interface AdminUsersAdminDeps {
    * held to the configured window too (the settings admin API refuses them).
    */
   settingsReadPort: SettingsReadPort;
+  /**
+   * Feature 164 — `GET /admin/me` carries the admin's own preferences, so the
+   * shell's first paint is already pinned, folded and railed (FR-016).
+   */
+  adminPreferenceService: AdminPreferenceService;
 }
 
 export async function registerAdminUsersAdminRoutes(
@@ -66,6 +73,7 @@ export async function registerAdminUsersAdminRoutes(
     resolveAdminContext,
     twoFactorEnrolments,
     settingsReadPort,
+    adminPreferenceService,
   } = deps;
 
   /** One `mfa` read per response, whether the response carries one admin or a page. */
@@ -107,12 +115,28 @@ export async function registerAdminUsersAdminRoutes(
       const role = adminUser.adminRoleId
         ? await adminRolePort.getById(adminUser.adminRoleId)
         : null;
+      // A preference is a convenience and never a sign-in dependency (FR-018):
+      // a failed read answers `null` — the Admin UI then opens with the
+      // defaults and saves nothing — and is logged. The `try` is around this
+      // module's own service, not a port, so no `ModuleDisabledError` can be
+      // swallowed here.
+      let preferences: AdminPreferences | null;
+      try {
+        preferences = await adminPreferenceService.read(adminUser.id);
+      } catch (error) {
+        adminPreferenceService.log.warn(
+          { err: error, adminUserId: adminUser.id },
+          'admin preferences unreadable; serving none',
+        );
+        preferences = null;
+      }
       return {
         data: {
           adminUser: await serializeOneAdminUser(adminUser),
           role: role ? serializeAdminRole(role) : null,
           permissions,
           idleLogoutMinutes: await readIdleLogoutMinutes(settingsReadPort),
+          preferences,
         },
       };
     },

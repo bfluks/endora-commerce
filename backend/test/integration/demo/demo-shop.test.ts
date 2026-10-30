@@ -86,41 +86,18 @@
  * file is run by hand — which is how its ledger sat stale for a day after the
  * escape-hatch audit landed.
  */
-import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { migratedDatabase, type MigratedDatabase } from '../../helpers/migrated-database.js';
+
 const BACKEND_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-/** ~90 s of migrations, one reset, three seeds and a second reset. */
+/** A migrated database, one reset, three seeds and a second reset. */
 const SUITE_TIMEOUT_MS = 900_000;
-
-/**
- * The DSN this run was given, with its database replaced.
- *
- * `DATABASE_URL` — never `TEST_DATABASE_URL` — is the run's own database since
- * issue #189, and it is read for its **host, port and credentials** only: the
- * databases below are created and dropped by this file and are nobody else's.
- */
-function dsnFor(database: string): string {
-  const declared = process.env['DATABASE_URL'];
-  if (declared === undefined || declared === '') {
-    throw new Error(
-      'demo shop: DATABASE_URL is not set. This test provisions its own throwaway ' +
-        'databases from the running invocation’s DSN and cannot invent one.',
-    );
-  }
-  const url = new URL(declared);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
-
-function maintenanceClient(): Client {
-  return new Client({ connectionString: dsnFor('postgres') });
-}
 
 /**
  * Run a command with one environment variable overridden, and fail loudly.
@@ -296,6 +273,8 @@ const SEED_DELTA: Readonly<Record<string, number>> = {
   admin_roles: 1,
   admin_users: 3,
   organizations: 1,
+  // `customer_accounts`' own demo data (feature 160): the VIP group of E3.
+  customer_groups: 1,
   taxes: 1,
   delivery_methods: 1,
   payment_methods: 2,
@@ -322,12 +301,26 @@ const SEED_DELTA: Readonly<Record<string, number>> = {
   // 2 — the product↔category and channel↔product bridges
   product_categories: 203,
   sales_channel_products: 203,
-  // 3 — the price-list backfill
-  price_list_products: 203,
-  price_list_price_brackets: 406,
+  // 3a — the demo organisation joins the VIP group: no table of its own, it
+  //      sets `organizations.customer_group_id` (feature 160).
+  // 3b — the demo's prices (feature 160): a base row per demo product in the
+  //      PLN base book (203), and the six rows of the E1–E3 books; the four
+  //      books, their three audience members and four channel rows.
+  price_list_matrix_entries: 209,
+  // Feature 161 (G15): one membership line per product or variant line of the demo's books.
+  price_list_product_lines: 206,
+  price_lists: 4,
+  price_list_audience_members: 3,
+  sales_channel_price_lists: 4,
+  // 3c — the VIP channel hides prices until sign-in (issue #492): its
+  //      `pricing.unauthenticated_display_mode = none`, which replaced the
+  //      retired non-public flag the channel used to be created with.
+  setting_values: 1,
   // 4 — the stock spread across the two warehouses
   stock_levels: 406,
   // 5 — the demo buyer joins the demo organisation
+  // (feature 154) and the demo organisation is assigned the retail store's channel
+  sales_channel_organizations: 1,
   customer_accounts: 1,
   // 6 — the product attributes: a `custom_fields` definition per `catalog` row
   custom_field_definitions: 7,
@@ -356,6 +349,42 @@ const SEED_DELTA: Readonly<Record<string, number>> = {
   crm_opportunity_comments: 6,
   crm_opportunity_references: 3,
   crm_opportunity_events: 8,
+  // 12 — the demo Projects (`specs/163-projects-and-tasks/` T134): the Template
+  //      *Showroom fit-out* — four Stages, its two Roles, four Stage Tasks and
+  //      four moves — and four Projects made from it, each with its own copy of
+  //      the four Stages, their Stage Tasks and moves, its Members (seven, each
+  //      with one Role), its Organization (the internal one has none) and one
+  //      history row per Stage entered and per close. No link: the demo has no
+  //      Order.
+  project_templates: 1,
+  project_template_roles: 2,
+  project_template_stages: 4,
+  project_template_stage_tasks: 4,
+  project_template_stage_moves: 4,
+  projects: 4,
+  project_organizations: 3,
+  project_members: 7,
+  project_member_roles: 7,
+  project_stages: 16,
+  project_stage_tasks: 16,
+  project_stage_moves: 16,
+  project_stage_entries: 11,
+  // 13 — their Tasks: one per Stage Task of every Stage each Project entered,
+  //      and an assignee row for each Task whose Role one Member holds
+  //      (`specs/165-task-management/` research R-2 — no longer a column).
+  //      Each carries its Stage Task definition's id as its `source_key`
+  //      (`specs/165-task-management/` research R-19), as a materialisation does.
+  // 14 — ten Tasks of no Project (`specs/165-task-management/` research R-23):
+  //      a parent with three sub-tasks, a private Task and a draft; nine
+  //      assignee rows, two tags on three Tasks, two comments, and the four
+  //      references their texts and one description carry. No link: the demo
+  //      has no Order.
+  tasks: 22,
+  task_assignees: 19,
+  task_tags: 2,
+  task_tag_assignments: 3,
+  task_comments: 2,
+  task_references: 4,
 };
 
 /**
@@ -399,10 +428,6 @@ const BOOT_RECONCILED: Readonly<Record<string, string>> = {
     'the channel the first run created, and the third run’s finds nothing left to bind.',
 };
 
-/** Names must fit PostgreSQL's 63-byte identifier limit and end in `_test`. */
-const RUN = randomBytes(4).toString('hex');
-const TEMPLATE_DB = `ds_${RUN}_tpl_test`;
-const SHOP_DB = `ds_${RUN}_shop_test`;
 const DEMO_SEED = ['pnpm', 'exec', 'tsx', 'src/cli.ts', 'demo', 'seed'];
 const DEMO_RESET = ['pnpm', 'exec', 'tsx', 'src/cli.ts', 'demo', 'reset'];
 
@@ -428,36 +453,19 @@ describe('T226 — `endora demo seed` builds this shop', () => {
   let seedReports: string[];
   /** What each of the three seed runs recorded in the escape-hatch audit. */
   let seedScopeEntries: ScopeEntry[][];
+  let database: MigratedDatabase | undefined;
   let shop: Client;
 
   beforeAll(async () => {
-    const admin = maintenanceClient();
-    await admin.connect();
-    try {
-      for (const database of [TEMPLATE_DB, SHOP_DB]) {
-        await admin.query(`drop database if exists "${database}" with (force)`);
-      }
-      await admin.query(`create database "${TEMPLATE_DB}"`);
-    } finally {
-      await admin.end();
-    }
+    // No migration run of its own: a clone of the template this invocation was
+    // cloned from, with the one row that template holds beyond its migrations
+    // withdrawn — exactly what `migration:up` from empty leaves, in about a
+    // second. See the helper, and the parity file that holds the claim.
+    database = await migratedDatabase('ds', async (migrateUrl) => {
+      await run('migration:up', ['pnpm', 'exec', 'tsx', 'src/db/migrate.ts', 'up'], migrateUrl);
+    });
 
-    // One migration run, one clone. `create database … template` is the same
-    // ~1 s trick `test/global-setup.ts` uses per invocation.
-    await run(
-      'migration:up',
-      ['pnpm', 'exec', 'tsx', 'src/db/migrate.ts', 'up'],
-      dsnFor(TEMPLATE_DB),
-    );
-    const cloner = maintenanceClient();
-    await cloner.connect();
-    try {
-      await cloner.query(`create database "${SHOP_DB}" template "${TEMPLATE_DB}"`);
-    } finally {
-      await cloner.end();
-    }
-
-    const url = dsnFor(SHOP_DB);
+    const url = database.url;
     const reading = new Client({ connectionString: url });
     await reading.connect();
     try {
@@ -497,15 +505,7 @@ describe('T226 — `endora demo seed` builds this shop', () => {
 
   afterAll(async () => {
     if (shop !== undefined) await shop.end();
-    const admin = maintenanceClient();
-    await admin.connect();
-    try {
-      for (const database of [SHOP_DB, TEMPLATE_DB]) {
-        await admin.query(`drop database if exists "${database}" with (force)`);
-      }
-    } finally {
-      await admin.end();
-    }
+    await database?.drop();
   }, SUITE_TIMEOUT_MS);
 
   /** What the seed actually moved, over the baseline. */
@@ -636,6 +636,24 @@ describe('T226 — `endora demo seed` builds this shop', () => {
       ]);
     });
 
+    it('hides prices from anonymous visitors on the VIP channel only (#492)', async () => {
+      // The VIP channel used to be created non-public, a flag that hid
+      // prices from its signed-in B2B buyers too. Its guests are now kept out
+      // by the display-mode chain — `pricing.unauthenticated_display_mode =
+      // none` on that channel — and its buyers see their prices; the retail
+      // channel publishes prices to everyone, as it did.
+      const rows = await query<{ channel: string; value: unknown }>(
+        shop,
+        `select ch.code as channel, v.value
+           from setting_values v
+           join settings s on s.id = v.setting_id
+           join sales_channels ch on ch.id = v.sales_channel_id
+          where s.code = 'pricing.unauthenticated_display_mode'
+          order by ch.code`,
+      );
+      expect(rows).toEqual([{ channel: 'pl_b2b_vip', value: 'none' }]);
+    });
+
     it('leaves no assignment pointing at a channel that is not there', async () => {
       // There is no foreign key on `warehouse_channel_assignments.
       // sales_channel_id`, which is how the `truncate sales_channels cascade`
@@ -718,6 +736,74 @@ describe('T226 — `endora demo seed` builds this shop', () => {
       for (const row of rows.filter((r) => r.parent_slug !== null)) {
         expect(sections).toContain(row.parent_slug);
       }
+    });
+
+    it('gives three Projects to the demo organisation and keeps one internal, each standing in a Stage of its own', async () => {
+      const projects = await query<{ state: string; organizations: string; current_ok: boolean; template: string }>(
+        shop,
+        `select p.state,
+                coalesce((select string_agg(o.tax_id, ',') from project_organizations po
+                            join organizations o on o.id = po.organization_id where po.project_id = p.id), '') as organizations,
+                exists (select 1 from project_stages s where s.id = p.current_stage_id and s.project_id = p.id) as current_ok,
+                t.name as template
+           from projects p join project_templates t on t.id = p.template_id
+          order by p.created_at`,
+      );
+      expect(projects.map((row) => [row.state, row.organizations, row.current_ok, row.template]).sort()).toEqual(
+        [
+          ['completed', 'PL5210000099', true, 'Showroom fit-out'],
+          ['lost', 'PL5210000099', true, 'Showroom fit-out'],
+          ['open', 'PL5210000099', true, 'Showroom fit-out'],
+          ['open', '', true, 'Showroom fit-out'],
+        ].sort(),
+      );
+    });
+
+    it('creates every demo Task in a Stage of a demo Project, by the demo administrator', async () => {
+      // `created_by_admin_user_id` is not null — and it is the demo
+      // administrator's, not a stand-in.
+      const tasks = await query<{ creator: string; in_stage: boolean }>(
+        shop,
+        `select a.email as creator,
+                exists (select 1 from project_stages s
+                         where s.id = t.context_group_id and s.project_id = t.context_id) as in_stage
+           from tasks t join admin_users a on a.id = t.created_by_admin_user_id
+          where t.context_type = 'project'`,
+      );
+      expect(tasks).toHaveLength(12);
+      expect(new Set(tasks.map((row) => row.creator))).toEqual(new Set(['admin@demo.local']));
+      expect(tasks.every((row) => row.in_stage)).toBe(true);
+    });
+
+    it('keys every Stage Task by its definition, so a retried materialisation adds none', async () => {
+      // `specs/165-task-management/` T088: the source key is what makes
+      // Stage Task creation idempotent (research R-19); a demo Task without one
+      // would be created a second time by the Stage's retry.
+      const rows = await query<{ keyed: boolean }>(
+        shop,
+        `select exists (select 1 from project_stage_tasks d
+                         where d.stage_id = t.context_group_id and d.id::text = t.source_key
+                           and d.title = t.title) as keyed
+           from tasks t
+          where t.context_type = 'project'`,
+      );
+      expect(rows).toHaveLength(12);
+      expect(rows.every((row) => row.keyed)).toBe(true);
+    });
+
+    it('seeds ten Tasks of no Project: one parent of three, one private and one draft, all published but the draft', async () => {
+      const rows = await query<{ children: number; is_private: boolean; is_draft: boolean; published: boolean }>(
+        shop,
+        `select (select count(*)::int from tasks c where c.parent_task_id = t.id) as children,
+                t.is_private, t.is_draft, t.published_at is not null as published
+           from tasks t
+          where t.context_type is null`,
+      );
+      expect(rows).toHaveLength(10);
+      expect(rows.filter((row) => row.children > 0).map((row) => row.children)).toEqual([3]);
+      expect(rows.filter((row) => row.is_private)).toHaveLength(1);
+      expect(rows.filter((row) => row.is_draft)).toHaveLength(1);
+      expect(rows.every((row) => row.published === !row.is_draft)).toBe(true);
     });
 
     it('gives the whole sales pipeline to the demo organisation, two to a status', async () => {

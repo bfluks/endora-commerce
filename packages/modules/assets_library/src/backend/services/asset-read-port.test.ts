@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql';
 
-import { AssetReadService, type AssetStorageRegistry } from './asset-read-port.js';
+import {
+  AssetReadService,
+  toAssetRecord,
+  type AssetStorageRegistry,
+  type AssetVisibilityReader,
+} from './asset-read-port.js';
 import { AdapterRegistry } from './storage/adapter-registry.js';
 import { HmacSigner } from './hmac.js';
 import type { Asset } from '../entities/asset.entity.js';
@@ -16,6 +21,13 @@ import type { Asset } from '../entities/asset.entity.js';
  * — over a stubbed `EntityManager`, so what is under test is the rule and not
  * the database.
  */
+
+/** The evaluator the cases that are not about visibility hand in: it must not be asked. */
+const NO_VISIBILITY: AssetVisibilityReader = {
+  async hiddenAmong() {
+    throw new Error('visibility is not under test here');
+  },
+};
 
 const KEY_HEX = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff';
 const API_ORIGIN = 'https://api.example.test';
@@ -41,11 +53,13 @@ function seededAsset(id: string, overrides: Partial<Asset> = {}): Asset {
     purgeAfterAt: null,
     pendingCleanup: false,
     mimeTypeOverridden: false,
+    contentVersion: 'a1b2c3d4e5f6',
+    permalink: null,
     ...overrides,
   } as unknown as Asset;
 }
 
-function makeService(rows: Asset[]): {
+function makeService(rows: Asset[], loadRetentionDays?: () => Promise<number>): {
   service: AssetReadService;
   filters: Array<FilterQuery<Asset>>;
 } {
@@ -74,7 +88,15 @@ function makeService(rows: Asset[]): {
     publicApiBaseUrl: API_ORIGIN,
   });
 
-  return { service: new AssetReadService(() => em, () => adapters), filters };
+  return {
+    service: new AssetReadService(
+      () => em,
+      () => adapters,
+      () => NO_VISIBILITY,
+      ...(loadRetentionDays ? [loadRetentionDays] : []),
+    ),
+    filters,
+  };
 }
 
 const PUBLIC_ID = 'aaaaaaaa-1111-2222-3333-444444444444';
@@ -86,7 +108,8 @@ describe('AssetReadService.resolvePublicUrls', () => {
 
     const urls = await service.resolvePublicUrls([PUBLIC_ID]);
 
-    expect(urls.get(PUBLIC_ID)).toBe(`${API_ORIGIN}/assets/file/${PUBLIC_ID}`);
+    // specs/156-asset-stable-url/ T061 (deliberate, R-20): versioned.
+    expect(urls.get(PUBLIC_ID)).toBe(`${API_ORIGIN}/assets/file/${PUBLIC_ID}?v=a1b2c3d4e5f6`);
   });
 
   it('narrows the read itself to live and public rows', async () => {
@@ -158,7 +181,7 @@ function byteService(
     }),
   } as unknown as AssetStorageRegistry;
 
-  return { service: new AssetReadService(() => em, () => adapters), filters, opened };
+  return { service: new AssetReadService(() => em, () => adapters, () => NO_VISIBILITY), filters, opened };
 }
 
 async function* chunks(...parts: Array<string | Uint8Array>): AsyncGenerator<string | Uint8Array> {
@@ -229,5 +252,135 @@ describe('AssetReadService.openAssetBytes', () => {
       bytes: new Uint8Array([0x68, 0x69]),
       mimeType: 'image/jpeg',
     });
+  });
+});
+
+/** specs/156-asset-stable-url/ T010 — `storageUrl` stays unchanged until Phase 9. */
+describe('toAssetRecord — stable URL members (feature 156)', () => {
+  it('carries contentVersion and permalink', () => {
+    const record = toAssetRecord(
+      seededAsset(PUBLIC_ID, { permalink: 'docs/a.pdf' } as Partial<Asset>),
+    );
+    expect(record.contentVersion).toBe('a1b2c3d4e5f6');
+    expect(record.permalink).toBe('docs/a.pdf');
+    expect(record.storageUrl).toBe(`/assets/file/${PUBLIC_ID}?v=a1b2c3d4e5f6`);
+  });
+
+  it('answers a null permalink when none is set', () => {
+    expect(toAssetRecord(seededAsset(PUBLIC_ID)).permalink).toBeNull();
+  });
+});
+
+/** specs/156-asset-stable-url/ T042a — the reported purge date follows the setting read now (P1). */
+describe('AssetRecord.purgeAfterAt (feature 156)', () => {
+  it('is deletedAt + the retention read at call time, once per batch, and null for a live asset', async () => {
+    const deletedAt = new Date('2026-10-01T12:00:00.000Z');
+    const deleted = seededAsset(PUBLIC_ID, {
+      deletedAt,
+      purgeAfterAt: new Date('2027-01-01T00:00:00.000Z'),
+    } as Partial<Asset>);
+    const live = seededAsset(PRIVATE_ID);
+    let reads = 0;
+    const { service } = makeService([deleted, live], async () => {
+      reads += 1;
+      return 7;
+    });
+    const records = await service.findByIds([PUBLIC_ID, PRIVATE_ID]);
+    const byId = Object.fromEntries(records.map((r) => [r.id, r]));
+    expect(byId[PUBLIC_ID]!.purgeAfterAt).toEqual(new Date(deletedAt.getTime() + 7 * 24 * 60 * 60 * 1000));
+    expect(byId[PRIVATE_ID]!.purgeAfterAt).toBeNull();
+    expect(reads).toBe(1);
+  });
+});
+
+/** specs/156-asset-stable-url/ T061 — `AssetRecord.storageUrl` serves the current version. */
+describe('AssetRecord.storageUrl (feature 156)', () => {
+  it.each(['local', 's3', 'gcs'] as const)('is versioned for a %s row', (backend) => {
+    const record = toAssetRecord(
+      seededAsset(PUBLIC_ID, { storageBackend: backend, storageUrl: `https://cdn.example.test/${PUBLIC_ID}.jpg` } as Partial<Asset>),
+    );
+    expect(record.storageUrl).toBe(`https://cdn.example.test/${PUBLIC_ID}.jpg?v=a1b2c3d4e5f6`);
+  });
+
+  it.each([
+    ['a legacy row', { storageBackend: 'legacy', storageUrl: 'https://old.example.test/a.jpg' }],
+    ['a data: URL', { storageUrl: 'data:application/pdf;base64,JVBERi0=' }],
+  ])('is unchanged for %s', (_label, over) => {
+    const record = toAssetRecord(seededAsset(PUBLIC_ID, over as Partial<Asset>));
+    expect(record.storageUrl).toBe(over.storageUrl);
+  });
+});
+
+describe('AssetRecord.storageUrl without a storage key (feature 156)', () => {
+  it('is the stored URL unchanged — no adapter of this platform wrote it', () => {
+    const record = toAssetRecord(
+      seededAsset(PUBLIC_ID, { storageLocator: '', storageUrl: 'https://cdn.example.test/a.jpg' } as Partial<Asset>),
+    );
+    expect(record.storageUrl).toBe('https://cdn.example.test/a.jpg');
+  });
+});
+
+// `specs/166-asset-reference-visibility/` contracts/ports.md §3, research R-13
+// — which of these assets the ambient caller may see. The evaluation is
+// `AssetVisibility`'s; this is the existence half and the one call per batch.
+describe('AssetReadService.visibleToCaller (feature 166)', () => {
+  const VISIBLE = '11111111-1111-4111-8111-111111111111';
+  const HIDDEN = '22222222-2222-4222-8222-222222222222';
+  const MISSING = '33333333-3333-4333-8333-333333333333';
+
+  function makeVisibilityService(options: { hidden?: readonly string[] } = {}) {
+    const existing = new Set([VISIBLE, HIDDEN]);
+    const asked: string[][] = [];
+    const reads: unknown[] = [];
+    const em = {
+      find: async (_entity: unknown, where: { id: { $in: string[] } }) => {
+        reads.push(where);
+        return where.id.$in.filter((id) => existing.has(id)).map((id) => ({ id }));
+      },
+    } as unknown as EntityManager;
+    const hidden = new Set(options.hidden ?? [HIDDEN]);
+    const visibility: AssetVisibilityReader = {
+      async hiddenAmong(ids) {
+        asked.push([...ids]);
+        return new Set(ids.filter((id) => hidden.has(id)));
+      },
+    };
+    const service = new AssetReadService(
+      () => em,
+      () => ({}) as unknown as AssetStorageRegistry,
+      () => visibility,
+    );
+    return { service, asked, reads };
+  }
+
+  it('answers hidden and missing ids alike: absent', async () => {
+    const { service } = makeVisibilityService();
+    expect([...(await service.visibleToCaller([VISIBLE, HIDDEN, MISSING]))]).toEqual([VISIBLE]);
+  });
+
+  it('answers an id that is not a uuid as absent, without reading it', async () => {
+    const { service, reads, asked } = makeVisibilityService();
+    expect([...(await service.visibleToCaller(['not-a-uuid']))]).toEqual([]);
+    expect(reads).toEqual([]);
+    expect(asked).toEqual([]);
+  });
+
+  it('gives an unrestricted caller every existing id (the evaluator hides nothing for them)', async () => {
+    const { service } = makeVisibilityService({ hidden: [] });
+    expect([...(await service.visibleToCaller([VISIBLE, HIDDEN, MISSING]))].sort()).toEqual([VISIBLE, HIDDEN].sort());
+  });
+
+  it('evaluates once per call, whatever the batch size, and only the ids that exist', async () => {
+    const { service, asked, reads } = makeVisibilityService();
+    await service.visibleToCaller([VISIBLE, HIDDEN, MISSING, VISIBLE]);
+    expect(reads).toHaveLength(1);
+    expect(asked).toHaveLength(1);
+    expect([...asked[0]!].sort()).toEqual([VISIBLE, HIDDEN].sort());
+  });
+
+  it('asks nothing when no id exists', async () => {
+    const { service, asked } = makeVisibilityService();
+    expect([...(await service.visibleToCaller([MISSING]))]).toEqual([]);
+    expect(asked).toEqual([]);
   });
 });

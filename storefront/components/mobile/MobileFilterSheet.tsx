@@ -1,8 +1,8 @@
 'use client';
 
-import Link from 'next/link';
 import { useRef, useState, type ReactNode } from 'react';
 import { BottomSheet } from './BottomSheet';
+import { LocalizedLink } from '../../lib/i18n/localized-link';
 
 /**
  * Feature 044 / US2 — mobile filter entry (Industria Mobile design §03).
@@ -72,14 +72,14 @@ export function MobileFilterSheet(props: {
         closeLabel={props.labels.close}
         footer={
           <div className="flex w-full gap-2">
-            <Link
+            <LocalizedLink
               href={props.clearHref}
               className="btn btn--outline"
               style={{ flex: '0 0 38%' }}
               onClick={() => setOpen(false)}
             >
               {props.labels.clear}
-            </Link>
+            </LocalizedLink>
             <button
               type="button"
               className="btn btn--dark justify-center"

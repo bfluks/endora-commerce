@@ -14,6 +14,8 @@ import { Organization } from '../entities/organization.entity.js';
 import { OrganizationInvitation } from '../entities/organization-invitation.entity.js';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
+import { currentSalesChannel } from '@endora-commerce/platform/kernel';
+import { storefrontPagePathFor } from '@endora-commerce/contracts';
 import { buildInvitationEmail } from '../email-templates/invitation.js';
 import { noopOrgTemplateEmail, type OrgTemplateEmail } from './org-template-email.js';
 import {
@@ -172,6 +174,8 @@ export class InvitationService {
         role: invitation.role,
         expiresAt: invitation.expiresAt,
         acceptBaseUrl: this.acceptBaseUrl,
+        // Feature 167 — the invitee's language is not known: the channel default.
+        pagePath: (path) => storefrontPagePathFor({ path, channel: currentSalesChannel() }),
       });
       const acceptUrl = (message.meta as { acceptUrl?: string } | undefined)?.acceptUrl ?? '';
       const sentViaTemplate = await this.templateEmail.trySend({

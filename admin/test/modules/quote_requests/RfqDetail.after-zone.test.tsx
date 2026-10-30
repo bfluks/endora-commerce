@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { zoneComponent, type AdminContributions } from '@endora-commerce/admin-kit/contributions';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+import { markup } from '../../helpers/react-ids';
 
 /**
  * `quote_request.detail.after` — the stack of panels a quote request's screen
@@ -129,11 +130,6 @@ async function renderDetail(options: {
   );
   await waitFor(() => expect(screen.getAllByRole('tab').length).toBeGreaterThan(0));
   return container;
-}
-
-/** The screen's markup with React's per-render ids taken out, so two renders compare. */
-function markup(container: HTMLElement): string {
-  return container.innerHTML.replace(/(id|for|aria-[a-z]+)="(:r[0-9a-z]+:|«r[0-9a-z]+»)"/g, '$1="_"');
 }
 
 beforeEach(() => {

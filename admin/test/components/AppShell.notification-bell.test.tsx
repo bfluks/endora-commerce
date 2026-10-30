@@ -19,6 +19,12 @@ import { adminSession, modulePresence, withSession } from '../helpers/render-wit
  *
  * Both axes are asserted separately, because either one alone would let the
  * other regress unnoticed.
+ *
+ * Issue #518 then moved the permission axis. Personal notifications are
+ * recorded for any administrator a Task or a CRM record names, whatever their
+ * role, and the feed now answers every signed-in admin — their own rows always,
+ * the `all_admins` broadcasts only with `admin:read`. So the bell renders for
+ * every admin; module presence is the one gate left.
  */
 
 let presentModules = new Set<string>();
@@ -82,19 +88,24 @@ function bell(): Element | null {
   return document.querySelector('[data-testid="notification-bell"]');
 }
 
-describe('AppShell — the notification bell answers both gates (#112)', () => {
+describe('AppShell — the notification bell (#112, #518)', () => {
   it('renders for an operator who holds the grant while the module is present', () => {
     renderShell({ permissions: ['admin:read'], present: ['admin_notifications'] });
     expect(bell()).not.toBeNull();
   });
 
-  it('is absent for an operator without the grant', () => {
-    renderShell({ permissions: [], present: ['admin_notifications'] });
+  it('renders for an admin without admin:read, whose own notifications it carries', () => {
+    renderShell({ permissions: ['orders:read'], present: ['admin_notifications'] });
     expect(
       bell(),
-      'a bell whose feed answers 403 is a control that advertises a capability the ' +
-        'operator does not have',
-    ).toBeNull();
+      'personal notifications are recorded for every admin, so every admin needs ' +
+        'the bell that reads them (#518)',
+    ).not.toBeNull();
+  });
+
+  it('renders for an admin whose role grants nothing at all', () => {
+    renderShell({ permissions: [], present: ['admin_notifications'] });
+    expect(bell()).not.toBeNull();
   });
 
   it('is absent while the module is switched off, however broad the role', () => {

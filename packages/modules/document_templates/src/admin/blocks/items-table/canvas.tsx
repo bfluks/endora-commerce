@@ -1,13 +1,17 @@
 import type { CSSProperties, ReactNode } from 'react';
 import {
   DOCUMENT_POSITION_FIELD,
+  documentSectionTexts,
   documentValueHasValue,
   evaluateDocumentCondition,
   formatDocumentValue,
+  isValidSectionPartition,
+  itemsTableGroupingMode,
   resolveDocumentAlign,
   sumDocumentValues,
   type DocumentFieldDefinition,
   type DocumentItem,
+  type DocumentValue,
   type DocumentValueFormat,
 } from '@endora-commerce/contracts';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
@@ -22,6 +26,10 @@ import { asList, asRecord, opOf, text, type Entry } from './shared.js';
  * `sumDocumentValues` — so what the operator sees is what prints (FR-036).
  * Pagination is not imitated. A column its rule hides on this sample is drawn
  * faded with a caption, so it can still be found and selected.
+ *
+ * Feature 159: with *Document's groups* (the default) and a sample holding
+ * groups, the sample's sections are drawn as the PDF prints them — a heading
+ * row, the rows, the table's totals rows over the section's totals.
  *
  * Inline styles, as every document canvas renderer: the canvas is an iframe.
  */
@@ -100,51 +108,101 @@ export function ItemsTableCanvas(props: Props): ReactNode {
       })
       .join(text(detail['separator'], ' · '));
 
-  const grouping = props['grouping'] ? asRecord(props['grouping']) : null;
-  const groupField = grouping ? text(grouping['field']) : '';
-  const groups = new Map<string, DocumentItem[]>();
-  for (const item of items) {
-    const value = groupField ? item.values[groupField] : null;
-    const key = groupField ? (documentValueHasValue(value) ? formatDocumentValue(value, {}, language) : text(grouping?.['emptyLabel'])) : '';
-    groups.set(key, [...(groups.get(key) ?? []), item]);
-  }
+  const totalsOf = (summary: Readonly<Record<string, DocumentValue>>) =>
+    asList(props['totals']).flatMap((entry) => {
+      const path = text(entry['field']);
+      const field = summaryByPath.get(path);
+      const value = field ? summary[path] : null;
+      const op = opOf(entry['visibleWhen'], 'has_value');
+      const shown = op === 'always' || (op !== 'never' && field !== undefined && documentValueHasValue(value));
+      if (!shown) return [];
+      return [
+        {
+          label: text(entry['label']).trim() || field?.label || '',
+          value: formatDocumentValue(value, (field?.defaultFormat ?? {}) as DocumentValueFormat, language),
+          emphasis: flagOf(entry['emphasis'], false),
+        },
+      ];
+    });
+
   const span = columns.length;
   let rowIndex = 0;
   const rows: ReactNode[] = [];
-  for (const [key, members] of groups) {
-    if (groupField) {
+  const pushItem = (item: DocumentItem): void => {
+    const n = rowIndex;
+    rowIndex += 1;
+    const position = String(item.values[DOCUMENT_POSITION_FIELD] && (item.values[DOCUMENT_POSITION_FIELD] as { value: number }).value);
+    rows.push(
+      <tr key={`r:${position}:${n}`} style={stripe && n % 2 === 1 ? { background: stripe } : undefined}>
+        {columns.map((entry, c) => (
+          <td key={c} style={cellStyle(entry.hidden, alignOf(entry))}>
+            {cell(entry, item)}
+          </td>
+        ))}
+      </tr>,
+    );
+    const extra = detailOn ? detailText(item) : '';
+    if (extra) {
       rows.push(
-        <tr key={`g:${key}`}>
-          <td colSpan={span} style={{ ...cellStyle(false, 'left'), fontWeight: 700, background: headerBackground }}>
-            {key}
+        <tr key={`d:${position}:${n}`}>
+          <td colSpan={span} style={{ ...cellStyle(false, 'left'), fontStyle: 'italic', color: '#475569', fontSize: fontSize - 1 }}>
+            {extra}
           </td>
         </tr>,
       );
     }
-    for (const item of members) {
-      const n = rowIndex;
-      rowIndex += 1;
-      const position = String(item.values[DOCUMENT_POSITION_FIELD] && (item.values[DOCUMENT_POSITION_FIELD] as { value: number }).value);
-      rows.push(
-        <tr key={`r:${position}:${n}`} style={stripe && n % 2 === 1 ? { background: stripe } : undefined}>
-          {columns.map((entry, c) => (
-            <td key={c} style={cellStyle(entry.hidden, alignOf(entry))}>
-              {cell(entry, item)}
-            </td>
-          ))}
-        </tr>,
-      );
-      const extra = detailOn ? detailText(item) : '';
-      if (extra) {
+  };
+  const headingRow = (key: string, label: string): ReactNode => (
+    <tr key={`g:${key}`}>
+      <td colSpan={span} style={{ ...cellStyle(false, 'left'), fontWeight: 700, background: headerBackground }}>
+        {label}
+      </td>
+    </tr>
+  );
+
+  const groupingMode = itemsTableGroupingMode(props['grouping']);
+  const grouping = props['grouping'] ? asRecord(props['grouping']) : null;
+  const sampleSections = collection.sampleSections ?? [];
+  const drawSections =
+    groupingMode === 'sections' &&
+    sampleSections.some((section) => section.kind === 'group') &&
+    isValidSectionPartition(sampleSections, items.length);
+  const groupField = grouping && groupingMode === 'field' ? text(grouping['field']) : '';
+  const groups = new Map<string, DocumentItem[]>();
+  for (const item of drawSections ? [] : items) {
+    const value = groupField ? item.values[groupField] : null;
+    const key = groupField ? (documentValueHasValue(value) ? formatDocumentValue(value, {}, language) : text(grouping?.['emptyLabel'])) : '';
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  }
+  if (drawSections) {
+    const texts = documentSectionTexts(language);
+    const otherItems = text(grouping?.['otherItemsLabel']).trim() || texts.otherItems;
+    const showItemCount = flagOf(grouping?.['showItemCount'], true);
+    for (const section of sampleSections) {
+      const name = section.kind === 'group' ? (section.label ?? '') : otherItems;
+      rows.push(headingRow(section.key, showItemCount ? `${name} · ${texts.itemCount(section.itemIndexes.length)}` : name));
+      for (const index of section.itemIndexes) pushItem(items[index]!);
+      totalsOf(section.summary).forEach((row, i) => {
         rows.push(
-          <tr key={`d:${position}:${n}`}>
-            <td colSpan={span} style={{ ...cellStyle(false, 'left'), fontStyle: 'italic', color: '#475569', fontSize: fontSize - 1 }}>
-              {extra}
-            </td>
+          <tr key={`st:${section.key}:${i}`}>
+            {span >= 2 ? (
+              <>
+                <td colSpan={span - 1} style={cellStyle(false, 'right')}>
+                  {row.label}
+                </td>
+                <td style={cellStyle(false, 'right')}>{row.value}</td>
+              </>
+            ) : (
+              <td style={cellStyle(false, 'right')}>{[row.label, row.value].filter(Boolean).join(' ')}</td>
+            )}
           </tr>,
         );
-      }
+      });
     }
+  }
+  for (const [key, members] of groups) {
+    if (groupField) rows.push(headingRow(key, key));
+    for (const item of members) pushItem(item);
     const subtotalField = grouping ? text(grouping['subtotalField']) : '';
     if (groupField && subtotalField) {
       const sum = sumDocumentValues(members.map((item) => item.values[subtotalField]));
@@ -160,21 +218,7 @@ export function ItemsTableCanvas(props: Props): ReactNode {
     }
   }
 
-  const totals = asList(props['totals']).flatMap((entry) => {
-    const path = text(entry['field']);
-    const field = summaryByPath.get(path);
-    const value = field ? collection.sampleSummary[path] : null;
-    const op = opOf(entry['visibleWhen'], 'has_value');
-    const shown = op === 'always' || (op !== 'never' && field !== undefined && documentValueHasValue(value));
-    if (!shown) return [];
-    return [
-      {
-        label: text(entry['label']).trim() || field?.label || '',
-        value: formatDocumentValue(value, (field?.defaultFormat ?? {}) as DocumentValueFormat, language),
-        emphasis: flagOf(entry['emphasis'], false),
-      },
-    ];
-  });
+  const totals = totalsOf(collection.sampleSummary);
 
   return (
     <div style={wrapper}>

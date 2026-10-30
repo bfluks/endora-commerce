@@ -109,15 +109,41 @@ ofertowemu.
   pozycją, dla której żaden wpis nie ma wartości, wiersz się nie pojawia.
 - **Sumy** — do 10 sum dokumentu, każda z etykietą, zasadą (domyślnie *tylko gdy ma wartość*) i
   opcją *Wyróżnij*, drukowane pod tabelą, wyrównane do prawej.
-- **Grupowanie** — opcjonalnie według jednego pola: pozycje są grupowane w kolejności pierwszego
-  wystąpienia wartości, każda grupa pod nagłówkiem (pozycje bez wartości pod podaną nazwą),
-  opcjonalnie z sumą częściową jednego pola liczbowego lub kwotowego.
+- **Grupowanie** — jeden z trzech trybów (zob. *Grupowanie* niżej): **Grupy z dokumentu**
+  (domyślny), **Według pola** albo **Bez grupowania**.
 - Wygląd: tło nagłówka, kolory obramowania i pasków, paski w wierszach, rozmiar czcionki, odstęp
   poniżej oraz tekst drukowany zamiast tabeli, gdy nie ma pozycji.
 
 Tabela powtarza wiersz nagłówka na każdej stronie i nigdy nie dzieli wiersza pozycji między strony.
-Kanwa rysuje ją na przykładowych danych z tym samym formatowaniem co PDF; kolumna ukryta przez swoją
+Wiersz jest utrzymywany w całości, ale nie razem z sąsiednim: wiersz szczegółów pozycji albo wiersz
+nagłówka grupy może wydrukować się u dołu strony, a następny wiersz na początku kolejnej. Kanwa
+rysuje tabelę na przykładowych danych z tym samym formatowaniem co PDF; kolumna ukryta przez swoją
 zasadę w przykładzie jest rysowana wyblakła.
+
+### Grupowanie
+
+- **Grupy z dokumentu** — drukuje grupy, które operator ułożył w samym dokumencie (w zapytaniu
+  ofertowym: grupy pozycji z zakładki *Modyfikacja*). Każda grupa, która ma pozycję, dostaje
+  **wiersz nagłówka** z nazwą, a przy włączonej opcji *Pokaż liczbę pozycji* (domyślnie) także z
+  liczbą pozycji (*3 pozycje* / *3 items*); potem jej pozycje; potem **jeden wiersz sumy częściowej
+  dla każdej sumy tabeli**, z tą samą etykietą i zasadą, policzony po pozycjach grupy i drukowany do
+  prawej bez wyróżnienia (żaden, gdy tabela nie ma sum). Pozycje bez grupy następują pod
+  **Nagłówkiem pozostałych pozycji** — pusty drukuje *Pozostałe pozycje* / *Other items* w języku
+  układu; może zawierać pola korespondencji. Liczba porządkowa biegnie 1…n przez wszystkie grupy, a
+  sumy dokumentu następują jak zwykle. Dokument bez grup — albo typ dokumentu, który ich nie ma i dla
+  którego edytor pokazuje *Ten typ dokumentu nie ma grup.* — drukuje tabelę bez podziału, dokładnie
+  tak jak wcześniej.
+- **Według pola** — pozycje są grupowane w kolejności pierwszego wystąpienia wartości jednego pola,
+  każda grupa pod nagłówkiem (pozycje bez wartości pod podaną nazwą), opcjonalnie z sumą częściową
+  jednego pola liczbowego lub kwotowego.
+- **Bez grupowania** — tabela jest zawsze bez podziału.
+
+**Grupy z dokumentu to znaczenie nieskonfigurowanej tabeli.** Tabela zapisana, zanim to ustawienie
+powstało — z pustym grupowaniem — jest odczytywana jako *Grupy z dokumentu*, więc układ wbudowany i
+istniejące szablony drukują grupy pogrupowanej oferty bez żadnej edycji; aby szablon pozostał bez
+podziału, wybierz *Bez grupowania*. Tabela grupowana według pola nadal tak działa. Kanwa pokazuje
+grupy z przykładowych danych (przykład zapytania ofertowego ma dwie grupy i jedną pozycję bez
+grupy).
 
 Symbole w postaci `{{item.…}}` są zarezerwowane dla przyszłego bloku powtarzającego bloki dla każdej
 pozycji; do tego czasu drukują się tak, jak je wpisano.
@@ -157,7 +183,8 @@ następnej tabeli. Tabela pozycji ma od 1 do 16 kolumn, do 8 wpisów szczegół�
 `/types/:code/builder-config`), szablony (lista, odczyt, tworzenie lub duplikowanie, zmiana nazwy,
 zapis jednego języka, ustawianie i usuwanie oznaczenia domyślnego, usuwanie) oraz `POST /preview`.
 Szczegóły typu dokumentu wymieniają jego kolekcje pozycji — pola w żądanym języku, przykładowe
-pozycje i sumy — na potrzeby edytora. Kody błędów: `DOCUMENT_TEMPLATE_NOT_FOUND`, `DOCUMENT_TYPE_NOT_AVAILABLE`,
+pozycje i sumy — na potrzeby edytora, oraz `sampleSections` — grupy z przykładu, puste dla typu,
+który ich nie deklaruje. Kody błędów: `DOCUMENT_TEMPLATE_NOT_FOUND`, `DOCUMENT_TYPE_NOT_AVAILABLE`,
 `DOCUMENT_TEMPLATE_INVALID`, `DOCUMENT_TEMPLATE_IS_DEFAULT`, `DOCUMENT_TEMPLATE_NOT_SELECTABLE`,
 `DOCUMENT_RENDER_FAILED`.
 
@@ -166,5 +193,8 @@ polami korespondencji, przykładowymi danymi, układem wbudowanym, językami, do
 strony, informacją, czy dla pojedynczego dokumentu można wybrać szablon, oraz **kolekcjami pozycji** —
 w `documentTypeRegistry`, a dokumenty generuje przez `documentRenderPort`, przekazując własne dane.
 Typ, który deklaruje kolekcję pozycji (jej pola, wartości pozycji i sumy), otrzymuje Tabelę pozycji
-bez pisania renderera ani edytora; typ z wyborem szablonu dla pojedynczego dokumentu pyta port
+bez pisania renderera ani edytora; kolekcja, która deklaruje też swoje **sekcje** — nazwę każdej
+grupy, jej pozycje i sumy oraz pozycje bez grupy — otrzymuje *Grupy z dokumentu* (lista sekcji,
+której tabela nie może użyć, jest jednorazowo logowana, a tabela drukuje się bez podziału i nigdy
+nie przerywa generowania dokumentu); typ z wyborem szablonu dla pojedynczego dokumentu pyta port
 `listChoices` o szablony, które można wybrać dla jednego dokumentu.

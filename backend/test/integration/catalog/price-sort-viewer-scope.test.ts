@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { warmPriceSort } from '../../helpers/price-surface.js';
+import { SalesChannel } from '@endora-commerce/platform/kernel';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -10,7 +12,6 @@ import {
   CHANNEL_PRICES,
   DELTA,
   GAMMA,
-  GAMMA_ATTRIBUTE_PRICE,
   ORG_A_PRICES,
   ORG_B_PRICES,
   PRICE_SORT_CHANNEL,
@@ -47,6 +48,12 @@ describe('a catalogue listing is ordered by the viewer\'s own price', () => {
   beforeAll(async () => {
     h = await setupBackendServer();
     await seedPriceSortFixture(h.em());
+    // A request never builds a price surface: register and build them first.
+    await warmPriceSort(h, [
+      { headers: PRICE_SORT_CHANNEL },
+      { headers: PRICE_SORT_CHANNEL, cookies: PRICE_SORT_ORG_A },
+      { headers: PRICE_SORT_CHANNEL, cookies: PRICE_SORT_ORG_B },
+    ]);
   }, 60_000);
 
   afterAll(async () => {
@@ -137,18 +144,13 @@ describe('a catalogue listing is ordered by the viewer\'s own price', () => {
     // because "no price" is the absence of the value being ordered by rather
     // than a large number or a small one.
     //
-    // Its **card** still shows the attribute figure, which is spec
-    // clarification 1's recommendation taken literally: the attribute is not
-    // part of the ordering and it is not removed from the card either. The
-    // alternative — interleaving it — needs one statement across two modules'
-    // tables for a case measured at zero incidence.
+    // Since feature 160 (FR-018) the attribute is not a price anywhere: its
+    // card shows no price either.
     const asc = await list('sort=price');
     const desc = await list('sort=-price');
     expect(asc.skus[asc.skus.length - 1]).toBe(GAMMA.sku);
     expect(desc.skus[desc.skus.length - 1]).toBe(GAMMA.sku);
-    expect(asc.entries.find((e) => e.sku === GAMMA.sku)?.price?.amount).toBe(
-      GAMMA_ATTRIBUTE_PRICE,
-    );
+    expect(asc.entries.find((e) => e.sku === GAMMA.sku)?.price ?? null).toBeNull();
   });
 
   it('excludes the unpriced product from a price range, in every ordering', async () => {
@@ -232,5 +234,34 @@ describe('a catalogue listing is ordered by the viewer\'s own price', () => {
     const a = await list('sort=price', PRICE_SORT_ORG_A);
     expect(a.skus).toEqual([ALPHA.sku, DELTA.sku, BETA.sku, GAMMA.sku]);
     expect(a.entries.find((e) => e.sku === DELTA.sku)?.price?.amount).toBe(CHANNEL_PRICES.delta);
+  });
+  it('serves the default order, cards priced, while no price surface exists — and never builds one for the request', async () => {
+    // This file's channel's surfaces only: as if never built.
+    const retail = await h.em().findOneOrFail(SalesChannel, { code: 'pl_retail' });
+    await h.em().getConnection().execute(`delete from "price_profiles" where "sales_channel_id" = ?`, [retail.id]);
+    try {
+      for (const cookies of [undefined, PRICE_SORT_ORG_A]) {
+        const sorted = await list('sort=price', cookies);
+        const plain = await list('', cookies);
+        expect(sorted.status).toBe(200);
+        expect(sorted.skus).toEqual(plain.skus);
+        expect(sorted.entries.map((e) => e.price)).toEqual(plain.entries.map((e) => e.price));
+      }
+      expect(
+        await h
+          .em()
+          .getConnection()
+          .execute(
+            `select count(*)::int as n from "price_profile_prices" p join "price_profiles" f on f."id" = p."profile_id" where f."sales_channel_id" = ?`,
+            [retail.id],
+          ),
+      ).toEqual([{ n: 0 }]);
+    } finally {
+      await warmPriceSort(h, [
+        { headers: PRICE_SORT_CHANNEL },
+        { headers: PRICE_SORT_CHANNEL, cookies: PRICE_SORT_ORG_A },
+        { headers: PRICE_SORT_CHANNEL, cookies: PRICE_SORT_ORG_B },
+      ]);
+    }
   });
 });

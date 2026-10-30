@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-addresses",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "sideEffects": false,
   "description": "Reusable address entities used by organizations, customers, and order fulfilment.",
@@ -37,7 +37,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ../../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src",
     "test": "vitest run"

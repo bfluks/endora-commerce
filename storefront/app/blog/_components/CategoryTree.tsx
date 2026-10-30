@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
 import type { BlogCategoryTile } from '@endora-commerce/contracts';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 const BLOG_PREFIX = '/blog';
 
@@ -20,7 +20,7 @@ export function CategoryTree({ children, currentSlug }: CategoryTreeProps): Reac
       <ul className="space-y-1 text-sm">
         {children.map((c) => (
           <li key={c.id}>
-            <Link
+            <LocalizedLink
               href={`${BLOG_PREFIX}/${c.slug}`}
               className={`block rounded px-2 py-1 hover:bg-[--surface-alt] ${
                 c.slug === currentSlug
@@ -29,7 +29,7 @@ export function CategoryTree({ children, currentSlug }: CategoryTreeProps): Reac
               }`}
             >
               {c.name}
-            </Link>
+            </LocalizedLink>
           </li>
         ))}
       </ul>

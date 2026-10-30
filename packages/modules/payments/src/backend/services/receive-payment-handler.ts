@@ -1,6 +1,13 @@
 import { randomUUID } from 'crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES, ORDER_STATUS_ON_HOLD, type ReceivePayment } from '@endora-commerce/contracts';
+import {
+  ERROR_CODES,
+  ORDER_STATUS_ON_HOLD,
+  decimalText,
+  hasAtMostTwoDecimals,
+  roundHalfUp,
+  type ReceivePayment,
+} from '@endora-commerce/contracts';
 import type {
   OrderTransitionOutcome,
   OrderTransitionPort,
@@ -410,7 +417,31 @@ export class ReceivePaymentHandler {
       const payment = await this.resolvePaymentForRefund(tx, input);
       if (!payment) return null;
 
-      const newRefunded = input.refundedAmount.toFixed(2);
+      // An amount with more than two decimal places is refused, never rounded
+      // (issue #428; nothing is rounded silently). Nothing about the payment's
+      // money or status moves and the order is not asked; the payment carries
+      // the refusal for an operator to settle by hand, and the call answers
+      // normally — a throw would answer the gateway's webhook with an error,
+      // which the gateway redelivers, and every delivery would be refused again.
+      if (!hasAtMostTwoDecimals(input.refundedAmount)) {
+        const reported = decimalText(input.refundedAmount);
+        payment.providerDetails = {
+          ...(payment.providerDetails ?? {}),
+          refundAnomaly: {
+            reason: 'amount_precision_exceeded',
+            reportedRefundedAmount: reported,
+            currency: input.currency,
+            fullyRefunded: input.fullyRefunded,
+            externalRefundId: input.externalRefundId ?? null,
+            reportedAt: new Date().toISOString(),
+          },
+        };
+        await tx.flush();
+        return { payment, changed: false, holdsTheOrder: false, refused: reported as string | null };
+      }
+
+      // Exact on its decimal digits (issue #417); `toFixed(2)` rounded the double.
+      const newRefunded = roundHalfUp(input.refundedAmount);
       const nextStatus: Payment['status'] = input.fullyRefunded
         ? 'refunded'
         : input.refundedAmount > 0 && payment.status !== 'refunded'
@@ -444,10 +475,28 @@ export class ReceivePaymentHandler {
       const holdsTheOrder = refunded !== null;
 
       await tx.flush();
-      return { payment, changed, holdsTheOrder };
+      return { payment, changed, holdsTheOrder, refused: null as string | null };
     });
 
     if (!result) return null;
+
+    if (result.refused !== null) {
+      this.log.warn(
+        {
+          paymentId: result.payment.id,
+          orderId: result.payment.orderId,
+          externalReference: result.payment.externalReference ?? null,
+          reportedRefundedAmount: result.refused,
+          recordedRefundedAmount: result.payment.refundedAmount,
+          currency: input.currency,
+          fullyRefunded: input.fullyRefunded,
+          externalRefundId: input.externalRefundId ?? null,
+        },
+        'payments: the gateway reported a refund amount with more than two decimal places; it was not ' +
+          'recorded, and the payment is marked for manual attention (providerDetails.refundAnomaly)',
+      );
+      return { paymentId: result.payment.id, changed: false };
+    }
 
     /**
      * The hold goes through the lifecycle too, after the commit, for the same

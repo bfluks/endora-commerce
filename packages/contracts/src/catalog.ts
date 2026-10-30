@@ -10,6 +10,10 @@ import {
 import type { FulfilmentStrategy } from './inventory.js';
 import type { BulkImportReport } from './import-export.js';
 import type { AttributeScope } from './product-value-resolver.js';
+import { ORDER_MINIMUM_MAX } from './order-minimums.js';
+import { productPagePathsSchema } from './product-url-keys.js';
+import type { ScopeLevel } from './product-scope-model.js';
+import type { ProductScopedWriteCell } from './product-scopes.js';
 
 /**
  * Catalog module contracts — Source of truth per Principle V.
@@ -34,29 +38,22 @@ export const productTypeSchema = z.enum([
 ]);
 export type ProductType = z.infer<typeof productTypeSchema>;
 
-export const productStatusSchema = z.enum(['draft', 'active', 'inactive']);
+/**
+ * Feature 163, spec Session 2026-10-25 (FR-010, FR-112) — `active` | `inactive` at
+ * every scope; `inactive` is plain off. `draft` is gone and the legacy `archived`
+ * write alias is refused: archiving is the separate Archive / Restore action
+ * (`archivedAt`), never a status.
+ */
+export const productStatusSchema = z.enum(['active', 'inactive']);
 export type ProductStatus = z.infer<typeof productStatusSchema>;
 
 /**
  * The most products one admin selection may carry: the cap of the admin product
  * browser (a session refuses to select a 201st row) and the `.max()` of every
- * request that submits such a selection in one call, e.g.
- * `bulkAddPriceListProductsRequestSchema`. One home for the number, so the
+ * request that submits such a selection in one call. One home for the number, so the
  * screen and the endpoint cannot disagree about it.
  */
 export const ADMIN_PRODUCT_SELECTION_MAX = 200;
-
-/** Maps legacy `archived` writes to `inactive` (feature 032). */
-export function coerceProductStatusWrite(
-  value: unknown,
-): 'draft' | 'active' | 'inactive' | unknown {
-  return value === 'archived' ? 'inactive' : value;
-}
-
-export const productStatusWriteSchema = z.preprocess(
-  coerceProductStatusWrite,
-  productStatusSchema,
-);
 
 export const stockModeSchema = z.enum(['categorical', 'numeric']);
 export type StockMode = z.infer<typeof stockModeSchema>;
@@ -223,15 +220,71 @@ export type ProductPriceTier = z.infer<typeof productPriceTierSchema>;
 
 // --- Product summary (list response) ----------------------------------------
 
+/**
+ * D-287 P0 — the price a storefront surface renders, from the **same**
+ * resolution that produced `ProductSummary.price`: the regular (base) price,
+ * the sale price when a sale list priced the product, and the display mode.
+ *
+ * The product page used to fetch this separately from
+ * `GET /api/v1/storefront/products/:id/resolved-price` after the catalogue had
+ * already priced the product for `price`, so every product page resolved its
+ * product twice, and the home page's cards fanned out one such request per card
+ * (`specs/pricing/read-paths-and-performance.md` §2.1). Carrying it here makes
+ * a catalogue read the one resolution those surfaces need.
+ *
+ * `basePrice` is the base partition's figure, else the Product's own price
+ * when that is what `price` came from; `salePrice` is set only when a sale list
+ * priced the product (it is then also `price`). Both are `null` when nothing
+ * prices the product; `displayMode` is still the viewer's, so a page can tell
+ * "sold on request only" (`none`) from "no price".
+ *
+ * Issue #491 — under `displayMode: 'none'` the server sends **no amount**:
+ * `basePrice` and `salePrice` are `null`, `listPrice` is absent, and so are
+ * `ProductSummary.price`, `compareAtPrice` and `priceVariesByVariant` beside it,
+ * whatever the price books would charge. The storefront renders "price on
+ * request" from `displayMode`; there is no figure to hide. The display-mode values are
+ * `displayModeSchema`'s (`price-lists.ts`, which imports this file and checks
+ * the two agree at compile time).
+ */
+export const productResolvedPriceSchema = z.object({
+  basePrice: z.object({ amount: z.string(), currency: z.string().length(3) }).nullable(),
+  salePrice: z.object({ amount: z.string(), currency: z.string().length(3) }).nullable(),
+  displayMode: z.enum(['gross_only', 'net_only', 'both', 'none']),
+  /**
+   * Feature 161 (G14) — the catalogue price to show beside a lower buyer price
+   * ("list price / your price"). Present only while `pricing.show_list_price`
+   * is on and the channel's everyone price is above the price charged; the
+   * decision is the pricing engine's (`ListingPriceDetail.listPrice`, G9).
+   */
+  listPrice: z.object({ amount: z.string(), currency: z.string().length(3) }).optional(),
+});
+export type ProductResolvedPrice = z.infer<typeof productResolvedPriceSchema>;
+
 export const productSummarySchema = z.object({
   id: uuidSchema,
   sku: z.string().min(1).max(255),
   type: productTypeSchema,
   name: z.string(),
   slug: z.string(),
+  /**
+   * Feature 163 (R-16) — the description as plain text in the request
+   * language, at most 160 characters, cut at a word boundary; `null` without
+   * a description. Optional so every producer written before it still compiles.
+   */
+  summary: z.string().max(160).nullable().optional(),
   categorySlugs: z.array(z.string()),
   primaryAssetUrl: z.string().url().nullable(),
   price: moneySchema.nullable(),
+  /**
+   * Feature 160 (FR-025) — the buyer's own price, struck through, when `price`
+   * is a charged sale. Absent otherwise.
+   */
+  compareAtPrice: moneySchema.nullable().optional(),
+  /**
+   * Feature 160 (FR-024) — the product's variants resolve to different prices
+   * for this viewer, and `price` is the lowest ("from").
+   */
+  priceVariesByVariant: z.boolean().optional(),
   stockIndicator: stockIndicatorSchema.nullable(),
   stockLevel: z.number().int().nullable(),
   /**
@@ -245,6 +298,19 @@ export const productSummarySchema = z.object({
    * indication (band + in-stock flag), present for bound and unbound keys.
    */
   availability: productAvailabilitySchema.optional(),
+  /**
+   * Feature 155 — the product's pieces minimum; `null` = none. Emitted only for
+   * `simple` / `configurable` products (else `null`). Optional so every producer
+   * written before it still compiles.
+   */
+  minOrderQuantity: z.number().int().positive().nullable().optional(),
+  /**
+   * D-287 P0 — base + sale + display mode from the resolution behind `price`
+   * ({@link productResolvedPriceSchema}). `null` where the channel withholds
+   * prices; absent from producers that do not resolve one (optional so every
+   * producer written before it still compiles).
+   */
+  resolvedPrice: productResolvedPriceSchema.nullable().optional(),
 });
 export type ProductSummary = z.infer<typeof productSummarySchema>;
 
@@ -254,7 +320,6 @@ export const productVariantSchema = z.object({
   id: uuidSchema,
   sku: z.string().min(1).max(255),
   variantAttributeValues: z.record(z.string(), z.unknown()),
-  priceOverride: z.number().finite().nullable(),
   stockLevel: z.number().int().nullable(),
 });
 export type ProductVariant = z.infer<typeof productVariantSchema>;
@@ -304,6 +369,11 @@ export const productDetailSchema = productSummarySchema.extend({
     }),
   ),
   seo: seoMetaSchema,
+  /**
+   * Feature 163 (FR-074) — the page's canonical and its alternate-language paths,
+   * built by catalog with `productPath()` (`contracts/url-keys-and-redirects.md` §6).
+   */
+  paths: productPagePathsSchema,
   structuredDataJsonLd: z.record(z.string(), z.unknown()),
   /**
    * Feature 002 — the AttributeSet wired to this Product. Optional so
@@ -335,6 +405,12 @@ export const productDetailSchema = productSummarySchema.extend({
           kind: z.string(),
           url: z.string(),
         }),
+        /**
+         * Feature 163 (FR-077) — the image's alt text at the request's scope language:
+         * the product's own, else the asset's; `null` = none. Optional so other
+         * builders of the DTO keep compiling; `catalog` always emits it.
+         */
+        altText: z.string().nullable().optional(),
       }),
     )
     .optional(),
@@ -467,6 +543,8 @@ export const productDetailSchema = productSummarySchema.extend({
         baseQuantity: z.number().int().positive(),
         position: z.number().int().nonnegative(),
         isDefault: z.boolean(),
+        /** Feature 155 — minimum units of this unit per order of the product; `null` = none. */
+        minOrderUnits: z.number().int().positive().nullable().optional(),
       }),
     )
     .optional(),
@@ -587,23 +665,32 @@ export type FilterDefinition = z.infer<typeof filterDefinitionSchema>;
 
 // --- Admin write-surface requests -------------------------------------------
 
+/** Feature 168 (R21) — the longest product name at any scope. */
+export const PRODUCT_NAME_MAX = 255;
+/** Feature 168 (R21) — the longest product description at any scope. */
+export const PRODUCT_DESCRIPTION_MAX = 20_000;
+
 // Base shape (no cross-field refine) so updateProductRequestSchema can
 // `.partial()` it. The cross-field rule for virtual download fields is
 // applied as a separate refine on the create variant below.
 const baseProductRequestObject = z.object({
   sku: z.string().min(1).max(255),
   type: productTypeSchema,
-  name: multilingualStringSchema,
-  description: multilingualStringSchema,
+  /**
+   * Feature 168 (FR-014) — the Global name, one string. Channel and Channel × language
+   * values are written through `PUT …/products/:id/scoped-values`.
+   */
+  name: z.string().min(1).max(PRODUCT_NAME_MAX),
+  /** Feature 168 (FR-014) — the Global description; `null` = none. */
+  description: z.string().max(PRODUCT_DESCRIPTION_MAX).nullable(),
   categoryIds: z.array(uuidSchema),
   attributeValues: z.record(z.string(), z.unknown()),
   stockMode: stockModeSchema.optional(),
   visibility: productVisibilitySchema,
   // Feature 022 — accepted by the single-product PATCH and the bulk
-  // update endpoint. Cross-field rule on `archivedAt` is enforced in
-  // the service layer (CatalogAdminService.updateProduct).
-  // Feature 032 — `archived` write alias → `inactive`.
-  status: productStatusWriteSchema.optional(),
+  // update endpoint. Feature 163 — a status write never touches
+  // `archivedAt` (FR-010); `draft` / `archived` are refused (FR-112).
+  status: productStatusSchema.optional(),
   allowedOrganizationIds: z.array(uuidSchema).optional(),
   assetIds: z.array(uuidSchema).optional(),
   initialStock: z.number().int().nonnegative().optional(),
@@ -646,6 +733,13 @@ const baseProductRequestObject = z.object({
     .nullable()
     .optional(),
   fulfilmentStrategyWarehouseOrder: z.array(uuidSchema).nullable().optional(),
+  /**
+   * Feature 155 — pieces minimum; `null` clears. Simple / configurable only (else
+   * 422 VALIDATION_FAILED, `details.field`, from the service).
+   */
+  minOrderQuantity: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
+  /** Feature 155 — may `return`-kind cases include this product? Every type. */
+  returnable: z.boolean().optional(),
 });
 
 export const createProductRequestSchema = baseProductRequestObject.refine(
@@ -670,7 +764,21 @@ export type CreateProductRequest = z.infer<typeof createProductRequestSchema>;
 // frozen at snapshot time.
 export const updateProductRequestSchema = baseProductRequestObject
   .partial()
-  .omit({ type: true });
+  .omit({ type: true })
+  .extend({
+    /**
+     * Feature 163 (FR-023) — the global publication window, inclusive at both
+     * ends; `null` opens that side. A start not before the end is refused by the
+     * service (`422 VALIDATION_FAILED`, `details.field = 'window'`).
+     */
+    publishFrom: isoDateTimeSchema.nullable().optional(),
+    publishUntil: isoDateTimeSchema.nullable().optional(),
+    /**
+     * Feature 168 (R7) — optional precondition: the `products.scope_version` the caller read
+     * (`GET …/scoped-values`, opaque). When sent and stale → `409 VERSION_CONFLICT`.
+     */
+    version: z.string().regex(/^\d{1,19}$/).optional(),
+  });
 export type UpdateProductRequest = z.infer<typeof updateProductRequestSchema>;
 
 // Admin batch-by-id lookup. The body carries the id set (deduped server-
@@ -690,11 +798,22 @@ export type BatchByIdProductsRequest = z.infer<typeof batchByIdProductsRequestSc
 
 export const MAX_RESOLVE_SELECTION_SIZE = 10_000;
 
+/**
+ * Feature 163 (FR-113, research R30.4) — which archived products a list or a
+ * selection shows, independently of the status: `exclude` hides them, `include`
+ * shows them beside the rest, `only` shows nothing else.
+ */
+export const productArchivedModeSchema = z.enum(['exclude', 'include', 'only']);
+export type ProductArchivedMode = z.infer<typeof productArchivedModeSchema>;
+
 export const resolveProductIdsRequestSchema = z.object({
   status: productStatusSchema.optional(),
   type: productTypeSchema.optional(),
   q: z.string().trim().min(1).optional(),
+  /** Legacy: `true` means `archived: 'include'`. `archived` wins when both are sent. */
   includeArchived: z.boolean().optional(),
+  /** Feature 163 (R30.4) — absent: `includeArchived`, else `include`, as before. */
+  archived: productArchivedModeSchema.optional(),
 });
 export type ResolveProductIdsRequest = z.infer<typeof resolveProductIdsRequestSchema>;
 
@@ -716,7 +835,7 @@ const bulkEditModeSchema = z.enum(['add', 'replace']);
 const bulkEditCategoryModeSchema = z.enum(['add', 'replace', 'remove']);
 
 const bulkUpdateFieldsObject = z.object({
-  status: productStatusWriteSchema.optional(),
+  status: productStatusSchema.optional(),
   visibility: productVisibilitySchema.optional(),
   salesChannels: z
     .object({
@@ -734,6 +853,25 @@ const bulkUpdateFieldsObject = z.object({
   // selected product.
   attributeSetId: uuidSchema.nullable().optional(),
   attributeValues: z.record(z.string(), z.unknown()).optional(),
+  /** Feature 155 — set (or unset) the returnable flag on every selected product. */
+  returnable: z.boolean().optional(),
+  /**
+   * Feature 163 (FR-050) — the status at one channel (`languageCode: null`) or one
+   * channel × language; `inherit` removes the override. Never combined with `status`.
+   */
+  scopedStatus: z
+    .object({
+      channelId: uuidSchema,
+      languageCode: z.string().min(1).max(16).nullable(),
+      value: z.enum([...productStatusSchema.options, 'inherit']),
+    })
+    .optional(),
+  /**
+   * Feature 163 (FR-053, research R30.3) — Archive (`true`) or Restore (`false`)
+   * every selected product, through the single-product Commands. Alone in its
+   * request: one meaning per bulk action.
+   */
+  archived: z.boolean().optional(),
 });
 
 export const bulkUpdateProductsRequestSchema = z.object({
@@ -751,8 +889,19 @@ export const bulkUpdateProductsRequestSchema = z.object({
       f.salesChannels !== undefined ||
       f.categories !== undefined ||
       f.attributeSetId !== undefined ||
+      f.returnable !== undefined ||
+      f.scopedStatus !== undefined ||
+      f.archived !== undefined ||
       (f.attributeValues !== undefined && Object.keys(f.attributeValues).length > 0),
     { message: 'at least one field must be present' },
+  ).refine((f) => f.scopedStatus === undefined || f.status === undefined, {
+    message: 'scopedStatus cannot be combined with status',
+    path: ['scopedStatus'],
+  }).refine(
+    (f) =>
+      f.archived === undefined ||
+      Object.entries(f).every(([key, value]) => key === 'archived' || value === undefined),
+    { message: 'archived cannot be combined with any other field', path: ['archived'] },
   ),
 });
 export type BulkUpdateProductsRequest = z.infer<typeof bulkUpdateProductsRequestSchema>;
@@ -767,6 +916,10 @@ export const bulkUpdateProductResultSchema = z.object({
       'permission_denied',
       'concurrent_modification',
       'product_not_found',
+      // Feature 163 — a scope the product cannot hold (FR-051), and the
+      // completeness gate in `refuse` mode (FR-061).
+      'scope_invalid',
+      'completeness_gate',
     ])
     .optional(),
   details: z
@@ -894,10 +1047,33 @@ export type BulkOperationsListResponse = z.infer<typeof bulkOperationsListRespon
 export const bulkOperationResponseSchema = z.object({ data: bulkOperationSchema });
 export type BulkOperationResponse = z.infer<typeof bulkOperationResponseSchema>;
 
+/**
+ * A variant's price is a row of a price book (feature 160, D-287 §5.8), not a
+ * field of the variant: a `priceOverride` in the body is refused with
+ * `400 PRICE_SET_IN_PRICE_BOOKS` by the route, before this schema strips it
+ * (FR-043; {@link PRICE_FIELDS_REFUSED_ON_VARIANTS}).
+ */
+/**
+ * A variant as the admin reads it (`serializeAdminVariant`) — the answer of
+ * `GET /api/v1/admin/catalog/products/:productId/variants` (feature 161):
+ * every variant of the product, whatever its channels, status or audience.
+ */
+export const adminProductVariantSchema = z.object({
+  id: z.string().uuid(),
+  parentProductId: z.string().uuid(),
+  sku: z.string(),
+  variantAttributeValues: z.record(z.string(), z.unknown()),
+  stockLevel: z.number().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type AdminProductVariant = z.infer<typeof adminProductVariantSchema>;
+export const adminProductVariantsResponseSchema = z.object({ data: z.array(adminProductVariantSchema) });
+export type AdminProductVariantsResponse = z.infer<typeof adminProductVariantsResponseSchema>;
+
 export const createVariantRequestSchema = z.object({
   sku: z.string().min(1).max(255),
   variantAttributeValues: z.record(z.string(), z.unknown()),
-  priceOverride: z.number().finite().optional(),
   stockLevel: z.number().int().nonnegative().optional(),
 });
 export type CreateVariantRequest = z.infer<typeof createVariantRequestSchema>;
@@ -906,6 +1082,15 @@ export const updateVariantRequestSchema = createVariantRequestSchema
   .partial()
   .omit({ sku: true });
 export type UpdateVariantRequest = z.infer<typeof updateVariantRequestSchema>;
+
+/**
+ * Feature 160 (FR-043) — the old price fields a product or variant write
+ * refuses with `400 PRICE_SET_IN_PRICE_BOOKS`: prices are set in price books.
+ * On a product they are keys of `attributeValues` (the old *default price*) or,
+ * from an old client, of the body itself; on a variant, the old price override.
+ */
+export const PRICE_FIELDS_REFUSED_ON_PRODUCTS = ['defaultPrice', 'price'] as const;
+export const PRICE_FIELDS_REFUSED_ON_VARIANTS = ['priceOverride', 'defaultPrice', 'price'] as const;
 
 /**
  * Slider-numeric-kind discriminant (feature 002 T013/T021/T022). The API
@@ -975,20 +1160,11 @@ const baseCreateAttributeObject = z.object({
   /** Feature 012 — gates inclusion in the storefront PDP "Parametry produktu" tab. */
   isVisibleOnProductPage: z.boolean().optional(),
   /**
-   * Feature 023 — when `true` the attribute may carry per-Sales-Channel
-   * overrides. Default `false` (global-only). Independent of
-   * `languageScoped`; the two flags compose into one of four effective
-   * scopes (`global` / `language` / `channel` / `channel+language`).
+   * Feature 168 (FR-012, R15) — the attribute may carry Channel overrides and, for a text
+   * (`string`) attribute, Channel × language overrides. Default `false` (Global only). The
+   * Global value is always one value, never a language map.
    */
-  channelScoped: z.boolean().optional(),
-  /**
-   * Feature 023 — when `true` the attribute's value is keyed by
-   * language at every slot. For user-defined attributes the baseline
-   * is stored as `Record<lang, value>` in `products.attribute_values`;
-   * for the system Name / Description attributes this flag is pinned
-   * `true` by SYSTEM_ATTRIBUTE_SCOPES.
-   */
-  languageScoped: z.boolean().optional(),
+  scopable: z.boolean().optional(),
   /**
    * Feature 022 (products bulk edit) — makes the attribute available in
    * the Products Bulk Edit dialog's attribute field list. Default false;
@@ -1067,10 +1243,8 @@ export const updateAttributeRequestSchema = z
     filterPosition: z.number().int().min(0).max(10000).optional(),
     /** Feature 012 — gates inclusion in the storefront PDP "Parametry produktu" tab. */
     isVisibleOnProductPage: z.boolean().optional(),
-    /** Feature 023 — see `baseCreateAttributeObject.channelScoped`. */
-    channelScoped: z.boolean().optional(),
-    /** Feature 023 — see `baseCreateAttributeObject.languageScoped`. */
-    languageScoped: z.boolean().optional(),
+    /** Feature 168 — see `baseCreateAttributeObject.scopable`. */
+    scopable: z.boolean().optional(),
     /** Feature 022 (products bulk edit) — toggles bulk-editability. */
     massEditable: z.boolean().optional(),
     /** Feature 039 — values participate in Quick Order search. */
@@ -1101,8 +1275,8 @@ export const adminAttributeResponseSchema = z.object({
   labelDefault: z.string(),
   /** API-form type (feature 002) — emitted alongside the legacy `valueType`. */
   type: apiAttributeTypeSchema,
-  /** Present only when `type === 'slider'`. */
-  numericKind: numericKindSchema.optional(),
+  /** A kind only when `type === 'slider'`; `null` (or absent) otherwise. */
+  numericKind: numericKindSchema.nullable().optional(),
   valueType: attributeValueTypeSchema,
   /** Legacy projection of the option values; `null` when not fetched or absent. */
   enumValues: z.array(z.string()).nullable(),
@@ -1120,6 +1294,13 @@ export const adminAttributeResponseSchema = z.object({
   quickSearchable: z.boolean(),
   /** Feature 061 (additive) — id of the backing product-host Custom Field definition. */
   customFieldDefinitionId: uuidSchema,
+  /**
+   * Feature 168 (R15) — the scope flag and the levels it derives with the value type
+   * (`attributeScopeSet`). Optional so other builders of the DTO keep compiling; `catalog`
+   * always emits both.
+   */
+  scopable: z.boolean().optional(),
+  scopeLevels: z.array(z.enum(['G', 'C', 'CL'])).optional(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
 });
@@ -1327,8 +1508,8 @@ export type ProductListQuery = z.infer<typeof productListQuerySchema>;
  *
  * It rides on the listing response because the storefront has to decide whether
  * to *render* the price controls, and the answer depends on the viewer and the
- * channel: a non-public channel publishes no prices, and
- * `pricing.unauthenticated_display_mode = none` hides them until login. A
+ * channel: `pricing.unauthenticated_display_mode = none` hides prices until
+ * login, on one channel or on all of them. A
  * storefront that guessed would guess wrong on exactly the deployments that
  * care, and a control that offers an ordering the API refuses is a worse defect
  * than no control.
@@ -1384,12 +1565,9 @@ export const attributeSetAssignedAttributeSchema = z.object({
   label: multilingualStringSchema,
   valueType: attributeValueTypeSchema,
   position: z.number().int().nonnegative(),
-  /**
-   * Feature 023 — the attribute's value is keyed by language, so the product
-   * editor renders it (and anything scoped to it, such as feature 068's
-   * overwrite protection) per language rather than once for the attribute.
-   */
-  languageScoped: z.boolean(),
+  /** Feature 168 (R15) — the attribute's scope flag and the levels it derives. */
+  scopable: z.boolean(),
+  scopeLevels: z.array(z.enum(['G', 'C', 'CL'])),
 });
 export type AttributeSetAssignedAttribute = z.infer<typeof attributeSetAssignedAttributeSchema>;
 
@@ -1436,12 +1614,23 @@ export type AssignAttributesRequest = z.infer<typeof assignAttributesRequestSche
 export const galleryLabelSchema = z.enum(['base_image', 'small_image', 'thumbnail']);
 export type GalleryLabel = z.infer<typeof galleryLabelSchema>;
 
+/** Feature 163 / 168 — the longest alt text of one image at one scope. */
+export const GALLERY_ALT_TEXT_MAX = 255;
+
 export const galleryItemSchema = z.object({
   id: uuidSchema,
   productId: uuidSchema,
   assetId: uuidSchema,
   position: z.number().int().nonnegative(),
   labels: z.array(galleryLabelSchema),
+  /**
+   * Feature 168 (data-model §6) — the Global alt text (`null` = none: the asset's own alt text
+   * is the derived fallback) and the Global hidden flag. Read-only here: every scope of both is
+   * written through `PUT …/products/:id/scoped-values`. Optional so other builders of the DTO
+   * keep compiling; `catalog` always emits both.
+   */
+  altText: z.string().nullable().optional(),
+  hidden: z.boolean().optional(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
 });
@@ -1463,6 +1652,12 @@ export const updateGalleryItemRequestSchema = z
   })
   .strict();
 export type UpdateGalleryItemRequest = z.infer<typeof updateGalleryItemRequestSchema>;
+
+/*
+ * Feature 168 (`contracts/scoped-values-api.md` §6) — 163's `GET` / `PUT …/gallery/channel-roles`
+ * are retired: a gallery role at G, C or C×L is the scoped field `galleryRole:<label>`, written
+ * through `PUT …/products/:id/scoped-values` (`null` = no image holds the role at the scope).
+ */
 
 export const reorderGalleryRequestSchema = z
   .object({
@@ -1515,6 +1710,12 @@ export const updateAttachmentTypeRequestSchema = z
   .strict();
 export type UpdateAttachmentTypeRequest = z.infer<typeof updateAttachmentTypeRequestSchema>;
 
+/** Feature 163 / 168 — the longest attachment description at a Channel or Channel × language scope. */
+export const ATTACHMENT_DESCRIPTION_TRANSLATION_MAX = 4000;
+
+/** Feature 163 / 168 — an attachment name at any scope, as long as the Global one. */
+export const ATTACHMENT_NAME_MAX = 160;
+
 export const productAttachmentSchema = z.object({
   id: uuidSchema,
   productId: uuidSchema,
@@ -1523,6 +1724,12 @@ export const productAttachmentSchema = z.object({
   name: z.string().min(1).max(160),
   description: z.string().nullable(),
   position: z.number().int().nonnegative(),
+  /**
+   * Feature 168 (data-model §7) — hidden at Global. Channel and Channel × language values of the
+   * name, description and hidden flag are written through `PUT …/products/:id/scoped-values`.
+   * Optional so other builders of the DTO keep compiling; `catalog` always emits it.
+   */
+  hidden: z.boolean().optional(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
 });
@@ -1551,6 +1758,9 @@ export type UpdateAttachmentRequest = z.infer<typeof updateAttachmentRequestSche
 
 // --- Packaging Units (Feature 043) ------------------------------------------
 
+/** The longest packaging-unit name at any scope. */
+export const PACKAGING_UNIT_NAME_MAX = 160;
+
 /**
  * A named ordering unit attached to a product (e.g. "Paleta" = 480 pieces).
  * Managed in the Inventory section of the admin product card; surfaced on the
@@ -1559,10 +1769,16 @@ export type UpdateAttachmentRequest = z.infer<typeof updateAttachmentRequestSche
 export const packagingUnitSchema = z.object({
   id: uuidSchema,
   productId: uuidSchema,
+  /** The Global name; Channel and Channel × language names go through `…/scoped-values` (feature 168). */
   name: z.string().min(1).max(160),
   baseQuantity: z.number().int().positive(),
   position: z.number().int().nonnegative(),
   isDefault: z.boolean(),
+  /**
+   * Feature 155 — minimum units of this unit per order of the product; `null` = none.
+   * Always emitted by `catalog`; optional so other builders of the DTO keep compiling.
+   */
+  minOrderUnits: z.number().int().positive().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -1574,6 +1790,8 @@ export const createPackagingUnitRequestSchema = z
     baseQuantity: z.number().int().positive(),
     isDefault: z.boolean().optional(),
     position: z.number().int().nonnegative().optional(),
+    /** Feature 155 — minimum number of this unit per order of the product; `null` clears. */
+    minOrderUnits: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
   })
   .strict();
 export type CreatePackagingUnitRequest = z.infer<typeof createPackagingUnitRequestSchema>;
@@ -1584,6 +1802,8 @@ export const updatePackagingUnitRequestSchema = z
     baseQuantity: z.number().int().positive().optional(),
     isDefault: z.boolean().optional(),
     position: z.number().int().nonnegative().optional(),
+    /** Feature 155 — minimum number of this unit per order of the product; `null` clears. */
+    minOrderUnits: z.number().int().min(1).max(ORDER_MINIMUM_MAX).nullable().optional(),
   })
   .strict();
 export type UpdatePackagingUnitRequest = z.infer<typeof updatePackagingUnitRequestSchema>;
@@ -1814,9 +2034,13 @@ export interface CatalogProductRecord {
   slug: string;
   type: ProductType;
   status: ProductStatus;
-  /** Per-locale JSONB. Resolve with the caller's language chain. */
-  name: Record<string, string>;
-  description: Record<string, string>;
+  /**
+   * Feature 168 (FR-014, FR-031) — the Global name and description, one string each. A reader
+   * with a channel resolves the effective texts at (C, L) through
+   * `catalogProductAvailabilityPort.effectiveTexts`; one without a channel shows these.
+   */
+  name: string;
+  description: string | null;
   /** Per-product override of the global stock mode; `null` ⇒ inherit. */
   stockMode: StockMode | null;
   visibility: ProductVisibility;
@@ -1836,6 +2060,17 @@ export interface CatalogProductRecord {
   lowStockThresholdMode: 'cumulative' | 'per_warehouse';
   fulfilmentStrategy: FulfilmentStrategy | null;
   fulfilmentStrategyWarehouseOrder: string[] | null;
+  /** Feature 155 — pieces minimum; `null` = none. Stored for any type, applied to simple/configurable only. */
+  minOrderQuantity: number | null;
+  /** Feature 155 — the product's current flag; order lines record their own copy at placement. */
+  returnable: boolean;
+  /**
+   * Feature 163 — the global publication window, inclusive at both ends; `null` =
+   * open on that side. Optional for good, so a record literal built without it keeps
+   * compiling; the channel-effective window comes from `catalogProductAvailabilityPort`.
+   */
+  publishFrom?: Date | null;
+  publishUntil?: Date | null;
 }
 
 /**
@@ -1860,6 +2095,15 @@ export interface ProductAudience {
   readonly organizationId: string | null;
   /** `true` for any caller the platform has identified; `false` for the public. */
   readonly authenticated: boolean;
+  /**
+   * D-287 P0 — the signed-in customer account, when the caller is one. **Not a
+   * visibility input**: `isProductVisibleTo` never reads it. It travels with
+   * the audience because the audience is the one sanctioned answer to "who is
+   * asking", and the price beside a product depends on the customer's own
+   * customer group, which overrides the organisation's (feature 040 R6). Absent
+   * for every other caller.
+   */
+  readonly customerAccountId?: string | null;
 }
 
 /**
@@ -2061,8 +2305,6 @@ export interface CatalogProductVariantRecord {
   parentProductId: string;
   sku: string;
   variantAttributeValues: Record<string, unknown>;
-  /** Decimal string, or `null` when the variant inherits the parent's price. */
-  priceOverride: string | null;
   stockLevel: number | null;
   createdAt: Date;
   updatedAt: Date;
@@ -2078,6 +2320,8 @@ export interface CatalogPackagingUnitRecord {
   isDefault: boolean;
   createdAt: Date;
   updatedAt: Date;
+  /** Feature 155 — minimum units of this packaging unit per order of the product; `null` = none. */
+  minOrderUnits: number | null;
 }
 
 /** A directed product↔product relation (cross-sell, up-sell, related). */
@@ -2087,6 +2331,21 @@ export interface CatalogProductLinkRow {
   targetProductId: string;
   kind: ProductLinkKind;
   position: number;
+}
+
+/**
+ * A product as pricing resolves it ({@link CatalogProductReadPort.listPricingRefs}):
+ * the id, and the attribute values an attribute row of a price book matches.
+ */
+export interface CatalogProductPricingRef {
+  id: string;
+  attributeValues: Record<string, unknown>;
+}
+
+/** {@link CatalogProductReadPort.listValueOverridesByProductIds}' narrowing. */
+export interface CatalogValueOverrideLookupOptions {
+  /** One sales channel's rows only; absent, every channel's. */
+  channelId?: string;
 }
 
 /** A per-channel / per-language override of one attribute value (feature 022). */
@@ -2150,6 +2409,16 @@ export interface CatalogProductReadPort {
   countByIds(ids: readonly string[]): Promise<number>;
   /** Every product, ordered by sku — the bulk export and the price-list backfill. */
   listAll(options?: CatalogProductLookupOptions): Promise<CatalogProductRecord[]>;
+  /**
+   * Every product as pricing resolves it — its id and its own attribute values
+   * — ordered by id: the products `listAll()` answers (soft-deleted and inactive
+   * included), without building a record of each. The price surface's worker
+   * reads it at the start of every whole build of a profile that may price any
+   * product (issue #416), so it is one statement and no hydration.
+   */
+  listPricingRefs(): Promise<CatalogProductPricingRef[]>;
+  /** {@link listPricingRefs} for the given ids: the ones that exist, as `findByIds(ids)` answers them. */
+  findPricingRefsByIds(ids: readonly string[]): Promise<CatalogProductPricingRef[]>;
 
   /** Variants of the given parent products, ordered by sku. */
   listVariantsByProductIds(productIds: readonly string[]): Promise<CatalogProductVariantRecord[]>;
@@ -2165,6 +2434,18 @@ export interface CatalogProductReadPort {
     productId: string,
     packagingUnitId: string,
   ): Promise<CatalogPackagingUnitRecord | null>;
+  /**
+   * Feature 155 — the packaging units of the given products, ordered by product id, then
+   * `position`, then `name`. The batch twin of `listVariantsByProductIds`. Unknown ids contribute
+   * nothing.
+   *
+   * **No policy, like every method of this port: it answers for any id.** Callers MUST pass only
+   * product ids they have already vetted — resolved through the buyer-visibility and channel checks
+   * (`isProductVisibleTo`, the request-channel filter) or taken from a document the caller owns on the
+   * buyer's behalf (their basket, quote request or order). Passing an id straight from a request body
+   * turns this method into a catalogue enumeration oracle.
+   */
+  listPackagingUnitsByProductIds(productIds: readonly string[]): Promise<CatalogPackagingUnitRecord[]>;
 
   /** Links out of the given products, optionally narrowed to one kind. */
   listLinksBySourceIds(
@@ -2172,9 +2453,14 @@ export interface CatalogProductReadPort {
     kind?: ProductLinkKind,
   ): Promise<CatalogProductLinkRow[]>;
 
-  /** Attribute-value overrides for the given products. */
+  /**
+   * Attribute-value overrides for the given products — every channel's, or
+   * only `options.channelId`'s rows when it is given (issue #384: a storefront
+   * read shows one sales channel's overrides and reads only those).
+   */
   listValueOverridesByProductIds(
     productIds: readonly string[],
+    options?: CatalogValueOverrideLookupOptions,
   ): Promise<CatalogProductValueOverrideRecord[]>;
 
   /**
@@ -2192,6 +2478,49 @@ export interface CatalogProductReadPort {
    * consulted.
    */
   listProductIdsByAttributeValue(query: CatalogAttributeValueQuery): Promise<string[]>;
+
+  /**
+   * Feature 161 (G15, `specs/161-price-book-editor/research.md` R14) — one page
+   * of the products a caller's **membership seam** names, ordered by the stored
+   * admin name key of the admin language (`en`, `pl`; any other reads `en`),
+   * then SKU, then id, and how many there are. `search` narrows to the products
+   * whose stored search key (folded shown name and SKU) or one of whose
+   * variants' SKU contains it — case- and accent-folded, taken literally. How
+   * `price_lists` pages a price book's product lines by label without either
+   * module naming the other's table.
+   *
+   * The seam is embedded as `(p.id in (<sql>)) is true`: a hashed probe while
+   * this module walks its own order index. It must select one uuid column.
+   * **Structural**: soft-deleted and inactive products answer like any other.
+   * One statement without a search (two with one: a count, then the page — by
+   * the trigram hits when they are few, by the ordered walk when many).
+   * `withTotal: false` skips the count of an unsearched page (`total` is then
+   * `null`) for a caller that counts its membership itself.
+   */
+  pageProductsByAdminName(query: CatalogAdminNamePageQuery): Promise<{ ids: string[]; total: number | null }>;
+}
+
+/**
+ * A subquery another module hands the catalogue to name a set of products
+ * (feature 161, G15): `sql` selects one uuid column, `params` bind its `?`.
+ * The precedent is `CustomFieldListFilterPort.condition`; the owner of the
+ * table the subquery reads is the module that wrote it.
+ */
+export interface CatalogProductMembership {
+  readonly sql: string;
+  readonly params: readonly unknown[];
+}
+
+/** {@link CatalogProductReadPort.pageProductsByAdminName}'s query. */
+export interface CatalogAdminNamePageQuery {
+  readonly membership: CatalogProductMembership;
+  readonly search?: string | null;
+  /** A language tag (`pl`, `pl-PL`); its primary subtag picks the key, `en` when it has none. */
+  readonly language: string | null;
+  readonly offset: number;
+  readonly limit: number;
+  /** Default `true`. Without a search, `false` skips the count. */
+  readonly withTotal?: boolean;
 }
 
 /** {@link CatalogProductReadPort.listProductIdsByAttributeValue}'s question. */
@@ -2372,9 +2701,35 @@ export interface ProductImportRow {
   sku: string;
   status?: ProductStatus;
   visibility?: ProductVisibility;
-  /** Per-locale, merged into the stored JSONB rather than replacing it. */
-  name?: Record<string, string>;
-  description?: Record<string, string>;
+  /**
+   * Feature 168 (`contracts/import-profiles-and-csv.md` §2; FR-043, FR-110) — every scoped cell
+   * of the row, Global included, already decoded with `decodeCsvScopedCell` and mapped through
+   * the run's profile. A (field, scope) the file has no column for is untouched; refusals are
+   * per cell (the row's other cells apply).
+   */
+  cells?: ProductScopedWriteCell[];
+}
+
+/** The scoped-status columns a products export carries, and each product's overrides in them. */
+export interface ScopedStatusExport {
+  /** Every channel scope, then its channel × language scopes, in a stable order. */
+  columns: Array<{ channelCode: string; languageCode: string | null }>;
+  /** Product id → column name ({@link scopedStatusColumn}) → the override there. An inherited scope is absent. */
+  values: Record<string, Record<string, ProductStatus>>;
+}
+
+const SCOPED_STATUS_COLUMN = /^status@([^/]+)(?:\/(.+))?$/;
+
+/** The products-file column of a scope: `status@<channel code>` or `status@<channel code>/<language>`. */
+export function scopedStatusColumn(channelCode: string, languageCode: string | null): string {
+  return languageCode === null ? `status@${channelCode}` : `status@${channelCode}/${languageCode}`;
+}
+
+/** The scope a products-file column names, or `null` when it is not a scoped-status column. */
+export function parseScopedStatusColumn(column: string): { channelCode: string; languageCode: string | null } | null {
+  const match = SCOPED_STATUS_COLUMN.exec(column.trim());
+  if (!match) return null;
+  return { channelCode: match[1]!, languageCode: match[2] ?? null };
 }
 
 /**
@@ -2393,6 +2748,8 @@ export interface ProductImportRow {
 export interface CatalogBulkImportPort {
   importCategories(rows: readonly CategoryImportRow[]): Promise<BulkImportReport>;
   importProducts(rows: readonly ProductImportRow[]): Promise<BulkImportReport>;
+  /** Feature 163 (FR-092) — the scoped-status columns of a products export, and their values. */
+  exportScopedStatuses(): Promise<ScopedStatusExport>;
 }
 
 // --- the attribute read model ------------------------------------------------
@@ -2440,8 +2797,9 @@ export interface CatalogAttributeView {
   isPriceRule: boolean;
   filterPosition: number;
   isVisibleOnProductPage: boolean;
-  channelScoped: boolean;
-  languageScoped: boolean;
+  /** Feature 168 (R15) — the scope flag; {@link scopeLevels} is what it derives with the value type. */
+  scopable: boolean;
+  scopeLevels: readonly ScopeLevel[];
   massEditable: boolean;
 
   createdAt: Date;
@@ -2515,14 +2873,24 @@ export interface CatalogQuickSearchParams {
    * See {@link CatalogQuickSearchPort} for what it restricts.
    */
   organizationId: string;
+  /**
+   * Feature 163 — the request's language tag (its first `Accept-Language`
+   * pick). Resolved against the channel's own languages by
+   * `resolveScopeLanguage`; absent means the channel's default language. A
+   * product switched off at (channel, that language) is not a hit.
+   */
+  languageCode?: string | undefined;
 }
 
 export interface CatalogQuickSearchHit {
   productId: string;
   sku: string;
   slug: string;
-  /** Per-locale JSONB as stored — the caller picks its own language. */
-  name: Record<string, string>;
+  /**
+   * Feature 168 (`contracts/readers.md` §2) — the name effective at the search's (channel,
+   * language) along C×L → C → G; the Global name when the search names no channel.
+   */
+  name: string;
   status: ProductStatus;
   matchedOn: CatalogQuickSearchField[];
 }
@@ -2601,8 +2969,8 @@ export interface CatalogQuickSearchPort {
  * — enforced at write time by the override-service validator.
  */
 export const SYSTEM_ATTRIBUTE_SCOPES: Readonly<Record<string, AttributeScope>> = {
-  name: { channelScoped: true, languageScoped: true },
-  description: { channelScoped: true, languageScoped: true },
+  name: { scopable: true },
+  description: { scopable: true },
 };
 
 export type SystemAttributeKey = keyof typeof SYSTEM_ATTRIBUTE_SCOPES;
@@ -2620,20 +2988,14 @@ export function isSystemAttributeKey(key: string): key is SystemAttributeKey {
  */
 export function getAttributeScope(
   attributeKey: string,
-  productAttributeRow?: { channelScoped: boolean; languageScoped: boolean } | null,
+  productAttributeRow?: { scopable: boolean } | null,
 ): AttributeScope {
   if (isSystemAttributeKey(attributeKey)) {
     // Keyed by `SystemAttributeKey`, so the lookup is non-undefined here; TS'
     // index signature still widens under `noUncheckedIndexedAccess`.
     return SYSTEM_ATTRIBUTE_SCOPES[attributeKey]!;
   }
-  if (productAttributeRow) {
-    return {
-      channelScoped: productAttributeRow.channelScoped,
-      languageScoped: productAttributeRow.languageScoped,
-    };
-  }
-  return { channelScoped: false, languageScoped: false };
+  return { scopable: productAttributeRow?.scopable ?? false };
 }
 
 // --- the write surface -------------------------------------------------------
@@ -2923,8 +3285,12 @@ export interface CatalogGalleryPort {
    * because both consumers render them identically (no image) and telling them
    * apart would need exactly the product-existence probe that makes `list`
    * unusable for a batch.
+   *
+   * Feature 163 (FR-076, owner decision MED-1 = A) — `channelId` is the channel the
+   * caller serves (a feed's channel): an item hidden there is left out. `null` names no
+   * channel and answers the global gallery.
    */
-  listForProducts(productIds: readonly string[]): Promise<CatalogGalleryBatchItem[]>;
+  listForProducts(productIds: readonly string[], channelId: string | null): Promise<CatalogGalleryBatchItem[]>;
   /**
    * The `base_image` url of each of a batch of products — `base_image` only,
    * with no fallback to `thumbnail` or to the first item by position.
@@ -2940,8 +3306,13 @@ export interface CatalogGalleryPort {
    * `gallery_items` plus the asset read port it already holds, so a consumer
    * gets the url without joining `assets_library`'s table itself — which is the
    * third of the three reaches this method retires (feature 075 / D-87).
+   *
+   * Feature 163 (FR-076, owner decision MED-1 = A) — the base image **in `channelId`**
+   * (the request's resolved channel): the channel's own holder of the role when it has
+   * one, else the global holder; `null` when that holder is hidden there. `null` names
+   * no channel and answers the global holder.
    */
-  baseImageUrls(productIds: readonly string[]): Promise<Map<string, string | null>>;
+  baseImageUrls(productIds: readonly string[], channelId: string | null): Promise<Map<string, string | null>>;
   create(
     productId: string,
     req: CreateGalleryItemRequest,
@@ -3238,6 +3609,16 @@ export interface CatalogSellableProductQuery {
   afterId?: string | null;
   /** Page size. Defaults to 500, the size the feed pipeline already walks in. */
   limit?: number;
+  /**
+   * Feature 163 — where the products are sold: the feed's sales channel and
+   * its language tag (resolved by `catalog` against the channel's own
+   * languages; absent or unknown = the channel's default). When given, the
+   * floor is **effective availability** there for the anonymous audience, now
+   * (`isProductEffectivelyAvailable`: the scoped status at (channel, language),
+   * the publication window and the channel's audience rule) instead of the
+   * global `status` and audience columns — still not overridable by `filter`.
+   */
+  scope?: { channelId: string; languageTag?: string | null | undefined } | undefined;
 }
 
 /**
@@ -3334,8 +3715,10 @@ export const ProductUpdatedEventV1Schema = z
 export type ProductUpdatedEventV1 = z.infer<typeof ProductUpdatedEventV1Schema>;
 
 /**
- * Payload of `product.archived.v1` — a product's status moved to `inactive`.
- * Emitted beside the `product.updated.v1` of the same write, after it.
+ * Payload of `product.archived.v1` — the product was archived by the Archive action
+ * (feature 163, FR-019; `POST …/products/:id/archive` or bulk `fields.archived`).
+ * Emitted after the `product.updated.v1` `['archivedAt']` of the same action. A
+ * status write never emits it: `inactive` is plain off.
  */
 export const ProductArchivedEventV1Schema = z
   .object({

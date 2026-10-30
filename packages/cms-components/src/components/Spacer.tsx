@@ -6,10 +6,12 @@ import {
   createColorField,
   resolveResponsiveNumber,
   withHideOn,
+  createToggleField,
 } from '@endora-commerce/page-builder-core';
 import { usePreviewBreakpointTier } from '@endora-commerce/page-builder-core/client';
 import type { SpacerProps } from '../schema/component-types.js';
 import { useViewportBreakpointTier } from '../hooks/use-viewport-breakpoint-tier.js';
+import { resolveColorValue } from '../utils/color-value.js';
 
 function SpacerBody({
   props,
@@ -28,7 +30,7 @@ function SpacerBody({
       {props.showDivider ? (
         <hr
           className="cmsc-pb-spacer__divider"
-          style={props.dividerColor ? { borderColor: props.dividerColor } : undefined}
+          style={props.dividerColor ? { borderColor: resolveColorValue(props.dividerColor) } : undefined}
         />
       ) : null}
     </div>
@@ -54,14 +56,7 @@ const spacerConfig: ComponentConfig<SpacerProps> = {
       step: 4,
       metadata: PB_RESPONSIVE_METADATA,
     },
-    showDivider: {
-      type: 'radio',
-      label: 'Show divider line',
-      options: [
-        { label: 'Yes', value: true },
-        { label: 'No', value: false },
-      ],
-    },
+    showDivider: createToggleField({ label: 'Show divider line', defaultValue: false }),
     dividerColor: createColorField({ label: 'Divider color' }),
   },
   defaultProps: {

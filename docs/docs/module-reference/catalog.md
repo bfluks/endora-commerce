@@ -30,6 +30,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | Module | Binding | What it means |
 | --- | --- | --- |
 | `_i18n` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
+| `admin_roles` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `admin_users` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `assets_library` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `audit_logs` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
@@ -48,6 +49,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | `prompt_actions` | no | contributes-to `promptActionToolRegistry` |
 | `search` | no | degrades-without `searchQueryPort` — the storefront product listing is served from PostgreSQL instead of the search index |
 | `search` | no | degrades-without `searchReindexPort` — an attribute’s `searchable` flip rebuilds no search index |
+| `seo` | no | degrades-without `seoProductMetaPort` — product pages show metadata derived from the name and description, and old URL keys answer not-found |
 | `webhooks` | no | contributes-to `webhookEventRegistry` |
 
 ## Permissions
@@ -61,13 +63,19 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | Action | Opens | Permission |
 | --- | --- | --- |
 | `new-product` | `/catalog/products/new` | `catalog:write` |
+| `open-archived-products` | `/catalog/products/archived` | `catalog:read` |
+| `open-attachment-types` | `/catalog/attachment-types` | `catalog:read` |
+| `open-attribute-sets` | `/catalog/attribute-sets` | `catalog:read` |
 | `open-attributes` | `/catalog/attributes` | `catalog:read` |
+| `open-bulk-operations` | `/catalog/bulk-operations` | `catalog:read` |
 | `open-categories` | `/catalog/categories` | `catalog:read` |
 | `open-products` | `/catalog/products` | `catalog:read` |
 
 ## Settings
 
-_None._
+| Code | Name | Type |
+| --- | --- | --- |
+| `catalog.scope_completeness_gate` | Completeness check when switching a product on | `string` |
 
 ## Translations
 

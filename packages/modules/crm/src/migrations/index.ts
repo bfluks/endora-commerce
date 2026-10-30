@@ -15,6 +15,8 @@ import { Migration20261005T215329CrmOpportunityCustomFieldValues } from './20261
 import { Migration20261007T180600CrmOpportunityReferenceAdminUser } from './20261007T180600_crm_opportunity_reference_admin_user.js';
 import { Migration20261008T135701CrmOpportunityEvents } from './20261008T135701_crm_opportunity_events.js';
 import { Migration20261009T163307CrmOpportunityMessageReads } from './20261009T163307_crm_opportunity_message_reads.js';
+import { Migration20261027T020030CrmOpportunityReferenceDocuments } from './20261027T020030_crm_opportunity_reference_documents.js';
+import { Migration20261028T143444CrmOpportunityReferenceKinds } from './20261028T143444_crm_opportunity_reference_kinds.js';
 
 export const migrations = [
   Migration20261005T132439CrmInit,
@@ -22,6 +24,8 @@ export const migrations = [
   Migration20261007T180600CrmOpportunityReferenceAdminUser,
   Migration20261008T135701CrmOpportunityEvents,
   Migration20261009T163307CrmOpportunityMessageReads,
+  Migration20261027T020030CrmOpportunityReferenceDocuments,
+  Migration20261028T143444CrmOpportunityReferenceKinds,
 ];
 
 export {
@@ -30,4 +34,6 @@ export {
   Migration20261007T180600CrmOpportunityReferenceAdminUser,
   Migration20261008T135701CrmOpportunityEvents,
   Migration20261009T163307CrmOpportunityMessageReads,
+  Migration20261027T020030CrmOpportunityReferenceDocuments,
+  Migration20261028T143444CrmOpportunityReferenceKinds,
 };

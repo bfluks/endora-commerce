@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-seo",
-  "version": "0.106.0",
+  "version": "0.108.0",
   "type": "module",
   "sideEffects": false,
   "description": "SEO metadata management for catalog, CMS, and blog surfaces.",
@@ -47,7 +47,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
+    "build": "node ../../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.ui.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run"
@@ -62,6 +62,7 @@
     "fastify": "^5.11.0",
     "lucide-react": "^1",
     "react": "^19",
+    "react-router-dom": "^7",
     "zod": "^4"
   },
   "peerDependenciesMeta": {
@@ -72,6 +73,9 @@
       "optional": true
     },
     "react": {
+      "optional": true
+    },
+    "react-router-dom": {
       "optional": true
     }
   },
@@ -87,6 +91,7 @@
     "fastify": "^5.12.5",
     "lucide-react": "^1.11.0",
     "react": "^19.2.5",
+    "react-router-dom": "^7.18.2",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11",
     "zod": "^4.2.0"

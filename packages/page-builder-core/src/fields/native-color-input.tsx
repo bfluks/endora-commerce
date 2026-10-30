@@ -15,11 +15,14 @@ export function NativeColorInput({
   onCommit,
   readOnly,
   className,
+  ariaLabel,
 }: {
   value: string;
   onCommit: (hex: string) => void;
   readOnly?: boolean | undefined;
   className?: string;
+  /** The picker's accessible name, where no `<label>` around it gives one. */
+  ariaLabel?: string;
 }): ReactElement {
   const inputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState(value);
@@ -69,6 +72,7 @@ export function NativeColorInput({
       ref={inputRef}
       type="color"
       className={className}
+      {...(ariaLabel !== undefined ? { 'aria-label': ariaLabel } : {})}
       disabled={readOnly === true}
       value={colorPickerDisplayHex(draft)}
     />

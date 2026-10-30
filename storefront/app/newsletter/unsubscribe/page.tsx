@@ -1,7 +1,7 @@
-import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { publicUnsubscribe } from '../../../lib/api/newsletter';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../lib/i18n/navigation';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -44,7 +44,7 @@ export default async function NewsletterUnsubscribePage({
     'use server';
     const reason = String(formData.get('reason') ?? '').trim();
     await publicUnsubscribe(token!, reason || undefined);
-    redirect('/newsletter/unsubscribe?done=1');
+    return await localeRedirect('/newsletter/unsubscribe?done=1');
   }
 
   return (

@@ -1,15 +1,22 @@
 import { Meilisearch, MeilisearchApiError, type SearchResponse } from 'meilisearch';
 import {
   ERROR_CODES,
-  isProductVisibleTo,
+  effectiveSystemText,
+  isOrderMinimumEligibleType,
   listingPriceChannelContext,
+  resolveScopeLanguage,
   listingPriceMoney,
+  scopeLanguageOf,
   type CatalogAttributeReadPort,
+  type CatalogProductAvailabilityPort,
+  type CatalogProductUrlKeyReadPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
   type ListingPrice,
-  type ListingPricePort,
+  type ListingPriceDetail,
+  type ListingPriceDetailPort,
   type OrganizationDetailsPort,
+  type OverrideRow,
   type PriceOrganization,
   type ProductAudience,
   type ProductListSort,
@@ -17,6 +24,8 @@ import {
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { encodeCursor, decodeCursor } from '@endora-commerce/platform/http';
+import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
+import { availabilityFilter } from './search-availability.js';
 import {
   indexUidFor,
   type IndexedDocument,
@@ -36,10 +45,10 @@ import {
  * write-side: each Sales Channel writes to its own `products_<channel_code>`
  * index, so the channel filter is implicit in the index id.
  *
- * Pricing comes from Postgres at hydrate time so the Sales-Channel visibility
- * rule from `catalog-query.service.ts` (R-18: hide price on non-public
- * channels) is enforced without trusting whatever the indexer happened to
- * snapshot.
+ * Pricing comes from Postgres at hydrate time, resolved for the viewer, so the
+ * display-mode chain decides what a hit shows — a viewer whose mode is `none`
+ * is sent no amount (issues #491, #492) — without trusting whatever the indexer
+ * happened to snapshot.
  */
 
 /**
@@ -50,9 +59,21 @@ import {
 export interface ResolvedSearchChannel {
   id: string;
   code: string;
-  isPublic: boolean;
   defaultCurrency: string;
   defaultLanguage: string;
+  /** Feature 163 — the channel's content languages (the published `ResolvedSearchChannel`). */
+  languages?: readonly string[] | undefined;
+}
+
+/**
+ * Feature 163 — the scope language L of a query: the request's pick resolved
+ * against the channel's own languages (R7); the default language always counts
+ * as offered.
+ */
+export function searchScopeLanguage(channel: ResolvedSearchChannel, preferredLanguage: string | undefined): string {
+  const languages = [...(channel.languages ?? [])];
+  if (!languages.includes(channel.defaultLanguage)) languages.unshift(channel.defaultLanguage);
+  return resolveScopeLanguage({ id: channel.id, languages, defaultLanguage: channel.defaultLanguage }, preferredLanguage);
 }
 
 export interface SearchQueryContext {
@@ -92,7 +113,7 @@ export interface SearchListResult {
   pagination: { cursor: string | null; hasMore: boolean; limit: number };
 }
 
-interface DocumentHit
+export interface DocumentHit
   extends Pick<
     IndexedDocument,
     'id' | 'sku' | 'name' | 'slug' | 'type' | 'categorySlugs'
@@ -136,7 +157,7 @@ export class SearchQueryService {
      * hit shows; the price it hydrates now comes from the engine for the same
      * reason.
      */
-    private readonly listingPrices?: ListingPricePort,
+    private readonly listingPrices?: ListingPriceDetailPort,
     /**
      * `organizations`' read model, for the customer group a group-targeted
      * price list is selected by. The module already resolves this port for the
@@ -148,6 +169,19 @@ export class SearchQueryService {
      * Optional only in the signature, and never reached by an anonymous query.
      */
     private readonly organizations?: OrganizationDetailsPort,
+    /**
+     * Feature 163 — `catalog`'s availability answer, asked again for every
+     * hit at (channel, L) for the caller, now. Optional only in the
+     * signature: hydration without it fails loudly rather than trusting the
+     * index.
+     */
+    private readonly availability?: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>,
+    /**
+     * Feature 163 (T113a, R28) — the effective URL key per channel language, so a
+     * card links to the key that resolves at the request's (channel, language).
+     * Absent (a rig that wires none), a card keeps the global key.
+     */
+    private readonly urlKeys?: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>,
   ) {
     const host =
       options.meilisearchHost ??
@@ -197,17 +231,34 @@ export class SearchQueryService {
     const index = this.client.index<DocumentHit & { updatedAt: number }>(indexUid);
 
     const offset = decodeOffsetCursor(params.cursor) ?? 0;
-    const filter = buildFilterExpression(params);
+    // Feature 163 (R8) — availability at (channel, L), the window at query time
+    // and the audience go into the filter the page is cut from (issue #151),
+    // never only into hydration.
+    const filter = [
+      ...buildFilterExpression(params),
+      availabilityFilter({
+        languageCode: searchScopeLanguage(channel, ctx.preferredLanguage),
+        audience: ctx.audience,
+        nowMs: Date.now(),
+      }),
+    ];
     const sort = buildSort(params.sort);
 
-    let response: SearchResponse<DocumentHit & { updatedAt: number }>;
-    try {
-      response = await index.search(params.q ?? '', {
+    // Feature 163 (FR-017 b) — a query matches the Name shown in its language,
+    // `localizedNames.<L>`, beside the fields it always searched. An index not
+    // yet reindexed after the upgrade does not know the field; it is asked
+    // again without the restriction rather than refused (see below).
+    const searchOn = params.q
+      ? await this.#attributesToSearchOn(searchScopeLanguage(channel, ctx.preferredLanguage))
+      : null;
+    const runSearch = (restrict: boolean) =>
+      index.search(params.q ?? '', {
         offset,
         // Over-fetch by one to detect hasMore.
         limit: params.limit + 1,
         ...(filter.length > 0 ? { filter } : {}),
         ...(sort.length > 0 ? { sort } : {}),
+        ...(restrict && searchOn ? { attributesToSearchOn: searchOn } : {}),
         attributesToRetrieve: [
           'id',
           'sku',
@@ -218,6 +269,17 @@ export class SearchQueryService {
           'primaryAssetUrl',
         ],
       });
+    let response: SearchResponse<DocumentHit & { updatedAt: number }>;
+    try {
+      try {
+        response = await runSearch(true);
+      } catch (err) {
+        rethrowIfModuleDisabled(err);
+        if (!(searchOn && err instanceof MeilisearchApiError && err.cause?.code === 'invalid_search_attributes_to_search_on')) {
+          throw err;
+        }
+        response = await runSearch(false);
+      }
     } catch (err) {
       // Reserved-fallback (R-08): `searchQueryPort` converts this into the
       // `index-unavailable` arm and `catalog`'s listing re-runs the request
@@ -239,16 +301,26 @@ export class SearchQueryService {
     const hasMore = response.hits.length > params.limit;
     const nextCursor = hasMore ? encodeOffsetCursor(offset + params.limit) : null;
 
-    if (hits.length === 0) {
-      return {
-        data: [],
-        pagination: { cursor: nextCursor, hasMore, limit: params.limit },
-      };
-    }
+    return {
+      data: hits.length === 0 ? [] : await this.hydrateHits(hits, ctx),
+      pagination: { cursor: nextCursor, hasMore, limit: params.limit },
+    };
+  }
+
+  /**
+   * The post-Meilisearch half of {@link listProducts}: re-read every hit from
+   * Postgres and project it into the card the catalogue's listing would show.
+   * Separate so the projection can be asserted without a search engine.
+   */
+  async hydrateHits(
+    hits: readonly DocumentHit[],
+    ctx: SearchQueryContext,
+  ): Promise<ProductSummary[]> {
+    const channel = ctx.resolvedChannel;
 
     // Hydrate the channel-aware price + multilingual name override from
-    // Postgres. This protects against stale index data and keeps R-18
-    // (hide price on non-public channels) authoritative on Postgres.
+    // Postgres. This protects against stale index data and keeps who sees a
+    // price (the display-mode chain) authoritative on Postgres.
     //
     // Issue #227 — and the audience answer, for the same reason and in the
     // same place. It is **not** pushed into the Meilisearch filter expression:
@@ -258,12 +330,21 @@ export class SearchQueryService {
     // the next author, as though the question were settled upstream. The cost
     // is the one this path already pays for a stale index: a page can come
     // back shorter than `limit`.
-    const products = (await this.products.findByIds(hits.map((h) => h.id))).filter((p) =>
-      isProductVisibleTo(p, ctx.audience),
+    //
+    // Feature 163 — the question is now the whole of availability, asked of
+    // `catalog` at (channel, L) for this caller, now: the index filter narrows
+    // the page and this pass keeps a stale document from deciding a disclosure.
+    const records = await this.products.findByIds(hits.map((h) => h.id));
+    const available = await this.#requireAvailability().filterAvailable(
+      records.map((p) => p.id),
+      {
+        channelId: channel.id,
+        languageCode: searchScopeLanguage(channel, ctx.preferredLanguage),
+        audience: ctx.audience,
+      },
     );
+    const products = records.filter((p) => available.has(p.id));
     const productById = new Map(products.map((p) => [p.id, p]));
-    // A channel that withholds prices is not asked for them (R-18), so the
-    // resolution never runs and every hit reports `null`.
     // The price is the *viewer's*, while the document stays everybody's. A
     // Meilisearch document has never carried a price and does not start now:
     // one index per sales channel, one document per product, and per-buyer
@@ -272,22 +353,46 @@ export class SearchQueryService {
     // decide what a buyer sees; resolving the price for the caller here costs
     // the page four statements (measured, `listing-price-viewer-cost.bench.ts`)
     // and leaves the index shared.
-    const priceable = channel.isPublic && products.length > 0;
+    const priceable = products.length > 0;
     const viewerOrganization = priceable
       ? await this.#viewerOrganization(ctx.audience)
       : null;
+    // D-287 P0 — the details call, so a Meilisearch page carries the same
+    // `resolvedPrice` a Postgres page does, from the same single resolution.
     const resolvedPrices =
       priceable
-        ? await this.#requireListingPrices().resolveListingPrices({
+        ? await this.#requireListingPrices().resolveListingPriceDetails({
             products,
             context: {
               // Issue #249 — the currency the catalogue route resolved for this
               // page, so a Meilisearch page and a Postgres page price alike.
               ...listingPriceChannelContext(channel, ctx.currency),
               organization: viewerOrganization,
+              // The customer's own group, as on the Postgres page.
+              ...(viewerOrganization && ctx.audience.customerAccountId
+                ? { customerAccountId: ctx.audience.customerAccountId }
+                : {}),
             },
           })
-        : new Map<string, ListingPrice>();
+        : new Map<string, ListingPriceDetail>();
+    // Issue #384 — the request channel's value overrides for the page, in one
+    // read, so a card's name is the one the catalogue's card shows for this
+    // (channel, language). Not `hit.name`: the indexer resolves that in the
+    // channel's default language only, so it is wrong for any other request
+    // language — it stays what the index ranks and sorts by.
+    const overridesByProduct = await this.#channelOverridesFor(products, channel.id);
+    // Feature 163 — the card's link and minimum in this channel: the effective URL
+    // key at (channel, L) (T113a, R28) and the channel's minimum (FR-100), one read
+    // each for the page.
+    const scopeLanguage = searchScopeLanguage(channel, ctx.preferredLanguage);
+    const productIds = products.map((p) => p.id);
+    const [keysByProduct, rulesByProduct] =
+      productIds.length > 0
+        ? await Promise.all([
+            this.urlKeys ? this.urlKeys.effectiveKeys(productIds, channel.id) : Promise.resolve(new Map()),
+            this.#requireAvailability().effectiveOrderRules(productIds, channel.id),
+          ])
+        : [new Map<string, Map<string, string>>(), new Map<string, { minOrderQuantity: number | null; returnable: boolean }>()];
     const summaries: ProductSummary[] = [];
     for (const hit of hits) {
       const product = productById.get(hit.id);
@@ -299,18 +404,69 @@ export class SearchQueryService {
           hit,
           channel,
           ctx.preferredLanguage,
+          resolvedPrices.get(product.id)?.price,
           resolvedPrices.get(product.id),
+          overridesByProduct.get(product.id),
+          {
+            slug: (keysByProduct as Map<string, Map<string, string>>).get(product.id)?.get(scopeLanguage),
+            minOrderQuantity: rulesByProduct.has(product.id)
+              ? (rulesByProduct.get(product.id)?.minOrderQuantity ?? null)
+              : undefined,
+          },
         ),
       );
     }
 
-    return {
-      data: summaries,
-      pagination: { cursor: nextCursor, hasMore, limit: params.limit },
-    };
+    return summaries;
   }
 
-  #requireListingPrices(): ListingPricePort {
+  /**
+   * Feature 163 — the fields a query searches: the Name in its language
+   * (`localizedNames.<L>`), the indexed default-language `name` (documents
+   * indexed before the upgrade carry nothing else), and the fields the index
+   * has always searched. Mirrors `SearchIndexer.attributeSettings`.
+   */
+  async #attributesToSearchOn(languageCode: string): Promise<string[]> {
+    const attributes = this.attributeRead ? await this.attributeRead.listAll() : [];
+    return [
+      `localizedNames.${languageCode}`,
+      'name',
+      'sku',
+      'description',
+      'searchableOptions',
+      ...attributes.filter((a) => a.isSearchable).map((a) => `attributes.${a.key}`),
+    ];
+  }
+
+  #requireAvailability(): Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'> {
+    if (!this.availability) {
+      throw new Error(
+        'SearchQueryService: the availability port is not wired — a hit cannot be hydrated without it.',
+      );
+    }
+    return this.availability;
+  }
+
+  /** Every override row `channelId` holds for the page's products, bucketed by product. */
+  async #channelOverridesFor(
+    products: readonly CatalogProductRecord[],
+    channelId: string,
+  ): Promise<Map<string, OverrideRow[]>> {
+    const byProduct = new Map<string, OverrideRow[]>();
+    if (products.length === 0) return byProduct;
+    const rows = await this.products.listValueOverridesByProductIds(
+      products.map((p) => p.id),
+      { channelId },
+    );
+    for (const row of rows) {
+      const list = byProduct.get(row.productId) ?? [];
+      list.push(row);
+      byProduct.set(row.productId, list);
+    }
+    return byProduct;
+  }
+
+  #requireListingPrices(): ListingPriceDetailPort {
     if (!this.listingPrices) {
       throw new Error(
         'SearchQueryService: the pricing port is not wired — a search hit cannot be priced.',
@@ -491,6 +647,24 @@ export function searchHitSummary(
   channel: ResolvedSearchChannel,
   preferredLanguage: string | undefined,
   resolvedPrice: ListingPrice | undefined,
+  /**
+   * D-287 P0 — the base / sale / display-mode split from the same resolution,
+   * projected onto `ProductSummary.resolvedPrice`. Omitted, the field is too.
+   */
+  detail?: ListingPriceDetail,
+  /**
+   * Issue #384 — this product's value-override rows for `channel`. A channel
+   * override for the language the baseline pick lands on (or an earlier leg of
+   * its chain) wins over that pick; omitted or empty, the name is exactly what
+   * it was before.
+   */
+  overrides?: readonly OverrideRow[],
+  /**
+   * Feature 163 — the product's values in this channel: the effective URL key at
+   * the request's (channel, language) (T113a) and the channel's minimum (FR-100).
+   * An absent value keeps the record's.
+   */
+  inChannel: { slug?: string | undefined; minOrderQuantity?: number | null | undefined } = {},
 ): ProductSummary {
   const price = resolvedPrice === undefined ? null : listingPriceMoney(resolvedPrice);
 
@@ -498,31 +672,38 @@ export function searchHitSummary(
     id: product.id,
     sku: product.sku,
     type: product.type,
-    name: pickLang(product.name, preferredLanguage, channel) || hit.name,
-    slug: product.slug,
+    name:
+      // 168-shim: the chain at the request's (C, L); S2's `texts.<L>` rewrite replaces it.
+      effectiveSystemText(
+        overrides,
+        'name',
+        { channelId: channel.id, languageCode: scopeLanguageOf(channel, preferredLanguage) },
+        product.name,
+      ) || hit.name,
+    slug: inChannel.slug ?? product.slug,
     categorySlugs: hit.categorySlugs,
     primaryAssetUrl: hit.primaryAssetUrl ?? null,
     price,
     stockIndicator: null,
     stockLevel: null,
+    // Feature 155 (FR-014) — from the hydrated record, never from the index;
+    // emitted for the types the minimum applies to only.
+    minOrderQuantity: isOrderMinimumEligibleType(product.type)
+      ? inChannel.minOrderQuantity !== undefined
+        ? inChannel.minOrderQuantity
+        : product.minOrderQuantity
+      : null,
+    ...(detail
+      ? {
+          resolvedPrice: {
+            basePrice: detail.basePrice,
+            salePrice: detail.salePrice,
+            displayMode: detail.displayMode,
+            // Feature 161 (G19) — the list price beside a lower buyer price, as on the catalogue cards.
+            ...(detail.listPrice ? { listPrice: { amount: detail.listPrice.amount, currency: detail.listPrice.currency } } : {}),
+          },
+        }
+      : {}),
   };
 }
 
-function pickLang(
-  blob: Record<string, string>,
-  preferred: string | undefined,
-  channel: ResolvedSearchChannel,
-): string {
-  const candidates = [
-    preferred,
-    channel?.defaultLanguage,
-    'en-US',
-    'en',
-  ].filter((v): v is string => typeof v === 'string');
-  for (const lang of candidates) {
-    const hit = blob[lang];
-    if (hit) return hit;
-  }
-  const anyKey = Object.keys(blob)[0];
-  return anyKey ? (blob[anyKey] ?? '') : '';
-}

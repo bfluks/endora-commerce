@@ -1,8 +1,8 @@
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { getCategoryTree } from '../lib/api/catalog';
 import { getShopInfo } from '../lib/api/shop';
 import { getServerContext } from '../lib/server-context';
+import { LocalizedLink, LocalizedForm } from '../lib/i18n/localized-link';
 
 export const metadata = {
   title: '404 — strona nie została znaleziona · B2B Platform',
@@ -66,7 +66,7 @@ export default async function NotFound(): Promise<ReactNode> {
             wystarczy jedno kliknięcie, żeby trafić tam, gdzie chcesz.
           </p>
 
-          <form
+          <LocalizedForm
             action="/catalog"
             method="get"
             className="mb-[24px] flex max-w-[560px] items-stretch gap-[8px]"
@@ -86,18 +86,18 @@ export default async function NotFound(): Promise<ReactNode> {
             <button type="submit" className="btn btn--primary btn--lg">
               Szukaj
             </button>
-          </form>
+          </LocalizedForm>
 
           <div className="flex flex-wrap gap-[10px]">
-            <Link href="/" className="btn btn--dark btn--lg">
+            <LocalizedLink href="/" className="btn btn--dark btn--lg">
               Wróć na stronę główną
-            </Link>
-            <Link href="/catalog" className="btn btn--outline btn--lg">
+            </LocalizedLink>
+            <LocalizedLink href="/catalog" className="btn btn--outline btn--lg">
               Przeglądaj katalog
-            </Link>
-            <Link href="/quote-request" className="btn btn--ghost btn--lg">
+            </LocalizedLink>
+            <LocalizedLink href="/quote-request" className="btn btn--ghost btn--lg">
               Wyślij zapytanie ofertowe
-            </Link>
+            </LocalizedLink>
           </div>
         </div>
 
@@ -111,7 +111,7 @@ export default async function NotFound(): Promise<ReactNode> {
           <ul className="m-0 mb-[20px] flex list-none flex-col gap-[2px] p-0">
             {popular.map((c) => (
               <li key={c.slug}>
-                <Link
+                <LocalizedLink
                   href={`/c/${c.slug}`}
                   className="-mx-[12px] flex items-baseline justify-between gap-[12px] rounded-md px-[12px] py-[10px] text-fg transition-colors hover:bg-surface-alt hover:text-accent"
                 >
@@ -119,7 +119,7 @@ export default async function NotFound(): Promise<ReactNode> {
                   <em className="whitespace-nowrap font-mono text-[11px] not-italic text-muted">
                     {c.count.toLocaleString('pl-PL')} produktów
                   </em>
-                </Link>
+                </LocalizedLink>
               </li>
             ))}
           </ul>

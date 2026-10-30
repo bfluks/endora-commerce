@@ -49,19 +49,22 @@ describe('MFA US1 — customer enrol + two-step login', () => {
   });
 
   it('enrols, activates, and logs in with recovery + TOTP codes', async () => {
-    // --- setup: returns a secret + otpauth URI -----------------------------
+    // --- setup: returns a secret + otpauth URI + QR code -------------------
     const setupRes = await h.app.inject({
       method: 'POST',
       url: '/api/v1/account/mfa/setup',
       cookies: CUSTOMER_COOKIE,
     });
     expect(setupRes.statusCode).toBe(200);
-    const { secret, otpauthUri } = setupRes.json().data as {
+    const { secret, otpauthUri, qrSvg } = setupRes.json().data as {
       secret: string;
       otpauthUri: string;
+      qrSvg: string;
     };
     expect(secret).toMatch(/^[A-Z2-7]+$/);
     expect(otpauthUri).toContain('otpauth://totp/');
+    // 166 FR-001 — the QR code of that URI, beside the manual key.
+    expect(qrSvg.startsWith('<svg')).toBe(true);
 
     // Status before activation: not active.
     const preStatus = await h.app.inject({

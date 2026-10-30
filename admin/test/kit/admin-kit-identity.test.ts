@@ -38,6 +38,7 @@ import { createContext } from 'react';
 
 import * as kitUi from '@endora-commerce/admin-kit/ui';
 import * as kitLib from '@endora-commerce/admin-kit/lib';
+import { ADMIN_LIST_PAGE_SIZE_OPTIONS } from '@endora-commerce/contracts';
 import * as kitI18n from '@endora-commerce/admin-kit/i18n';
 import * as kitComponents from '@endora-commerce/admin-kit/components';
 
@@ -238,5 +239,12 @@ describe('@endora-commerce/admin-kit — the shims forward, they do not copy', (
     // and the shim forwards both. Identity is what made it a split rather than
     // a fork, and it is what keeps the forwarding honest now.
     expect(PAGE_SIZE_OPTIONS).toBe(kitLib.PAGE_SIZE_OPTIONS);
+  });
+
+  it('serves the contracts array itself, so the server validates against the same options (feature 164, R-2)', () => {
+    // The server refuses a page size that is not an option; it can import
+    // `@endora-commerce/contracts` and not the kit. One array, so the kit's
+    // dropdown and the server's validation cannot drift apart.
+    expect(kitLib.PAGE_SIZE_OPTIONS).toBe(ADMIN_LIST_PAGE_SIZE_OPTIONS);
   });
 });

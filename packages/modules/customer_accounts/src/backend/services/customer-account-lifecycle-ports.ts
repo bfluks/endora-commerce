@@ -16,7 +16,7 @@ import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
-import { hashPassword } from '@endora-commerce/platform/kernel';
+import { currentSalesChannel, hashPassword } from '@endora-commerce/platform/kernel';
 // D-178 — the one co-transactional seam this module consumes, and the reason it
 // is imported from another module's directory rather than from
 // `@endora-commerce/contracts` is on the interface itself: its signature carries
@@ -149,6 +149,11 @@ export class CustomerAccountLifecycleWriteService implements CustomerAccountLife
         email,
         firstName: input.firstName,
         lastName: input.lastName,
+        // Feature 154 (owner decision D6) — the store the visitor registers on
+        // becomes the personal organisation's channel. The registration route
+        // is subject to the access step, so this is a store open to anonymous
+        // visitors; outside a request there is none and the default applies.
+        salesChannelId: currentSalesChannel()?.id ?? null,
       });
       const account = tem.create(CustomerAccount, {
         id: customerAccountId,

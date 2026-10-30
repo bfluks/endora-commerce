@@ -133,3 +133,22 @@ describe('buildOrderConfirmationVariables', () => {
     expect(order.summaryText).not.toContain('Subtotal:');
   });
 });
+
+/** Owner ruling of 2026-10-25 (§10.18) — a unit price shows its significant places, up to four. */
+describe('buildOrderConfirmationVariables — unit prices', () => {
+  it('writes a sub-cent unit price at its places and the line value at two', () => {
+    const base = input();
+    const vars = buildOrderConfirmationVariables(
+      { ...base, items: [{ productSnapshot: { sku: 'S', name: 'Screw' }, quantity: 10_000, unitPrice: '0.0125', lineTotal: '153.75' }] },
+      renderers,
+    );
+    const [item] = (vars['order'] as { items: Array<{ unitPrice: string; lineTotal: string }> }).items;
+    expect(item).toMatchObject({ unitPrice: '0.0125 PLN', lineTotal: '153.75 PLN' });
+  });
+
+  it('writes a unit price with zero third and fourth places at two', () => {
+    const vars = buildOrderConfirmationVariables(input(), renderers);
+    const [item] = (vars['order'] as { items: Array<{ unitPrice: string }> }).items;
+    expect(item!.unitPrice).toBe('40.00 PLN');
+  });
+});

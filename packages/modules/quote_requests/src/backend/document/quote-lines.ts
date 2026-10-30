@@ -1,8 +1,23 @@
+import {
+  arrangeLineGroups,
+  decimalDifference,
+  decimalProduct,
+  DOCUMENT_UNGROUPED_SECTION_KEY,
+  grossUnitPriceHalfUp,
+  lineAmountHalfUp,
+  moneyDifference,
+  moneySum,
+  quotientHalfUp,
+  roundHalfUp,
+  taxAmountHalfUp,
+  unitPriceHalfUp,
+} from '@endora-commerce/contracts';
 import type {
   CatalogAttributeView,
   DocumentCollectionDeclaration,
   DocumentFieldDefinition,
   DocumentItem,
+  DocumentItemSection,
   DocumentValue,
   DocumentValueKind,
   QuoteRequestDocumentData,
@@ -33,8 +48,30 @@ import { localized, quoteDocumentTexts } from './texts.js';
 
 export const QUOTE_LINES_COLLECTION = 'lines';
 
-const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
-const money = (amount: number, currency: string): DocumentValue => ({ kind: 'money', amount: round2(amount), currency });
+// Exact decimal arithmetic (issue #417): every amount is computed on the
+// decimals it is written as and rounded half-up once; each result is a
+// two-place decimal, which a number holds losslessly.
+const round2 = (value: number | string): number => Number(roundHalfUp(value));
+const money = (amount: number | string, currency: string): DocumentValue => ({ kind: 'money', amount: round2(amount), currency });
+/**
+ * A discount: an amount, but one that is real and rounds to no cent — a unit
+ * discount of 0.0001 over three units — is marked, so it prints "—" rather than
+ * a `0,00` that reads as "no discount" (issue #430). Its amount stays the
+ * rounded zero, so list value − discount = net still holds.
+ */
+const discountMoney = (amount: string, currency: string): DocumentValue =>
+  round2(amount) === 0 ? { kind: 'money', amount: 0, currency, belowMinorUnit: true } : money(amount, currency);
+/**
+ * A unit price (owner ruling of 2026-10-25): at its four places, unrounded,
+ * and marked so the document shows its significant places (`0,0125 zł`).
+ */
+const unitMoney = (amount: number | string, currency: string): DocumentValue => ({
+  kind: 'money',
+  amount: Number(unitPriceHalfUp(amount)),
+  currency,
+  unitPrice: true,
+});
+const ratePercent = (rate: number): DocumentValue => ({ kind: 'percent', value: round2(decimalProduct(rate, 100)) });
 const text = (value: string | null | undefined): DocumentValue =>
   typeof value === 'string' && value.trim() !== '' ? { kind: 'text', value } : null;
 
@@ -90,13 +127,26 @@ function definitionOf(field: StaticField, label: string): DocumentFieldDefinitio
 
 type Line = QuoteRequestDocumentData['lines'][number];
 
-/** The per-unit discount of a line, or `null` when it has none (R-11). */
-function unitDiscountOf(line: Line): number | null {
+/** The per-unit discount of a line, at four places, or `null` when it has none (R-11). */
+function unitDiscountOf(line: Line): string | null {
   const list = line.referenceUnitPrice;
   const agreed = line.agreedUnitPrice;
   if (list === null || agreed === null || list <= 0) return null;
   if (line.referenceCurrency !== line.lineCurrency) return null;
-  return agreed < list ? list - agreed : null;
+  return agreed < list ? unitPriceHalfUp(decimalDifference(list, agreed)) : null;
+}
+
+/**
+ * A line's discount: its list value less its net, each rounded once at the
+ * line (§10.18) — so list value − discount = net on the document, which
+ * `(list − agreed) × quantity` rounded on its own need not be.
+ */
+function lineDiscountOf(line: Line): string | null {
+  if (unitDiscountOf(line) === null) return null;
+  return moneyDifference(
+    lineAmountHalfUp(line.referenceUnitPrice ?? 0, line.quantity),
+    lineAmountHalfUp(line.agreedUnitPrice ?? 0, line.quantity),
+  );
 }
 
 /** The values of every line, by field path. */
@@ -107,8 +157,8 @@ export function quoteLineItems(data: QuoteRequestDocumentData): DocumentItem[] {
     const agreed = line.agreedUnitPrice;
     const list = line.referenceUnitPrice;
     const unitDiscount = unitDiscountOf(line);
-    const net = agreed !== null ? round2(agreed * line.quantity) : null;
-    const vat = net !== null ? round2(net * rate) : null;
+    const net = agreed !== null ? lineAmountHalfUp(agreed, line.quantity) : null;
+    const vat = net !== null ? taxAmountHalfUp(net, rate, 'fraction') : null;
     const values: Record<string, DocumentValue> = {
       productName: text(line.productName),
       variant: text(line.variantLabel),
@@ -119,21 +169,22 @@ export function quoteLineItems(data: QuoteRequestDocumentData): DocumentItem[] {
         line.packagingUnitName && line.packagingUnitBaseQuantity && line.packagingUnitBaseQuantity > 0
           ? { kind: 'number', value: line.quantity / line.packagingUnitBaseQuantity }
           : null,
-      listUnitPrice: list !== null && line.referenceCurrency ? money(list, line.referenceCurrency) : null,
-      proposedUnitPrice: line.proposedUnitPrice !== null ? money(line.proposedUnitPrice, currency) : null,
-      unitPrice: agreed !== null ? money(agreed, currency) : null,
-      unitGrossPrice: agreed !== null ? money(agreed * (1 + rate), currency) : null,
+      listUnitPrice: list !== null && line.referenceCurrency ? unitMoney(list, line.referenceCurrency) : null,
+      proposedUnitPrice: line.proposedUnitPrice !== null ? unitMoney(line.proposedUnitPrice, currency) : null,
+      unitPrice: agreed !== null ? unitMoney(agreed, currency) : null,
+      unitGrossPrice: agreed !== null ? unitMoney(grossUnitPriceHalfUp(agreed, rate, 'fraction'), currency) : null,
       discountPercent:
         unitDiscount !== null && list !== null
-          ? { kind: 'percent', value: round2((unitDiscount / list) * 100) }
+          ? { kind: 'percent', value: Number(quotientHalfUp(decimalProduct(unitDiscount, 100), list)) }
           : null,
-      unitDiscount: unitDiscount !== null ? money(unitDiscount, currency) : null,
-      lineDiscount: unitDiscount !== null ? money(unitDiscount * line.quantity, currency) : null,
-      lineListValue: list !== null && line.referenceCurrency ? money(list * line.quantity, line.referenceCurrency) : null,
+      unitDiscount: unitDiscount !== null ? unitMoney(unitDiscount, currency) : null,
+      lineDiscount: unitDiscount !== null ? discountMoney(lineDiscountOf(line)!, currency) : null,
+      lineListValue:
+        list !== null && line.referenceCurrency ? money(lineAmountHalfUp(list, line.quantity), line.referenceCurrency) : null,
       lineNet: net !== null ? money(net, currency) : null,
-      vatRate: { kind: 'percent', value: round2(rate * 100) },
+      vatRate: ratePercent(rate),
       lineVat: vat !== null ? money(vat, currency) : null,
-      lineGross: net !== null && vat !== null ? money(net + vat, currency) : null,
+      lineGross: net !== null && vat !== null ? money(moneySum([net, vat]), currency) : null,
       lineNote: text(line.lineNote),
     };
     for (const [code, value] of Object.entries(line.attributes ?? {})) {
@@ -147,38 +198,57 @@ export function quoteLineItems(data: QuoteRequestDocumentData): DocumentItem[] {
 export function quoteSummary(data: QuoteRequestDocumentData): Record<string, DocumentValue> {
   const rate = Number.isFinite(data.quote.taxRate) ? data.quote.taxRate : 0;
   const lines = data.lines;
-  const vatRate: DocumentValue = { kind: 'percent', value: round2(rate * 100) };
+  const vatRate = ratePercent(rate);
   const currencies = new Set(lines.map((line) => line.lineCurrency));
   const none = { listTotal: null, discountTotal: null, netTotal: null, vatRate, vatTotal: null, grossTotal: null };
   if (currencies.size > 1) return none;
   const currency = lines[0]?.lineCurrency ?? data.quote.currency;
 
   const everyPriced = lines.every((line) => line.agreedUnitPrice !== null);
-  const net = everyPriced ? round2(lines.reduce((sum, line) => sum + (line.agreedUnitPrice ?? 0) * line.quantity, 0)) : null;
-  const vat = net !== null ? round2(net * rate) : null;
+  const net = everyPriced
+    ? moneySum(lines.map((line) => lineAmountHalfUp(line.agreedUnitPrice ?? 0, line.quantity)))
+    : null;
+  const vat = net !== null ? taxAmountHalfUp(net, rate, 'fraction') : null;
 
   const everyListed =
     lines.length > 0 &&
     lines.every((line) => line.referenceUnitPrice !== null && line.referenceCurrency === line.lineCurrency);
   const list = everyListed
-    ? lines.reduce((sum, line) => sum + (line.referenceUnitPrice ?? 0) * line.quantity, 0)
+    ? moneySum(lines.map((line) => lineAmountHalfUp(line.referenceUnitPrice ?? 0, line.quantity)))
     : null;
 
-  const discounts = lines
-    .map((line) => {
-      const unit = unitDiscountOf(line);
-      return unit !== null ? round2(unit * line.quantity) : null;
-    })
-    .filter((value): value is number => value !== null);
+  const discounts = lines.map(lineDiscountOf).filter((value): value is string => value !== null);
 
   return {
     listTotal: list !== null ? money(list, currency) : null,
-    discountTotal: discounts.length > 0 ? money(discounts.reduce((sum, value) => sum + value, 0), currency) : null,
+    discountTotal: discounts.length > 0 ? discountMoney(moneySum(discounts), currency) : null,
     netTotal: net !== null ? money(net, currency) : null,
     vatRate,
     vatTotal: vat !== null ? money(vat, currency) : null,
-    grossTotal: net !== null && vat !== null ? money(net + vat, currency) : null,
+    grossTotal: net !== null && vat !== null ? money(moneySum([net, vat]), currency) : null,
   };
+}
+
+/**
+ * Feature 159 — the quote's groups as sections of its lines
+ * (`specs/159-quote-request-item-groups/contracts/document-sections.md` §5).
+ * `data.lines` is already in display order and `data.groups` holds the groups
+ * with a line (the data builder), so each section is a contiguous run of
+ * indexes into `quoteLineItems(data)`. Each section's totals follow the
+ * document's own rule over the section's lines — an unpriced line leaves its
+ * section without net, VAT and gross, and a discount shows only where one
+ * applies. A quote with no group is one ungrouped section, which the table
+ * prints flat.
+ */
+export function quoteLineSections(data: QuoteRequestDocumentData): DocumentItemSection[] {
+  const indexOf = new Map(data.lines.map((line, index) => [line, index]));
+  return arrangeLineGroups(data.groups ?? [], data.lines).map((section) => ({
+    key: section.group?.id ?? DOCUMENT_UNGROUPED_SECTION_KEY,
+    kind: section.kind,
+    label: section.group?.name ?? null,
+    itemIndexes: section.lines.map((line) => indexOf.get(line)!),
+    summary: quoteSummary({ ...data, lines: [...section.lines] }),
+  }));
 }
 
 export interface QuoteLinesCollectionDeps {
@@ -216,5 +286,6 @@ export function createQuoteLinesCollection(
       return SUMMARY_FIELDS.map((field) => definitionOf(field, texts.totals[field.path] ?? field.path));
     },
     summary: quoteSummary,
+    sections: quoteLineSections,
   };
 }

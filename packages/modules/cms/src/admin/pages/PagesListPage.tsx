@@ -120,6 +120,19 @@ export function PagesListPage(): ReactNode {
                           {t('state.inactive')}
                         </Badge>
                       ) : null}
+                      {/* Feature 167 (FR-041) — `/<prefix>/…` is a storefront language page. */}
+                      {page.shadowedByLanguagePrefix ? (
+                        <Badge
+                          variant="destructive"
+                          className="ml-2"
+                          title={t('pagesList.shadowedByLanguagePrefixHint', {
+                            prefix: page.shadowedByLanguagePrefix.prefix,
+                            channels: page.shadowedByLanguagePrefix.channelCodes.join(', '),
+                          })}
+                        >
+                          {t('pagesList.shadowedByLanguagePrefix', { prefix: page.shadowedByLanguagePrefix.prefix })}
+                        </Badge>
+                      ) : null}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {page.languages.join(', ')}

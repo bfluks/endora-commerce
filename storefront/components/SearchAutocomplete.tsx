@@ -16,6 +16,8 @@ import {
   type SuggestResponse,
 } from '../lib/api/search';
 import { toAbsoluteAssetUrl } from '../lib/asset-url';
+import { formatMoney as formatUnitPrice } from '../lib/i18n/money';
+import { LocalizedAnchor, useLocalizedPath } from '../lib/i18n/localized-link';
 
 /**
  * SearchAutocomplete — feature 006 / US1 / T015.
@@ -46,8 +48,11 @@ export interface SearchAutocompleteProps {
   initialLimit?: number;
   /** Minimum-query-length default until the first response echoes the resolved value. */
   initialMinimumQueryLength?: number;
-  /** Forwarded as `X-Sales-Channel`. */
-  salesChannelCode?: string;
+  /**
+   * Forwarded as `X-Sales-Channel`. Required, so the layout cannot forget it: a
+   * query that names no channel is answered on the system default.
+   */
+  salesChannelCode: string | undefined;
   /** Translated placeholder + button label (matches the server-rendered fallback). */
   placeholder: string;
   searchActionLabel: string;
@@ -56,6 +61,10 @@ export interface SearchAutocompleteProps {
    * `priceDisplayMode` is `none` (price hidden for this customer).
    */
   requestQuoteLabel: string;
+  /** Feature 161 (FR-026) — translated "List price" / "Your price" for a
+   *  suggestion whose buyer price is below the catalogue price. */
+  listPriceLabel: string;
+  yourPriceLabel: string;
   /**
    * Translated "see all results" link label. Kept as a plain string so
    * the prop is serialisable across the Server → Client component
@@ -75,6 +84,7 @@ export interface SearchAutocompleteProps {
 }
 
 export function SearchAutocomplete(props: SearchAutocompleteProps): ReactNode {
+  const localize = useLocalizedPath();
   const [value, setValue] = useState('');
   const [response, setResponse] = useState<SuggestResponse | null>(null);
   const [unavailable, setUnavailable] = useState(false);
@@ -109,9 +119,7 @@ export function SearchAutocomplete(props: SearchAutocompleteProps): ReactNode {
             apiBaseUrl: props.apiBaseUrl,
             q: trimmed,
             ...(props.initialLimit !== undefined ? { limit: props.initialLimit } : {}),
-            ...(props.salesChannelCode !== undefined
-              ? { salesChannelCode: props.salesChannelCode }
-              : {}),
+            salesChannelCode: props.salesChannelCode,
             signal: ac.signal,
           });
           setResponse(next);
@@ -218,7 +226,7 @@ export function SearchAutocomplete(props: SearchAutocompleteProps): ReactNode {
       const hit = response.data[activeIndex];
       if (hit) {
         e.preventDefault();
-        window.location.href = `/p/${encodeURIComponent(hit.slug)}`;
+        window.location.href = localize(`/p/${encodeURIComponent(hit.slug)}`);
       }
     } else if (e.key === 'Escape') {
       setOpen(false);
@@ -272,7 +280,7 @@ export function SearchAutocomplete(props: SearchAutocompleteProps): ReactNode {
                     i === activeIndex ? 'bg-surface-alt' : 'hover:bg-surface-alt'
                   }`}
                 >
-                  <a
+                  <LocalizedAnchor
                     href={`/p/${encodeURIComponent(p.slug)}`}
                     className="flex items-center gap-3 px-3 py-2"
                   >
@@ -299,15 +307,19 @@ export function SearchAutocomplete(props: SearchAutocompleteProps): ReactNode {
                       </span>
                     </span>
                     <span className="flex-none whitespace-nowrap text-right">
-                      {renderSuggestionPrice(p, props.locale, props.requestQuoteLabel)}
+                      {renderSuggestionPrice(p, props.locale, {
+                        requestQuote: props.requestQuoteLabel,
+                        listPrice: props.listPriceLabel,
+                        yourPrice: props.yourPriceLabel,
+                      })}
                     </span>
-                  </a>
+                  </LocalizedAnchor>
                 </li>
               ))}
               <li className="text-[13px] font-medium text-accent [&>a]:block [&>a]:px-3 [&>a]:py-2 hover:bg-surface-alt">
-                <a href={`/search?q=${encodeURIComponent(value.trim())}`}>
+                <LocalizedAnchor href={`/search?q=${encodeURIComponent(value.trim())}`}>
                   {props.seeAllResultsLabel}
-                </a>
+                </LocalizedAnchor>
               </li>
             </>
           )}
@@ -325,12 +337,17 @@ export function SearchAutocomplete(props: SearchAutocompleteProps): ReactNode {
  *   - a resolved sale price → show it, with the base price struck through.
  *   - otherwise → the resolved base price, falling back to the legacy
  *     `ProductSummary.price` projection when the resolver wasn't wired.
+ *   - `listPrice` present (feature 161, FR-026) → the catalogue price above
+ *     the buyer's, both labelled; whether it is present is the backend's call.
+ *
+ * Exported for the server-rendered tests (`test/catalog/list-price-pair.test.tsx`).
  */
-function renderSuggestionPrice(
+export function renderSuggestionPrice(
   p: SearchSuggestItem,
   locale: string,
-  requestQuoteLabel: string,
+  labels: { requestQuote: string; listPrice: string; yourPrice: string },
 ): ReactNode {
+  const requestQuoteLabel = labels.requestQuote;
   if (p.priceDisplayMode === 'none') {
     return (
       <span className="text-[11px] font-medium text-muted">{requestQuoteLabel}</span>
@@ -346,6 +363,22 @@ function renderSuggestionPrice(
     ? formatMoney(p.salePrice.amount, p.salePrice.currency, locale)
     : null;
 
+  const list = p.listPrice ? formatMoney(p.listPrice.amount, p.listPrice.currency, locale) : null;
+
+  if (sale && list) {
+    // Owner ruling 2026-10-23: the list price struck through and the sale as
+    // "Your price" — the buyer's regular price is not a third number.
+    return (
+      <span className="flex flex-col items-end leading-tight">
+        <span className="font-mono text-[11px] text-muted">
+          {labels.listPrice} <s>{list}</s>
+        </span>
+        <span className="font-mono text-[13px] font-semibold text-fg">
+          <span className="text-[10px] font-normal text-muted">{labels.yourPrice}</span> {sale}
+        </span>
+      </span>
+    );
+  }
   if (sale) {
     return (
       <span className="flex flex-col items-end leading-tight">
@@ -356,26 +389,27 @@ function renderSuggestionPrice(
       </span>
     );
   }
+  if (base && list) {
+    return (
+      <span className="flex flex-col items-end leading-tight">
+        <span className="font-mono text-[11px] text-muted">
+          {labels.listPrice} {list}
+        </span>
+        <span className="font-mono text-[13px] font-semibold text-fg">
+          <span className="text-[10px] font-normal text-muted">{labels.yourPrice}</span> {base}
+        </span>
+      </span>
+    );
+  }
   if (base) {
     return <span className="font-mono text-[13px] font-semibold text-fg">{base}</span>;
   }
   return <span className="text-[11px] font-medium text-muted">{requestQuoteLabel}</span>;
 }
 
-function formatMoney(
-  amount: string | number,
-  currency: string,
-  locale: string,
-): string {
+/** A suggestion's price is a unit price: its significant places, up to four (owner ruling of 2026-10-25). */
+function formatMoney(amount: string | number, currency: string, locale: string): string {
   const value = typeof amount === 'string' ? Number(amount) : amount;
   if (!Number.isFinite(value)) return '';
-  try {
-    return new Intl.NumberFormat(locale, {
-      style: 'currency',
-      currency,
-      minimumFractionDigits: 2,
-    }).format(value);
-  } catch {
-    return `${value.toFixed(2)} ${currency}`;
-  }
+  return formatUnitPrice(value, currency, locale, { unitPrice: true });
 }

@@ -11,7 +11,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 
 import {
   ERROR_CODES,
@@ -25,10 +25,12 @@ import {
 } from '@endora-commerce/contracts';
 
 import { HttpError } from '@endora-commerce/platform/http';
-import type { CommandBus } from '@endora-commerce/platform/commands';
+import type { Command, CommandBus } from '@endora-commerce/platform/commands';
+import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { Product } from '../entities/product.entity.js';
 import { AttachmentType } from '../entities/attachment-type.entity.js';
 import { ProductAttachment } from '../entities/product-attachment.entity.js';
+import { requireLinkableAsset } from './linkable-asset.js';
 
 const ASSET_KINDS_ATTACHMENT = new Set(['pdf', 'certificate', 'other']);
 
@@ -44,6 +46,12 @@ export class AttachmentService {
      * `assets_library` off the port fails closed and the attach is refused.
      */
     private readonly assets?: AssetReadPort,
+    /**
+     * Feature 163 (FR-014) — which channels the product is a member of. Unused since feature 168
+     * retired the per-channel attachment writes on this route; kept so the composition root's
+     * signature does not move before T041 rewrites the service.
+     */
+    _membership?: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>,
   ) {}
 
   #requireAssets(): AssetReadPort {
@@ -226,10 +234,8 @@ export class AttachmentService {
     const em = this.emFactory();
     await this.#assertProductExists(em, productId);
 
-    const asset = await this.#requireAssets().findById(req.assetId);
-    if (!asset) {
-      throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Asset ${req.assetId} not found.`);
-    }
+    // A hidden file answers as a missing one (feature 166, FR-006).
+    const asset = await requireLinkableAsset(this.#requireAssets(), req.assetId);
     if (!ASSET_KINDS_ATTACHMENT.has(asset.kind)) {
       throw new HttpError(
         400,
@@ -249,7 +255,9 @@ export class AttachmentService {
 
     const position = req.position ?? (await this.#nextPosition(em, productId));
     const id = randomUUID();
-    const attachment = await this.#audited('product_attachment.create', 'product_attachment', id, async (cem) => {
+    // Feature 163 (FR-080) — one audit entry per request, the Command's; the route
+    // writes none of its own. `product.updated.v1` `['attachments']` after commit.
+    const attachment = await this.#runAttachmentCommand('product_attachment.create', id, productId, async (cem) => {
       const created = cem.create(ProductAttachment, {
         id,
         productId,
@@ -263,7 +271,7 @@ export class AttachmentService {
       return {
         result: created,
         before: null,
-        after: { productId, assetId: req.assetId, attachmentTypeId: req.attachmentTypeId, name: req.name, position },
+        after: { ...attachmentProjection(created), assetId: req.assetId },
       };
     });
     return this.#attachmentDto(attachment);
@@ -274,8 +282,14 @@ export class AttachmentService {
     attachmentId: string,
     req: UpdateAttachmentRequest,
   ): Promise<ProductAttachmentDto> {
-    const a = await this.#audited('product_attachment.update', 'product_attachment', attachmentId, async (em) => {
-      const row = await em.findOne(ProductAttachment, { id: attachmentId, productId });
+    const a = await this.#runAttachmentCommand('product_attachment.update', attachmentId, productId, async (em) => {
+      // Locked, so concurrent writes on one attachment serialise and each audit
+      // `before` is its true predecessor (FR-081).
+      const row = await em.findOne(
+        ProductAttachment,
+        { id: attachmentId, productId },
+        { lockMode: LockMode.PESSIMISTIC_WRITE },
+      );
       if (!row) {
         throw new HttpError(
           404,
@@ -283,7 +297,7 @@ export class AttachmentService {
           `Attachment ${attachmentId} not found under Product ${productId}.`,
         );
       }
-      const before = { attachmentTypeId: row.attachmentTypeId, name: row.name, position: row.position };
+      const before = attachmentProjection(row);
       if (req.attachmentTypeId !== undefined) {
         const type = await em.findOne(AttachmentType, { id: req.attachmentTypeId });
         if (!type) {
@@ -298,11 +312,11 @@ export class AttachmentService {
       if (req.name !== undefined) row.name = req.name;
       if (req.description !== undefined) row.description = req.description;
       if (req.position !== undefined) row.position = req.position;
-      return {
-        result: row,
-        before,
-        after: { attachmentTypeId: row.attachmentTypeId, name: row.name, position: row.position },
-      };
+      const after = attachmentProjection(row);
+      // A request that changes nothing writes and announces nothing.
+      if (JSON.stringify(before) === JSON.stringify(after)) return { result: row, unchanged: true };
+      await em.flush();
+      return { result: row, before, after };
     });
     return this.#attachmentDto(a);
   }
@@ -326,6 +340,57 @@ export class AttachmentService {
   }
 
   // -- INTERNALS ------------------------------------------------------------
+
+  /**
+   * Feature 163 (FR-080, FR-082) — an attachment write as a Command (`objectType:
+   * 'product_attachment'`): one audit entry whose projections carry the product, the
+   * translations and the hidden channels; `product.updated.v1` `['attachments']` after
+   * commit. `write` answers `unchanged` for a no-op — no audit row, no event.
+   */
+  async #runAttachmentCommand(
+    action: string,
+    attachmentId: string,
+    productId: string,
+    write: (em: EntityManager) => Promise<
+      | { result: ProductAttachment; unchanged: true }
+      | { result: ProductAttachment; before: Record<string, unknown> | null; after: Record<string, unknown> }
+    >,
+  ): Promise<ProductAttachment> {
+    const command: Command<{ row: ProductAttachment; changed: boolean }> = {
+      action,
+      objectType: 'product_attachment',
+      objectId: attachmentId,
+      run: async ({ em }) => {
+        const written = await write(em);
+        if ('unchanged' in written) return { result: { row: written.result, changed: false }, skipAudit: true };
+        return {
+          result: { row: written.result, changed: true },
+          before: written.before,
+          after: { ...written.after, changedFields: ['attachments'] },
+        };
+      },
+      event: ({ changed }) =>
+        changed
+          ? {
+              eventName: 'product.updated.v1',
+              payload: {
+                eventId: randomUUID(),
+                occurredAt: new Date().toISOString(),
+                productId,
+                changedFields: ['attachments'],
+              },
+            }
+          : undefined,
+    };
+    if (this.commandBus) return (await this.commandBus.run(command)).row;
+    return this.emFactory().transactional(async (em) => {
+      const outcome = await command.run({
+        em,
+        actor: { actorAdminUserId: null, impersonatedCustomerAccountId: null, kind: 'system' },
+      });
+      return outcome.result.row;
+    });
+  }
 
   async #assertProductExists(em: EntityManager, productId: string): Promise<void> {
     const product = await em.findOne(Product, { id: productId });
@@ -369,8 +434,23 @@ export class AttachmentService {
       name: a.name,
       description: a.description ?? null,
       position: a.position,
+      hidden: a.hidden,
       createdAt: a.createdAt.toISOString(),
       updatedAt: a.updatedAt.toISOString(),
     };
   }
+}
+
+/**
+ * The audit projection of one attachment write (FR-080): every field the PATCH accepts
+ * plus the product, so re-sending it (minus `productId`) restores the row (FR-081).
+ */
+function attachmentProjection(row: ProductAttachment): Record<string, unknown> {
+  return {
+    productId: row.productId,
+    attachmentTypeId: row.attachmentTypeId,
+    name: row.name,
+    description: row.description ?? null,
+    position: row.position,
+  };
 }

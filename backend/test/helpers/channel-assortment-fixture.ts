@@ -7,6 +7,7 @@ import {
   SEED_PRODUCT_102_ID,
   SEED_PRODUCT_102_SKU,
 } from './seed-catalog.js';
+import { TEST_ORGANIZATION_ID } from './test-actors.js';
 
 /**
  * One channel that sells one of the seeded products and not the other — the
@@ -65,7 +66,6 @@ export async function seedProbeChannelAssortment(
     currencies: ['PLN'],
     defaultCurrency: 'PLN',
     active: true,
-    isPublic: true,
   });
   await em.persistAndFlush(channel);
 
@@ -75,6 +75,18 @@ export async function seedProbeChannelAssortment(
       `insert into sales_channel_products (sales_channel_id, product_id) values (?,?) ` +
         `on conflict (sales_channel_id, product_id) do nothing`,
       [channel.id, SEED_PRODUCT_102_ID],
+    );
+
+  // Feature 154 — the buyer these suites sign in as shops on the probe channel,
+  // so its Organization is assigned to it. Written the same way as the product
+  // bridge above, and for the same reason. Seeded before the suite's first
+  // request, so no permitted-channel set is cached yet for it to go stale in.
+  await em
+    .getConnection()
+    .execute(
+      `insert into sales_channel_organizations (sales_channel_id, organization_id) values (?,?) ` +
+        `on conflict (sales_channel_id, organization_id) do nothing`,
+      [channel.id, TEST_ORGANIZATION_ID],
     );
 
   return {

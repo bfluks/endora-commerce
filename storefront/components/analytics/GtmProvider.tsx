@@ -17,15 +17,22 @@ import { subscribeConsent } from '../../lib/analytics/consent';
  *
  * Renders no visible UI.
  */
-export function GtmProvider({ config }: { config: GtmStorefrontConfig }): ReactNode {
+export function GtmProvider({
+  config,
+  salesChannelCode,
+}: {
+  config: GtmStorefrontConfig;
+  /** The active sales channel, named on the collect beacon. */
+  salesChannelCode: string | undefined;
+}): ReactNode {
   // Publish synchronously on first render so an interaction that fires before
   // effects run still sees the config.
-  configureGtm(config);
+  configureGtm(config, salesChannelCode);
 
   useEffect(() => {
-    configureGtm(config);
-    return subscribeConsent(() => configureGtm(config));
-  }, [config]);
+    configureGtm(config, salesChannelCode);
+    return subscribeConsent(() => configureGtm(config, salesChannelCode));
+  }, [config, salesChannelCode]);
 
   return null;
 }

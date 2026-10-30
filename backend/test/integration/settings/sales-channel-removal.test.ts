@@ -56,14 +56,12 @@ describe('sales-channel removal cascades to setting_values (T054)', () => {
         name: { en: 'Main' },
         defaultLanguage: 'en',
         defaultCurrency: 'USD',
-        isPublic: true,
       });
       const wholesale = em.create(SalesChannel, {
         code: 'sc_rem_wholesale',
         name: { en: 'Wholesale' },
         defaultLanguage: 'en',
         defaultCurrency: 'USD',
-        isPublic: false,
       });
       await em.persistAndFlush([main, wholesale]);
 

@@ -1,5 +1,183 @@
 # @endora-commerce/mod-product-feeds
 
+## 0.108.0
+
+### Minor Changes
+
+- 14bcf1d: Every consumer prices on price books (feature 160, D-287 P1), through the one batched resolution chain.
+
+  - **carts** — `cart_items.price_source` (migration `…_carts_cart_items_price_source`) records which tier priced a line (`agreed | base | catalogue | buyer | sale`). `CartLinePricing.orderablePrices` drops the product's own price step, passes the variant, and stores the source.
+  - **orders** — `order_items.price_source` (migration `…_orders_order_items_price_source`) is copied from the cart line at placement. The admin order preview and the external order intake price through `resolveLinePrices` instead of one `resolveLinePrice` per line; a line no price book prices is refused, with no `defaultPrice` fallback.
+  - **organizations** — the effective price lists of an organization are its effective **price books**: `PriceListReadPort.listForOrganization({ organizationChain, customerGroupId })` answers the books whose audience holds the organization, an ancestor or its group, each with `reason` and `depth`. Old: `listActive()` plus `evaluateApplicationRule` per list. New: one `listForOrganization` call.
+  - **product_feeds** — a feed pinned to a price book publishes that book's rows over the channel's catalogue price (`namedListPrices` takes the feed's `salesChannelId`); a product the book does not price is absent.
+  - **search** — hits and suggestions price through the batched listing resolution; suggestions pass the request currency.
+  - **quote_requests** — reference prices are resolved in the request's currency; the RFQ create prefill and the reference probe call `POST /api/v1/admin/price-books/resolve` instead of `GET /api/v1/admin/products/:id/resolved-price`.
+
+- 337fb65: The upgrade to price books no longer stops on a product feed pinned to an old-model price list.
+
+  - **`@endora-commerce/mod-price-lists`.** The conversion migration deletes the old-model lists one at a time. A list another table still refers to (on 0.107.0, a product feed pinned to it) is **retired** instead of deleted: it keeps its id, loses its rows, audience, channel bindings and dates, becomes `expired` and for everyone, and is renamed "… (removed by the 0.108.0 upgrade)". Before, the conversion failed on the feed's foreign key and the whole upgrade rolled back.
+  - **`@endora-commerce/mod-product-feeds`.** New migration `20261023T234605_product_feeds_price_list_fk_dropped` drops `product_feeds_price_list_fk`: a price book a feed is pinned to can now be deleted. The feed then warns `not_found` and its next run withdraws its published file; a new pin is still checked against the price books when it is written. After the upgrade a feed pinned to a retired list warns `not_active`, and its next run withdraws its file until it is pinned to a price book that applies, or unpinned, through the product feeds API (`PATCH …/product-feeds/:id`, `priceListId`).
+
+- 789f917: A product feed pinned to a price book publishes the book's prices only while the book applies to an anonymous buyer on the feed's channel (feature 160, FR-029, owner ruling 2026-10-23).
+
+  - **`@endora-commerce/contracts`.** New `pinnedPriceBookUnpublishableReasonSchema` (`not_found`, `currency_mismatch`, `not_active`, `outside_schedule`, `not_on_channel`, `audience_restricted`) and the `PinnedPriceBookPublishability` type. `productFeedSchema` gains `pinnedPriceBookWarning` (the reason, or `null`).
+  - **`@endora-commerce/mod-price-lists`.** `pricingService.namedListPrices` answers nothing unless the book is `active` or `scheduled` inside its schedule window, bound to the feed's channel with the channel offering its currency (a base book is channel-independent) and for everyone; before, it ignored status, dates, channel and audience. New `pricingService.namedListPublishability({ priceListId, currencyCode, salesChannelId })` says whether, and why not. The catalogue price a pinned book's percentage and amount rows are taken off is now the channel's catalogue price **without** that book (an everyone book was taken off its own result).
+  - **`@endora-commerce/mod-product-feeds`.** `FeedPricingPort` requires `namedListPublishability`; the admin feed list and detail rows carry `pinnedPriceBookWarning`, and the feed page shows it as a warning (English and Polish). What a run of such a feed does is `160-pinned-feed-withdrawal.md`'s.
+
+- d231c48: A product feed whose pinned price book does not apply at generation time withdraws its published file (feature 160, FR-029, owner ruling 2026-10-23).
+
+  - **`@endora-commerce/contracts`.** `feedRunStatusSchema` gains `withdrawn`. `productFeedRunSummarySchema` (and so a feed's `lastRun` and every run) gains `withdrawalReason`: on a `withdrawn` run, one of `pinnedPriceBookUnpublishableReasonSchema`'s reasons; `null` otherwise. A consumer that switches exhaustively on the run status has one more case. `feedRunFailureCodeSchema` drops `price_list_unavailable`, which nothing ever raised: a run whose pinned book does not apply is a withdrawal, not a failure.
+  - **`@endora-commerce/mod-product-feeds`.** A run of a feed pinned to a book that does not apply ends `withdrawn` with the reason, before the catalogue is walked: it produces no file, clears the feed's published file, and the public feed URL then answers exactly as for a feed that has never been generated (`404`, the one not-available body). It is not a failed run, so no failed-run notification is sent; the earlier file is detached, not deleted, and is purged by the usual artefact retention. When the book applies again, the next run publishes as usual. A failed run (a configuration error, the skip threshold, storage) still keeps the last good file serving, as before. New column `product_feed_runs.withdrawal_reason` (migration `20261023T195611_product_feeds_run_withdrawal_reason`). `FeedGenerationService` requires a `pinnedPriceBookPublishability` dependency. The admin shows the outcome as _Withdrawn_ on the run badge, the run page and the feed page (English and Polish); the warning for a pinned book that no longer exists no longer points at a Settings control that does not exist.
+
+- f367838: A resolver amount stays the decimal string `price_lists` answers with until it is rounded, and it is rounded only by the decimal helpers (`roundAmountHalfUp`, `grossAmountHalfUp`).
+
+  - **`@endora-commerce/mod-product-feeds`.** The feed's price ports carry decimal strings: `NamedListPriceResolver` and `SelectionPricePort` answer `Map<string, string>` (was `Map<string, number>`), `AnonymousPriceResolver` answers `{ amount: string; isSale }`, `NamedListPriceResolvers.one` answers `string | null`, and `FeedItemPrice.net` / `.gross` are strings (`gross` already rounded to two places). A custom item-field resolver or a decoration of these ports reads strings now; the file's figures do not change.
+  - **`@endora-commerce/mod-quote-requests`.** A quote line's reference price is rounded from the resolver's decimal string, not from a JS number; anything but a non-negative decimal stores no reference.
+  - **`@endora-commerce/mod-comparisons`.** The comparison PDF, its document table block and the admin comparison screen write a price at two places, half-up: a price of 9.0450 was shown as `9.045 PLN`, and 1900 as `1900 PLN`.
+
+### Patch Changes
+
+- 8d62ff8: Documentation only (feature 160, FR-048): the module pages describe how prices are determined with price books.
+
+  - `price_lists` ships three pages instead of one: _Price books_ (what a book is, base prices, the four resolution steps, the default precedence, variants, where prices appear, the demo's worked examples, permissions, known limitations and a migration note), _The price-book editor_ (every admin screen) and _Pricing for developers_ (data model, resolver, the batched read path, caching, the price surface, the admin and storefront API, the ports and the conversion from the old model).
+  - The pages of `catalog`, `carts`, `orders`, `organizations`, `product_feeds`, `quick_order`, `quote_requests` and `search` describe their prices as resolved from price books, with no product-owned price and no fallback. No code changes.
+
+- e358ccb: Documentation only (feature 160): the module pages follow the targeted refresh of the price surface and the pinned-feed rules of 2026-10-23.
+
+  - `price_lists` — _Pricing for developers_ describes the two kinds of mark (a (profile, product) mark in `price_profile_stale_products`, a whole-profile mark), what each write marks, the worker's pass, `namedListPublishability` and the reference a pinned book's percentages are taken off, and the unpriced shape of `resolved-price`; _Price books_ says how soon a price change shows in a price-sorted listing — within a minute for a targeted change, within five minutes at about 200 profiles for a catalogue-wide one (SC-005, owner ruling 2026-10-24) — and that a list a feed was pinned to is retired, not deleted, by the upgrade. The demo is loaded with `demo seed`, not `demo reset`.
+  - `product_feeds` — a pinned price book publishes only while it is active or scheduled within its dates, on the feed's channel and for everyone; the feed page warns otherwise, and a run ends `withdrawn` and withdraws the published file (not a failure: no notification, no delivery; the old file stays downloadable from its run). A feed is pinned through the admin API (issue #414).
+  - `catalog` — product, category and attribute events mark on the price surface the products they concern. No code changes.
+
+- 87ac085: A price is rounded to two places the same way everywhere: half-up on its decimal digits.
+
+  - **`@endora-commerce/contracts`.** New `roundAmountHalfUp(value: string | number): string` — an amount at two places, half-up on its decimal digits (half away from zero when negative). A number is read as the shortest decimal that round-trips it.
+  - **`@endora-commerce/mod-carts`.** The basket line stores the resolver's four-place amount through `roundAmountHalfUp`, and the placement drift check (`storedPriceDiffers`) compares with it. `Number(amount).toFixed(2)` rounded the binary double, so a 9.0450 price was stored and charged as 9.04 while the card showed 9.05, and 1.0050 as 1.00 against 1.01.
+  - **`@endora-commerce/mod-orders`.** The admin order preview rounds its line prices the same way.
+  - **`@endora-commerce/mod-quote-requests`.** A quote line's stored reference price is rounded the same way.
+  - **`@endora-commerce/mod-product-feeds`.** Feed prices (`123.45 PLN`) are rounded the same way.
+
+- 87f673d: A gross price is computed on decimals and rounded half-up, the same way everywhere.
+
+  - **`@endora-commerce/contracts`.** New `grossAmountHalfUp(net: string | number, ratePercent: string | number): string` — `net × (1 + rate / 100)` at two places, half-up on the exact decimal product, beside `roundAmountHalfUp`. A number is read as the shortest decimal that round-trips it.
+  - **`@endora-commerce/mod-product-feeds`.** A gross feed (the default presentation) computes its price with it. It rounded the binary double, so 29.50 at 23 % was published as 36.28 instead of 36.29, 4.30 at 5 % as 4.51 instead of 4.52, and 31.50 at 23 % as 38.74 instead of 38.75.
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+
+## 0.107.0
+
+### Patch Changes
+
+- 248a9df: Routes a visitor reaches before signing in, or that arrive with no storefront channel, declare
+  `salesChannelAccess: 'open'` and stay reachable when an operator closes a sales channel to
+  anonymous visitors: administrator sign-in and sign-out, second-factor verification and set-up
+  tickets and federated sign-in (both surfaces), `GET /api/v1/i18n/config`, the dictionary reads the
+  registration form uses, the crawler policy, product-feed downloads by token, and the newsletter
+  confirmation, unsubscribe and tracking links.
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

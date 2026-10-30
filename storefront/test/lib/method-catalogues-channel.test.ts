@@ -13,15 +13,29 @@ import { listDeliveryMethods, listPaymentMethods } from '../../lib/api/methods';
  * channel; once it does not, a storefront that still asked without the header
  * would be shown the default channel's methods on every channel.
  *
- * A deployment that stamps no channel passes a context without a code, sends no
- * header and gets the default channel's catalogue: the single-channel path,
- * unchanged, and held by the last case.
+ * A context without a code sends the channel the middleware stamped on the
+ * request (`specs/154-sales-channel-access/`); only outside a request is no
+ * header sent and the default channel's catalogue returned.
  */
+
+/**
+ * The channel `middleware.ts` stamped on the request being served, as
+ * `next/headers` answers it — or `null` for no request scope at all
+ * (`specs/154-sales-channel-access/contracts/storefront-ux.md` §1.3).
+ */
+const stamped: { code: string | null } = { code: null };
+vi.mock('next/headers', () => ({
+  headers: async () => {
+    if (stamped.code === null) throw new Error('`headers` was called outside a request scope.');
+    return new Headers({ 'x-sales-channel': stamped.code });
+  },
+}));
 
 const originalFetch = globalThis.fetch;
 let sent: Array<{ path: string; headers: Record<string, string> }> = [];
 
 beforeEach(() => {
+  stamped.code = null;
   sent = [];
   globalThis.fetch = vi.fn(async (url: unknown, init: unknown) => {
     sent.push({
@@ -59,7 +73,15 @@ describe('method catalogues carry the sales channel', () => {
     expect(sent[0]!.headers['X-Sales-Channel']).toBe('b2b-eu');
   });
 
-  it('sends no channel header when the deployment stamps none', async () => {
+  it('sends the stamped channel when the context names none', async () => {
+    stamped.code = 'default';
+    await listDeliveryMethods({ locale: 'en-US' });
+    await listPaymentMethods({ locale: 'en-US' });
+
+    expect(sent.map((request) => request.headers['X-Sales-Channel'])).toEqual(['default', 'default']);
+  });
+
+  it('sends no channel header outside a request', async () => {
     await listDeliveryMethods({ locale: 'en-US' });
     await listPaymentMethods({ locale: 'en-US' });
 

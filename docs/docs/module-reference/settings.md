@@ -29,6 +29,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 
 | Module | Binding | What it means |
 | --- | --- | --- |
+| `assets_library` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `auth` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 
 ## Permissions
@@ -42,6 +43,8 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 
 | Action | Opens | Permission |
 | --- | --- | --- |
+| `clear-cache` | `/settings/cache` | `settings:write` |
+| `open-setting-groups` | `/settings/groups` | `settings:read` |
 | `open-settings` | `/settings` | `settings:read` |
 
 ## Settings
@@ -54,8 +57,10 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | `shop.address` | Shop address | `string` |
 | `shop.contact_email` | Main contact email | `string` |
 | `shop.contact_form_recipient_emails` | Contact form recipient emails | `string` |
+| `shop.logo_asset_id` | Shop logo | `string` |
 | `shop.name` | Shop name | `string` |
 | `shop.phone` | Shop phone number | `string` |
+| `shop.social_profiles` | Social profiles | `string_list` |
 | `shop.support_email` | Support / customer service email | `string` |
 | `storefront.product_card.show_add_to_cart` | Show "Add to cart" on product cards | `boolean` |
 | `storefront.product_card.show_add_to_shopping_list` | Show "Add to shopping list" on product cards | `boolean` |

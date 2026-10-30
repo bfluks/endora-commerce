@@ -14,7 +14,11 @@
  * plus the discriminations, because a judgement that reported every package
  * would be satisfied by half of these on its own.
  */
-import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   binTargets,
@@ -24,6 +28,7 @@ import {
   workspaceRanges,
   type PackedPackage,
 } from '../../../scripts/lib/pack-assert.js';
+import { listTarball } from '../../../scripts/lib/pack-tarball.js';
 
 /** A package that packs correctly. Every proof below is one mutation of it. */
 const HEALTHY: PackedPackage = {
@@ -355,5 +360,64 @@ describe('pack-gate — over the whole set', () => {
       'peerDependencies.c',
       'optionalDependencies.d',
     ]);
+  });
+});
+
+/**
+ * The listing the judgement is handed, read from a real tarball (issue #315).
+ *
+ * It used to parse `tar -tzvf` columns, and the two `tar`s print different
+ * ones: GNU tar `mode owner/group size date time path`, bsdtar (macOS)
+ * `mode links owner group size month day time path`. Under bsdtar no line
+ * matched, every tarball listed as empty, and every package was reported
+ * `no-compiled-code`. The tarball here is built with whichever `tar` the
+ * machine has, so the proof runs on the userland that produced the defect.
+ */
+describe('pack-gate — listing a tarball', () => {
+  let scratch: string | null = null;
+
+  afterEach(() => {
+    if (scratch !== null) rmSync(scratch, { recursive: true, force: true });
+    scratch = null;
+  });
+
+  function tarballOf(files: Readonly<Record<string, string>>): string {
+    scratch = mkdtempSync(join(tmpdir(), 'pack-tarball-'));
+    mkdirSync(join(scratch, 'source', 'package'), { recursive: true });
+    for (const [path, content] of Object.entries(files)) {
+      const target = join(scratch, 'source', path);
+      mkdirSync(join(target, '..'), { recursive: true });
+      writeFileSync(target, content);
+    }
+    const tarball = join(scratch, 'fixture.tgz');
+    const packed = spawnSync('tar', ['-czf', tarball, '-C', join(scratch, 'source'), 'package']);
+    expect(packed.status).toBe(0);
+    return tarball;
+  }
+
+  it('lists every file under `package/` with its size', () => {
+    const tarball = tarballOf({
+      'package/package.json': '{"name":"@fx/alpha"}',
+      'package/dist/index.js': 'export const a = 1;\n',
+      'package/dist/empty.js': '',
+    });
+    const entries = listTarball(tarball, join(scratch!, 'listed'));
+    expect([...(entries ?? [])].sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: 'dist/empty.js', size: 0 },
+      { path: 'dist/index.js', size: 20 },
+      { path: 'package.json', size: 20 },
+    ]);
+  });
+
+  it('answers `null` for a tarball it cannot read, never an empty package', () => {
+    scratch = mkdtempSync(join(tmpdir(), 'pack-tarball-'));
+    const tarball = join(scratch, 'broken.tgz');
+    writeFileSync(tarball, 'not a tarball');
+    expect(listTarball(tarball, join(scratch, 'listed'))).toBeNull();
+  });
+
+  it('answers `null` for a tarball holding nothing under `package/`', () => {
+    const tarball = tarballOf({});
+    expect(listTarball(tarball, join(scratch!, 'listed'))).toBeNull();
   });
 });

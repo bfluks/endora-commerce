@@ -22,13 +22,14 @@ platformy, a nie tego, co akurat zostało opisane.
 | [Cykl życia modułu](./lifecycle.md) | Instalacja, odinstalowanie, włączanie, wyłączanie i status każdego modułu backendu z poziomu CLI, walidacja zależności i uzgadnianie stanu przy pierwszym starcie | core |
 | [addresses](./addresses.md) | Adresy pocztowe klientów, z najwyżej jednym adresem domyślnym każdego rodzaju | @endora-commerce/mod-addresses |
 | [Akcje palety poleceń w panelu administracyjnym](./admin-actions.md) | Rejestr akcji dodawanych przez moduły do palety poleceń w panelu administracyjnym (⌘K, grupa Actions) | @endora-commerce/mod-admin-actions |
+| [Opinie](./admin-feedback.md) | Administratorzy wysyłają z panelu opinie twórcom Endora Commerce, przekazywane jako jeden e-mail i nigdzie nie zapisywane | @endora-commerce/mod-admin-feedback |
 | `admin_notifications` | _brak strony_ | @endora-commerce/mod-admin-notifications |
 | [admin_roles](./admin_roles.md) | Role administratorów i uprawnienia poszczególnych modułów | @endora-commerce/mod-admin-roles |
 | [admin_search](./admin-search.md) | Wyszukiwanie globalne w panelu administracyjnym — znajdowanie organizacji, klientów, zamówień, zapytań ofertowych, szans sprzedażowych, produktów i kategorii z palety poleceń, z konfigurowalnymi polami wyszukiwania | @endora-commerce/mod-admin-search |
 | [admin_users](./admin_users.md) | Konta administratorów platformy i logowanie jako klient | @endora-commerce/mod-admin-users |
 | [analytics](./analytics.md) | Zbieranie zdarzeń ze storefrontu, zestawienia w panelu administracyjnym i opcjonalne przekazywanie do GA4 | @endora-commerce/mod-analytics |
 | [api_keys](./api_keys.md) | Dane uwierzytelniające integracji w postaci tokenu bearer | @endora-commerce/mod-api-keys |
-| [Biblioteka mediów](./assets-library/index.md) | Centralna biblioteka plików z wymiennymi adapterami przechowywania, usuwaniem miękkim i ochroną przed usunięciem używanych plików | @endora-commerce/mod-assets-library |
+| [Biblioteka zasobów](./assets-library/index.md) | Centralna biblioteka plików z wymiennymi adapterami przechowywania, stałymi adresami plików i stałymi linkami, podmianą pliku w miejscu, usuwaniem miękkim z okresowym czyszczeniem i ochroną przed usunięciem używanych plików | @endora-commerce/mod-assets-library |
 | [audit_logs](./audit_logs.md) | Dziennik audytu wrażliwych operacji | @endora-commerce/mod-audit-logs |
 | [auth](./auth.md) | Sesje klientów i administratorów, hashowanie haseł, TOTP | @endora-commerce/mod-auth |
 | [Blog](./blog/index.md) | Wpisy redakcyjne z treścią z Page Buildera, kategoriami i tagami oraz listami wpisów w storefroncie | @endora-commerce/mod-blog |
@@ -40,7 +41,7 @@ platformy, a nie tego, co akurat zostało opisane.
 | [credit_limits](./credit_limits.md) | Przyznawanie limitów kredytowych i atomowa rezerwacja | @endora-commerce/mod-credit-limits |
 | [crm](./crm.md) | Szanse sprzedażowe z konfigurowalnym przepływem statusów, za którym podążają powiązane zamówienia | @endora-commerce/mod-crm |
 | [currencies](./currencies.md) | Lista akceptowanych kodów walut ISO 4217 i waluta domyślna | @endora-commerce/mod-currencies |
-| `custom_fields` | _brak strony_ | @endora-commerce/mod-custom-fields |
+| [custom_fields](./custom_fields.md) | Typowane pola, które operator dodaje do zamówień, zapytań ofertowych, szans sprzedażowych i innych rekordów bez zmiany kodu, edytowane na jednym ekranie, dostępne jako filtry list w panelu i przenoszone z jednego rekordu do rekordu z niego utworzonego. | @endora-commerce/mod-custom-fields |
 | [customer_accounts](./customer_accounts.md) | Logowanie klientów, reset hasła, 2FA, przypisanie roli | @endora-commerce/mod-customer-accounts |
 | [customers](./customers.md) | Cykl życia klienta na bazie `customer_accounts` — organizacje firmowe i prywatne, przypisanie handlowca i obsługa klientów w panelu administracyjnym | @endora-commerce/mod-customers |
 | [delivery_methods](./delivery_methods.md) | Skonfigurowane metody dostawy | @endora-commerce/mod-delivery-methods |
@@ -65,8 +66,9 @@ platformy, a nie tego, co akurat zostało opisane.
 | [payment_methods](./payment_methods.md) | Skonfigurowane metody płatności | @endora-commerce/mod-payment-methods |
 | [payments](./payments.md) | Obsługa sterowników płatności i zdarzenia rozliczeń | @endora-commerce/mod-payments |
 | `pim_connector` | _brak strony_ | @endora-commerce/mod-pim-connector |
-| [price_lists](./price_lists.md) | Cenniki dla klienta, grupy i domyślne, z progami ilościowymi i korektami dla kategorii | @endora-commerce/mod-price-lists |
+| [Cenniki](./price_lists.md) | Cenniki — ceny bazowe w każdej walucie, ceny katalogowe, ceny dla kupujących i ceny promocyjne w kanałach sprzedaży oraz reguły, które decydują, ile płaci każdy kupujący. | @endora-commerce/mod-price-lists |
 | [Feedy produktowe](./product_feeds.md) | Feedy produktowe w formacie dostawcy dla każdego kanału sprzedaży — generowanie według harmonogramu, adresy URL z tokenem do pobierania oraz wysyłka przez SFTP/FTP/HTTP | @endora-commerce/mod-product-feeds |
+| [projects](./projects.md) | Projekty dla zera lub wielu organizacji, prowadzone przez własne etapy przez członków pełniących role projektowe | @endora-commerce/mod-projects |
 | [promotions](./promotions.md) | Rabaty na poziomie koszyka — procentowe, kwotowe i darmowa dostawa — z warunkami, które muszą być spełnione | @endora-commerce/mod-promotions |
 | [Asystent AI (Prompt Actions)](./prompt-actions.md) | Polecenia w języku naturalnym w palecie poleceń panelu administracyjnego, z jawnym podglądem i potwierdzeniem przed każdą zmianą | @endora-commerce/mod-prompt-actions |
 | [PWA (Progressive Web App)](./pwa.md) | Funkcje Progressive Web App dla storefrontu i panelu administracyjnego — instalacja na ekranie głównym, opcjonalna pamięć podręczna zasobów, kontrolowane aktualizacje i opcjonalne powiadomienia push | @endora-commerce/mod-pwa |
@@ -79,6 +81,7 @@ platformy, a nie tego, co akurat zostało opisane.
 | [Ustawienia](./settings/index.md) | Konfiguracja platformy deklarowana w manifestach, z wartościami dla poszczególnych kanałów sprzedaży i API odczytu z pamięcią podręczną | @endora-commerce/mod-settings |
 | [shipments](./shipments.md) | Rekord przesyłki z możliwością ponowienia i jego cykl życia — odpowiednik modułu payments po stronie dostawy | @endora-commerce/mod-shipments |
 | [shopping_lists](./shopping_lists.md) | Nazwane listy zakupów klienta, które można zamienić w koszyk lub zapytanie ofertowe | @endora-commerce/mod-shopping-lists |
+| [tasks](./tasks.md) | Zadania dla administratorów — wiele osób przypisanych, terminy, priorytety, etykiety, przebieg określony przez operatora, lista i tablica, komentarze, podzadania, powiązania, przypomnienia i dzienne podsumowanie — które inne moduły mogą przejmować przez kontekst zadania | @endora-commerce/mod-tasks |
 | [taxes](./taxes.md) | Wyznaczanie stawek podatkowych według kraju, typu produktu i statusu VAT | @endora-commerce/mod-taxes |
 | [transactional_emails](./transactional-emails.md) | E-maile transakcyjne edytowane w panelu administracyjnym — temat, treść i wygląd, globalnie i dla poszczególnych kanałów sprzedaży | @endora-commerce/mod-transactional-emails |
 | [webhooks](./webhooks.md) | Subskrypcje zdarzeń wychodzących podpisywanych HMAC | @endora-commerce/mod-webhooks |

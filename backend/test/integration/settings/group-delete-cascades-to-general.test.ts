@@ -69,7 +69,6 @@ describe('group delete reassigns to general (T033)', () => {
           name: { en: 'Main' },
           defaultLanguage: 'en',
           defaultCurrency: 'USD',
-          isPublic: true,
         });
       if (!(await em.findOne(SalesChannel, { id: channel.id }))) {
         await em.persistAndFlush(channel);

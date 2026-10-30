@@ -1,5 +1,209 @@
 # @endora-commerce/platform
 
+## 0.108.0
+
+### Minor Changes
+
+- 4da88fd: **New: `request.responseLanguage()`** on every request of a composition that installs the error envelope (`registerErrorEnvelope`). It answers the language the envelope translates an error sentence into — the admin's stored preference for an admin, otherwise the q-sorted `Accept-Language`, otherwise the channel's default language — so a handler can name things in a refusal in the same language as its sentence. Resolved lazily, once per request, and shared with the envelope; it never throws, answering `LANGUAGE_FALLBACK` when no language resolver was injected or the resolver failed. The declaration rides on `@endora-commerce/platform/http`; no new export. Registering the error envelope twice on one app with a different `resolvePreferredLanguage` now throws at registration; twice with the same resolver shares the first registration's resolution.
+- 8f0fd0e: A typed money amount with more than two decimal places is refused with `400 AMOUNT_PRECISION_EXCEEDED`, never rounded (issue #417, owner ruling of 2026-10-24).
+
+  - `@endora-commerce/contracts`: new `money-input` module — `twoDecimalAmount(schema)` for a number schema, `twoDecimalAmountString(schema)` for a decimal string, `addAmountPrecisionIssue(ctx, path)` for a `superRefine` that decides per field, `hasAtMostTwoDecimals(value)`, `isAmountPrecisionIssue(issue)` and the `AMOUNT_PRECISION_EXCEEDED` constant; new `ERROR_CODES.AMOUNT_PRECISION_EXCEEDED`.
+  - `@endora-commerce/platform`: the error envelope answers `400 AMOUNT_PRECISION_EXCEEDED` when every failed issue of a request is the precision issue, whether the route validated through the type provider or parsed the body itself; a request failing anything else as well stays `VALIDATION_FAILED`, the precision issue listed among its details.
+  - `@endora-commerce/mod-i18n`: declares the code in the platform block, with its sentence in English and Polish.
+
+- a8919dc: A unit price keeps up to four decimal places, unrounded, from the price book to the invoice line; only the line value is rounded (owner ruling of 2026-10-25).
+
+  - `@endora-commerce/contracts`: new `unitPriceHalfUp(value)` (a unit price at its four places, as `numeric(14,4)` stores it), `unitPriceFractionDigits(value)` and `unitPriceDisplayText(value)` (the one display rule: two places when places three and four are zero, otherwise the significant places, up to four), `grossUnitPriceHalfUp(net, rate, unit?)` (a displayed gross unit price: two places for a two-place net, four for a sub-cent one) and `UNIT_PRICE_PLACES`. In `money-input`: `fourDecimalUnitPrice(schema)`, `fourDecimalUnitPriceString(schema)`, `hasAtMostFourDecimals(value)`, `isUnitPricePrecisionIssue(issue)` and the `UNIT_PRICE_PRECISION_EXCEEDED` constant; new `ERROR_CODES.UNIT_PRICE_PRECISION_EXCEEDED`. A quote's `desiredUnitPrice` (`createQuoteRequestLineSchema`) and `agreedUnitPrice` (`adminCreateQuoteRequestLineSchema`, `adminPatchQuoteRequestLineSchema`) now accept four places; a fifth is refused with the new code. Typed money amounts keep `twoDecimalAmount`. A `money` document value (`documentValueSchema`, `DocumentValue`) takes an optional `unitPrice: true`, and `formatDocumentValue` shows such a value with its significant places, up to four, never fewer than the format's `decimals`.
+  - `@endora-commerce/platform`: the error envelope answers `400 UNIT_PRICE_PRECISION_EXCEEDED` when every failed issue of a request is the unit-price precision issue; a request refused for an amount and a unit price at once stays `VALIDATION_FAILED`.
+  - `@endora-commerce/mod-i18n`: declares `UNIT_PRICE_PRECISION_EXCEEDED` in the platform block, with its sentence in English and Polish.
+
+### Patch Changes
+
+- 5bddd11: `productAudienceOf(request)` now carries the signed-in customer's `customerAccountId` on the `ProductAudience` it answers for a customer actor (D-287 P0), so catalogue, search, comparison and product-link pricing can apply the customer's own customer group. Visibility is unchanged: `isProductVisibleTo` does not read it.
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [5bddd11]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- 248a9df: The sales-channel resolver now decides who may use the channel it resolved.
+
+  After a request's channel is resolved — by API-key binding, `X-Sales-Channel`, `?salesChannel=`,
+  the host map or the system-default fallback — an **anonymous** request is answered only on a
+  channel open to anonymous visitors, and a **customer** request (impersonation included) only on a
+  channel assigned to the customer's Organization in `sales_channel_organizations`. Refusals are 403
+  `SALES_CHANNEL_SIGN_IN_REQUIRED` / `SALES_CHANNEL_NOT_PERMITTED` with `details.channelCode`.
+  Administrator and API-key requests and every `/api/v1/admin/*` path are not decided.
+
+  **Module authors: a route a visitor must reach before signing in, or that is called with no
+  storefront channel at all, must declare `config: { salesChannelAccess: 'open' }`.** That covers
+  sign-in, registration and account-recovery routes, e-mail links, feed downloads and — the case
+  easy to miss — **payment-provider and carrier callbacks**: they arrive anonymously with no channel
+  signal, resolve to the system-default channel, and are refused when an operator closes that
+  channel. The option is typed on Fastify's `FastifyContextConfig` through the `./http` barrel; an
+  open route is still resolved (an unknown channel still answers 400) and keeps its own guards.
+
+  New on `./kernel`:
+
+  - `SalesChannelAccessPort` — `decide(actor, channel)`, `permittedChannelIds(organizationId)` and
+    `assertCustomerMayUse(organizationId, channelId)` (throws the 403 refusal), registered by both
+    composition roots as `salesChannelAccessPort` for sign-in paths that must decide before a session
+    exists.
+  - `SalesChannelAccessCacheInvalidation` — the invalidating half of the per-Organization
+    permitted-channel cache (`salesChannelAccessCache`): a per-process LRU (30 s) over Redis, dropped
+    by the membership writer as part of every change of an Organization's channels and announced on
+    `b2b:sales-channel-access:changed`, so every process follows within the LRU window.
+
+  Also:
+
+  - `SalesChannel` gains `anonymousAccess` (column `sales_channels.anonymous_access`, default `true`,
+    core migration `Migration20261018T101912CoreSalesChannelsAnonymousAccess`); the cached channel
+    carries it and the channel cache key moves to `sales-channels:v3:`. The default channel the
+    reconciler creates is open.
+  - `MembershipMutationOptions` gains `em`: the bridge statements run on that `EntityManager`, so a
+    caller can bind channels inside the transaction that creates the entity.
+  - The OpenAPI document carries the two refusals as shared response components
+    (`SalesChannelSignInRequired`, `SalesChannelNotPermitted`); `GET /api/v1/storefront/module-presence`
+    and the OpenAPI routes are open.
+
+- 5865c59: The API description is available to administrators with the `platform.api_description.read` permission and to API keys with the `platform.api_description.read` scope.
+
+  **`@endora-commerce/platform`.**
+
+  - New permission `platform.api_description.read` (_Read the API description_), declared by `_lifecycle`'s manifest with English and Polish labels. The platform administrator grants it through an admin role.
+  - `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` now answer only an administrator holding the code or an API key whose scopes include it. Anybody else is answered `401 UNAUTHORIZED` (no administrator session or key, a customer session included) or `403 FORBIDDEN` (an administrator or a key without the code). Both stay outside the sales-channel access rule (`salesChannelAccess: 'open'`). Responses carry `Cache-Control: private, no-store`.
+  - New admin route `GET /api/v1/admin/api-description`, gated on the same code, serving the same document to the Admin UI.
+  - `buildServer` no longer mounts the two routes. It decorates the root instance with `apiDescription(): OpenAPIV3_1.Document` (built on first call, as before), and `_lifecycle` mounts the routes where `auth`'s `requireAdmin` port is available. A composition that mounts no `_lifecycle` serves no API description; one that called `buildServer` and read `/api/v1/_openapi.json` in-process reads `app.apiDescription()` instead, or sends credentials. `registerOpenApiRoutes` is removed; it was reachable only through the host-internal `./http/openapi` subpath.
+  - The reference page loads `swagger-ui-dist@5.33.3` from jsDelivr with Subresource Integrity on both files (`swagger-ui.css` `sha384-Ov4/wv3j2bmct8cDc5X4ngJZohVPzEmc6uDPH8WeljUxO5vtoykvMEfbu9Vh6RaW`, `swagger-ui-bundle.js` `sha384-h00llMzD1afyNow1pDmnZKlHsUZgp9KE9HXLFXF2CvbwsBY0+WBO4f75SfGwvM4K`) and `crossorigin="anonymous"`; it used to load an unpinned version.
+  - A command-palette action, _API description_, targets `/api-description` and requires the new code.
+
+  **`@endora-commerce/contracts`.** `apiKeyScopeSchema` gains `'platform.api_description.read'`, so an administrator who holds the code can issue an API key that reads the API description.
+
+  **`@endora-commerce/admin-shell`.** New kernel-served screen `/api-description` (_System → API description_, gated on `platform.api_description.read`): the document's title, version and endpoint count, a JSON download, and a link that opens the interactive reference on the API's own address in a new tab, carrying the administrator session.
+
+  **`@endora-commerce/mod-i18n`.** The screen's strings and its navigation label in English and Polish (`platform.apiDescription.*`, `appShell.nav.platformApiDescription`).
+
+  **`@endora-commerce/mod-api-keys`.** The module page lists the new scope.
+
+### Patch Changes
+
+- cd272e5: A request refused by the rate limiter is answered `429 RATE_LIMITED` in the standard error envelope instead of `500 INTERNAL`.
+
+  `registerErrorEnvelope`'s error handler now recognises the error `@fastify/rate-limit` throws (`statusCode: 429`) — for the host's global per-client limit and for any route's own `config.rateLimit` alike — and keeps the limiter's `Retry-After` and `x-ratelimit-*` headers. The refusal is no longer logged as an unhandled error. Only the limiter's own refusal is mapped: a thrown `statusCode: 429` on a reply the limiter has not stamped with `Retry-After` — an upstream client's 429 escaping a handler, say — still answers `500 INTERNAL` and is logged. Other thrown errors carrying a `statusCode` are unchanged: they still answer `500 INTERNAL` and are logged.
+
+- 1525d86: Customer sign-in, the customer second factor and password-reset requests are now limited per
+  account, the way administrator sign-in already was.
+
+  - `@endora-commerce/platform/kernel` publishes `AuthenticationAttemptThrottle`, the attempt
+    counter administrator sign-in used, with the profile types an owner of accounts builds one
+    over (`AttemptThrottleProfile`, `AttemptPolicy`, `AttemptCounterStore`, `ThrottledAttempt`,
+    `ThrottledCheckResult`, `ThrottledCredentialState`) and `ADDRESS_POLICY`, `ACCOUNT_POLICY`,
+    `ABANDONED_AFTER_SECONDS`, `DEFAULT_STORE_DEADLINE_MS`, `addressOrigin`. `admin_users`' own
+    throttle is now a profile over it; its keys, cookie values, codes and audit rows are unchanged.
+  - `@endora-commerce/contracts` adds `CustomerAuthenticationThrottlePort` (container name
+    `customerAuthenticationThrottlePort`, owner `customer_accounts`) with
+    `CustomerAuthenticationAttempt`, `CustomerAuthenticationCheckResult`,
+    `CustomerAuthenticationOrigin` and `CustomerAuthenticationFactor`; the error codes
+    `CUSTOMER_AUTHENTICATION_THROTTLED` (429, with `Retry-After`) and
+    `CUSTOMER_AUTHENTICATION_UNAVAILABLE` (503); the cookie name
+    `CUSTOMER_KNOWN_DEVICE_COOKIE_NAME` (`b2b_customer_device`) and its lifetime. Optional
+    additions: `CustomerLoginInput.knownDevice`, `CustomerLoginResult.knownDevice`, and a second
+    `context` argument on `CustomerPasswordResetPort.requestReset`.
+  - `customer_accounts` counts wrong passwords per folded e-mail address (50 in 30 minutes from a
+    device the account has not signed in on, 10 from a known one), and password-reset requests per
+    address (5 an hour). There is no per-address counter: the storefront signs shoppers in from its
+    own server. A completed sign-in sets the signed `b2b_customer_device` cookie, and an attempt
+    carrying it is held to that device's own budget. Asking for a new reset link retires the
+    earlier unused ones.
+  - `mfa` checks customer second-factor codes inside the customer throttle (20 in 30 minutes,
+    10 from a known device) and sets the customer known-device cookie when a customer sign-in
+    completes there.
+  - `organizations` reads and sets the customer known-device cookie on
+    `POST /api/v1/auth/customer/login` and reads it on `POST /api/v1/auth/password-reset/request`.
+
+- 4e82450: The error envelope (`registerErrorEnvelope`) now answers a request body Fastify refuses to parse as a 4xx refusal of the request, instead of `500 INTERNAL`. An empty body sent with `Content-Type: application/json` (for example a `DELETE` from a caller that sets the header on every request) and a malformed JSON body answer `400`, a body over `bodyLimit` answers `413`, and a media type with no parser answers `415` — each with Fastify's own status, the `VALIDATION_FAILED` code, Fastify's message and the `requestId`. These are no longer written to the error log as unhandled faults. Only Fastify's own `FST_*` errors are mapped this way; any other unrecognised throw is still a logged `500`.
+- 0472475: Two changes that keep a stored protection from being dropped as a side effect of another change.
+
+  - **`mfa` is not switched off while administrators are required to use a second factor.** `POST /api/v1/admin/modules/mfa/activation` with `{ active: false }` answers `409 MFA_DEACTIVATION_BLOCKED` (`details.setting: 'mfa.admin.totp_enforced'`) while that setting is on, and changes nothing. Turn the requirement off first; the switch-off then goes through as before, and switching `mfa` back on is never refused. `mfa` publishes the answer as `mfaDeactivationGuardPort` (`MfaDeactivationGuardPort` in `@endora-commerce/contracts`).
+  - **A stored credential secret is not carried over to a changed endpoint.** `PUT /api/v1/admin/credentials/:code` that changes a field saying where the record's secrets are sent — an LLM `baseUrl`, an SMTP `host` — answers `422 CREDENTIAL_SECRET_REENTRY_REQUIRED` (`details.fields` lists the secret keys) unless every stored secret is re-entered in the same request. The admin form marks those secret fields as soon as the endpoint is edited. `FieldDefinition` gains an optional `endpoint` flag (defaulting to `true` for `format: 'url'` fields) and `@endora-commerce/contracts` exports `isCredentialEndpointField`; a module registering its own configuration type gets the rule for its URL fields without a change, and declares `endpoint: true` on a host field that is not a URL.
+
+- Updated dependencies [fcf4d09]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/contracts@0.107.0
+
 ## 0.106.0
 
 ### Minor Changes

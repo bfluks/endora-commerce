@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useFocusTrap } from './hooks/useFocusTrap.js';
 import { BrandLogo } from './BrandLogo.js';
 import { VersionBadge } from './VersionBadge.js';
+import { AdminFeedback } from './AdminFeedback.js';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
+  BookOpen,
   Boxes,
   ChevronDown,
   ChevronRight,
@@ -14,6 +16,8 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
+  Pin,
+  PinOff,
   Search,
   Sparkles,
   type LucideIcon,
@@ -32,7 +36,7 @@ import { RoleRequiredNotice } from './RoleRequiredNotice.js';
 import { useViewportTier } from './hooks/useViewportTier.js';
 import { NotificationBell } from './notifications/index.js';
 import { useAdminActions } from '../lib/admin-actions/useAdminActions.js';
-import { normalize } from '../lib/text-normalization.js';
+import { matchesSearchTerms, searchTerms } from '../lib/palette-match.js';
 import { useModulePresence } from '../lib/module-presence/index.js';
 import { usePlatformVersion } from '../lib/platform-info/usePlatformVersion.js';
 import {
@@ -48,59 +52,18 @@ import { Badge } from './ui/badge.js';
 import { SpeechToTextButton } from './SpeechToTextButton.js';
 import type { PromptActionRequestDto } from '@endora-commerce/contracts';
 
-interface NavItem extends GatedSurface {
-  to: string;
-  /**
-   * Translation key under the `core` scope. Resolved at render time so
-   * the label flips when the admin changes preferred language.
-   */
-  labelKey: string;
-  /**
-   * The i18n scope `labelKey` resolves in. Absent means `'core'`, the shared
-   * bundle every host entry's key lives in.
-   *
-   * A module-contributed entry (feature 091) carries its own module id here:
-   * its `labelKey` is module-relative (`nav.importExport.label`) and its
-   * translations ship in the module's own `i18n/` directory, which is what
-   * takes a new module's sidebar label out of the shared `_i18n` bundle — one
-   * of the four shared files 11 of the last 12 module additions had to edit.
-   */
-  labelScope?: string;
-  icon: LucideIcon;
-  /**
-   * The permission code (or any-of set) that gates the entry's visibility, read
-   * from the **route that gates the destination** rather than copied from the
-   * entry above it. When unset, the entry renders for every authenticated admin
-   * because the destination genuinely has no gate. When set, the entry is hidden
-   * unless `useAuth().hasPermission(code)` returns true (the wildcard `*`
-   * permission held by `platform_admin` satisfies every code).
-   *
-   * Issue #230 filled the gaps this comment used to record as an open count:
-   * `/orders` (`orders:read`) and `/quote-requests` (`rfqs:handle`) were both
-   * advertised to roles that would collect a 403 on arrival.
-   */
-  requiredPermission?: PermissionRequirement;
-  /**
-   * The module that owns this destination, or `null` for a surface the admin
-   * shell owns itself (the dashboard). Feature 073 / FR-031: the sidebar is
-   * resolved from the server's effective enabled-set, and permission is not a
-   * proxy for module ownership — the two axes are filtered separately by
-   * `isSurfaceVisible`. Explicit attribution is what keeps a new entry from
-   * being silently unfiltered.
-   */
-  module: string | null;
-}
-
-interface NavSection {
-  /** Stable key — used as the localStorage slot for collapse state. */
-  key: string;
-  /**
-   * Translation key under the `core` scope for the section heading.
-   * Empty string = no group label (rendered flat).
-   */
-  labelKey: string;
-  items: NavItem[];
-}
+import type { NavItem, NavSection } from './sidebar/nav-types.js';
+import { PinnedSection } from './sidebar/PinnedSection.js';
+import { PinToggleButton } from './sidebar/PinToggleButton.js';
+import { PreferencesSaveNotice } from './sidebar/PreferencesSaveNotice.js';
+import { usePinActions, type PinOutcome } from './sidebar/use-pin-actions.js';
+import { useAdminPreference } from '@endora-commerce/admin-kit/lib';
+import {
+  reorderVisiblePins,
+  resolvePinsFrom,
+  visibleDestinations,
+  type VisibleDestination,
+} from '../lib/pinned-entries.js';
 
 /* Design-aligned navigation. The "Home" + "Orders" cluster sits above
  * the first labelled group exactly as the prototype shows. */
@@ -148,6 +111,16 @@ const NAV: NavSection[] = [
     // and the operator may see one of its entries.
     key: 'crm',
     labelKey: 'appShell.section.crm',
+    items: [],
+  },
+  {
+    // The "Projects & tasks" group (`specs/163-projects-and-tasks/` research
+    // R-16). It holds no host-declared row: every entry is the `projects` or
+    // the `tasks` module's contribution, each gated by its own module's
+    // permission, so the heading shows only Tasks entries while `projects` is
+    // off and disappears when both modules are.
+    key: 'work',
+    labelKey: 'appShell.section.work',
     items: [],
   },
   {
@@ -346,6 +319,16 @@ const NAV: NavSection[] = [
         requiredPermission: 'platform.modules.read',
         module: null,
       },
+      // `module: null` for the same reason: the API description covers every
+      // module's routes, so no module's presence decides whether it is there.
+      // Gated on the code its backing route enforces.
+      {
+        to: '/api-description',
+        labelKey: 'appShell.nav.platformApiDescription',
+        icon: BookOpen,
+        requiredPermission: 'platform.api_description.read',
+        module: null,
+      },
       // `/admin-users`, `/admin-roles` and `/audit-log` are declared by the
       // modules that own them since feature 091's Phase 4 batch four, and
       // arrive through `composeNav` from `modules.generated.ts` — including the
@@ -385,57 +368,6 @@ const NAV: NavSection[] = [
     ],
   },
 ];
-
-const STORAGE_KEY = 'b2b-admin.nav.collapsed-groups';
-const RAIL_STORAGE_KEY = 'b2b-admin.nav.rail-mode';
-
-/**
- * Rail (icon-only) mode persistence. The whole sidebar shrinks to a
- * 64px-wide column showing just icons; section labels disappear and
- * each section becomes a single icon (the first item's icon). Hovering
- * or clicking the icon reveals a popover with the section's items.
- */
-function loadRailMode(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    return window.localStorage.getItem(RAIL_STORAGE_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function persistRailMode(value: boolean): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(RAIL_STORAGE_KEY, value ? '1' : '0');
-  } catch {
-    /* ignore */
-  }
-}
-
-function loadCollapsed(): Set<string> {
-  if (typeof window === 'undefined') return new Set();
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) {
-      return new Set(parsed.filter((v): v is string => typeof v === 'string'));
-    }
-  } catch {
-    /* ignore */
-  }
-  return new Set();
-}
-
-function persistCollapsed(value: Set<string>): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(value)));
-  } catch {
-    /* ignore */
-  }
-}
 
 /**
  * Map URL pathname → breadcrumb trail. Each crumb carries a label and
@@ -824,13 +756,19 @@ interface PaletteItem extends GatedSurface {
  * does type `zamówienia`; folding only the query breaks the one who does not.
  * (Postel's Law — accept what was typed and normalise it.)
  *
- * `needle` must already be normalised; the caller folds the query once per
- * keystroke rather than once per row. `normalize` trims, so a query with a
+ * **Per word, across the row** — every word of the query must occur in some
+ * field, not the whole query in one. The rule itself is `lib/palette-match.ts`,
+ * shared with the Actions group for the same reason as the fold: a multi-word
+ * query such as `kanał sprzedaży` used to need one field carrying those words
+ * contiguously, so it missed `Kanały sprzedaży`.
+ *
+ * `terms` must already be folded by `searchTerms`; the caller does that once
+ * per keystroke rather than once per row. `normalize` trims, so a query with a
  * leading space matches what the operator meant rather than nothing at all
  * (issue #236).
  */
-function matchesQuery(needle: string, ...haystacks: string[]): boolean {
-  return haystacks.some((haystack) => normalize(haystack).includes(needle));
+function matchesQuery(terms: readonly string[], ...haystacks: string[]): boolean {
+  return matchesSearchTerms(terms, haystacks);
 }
 
 /**
@@ -1045,8 +983,20 @@ function useNavLabel(): (item: NavItem) => string {
   );
 }
 
+/** The sentence the pin and unpin live regions say, in the admin's language (FR-005). */
+function pinAnnouncementText(
+  t: (key: string, params?: Record<string, string | number>) => string,
+  outcome: PinOutcome,
+  label: string,
+): string {
+  return t(
+    outcome === 'pinned' ? 'appShell.pinned.announce.pinned' : 'appShell.pinned.announce.unpinned',
+    { label },
+  );
+}
+
 export function AppShell(): ReactNode {
-  const { me, logout, hasPermission } = useAuth();
+  const { me, logout } = useAuth();
   // The host's nav with every installed module's contributed entry folded in.
   const composedNav = useComposedNav();
   // Feature 073 — the effective enabled-set. A module that is off contributes
@@ -1056,23 +1006,27 @@ export function AppShell(): ReactNode {
   const isVisible = useSurfaceVisibility();
   const navigate = useNavigate();
   const location = useLocation();
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed());
-  const [railMode, setRailMode] = useState<boolean>(() => loadRailMode());
+  // Feature 164 — folded groups and rail mode are the admin's, kept on the
+  // server and present in the first render (FR-013, FR-016). A stored group key
+  // this release does not render folds nothing and is kept in the next write
+  // (FR-015).
+  const [collapsedGroups, setCollapsedGroups] = useAdminPreference('sidebarCollapsedGroups');
+  const collapsed = useMemo(() => new Set(collapsedGroups), [collapsedGroups]);
+  const [storedRailMode, setStoredRailMode] = useAdminPreference('sidebarRailMode');
   const platformVersion = usePlatformVersion();
+  const feedbackOffered = isModulePresent('admin_feedback');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const sidebarRef = useRef<HTMLElement | null>(null);
   const viewportTier = useViewportTier();
   const isMobile = viewportTier === 'mobile';
   useFocusTrap(sidebarRef, isMobile && navDrawerOpen);
+  // Rail mode has no effect on the mobile tier, whatever is stored (FR-013).
+  const railMode = storedRailMode && !isMobile;
 
   const toggleRailMode = useCallback((): void => {
-    setRailMode((prev) => {
-      const next = !prev;
-      persistRailMode(next);
-      return next;
-    });
-  }, []);
+    setStoredRailMode(!storedRailMode);
+  }, [storedRailMode, setStoredRailMode]);
   const t = useTranslation('core');
   // The brand link's tooltip. With a release known it is the full sentence in
   // either mode: collapsed, the badge has no room and this is the only place
@@ -1091,18 +1045,40 @@ export function AppShell(): ReactNode {
   // contributed resolves its label in that module's own namespace.
   const { t: tScoped } = useTranslationContext();
 
+  // Feature 164 — the sidebar's visible destinations, built once with the same
+  // predicate the sections render with and read by both the Pinned section and
+  // the palette's pin control (research R-7, R-15): a pin is the original
+  // entry's own object, so it cannot show a surface its original would not.
+  const pinTargets = useMemo(
+    () => visibleDestinations(composedNav, isVisible),
+    [composedNav, isVisible],
+  );
+  const { pins, isPinned, toggle: togglePin, setPins } = usePinActions();
+  const resolvedPins = useMemo(() => resolvePinsFrom(pins, pinTargets), [pins, pinTargets]);
+  // One polite region for every pin and unpin in the sidebar (FR-005), mounted
+  // empty and outside the sidebar, which the closed drawer hides from AT.
+  const [pinAnnouncement, setPinAnnouncement] = useState('');
+  const togglePinOf = useCallback(
+    (item: NavItem): void => {
+      const outcome = togglePin(item.to);
+      setPinAnnouncement(pinAnnouncementText(t, outcome, navLabel(item)));
+    },
+    [togglePin, t, navLabel],
+  );
+
   const fullName = me ? `${me.adminUser.firstName} ${me.adminUser.lastName}`.trim() : '';
   const role = me?.role?.name ?? 'Admin';
 
-  const toggleSection = useCallback((key: string): void => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      persistCollapsed(next);
-      return next;
-    });
-  }, []);
+  const toggleSection = useCallback(
+    (key: string): void => {
+      setCollapsedGroups(
+        collapsedGroups.includes(key)
+          ? collapsedGroups.filter((group) => group !== key)
+          : [...collapsedGroups, key],
+      );
+    },
+    [collapsedGroups, setCollapsedGroups],
+  );
 
   // ⌘K opens the palette anywhere in the admin; ⌘B toggles the
   // sidebar rail (matches the shadcn / VS Code shortcut convention).
@@ -1158,7 +1134,7 @@ export function AppShell(): ReactNode {
         ref={sidebarRef}
         className={cn(
           'b2b-sidebar',
-          railMode && !isMobile && 'b2b-sidebar--rail',
+          railMode && 'b2b-sidebar--rail',
           isMobile && navDrawerOpen && 'b2b-sidebar--drawer-open',
         )}
         aria-hidden={isMobile && !navDrawerOpen ? true : undefined}
@@ -1187,9 +1163,18 @@ export function AppShell(): ReactNode {
             search, divided from both. It is the link's sibling, not its child:
             the link's `aria-label` replaces its content as the accessible
             name, so a version inside it would be announced by nothing. */}
-        {platformVersion !== null ? (
+        {/* *Send feedback* (#379) sits beside the release, and is there while
+            the module that owns its endpoint is. Collapsed, the release is
+            hidden and the link is an icon of its own. */}
+        {platformVersion !== null || feedbackOffered ? (
           <div className="b2b-sidebar__version">
-            <VersionBadge version={platformVersion} />
+            {platformVersion !== null ? <VersionBadge version={platformVersion} /> : null}
+            {feedbackOffered && !railMode ? <AdminFeedback rail={false} /> : null}
+          </div>
+        ) : null}
+        {feedbackOffered && railMode ? (
+          <div className="b2b-sidebar__feedback-rail-row">
+            <AdminFeedback rail />
           </div>
         ) : null}
 
@@ -1220,6 +1205,37 @@ export function AppShell(): ReactNode {
         </div>
 
         <nav className="b2b-sidebar__nav">
+          {railMode ? (
+            resolvedPins.length > 0 ? (
+              <RailSection
+                key="pinned"
+                section={{
+                  key: 'pinned',
+                  labelKey: 'appShell.pinned.heading',
+                  items: resolvedPins.map((pin) => pin.item),
+                }}
+                visibleItems={resolvedPins.map((pin) => pin.item)}
+                translatedLabel={t('appShell.pinned.heading')}
+                pinned={{
+                  icon: Pin,
+                  endOf: (item): boolean =>
+                    resolvedPins.find((pin) => pin.item === item)?.end ?? false,
+                  onUnpin: togglePinOf,
+                }}
+              />
+            ) : null
+          ) : (
+            <PinnedSection
+              pins={resolvedPins}
+              sections={composedNav}
+              collapsed={collapsed.has('pinned')}
+              onToggleCollapsed={toggleSection}
+              onUnpin={(pin): void => togglePinOf(pin.item)}
+              onReorder={(visibleOrder): void => setPins(reorderVisiblePins(pins, visibleOrder))}
+              navLabel={navLabel}
+              touch={isMobile}
+            />
+          )}
           {composedNav.map((section) => {
             const isOpen = !collapsed.has(section.key);
             // Permission-gate every entry, then presence-gate it (feature 073 /
@@ -1286,18 +1302,28 @@ export function AppShell(): ReactNode {
                         other !== item &&
                         other.to.startsWith(item.to === '/' ? '/' : `${item.to}/`),
                     );
+                    const label = navLabel(item);
+                    // Feature 164 — the pin control is the row's second Tab
+                    // stop, after the link and never inside it (FR-004).
                     return (
-                      <NavLink
-                        key={item.to}
-                        to={item.to}
-                        end={item.to === '/' || hasNestedSibling}
-                        className={({ isActive }): string =>
-                          cn('b2b-nav-item', isActive && 'is-active')
-                        }
-                      >
-                        <Icon size={16} />
-                        <span style={{ flex: 1 }}>{navLabel(item)}</span>
-                      </NavLink>
+                      <div key={item.to} className="b2b-nav-row">
+                        <NavLink
+                          to={item.to}
+                          end={item.to === '/' || hasNestedSibling}
+                          className={({ isActive }): string =>
+                            cn('b2b-nav-item', isActive && 'is-active')
+                          }
+                        >
+                          <Icon size={16} />
+                          <span style={{ flex: 1 }}>{label}</span>
+                        </NavLink>
+                        <PinToggleButton
+                          label={label}
+                          pinned={isPinned(item.to)}
+                          touch={isMobile}
+                          onToggle={(): void => togglePinOf(item)}
+                        />
+                      </div>
                     );
                   })}
                 </div>
@@ -1364,6 +1390,10 @@ export function AppShell(): ReactNode {
         ) : null}
       </aside>
 
+      <div role="status" aria-live="polite" className="sr-only" data-testid="sidebar-pin-status">
+        {pinAnnouncement}
+      </div>
+
       {/* ============ Main column (topbar + content) ============ */}
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <div className="b2b-topbar">
@@ -1409,13 +1439,14 @@ export function AppShell(): ReactNode {
               <Search size={16} />
             </button>
             {/*
-              Issue #112 — the bell is a surface like any other: it renders only
-              where the operator holds the code its feed is gated on and the
-              owning module is present. It used to render for every
-              authenticated admin and poll every 30 s, so a restricted role got a
-              permanent 403 and a deactivated `admin_notifications` a 503.
+              Issue #112 — the bell renders only while the owning module is
+              present, so a deactivated `admin_notifications` contributes no
+              widget polling a 503. Issue #518 — and for every signed-in admin:
+              the feed answers each admin their own notifications with no
+              permission code, and `admin:read` decides only whether the
+              `all_admins` broadcasts are among them.
             */}
-            {isModulePresent('admin_notifications') && hasPermission('admin:read') ? (
+            {isModulePresent('admin_notifications') ? (
               <NotificationBell />
             ) : null}
             <button
@@ -1446,6 +1477,7 @@ export function AppShell(): ReactNode {
             ) : null}
           </div>
         </div>
+        <PreferencesSaveNotice />
         <main className="b2b-main" style={{ flex: 1, overflow: 'auto' }}>
           <div className="b2b-impersonation-slot" data-impersonation-banner />
           {/* Issue #140 — a session whose role is null reaches no gated
@@ -1456,6 +1488,7 @@ export function AppShell(): ReactNode {
       </div>
 
       <CommandPalette
+        pinTargets={pinTargets}
         open={paletteOpen}
         onClose={(): void => setPaletteOpen(false)}
         onNavigate={(to): void => {
@@ -1485,10 +1518,21 @@ interface RailSectionProps {
   section: NavSection;
   visibleItems: NavItem[];
   translatedLabel: string;
+  /**
+   * Feature 164 — the Pinned section's rail form (US1 AS-9): its own icon, a
+   * popover even for one pin, each row the original's `end` flag and an unpin
+   * control. Not a `menu`: a menu may hold only menu items, and the row holds a
+   * link and a button.
+   */
+  pinned?: {
+    icon: LucideIcon;
+    endOf: (item: NavItem) => boolean;
+    onUnpin: (item: NavItem) => void;
+  };
 }
 
 function RailSection(props: RailSectionProps): ReactNode {
-  const { section, visibleItems, translatedLabel } = props;
+  const { section, visibleItems, translatedLabel, pinned } = props;
   const navLabel = useNavLabel();
   const [hover, setHover] = useState(false);
   const [sticky, setSticky] = useState(false);
@@ -1536,12 +1580,12 @@ function RailSection(props: RailSectionProps): ReactNode {
 
   const railSource = visibleItems[0] ?? section.items[0];
   if (!railSource) return null;
-  const RailIcon = railSource.icon;
+  const RailIcon = pinned?.icon ?? railSource.icon;
   const headerLabel = translatedLabel || (visibleItems[0] ? navLabel(visibleItems[0]) : '');
 
   // Single-item section: render a plain link with no popover. The
   // hover area is the link itself; tooltip carries the label.
-  if (visibleItems.length === 1) {
+  if (visibleItems.length === 1 && pinned === undefined) {
     const only = visibleItems[0]!;
     const Icon = only.icon;
     const onlyLabel = navLabel(only);
@@ -1580,14 +1624,43 @@ function RailSection(props: RailSectionProps): ReactNode {
           open && 'is-open',
         )}
         onClick={(): void => setSticky((prev) => !prev)}
-        aria-haspopup="menu"
+        {...(pinned === undefined ? { 'aria-haspopup': 'menu' as const } : {})}
         aria-expanded={open}
         aria-label={headerLabel}
         title={headerLabel}
       >
         <RailIcon size={18} />
       </button>
-      {open ? (
+      {open && pinned !== undefined ? (
+        <div className="b2b-sidebar__rail-popover">
+          {headerLabel ? (
+            <div className="b2b-sidebar__rail-popover-header">{headerLabel}</div>
+          ) : null}
+          {visibleItems.map((item) => {
+            const Icon = item.icon;
+            const label = navLabel(item);
+            return (
+              <div key={item.to} className="b2b-sidebar__rail-popover-row">
+                <NavLink
+                  to={item.to}
+                  end={pinned.endOf(item)}
+                  className={({ isActive }): string =>
+                    cn('b2b-sidebar__rail-popover-item', isActive && 'is-active')
+                  }
+                  onClick={(): void => {
+                    setSticky(false);
+                    setHover(false);
+                  }}
+                >
+                  <Icon size={14} />
+                  <span>{label}</span>
+                </NavLink>
+                <PinToggleButton label={label} pinned onToggle={(): void => pinned.onUnpin(item)} />
+              </div>
+            );
+          })}
+        </div>
+      ) : open ? (
         <div className="b2b-sidebar__rail-popover" role="menu">
           {headerLabel ? (
             <div className="b2b-sidebar__rail-popover-header">{headerLabel}</div>
@@ -1628,7 +1701,17 @@ interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
   onNavigate: (to: string) => void;
+  /**
+   * Feature 164, FR-027 — the sidebar's visible destinations (`AppShell`'s one
+   * map). A result whose destination is in it, from any group, gets a pin
+   * control; nothing else does, so the palette cannot offer a hidden surface.
+   */
+  pinTargets: ReadonlyMap<string, VisibleDestination>;
 }
+
+/** The `Alt+Enter` chord as the platform writes it (FR-027, research R-16). */
+const ALT_ENTER_GLYPH =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌥↵' : 'Alt+↵';
 
 /** Sentinel route for the assistant entry row — switches the palette mode
  *  instead of navigating (feature 043; module_actions are navigation-only). */
@@ -1655,8 +1738,14 @@ export function resetPromptCapabilityCacheForTesting(): void {
 }
 
 function CommandPalette(props: CommandPaletteProps): ReactNode {
-  const { open, onClose, onNavigate } = props;
+  const { open, onClose, onNavigate, pinTargets } = props;
   const t = useTranslation('core');
+  const navLabel = useNavLabel();
+  const { isPinned, toggle: togglePin } = usePinActions();
+  // The palette is `aria-modal`, so assistive technology ignores the sidebar's
+  // region while it is open: it announces in its own (research R-16).
+  const [pinAnnouncement, setPinAnnouncement] = useState('');
+  const instructionsId = useId();
   const tp = useTranslation('prompt_actions');
   const { hasPermission } = useAuth();
   const isVisible = useSurfaceVisibility();
@@ -1814,7 +1903,7 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
   const itemsBeforeSeeAll = useMemo(() => {
     if (!query.trim()) return [...assistantItems, ...navigateItems, ...actionItems];
     // Folded once here, then compared against every row — see `matchesQuery`.
-    const q = normalize(query);
+    const q = searchTerms(query);
     const filteredAssistant = assistantItems.filter((i) =>
       matchesQuery(q, i.label, i.sub, i.keywords),
     );
@@ -1833,6 +1922,24 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
   const items = useMemo(
     () => (seeAllItem ? [...itemsBeforeSeeAll, seeAllItem] : itemsBeforeSeeAll),
     [itemsBeforeSeeAll, seeAllItem],
+  );
+
+  // FR-027 — a row is pinnable when its destination **is** a visible sidebar
+  // entry's. The assistant sentinel and "see all" (a path with a query) never
+  // match a destination, so they never carry the control.
+  const pinTargetOf = useCallback(
+    (it: PaletteItem): VisibleDestination | undefined =>
+      it.to === PROMPT_MODE_SENTINEL ? undefined : pinTargets.get(it.to),
+    [pinTargets],
+  );
+  const togglePinOf = useCallback(
+    (to: string): void => {
+      const target = pinTargets.get(to);
+      if (!target) return;
+      const outcome = togglePin(to);
+      setPinAnnouncement(pinAnnouncementText(t, outcome, navLabel(target.item)));
+    },
+    [pinTargets, togglePin, t, navLabel],
   );
 
   // Activating the assistant row switches the palette body instead of
@@ -1873,6 +1980,7 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
 
   useEffect(() => {
     if (!open) {
+      setPinAnnouncement('');
       setQuery('');
       setMode('search');
       setInitialRequest(undefined);
@@ -1902,6 +2010,12 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setCursor((c) => Math.max(0, c - 1));
+      } else if (e.key === 'Enter' && e.altKey) {
+        // Feature 164, FR-027 — `Alt+Enter` (⌥↵) pins or unpins the highlighted
+        // row and never navigates; focus stays in the input.
+        e.preventDefault();
+        const it = items[cursor];
+        if (it && pinTargetOf(it)) togglePinOf(it.to);
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const it = items[cursor];
@@ -1912,7 +2026,7 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
     };
     window.addEventListener('keydown', onKey);
     return (): void => window.removeEventListener('keydown', onKey);
-  }, [open, mode, items, cursor, onClose, activate]);
+  }, [open, mode, items, cursor, onClose, activate, pinTargetOf, togglePinOf]);
 
   if (!open) return null;
 
@@ -1949,6 +2063,14 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
     const Icon = it.icon;
     const label = resolveLabel(it);
     const sub = resolveSub(it);
+    const pinTarget = pinTargetOf(it);
+    const pinned = pinTarget !== undefined && isPinned(it.to);
+    const pinName =
+      pinTarget === undefined
+        ? ''
+        : t(pinned ? 'appShell.pinned.unpin' : 'appShell.pinned.pin', {
+            label: navLabel(pinTarget.item),
+          });
     return (
       <div
         key={`${it.group}-${it.groupKey ?? ''}-${it.to}-${i}`}
@@ -1962,6 +2084,32 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
           {sub ? <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{sub}</div> : null}
         </div>
         {it.badge ? <Badge variant="secondary">{it.badge}</Badge> : null}
+        {pinTarget !== undefined && i === cursor ? (
+          <span className="b2b-palette__pin-hint">
+            <span className="b2b-kbd-sm">{ALT_ENTER_GLYPH}</span>
+            {t(pinned ? 'appShell.palette.pin.hintUnpin' : 'appShell.palette.pin.hintPin')}
+          </span>
+        ) : null}
+        {pinTarget !== undefined ? (
+          <button
+            type="button"
+            tabIndex={-1}
+            className="b2b-palette__pin"
+            aria-pressed={pinned}
+            aria-keyshortcuts="Alt+Enter"
+            aria-label={pinName}
+            title={pinName}
+            // Focus stays in the search input; the row's own activation (open
+            // the destination) must not fire.
+            onMouseDown={(event): void => event.preventDefault()}
+            onClick={(event): void => {
+              event.stopPropagation();
+              togglePinOf(it.to);
+            }}
+          >
+            {pinned ? <PinOff size={14} aria-hidden="true" /> : <Pin size={14} aria-hidden="true" />}
+          </button>
+        ) : null}
         <span className="meta">{i === cursor ? <span className="b2b-kbd-sm">↵</span> : null}</span>
       </div>
     );
@@ -1978,6 +2126,7 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
           <input
             ref={inputRef}
             placeholder={t('appShell.search.commandPalettePlaceholder')}
+            aria-describedby={instructionsId}
             value={query}
             onChange={(e): void => handleQueryChange(e.target.value)}
           />
@@ -1990,6 +2139,13 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
             }}
           />
           <span className="b2b-kbd-sm">esc</span>
+          <span id={instructionsId} className="sr-only">
+            {t('appShell.palette.pin.instructions')}
+          </span>
+        </div>
+        {/* Feature 164 — pin and unpin, announced inside the modal dialog. */}
+        <div role="status" aria-live="polite" className="sr-only" data-testid="palette-pin-status">
+          {pinAnnouncement}
         </div>
         {/* FR-033 — a settled record search is announced without moving focus.
             Mounted before it has text: a live region that arrives already

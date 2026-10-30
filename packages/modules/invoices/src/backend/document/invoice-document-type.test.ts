@@ -44,6 +44,7 @@ function invoice(over: Partial<InvoiceDetail> = {}): InvoiceDetail {
     grossTotal: 1107,
     paidTotal: 0,
     amountDue: 1107,
+    overpayment: 0,
     total: 1107,
     originalInvoiceId: null,
     templateId: null,

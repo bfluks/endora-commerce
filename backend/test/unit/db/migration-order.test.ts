@@ -452,6 +452,26 @@ describe('orderMigrations — J13 input errors', () => {
     );
   });
 
+  it('throws missing-class naming the entry and the rebuild for an undefined class (issue #443)', () => {
+    // What the generated registry hands over when a module package's `dist`
+    // no longer exports a class the registry imports: a named import of a
+    // missing export is `undefined` under vitest's transform, and reading
+    // `.name` off it used to be the whole diagnostic. The baseline is passed
+    // explicitly because the fixture's own derivation reads `.name` too.
+    const good = entry('orders', '20260901T090000', 'a');
+    const stale = { moduleId: 'catalog', cls: undefined } as unknown as MigrationRegistryEntry;
+    let thrown: unknown;
+    try {
+      run([good, stale], CHAIN, []);
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as MigrationOrderError).code).toBe('missing-class');
+    expect((thrown as MigrationOrderError).message).toContain('#1');
+    expect((thrown as MigrationOrderError).message).toContain('"catalog"');
+    expect((thrown as MigrationOrderError).message).toContain('pnpm run build:packages');
+  });
+
   it('throws unparsable-name for a stamp that is not a real UTC instant', () => {
     const bad: MigrationRegistryEntry = {
       moduleId: 'orders',

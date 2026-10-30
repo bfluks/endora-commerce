@@ -25,9 +25,15 @@ import type {
   CmsPageBuilderTranslateRequest,
   CmsPageBuilderTranslateResponse,
   CmsPageBuilderTranslationCapability,
+  CmsBrandTokensAdminRead,
+  ContrastFinding,
+  PutCmsBrandTokensRequest,
 } from '@endora-commerce/contracts';
 
 export type {
+  CmsBrandTokensAdminRead,
+  ContrastFinding,
+  PutCmsBrandTokensRequest,
   CmsPageBuilderTranslateRequest,
   CmsPageBuilderTranslateResponse,
   CmsPageBuilderTranslationCapability,
@@ -199,9 +205,37 @@ export const cmsClient = {
     return out.data.segments;
   },
 
-  async getPageBuilderConfig(): Promise<CmsPageBuilderDescriptor> {
+  /**
+   * The page-builder descriptor. With a sales channel, its `brandTokens` are
+   * that channel's effective set, which the preview is styled with (feature
+   * 163, research R-4); without one, the global set.
+   */
+  async getPageBuilderConfig(salesChannelId?: string | null): Promise<CmsPageBuilderDescriptor> {
+    const query = salesChannelId ? `?salesChannelId=${encodeURIComponent(salesChannelId)}` : '';
     const out = await apiClient.get<{ data: CmsPageBuilderDescriptor }>(
-      '/api/v1/admin/cms/page-builder/config',
+      `/api/v1/admin/cms/page-builder/config${query}`,
+    );
+    return out.data;
+  },
+
+  /**
+   * Feature 163 — the brand tokens (`contracts/storefront-and-admin-api.md`
+   * §1). With a sales channel, the read carries that channel's stored
+   * override beside the global set; `effective` is what the storefront uses.
+   */
+  async getBrandTokens(salesChannelId?: string | null): Promise<CmsBrandTokensAdminRead> {
+    const query = salesChannelId ? `?salesChannelId=${encodeURIComponent(salesChannelId)}` : '';
+    const out = await apiClient.get<{ data: CmsBrandTokensAdminRead }>(`/api/v1/admin/cms/brand-tokens${query}`);
+    return out.data;
+  },
+
+  /** Saves one scope's set, or with `tokens: null` removes it; 409 on a stale `expectedVersion`. */
+  async putBrandTokens(
+    body: PutCmsBrandTokensRequest,
+  ): Promise<{ version: number; warnings: ContrastFinding[] }> {
+    const out = await apiClient.put<{ data: { version: number; warnings: ContrastFinding[] } }>(
+      '/api/v1/admin/cms/brand-tokens',
+      body,
     );
     return out.data;
   },

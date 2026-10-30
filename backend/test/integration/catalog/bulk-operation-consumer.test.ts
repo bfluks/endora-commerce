@@ -33,7 +33,8 @@ describe('Bulk-operation queue consumer — processById', () => {
     await teardownBackendServer(h);
   });
 
-  const ADMIN_ID = '00000000-0000-0000-0000-000000000000';
+  // Not the all-zero sentinel: a product write needs a known requester (163 S-L3).
+  const ADMIN_ID = '00000000-0000-4000-8000-0000000000a1';
 
   function fakeBulkUpdateService(onCall: () => void): CatalogBulkUpdateService {
     return {

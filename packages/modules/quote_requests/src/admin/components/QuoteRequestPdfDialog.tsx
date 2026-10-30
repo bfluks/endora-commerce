@@ -66,6 +66,19 @@ async function downloadPdf(id: string, query: URLSearchParams): Promise<{ blob: 
   };
 }
 
+/** The languages a selection offers: the template's own, else the built-in layout's. */
+function languagesOf(choices: QuoteRequestDocumentChoices, selected: string): readonly string[] {
+  if (selected === BUILT_IN) return choices.builtInLanguages;
+  return choices.templates.find((template) => template.id === selected)?.languages ?? choices.builtInLanguages;
+}
+
+/** Keeps the current language while the selection offers it, else the channel's, else the first offered. */
+function pickLanguage(languages: readonly string[], current: string, suggested: string): string {
+  if (languages.includes(current)) return current;
+  if (languages.includes(suggested)) return suggested;
+  return languages[0] ?? '';
+}
+
 function saveBlob(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
@@ -104,7 +117,12 @@ export function QuoteRequestPdfDialog({ quoteRequestId, mode, onClose, onDone }:
         setChoices(loaded);
         const remembered =
           loaded.rememberedTemplateId !== null && !loaded.rememberedTemplateMissing ? loaded.rememberedTemplateId : null;
-        setSelected(remembered ?? loaded.effectiveDefaultId ?? BUILT_IN);
+        const preselected = remembered ?? loaded.effectiveDefaultId ?? BUILT_IN;
+        setSelected(preselected);
+        // In the same update as the choices, never in a later effect: the
+        // controls and an enabled Download render together with the language
+        // they show, so a click can never send an empty one.
+        setLanguage((current) => pickLanguage(languagesOf(loaded, preselected), current, loaded.suggestedLanguage));
         setRecipients(loaded.requesterEmail ? [loaded.requesterEmail] : ['']);
         setTouched([]);
       })
@@ -123,18 +141,13 @@ export function QuoteRequestPdfDialog({ quoteRequestId, mode, onClose, onDone }:
     return choices.effectiveDefaultId ?? BUILT_IN;
   }, [choices]);
 
-  const languages = useMemo((): string[] => {
-    if (!choices) return [];
-    if (selected === BUILT_IN) return choices.builtInLanguages;
-    return choices.templates.find((template) => template.id === selected)?.languages ?? choices.builtInLanguages;
-  }, [choices, selected]);
+  const languages = useMemo((): readonly string[] => (choices ? languagesOf(choices, selected) : []), [choices, selected]);
 
-  useEffect(() => {
-    if (!choices || languages.length === 0) return;
-    setLanguage((current) =>
-      languages.includes(current) ? current : languages.includes(choices.suggestedLanguage) ? choices.suggestedLanguage : languages[0]!,
-    );
-  }, [choices, languages]);
+  /** A template change re-picks the language in the same update, for the same reason as the load. */
+  const selectTemplate = (next: string): void => {
+    setSelected(next);
+    if (choices) setLanguage((current) => pickLanguage(languagesOf(choices, next), current, choices.suggestedLanguage));
+  };
 
   const languageName = useCallback(
     (code: string): string => {
@@ -291,7 +304,7 @@ export function QuoteRequestPdfDialog({ quoteRequestId, mode, onClose, onDone }:
                 value={selected}
                 aria-describedby={`${base}-template-hint`}
                 disabled={busy}
-                onChange={(event) => setSelected(event.target.value)}
+                onChange={(event) => selectTemplate(event.target.value)}
               >
                 {choices.effectiveDefaultId === null || selected === BUILT_IN ? (
                   <option value={BUILT_IN}>{t('pdf.dialog.builtIn')}</option>

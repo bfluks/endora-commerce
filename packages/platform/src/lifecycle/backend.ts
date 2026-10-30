@@ -2,6 +2,7 @@ import type { MfaDeactivationGuardPort, MfaEnrolmentCountPort } from '@endora-co
 import type { ModuleContext } from '../kernel/index.js';
 import { lazyPort } from '../kernel/index.js';
 import type { ApiInterceptorRegistry } from '../http/interceptors/index.js';
+import { registerApiDescriptionRoutes } from './routes.api-description.js';
 import { registerPlatformInfoRoutes } from '../http/platform-info.js';
 import type { RequireAdminFactory } from '../kernel/ports/require-admin.js';
 import {
@@ -121,6 +122,19 @@ export function registerModule(ctx: ModuleContext): void {
     (app) => {
       registerPlatformInfoRoutes(app, {
         requireAdmin: ctx.cradle<LifecycleCradle>().requireAdmin,
+      });
+    },
+  );
+
+  ctx.ungatedRoutes(
+    'The API description: a fact about the platform itself, generated from every route this ' +
+      'server registered. No module owns it, and gating it on one would take the description ' +
+      'of every other module away with it. Who reads it is decided by its own permission, ' +
+      'platform.api_description.read, not by module presence.',
+    (app) => {
+      registerApiDescriptionRoutes(app, {
+        requireAdmin: ctx.cradle<LifecycleCradle>().requireAdmin,
+        document: () => app.apiDescription(),
       });
     },
   );

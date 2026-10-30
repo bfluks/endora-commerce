@@ -1,30 +1,17 @@
 /**
- * `price_lists`' admin surface — three routes, one sidebar entry and three zone
- * contributions (feature 091, P7a and P7b for the zones, Phase 4 batch 13 for
- * the registrations;
- * `specs/091-module-owned-admin-surfaces/contracts/admin-component-contribution.md`
- * §10).
+ * `price_lists`' admin surface — five routes, one sidebar entry and three zone
+ * contributions (feature 091; `specs/091-module-owned-admin-surfaces/contracts/admin-component-contribution.md`
+ * §10; feature 161, `specs/161-price-book-editor/research.md` R3).
  *
- * **The zones came first, and that is the property the batch rests on.** P7a
- * and P7b declared the three contributions below while this module's screens
- * were still `admin/src/App.tsx`'s, because `check:admin-registrations` counts
- * routes and nav entries and a zone is neither — so a contributor can be
- * scheduled independently of the host that renders its place. Batch 13 is the
- * other half: the three screens are this package's now.
- *
- * **What it drains**: two of the three admin keys in
- * `backend/scripts/ledgers/cross-module-imports/catalog.ts` —
- * `CategoriesTree.tsx` importing `DisplayModeOverrideRow` and
- * `ProductEditor.tsx` importing `LinkedPriceListsPanel` — and, with P7b, the
- * `DisplayModeOverrideRow` key of
- * `backend/scripts/ledgers/cross-module-imports/organizations.ts`. Each entry's
- * recorded retiring condition is *"the owner declaring an admin contribution
- * zone"*, and this is that declaration.
- *
- * **Zone and not a published component**, decided from the two signatures read
- * off the files in this merge request (§9.3): `(scope, targetId, …)` and
- * `(productId)` — identifiers in, nothing back, no `onChange` — which is Z1
- * question 2, an addition this module makes because this module is installed.
+ * **Feature 160 (D-287 P1) deleted the screens of the old model** — the
+ * price-list roster, the list detail with its Application-rule builder, bracket
+ * grid and price matrix, and the product editor's *Linked price lists* zone —
+ * with the API they edited, and left the display-mode page as the module's
+ * temporary landing. **Feature 161 (P2) restores `/price-lists`** as the
+ * landing — the price-book list — and adds the create flow, the explanation
+ * screen and the book itself, with the product editor's base-price panel in the
+ * zone the old panel left. The display-mode page stays at its address; Phase 9
+ * makes it *Pricing settings*.
  *
  * **This entry exports data and nothing else** (R2); every component is a
  * dynamic-import factory (R6).
@@ -35,72 +22,67 @@ import {
 } from '@endora-commerce/admin-kit/contributions';
 
 /**
- * The one code every surface below needs — the three screens and the three
- * contributions alike.
- *
- * `packages/modules/price_lists/src/backend/routes.ts` builds one `readGate`
- * from `PRICE_LIST_PERMISSIONS.READ` and gates every read with it: the price
- * list roster and one price list, plus the two endpoints behind the
- * contributions, `GET /api/v1/admin/pricing/display-mode-overrides/:scope/:targetId`
- * and `GET /api/v1/admin/products/:productId/price-lists`. Saving a list,
- * writing a bracket and setting a display mode enforce `price_lists:write` on
- * the API, and each screen gates its own controls on that code through
- * `useAuth().hasPermission`; the read code is what opens the screen (issue
- * #232's rule, and the code the hand-written sidebar row carried).
+ * The code every screen below opens on but the create flow. The price-book
+ * reads are gated on `price_lists:read` by
+ * `packages/modules/price_lists/src/backend/routes.price-books.ts` (and the
+ * display-mode reads by `routes.ts`); every write enforces `price_lists:write`
+ * on the API, and the screens gate their own controls on that code through
+ * `useAuth().hasPermission` (FR-028: absent, not disabled).
  */
 const READ_PERMISSION = 'price_lists:read';
 
-/** The module's landing route: the price-list roster. */
+/**
+ * The code the create flow opens on — the `/new` shape of `blog` and
+ * `sales_channels`: the palette's `new-price-book` advertises it under this
+ * code, and a create form exists only to write.
+ */
+const WRITE_PERMISSION = 'price_lists:write';
+
+/** The module's landing route: the price-book list. */
 const ROUTE_PATH = '/price-lists';
 
 export const contributions: AdminContributions = {
   routes: [
     {
       path: ROUTE_PATH,
-      component: () => import('./pages/PriceListsPage.js'),
+      component: () => import('./pages/PriceBooksPage.js'),
       requiredPermission: READ_PERMISSION,
       index: true,
     },
+    // The static segments before `/:id`, as every module declares them;
+    // `<Routes>` ranks by specificity, so the order is for the reader.
     {
-      // Declared before `/price-lists/:id`, and `App.tsx` declared it before it
-      // too. `<Routes>` ranks by specificity rather than by declaration order,
-      // so the static segment wins whatever the order — the ordering is kept
-      // anyway, so a reader does not have to know that to see why the detail
-      // route is safe here.
+      path: `${ROUTE_PATH}/new`,
+      component: () => import('./pages/PriceBookCreatePage.js'),
+      requiredPermission: WRITE_PERMISSION,
+    },
+    {
+      path: `${ROUTE_PATH}/explain`,
+      component: () => import('./pages/PriceExplainerPage.js'),
+      requiredPermission: READ_PERMISSION,
+    },
+    {
       path: `${ROUTE_PATH}/display-modes`,
       component: () => import('./pages/DisplayModeOverridesPage.js'),
       requiredPermission: READ_PERMISSION,
     },
     {
+      // The address P1's audit reference resolver links a book's audit rows to
+      // (`backend/services/audit-references.ts`).
       path: `${ROUTE_PATH}/:id`,
-      component: () => import('./pages/PriceListDetailPage.js'),
+      component: () => import('./pages/PriceBookPage.js'),
       requiredPermission: READ_PERMISSION,
     },
   ],
-  // One row for three screens, and the two without one are deliberate:
-  // `/price-lists/:id` is a detail reached from the roster, and
-  // `/price-lists/display-modes` is reached from the button the roster renders
-  // beside its heading. A route is what `App.tsx` used to hold; a button is not
-  // a route.
   nav: [
     {
       to: ROUTE_PATH,
       // Module-relative (R8), resolved in this module's own namespace out of
-      // `packages/modules/price_lists/i18n/`. It was `appShell.nav.priceLists`
-      // in the shared `_i18n` bundle, one of the four shared files a module
-      // author had to edit.
+      // `packages/modules/price_lists/i18n/`.
       labelKey: 'nav.priceLists.label',
-      // The glyph `AppShell.tsx` rendered by hand, and already on
-      // `KnownIconNameSchema` — the palette action this batch declares names
-      // the same one.
       icon: 'CircleDollarSign',
       section: 'pricing',
-      // First in *Pricing*, which is where the hand-written table put it and
-      // where the operator has always seen it. The section's other rows are
-      // already the registry's — `taxes` and `promotions` at 200,
-      // `delivery_methods` and `promotions`' second row at 300,
-      // `payment_methods` at 600 — and the host declares none in it once this
-      // one leaves, so 100 is the whole of what keeps this row on top.
+      // First in *Pricing*; the section's other rows are the registry's.
       weight: 100,
       requiredPermission: READ_PERMISSION,
     },
@@ -113,11 +95,6 @@ export const contributions: AdminContributions = {
       weight: 100,
       requiredPermission: READ_PERMISSION,
     }),
-    zoneComponent(
-      'product.editor.pricing.after',
-      () => import('./zones/ProductLinkedPriceLists.js'),
-      { weight: 200, requiredPermission: READ_PERMISSION },
-    ),
     // Weight 200 of four contributors to the organization detail's zone
     // (feature 091, P7b): `sales_channels`' membership at 100, this row, then
     // `quick_order` at 300 and `carts` at 400. The order is the one the
@@ -128,5 +105,13 @@ export const contributions: AdminContributions = {
       () => import('./zones/OrganizationDisplayMode.js'),
       { weight: 200, requiredPermission: READ_PERMISSION },
     ),
+    // Feature 161 (R7): the end of the product editor's Pricing tab, after the
+    // PIM panels of `product.editor.pricing.before`. The only contributor to
+    // this place; the weight is declared rather than defaulted for the category
+    // member's reason.
+    zoneComponent('product.editor.pricing.after', () => import('./zones/ProductBasePrices.js'), {
+      weight: 100,
+      requiredPermission: READ_PERMISSION,
+    }),
   ],
 };

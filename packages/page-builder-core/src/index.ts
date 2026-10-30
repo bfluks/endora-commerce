@@ -108,9 +108,73 @@ export {
 
 export { createSpacingField } from './fields/spacing-field.js';
 export { createBorderField } from './fields/border-field.js';
-export { createColorField } from './fields/color-field.js';
+// Feature 163, R17 (T199) — one switch for every true/false setting.
+export { createToggleField, ToggleSwitch, type ToggleFieldOptions } from './fields/toggle-field.js';
+// Feature 163, R17 (T200) — one translation for a field the page builder owns.
+export {
+  PAGE_BUILDER_SHARED_FIELD_KEYS,
+  sharedFieldLabel,
+  withSharedFieldLabel,
+  type PageBuilderSharedFieldKey,
+  type SharedFieldLabel,
+} from './fields/shared-field-label.js';
+export {
+  createColorField,
+  createResponsiveColorField,
+  writeResponsiveColor,
+  type ResponsiveColorProp,
+} from './fields/color-field.js';
+// Feature 163, T040 — block colours may reference a brand colour role (research R-6).
+export {
+  BRAND_COLOR_ROLES,
+  brandColorFallback,
+  brandColorRole,
+  resolveColorValue,
+  type BrandColorRole,
+} from './types/brand-colors.js';
 export { createBackgroundField } from './fields/background-field.js';
+// Feature 163, T117 — the custom fields of `cms.Section`'s flat props; the
+// spacing ones are responsive and sit on the editor's Responsive tab.
+export {
+  createSectionAnchorField,
+  createSectionBackgroundField,
+  createSectionRevealField,
+  createSectionSpaceField,
+  isSectionBackgroundField,
+  isTopLevelParent,
+  type SectionAssetInputProps,
+  type SectionBackgroundField,
+  type SectionFieldOptions,
+  type SectionSpaceFieldOptions,
+  type SectionSpaceProp,
+} from './fields/section-field.js';
+// Feature 163, T126, T127 — an aspect ratio per breakpoint on the Responsive tab.
+export {
+  createAspectRatioField,
+  type AspectRatioFieldOptions,
+  type AspectRatioProp,
+} from './fields/aspect-ratio-field.js';
 export { NativeColorInput } from './fields/native-color-input.js';
+// Feature 163, T116 — the side bar's shared field chrome and the copy of the
+// package's own controls (FR-039: the admin translates it through the provider).
+export { PB_FIELD_HINT_CLASS, PB_FIELD_INPUT_CLASS, PB_FIELD_LABEL_CLASS } from './fields/field-classes.js';
+export { FIELD_TIERS, FieldControlLabel, ResponsiveTiers, type FieldTier } from './fields/field-ui.js';
+export {
+  PAGE_BUILDER_FIELD_TEXT,
+  PageBuilderFieldTextProvider,
+  useFieldText,
+  type FieldText,
+  type PageBuilderFieldTextKey,
+  type PageBuilderFieldTextResolver,
+} from './fields/field-text.js';
+// Feature 163, T195 — the host's image picker (the admin's asset library), for the rich text's image dialog.
+export {
+  PageBuilderImagePickerProvider,
+  useImagePicker,
+  type PageBuilderImagePicker,
+  type PageBuilderImagePickerProps,
+  type PickedImage,
+} from './fields/image-picker.js';
 
 export {
   normalizeBackground,
@@ -121,7 +185,111 @@ export {
   type MediaSourceKind,
 } from './types/background.js';
 
-export { withHideOn } from './visibility/with-hide-on.js';
+// Feature 163 — section settings as the editor and renderers handle them
+// (data-model §3.4, research R-8, R-9).
+export {
+  DEFAULT_SECTION_SPACE,
+  SECTION_CONTENT_POSITIONS,
+  SECTION_CONTENT_WIDTH_OPTIONS,
+  SECTION_SCHEME_OPTIONS,
+  SECTION_SPACE_FALLBACKS,
+  SECTION_SPACE_TOKENS,
+  SECTION_WIDTH_OPTIONS,
+  SECTION_WIDTHS_WITH_CONTENT_WIDTH,
+  isSpaceToken,
+  normalizeSectionBackground,
+  type SectionBackgroundValue,
+  type SectionDefaults,
+  type SectionSettingsValue,
+} from './types/section.js';
+
+// Feature 163 — the prop shapes blocks share (data-model §3), authored in
+// `contracts` and re-exported here for renderers and editor fields.
+export {
+  ASPECT_TOKENS,
+  BACKGROUND_REPEATS,
+  DESKTOP_FROM_TIERS,
+  SECTION_OUTSET_PX_MAX,
+  BACKGROUND_SIZE_KEYWORDS,
+  BACKGROUND_SIZE_PERCENT_MAX,
+  BACKGROUND_SIZE_PX_MAX,
+  INLINE_ICON_NAME_RE,
+  INLINE_ICON_OFFSET_EM,
+  INLINE_ICON_SIZE_EM,
+  INLINE_ICON_SIZE_PX,
+  INLINE_ICON_SIZE_RE,
+  backgroundSizeToCss,
+  isBackgroundRepeat,
+  isInlineIconOffset,
+  isInlineIconSize,
+  COLOR_TOKEN_RE,
+  EMPHASIS_VARIANTS,
+  FOCAL_TOKENS,
+  HEX_COLOR_RE,
+  SECTION_ANCHOR_MAX_LENGTH,
+  SECTION_ANCHOR_RE,
+  inlineRichTextToPlain,
+  isAspectToken,
+  isSafeLinkUrl,
+  normalizeAnchor,
+  plainTextToInlineRichText,
+  type AspectToken,
+  type BackgroundRepeat,
+  type BackgroundSizeKeyword,
+  type BackgroundSizeValue,
+  type DesktopFromTier,
+  type ButtonFill,
+  type ButtonIconPosition,
+  type ButtonSize,
+  type ButtonSpec,
+  type ButtonStyle,
+  type ColorValue,
+  type EmphasisVariant,
+  type FocalToken,
+  type InlineRichMark,
+  type InlineRichNode,
+  type InlineRichText,
+  type LinkKind,
+  type LinkTarget,
+  type LinkValue,
+  type Responsive,
+  type ResponsiveImage,
+  type RevealSetting,
+  type SectionBackground,
+  type SectionContentPosition,
+  type SectionContentWidth,
+  type SectionOverlay,
+  type SectionScheme,
+  type SectionSettings,
+  type SectionWidth,
+  type SpaceToken,
+  type SpaceValue,
+} from './types/page-builder-props.js';
+
+// Feature 163 — the brand tokens' types (data-model §2). The values (the
+// built-in set, the token lists) are on the `./brand-tokens` subpath.
+export type {
+  BrandFontSource,
+  BrandScheme,
+  BrandSchemeColors,
+  BrandSpaceToken,
+  BrandTypeStyle,
+  BrandTypeToken,
+  CmsBrandTokens,
+} from './brand-tokens.js';
+
+export {
+  BLOCK_ORDER_PARENTS,
+  BlockDepthContext,
+  createStackOrderField,
+  EmbeddedBlockDepth,
+  STACK_ORDER_VALUES,
+  stackOrderAttributes,
+  useSectionContext,
+  withHideOn,
+  type SectionContextValue,
+  type StackOrder,
+} from './visibility/with-hide-on.js';
 
 // Feature 096 — the one implementation of the block-name readers. Also
 // reachable as `@endora-commerce/page-builder-core/block-name` through this
@@ -153,8 +321,14 @@ export {
 // exactly the copy `block-name.ts`' header exists to refuse.
 export {
   countBlockNames,
+  countComponentNames,
   mapBlockNames,
   renameBlockNames,
   type BlockNameVisitor,
   type BlockNameWalkResult,
 } from './block-tree.js';
+
+// Feature 163 — the section anchors of a document, which the link field's
+// in-page kind offers (research R-8, R-11). Pure, so the server's duplicate-anchor
+// check can read the same walk as the editor.
+export { collectAnchors } from './editor/anchors.js';

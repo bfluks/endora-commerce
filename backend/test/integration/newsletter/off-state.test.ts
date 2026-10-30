@@ -1,11 +1,11 @@
-import { afterAll, beforeAll, describe, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NEWSLETTER_SETTING_CODES } from '@endora-commerce/contracts';
 import {
   setupBackendServer,
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { expectModuleAbsent } from '../../helpers/off-state.js';
+import { expectModuleAbsent, withModuleOff, type OffStateAxis } from '../../helpers/off-state.js';
 
 /**
  * `newsletter` off-state — Constitution XVII item 6.
@@ -32,7 +32,14 @@ import { expectModuleAbsent } from '../../helpers/off-state.js';
  *  * **non-editable configuration** — the sender display name, an ordinary
  *    setting. `newsletter.enabled` is the activation control and is
  *    deliberately not the code written here;
- *  * **restoration** — asserted by the harness after both axes.
+ *  * **the block** — `newsletter.Signup` (feature 163, US7 acceptance 2)
+ *    leaves the Page Builder's served descriptor, and the storefront's module
+ *    presence reports `newsletter` absent, which is what the storefront filters
+ *    `newsletter.*` blocks and answers `/newsletter/subscribe` with 404 by.
+ *    Asserted on both axes below, beside the harness, because a block is
+ *    neither a route nor a setting (the `blog` off-state file does the same);
+ *  * **restoration** — asserted by the harness after both axes, and by the
+ *    block probe after each.
  *
  * The **deactivated-while-platform-available** case is the first axis driven.
  */
@@ -75,4 +82,34 @@ describe('newsletter off-state (Constitution XVII)', () => {
       },
     });
   });
+
+  async function descriptorNames(): Promise<string[]> {
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/admin/cms/page-builder/config', cookies: admin });
+    expect(res.statusCode, res.body).toBe(200);
+    return (res.json() as { data: { components: Array<{ name: string }> } }).data.components.map((c) => c.name);
+  }
+
+  async function storefrontPresence(): Promise<boolean | undefined> {
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/storefront/module-presence', headers: channel });
+    expect(res.statusCode, res.body).toBe(200);
+    return (res.json() as { modules: Array<{ id: string; present: boolean }> }).modules.find((m) => m.id === 'newsletter')
+      ?.present;
+  }
+
+  it.each<OffStateAxis>(['deactivated', 'platform-unavailable'])(
+    'withdraws newsletter.Signup from the palette and the storefront while off (%s), and restores it',
+    async (axis) => {
+      expect(await descriptorNames()).toContain('newsletter.Signup');
+      expect(await storefrontPresence()).toBe(true);
+      await withModuleOff('newsletter', axis, async () => {
+        const names = await descriptorNames();
+        expect(names).not.toContain('newsletter.Signup');
+        // The external-endpoint form is `cms`' and stays (T076, decision (a)).
+        expect(names).toContain('cms.NewsletterSignup');
+        expect(await storefrontPresence()).toBe(false);
+      });
+      expect(await descriptorNames()).toContain('newsletter.Signup');
+      expect(await storefrontPresence()).toBe(true);
+    },
+  );
 });

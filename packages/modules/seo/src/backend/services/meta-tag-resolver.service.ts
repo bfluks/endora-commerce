@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, resolveScoped, toScopeChannel } from '@endora-commerce/contracts';
+import type { ScopeRef, ScopedFieldView, ScopedRow } from '@endora-commerce/contracts';
 import type {
   CatalogCategoryReadPort,
   CatalogCategoryRecord,
@@ -9,23 +10,39 @@ import type {
   CmsPageRecord,
   ResolvedMeta,
   SeoEntityType,
+  SeoProductMetaField,
+  SeoProductMetaPort,
+  SeoProductMetaSource,
+  SeoProductMetaValues,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
-import { recordAuditFromContext } from '@endora-commerce/platform/commands';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { CommandBus } from '@endora-commerce/platform/commands';
+import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { SeoMetaOverride } from '../entities/seo-meta-override.entity.js';
+import {
+  makeDeleteSeoMetaOverrideCommand,
+  makeUpsertSeoMetaOverrideCommand,
+  seoMetaOverrideWhere,
+  type SeoMetaOverrideAddress,
+  type SeoMetaOverrideFields,
+} from '../commands/seo-meta-override.commands.js';
 
 /**
- * MetaTagResolverService (T235 / FR-101).
+ * MetaTagResolverService (T235 / FR-101; feature 163, R13).
  *
- * Resolution order:
- *   1. Look up the per-(entity, locale) override row.
- *   2. If a field is set on the override, use it verbatim.
- *   3. Otherwise fall back to the rule derived from the entity (Product
- *      name + description, Category name, etc.).
+ * Resolution order, per field:
+ *   1. the override row at the request's scope — for a product read at a sales
+ *      channel and language, channel × language → channel → language;
+ *   2. otherwise the rule derived from the entity (Product name + description,
+ *      Category name, etc.).
  *
- * Locale fallback: if no override exists for the requested locale, try
- * `en-US`, then return rule-only.
+ * There is no cross-language fallback: an override of one language never answers
+ * for another. A request naming neither a channel nor a locale is the `en-US`
+ * language row, as before feature 163.
+ *
+ * Writes run as Commands (`seo_meta_override.upsert` / `.delete`) through the
+ * Command Bus — one audit entry per request with the full row before and after
+ * (Constitution XIII, analyze C1).
  *
  * The three rule sources arrive over their owners' published read ports
  * (feature 075, Phase C) rather than out of `catalog`'s and `cms`' tables.
@@ -38,127 +55,260 @@ const FALLBACK_LOCALE = 'en-US';
 const TITLE_MAX = 60;
 const DESCRIPTION_MAX = 160;
 
+const FIELDS: readonly SeoProductMetaField[] = ['title', 'description', 'ogTitle', 'ogDescription', 'ogImageUrl'];
+
 export interface RuleBuilderInput {
   product?: CatalogProductRecord;
   category?: CatalogCategoryRecord;
   cmsPage?: CmsPageRecord;
 }
 
-export class MetaTagResolverService {
+/** What a request names: a channel, a locale, both, or neither (= `en-US`). */
+export interface SeoMetaScopeRequest {
+  entityType: SeoEntityType;
+  entityId: string;
+  channelId?: string | null | undefined;
+  locale?: string | null | undefined;
+}
+
+function sameLanguage(a: string | null, b: string): boolean {
+  return a !== null && a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * The address a request names. Neither half keeps today's meaning, the `en-US`
+ * language row; a channel is a product's alone (`422 VALIDATION_FAILED`).
+ */
+export function seoMetaAddress(request: SeoMetaScopeRequest): SeoMetaOverrideAddress {
+  const channelId = request.channelId ?? null;
+  const locale = request.locale ?? null;
+  if (channelId !== null && request.entityType !== 'product') {
+    throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'Only a product takes a sales channel scope.', {
+      field: 'channelId',
+    });
+  }
+  return {
+    entityType: request.entityType,
+    entityId: request.entityId,
+    channelId,
+    locale: channelId === null && locale === null ? FALLBACK_LOCALE : locale,
+  };
+}
+
+/** The override rows that apply at (channel, language), most specific first. */
+function scopeChain(
+  rows: readonly SeoMetaOverride[],
+  channelId: string | null,
+  languageCode: string,
+): Array<{ row: SeoMetaOverride; source: Exclude<SeoProductMetaSource, 'derived'> }> {
+  const chain: Array<{ row: SeoMetaOverride; source: Exclude<SeoProductMetaSource, 'derived'> }> = [];
+  if (channelId !== null) {
+    const cxl = rows.find((r) => r.salesChannelId === channelId && sameLanguage(r.locale ?? null, languageCode));
+    if (cxl) chain.push({ row: cxl, source: 'set' });
+    const c = rows.find((r) => r.salesChannelId === channelId && (r.locale ?? null) === null);
+    if (c) chain.push({ row: c, source: 'inherited_channel' });
+  }
+  // Feature 168 (FR-010) — the Global row, never a Language-only one. 168-shim: the empty override
+  // (`''`) → derived value rule of round 6 is T121's.
+  const g = rows.find((r) => (r.salesChannelId ?? null) === null && (r.locale ?? null) === null);
+  if (g) chain.push({ row: g, source: 'inherited_global' });
+  return chain;
+}
+
+/** Each field from the most specific row that sets it, else the fallback (FR-075). */
+export function walkSeoScopes(
+  rows: readonly SeoMetaOverride[],
+  channelId: string | null,
+  languageCode: string,
+  fallback: SeoProductMetaValues,
+): SeoProductMetaValues & { sources: Record<SeoProductMetaField, SeoProductMetaSource> } {
+  const chain = scopeChain(rows, channelId, languageCode);
+  const values = { ...fallback };
+  const sources = {} as Record<SeoProductMetaField, SeoProductMetaSource>;
+  for (const field of FIELDS) {
+    const hit = chain.find(({ row }) => row[field] != null);
+    sources[field] = hit ? hit.source : 'derived';
+    if (hit) (values as Record<SeoProductMetaField, string | null>)[field] = hit.row[field] ?? null;
+  }
+  return { ...values, sources };
+}
+
+export class MetaTagResolverService implements SeoProductMetaPort {
   constructor(
     private readonly emFactory: () => EntityManager,
-    private readonly auditLog: AuditPort | undefined,
+    /** Every override write is a Command on the bus (Constitution XIII). */
+    private readonly commandBus: CommandBus,
     /** The three rows a rule is derived from, asked of the modules that own them. */
     private readonly catalogProducts: CatalogProductReadPort,
     private readonly catalogCategories: CatalogCategoryReadPort,
     private readonly cmsPages: CmsPageReadPort,
+    /** A product's channels and their languages, for the FR-014 check of a scoped write. */
+    private readonly membership: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>,
   ) {}
 
-  #audit(em: EntityManager, action: string, objectId: string, stateBefore: Record<string, unknown> | null, stateAfter: Record<string, unknown> | null): void {
-    if (this.auditLog) {
-      recordAuditFromContext(this.auditLog, em, { action, objectType: 'seo_meta_override', objectId, stateBefore, stateAfter });
-    }
+  async resolve(input: SeoMetaScopeRequest): Promise<ResolvedMeta> {
+    return (await this.resolveWithSources(input)).resolved;
   }
 
-  async resolve(input: {
-    entityType: SeoEntityType;
-    entityId: string;
-    locale: string;
-  }): Promise<ResolvedMeta> {
-    const em = this.emFactory();
+  /**
+   * {@link resolve} plus, per field, the scope its value comes from — what the admin
+   * meta editor shows beside each resolved value (feature 163, T126).
+   */
+  async resolveWithSources(
+    input: SeoMetaScopeRequest,
+  ): Promise<{ resolved: ResolvedMeta; sources: Record<SeoProductMetaField, SeoProductMetaSource> }> {
+    const address = seoMetaAddress(input);
+    const locale = address.locale ?? FALLBACK_LOCALE;
     const ruleSource = await this.loadRuleSource(input.entityType, input.entityId);
-    const rule = buildRuleMeta(input.entityType, ruleSource, input.locale);
-
-    const override = await this.findOverride(em, input);
-    if (!override) {
-      return { ...rule, source: 'rule', locale: input.locale };
-    }
-
+    const rule = buildRuleMeta(input.entityType, ruleSource, locale);
+    const rows = await this.emFactory().find(SeoMetaOverride, {
+      entityType: input.entityType,
+      entityId: input.entityId,
+    });
+    const walked = walkSeoScopes(rows, address.channelId, locale, {
+      title: rule.title,
+      description: rule.description,
+      ogTitle: rule.openGraph.title,
+      ogDescription: rule.openGraph.description,
+      ogImageUrl: rule.openGraph.image,
+    });
     return {
-      title: override.title ?? rule.title,
-      description: override.description ?? rule.description,
-      openGraph: {
-        title: override.ogTitle ?? rule.openGraph.title,
-        description: override.ogDescription ?? rule.openGraph.description,
-        image: override.ogImageUrl ?? rule.openGraph.image,
+      resolved: {
+        title: walked.title,
+        description: walked.description,
+        openGraph: { title: walked.ogTitle, description: walked.ogDescription, image: walked.ogImageUrl },
+        source: FIELDS.some((field) => walked.sources[field] !== 'derived') ? 'override' : 'rule',
+        locale,
       },
-      source: 'override',
-      locale: input.locale,
+      sources: walked.sources,
     };
   }
 
-  async getOverride(input: {
-    entityType: SeoEntityType;
-    entityId: string;
-    locale: string;
-  }): Promise<SeoMetaOverride | null> {
-    return this.findOverride(this.emFactory(), input);
+  /** The row at exactly the requested address, or `null`. */
+  async getOverride(input: SeoMetaScopeRequest): Promise<SeoMetaOverride | null> {
+    return this.emFactory().findOne(SeoMetaOverride, seoMetaOverrideWhere(seoMetaAddress(input)));
   }
 
-  async upsertOverride(input: {
-    entityType: SeoEntityType;
-    entityId: string;
-    locale: string;
-    title?: string | null;
-    description?: string | null;
-    ogTitle?: string | null;
-    ogDescription?: string | null;
-    ogImageUrl?: string | null;
-  }): Promise<SeoMetaOverride> {
-    const em = this.emFactory();
+  async upsertOverride(input: SeoMetaScopeRequest & SeoMetaOverrideFields): Promise<SeoMetaOverride> {
+    const address = seoMetaAddress(input);
     // Validate the entity actually exists so an admin typo doesn't write a
     // dangling row.
     await this.loadRuleSource(input.entityType, input.entityId);
-
-    const existing = await em.findOne(SeoMetaOverride, {
-      entityType: input.entityType,
-      entityId: input.entityId,
-      locale: input.locale,
-    });
-    if (existing) {
-      if (input.title !== undefined) existing.title = input.title;
-      if (input.description !== undefined) existing.description = input.description;
-      if (input.ogTitle !== undefined) existing.ogTitle = input.ogTitle;
-      if (input.ogDescription !== undefined) existing.ogDescription = input.ogDescription;
-      if (input.ogImageUrl !== undefined) existing.ogImageUrl = input.ogImageUrl;
-      this.#audit(em, 'seo_meta_override.upsert', existing.id, null, { entityType: existing.entityType, entityId: existing.entityId, locale: existing.locale });
-      await em.flush();
-      return existing;
-    }
-    const row = em.create(SeoMetaOverride, {
-      entityType: input.entityType,
-      entityId: input.entityId,
-      locale: input.locale,
-      ...(input.title !== undefined ? { title: input.title } : {}),
-      ...(input.description !== undefined ? { description: input.description } : {}),
-      ...(input.ogTitle !== undefined ? { ogTitle: input.ogTitle } : {}),
-      ...(input.ogDescription !== undefined ? { ogDescription: input.ogDescription } : {}),
-      ...(input.ogImageUrl !== undefined ? { ogImageUrl: input.ogImageUrl } : {}),
-    });
-    em.persist(row);
-    this.#audit(em, 'seo_meta_override.upsert', row.id, null, { entityType: row.entityType, entityId: row.entityId, locale: row.locale });
-    await em.flush();
-    return row;
+    const scoped = await this.#checkScope(address);
+    const existing = await this.emFactory().findOne(SeoMetaOverride, seoMetaOverrideWhere(scoped));
+    return this.commandBus.run(
+      makeUpsertSeoMetaOverrideCommand({
+        address: scoped,
+        existingId: existing?.id ?? null,
+        fields: {
+          ...(input.title !== undefined ? { title: input.title } : {}),
+          ...(input.description !== undefined ? { description: input.description } : {}),
+          ...(input.ogTitle !== undefined ? { ogTitle: input.ogTitle } : {}),
+          ...(input.ogDescription !== undefined ? { ogDescription: input.ogDescription } : {}),
+          ...(input.ogImageUrl !== undefined ? { ogImageUrl: input.ogImageUrl } : {}),
+        },
+      }),
+    );
   }
 
-  async deleteOverride(input: {
-    entityType: SeoEntityType;
-    entityId: string;
-    locale: string;
-  }): Promise<void> {
-    const em = this.emFactory();
-    const row = await em.findOne(SeoMetaOverride, input);
-    if (row) {
-      this.#audit(em, 'seo_meta_override.delete', row.id, { entityType: row.entityType, entityId: row.entityId, locale: row.locale }, null);
-      await em.removeAndFlush(row);
-    }
+  /**
+   * Removes the addressed row. No scope check: removing an override whose channel
+   * the product left, or whose language the channel dropped, is always allowed
+   * (FR-015).
+   */
+  async deleteOverride(input: SeoMetaScopeRequest): Promise<void> {
+    const address = seoMetaAddress(input);
+    const existing = await this.emFactory().findOne(SeoMetaOverride, seoMetaOverrideWhere(address));
+    await this.commandBus.run(makeDeleteSeoMetaOverrideCommand({ address, existingId: existing?.id ?? null }));
   }
 
-  private async findOverride(
-    em: EntityManager,
-    input: { entityType: SeoEntityType; entityId: string; locale: string },
-  ): Promise<SeoMetaOverride | null> {
-    return em.findOne(SeoMetaOverride, input);
+  // --- seoProductMetaPort (feature 163, R13) -------------------------------
+
+  async resolveForProduct(input: {
+    productId: string;
+    channelId: string;
+    languageCode: string;
+    fallback: SeoProductMetaValues;
+  }): Promise<SeoProductMetaValues & { sources: Record<SeoProductMetaField, SeoProductMetaSource> }> {
+    const rows = await this.emFactory().find(SeoMetaOverride, {
+      entityType: 'product',
+      entityId: input.productId,
+      $or: [{ salesChannelId: input.channelId }, { salesChannelId: null }],
+    });
+    return walkSeoScopes(rows, input.channelId, input.languageCode, input.fallback);
+  }
+
+  /**
+   * Feature 168 (`contracts/seo-ports.md` §1) — each field's view at one scope.
+   * 168-shim: no scope validation (`422 SCOPE_INVALID`) yet — T121's.
+   */
+  async readScoped(productId: string, scope: ScopeRef): Promise<Record<SeoProductMetaField, ScopedFieldView<string>>> {
+    const rows = await this.emFactory().find(SeoMetaOverride, { entityType: 'product', entityId: productId });
+    const global = rows.find((r) => (r.salesChannelId ?? null) === null && (r.locale ?? null) === null);
+    const out = {} as Record<SeoProductMetaField, ScopedFieldView<string>>;
+    for (const field of FIELDS) {
+      const scoped: ScopedRow<string>[] = rows.flatMap((r) => {
+        const value = r[field];
+        if (r.salesChannelId == null || value == null) return [];
+        return [
+          {
+            channelId: r.salesChannelId,
+            languageCode: r.locale ?? null,
+            value: value === '' ? { kind: 'empty' as const } : { kind: 'value' as const, value },
+          },
+        ];
+      });
+      const resolved = resolveScoped<string>({
+        global: global?.[field] || null,
+        rows: scoped,
+        scope,
+        levels: ['G', 'C', 'CL'],
+      });
+      out[field] = { ...resolved, levels: ['G', 'C', 'CL'], supportedHere: true, required: false };
+    }
+    return out;
+  }
+
+  async listScopesForProduct(
+    productId: string,
+  ): Promise<Array<{ channelId: string | null; languageCode: string | null; fields: SeoProductMetaField[] }>> {
+    const rows = await this.emFactory().find(
+      SeoMetaOverride,
+      { entityType: 'product', entityId: productId },
+      { orderBy: { salesChannelId: 'asc', locale: 'asc' } },
+    );
+    return rows.map((row) => ({
+      channelId: row.salesChannelId ?? null,
+      languageCode: row.locale ?? null,
+      fields: FIELDS.filter((field) => row[field] != null),
+    }));
+  }
+
+  /**
+   * FR-014 for a write naming a channel: the product is a member of it, and the
+   * locale (when named) is one the channel offers — answered in the channel's own
+   * spelling. A language row is checked by nothing beyond today's rules.
+   */
+  async #checkScope(address: SeoMetaOverrideAddress): Promise<SeoMetaOverrideAddress> {
+    if (address.channelId === null) return address;
+    const channels = await this.membership.listChannelsForEntity('product', address.entityId);
+    const channel = channels.find((c) => c.id === address.channelId);
+    if (!channel) {
+      throw new HttpError(422, ERROR_CODES.SCOPE_INVALID, 'The product is not a member of this sales channel.', {
+        channelId: address.channelId,
+        reason: 'not_a_member',
+      });
+    }
+    if (address.locale === null) return address;
+    const offered = toScopeChannel(channel).languages.find((code) => sameLanguage(code, address.locale!));
+    if (offered === undefined) {
+      throw new HttpError(422, ERROR_CODES.SCOPE_INVALID, 'The sales channel does not offer this language.', {
+        channelId: address.channelId,
+        languageCode: address.locale,
+        reason: 'language_not_offered',
+      });
+    }
+    return { ...address, locale: offered };
   }
 
   private async loadRuleSource(
@@ -201,8 +351,9 @@ export function buildRuleMeta(
   locale: string,
 ): { title: string; description: string; openGraph: ResolvedMeta['openGraph'] } {
   if (entityType === 'product' && source.product) {
-    const name = pickLocale(source.product.name, locale);
-    const description = pickLocale(source.product.description, locale);
+    // 168-shim: the Global texts; the derived fallback at (C, L) through `effectiveTexts` is T121's.
+    const name = source.product.name;
+    const description = source.product.description ?? '';
     return {
       title: trim(name, TITLE_MAX),
       description: trim(description, DESCRIPTION_MAX),

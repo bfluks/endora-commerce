@@ -17,6 +17,7 @@ import {
   renderCrm,
   core,
   crmLookupResponse,
+  returningHere,
 } from './crm-fixtures';
 
 /**
@@ -251,7 +252,7 @@ describe('OpportunityDetail — what became of the linked orders', () => {
     ).toBeInTheDocument();
     expect(within(outcomes).getByRole('link', { name: /ORD-1001/ })).toHaveAttribute(
       'href',
-      `/orders/${ORDER_ID}`,
+      returningHere(`/orders/${ORDER_ID}`),
     );
     expect(within(outcomes).getByRole('button', { name: en('propagation.retry') })).toBeInTheDocument();
     expect(
@@ -321,7 +322,7 @@ describe('OpportunityDetail — linked orders', () => {
     const region = linksRegion();
     expect(within(region).getByRole('link', { name: 'ORD-1001' })).toHaveAttribute(
       'href',
-      `/orders/${ORDER_ID}`,
+      returningHere(`/orders/${ORDER_ID}`),
     );
     // The Order's status is shown by its name, not by its code — once the
     // Orders module's statuses have been read, which is a request of its own.
@@ -619,7 +620,7 @@ describe('OpportunityDetail — tabs and their address (User Story 20)', () => {
     const orders = await within(panel).findByRole('region', { name: en('links.title') });
     expect(within(orders).getByRole('link', { name: 'ORD-1001' })).toHaveAttribute(
       'href',
-      `/orders/${ORDER_ID}`,
+      returningHere(`/orders/${ORDER_ID}`),
     );
     // The Quote Requests module is off here and nothing of it is linked: no section.
     expect(within(panel).queryByRole('heading', { name: en('links.quote.title') })).toBeNull();
@@ -785,9 +786,9 @@ describe('OpportunityDetail — the header and the sidebar (User Story 20)', () 
     return within(sidebar()).getByRole('region', { name: en(key) });
   }
 
-  /** The value shown under a fact's label. */
+  /** The value shown under a fact's label — a read-only fact's `dd`, or an editable one's value and pencil. */
   function fact(container: HTMLElement, labelKey: string): HTMLElement {
-    const term = within(container).getByText(en(labelKey), { selector: 'dt' });
+    const term = within(container).getByText(en(labelKey), { selector: 'dt, p' });
     return term.nextElementSibling as HTMLElement;
   }
 
@@ -919,25 +920,17 @@ describe('OpportunityDetail — the header and the sidebar (User Story 20)', () 
     expect(within(sidebar()).queryAllByRole('button')).toEqual([]);
     expect(within(sidebar()).queryAllByRole('combobox')).toEqual([]);
     expect(group('opportunity.facts.customer')).toHaveTextContent('Anna Nowak');
-    expect(screen.queryByRole('button', { name: en('opportunity.edit.open') })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Edit / })).toBeNull();
     expect(screen.queryByRole('button', { name: en('opportunity.delete.open') })).toBeNull();
   });
 
-  it('opens the edit form on the Overview from any tab, with the keyboard in its first field', async () => {
-    await renderPage(undefined, { search: '?tab=links' });
-    await userEvent.click(screen.getByRole('button', { name: en('opportunity.edit.open') }));
-    const form = await screen.findByRole('form', { name: en('opportunity.edit.title') });
-    expect(screen.getByRole('tab', { name: en('opportunity.tabs.overview') })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    await waitFor(() =>
-      expect(document.activeElement).toBe(within(form).getByLabelText(/^Title/)),
-    );
-    // One way in at a time: the button is back once the form is closed.
-    expect(screen.queryByRole('button', { name: en('opportunity.edit.open') })).toBeNull();
-    await userEvent.click(within(form).getByRole('button', { name: core('common.action.cancel') }));
-    expect(await screen.findByRole('button', { name: en('opportunity.edit.open') })).toBeInTheDocument();
+  it('has no edit form: every field is edited where it is shown (specs/158-crm-opportunity-inline-editing/)', async () => {
+    await renderPage();
+    expect(screen.queryByRole('button', { name: /^Edit$/ })).toBeNull();
+    expect(screen.queryByRole('form')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: en('inlineEdit.edit', { field: en('opportunity.field.title') }) }),
+    ).toBeInTheDocument();
   });
 
   it('keeps one h1, and no heading that skips a level', async () => {

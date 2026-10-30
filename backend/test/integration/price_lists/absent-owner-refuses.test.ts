@@ -7,14 +7,13 @@ import {
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { registryCache } from '../../../src/kernel/lifecycle/registry-cache.js';
 import { REGISTERED_MANIFESTS } from '../../../src/lifecycle/registered-manifests.js';
-import { PriceListMatrixEntry, Product } from '../../helpers/package-entities.js';
+import { Product } from '../../helpers/package-entities.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { PricingService } from '../../../../packages/modules/price_lists/src/backend/services/pricing-service.js';
-import {
-  DefaultPriceListMigrator,
-  DEFAULT_PRICE_LIST_ID,
-} from '../../../../packages/modules/price_lists/src/backend/services/default-price-list-migration.js';
 import { neighbourReadPorts } from '../../helpers/price-list-neighbour-ports.js';
+import { priceListChannelBridge } from '../../helpers/orders-neighbour-ports.js';
+import { seedPriceBookSql } from '../../helpers/price-book-sql.js';
+import { CUSTOMER_COOKIES } from '../../helpers/test-actors.js';
 
 /**
  * Issue #124, the price half — an absent `price_lists` must refuse, not price
@@ -83,13 +82,60 @@ describe('price_lists — an absent owner refuses to price a cart line [integrat
   it('refuses to re-price a cart that already has lines while `price_lists` is absent', async () => {
     // The cart read re-prices every line, so it is the same question as adding
     // one: the platform either has a price list to answer with or it says so.
+    //
+    // A basket of its own: the buyer's basket on this channel is shared with
+    // every other file of the run, and a re-price another file cached for it
+    // would answer this read without asking `price_lists` at all.
+    const retail = await h.em().findOneOrFail(SalesChannel, { code: SALES_CHANNEL_HEADER['x-sales-channel'] });
+    await h.cartService()!.clearForCustomer({
+      ...CUSTOMER_COOKIES[CUSTOMER.b2b_session]!,
+      salesChannelId: retail.id,
+    });
     expect((await addItem()).statusCode).toBe(200);
 
     registryCache.__setEnabledForTesting(ALL_IDS.filter((id) => id !== 'price_lists'));
-    const res = await h.app.inject({ method: 'GET', url: '/api/v1/cart', cookies: CUSTOMER });
+    // On the channel the line was added on: a basket belongs to its channel
+    // (`specs/154-sales-channel-access/`), and another channel's is empty.
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/cart',
+      headers: SALES_CHANNEL_HEADER,
+      cookies: CUSTOMER,
+    });
 
     expect(res.statusCode).toBe(503);
     expect((res.json() as { error: { code: string } }).error.code).toBe('MODULE_DISABLED');
+  });
+
+  it('refuses the PIM price write port while `price_lists` is absent (FR-049)', async () => {
+    // `providePort` gates the resolution: a caller resolves the port per use,
+    // so the refusal comes before anything executes.
+    const resolvePort = () =>
+      (h.container as unknown as { resolve<T>(name: string): T }).resolve<{
+        replaceProductBaseTiers(productId: string, tiers: Record<string, unknown[]>): Promise<unknown>;
+      }>('priceBookWritePort');
+    const count = () =>
+      h
+        .em()
+        .getConnection()
+        .execute<Array<{ n: string }>>(`select count(*) as "n" from "price_list_matrix_entries" where "product_id" = ?`, [
+          SEED_PRODUCT_101_ID,
+        ]);
+    const before = await count();
+    registryCache.__setEnabledForTesting(ALL_IDS.filter((id) => id !== 'price_lists'));
+
+    let refusal: unknown;
+    try {
+      await resolvePort().replaceProductBaseTiers(SEED_PRODUCT_101_ID, {
+        PLN: [{ minQuantity: 1, maxQuantity: null, amount: '1.0000' }],
+      });
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toMatchObject({ code: 'MODULE_DISABLED' });
+
+    registryCache.__setEnabledForTesting(ALL_IDS);
+    expect(await count()).toEqual(before);
   });
 
   it('adds the line again once `price_lists` is back', async () => {
@@ -104,23 +150,24 @@ describe('price_lists — an absent owner refuses to price a cart line [integrat
    * engine refuses the line; it never treats "cannot ask" as "no attribute is
    * eligible", which would price the line as though the entry did not exist.
    */
-  it('refuses a line a matrix attribute entry could price when the attribute read port is absent', async () => {
-    await new DefaultPriceListMigrator(h.em).seedDefault();
+  it('refuses a line a price-book attribute row could price when the attribute read port is absent', async () => {
     const em = h.em();
-    const entry = em.create(PriceListMatrixEntry, {
-      priceListId: DEFAULT_PRICE_LIST_ID,
-      attributeKey: 'material',
-      attributeValue: 'steel',
-      minQuantity: 1,
-      priceType: 'discount_percent',
-      discountPercent: '10',
-    });
-    await em.persistAndFlush(entry);
+    // An everyone book of the channel with one attribute row: a resolution of
+    // any product on it has to ask which attributes select prices.
+    const bookId = await seedPriceBookSql(em, { name: 'Attribute book', audience: 'everyone', rows: [] });
+    await em.getConnection().execute(
+      `insert into "price_list_matrix_entries"
+         ("id", "price_list_id", "attribute_key", "attribute_value", "min_quantity", "price_type", "percent", "created_at", "updated_at")
+       values (gen_random_uuid(), ?, 'material', 'steel', 1, 'percent', -10, now(), now())`,
+      [bookId],
+    );
     try {
       const channel = await em.findOneOrFail(SalesChannel, { code: 'pl_retail' });
       const product = await em.findOneOrFail(Product, { id: SEED_PRODUCT_101_ID });
       // `neighbourReadPorts` without an attribute read is the unwired port.
-      const pricing = new PricingService(h.em, undefined, undefined, neighbourReadPorts(h.em));
+      const pricing = new PricingService(h.em, undefined, neighbourReadPorts(h.em), undefined, {
+        channelBridge: priceListChannelBridge(),
+      });
       await expect(
         pricing.resolveLinePrice({
           product,
@@ -132,7 +179,7 @@ describe('price_lists — an absent owner refuses to price a cart line [integrat
         }),
       ).rejects.toThrow(/catalogAttributeRead/);
     } finally {
-      await h.em().nativeDelete(PriceListMatrixEntry, { id: entry.id });
+      await h.em().getConnection().execute(`delete from "price_lists" where "id" = ?`, [bookId]);
     }
   });
 });

@@ -1,9 +1,9 @@
-import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { setOrganizationMfaPolicy } from '../../../lib/api/mfa';
 import { StorefrontApiError } from '../../../lib/api/client';
 import { getSessionCookie } from '../../../lib/session';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../lib/i18n/navigation';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -24,7 +24,7 @@ export default async function OrganizationSecurityPage({
   searchParams: Promise<{ error?: string; done?: string }>;
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/account/organization-security');
+  if (!session) return await localeRedirect('/login?next=/account/organization-security');
   const params = await searchParams;
 
   return (
@@ -48,14 +48,14 @@ export default async function OrganizationSecurityPage({
 async function enforceAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/account/organization-security');
+  if (!session) return await localeRedirect('/login?next=/account/organization-security');
   const enforce = (formData.get('value') as string) === 'true';
   try {
     await setOrganizationMfaPolicy(session, enforce);
   } catch (err) {
     const message =
       err instanceof StorefrontApiError ? err.detail : 'Could not update enforcement.';
-    redirect(`/account/organization-security?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/account/organization-security?error=${encodeURIComponent(message)}`);
   }
-  redirect('/account/organization-security?done=1');
+  return await localeRedirect('/account/organization-security?done=1');
 }

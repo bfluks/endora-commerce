@@ -13,6 +13,7 @@ import {
   type PutBlogPostContentRequest,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
+import { assertLinkableAsset, type LinkableAssetReader } from './linkable-asset.js';
 import { assertSlugAvailable } from './blog-slug-collision.js';
 import type { BlogCacheService } from './blog-cache.js';
 
@@ -24,6 +25,7 @@ type PostRow = {
   status: BlogPostStatus;
   published_at: Date | string | null;
   description: string | null;
+  main_image_asset_id: string | null;
   meta_title: Record<string, string> | null;
   meta_description: Record<string, string> | null;
   meta_keywords: Record<string, string> | null;
@@ -67,6 +69,8 @@ export class BlogPostService {
     private readonly emFactory: () => EntityManager,
     private readonly cache?: BlogCacheService,
     private readonly dictionaryValidator?: DictionaryValidator,
+    /** Feature 166 (FR-006) — `assets_library`'s read port, asked before a main image is linked. */
+    private readonly assets?: LinkableAssetReader,
   ) {}
 
   // ────────────────────────────────────────────────────────────────────
@@ -148,6 +152,8 @@ export class BlogPostService {
     const em = this.emFactory();
     const id = randomUUID();
     const now = new Date();
+    // Feature 166 (FR-006) — a main image the caller may not see answers as a missing one.
+    if (input.mainImageAssetId) await assertLinkableAsset(this.assets, input.mainImageAssetId);
 
     return em.transactional(async (tx) => {
       // Slug-collision guard runs first so we don't pollute the post row
@@ -177,16 +183,17 @@ export class BlogPostService {
 
       await tx.execute(
         `insert into blog_posts
-           (id, name, slug, active, status, published_at, description,
+           (id, name, slug, active, status, published_at, description, main_image_asset_id,
             meta_title, meta_description, meta_keywords, content,
             version, created_at, updated_at)
-           values (?, ?::jsonb, ?, ?, 'draft', null, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, 1, ?, ?)`,
+           values (?, ?::jsonb, ?, ?, 'draft', null, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, 1, ?, ?)`,
         [
           id,
           JSON.stringify(input.name),
           input.slug,
           input.active ?? true,
           input.description ?? null,
+          input.mainImageAssetId ?? null,
           input.metaTitle ? JSON.stringify(input.metaTitle) : null,
           input.metaDescription ? JSON.stringify(input.metaDescription) : null,
           input.metaKeywords ? JSON.stringify(input.metaKeywords) : null,
@@ -241,6 +248,8 @@ export class BlogPostService {
         throw new HttpError(404, ERROR_CODES.BLOG_POST_NOT_FOUND, 'Blog post not found.');
       }
       this.assertVersion(existing.version, input.version);
+      // Feature 166 (FR-006) — a main image the caller may not see answers as a missing one.
+      if (input.mainImageAssetId) await assertLinkableAsset(this.assets, input.mainImageAssetId);
 
       const slugChange = input.slug !== undefined && input.slug !== existing.slug;
       const channelChange = input.salesChannelIds !== undefined;
@@ -275,6 +284,10 @@ export class BlogPostService {
       if (input.description !== undefined) {
         sets.push('description = ?');
         params.push(input.description);
+      }
+      if (input.mainImageAssetId !== undefined) {
+        sets.push('main_image_asset_id = ?');
+        params.push(input.mainImageAssetId);
       }
       if (input.metaTitle !== undefined) {
         sets.push('meta_title = ?::jsonb');
@@ -630,6 +643,7 @@ export class BlogPostService {
       status: row.status,
       publishedAt: this.toIso(row.published_at),
       description: row.description,
+      mainImageAssetId: row.main_image_asset_id ?? null,
       metaTitle: row.meta_title,
       metaDescription: row.meta_description,
       metaKeywords: row.meta_keywords,
@@ -682,6 +696,7 @@ export class BlogPostService {
       active: row.active,
       publishedAt: this.toIso(row.published_at),
       description: row.description,
+      mainImageAssetId: row.main_image_asset_id ?? null,
       version: row.version,
       createdAt: this.toIsoNonNull(row.created_at),
       updatedAt: this.toIsoNonNull(row.updated_at),

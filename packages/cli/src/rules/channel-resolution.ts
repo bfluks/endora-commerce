@@ -83,8 +83,9 @@
  *     not settings calls at all, which is part of why D-42's check read clean
  *     across all four.
  *
- * Reading `channel.isPublic` (price-visibility) off an already-resolved
- * channel is NOT a violation — it is a property read, neither signal.
+ * Reading a display property (`channel.defaultCurrency`,
+ * `channel.anonymousAccess`) off an already-resolved channel is NOT a
+ * violation — it is a property read, neither signal.
  *
  * ## One analysis, two hosts
  *

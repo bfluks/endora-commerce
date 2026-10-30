@@ -81,6 +81,7 @@ async function buildApp(): Promise<{ app: FastifyInstance; created: AuthCreateSe
       ok: true as const,
       subject: { subjectType: 'customer' as const, subjectId: 'customer-1' },
       factor: 'totp' as const,
+      salesChannelId: 'channel-1',
     }),
   } as unknown as MfaPublicDeps['loginService'];
 
@@ -96,6 +97,7 @@ async function buildApp(): Promise<{ app: FastifyInstance; created: AuthCreateSe
     auditLogService: { record: async () => undefined } as unknown as MfaPublicDeps['auditLogService'],
     adminAuthenticationThrottle: { issueKnownDevice: async () => null },
     customerAuthenticationThrottle: { issueKnownDevice: async () => null },
+    customerChannelAccess: { permits: async () => true, assertAccountMayUse: async () => undefined },
   });
   await app.ready();
   return { app, created };

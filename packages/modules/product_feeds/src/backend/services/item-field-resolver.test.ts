@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveFeedItem } from './item-field-resolver.js';
+import { feedLinkLanguage, resolveFeedItem } from './item-field-resolver.js';
 import type {
   FeedItemSource,
   FeedResolutionContext,
@@ -22,6 +22,8 @@ const CONTEXT: FeedResolutionContext = {
   pricePresentation: 'gross',
   taxCountry: 'PL',
   storefrontOrigin: 'https://shop.example.com',
+  // Feature 167 — the channel's URL-language facts: links carry the language prefix.
+  channelUrl: { languages: ['pl-PL', 'en-US'], defaultLanguage: 'pl-PL', prefixDefaultLanguage: true },
   salesChannelId: '00000000-0000-4000-8000-000000000001',
   priceListId: null,
 };
@@ -36,7 +38,7 @@ const ITEM: FeedItemSource = {
   description: { 'pl-PL': 'Opis', 'en-US': 'Description' },
   attributes: { brand: 'Acme', colour: 'blue', weight: 2.5 },
   customFields: { warranty_months: 24 },
-  price: { net: 100, gross: 123, taxResolved: true },
+  price: { net: '100.0000', gross: '123.00', taxResolved: true, taxRatePercent: 23 },
   salePrice: null,
   inStock: true,
   stockQuantity: 7,
@@ -85,7 +87,7 @@ describe('resolveFeedItem — every source kind (FR-003)', () => {
     [field({ outputName: 'a', sourceKind: 'stock_quantity' }), '7'],
     [
       field({ outputName: 'a', sourceKind: 'link' }),
-      'https://shop.example.com/p/blue-widget?lang=pl-PL',
+      'https://shop.example.com/pl/p/blue-widget',
     ],
     [field({ outputName: 'a', sourceKind: 'image_link' }), 'https://cdn.example.com/a.jpg'],
     [
@@ -173,7 +175,7 @@ describe('resolveFeedItem — every source kind (FR-003)', () => {
 
     const some = resolveFeedItem({
       fields: [field({ outputName: 'sale', sourceKind: 'sale_price' })],
-      item: { ...ITEM, salePrice: { net: 80, gross: 98.4, taxResolved: true } },
+      item: { ...ITEM, salePrice: { net: '80.0000', gross: '98.40', taxResolved: true, taxRatePercent: 23 } },
       context: CONTEXT,
     });
     expect(valueOf(some.fields, 'sale')).toBe('98.40 PLN');
@@ -191,7 +193,7 @@ describe('resolveFeedItem — every source kind (FR-003)', () => {
   it('warns rather than silently emitting a zero-VAT price on a gross feed (R12)', () => {
     const out = resolveFeedItem({
       fields: [field({ outputName: 'p', sourceKind: 'price' })],
-      item: { ...ITEM, price: { net: 100, gross: 100, taxResolved: false } },
+      item: { ...ITEM, price: { net: '100.0000', gross: '100.0000', taxResolved: false, taxRatePercent: null } },
       context: CONTEXT,
     });
     expect(valueOf(out.fields, 'p')).toBe('100.00 PLN');
@@ -236,15 +238,30 @@ describe('resolveFeedItem — identity defaults (FR-041)', () => {
 });
 
 describe('resolveFeedItem — link (FR-042)', () => {
-  it('builds the link from the channel storefront origin, /p/<slug> and ?lang=', () => {
+  it('builds the link from the origin and the prefixed product path, never ?lang= (feature 167)', () => {
     const out = resolveFeedItem({
       fields: [field({ outputName: 'link', sourceKind: 'link' })],
       item: ITEM,
       context: CONTEXT,
     });
-    expect(valueOf(out.fields, 'link')).toBe(
-      'https://shop.example.com/p/blue-widget?lang=pl-PL',
-    );
+    expect(valueOf(out.fields, 'link')).toBe('https://shop.example.com/pl/p/blue-widget');
+  });
+
+  it('leaves the default language unprefixed with the setting off, prefixes another language', () => {
+    const off = { ...CONTEXT, channelUrl: { ...CONTEXT.channelUrl, prefixDefaultLanguage: false } };
+    const link = (context: FeedResolutionContext) =>
+      valueOf(resolveFeedItem({ fields: [field({ outputName: 'link', sourceKind: 'link' })], item: ITEM, context }).fields, 'link');
+    expect(link(off)).toBe('https://shop.example.com/p/blue-widget');
+    expect(link({ ...off, languageCode: 'en-US' })).toBe('https://shop.example.com/en/p/blue-widget');
+  });
+
+  it('links the channel default language when the feed language is not a channel language (FR-034)', () => {
+    const out = resolveFeedItem({
+      fields: [field({ outputName: 'link', sourceKind: 'link' })],
+      item: ITEM,
+      context: { ...CONTEXT, languageCode: 'de-DE' },
+    });
+    expect(valueOf(out.fields, 'link')).toBe('https://shop.example.com/pl/p/blue-widget');
   });
 
   it('never emits a double slash when the origin carries a trailing slash', () => {
@@ -254,7 +271,7 @@ describe('resolveFeedItem — link (FR-042)', () => {
       context: { ...CONTEXT, storefrontOrigin: 'https://shop.example.com/' },
     });
     expect(valueOf(out.fields, 'link')).toBe(
-      'https://shop.example.com/p/blue-widget?lang=pl-PL',
+      'https://shop.example.com/pl/p/blue-widget',
     );
   });
 
@@ -495,5 +512,45 @@ describe('resolveFeedItem — transforms (FR-067)', () => {
       context: CONTEXT,
     });
     expect(valueOf(out.fields, 'u')).toBe('https://shop.example.com/files/manual.pdf');
+  });
+});
+
+/**
+ * Review finding 2 (release 0.108.0) rounded an x.xx50 price half-up on its
+ * decimal digits, where `amount.toFixed(2)` had rounded the binary double
+ * (9.0450 became `9.04 PLN`). Issue #430 goes further: such a price has a
+ * significant third place, so it is not rounded at all — it is published as
+ * the price of ten units, exact, where the template can say so, and skipped
+ * where it cannot (`feed-sub-cent-pack.test.ts`).
+ */
+describe('resolveFeedItem — an x.xx50 price is published as a pack of ten, never rounded', () => {
+  it.each([
+    ['9.0450', '90.45 PLN'],
+    ['1.0050', '10.05 PLN'],
+    ['2.6750', '26.75 PLN'],
+  ])('%s → %s', (amount, emitted) => {
+    const net = amount;
+    const prices = { price: { net, gross: net, taxResolved: true, taxRatePercent: null }, salePrice: { net, gross: net, taxResolved: true, taxRatePercent: null } };
+    const fields = [field({ outputName: 'p', sourceKind: 'price' }), field({ outputName: 's', sourceKind: 'sale_price' })];
+    const context = { ...CONTEXT, pricePresentation: 'net' as const, taxCountry: null };
+    const packed = resolveFeedItem({
+      fields: [...fields, field({ outputName: 'n', sourceKind: 'pack_quantity' })],
+      item: { ...ITEM, ...prices },
+      context,
+    });
+    expect(valueOf(packed.fields, 'p')).toBe(emitted);
+    expect(valueOf(packed.fields, 's')).toBe(emitted);
+    expect(valueOf(packed.fields, 'n')).toBe('10');
+
+    const unpackable = resolveFeedItem({ fields, item: { ...ITEM, ...prices }, context });
+    expect(unpackable.skipReason).toBe('sub_cent_price_without_pack_field');
+  });
+});
+
+describe('feedLinkLanguage (feature 167)', () => {
+  it('is the feed language when the channel serves it (exact, then primary subtag), else the default', () => {
+    expect(feedLinkLanguage(CONTEXT)).toBe('pl-PL');
+    expect(feedLinkLanguage({ ...CONTEXT, languageCode: 'en' })).toBe('en-US');
+    expect(feedLinkLanguage({ ...CONTEXT, languageCode: 'de-DE' })).toBe('pl-PL');
   });
 });

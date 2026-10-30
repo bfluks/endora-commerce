@@ -8,8 +8,10 @@ import { randomUUID } from 'crypto';
  * products still resolve from historical Orders, Invoices, RFQs, Shopping Lists
  * but are excluded from search/filters.
  *
- * Multilingual fields (`name`, `description`) are stored as JSONB per
- * data-model.md; `attributeValues` is a JSONB keyed by ProductAttribute.key.
+ * Feature 168 (`specs/168-product-editor-scope-switcher/data-model.md` §1): `name` and
+ * `description` are the **Global** values, one text each; Channel and Channel × language
+ * values live in `product_value_overrides`. `attributeValues` is a JSONB keyed by
+ * ProductAttribute.key holding Global values only — never a language map.
  */
 @GlobalEntity()
 @Entity({ tableName: 'products' })
@@ -31,7 +33,11 @@ export class Product {
     | 'lowStockThreshold'
     | 'lowStockThresholdMode'
     | 'fulfilmentStrategy'
-    | 'fulfilmentStrategyWarehouseOrder';
+    | 'fulfilmentStrategyWarehouseOrder'
+    | 'minOrderQuantity'
+    | 'returnable'
+    | 'publishFrom'
+    | 'publishUntil';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -48,15 +54,22 @@ export class Product {
   @Property({ type: 'string', length: 16 })
   type!: 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
 
+  /**
+   * Feature 163 (FR-010, FR-019, FR-110) — `active` | `inactive`; `inactive` is
+   * plain off and never archives. Archiving is `archivedAt`, written only by the
+   * Archive / Restore action. New and duplicated products start `inactive` (Q1-d);
+   * the database refuses any other value (`products_status_check`).
+   */
   @Property({ type: 'string', length: 16 })
   @Index()
-  status: 'draft' | 'active' | 'inactive' = 'draft';
+  status: 'active' | 'inactive' = 'inactive';
 
-  @Property({ type: 'json' })
-  name!: Record<string, string>;
+  @Property({ type: 'text' })
+  name!: string;
 
-  @Property({ type: 'json' })
-  description!: Record<string, string>;
+  /** `null` = no Global description. */
+  @Property({ type: 'text', nullable: true })
+  description: string | null = null;
 
   /** Per-product override of global stock mode (categorical/numeric/null=inherit). */
   @Property({ type: 'string', length: 16, nullable: true })
@@ -191,4 +204,61 @@ export class Product {
    *  of warehouse UUIDs to walk. */
   @Property({ type: 'json', nullable: true })
   fulfilmentStrategyWarehouseOrder?: string[] | null;
+
+  /**
+   * Feature 155 (FR-001) — the minimum order quantity in pieces, 1…1 000 000,
+   * or `null` for none; `1` is equivalent to none. Meaningful for `simple`
+   * and `configurable` products only, and inherited by their variants.
+   */
+  @Property({ type: 'integer', nullable: true })
+  minOrderQuantity?: number | null;
+
+  /**
+   * Feature 155 (FR-003, FR-004) — whether the product may be returned.
+   * `false` unless an operator turns it on; snapshotted onto each order line
+   * at placement.
+   */
+  @Property({ type: 'boolean' })
+  returnable: boolean = false;
+
+  /**
+   * Feature 161 (G15), rewritten by feature 168 (data-model §1) — the admin name key and search
+   * key: **generated stored** columns Postgres computes from the Global `name` (else the SKU) on
+   * every write. One key for every admin language: an admin sees the Global name (FR-031).
+   * Read-only here: the ORM never writes them, never loads them unless asked (`lazy`) and never
+   * serialises them (`hidden`); `pageProductsByAdminName` reads them in SQL.
+   */
+  @Property({ type: 'text', generated: `(catalog_admin_name_key("name", "sku")) stored`, lazy: true, hidden: true, nullable: true })
+  readonly adminNameKey?: string;
+
+  @Property({
+    type: 'text',
+    generated: `(catalog_admin_name_key("name", "sku") || ' ' || lower("sku")) stored`,
+    lazy: true,
+    hidden: true,
+    nullable: true,
+  })
+  readonly adminSearchKey?: string;
+
+  /**
+   * Feature 168 (research R7) — the version of everything a Save can overwrite: the product
+   * row's own fields and every scoped value. Not ORM-versioned: written only by
+   * `bumpScopeVersion` (one `update … set scope_version = scope_version + 1`), never by a flush,
+   * so a structural or inventory writer that loads a `Product` never moves it.
+   */
+  @Property({ type: 'bigint', defaultRaw: '0', lazy: true, hidden: true })
+  readonly scopeVersion?: string;
+
+  /**
+   * Feature 163 (FR-023) — the global publication window, inclusive at both
+   * ends; `null` = open on that side. A channel may replace the pair
+   * (`product_channel_scopes.window_overridden`). Never changes `status`: the
+   * window is evaluated at read time (A-4).
+   */
+  @Property({ type: 'datetime', nullable: true })
+  publishFrom?: Date | null;
+
+  /** Feature 163 (FR-023) — the end of the global publication window, inclusive. */
+  @Property({ type: 'datetime', nullable: true })
+  publishUntil?: Date | null;
 }

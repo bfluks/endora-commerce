@@ -139,12 +139,15 @@ export class TemplatePreviewService {
       // whether the source itself produced the value, and once as configured.
       // That is what lets the editor show "Empty — will send \"New\"" instead
       // of a value the operator cannot account for (ux-design §3.4).
+      // `templateFields`: whether a sub-cent price is published as a pack is
+      // the whole template's answer, not one field's (issue #430).
       const withoutFallback = this.deps.resolver.resolve({
         fields: [{ ...field, fallbackValue: null }],
+        templateFields: fields,
         item,
         context,
       });
-      const asConfigured = this.deps.resolver.resolve({ fields: [field], item, context });
+      const asConfigured = this.deps.resolver.resolve({ fields: [field], templateFields: fields, item, context });
 
       const emitted = asConfigured.fields[0]?.value ?? null;
       const resolvedFrom: PreviewFieldResult['resolvedFrom'] =
@@ -252,6 +255,11 @@ export class TemplatePreviewService {
       pricePresentation,
       taxCountry,
       storefrontOrigin: await this.deps.storefrontOriginFor(channel.id),
+      channelUrl: {
+        languages: channel.languages,
+        defaultLanguage: channel.defaultLanguage,
+        prefixDefaultLanguage: channel.prefixDefaultLanguage,
+      },
       salesChannelId: channel.id,
       priceListId,
     };

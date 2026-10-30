@@ -1,5 +1,242 @@
 # @endora-commerce/admin-kit
 
+## 0.108.0
+
+### Minor Changes
+
+- 291ec86: Custom-field filters for admin lists: one composite, its hook and the pure helpers the Orders, Quote Requests and Opportunities lists share.
+
+  **New in `@endora-commerce/admin-kit/components`.**
+
+  - `CustomFieldListFilters` — one filter control per custom field a list offers, rendered as grid
+    cells for the host's own advanced-filters grid. Props: `idPrefix`, `fields`
+    (`CustomFieldListFilterField[]`), `value` (`CustomFieldFilters`), `onChange(key, filter | null)`
+    (one key's filter, whole; `null` when nothing of it is left), `language`, and optionally
+    `status` (the hook's) with `onRetry`: a placeholder cell while the fields load, and on failure a
+    sentence with a _Try again_ button. A text field is a search box committed after a 300 ms pause;
+    a number is a minimum and a maximum, a decimal comma accepted, also paused; a date is a from and
+    a to. Both ranges stack below `sm` with a visible short label on each bound, explain a bound that
+    is not a number and an inverted range in a message linked to the input, and send nothing for
+    either. A yes/no field is _Any / Yes / No_; a select or multiselect field is a multi-select of its
+    options in their order, searchable above eight. Labels follow `label[language]`, then the base
+    language, then `labelDefault`. A pending text or number commit is dropped when the value changes
+    from outside.
+  - `useCustomFieldListFilterFields(endpoint)` — `{ fields, status: 'loading' | 'ready' | 'error',
+reload }` from one `GET` of a list's offered-fields endpoint; `reload()` reads it again.
+  - `readCustomFieldFilterParams(params)` / `writeCustomFieldFilterParams(params, filters)` — the
+    filters in an address's `cf.<key>.<op>` parameters (`in` repeated) and back, other parameters
+    untouched. A key failing the definition-key grammar and a malformed operator value are dropped;
+    an unknown well-formed key is kept for the server to refuse; at most 10 keys and 100 `in`
+    values.
+  - `sanitizeCustomFieldFilters(saved, fields)` — a saved view's filters against the offered fields:
+    `{ kept, dropped }`, removed options pruned. `pruneRemovedOptions(filters, fields)` — removes
+    options a known field no longer has from filters read from the address.
+  - `customFieldFilterChips(fields, filters, language, t)` — one `{ id, label, remove, removeLabel }`
+    chip per key, the label plain text and `removeLabel` the remove action's accessible name.
+  - `customFieldDisplayName(fields, key, language)` — how a field is named to the operator: its label
+    (language, base language, `labelDefault`), or for a key the list does not offer the key cut to
+    64 characters. `resolveCustomFieldLabel(label, labelDefault, language)` — the label rule alone.
+  - `emptyCustomFieldFilters()`, `withCustomFieldFilter(filters, key, filter | null)` and
+    `withoutCustomFieldFilter(filters, key)` — new prototype-free records with one key set or removed. `customFieldFilterRefusal(error)` — the key a
+    `CUSTOM_FIELD_FILTER_UNAVAILABLE` refusal names, else `null`. `toCustomFieldFiltersParam(filters)`
+    — the `customFieldFilters` request parameter, keys sorted, `null` when empty.
+  - Types: `CustomFieldListFiltersProps`, `CustomFieldFilterChip`, `CustomFieldFilterTranslator`,
+    `CustomFieldListFilterFieldsState`, `CustomFieldListFilterFieldsStatus`.
+
+  Every record the helpers return has a `null` prototype, so a key such as `constructor` is an
+  ordinary key and never an inherited member.
+
+  **`@endora-commerce/mod-i18n`** ships the `customFieldFilters.*` keys of the `core` namespace in
+  English and Polish, which the composite reads; a host needs that version alongside this one.
+
+  **`Input`** (`@endora-commerce/admin-kit/ui`) draws its border in the destructive colour while
+  `aria-invalid` is set.
+
+- cf7a9c0: A detail screen can lead its Back to the screen that opened it, and a page header can carry controls beside its title.
+
+  - **New in `@endora-commerce/admin-kit/lib`**: `readReturnTo(searchParams)` returns the `?returnTo=` path a screen was opened with, or `null` for anything that is not a path of the application (a scheme, a host, `//`); `withReturnTo(target, returnTo)` adds it to a link, keeping the query and the hash; `RETURN_TO_PARAM`.
+  - **`PageHeader`** takes an optional `titleActions`, drawn beside the heading but outside it, so the heading's accessible name stays its words. Pages that do not pass it render as before.
+
+- c8aa175: Line groups editor and grouped reordering in `@endora-commerce/admin-kit/components`.
+
+  - **`useGroupedReorder(options)`** — the multi-section sibling of `useReorderList`: items move within and across sections (native pointer drag, the ARIA grab-mode keyboard map crossing section boundaries, `moveItemBy` / `moveItemTo`), non-fixed sections move among themselves (`moveSectionBy`), and every move is announced through the caller's labels. The hook owns no list: it calls `onMoveItem(id, sectionKey, index)` and `onMoveSection(key, index)`.
+  - **`<LineGroupsEditor>`** — domain-free editor of named, ordered groups of a document's lines: inline group names (required, 120 characters), move up/down, delete (lines move to the ungrouped section, announced), a _Move to group_ menu per line, per-section `renderSummary` and `renderSectionFooter`, a `readOnly` mode and a `layout="table"` mode for screens whose lines are table rows. With no group it renders the bare line list. Every string is a prop (`LineGroupsEditorLabels`).
+  - **`<SplitLineDialog>`** — _Split line_: a modal dialog asking for the quantity to move to a new line (whole steps from `step` to `quantity − step`, invalid entries marked with their reason, Enter confirms) and the section of the new line; with `canSplitLine(quantity, step)` and `splitLineInto(lines, key, split, ops)`, which applies a confirmed split to a display-ordered line list. Every string is a prop (`SplitLineDialogLabels`).
+
+- e1b173f: New `EditableGrid` on `@endora-commerce/admin-kit/components` (feature 161, `specs/161-price-book-editor/research.md` R4): an ARIA data grid for spreadsheet-like editing that knows nothing about its cells' meaning. The caller supplies `columns`, `rows`, `getText(rowKey, columnKey)`, optional `getError`, `isReadOnly` and `renderCell` (keep it stable), and receives every change as one group through `onChange(changes, reason)` — `changes` are `{ rowKey, columnKey, text }`, `reason` is `'edit' | 'paste' | 'fill' | 'clear' | 'undo' | 'redo'`. The grid owns the keyboard model (one tab stop, arrows, Home/End, Ctrl+Home/End, PageUp/PageDown, Enter/F2/Escape/Tab, Shift selection), tab-separated copy and paste (a semicolon line too), fill down (Ctrl/⌘+D), clear, undo and redo of change groups, per-cell `aria-invalid` with its reason, `aria-rowcount`/`aria-rowindex` for paged sets (`totalRowCount`, `rowIndexOffset`), and a polite live region. A `ref` (`EditableGridHandle`) applies an outside change as one undoable group (`apply`), forgets the history (`clearHistory`) and reads the selection (`selection`). Types: `EditableGridProps`, `EditableGridColumn`, `EditableGridRow`, `EditableGridCellChange`, `EditableGridChangeReason`, `EditableGridRenderContext`, `EditableGridSelection`, `EditableGridHandle`. Its strings are in the `core` namespace under `editableGrid.*` (shipped by `@endora-commerce/mod-i18n`).
+- ef1318e: Two additions for the price-book grid (feature 161, Phase 5), both additive.
+
+  - **`EditableGrid` `getCellToken?(rowKey, columnKey): string`.** A cell's memo token: a cell renders again when its text, error, state or this token changes. A caller whose cell shows more than its own text (what an empty cell inherits from a neighbour) puts that in the token, so a change renders the cells it affects and no other. Without it, a cell renders on its text alone, as before.
+  - **`DropdownMenu`, `DropdownMenuTrigger`, `DropdownMenuContent`, `DropdownMenuItem` on `@endora-commerce/admin-kit/ui`** — the Radix menu `RowActionMenu` is built on, published for menus with a labelled trigger.
+
+- f42bbaf: `PaginationFooter` takes an optional `pageSizes` (feature 161): the page sizes its rows-per-page select offers, for a list whose API pages differently. Omitted, it offers `PAGE_SIZE_OPTIONS` as before. The props are generic over the size type — `PaginationFooterProps<S extends number = PageSizeOption>` — so `pageSize` and `onPageSizeChange` take the caller's sizes; existing callers are unchanged.
+- c781cd6: `useUnsavedChangesPrompt(when, message?, options?)` takes an optional third argument (feature 161, FR-020): `{ guardTabsOutside: ref }` also asks before a `role="tab"` outside the referenced element is activated, and keeps the tab when the operator cancels — for a panel contributed into a host's tabbed screen, whose tab switch unmounts it. Existing two-argument calls are unchanged. Type: `UnsavedChangesPromptOptions`.
+- 4a05f32: `formatMoney(amount, currency, locale?, options?)` takes `{ unitPrice: true }` for a unit price (owner ruling of 2026-10-25): two places when its third and fourth are zero, otherwise its significant places, up to four (`0,0125 zł`, `1,50 zł`, `1,505 zł`), by `unitPriceFractionDigits` from `@endora-commerce/contracts`. An amount (a line value, a total) still shows two. New exported type `FormatMoneyOptions`.
+
+### Patch Changes
+
+- 172597c: `ModalDialog` (`@endora-commerce/admin-kit/components`) takes an optional `aria-describedby`: the
+  id of the element that describes the dialog, set on the panel beside its `aria-labelledby`, so a
+  screen reader reads a warning or a question together with the title when focus enters the dialog.
+  Without it the panel carries no `aria-describedby`, exactly as before. Additive.
+- 53e88c7: _Send feedback_ beside the release in the Admin UI sidebar (an icon of its own when the sidebar is collapsed), shown while the `admin_feedback` module is present. It opens a dialog — the feedback (required), the sender's e-mail (the signed-in administrator's, editable) and an optional phone — that posts to `POST /api/v1/admin/feedback`, and says every outcome: thanks, sending switched off on the instance, too many messages, or not delivered, always with `support@endora.software` to write to by hand and with what was typed kept. New `appShell.feedback.*` keys in the core bundle (EN, PL); `theme.css` gains `.b2b-sidebar__feedback` and `.b2b-sidebar__feedback-rail-row`.
+- 8e10ba1: The collapsed sidebar's fly-out is drawn over the page content again. `.b2b-sidebar` now sets `z-index: 36` — above the sticky topbar (35) and the page's sticky bars, below the mobile nav backdrop (40), the scrim, drawers and command palette (50/60). A sticky box is its own stacking context, so the fly-out's own `z-index` could never lift it above content painted later in the page.
+- 3a9dc6e: Raise `vite` to `^7.3.7`. It includes a dev-server fix that keeps module ids, not URLs, in `safeModulePaths`. `@endora-commerce/admin-shell`'s generated README lists the new peer range.
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [5bddd11]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- 97d24cf: A shared product browser for admin screens that add many products at once, and selectability rules for the quick product search.
+
+  **New in `@endora-commerce/admin-kit/components`.**
+
+  - `ProductBrowserDialog` — a wide side drawer that lists the catalogue from
+    `GET /api/v1/admin/catalog/products` in a paginated table (status tabs with counts, a type
+    filter, a debounced SKU / slug / name search) and keeps a selection across pages, page sizes
+    and filters. Props: `open`, `rules`, `alreadyAddedIds`, `title?`, `onConfirm(items)`,
+    `onCancel`, `confirmErrorMessage?(error)` (the message shown for a rejected confirm, given the
+    rejection so a host can name its cause). `onConfirm` receives the selected
+    `ProductBrowserItem`s in the order they were ticked. Return nothing for a local append; return a
+    promise to make the confirm a server write — the dialog shows pending, and on rejection stays
+    open with the selection kept and a **Retry** that sends the same items again. **The host owns
+    `open`**: close the dialog in `onConfirm`, or once its promise resolves. One confirm takes at most
+    `ADMIN_PRODUCT_SELECTION_MAX` (200) products. Its first page size follows the operator's
+    Products-list preference, and changing it inside the dialog does not change that preference.
+  - `ProductBrowserTrigger` — the **Browse products** button. It is disabled, with a visible hint,
+    for an operator without `catalog:read`; `disabled` and `disabledReason` add a host's own reason.
+  - `productSelectability(row, rules, { alreadyAddedIds, selectedIds, max })` — the pure rule both
+    entry points apply: `{ selectable: true }` or `{ selectable: false, reason }`, the reason being
+    the first of `alreadyAdded`, `typeBlocked`, `statusBlocked`, `limitReached`. A row already
+    selected stays de-selectable at the cap. `productSelectabilityReasonKey(reason, rules)` gives
+    the `core` translation key for a reason.
+  - `productDisplayName(item)` — the name a product is shown under: `en-US`, else the first locale
+    present, else the slug, else the SKU. `parsePositiveInt(input)` — a whole number of at least 1
+    from a quantity field, or `null`. The two line helpers every product-browser host shares, so
+    their screens and the kit's own picker show the same name and accept the same quantities.
+  - Types: `ProductBrowserRules` (`initialStatus: 'all' | 'active'`, `blockedTypes?`,
+    `blockedStatuses?`, `alreadyAddedLabelKey?`), `ProductBrowserItem`, `ProductBrowserStatus`,
+    `ProductBrowserType`, `ProductSelectability`, `ProductSelectabilityReason`,
+    `ProductSelectabilityContext`, `ProductBrowserDialogProps`, `ProductBrowserTriggerProps`.
+
+  **`ProductPicker` gains three optional props; without them nothing changes.**
+
+  - `rules` and `alreadyAddedIds` — every option is judged by `productSelectability`; one the host
+    refuses is shown disabled with its translated reason instead of hidden. Passing `rules` also
+    disables the picker, with the same hint as the trigger, for an operator without
+    `catalog:read`. A picker given no `rules` adds no permission check and needs no signed-in
+    session, exactly as before.
+  - `onPickProduct(item)` — receives the full summary of the picked product (`id`, `sku`, `slug`,
+    `name`, `status`, `type`), in both `select` and `multiselect` mode.
+
+  Every new string is read from the `core` namespace, so a host needs `@endora-commerce/mod-i18n`
+  at the version that ships the `productBrowser.*` keys.
+
+- 86a88fd: `AssetUploader` takes two optional props: `upload` and `accept`.
+
+  - `upload(file)` replaces the default request, which uploads the file as a new asset. The assets library's **Replace file** action passes one that stages the file for its own confirmation. The component still refuses a file outside `acceptPrefix` when one is given — a dropped file included — shows its progress and errors, and calls `onUploaded` with what `upload` answers.
+  - `accept` sets the file input's whole `accept` attribute (for example `application/pdf`). It only filters the file picker: a dropped file is checked against `acceptPrefix` alone, so pass both to hold a drop to one kind. Without `accept`, `acceptPrefix` decides the attribute as before.
+
+  The hidden file input now carries the trigger's label as its accessible name.
+
+  Every existing caller is unchanged.
+
+- 2933bf0: `@endora-commerce/admin-kit/components` publishes two new components. `ModalDialog` (with `ModalDialogProps`) is the dialog primitive `crm` used to keep to itself: a titled panel over a scrim with an accessible name, a focus trap, Escape and scrim to close, and a `busy` flag that makes both inert. It gains two optional props, `initialFocusRef` (focused on open instead of the first focusable element) and `finalFocusRef` (focused after close instead of the opener, read at close time); without them it behaves as before. `useFocusTrap` accepts the same two refs through a new optional third argument (`FocusTrapOptions`). `SavedViewsControl` (with `SavedViewsControlProps` and `SavedViewState`) is the saved-views selector with _Save view_ and _Delete view_, both through dialogs rather than the browser's native prompts: the caller passes the list's saved-view endpoint, its current state and an `onApply` callback, and the control lists, creates and deletes views through the kit's `apiClient`. A name the server refuses as taken (`409`) is shown in the save dialog with the name field marked invalid until the next keystroke. It never sends an update.
+
+  `crm` imports `ModalDialog` from the kit instead of its own copy, which is deleted. No behaviour changes.
+
+  The `core` bundle gains eighteen `savedViews.*` keys in English and Polish — the copy `SavedViewsControl` and its dialogs render.
+
+### Patch Changes
+
+- 09e72a3: `ProductPicker` now shows a preselected product without any interaction when it is mounted under React `<StrictMode>`, as the admin runs it. Its warm-up lookup marked an id as fetched before the answer arrived, so StrictMode's simulated unmount discarded the answer and the remount asked for nothing — the field stayed empty until opening the dropdown happened to load the product (seen on a quote request's Modify tab). The lookup in flight is now kept per id and re-awaited by every effect run, so a remount reuses the same request; only a failed lookup is remembered so it is not retried on every re-render.
+- b8adc7f: `AssetPicker` carries the new asset summary members (`fileUrl`, `permalink`, `permalinkUrl`, `contentVersion`) into its grid when an upload completes.
+
+  Nothing changes in what the picker shows or selects; the item it adds after an upload now matches the
+  shape the library's list answers.
+
+- a57515b: The sidebar shows the release number in a section of its own: the logo, a divider, the version
+  badge, a divider, then the rest of the sidebar. The badge no longer overlaps the logo's header.
+  The collapsed sidebar still hides it and keeps the release in the logo's tooltip.
+- 30c61d9: `AuthProvider` picks up what a federated sign-in leaves in the address when it returns to the Admin UI: `#mfa-challenge=<id>` opens the two-step verification form exactly as after the password step, and `/login?error=<sentence>` shows that sentence on the sign-in form (it was not shown before). Both are removed from the address bar once read. A pending challenge and that sentence survive the initial `/admin/me` check answering `401`.
+- Updated dependencies [fcf4d09]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/contracts@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

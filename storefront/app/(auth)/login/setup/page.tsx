@@ -1,4 +1,3 @@
-import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { completeMfaSetupTicket } from '../../../../lib/api/mfa';
 import { StorefrontApiError } from '../../../../lib/api/client';
@@ -10,6 +9,7 @@ import {
 } from '../../../../lib/session';
 import { Hook } from '../../../../components/Hook';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -33,7 +33,7 @@ export default async function ForcedSetupPage({
   const nextPath = sanitiseNext(params.next);
   const ticket = await getMfaSetupTicketCookie();
   if (!ticket) {
-    redirect(`/login?next=${encodeURIComponent(nextPath)}`);
+    return await localeRedirect(`/login?next=${encodeURIComponent(nextPath)}`);
   }
 
   return (
@@ -79,7 +79,7 @@ async function completeAction(formData: FormData): Promise<void> {
   const next = sanitiseNext((formData.get('next') as string) ?? '/account');
   const ticket = await getMfaSetupTicketCookie();
   if (!ticket) {
-    redirect(`/login?next=${encodeURIComponent(next)}`);
+    return await localeRedirect(`/login?next=${encodeURIComponent(next)}`);
   }
 
   let result;
@@ -88,16 +88,16 @@ async function completeAction(formData: FormData): Promise<void> {
   } catch (err) {
     const message =
       err instanceof StorefrontApiError ? err.detail : 'Setup failed. Please try again.';
-    redirect(`/login/setup?error=${encodeURIComponent(message)}&next=${encodeURIComponent(next)}`);
+    return await localeRedirect(`/login/setup?error=${encodeURIComponent(message)}&next=${encodeURIComponent(next)}`);
   }
   if (!result.sessionCookieValue) {
-    redirect(`/login/setup?error=${encodeURIComponent('Setup failed. Please try again.')}&next=${encodeURIComponent(next)}`);
+    return await localeRedirect(`/login/setup?error=${encodeURIComponent('Setup failed. Please try again.')}&next=${encodeURIComponent(next)}`);
   }
   await setSessionCookie(result.sessionCookieValue);
   await clearMfaSetupTicketCookie();
   // Surface the recovery codes once on the security page.
   await setMfaRecoveryFlash(result.recoveryCodes);
-  redirect('/account/security');
+  return await localeRedirect('/account/security');
 }
 
 function sanitiseNext(input: string | undefined): string {

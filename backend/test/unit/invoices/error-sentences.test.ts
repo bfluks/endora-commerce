@@ -69,6 +69,7 @@ const KEYS = [
   'errors.INVOICE_NUMBER_ALREADY_ISSUED',
   'errors.INVOICE_NUMBER_ALREADY_ISSUED.other_channel',
   'errors.INVOICE_NUMBER_ALREADY_ISSUED.same_channel',
+  'errors.INVOICE_ORDER_REFUNDED',
 ] as const;
 
 describe('the INVOICE_* sentences', () => {
@@ -78,6 +79,7 @@ describe('the INVOICE_* sentences', () => {
     expect(routed(ERROR_CODES.INVOICE_NOT_READY)).toBe('invoices');
     expect(routed(ERROR_CODES.INVOICE_NUMBER_PATTERN_COLLIDES)).toBe('invoices');
     expect(routed(ERROR_CODES.INVOICE_NUMBER_ALREADY_ISSUED)).toBe('invoices');
+    expect(routed(ERROR_CODES.INVOICE_ORDER_REFUNDED)).toBe('invoices');
   });
 
   for (const language of LANGUAGES) {

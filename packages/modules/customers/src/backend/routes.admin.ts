@@ -38,7 +38,8 @@ import type { CustomerOrgAssignmentService } from './services/customer-org-assig
 import type { CustomerDeletionService } from './services/customer-deletion-service.js';
 import type { CustomerPresenceService } from './services/customer-presence-service.js';
 import type { CustomerAddressService } from './services/customer-address-service.js';
-import type { CustomerPasswordResetPort } from '@endora-commerce/contracts';
+import type { ChannelUrlFacts, CustomerPasswordResetPort } from '@endora-commerce/contracts';
+import { storefrontPagePathFor } from '@endora-commerce/contracts';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import {
   serializeCustomerAddress,
@@ -116,6 +117,11 @@ export interface CustomersAdminDeps {
   mailer: EmailMailerPort;
   auditLogService: AuditPort;
   storefrontBaseUrl: string;
+  /**
+   * Feature 167 (FR-034) — the channel an admin-sent storefront link is composed for:
+   * a customer belongs to no channel, so the system-default one. Absent: no prefix.
+   */
+  linkChannel?: () => Promise<ChannelUrlFacts | null>;
   /**
    * Feature 055 — validates Customer custom-field values. It no longer
    * persists them: `customer_accounts` owns the row, so its lifecycle port
@@ -523,7 +529,14 @@ export async function registerCustomersAdminRoutes(
       }
       const { rawToken } = await deps.passwordResetService.requestReset(customer.email);
       if (rawToken) {
-        const link = `${deps.storefrontBaseUrl}/reset-password?token=${rawToken}`;
+        // Feature 167 — the storefront's real reset page (`/password-reset/confirm`;
+        // `/reset-password` was served by nothing), under the default language's
+        // prefix: the e-mail is written in no particular language.
+        const path = storefrontPagePathFor({
+          path: `/password-reset/confirm?token=${encodeURIComponent(rawToken)}`,
+          channel: deps.linkChannel ? await deps.linkChannel() : null,
+        });
+        const link = `${deps.storefrontBaseUrl.replace(/\/+$/, '')}${path}`;
         const outcome = await deps.mailer.send({
           messageId: `admin-pwd-reset.${customer.id}.${rawToken.slice(0, 8)}`,
           to: customer.email,

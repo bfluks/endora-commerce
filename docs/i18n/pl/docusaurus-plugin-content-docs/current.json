@@ -14,6 +14,9 @@
   "sidebar.main.category.admin_actions": {
     "message": "Akcje palety poleceń"
   },
+  "sidebar.main.category.admin_feedback": {
+    "message": "Opinie"
+  },
   "sidebar.main.category.admin_roles": {
     "message": "admin_roles"
   },
@@ -42,7 +45,7 @@
     "message": "Architektura"
   },
   "sidebar.main.category.assets_library": {
-    "message": "Biblioteka mediów"
+    "message": "Biblioteka zasobów"
   },
   "sidebar.main.category.audit_logs": {
     "message": "audit_logs"
@@ -76,6 +79,9 @@
   },
   "sidebar.main.category.currencies": {
     "message": "currencies"
+  },
+  "sidebar.main.category.custom_fields": {
+    "message": "custom_fields"
   },
   "sidebar.main.category.customer_accounts": {
     "message": "customer_accounts"
@@ -156,10 +162,13 @@
     "message": "payments"
   },
   "sidebar.main.category.price_lists": {
-    "message": "price_lists"
+    "message": "Cenniki"
   },
   "sidebar.main.category.product_feeds": {
     "message": "Feedy produktowe"
+  },
+  "sidebar.main.category.projects": {
+    "message": "projects"
   },
   "sidebar.main.category.promotions": {
     "message": "promotions"
@@ -202,6 +211,9 @@
   },
   "sidebar.main.category.shopping_lists": {
     "message": "shopping_lists"
+  },
+  "sidebar.main.category.tasks": {
+    "message": "tasks"
   },
   "sidebar.main.category.taxes": {
     "message": "taxes"

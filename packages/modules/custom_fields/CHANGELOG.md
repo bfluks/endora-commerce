@@ -1,5 +1,258 @@
 # @endora-commerce/mod-custom-fields
 
+## 0.108.0
+
+### Minor Changes
+
+- 1846a38: An existing custom-field definition is editable on `/custom-fields`.
+
+  - **Edit dialog.** Each row has an _Edit_ action that opens a dialog showing the key, the entity
+    type and the value type as fixed text. The dialog edits the default, English and Polish
+    labels, _Required_ (switching it on explains that existing records keep their values and are
+    asked for one at their next custom-field edit) and _Use as list filter_ where the entity type
+    offers it. _Save_ sends only the members that changed and nothing when nothing did; a refusal
+    keeps the dialog open with the server's sentence.
+  - **Options** of a select or multiselect field are edited in the same dialog, one action at a
+    time: relabel, mark as default, move up or down (announced to assistive technology), remove
+    after an in-dialog confirmation (an option still in use is refused at its row), and add. An
+    option's stored value never changes.
+  - **The table** shows a _List filter_ column, and the create form offers _Use as list filter_
+    for the entity types that have the option.
+  - **Translated.** Every label, header, value-type name and placeholder on the page is read from
+    the module's bundle, in English and Polish.
+  - **Write controls follow `custom_fields:write`.** Create, edit, delete and the audience select
+    are offered only to an operator holding it; a reader sees the table.
+  - **Edits keep your place.** An option's labels save when you leave the field or press Enter, with a
+    _Saved_ confirmation at the row. Its inputs stay usable while a save is on its way, a save that
+    lands does not overwrite what you are still typing, and a reorder returns focus to the moved
+    option. Option changes apply at once, and the dialog says so: after one, _Cancel_ reads _Close_.
+  - **An option in use** is named by its label in a sentence of the editor's own, never by the
+    server's message or code.
+  - **Deleting a field** asks in place first. The table shows a loading line, an empty state with
+    one action, and cards on a narrow screen. Its _List filter_ column says _Yes_ or _No_.
+
+- b124db8: **Behaviour change for API clients.** Three 409 refusals on the custom-field definition routes no longer share `CUSTOM_FIELD_DEFINITION_INVALID` and an English message:
+
+  - removing an option records still hold answers `CUSTOM_FIELD_OPTION_IN_USE`, with `details.value` and `details.label`;
+  - changing a definition's value type while records hold values answers `CUSTOM_FIELD_VALUE_TYPE_LOCKED`, with `details.key`;
+  - creating a customer-visible definition over values a deleted field left answers `CUSTOM_FIELD_STORED_VALUES_EXIST`, with `details.key`.
+
+  Each has a sentence in English and Polish naming what it refuses.
+
+  **An option patch changes only what it names.** `PATCH /api/v1/admin/custom-fields/definitions/:id/options/:optionId` used to fill every member the request left out with its create default, so relabelling an option also cleared its translations, its default flag and its position; it now leaves them as they are, and still never changes the stored `value`. Its audit entry records the option's `label`, `labelDefault`, `isDefault` and `sortOrder` before and after, so a translation, a new default or a move is visible in the audit log rather than looking unchanged.
+
+- 44c1615: **Behaviour change for API clients.** Quote Request custom-field definitions now follow the `quote_requests` module, as Opportunity definitions follow `crm`: while `quote_requests` is switched off, `quote_request` is left out of `GET /api/v1/admin/custom-fields/entity-types`, its definitions are not listed or served by id (404), and every definition and option write answers 409 `CUSTOM_FIELD_HOST_MANAGED`. Nothing is deleted; the definitions and the stored values return unchanged with the module.
+
+  Definitions carry `listFilter`, saying whether the admin list of their entity type offers the field as a filter. It is settable on Order, Quote Request and Opportunity definitions; `listFilter: true` on any other entity type is refused with 422 `CUSTOM_FIELD_DEFINITION_INVALID`. Absent on create it is `false`, absent on update it is unchanged, and changing it is one audited write that never touches a record's stored values. Each `entity-types` item carries `listFilter`, saying whether its definitions may be list filters.
+
+  The admin custom-fields page no longer offers the Quote request type before the server has said it is offered.
+
+- 3d1e47c: Publishes `customFieldListFilterPort`, the seam the admin lists of other modules use to filter on custom fields.
+
+  - `listFilterable(entityType)` answers the fields a list offers: the served definitions of the type whose list-filter option is on, ordered, with their labels and options and nothing else.
+  - `condition(entityType, filters)` turns a request's custom-field filters into one server-side condition over the entity's own table, every key and value bound. A filter on a field the list does not offer is refused with a failure naming every such key, which the hosts answer as 400 `CUSTOM_FIELD_FILTER_UNAVAILABLE`; more than 10 keys or 100 chosen values in total is refused before anything is read.
+  - An operator that does not apply to the field's type (`contains` on a Yes/No field, a range on an options field) is refused as a validation failure rather than ignored, and so is an inverted range (a minimum above its maximum, a start date after its end) rather than answered with an empty list.
+  - A Yes/No filter matches a stored _yes_ or _no_ only; a record without a value matches neither. A date range compares only a stored `YYYY-MM-DD` date and a number range only a stored number, so a value stored under an earlier type neither matches nor fails the list.
+
+- b0e1abd: A custom-field value that was not carried is recorded with the field's label, so its history line can name the field.
+
+  - **`customFieldCarryPort`** names every skipped key with the **source** definition's label as
+    it reads at that moment — `label: { labelDefault, labels }` — a `target_missing` skip
+    included.
+  - **Records keep the label.** The Order system note (`systemNote.skipped`), the Quote Request
+    `custom-field-carry-skipped` event and its `custom_field_carry_skipped` history entry, and the
+    Sales Opportunity audit member `customFieldCarry.skipped` store each skip's label next to its
+    key and reason. It is a snapshot: renaming the field later does not change history. Skips
+    recorded earlier have no label and read as before.
+  - An administrator who cannot read custom-field definitions can now be shown which field was
+    not carried and why. The values themselves stay visible only to readers with
+    `custom_fields:read`.
+
+- 55d957b: Custom-field definitions can carry their values to Quote Requests, Orders and Sales Opportunities.
+
+  - **Carry options on definitions.** A definition's `carryTo` names the entity types its values
+    carry to when a record of such a type is created from, or joins, a record of the definition's
+    own type. `GET /api/v1/admin/custom-fields/entity-types` serves `carryTargets` per type — the
+    pairs the registry offers (Quote Request → Order and Opportunity, Order → Opportunity,
+    Opportunity → Quote Request and Order), filtered to targets whose owner module is present.
+    New column `custom_field_definitions.carry_to` (migration
+    `Migration20261020T110920CustomFieldsDefinitionCarryTo`); every existing definition carries
+    nothing, and turning an option on or off changes no stored value.
+  - **Configuration refusal.** Turning a target on is judged once, in the definition Command:
+    `422 CUSTOM_FIELD_CARRY_INCOMPATIBLE` with `details.code` `target_missing`,
+    `value_type_mismatch`, `options_missing` (`details.missingOptionValues` as text,
+    `details.missingOptionValueList` as a list), `audience_mismatch`, `pair_unsupported` or
+    `target_unavailable`, and a sentence in the request's language. A target already on is never
+    judged again, so later changes to either field are allowed. The audit entries of
+    `custom_fields.definition.*` carry `carryTo`.
+  - **Retention while an owner is off.** A carry to a type whose module is switched off is not
+    served and not offered, a save made meanwhile keeps it, and it is served again when the module
+    returns.
+  - **`customFieldCarryPort`** (`CustomFieldCarryPort` from `@endora-commerce/contracts`) computes
+    which values carry into a target record's bag — empty target fields only, the value judged by
+    the target definition — and writes nothing; the module owning the target persists the answer.
+  - **`./ports`:** `CustomFieldDefinitionApplyApi.applyCreate` takes the new
+    `CustomFieldDefinitionApplyCreateInput` (the create request with `carryTo` optional). A host
+    names no carry target; one it named outside the registry's pairs is refused
+    (`carry_incompatible`).
+
+- 9a2d1f8: The `/custom-fields` screen turns value carry-over on and off, shows where values carry, and warns before a change that would stop a carry from working.
+
+  **For an administrator.**
+
+  - The create form and the definition editor offer one _Carry value to …_ checkbox per entity type
+    the definition's type can carry to — none for a type that carries nowhere (Category, Product,
+    Customer, Organization), and never _Quote request_ for an Order field. The editor's _Save_ sends
+    the carry list only when it changed.
+  - A refused carry option keeps the form or the editor open with a sentence that names what is
+    wrong — the missing field and its type, the two value types, the missing option values, or the
+    audience rule — in the operator's language. The sentence stands under the carry options it is
+    about and takes the focus; the editor also says beside _Save_ that nothing was saved.
+  - A new _Carries to_ column lists each target as a chip. A chip whose same-key target no longer
+    fits is marked _Incompatible_, with its reason as text; the mark goes as soon as the definitions
+    are re-read compatible.
+  - When the definitions of every type cannot be read, the table says _Carry checks are
+    unavailable_ with a _Retry_ button instead of showing no mark and asking nothing in silence.
+  - Removing or adding an option, changing a field's audience in the table and deleting a field ask
+    first when the change would break an enabled carry, naming every field on the other side.
+    _Cancel_ sends nothing; the proceed button, named after the action — _Remove option anyway_,
+    _Add option anyway_, _Change audience anyway_, _Delete field anyway_ — makes the change exactly
+    as before. A change that breaks nothing asks nothing.
+
+  **For a module author.** `DefinitionBehaviourFields` takes an optional `value.carryTo` (answered
+  back by `onChange`), an optional `entityTypes`, and an optional `carryError` with its `carryErrorRef`; `DefinitionEditorDialog` takes optional
+  `entityTypes` and `definitions`; `DefinitionOptionsEditor` takes an optional `carryGuard`. All
+  additive.
+
+### Patch Changes
+
+- ee26beb: Documentation for custom-field list filters, in English and Polish.
+
+  - `@endora-commerce/mod-custom-fields` ships its first documentation page: the records that take
+    custom fields, creating and editing a field and the limits of editing, the _Use as list
+    filter_ option, how each type filters, and the list APIs.
+  - The `orders`, `quote_requests` and `crm` pages describe the custom-field filters on their admin
+    lists. The `quote_requests` page also says that its fields follow the module's activation. The
+    `crm` page explains how the Opportunities list's filters differ from the board's card-field
+    filters.
+
+- 6f1e0ec: Custom-field carry review fixes.
+
+  - **`@endora-commerce/contracts`** — every string of `customFieldCarrySkipLabelSchema` is at most 200 characters (`CUSTOM_FIELD_CARRY_SKIP_LABEL_MAX`, new export); a longer `labelDefault` or per-locale label is refused.
+  - **`@endora-commerce/mod-custom-fields`** — the carry port cuts a skip's label snapshot to that limit, since a definition's per-locale labels are not capped, so every skip it plans parses.
+  - **`@endora-commerce/mod-quote-requests`** — the Opportunity → Quote Request carry takes the request's row `for update` and plans over the bag it re-reads under the lock, so an administrator's concurrent edit is never overwritten. A carry that fills a field still raises the request's `version`.
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+
+## 0.107.0
+
+### Patch Changes
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

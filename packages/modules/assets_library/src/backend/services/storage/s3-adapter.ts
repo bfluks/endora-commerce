@@ -10,11 +10,13 @@ import {
   HeadBucketCommand,
   DeleteObjectCommand,
   PutObjectAclCommand,
+  CopyObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type {
   StorageAdapter,
   StorageAdapterSelfCheck,
+  StorageCopyInput,
   StorageNewLocatorInput,
   StoragePutInput,
   StorageResolveUrlInput,
@@ -112,6 +114,10 @@ export class S3StorageAdapter implements StorageAdapter {
           ContentType: input.mimeType,
           ContentLength: input.sizeBytes > 0 ? input.sizeBytes : undefined,
           ACL: input.visibility === 'public' ? 'public-read' : 'private',
+          ...(input.cacheControl !== undefined ? { CacheControl: input.cacheControl } : {}),
+          ...(input.contentDisposition !== undefined
+            ? { ContentDisposition: input.contentDisposition }
+            : {}),
         }),
       );
     } catch (e) {
@@ -156,6 +162,35 @@ export class S3StorageAdapter implements StorageAdapter {
     } catch (e) {
       throw new BackendUnavailableError(
         `S3StorageAdapter.delete: failed to remove ${input.locator}`,
+        e,
+      );
+    }
+  }
+
+  /**
+   * One server-side `CopyObject` — atomic at the destination. The metadata is
+   * replaced rather than copied, and the ACL is always sent: a copy would
+   * otherwise land with the bucket's default ACL, whatever the row says.
+   */
+  async copy(input: StorageCopyInput): Promise<void> {
+    try {
+      await this.client.send(
+        new CopyObjectCommand({
+          Bucket: this.cfg.bucket,
+          CopySource: `${this.cfg.bucket}/${input.from.split('/').map(encodeURIComponent).join('/')}`,
+          Key: input.to,
+          MetadataDirective: 'REPLACE',
+          ContentType: input.mimeType,
+          ...(input.cacheControl !== undefined ? { CacheControl: input.cacheControl } : {}),
+          ...(input.contentDisposition !== undefined
+            ? { ContentDisposition: input.contentDisposition }
+            : {}),
+          ACL: input.visibility === 'public' ? 'public-read' : 'private',
+        }),
+      );
+    } catch (e) {
+      throw new BackendUnavailableError(
+        `S3StorageAdapter.copy: failed to copy ${input.from} to ${input.to}`,
         e,
       );
     }

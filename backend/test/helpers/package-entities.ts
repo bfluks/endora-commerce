@@ -74,6 +74,8 @@ import type { SearchPhraseRecord as SearchPhraseRecordRow } from '../../../packa
 import type { Tax as TaxRow } from '../../../packages/modules/taxes/src/backend/entities/tax.entity.js';
 import type { Asset as AssetRow } from '../../../packages/modules/assets_library/src/backend/entities/asset.entity.js';
 import type { AssetFolder as AssetFolderRow } from '../../../packages/modules/assets_library/src/backend/entities/asset-folder.entity.js';
+import type { AssetObjectCleanup as AssetObjectCleanupRow } from '../../../packages/modules/assets_library/src/backend/entities/asset-object-cleanup.entity.js';
+import type { AssetPermalinkRelease as AssetPermalinkReleaseRow } from '../../../packages/modules/assets_library/src/backend/entities/asset-permalink-release.entity.js';
 import type { Cart as CartRow } from '../../../packages/modules/carts/src/backend/entities/cart.entity.js';
 import type { CartItem as CartItemRow } from '../../../packages/modules/carts/src/backend/entities/cart-item.entity.js';
 import type { CartAuditEntry as CartAuditEntryRow } from '../../../packages/modules/carts/src/backend/entities/cart-audit-entry.entity.js';
@@ -120,8 +122,6 @@ import type { MegamenuBinding as MegamenuBindingRow } from '../../../packages/mo
 import type { Organization as OrganizationRow } from '../../../packages/modules/organizations/src/backend/entities/organization.entity.js';
 import type { OrganizationSalesRepAssignment as OrganizationSalesRepAssignmentRow } from '../../../packages/modules/organizations/src/backend/entities/organization-sales-rep-assignment.entity.js';
 import type { PriceList as PriceListRow } from '../../../packages/modules/price_lists/src/backend/entities/price-list.entity.js';
-import type { PriceListProduct as PriceListProductRow } from '../../../packages/modules/price_lists/src/backend/entities/price-list-product.entity.js';
-import type { PriceListPriceBracket as PriceListPriceBracketRow } from '../../../packages/modules/price_lists/src/backend/entities/price-list-price-bracket.entity.js';
 import type { PriceListMatrixEntry as PriceListMatrixEntryRow } from '../../../packages/modules/price_lists/src/backend/entities/price-list-matrix-entry.entity.js';
 import type { PriceDisplayModeOverride as PriceDisplayModeOverrideRow } from '../../../packages/modules/price_lists/src/backend/entities/price-display-mode-override.entity.js';
 import type { Order as OrderRow } from '../../../packages/modules/orders/src/backend/entities/order.entity.js';
@@ -147,6 +147,22 @@ import type { CrmOrderStatusMapping as CrmOrderStatusMappingRow } from '../../..
 import type { CrmStatusPropagation as CrmStatusPropagationRow } from '../../../packages/modules/crm/src/backend/entities/crm-status-propagation.entity.js';
 import type { CrmTag as CrmTagRow } from '../../../packages/modules/crm/src/backend/entities/crm-tag.entity.js';
 import type { CrmValueCountingStatus as CrmValueCountingStatusRow } from '../../../packages/modules/crm/src/backend/entities/crm-value-counting-status.entity.js';
+import type { Task as TaskRow } from '../../../packages/modules/tasks/src/backend/entities/task.entity.js';
+import type { TaskAssignee as TaskAssigneeRow } from '../../../packages/modules/tasks/src/backend/entities/task-assignee.entity.js';
+import type { TaskTagAssignment as TaskTagAssignmentRow } from '../../../packages/modules/tasks/src/backend/entities/task-tag-assignment.entity.js';
+import type { TaskComment as TaskCommentRow } from '../../../packages/modules/tasks/src/backend/entities/task-comment.entity.js';
+import type { TaskReference as TaskReferenceRow } from '../../../packages/modules/tasks/src/backend/entities/task-reference.entity.js';
+import type { TaskAttachment as TaskAttachmentRow } from '../../../packages/modules/tasks/src/backend/entities/task-attachment.entity.js';
+import type { TaskRecordLink as TaskRecordLinkRow } from '../../../packages/modules/tasks/src/backend/entities/task-record-link.entity.js';
+import type { TaskRelation as TaskRelationRow } from '../../../packages/modules/tasks/src/backend/entities/task-relation.entity.js';
+import type { TaskReminder as TaskReminderRow } from '../../../packages/modules/tasks/src/backend/entities/task-reminder.entity.js';
+import type { TaskReminderDelivery as TaskReminderDeliveryRow } from '../../../packages/modules/tasks/src/backend/entities/task-reminder-delivery.entity.js';
+import type { TaskStatus as TaskStatusRow } from '../../../packages/modules/tasks/src/backend/entities/task-status.entity.js';
+import type { TaskStatusTransition as TaskStatusTransitionRow } from '../../../packages/modules/tasks/src/backend/entities/task-status-transition.entity.js';
+import type { TaskPriority as TaskPriorityRow } from '../../../packages/modules/tasks/src/backend/entities/task-priority.entity.js';
+import type { TaskTag as TaskTagRow } from '../../../packages/modules/tasks/src/backend/entities/task-tag.entity.js';
+import type { TaskListSavedView as TaskListSavedViewRow } from '../../../packages/modules/tasks/src/backend/entities/task-list-saved-view.entity.js';
+import type { TaskDigestSubscription as TaskDigestSubscriptionRow } from '../../../packages/modules/tasks/src/backend/entities/task-digest-subscription.entity.js';
 
 /**
  * How a test names a **module package's** entity class (D-168).
@@ -716,6 +732,16 @@ export const AssetFolder = classNamed<AssetFolderRow>(
   'assets_library',
   'AssetFolder',
 );
+export const AssetPermalinkRelease = classNamed<AssetPermalinkReleaseRow>(
+  installedModuleEntities,
+  'assets_library',
+  'AssetPermalinkRelease',
+);
+export const AssetObjectCleanup = classNamed<AssetObjectCleanupRow>(
+  installedModuleEntities,
+  'assets_library',
+  'AssetObjectCleanup',
+);
 export const Cart = classNamed<CartRow>(installedModuleEntities, 'carts', 'Cart');
 export const CartItem = classNamed<CartItemRow>(installedModuleEntities, 'carts', 'CartItem');
 export const CartAuditEntry = classNamed<CartAuditEntryRow>(
@@ -979,16 +1005,6 @@ export const PriceList = classNamed<PriceListRow>(
   'price_lists',
   'PriceList',
 );
-export const PriceListProduct = classNamed<PriceListProductRow>(
-  installedModuleEntities,
-  'price_lists',
-  'PriceListProduct',
-);
-export const PriceListPriceBracket = classNamed<PriceListPriceBracketRow>(
-  installedModuleEntities,
-  'price_lists',
-  'PriceListPriceBracket',
-);
 export const PriceListMatrixEntry = classNamed<PriceListMatrixEntryRow>(
   installedModuleEntities,
   'price_lists',
@@ -1021,8 +1037,6 @@ export type MegamenuBinding = MegamenuBindingRow;
 export type Organization = OrganizationRow;
 export type OrganizationSalesRepAssignment = OrganizationSalesRepAssignmentRow;
 export type PriceList = PriceListRow;
-export type PriceListProduct = PriceListProductRow;
-export type PriceListPriceBracket = PriceListPriceBracketRow;
 export type PriceListMatrixEntry = PriceListMatrixEntryRow;
 export type PriceDisplayModeOverride = PriceDisplayModeOverrideRow;
 export type CustomerAccount = CustomerAccountRow;
@@ -1065,6 +1079,23 @@ export const CrmOrderStatusMapping = classNamed<CrmOrderStatusMappingRow>(instal
 export const CrmStatusPropagation = classNamed<CrmStatusPropagationRow>(installedModuleEntities, 'crm', 'CrmStatusPropagation');
 export const CrmTag = classNamed<CrmTagRow>(installedModuleEntities, 'crm', 'CrmTag');
 export const CrmValueCountingStatus = classNamed<CrmValueCountingStatusRow>(installedModuleEntities, 'crm', 'CrmValueCountingStatus');
+// `tasks` — every class of the module (`specs/165-task-management/` T014).
+export const Task = classNamed<TaskRow>(installedModuleEntities, 'tasks', 'Task');
+export const TaskAssignee = classNamed<TaskAssigneeRow>(installedModuleEntities, 'tasks', 'TaskAssignee');
+export const TaskTagAssignment = classNamed<TaskTagAssignmentRow>(installedModuleEntities, 'tasks', 'TaskTagAssignment');
+export const TaskComment = classNamed<TaskCommentRow>(installedModuleEntities, 'tasks', 'TaskComment');
+export const TaskReference = classNamed<TaskReferenceRow>(installedModuleEntities, 'tasks', 'TaskReference');
+export const TaskAttachment = classNamed<TaskAttachmentRow>(installedModuleEntities, 'tasks', 'TaskAttachment');
+export const TaskRecordLink = classNamed<TaskRecordLinkRow>(installedModuleEntities, 'tasks', 'TaskRecordLink');
+export const TaskRelation = classNamed<TaskRelationRow>(installedModuleEntities, 'tasks', 'TaskRelation');
+export const TaskReminder = classNamed<TaskReminderRow>(installedModuleEntities, 'tasks', 'TaskReminder');
+export const TaskReminderDelivery = classNamed<TaskReminderDeliveryRow>(installedModuleEntities, 'tasks', 'TaskReminderDelivery');
+export const TaskStatus = classNamed<TaskStatusRow>(installedModuleEntities, 'tasks', 'TaskStatus');
+export const TaskStatusTransition = classNamed<TaskStatusTransitionRow>(installedModuleEntities, 'tasks', 'TaskStatusTransition');
+export const TaskPriority = classNamed<TaskPriorityRow>(installedModuleEntities, 'tasks', 'TaskPriority');
+export const TaskTag = classNamed<TaskTagRow>(installedModuleEntities, 'tasks', 'TaskTag');
+export const TaskListSavedView = classNamed<TaskListSavedViewRow>(installedModuleEntities, 'tasks', 'TaskListSavedView');
+export const TaskDigestSubscription = classNamed<TaskDigestSubscriptionRow>(installedModuleEntities, 'tasks', 'TaskDigestSubscription');
 export type CrmOpportunity = CrmOpportunityRow;
 export type CrmOpportunityAttachment = CrmOpportunityAttachmentRow;
 export type CrmOpportunityComment = CrmOpportunityCommentRow;
@@ -1081,3 +1112,19 @@ export type CrmOrderStatusMapping = CrmOrderStatusMappingRow;
 export type CrmStatusPropagation = CrmStatusPropagationRow;
 export type CrmTag = CrmTagRow;
 export type CrmValueCountingStatus = CrmValueCountingStatusRow;
+export type Task = TaskRow;
+export type TaskAssignee = TaskAssigneeRow;
+export type TaskTagAssignment = TaskTagAssignmentRow;
+export type TaskComment = TaskCommentRow;
+export type TaskReference = TaskReferenceRow;
+export type TaskAttachment = TaskAttachmentRow;
+export type TaskRecordLink = TaskRecordLinkRow;
+export type TaskRelation = TaskRelationRow;
+export type TaskReminder = TaskReminderRow;
+export type TaskReminderDelivery = TaskReminderDeliveryRow;
+export type TaskStatus = TaskStatusRow;
+export type TaskStatusTransition = TaskStatusTransitionRow;
+export type TaskPriority = TaskPriorityRow;
+export type TaskTag = TaskTagRow;
+export type TaskListSavedView = TaskListSavedViewRow;
+export type TaskDigestSubscription = TaskDigestSubscriptionRow;

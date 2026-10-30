@@ -47,6 +47,11 @@ export const CMS_TRANSLATE_PERMISSION = 'cms.translate';
  */
 export const CMS_SETTING_CODES = {
   RESERVED_SLUG_SEGMENTS: 'cms.reserved_slug_segments',
+  /**
+   * Feature 163 (FR-033) — the sharing image a page without its own uses. The
+   * `*_asset_id` suffix gives the generic Settings screen its asset picker.
+   */
+  DEFAULT_SHARE_IMAGE_ASSET_ID: 'cms.default_share_image_asset_id',
 } as const;
 
 const settings = defineModuleSettingsManifest({
@@ -134,6 +139,17 @@ const settings = defineModuleSettingsManifest({
       groupCode: 'cms_page_builder',
       valueType: 'number',
       defaultValue: CMS_TRANSLATION_DEFAULT_MAX_SOURCE_CHARACTERS,
+    },
+    // Feature 163 (FR-033; data-model §1.4). Read per request for the
+    // request's channel, so a channel may carry an image of its own.
+    {
+      code: CMS_SETTING_CODES.DEFAULT_SHARE_IMAGE_ASSET_ID,
+      name: 'Default sharing image',
+      description:
+        'The image shown when a CMS page is shared on social networks and in messengers, for every page that has no sharing image of its own. Choose a public image from the Assets Library; about 1200 × 630 px suits most networks. Leave empty and such pages are shared without an image. Can be overridden per sales channel.',
+      groupCode: 'cms_page_builder',
+      valueType: 'string',
+      defaultValue: '',
     },
   ],
 });
@@ -283,6 +299,11 @@ export const manifest = defineModuleManifest({
     // path would win rather than being told a slug is "invalid".
     { code: 'CMS_SLUG_RESERVED' },
     { code: 'CMS_TEMPLATE_NOT_FOUND' },
+    // Feature 163 (`specs/163-page-builder-marketing-pages/` data-model §6). The
+    // anchor sentences name the anchor through `details` → `{anchor}`.
+    { code: 'CMS_DUPLICATE_ANCHOR' },
+    { code: 'CMS_RESERVED_ANCHOR' },
+    { code: 'CMS_PAGE_PARENT_CYCLE' },
     // Feature 151 — the Page Builder translation (`contracts/page-builder-translation-api.md` §3).
     // `TOO_LARGE` names the configured limit through `details` → `{limit}`;
     // `PROVIDER_FAILED` chooses its sentence by `details.code`.
@@ -303,6 +324,10 @@ export const manifest = defineModuleManifest({
     { code: 'cms.read', label: 'View CMS content' },
     { code: 'cms.write', label: 'Edit CMS content' },
     { code: CMS_TRANSLATE_PERMISSION, label: 'Translate Page Builder content with AI' },
+    // Feature 163 — the brand tokens are every page at once, so saving them is
+    // its own decision; reading them stays `cms.read` (the canvas is styled with
+    // them). `PUT /api/v1/admin/cms/brand-tokens`.
+    { code: 'cms.brand', label: 'Edit brand settings', requires: ['cms.read'] },
   ],
   actions: [
     {
@@ -379,6 +404,31 @@ export const manifest = defineModuleManifest({
       ],
       weight: 135,
     },
+    // Feature 163 — the brand screen (`contracts/storefront-and-admin-api.md`
+    // §6). Under the read code that opens it; saving there needs `cms.brand`.
+    // No palette glyph is on the allowlist, so it draws its sidebar row's.
+    {
+      id: 'open-cms-brand',
+      labelKey: 'actions.openCmsBrand.label',
+      descriptionKey: 'actions.openCmsBrand.description',
+      icon: 'Layers',
+      targetRoute: '/cms/brand',
+      requiredPermission: 'cms.read',
+      keywords: [
+        'brand',
+        'fonts',
+        'colours',
+        'colors',
+        'typography',
+        'theme',
+        // The schema's ceiling is ten: the contract's six, and four Polish.
+        'marka',
+        'czcionki',
+        'kolory',
+        'motyw',
+      ],
+      weight: 136,
+    },
   ],
   // Feature 073 — the operator's activation control. A platform without a CMS
   // is a smaller platform, not a broken one: pages, blocks and hooks are
@@ -395,9 +445,9 @@ export const manifest = defineModuleManifest({
    * `catalog`'s, and a section is declared by the module whose blocks occupy it
    * (`contracts/block-definition.md` §1.1's authoring guidance).
    *
-   * `internal` is the hidden drawer that keeps `cms.Column` and `cms.Slide` out
-   * of Puck's *Other* group, where they are insertable outside their parent and
-   * render wrong. It was keyed `_internal` until this feature; the key grammar
+   * `internal` is the hidden drawer that keeps `cms.Column`, `cms.Slide` and
+   * the Carousel's item blocks (feature 163) out of Puck's *Other* group, where
+   * they are insertable outside their parent and render wrong. It was keyed `_internal` until this feature; the key grammar
    * `blockCategoryKeyRe` forbids a leading underscore, so it is `internal` —
    * the same word, the same title and the same behaviour.
    *
@@ -407,6 +457,37 @@ export const manifest = defineModuleManifest({
    * until Phase 2's registry work (T209/T210).
    */
   blocks: [
+    // Feature 163, plan § Owner ruling 2026-10-23 (FR-000): the one block that
+    // carries section settings, with a slot for any blocks; top level only.
+    // Its settings hold no text (the anchor is an identifier), so nothing is
+    // translated here — the slot's blocks are, through their own declarations.
+    {
+      name: 'cms.Section',
+      translatable: [],
+      labelKey: 'blocks.section.label',
+      descriptionKey: 'blocks.section.description',
+      category: 'layout',
+      contexts: ['cms'],
+      fields: {},
+      // T117: the settings are top-level props; these sit on the editor's Responsive tab
+      // (R19C, T260/T261: the width and the background outset too).
+      responsiveFields: ['width', 'spaceTop', 'spaceBottom', 'contentPosition', 'overlap'],
+      weight: 5,
+    },
+    // Feature 163, T158 (plan § Owner ruling 2026-10-26): the top-level container
+    // of Sections, painting one scheme, background and decorative layer behind
+    // them. No prose: its Sections are their own nodes.
+    {
+      name: 'cms.SectionGroup',
+      translatable: [],
+      labelKey: 'blocks.sectionGroup.label',
+      descriptionKey: 'blocks.sectionGroup.description',
+      category: 'layout',
+      contexts: ['cms'],
+      fields: {},
+      responsiveFields: ['spaceTop', 'spaceBottom'],
+      weight: 6,
+    },
     {
       name: 'cms.Row',
       translatable: [],
@@ -454,7 +535,10 @@ export const manifest = defineModuleManifest({
     },
     {
       name: 'cms.Heading',
-      translatable: [{ path: 'text' }],
+      // Feature 163 (T039): inline rich text. A heading stored before keeps a
+      // plain string here until the editor opens it; the translation reads
+      // that string as plain text.
+      translatable: [{ path: 'text', format: 'tiptap' }],
       labelKey: 'blocks.heading.label',
       descriptionKey: 'blocks.heading.description',
       category: 'content',
@@ -464,40 +548,47 @@ export const manifest = defineModuleManifest({
           type: 'select',
           label: 'Level',
           options: [
-            { label: 'H1', value: 1 },
-            { label: 'H2', value: 2 },
-            { label: 'H3', value: 3 },
-            { label: 'H4', value: 4 },
-            { label: 'H5', value: 5 },
-            { label: 'H6', value: 6 },
+            { label: 'H1', value: 'h1' },
+            { label: 'H2', value: 'h2' },
+            { label: 'H3', value: 'h3' },
+            { label: 'H4', value: 'h4' },
+            { label: 'H5', value: 'h5' },
+            { label: 'H6', value: 'h6' },
+            { label: 'Paragraph', value: 'p' },
           ],
         },
-        text: { type: 'text', label: 'Text' },
+        text: { type: 'richtext', label: 'Text' },
       },
       responsiveFields: [
+        'size',
         'fontSize',
         'fontWeight',
-        'textAlign',
+        'align',
         'lineHeight',
         'margin',
         'padding',
         'border',
+        // R19A (T226), R21G (T337).
+        'textMaxWidth', 'textMaxWidthPx',
       ],
       weight: 10,
     },
     {
       name: 'cms.Text',
-      translatable: [{ path: 'text' }, { path: 'tiptapContent', format: 'tiptap' }],
+      // R19A (T232): `text` is inline rich text once edited; a plain string stored before is read as plain text.
+      translatable: [{ path: 'text', format: 'tiptap' }, { path: 'tiptapContent', format: 'tiptap' }],
       labelKey: 'blocks.text.label',
       descriptionKey: 'blocks.text.description',
       category: 'content',
       contexts: ['cms'],
-      fields: { text: { type: 'text', label: 'Text' } },
+      fields: { text: { type: 'richtext', label: 'Text' } },
       responsiveFields: [
         'fontSize',
         'fontWeight',
         'textAlign',
         'lineHeight',
+        'textMaxWidth',
+        'textMaxWidthPx',
         'margin',
         'padding',
         'border',
@@ -512,35 +603,38 @@ export const manifest = defineModuleManifest({
       category: 'content',
       contexts: ['cms'],
       fields: { content: { type: 'richtext', label: 'Content' } },
-      responsiveFields: ['margin', 'padding', 'border'],
+      responsiveFields: ['textMaxWidth', 'textMaxWidthPx', 'margin', 'padding', 'border', 'textSize', 'textSizePx', 'listLineHeight'],
       weight: 30,
     },
     {
       name: 'cms.Button',
-      translatable: [{ path: 'label' }],
+      // Feature 163 (T039): one `ButtonSpec`. A button stored before keeps its
+      // top-level `label` until the editor opens it; both are translated.
+      translatable: [{ path: 'button.label' }, { path: 'label' }],
       labelKey: 'blocks.button.label',
       descriptionKey: 'blocks.button.description',
       category: 'content',
       contexts: ['cms'],
       fields: {
-        label: { type: 'text', label: 'Label', required: true },
-        href: { type: 'text', label: 'Link target', required: true },
-        variant: {
+        button: { type: 'object', label: 'Button', required: true },
+        align: {
           type: 'select',
-          label: 'Variant',
+          label: 'Align',
           options: [
-            { label: 'primary', value: 'primary' },
-            { label: 'secondary', value: 'secondary' },
-            { label: 'ghost', value: 'ghost' },
+            { label: 'start', value: 'start' },
+            { label: 'center', value: 'center' },
+            { label: 'end', value: 'end' },
           ],
         },
       },
-      responsiveFields: ['variant', 'margin', 'padding', 'border'],
+      // R19B (T246): an icon-only button's size per breakpoint.
+      responsiveFields: ['button', 'align', 'fullWidth', 'margin', 'padding', 'border'],
       weight: 40,
     },
     {
       name: 'cms.Image',
-      translatable: [{ path: 'alt' }],
+      // Feature 163, T127: the caption is prose too.
+      translatable: [{ path: 'alt' }, { path: 'caption' }],
       labelKey: 'blocks.image.label',
       descriptionKey: 'blocks.image.description',
       category: 'content',
@@ -549,7 +643,8 @@ export const manifest = defineModuleManifest({
         src: { type: 'text', label: 'Image URL', required: true },
         alt: { type: 'text', label: 'Alt text' },
       },
-      responsiveFields: ['widthMode', 'widthPx', 'align', 'margin', 'padding', 'border'],
+      // R19B (T251): the caption's placement, size and alignment per breakpoint.
+      responsiveFields: ['widthMode', 'widthPx', 'ratio', 'align', 'captionPlacement', 'captionSize', 'captionSizePx', 'captionAlign', 'captionMaxWidthPx', 'margin', 'padding', 'border'],
       weight: 50,
     },
     {
@@ -586,32 +681,255 @@ export const manifest = defineModuleManifest({
           ],
         },
       },
-      responsiveFields: ['align', 'margin', 'padding', 'border'],
+      responsiveFields: ['align', 'margin', 'padding', 'border', 'gap', 'gapPx'],
       previewIcon: 'share',
       weight: 70,
     },
     {
       name: 'cms.FeatureList',
-      translatable: [{ path: 'items[].title' }, { path: 'items[].description' }],
+      // Feature 163 (T049): a heading, inline rich titles, rich bodies and an
+      // image below the grid. A list stored before keeps plain titles and its
+      // `description`s until the editor opens it; those are translated too.
+      translatable: [
+        { path: 'heading', format: 'tiptap' },
+        { path: 'items[].title', format: 'tiptap' },
+        { path: 'items[].body', format: 'tiptap' },
+        { path: 'image.alt' },
+        { path: 'items[].description' },
+      ],
       labelKey: 'blocks.featureList.label',
       descriptionKey: 'blocks.featureList.description',
       category: 'content',
       contexts: ['cms'],
-      fields: {},
-      responsiveFields: ['columns', 'gap', 'margin', 'padding', 'border'],
+      fields: { items: { type: 'array', label: 'Features' } },
+      responsiveFields: [
+        'headingSize',
+        'headingSizePx',
+        'headingMaxWidth',
+        'headingMaxWidthPx',
+        'columns',
+        'gap',
+        'gapPx',
+        'titleSize',
+        'titleSizePx',
+        'margin',
+        'padding',
+        'border',
+        'headingWeight',
+        'align',
+        'titleWeight',
+        // R19A (T224, T225).
+        'titleLineHeight',
+        'bodySize',
+        'bodySizePx',
+        'bodyLineHeight',
+        // R20F (T317).
+        'rowGapPx',
+        'listLineHeight',
+        // R22I.
+        'iconPosition',
+      ],
       previewIcon: 'layout',
       weight: 80,
     },
     {
       name: 'cms.Hero',
-      translatable: [{ path: 'heading' }, { path: 'subtitle' }, { path: 'buttonLabel' }],
+      // Feature 163 (T043): inline rich texts, a rich body, a button list and a
+      // social-proof line. A hero stored before keeps `heading`, `subtitle` and
+      // `buttonLabel` until the editor opens it; those are translated too.
+      translatable: [
+        { path: 'eyebrow' },
+        { path: 'title', format: 'tiptap' },
+        { path: 'subheading', format: 'tiptap' },
+        { path: 'statement', format: 'tiptap' },
+        { path: 'body', format: 'tiptap' },
+        { path: 'buttons[].label' },
+        { path: 'socialProof.caption' },
+        { path: 'media.image.alt' },
+        { path: 'socialProof.image.alt' },
+        { path: 'heading' },
+        { path: 'subtitle' },
+        { path: 'buttonLabel' },
+      ],
       labelKey: 'blocks.hero.label',
       descriptionKey: 'blocks.hero.description',
       category: 'content',
       contexts: ['cms'],
-      fields: { heading: { type: 'text', label: 'Heading' } },
-      responsiveFields: ['minHeightPx', 'margin', 'padding', 'border'],
+      fields: {
+        title: { type: 'richtext', label: 'Title' },
+        buttons: { type: 'array', label: 'Buttons' },
+      },
+      responsiveFields: [
+        'titleSize',
+        'titleSizePx',
+        'titleMaxWidth',
+        'titleMaxWidthPx',
+        'subheadingSize',
+        'subheadingSizePx',
+        'statementSize',
+        'statementSizePx',
+        'buttons',
+        'buttonsFullWidth',
+        'minHeight',
+        'minHeightPx',
+        'gaps',
+        'margin',
+        'padding',
+        'border',
+        'titleWeight',
+        'align',
+        // R19A (T227–T229).
+        'subheadingLineHeight',
+        'subheadingMaxWidth',
+        'subheadingMaxWidthPx',
+        'statementLineHeight',
+        'statementMaxWidth',
+        'statementMaxWidthPx',
+        'bodySize',
+        'bodySizePx',
+        'bodyLineHeight',
+        'bodyMaxWidth',
+        'bodyMaxWidthPx',
+        'gapsPx',
+        'mediaSpace',
+        'mediaSpacePx',
+        // R20E.
+        'titleLineHeight',
+        'eyebrowSizePx',
+        'eyebrowLineHeight',
+        'proofCaptionPlacement',
+        'proofCaptionMaxWidthPx',
+        // R23 (T436).
+        'eyebrowSize',
+      ],
       weight: 90,
+    },
+    // Feature 163 (T047) — the composition blocks of US3 (contracts/blocks.md).
+    {
+      name: 'cms.MediaText',
+      // `rows[].media.image.alt` beside the contract's paths: a row's image is
+      // read by a screen reader as the first row's is.
+      translatable: [
+        { path: 'heading', format: 'tiptap' },
+        { path: 'body', format: 'tiptap' },
+        { path: 'features[].title', format: 'tiptap' },
+        { path: 'features[].body' },
+        { path: 'buttons[].label' },
+        { path: 'footnote', format: 'tiptap' },
+        { path: 'media.image.alt' },
+        { path: 'rows[].heading', format: 'tiptap' },
+        { path: 'rows[].body', format: 'tiptap' },
+        { path: 'rows[].features[].title', format: 'tiptap' },
+        { path: 'rows[].features[].body' },
+        { path: 'rows[].buttons[].label' },
+        { path: 'rows[].media.image.alt' },
+      ],
+      labelKey: 'blocks.mediaText.label',
+      descriptionKey: 'blocks.mediaText.description',
+      category: 'content',
+      contexts: ['cms'],
+      fields: {
+        heading: { type: 'richtext', label: 'Heading' },
+        media: { type: 'object', label: 'Media' },
+        body: { type: 'richtext', label: 'Text' },
+      },
+      // Feature 163, T160: the item titles' size per breakpoint.
+      responsiveFields: [
+        'headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'featureTitleSize', 'featureTitleSizePx', 'buttons', 'buttonsFullWidth', 'headingWeight', 'featureTitleWeight',
+        // R20F (T315): the text size.
+        'bodySize', 'bodySizePx', 'bodyLineHeight', 'headingLineHeight',
+        // R22I.
+        'columnGapPx', 'featureBodySize', 'featureBodySizePx',
+      ],
+      weight: 92,
+    },
+    {
+      name: 'cms.BackgroundPanel',
+      translatable: [
+        { path: 'heading', format: 'tiptap' },
+        { path: 'body', format: 'tiptap' },
+        { path: 'buttons[].label' },
+        { path: 'image.alt' },
+      ],
+      labelKey: 'blocks.backgroundPanel.label',
+      descriptionKey: 'blocks.backgroundPanel.description',
+      category: 'content',
+      contexts: ['cms'],
+      fields: {
+        image: { type: 'object', label: 'Image', required: true },
+        heading: { type: 'richtext', label: 'Heading' },
+      },
+      // R20F (T316): the text box's margin and padding.
+      responsiveFields: ['headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'buttons', 'buttonsFullWidth', 'minHeight', 'headingWeight'],
+      weight: 94,
+    },
+    {
+      name: 'cms.CtaCard',
+      translatable: [
+        { path: 'heading', format: 'tiptap' },
+        { path: 'body', format: 'tiptap' },
+        { path: 'list[].text' },
+        { path: 'buttons[].label' },
+        { path: 'image.alt' },
+      ],
+      labelKey: 'blocks.ctaCard.label',
+      descriptionKey: 'blocks.ctaCard.description',
+      category: 'content',
+      contexts: ['cms'],
+      fields: {
+        heading: { type: 'richtext', label: 'Heading' },
+        buttons: { type: 'array', label: 'Buttons' },
+      },
+      // R20F (T318): the card's padding and the image's columns.
+      responsiveFields: ['headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'buttons', 'buttonsFullWidth', 'headingWeight', 'imageColumns', 'bodySize', 'bodySizePx', 'textMaxWidth', 'textMaxWidthPx'],
+      weight: 96,
+    },
+    {
+      name: 'cms.Statement',
+      translatable: [
+        { path: 'heading', format: 'tiptap' },
+        { path: 'body', format: 'tiptap' },
+        { path: 'background.image.alt' },
+      ],
+      labelKey: 'blocks.statement.label',
+      descriptionKey: 'blocks.statement.description',
+      category: 'content',
+      contexts: ['cms'],
+      fields: { heading: { type: 'richtext', label: 'Heading' } },
+      responsiveFields: [
+        'headingSize',
+        'headingSizePx',
+        'textMaxWidth',
+        'textMaxWidthPx',
+        'headingWeight',
+        'align',
+        // R19A (T231).
+        'minHeight',
+        'minHeightPx',
+        'headingLineHeight',
+        'bodySize',
+        'bodySizePx',
+        'bodyLineHeight',
+      ],
+      weight: 98,
+    },
+    {
+      // Feature 163 (T072, FR-028): rows of a title, a description and a button.
+      name: 'cms.LinkList',
+      translatable: [
+        { path: 'heading', format: 'tiptap' },
+        { path: 'items[].title' },
+        { path: 'items[].description' },
+        { path: 'items[].button.label' },
+      ],
+      labelKey: 'blocks.linkList.label',
+      descriptionKey: 'blocks.linkList.description',
+      category: 'content',
+      contexts: ['cms'],
+      fields: { heading: { type: 'richtext', label: 'Heading' } },
+      // R19A (T236): the row titles' size and weight.
+      responsiveFields: ['headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'headingWeight', 'titleSize', 'titleSizePx', 'titleLineHeight'],
+      weight: 99,
     },
     {
       name: 'cms.LogoStrip',
@@ -621,29 +939,65 @@ export const manifest = defineModuleManifest({
       category: 'content',
       contexts: ['cms'],
       fields: {},
-      responsiveFields: ['margin', 'padding', 'border'],
+      responsiveFields: ['margin', 'padding', 'border', 'align', 'gap', 'gapPx'],
       weight: 100,
     },
     {
       name: 'cms.Testimonial',
-      translatable: [{ path: 'quote' }, { path: 'author' }, { path: 'role' }],
+      // Feature 163 (T049): a rich quote (a plain quote stored before is read
+      // as plain text under the same path), the image and the avatar.
+      translatable: [
+        { path: 'quote', format: 'tiptap' },
+        { path: 'author' },
+        { path: 'role' },
+        { path: 'image.alt' },
+        { path: 'avatar.alt' },
+      ],
       labelKey: 'blocks.testimonial.label',
       descriptionKey: 'blocks.testimonial.description',
       category: 'content',
       contexts: ['cms'],
-      fields: { quote: { type: 'textarea', label: 'Quote' } },
-      responsiveFields: ['margin', 'padding', 'border'],
+      fields: { quote: { type: 'richtext', label: 'Quote' } },
+      responsiveFields: ['margin', 'padding', 'border', 'quoteSize', 'quoteSizePx'],
       weight: 110,
     },
     {
       name: 'cms.Stats',
-      translatable: [{ path: 'items[].value' }, { path: 'items[].label' }],
+      // Feature 163 (T049): a heading and an image beside the figures.
+      translatable: [
+        { path: 'heading', format: 'tiptap' },
+        { path: 'items[].value' },
+        { path: 'items[].label' },
+        { path: 'image.alt' },
+      ],
       labelKey: 'blocks.stats.label',
       descriptionKey: 'blocks.stats.description',
       category: 'content',
       contexts: ['cms'],
-      fields: {},
-      responsiveFields: ['columns', 'margin', 'padding', 'border'],
+      fields: { items: { type: 'array', label: 'Metrics' } },
+      responsiveFields: [
+        'headingSize',
+        'headingSizePx',
+        'headingMaxWidth',
+        'headingMaxWidthPx',
+        'columns',
+        'gap',
+        'gapPx',
+        'valueSize',
+        'valueSizePx',
+        'margin',
+        'padding',
+        'border',
+        'headingWeight',
+        'align',
+        // R19A (T235).
+        'labelSize',
+        'labelSizePx',
+        // R20F (T319).
+        'labelLineHeight',
+        // R22I.
+        'columnGapPx', 'valueLineHeight',
+      ],
       weight: 120,
     },
     {
@@ -680,7 +1034,8 @@ export const manifest = defineModuleManifest({
       category: 'media',
       contexts: ['cms'],
       fields: { url: { type: 'text', label: 'Video URL' } },
-      responsiveFields: ['maxWidth', 'align', 'margin', 'padding', 'border'],
+      // Feature 163, T126: the aspect ratio is per breakpoint.
+      responsiveFields: ['aspectRatio', 'maxWidth', 'align', 'margin', 'padding', 'border'],
       weight: 10,
     },
     {
@@ -704,47 +1059,71 @@ export const manifest = defineModuleManifest({
       weight: 20,
     },
     {
+      // Feature 163 (T054, T055): labelled "Carousel"; the image slider is
+      // gone, its items are `cms.CarouselImage` slides (research R-12, FR-041a).
       name: 'cms.ContentSlider',
-      translatable: [],
+      translatable: [
+        { path: 'header.heading', format: 'tiptap' },
+        { path: 'header.lead' },
+        { path: 'header.button.label' },
+        // T131: the filter bar's labels; the tags themselves are keys, not prose.
+        { path: 'filter.allLabel' },
+        { path: 'filter.tags[].label' },
+      ],
       labelKey: 'blocks.contentSlider.label',
       descriptionKey: 'blocks.contentSlider.description',
       category: 'interactive',
       contexts: ['cms'],
       fields: {},
-      responsiveFields: ['slidesPerView', 'gap', 'margin', 'padding', 'border'],
+      responsiveFields: [
+        'headingSize',
+        'headingSizePx',
+        'headingMaxWidth',
+        'headingMaxWidthPx',
+        'slidesPerView',
+        'gap',
+        'gapPx',
+        'controlsPlacement',
+        'controlsAlign',
+        'columns',
+        'margin',
+        'padding',
+        'border',
+        'headingWeight',
+        // R22I.
+        'headingLineHeight',
+      ],
       weight: 10,
     },
     {
-      name: 'cms.ImageSlider',
-      translatable: [{ path: 'items[].title' }],
-      labelKey: 'blocks.imageSlider.label',
-      descriptionKey: 'blocks.imageSlider.description',
-      category: 'interactive',
-      contexts: ['cms'],
-      fields: {},
-      responsiveFields: ['slidesPerView', 'gap', 'margin', 'padding', 'border'],
-      weight: 20,
-    },
-    {
       name: 'cms.Tabs',
+      // Feature 163 (R-13): a panel's blocks sit in the `items[].panel` slot and
+      // are translated through their own declarations. `items[].content` is
+      // only ever the HTML a page stored before, until the editor converts it.
       translatable: [{ path: 'items[].label' }, { path: 'items[].content', format: 'html' }],
       labelKey: 'blocks.tabs.label',
       descriptionKey: 'blocks.tabs.description',
       category: 'interactive',
       contexts: ['cms'],
       fields: {},
-      responsiveFields: ['margin', 'padding', 'border'],
+      responsiveFields: ['tabSize', 'panelGap', 'panelGapPx', 'margin', 'padding', 'border', 'align'],
       weight: 30,
     },
     {
       name: 'cms.Accordion',
+      // Feature 163 (R-13): as `cms.Tabs` — blocks in `items[].panel`, stored HTML in `items[].content`.
       translatable: [{ path: 'items[].title' }, { path: 'items[].content', format: 'html' }],
       labelKey: 'blocks.accordion.label',
       descriptionKey: 'blocks.accordion.description',
       category: 'interactive',
       contexts: ['cms'],
       fields: {},
-      responsiveFields: ['margin', 'padding', 'border'],
+      // Feature 163, T175: the title padding per breakpoint; T182: the space above an open panel and between items;
+      // T185: the title weight; T186: the space below an open panel and after an open item.
+      responsiveFields: [
+        'titleSize', 'titleSizePx', 'titleWeight', 'titlePadding', 'titlePaddingPx', 'panelGap', 'panelGapPx', 'itemGap', 'itemGapPx',
+        'panelPaddingBottom', 'panelPaddingBottomPx', 'openItemGap', 'openItemGapPx', 'margin', 'padding', 'border', 'titleLineHeight',
+      ],
       weight: 40,
     },
     {
@@ -755,7 +1134,9 @@ export const manifest = defineModuleManifest({
       category: 'internal',
       contexts: ['cms'],
       fields: { span: { type: 'number', label: 'Width (1–12)' } },
-      responsiveFields: ['span', 'margin', 'padding', 'border'],
+      // Feature 163, T159: the column's order in the row per breakpoint; T165: its placement in the row's grid;
+      // R19C (T265): its box's outset past the track.
+      responsiveFields: ['span', 'stackOrder', 'rowSpan', 'columnStart', 'rowStart', 'margin', 'padding', 'border', 'outsetPx'],
       weight: 10,
     },
     {
@@ -769,6 +1150,68 @@ export const manifest = defineModuleManifest({
       responsiveFields: ['margin', 'padding', 'border'],
       weight: 20,
     },
+    // Feature 163 (T054): the Carousel's item blocks, insertable only into its
+    // `slides` (contracts/blocks.md, research R-12).
+    {
+      name: 'cms.CarouselImage',
+      // R19B (T249): the read-more label is prose too.
+      translatable: [{ path: 'image.alt' }, { path: 'caption', format: 'tiptap' }, { path: 'moreLabel' }],
+      labelKey: 'blocks.carouselImage.label',
+      descriptionKey: 'blocks.carouselImage.description',
+      category: 'internal',
+      contexts: ['cms'],
+      fields: {},
+      // Feature 163, T188: the caption's weight per breakpoint too. R19B (T249, T250): the caption's
+      // padding and the read-more label's size.
+      responsiveFields: ['captionSize', 'captionSizePx', 'captionWeight'],
+      weight: 30,
+    },
+    {
+      name: 'cms.CarouselSplit',
+      translatable: [
+        { path: 'title', format: 'tiptap' },
+        { path: 'body', format: 'tiptap' },
+        { path: 'buttons[].label' },
+        { path: 'media.image.alt' },
+      ],
+      labelKey: 'blocks.carouselSplit.label',
+      descriptionKey: 'blocks.carouselSplit.description',
+      category: 'internal',
+      contexts: ['cms'],
+      fields: {},
+      // R20F (T311, T312): the title's and the text's type, the space after a hanging icon.
+      responsiveFields: [
+        'buttons', 'buttonsFullWidth',
+        'titleSize', 'titleSizePx', 'titleLineHeight', 'bodySize', 'bodySizePx', 'bodyLineHeight',
+        // R22I.
+        'columnGapPx',
+      ],
+      weight: 40,
+    },
+    {
+      name: 'cms.LinkTile',
+      translatable: [{ path: 'title', format: 'tiptap' }, { path: 'linkLabel' }, { path: 'image.alt' }],
+      labelKey: 'blocks.linkTile.label',
+      descriptionKey: 'blocks.linkTile.description',
+      category: 'internal',
+      contexts: ['cms'],
+      fields: {},
+      // Feature 163, T181: the resting title and label colours per breakpoint too; T188: their weights.
+      responsiveFields: ['ratio', 'titleSize', 'titleSizePx', 'titleWeight', 'titleColor', 'labelSize', 'labelSizePx', 'labelWeight', 'labelColor'],
+      weight: 50,
+    },
+    {
+      name: 'cms.DownloadTile',
+      translatable: [{ path: 'title' }, { path: 'subtitle' }, { path: 'linkLabel' }, { path: 'hoverImage.alt' }],
+      labelKey: 'blocks.downloadTile.label',
+      descriptionKey: 'blocks.downloadTile.description',
+      category: 'internal',
+      contexts: ['cms'],
+      fields: {},
+      // R19B (T247, T248): the card's padding, the title's size and the icon button's size per breakpoint.
+      responsiveFields: ['titleSize', 'titleSizePx'],
+      weight: 60,
+    },
     {
       name: 'cms.NewsletterSignup',
       translatable: [
@@ -776,6 +1219,8 @@ export const manifest = defineModuleManifest({
         { path: 'description' },
         { path: 'placeholder' },
         { path: 'buttonLabel' },
+        // Feature 163 (T076): the optional consent checkbox's label.
+        { path: 'consentLabel', format: 'tiptap' },
       ],
       labelKey: 'blocks.newsletterSignup.label',
       descriptionKey: 'blocks.newsletterSignup.description',

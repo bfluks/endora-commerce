@@ -18,10 +18,8 @@ import {
 } from '@endora-commerce/admin-kit/ui';
 import { useAppLanguage, useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { crmApi } from '../../../api.js';
-import { AttachmentUploader } from '../../../components/AttachmentUploader.js';
-import { ModalDialog } from '@endora-commerce/admin-kit/components';
+import { AttachmentUploader, ModalDialog, uploadAttachment } from '@endora-commerce/admin-kit/components';
 import { errorMessage, fileSizeLabel } from '../../../lib/labels.js';
-import { uploadOpportunityAttachment } from '../../../lib/upload-attachment.js';
 import type { OpportunityTabProps } from '../tabs.js';
 
 /**
@@ -91,7 +89,11 @@ export function AttachmentsTab(props: OpportunityTabProps): ReactNode {
     }
     setUploading(file.name);
     try {
-      const added = await uploadOpportunityAttachment(opportunityId, file);
+      // CRM's own upload, gated by `crm:write` alone (`contracts/admin-api.md` §7a).
+      const added = await uploadAttachment<OpportunityAttachment>(
+        `/api/v1/admin/crm/opportunities/${opportunityId}/attachments/upload`,
+        file,
+      );
       setAttachments((previous) =>
         (previous ?? []).some((item) => item.id === added.id)
           ? (previous ?? [])

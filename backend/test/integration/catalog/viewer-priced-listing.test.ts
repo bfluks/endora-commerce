@@ -63,6 +63,14 @@ interface Summary {
  * hoisted to the page. The pair is what makes the guarantee bite across cards:
  * the two products' right answers differ in every field a page-wide read could
  * mis-key.
+ *
+ * `summary` was added to both entries after the fact, and on purpose: feature
+ * 163 (`specs/163-page-builder-marketing-pages/` R-16, FR-027) made the card's
+ * short description — the product description as plain text, cut at 160
+ * characters — part of every listing projection, anonymous included, and the
+ * value is the fixture's own `description`. It is the deliberate change this
+ * assertion exists to surface, not a leak: it carries no price and nothing
+ * that varies by viewer.
  */
 const RECORDED_ANONYMOUS_LISTING_ENTRY = {
   id: '00000000-0000-4000-8000-00000000f001',
@@ -70,11 +78,21 @@ const RECORDED_ANONYMOUS_LISTING_ENTRY = {
   type: 'simple',
   name: 'Viewer priced probe',
   slug: 'viewer-priced-0001',
+  // Feature 163 (R-16) — the fixture's description, as the card's summary.
+  summary: 'One product, three viewers, three prices.',
   categorySlugs: ['viewer-priced-category-a', 'viewer-priced-category-b'],
   primaryAssetUrl: 'https://assets.test/viewer-priced-thumbnail.svg',
   price: { amount: 88, currency: 'PLN' },
   stockIndicator: null,
   stockLevel: null,
+  // Feature 155 — the pieces minimum, `null` for none.
+  minOrderQuantity: null,
+  // D-287 P0 — the split behind `price`, from the same resolution.
+  resolvedPrice: {
+    basePrice: { amount: '88.0000', currency: 'PLN' },
+    salePrice: null,
+    displayMode: 'gross_only',
+  },
 };
 
 /**
@@ -89,11 +107,15 @@ const RECORDED_ANONYMOUS_SOURCE_ENTRY = {
   type: 'simple',
   name: 'Viewer priced probe source',
   slug: 'viewer-priced-source-0001',
+  summary: 'Cross-sells the priced product.',
   categorySlugs: ['viewer-priced-category-source'],
   primaryAssetUrl: 'https://assets.test/viewer-priced-source-legacy.svg',
   price: null,
   stockIndicator: null,
   stockLevel: null,
+  minOrderQuantity: null,
+  // Nothing prices it; the display mode is still the viewer's.
+  resolvedPrice: { basePrice: null, salePrice: null, displayMode: 'gross_only' },
 };
 
 describe('a catalogue listing is priced for the viewer', () => {

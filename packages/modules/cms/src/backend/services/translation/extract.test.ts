@@ -121,6 +121,33 @@ describe('extract', () => {
     const data = { root: {}, content: [{ type: 'cms.Heading', props: { id: 'h', text: { not: 'a string' } } }] };
     expect(extract(data, declarations).segments).toEqual([]);
   });
+
+  it('walks into an accordion panel that holds blocks, beside one still stored as HTML (feature 163, T059)', () => {
+    const data = {
+      root: { props: {} },
+      content: [
+        {
+          type: 'cms.Accordion',
+          props: {
+            id: 'acc',
+            items: [
+              { title: 'Pytanie', panel: [{ type: 'cms.Heading', props: { id: 'h', text: 'W panelu' } }] },
+              { title: 'Stare', content: '<p>Zapisane</p>' },
+            ],
+          },
+        },
+      ],
+    };
+    const extraction = extract(data, declarations);
+    expect(extraction.segments.map((s) => [s.kind, s.text])).toEqual([
+      ['plain', 'Pytanie'],
+      ['plain', 'Stare'],
+      ['html', '<0/>Zapisane<1/>'],
+      ['plain', 'W panelu'],
+    ]);
+    const identity = new Map(extraction.segments.map((s) => [s.id, s.text]));
+    expect(inject(data, extraction, identity).data).toEqual(data);
+  });
 });
 
 describe('inject', () => {
@@ -169,5 +196,46 @@ describe('inject', () => {
     expect(
       (inject(data, extraction, new Map([[id, 'Hi {{customer.firstName}} &lt;3']])).data.content[0] as { props: { text: string } }).props.text,
     ).toBe('Hi {{customer.firstName}} <3');
+  });
+});
+
+/**
+ * Feature 163, T163 — a heading's inline rich text may hold an icon of the
+ * catalog (`{type: 'inlineIcon', attrs: {name}}`). It travels as one atomic
+ * `<n/>` tag: its name is never sent, a translation may move it, and one that
+ * drops it leaves the heading as it was.
+ */
+describe('an inline icon in a heading (feature 163, T163)', () => {
+  const ICON = { type: 'inlineIcon', attrs: { name: 'sparkles' } };
+  const declarationsWithTitle: Declarations = (name) => (name === 'acme.Title' ? [{ path: 'title', format: 'tiptap' }] : undefined);
+  const page = () => ({
+    root: {},
+    content: [
+      {
+        type: 'acme.Title',
+        props: { id: 't', title: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Nowe pomysły ' }, ICON] }] } },
+      },
+    ],
+  });
+
+  it('is one tag in the segment, without its name', () => {
+    const extraction = extract(page(), declarationsWithTitle);
+    expect(extraction.segments.map((segment) => segment.text)).toEqual(['Nowe pomysły <0/>']);
+    expect(JSON.stringify(extraction.segments)).not.toContain('sparkles');
+  });
+
+  it('comes back unchanged with the translation, and a translation that drops it is refused', () => {
+    const data = page();
+    const extraction = extract(data, declarationsWithTitle);
+    const id = extraction.segments[0]!.id;
+    const out = inject(data, extraction, new Map([[id, '<0/> New ideas']]));
+    expect(out.untranslated).toBe(0);
+    expect((out.data.content[0] as { props: { title: { content: Array<{ content: unknown[] }> } } }).props.title.content[0]!.content).toEqual([
+      ICON,
+      { type: 'text', text: ' New ideas' },
+    ]);
+    const dropped = inject(data, extraction, new Map([[id, 'New ideas']]));
+    expect(dropped.untranslated).toBe(1);
+    expect(dropped.data).toEqual(page());
   });
 });

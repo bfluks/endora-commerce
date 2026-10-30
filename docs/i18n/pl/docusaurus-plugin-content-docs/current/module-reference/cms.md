@@ -40,6 +40,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 
 | Kod | Etykieta | Wymaga też |
 | --- | --- | --- |
+| `cms.brand` | Edit brand settings | `cms.read` |
 | `cms.read` | View CMS content | — |
 | `cms.translate` | Translate Page Builder content with AI | — |
 | `cms.write` | Edit CMS content | — |
@@ -50,6 +51,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 | --- | --- | --- |
 | `new-page` | `/cms/pages/new` | `cms.write` |
 | `open-blocks` | `/cms/blocks` | `cms.read` |
+| `open-cms-brand` | `/cms/brand` | `cms.read` |
 | `open-hooks` | `/cms/hooks` | `cms.read` |
 | `open-page-builder-translation-settings` | `/settings` | `settings:read` |
 | `open-pages` | `/cms/pages` | `cms.read` |
@@ -59,6 +61,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 
 | Kod | Nazwa | Typ |
 | --- | --- | --- |
+| `cms.default_share_image_asset_id` | Default sharing image | `string` |
 | `cms.enabled` | CMS enabled | `boolean` |
 | `cms.page_builder.breakpoint.desktop_min` | Desktop breakpoint (min-width px) | `number` |
 | `cms.page_builder.breakpoint.tablet_min` | Tablet breakpoint (min-width px) | `number` |

@@ -1,8 +1,18 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Pencil } from 'lucide-react';
-import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
+import { getAttributeScope, isSystemAttributeKey } from '@endora-commerce/contracts';
+import { ApiError, apiClient, useAuth } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Checkbox, Input, Label, PageHeader, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { ModalDialog } from '@endora-commerce/admin-kit/components';
+import { AppLanguageContext, useTranslation } from '@endora-commerce/admin-kit/i18n';
+import {
+  isScopeNarrowing,
+  previewAttributeScopeChange,
+  scopeFlagsOf,
+  type AttributeScopeFlags,
+  type AttributeScopePreview,
+} from '../lib/attribute-scope.js';
+import { pickLocalized } from '../lib/scope-overview.js';
 
 // Feature 002 (T035) — DB-level value types. Foundation 001 had
 // the original 5 (string, number, boolean, enum, date); 002 adds
@@ -41,6 +51,20 @@ interface AdminAttribute {
   quickSearchable: boolean;
   /** Feature 061 — backing product-host custom-field definition (read-only, additive). */
   customFieldDefinitionId?: string;
+  /**
+   * Feature 023 / 163 (FR-090) — may the value differ per sales channel / per language.
+   * Optional: the form shows them only when the answer carries both.
+   */
+  channelScoped?: boolean;
+  languageScoped?: boolean;
+}
+
+/** A narrowing waiting for the operator's confirmation (FR-090). */
+interface PendingNarrowing {
+  attribute: AdminAttribute;
+  input: AttributeFormValues;
+  preview: AttributeScopePreview;
+  channelNames: Record<string, string>;
 }
 
 // Boolean flags surfaced as togglable checkbox columns in the list.
@@ -83,6 +107,10 @@ export function AttributesManager(): ReactNode {
   const [flagDrafts, setFlagDrafts] = useState<Record<string, FlagSet>>({});
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [pendingNarrowing, setPendingNarrowing] = useState<PendingNarrowing | null>(null);
+  const [narrowing, setNarrowing] = useState(false);
+  const language = useContext(AppLanguageContext)?.language ?? 'en';
+  const narrowingBodyId = useId();
 
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -136,6 +164,7 @@ export function AttributesManager(): ReactNode {
       ...(input.valueType === 'number' || input.valueType === 'price'
         ? { displayAsSlider: input.displayAsSlider }
         : {}),
+      ...(input.scope ? { channelScoped: input.scope.channelScoped, languageScoped: input.scope.languageScoped } : {}),
     };
   };
 
@@ -165,7 +194,7 @@ export function AttributesManager(): ReactNode {
     [refresh, t],
   );
 
-  const handleEditSave = useCallback(
+  const saveEdit = useCallback(
     async (attr: AdminAttribute, input: AttributeFormValues): Promise<void> => {
       try {
         await apiClient.patch<{ data: AdminAttribute }>(
@@ -181,6 +210,50 @@ export function AttributesManager(): ReactNode {
     },
     [refresh, t],
   );
+
+  // Feature 163 (FR-090) — narrowing a scope flag leaves values set at that level
+  // unused, so the count is shown and confirmed before anything is sent.
+  const handleEditSave = useCallback(
+    async (attr: AdminAttribute, input: AttributeFormValues): Promise<void> => {
+      const current = scopeFlagsOf(attr);
+      if (!current || !input.scope || !isScopeNarrowing(current, input.scope)) {
+        await saveEdit(attr, input);
+        return;
+      }
+      setError(null);
+      try {
+        const [preview, channels] = await Promise.all([
+          previewAttributeScopeChange(attr.key, input.scope),
+          apiClient
+            .get<{ items?: Array<{ id: string; code: string; name: Record<string, string> | string }> }>(
+              '/api/v1/admin/sales-channels',
+            )
+            .catch(() => ({ items: [] })),
+        ]);
+        const channelNames = Object.fromEntries(
+          (channels.items ?? []).map((c) => [
+            c.id,
+            typeof c.name === 'string' ? c.name : pickLocalized(c.name, language) || c.code,
+          ]),
+        );
+        setPendingNarrowing({ attribute: attr, input, preview, channelNames });
+      } catch {
+        setError(t('attributes.scope.previewFailed'));
+      }
+    },
+    [saveEdit, language, t],
+  );
+
+  const confirmNarrowing = useCallback(async (): Promise<void> => {
+    if (!pendingNarrowing || narrowing) return;
+    setNarrowing(true);
+    try {
+      await saveEdit(pendingNarrowing.attribute, pendingNarrowing.input);
+    } finally {
+      setNarrowing(false);
+      setPendingNarrowing(null);
+    }
+  }, [pendingNarrowing, narrowing, saveEdit]);
 
   // Flush every dirty row's flags in one batch, then refresh once.
   const saveFlags = useCallback(async (): Promise<void> => {
@@ -224,13 +297,67 @@ export function AttributesManager(): ReactNode {
         </Alert>
       ) : null}
 
+      {pendingNarrowing ? (
+        <ModalDialog
+          title={t('attributes.scope.confirmTitle', {
+            attribute:
+              pickLocalized(pendingNarrowing.attribute.label, language) || pendingNarrowing.attribute.key,
+          })}
+          onClose={(): void => setPendingNarrowing(null)}
+          busy={narrowing}
+          aria-describedby={narrowingBodyId}
+          footer={
+            <>
+              <Button type="button" variant="outline" disabled={narrowing} onClick={(): void => setPendingNarrowing(null)}>
+                {t('attributes.action.cancel')}
+              </Button>
+              <Button
+                type="button"
+                disabled={narrowing}
+                aria-busy={narrowing || undefined}
+                onClick={(): void => {
+                  void confirmNarrowing();
+                }}
+              >
+                {t('attributes.scope.confirm')}
+              </Button>
+            </>
+          }
+        >
+          <p id={narrowingBodyId} className="text-sm">
+            {pendingNarrowing.preview.orphanedOverrides === 0
+              ? t('attributes.scope.confirmNone')
+              : t(
+                  // D21 — the plural form the admin language needs (PL: one / few / many).
+                  `attributes.scope.confirmBody.${new Intl.PluralRules(language).select(pendingNarrowing.preview.orphanedOverrides)}`,
+                  { count: String(pendingNarrowing.preview.orphanedOverrides) },
+                )}
+          </p>
+          {pendingNarrowing.preview.byChannel.length > 0 ? (
+            <ul className="mt-3 space-y-1 text-sm">
+              {pendingNarrowing.preview.byChannel.map((entry) => (
+                <li key={entry.channelId}>
+                  {t('attributes.scope.perChannel', {
+                    channel: pendingNarrowing.channelNames[entry.channelId] ?? entry.channelId.slice(0, 8),
+                    count: String(entry.count),
+                  })}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </ModalDialog>
+      ) : null}
+
       {editingAttr ? (
         <Card className="mb-4">
           <CardHeader>
             <CardTitle>{t('attributes.edit.title', { key: editingAttr.key })}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
+            {/* Keyed so opening an attribute starts from its stored values, not the
+                previous form's state (same element type at the same position). */}
             <AttributeForm
+              key={editingAttr.id}
               mode="edit"
               attribute={editingAttr}
               onSubmit={(input): Promise<void> => handleEditSave(editingAttr, input)}
@@ -251,7 +378,7 @@ export function AttributesManager(): ReactNode {
             <CardTitle>{t('attributes.create.title')}</CardTitle>
           </CardHeader>
           <CardContent>
-            <AttributeForm mode="create" onSubmit={handleCreate} />
+            <AttributeForm key="create" mode="create" onSubmit={handleCreate} />
           </CardContent>
         </Card>
       )}
@@ -359,6 +486,8 @@ interface AttributeFormValues {
   quickSearchable: boolean;
   isPromoRule: boolean;
   isPriceRule: boolean;
+  /** Feature 163 (FR-090) — `null` when the form does not show the flags. */
+  scope: AttributeScopeFlags | null;
 }
 
 interface AttributeFormProps {
@@ -396,6 +525,22 @@ function AttributeForm({ mode, attribute, onSubmit, onCancel }: AttributeFormPro
   const [isPriceRule, setIsPriceRule] = useState(attribute?.isPriceRule ?? false);
   const [busy, setBusy] = useState(false);
   const isNumeric = valueType === 'number' || valueType === 'price';
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('catalog:write');
+  // Feature 163 (FR-090) — shown on create, and on edit when the answer carries both
+  // flags; a system attribute's are fixed (`getAttributeScope`) and read-only.
+  const storedScope = attribute ? scopeFlagsOf(attribute) : { channelScoped: false, languageScoped: false };
+  const systemAttribute = attribute ? isSystemAttributeKey(attribute.key) : false;
+  // 168-shim: the two 163 flags are one `scopable` flag now (R15); T113 rewrites this form.
+  const initialScope: AttributeScopeFlags | null =
+    systemAttribute && attribute
+      ? { channelScoped: getAttributeScope(attribute.key).scopable, languageScoped: getAttributeScope(attribute.key).scopable }
+      : storedScope;
+  const [channelScoped, setChannelScoped] = useState(initialScope?.channelScoped ?? false);
+  const [languageScoped, setLanguageScoped] = useState(initialScope?.languageScoped ?? false);
+  const showScope = initialScope !== null;
+  const scopeEditable = showScope && !systemAttribute && canWrite;
+  const scopeHelpId = useId();
 
   const collect = (): AttributeFormValues => ({
     key,
@@ -412,6 +557,7 @@ function AttributeForm({ mode, attribute, onSubmit, onCancel }: AttributeFormPro
     quickSearchable,
     isPromoRule,
     isPriceRule,
+    scope: scopeEditable ? { channelScoped, languageScoped } : null,
   });
 
   const reset = (): void => {
@@ -428,6 +574,8 @@ function AttributeForm({ mode, attribute, onSubmit, onCancel }: AttributeFormPro
     setQuickSearchable(false);
     setIsPromoRule(false);
     setIsPriceRule(false);
+    setChannelScoped(false);
+    setLanguageScoped(false);
   };
 
   return (
@@ -556,8 +704,37 @@ function AttributeForm({ mode, attribute, onSubmit, onCancel }: AttributeFormPro
           {t('attributes.flag.priceRule')}
         </label>
       </div>
+      {showScope ? (
+        <fieldset className="space-y-2" aria-describedby={scopeHelpId}>
+          <legend className="text-sm font-medium">{t('attributes.scope.legend')}</legend>
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox
+              checked={channelScoped}
+              disabled={!scopeEditable}
+              onChange={(e): void => setChannelScoped(e.target.checked)}
+            />
+            {t('attributes.scope.channelScoped')}
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox
+              checked={languageScoped}
+              disabled={!scopeEditable}
+              onChange={(e): void => setLanguageScoped(e.target.checked)}
+            />
+            {t('attributes.scope.languageScoped')}
+          </label>
+          <p id={scopeHelpId} className="text-xs text-muted-foreground">
+            {systemAttribute
+              ? t('attributes.scope.systemHelp')
+              : !canWrite
+                ? t('attributes.scope.readOnly')
+                : t('attributes.scope.help')}
+          </p>
+        </fieldset>
+      ) : null}
       <div className="flex gap-2">
-        <Button type="submit" disabled={busy}>
+        {/* Disabled and announced as busy while the save — or a narrowing's preview — runs (D18). */}
+        <Button type="submit" disabled={busy} aria-busy={busy || undefined}>
           {isEdit ? t('attributes.action.saveEdit') : t('attributes.action.create')}
         </Button>
         {onCancel ? (

@@ -11,6 +11,7 @@ import {
 import { seedCartForStubCustomer, SEED_PAYMENT_METHOD_ID } from '../../helpers/seed-commerce.js';
 
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 
 import { EventBus } from '@endora-commerce/platform/events';
 
@@ -230,7 +231,11 @@ describe('placeOrder — the T048 apply ports, against a live transaction', () =
 
     const read = await orderServiceNeighbours(h.em).cartPlacementApply.readActiveForPlacement(
       em as EntityManager,
-      { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID },
+      {
+        customerAccountId: TEST_CUSTOMER_ID,
+        organizationId: TEST_ORGANIZATION_ID,
+        salesChannelId: await systemDefaultSalesChannelId(em),
+      },
     );
 
     expect(read?.cart.id).toBe(managed!.id);

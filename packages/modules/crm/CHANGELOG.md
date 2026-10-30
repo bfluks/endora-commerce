@@ -1,5 +1,240 @@
 # @endora-commerce/mod-crm
 
+## 0.108.0
+
+### Minor Changes
+
+- bc1b52c: **Behaviour change for API clients.** On `GET /api/v1/admin/crm/opportunities` without `cardValues=true`, a `custom:` reference in `fieldFilters` is now governed by the custom-field definition's list-filter option instead of the board card: a field with the option on is filtered whether or not the card shows it, and a field with the option off is refused with 400 `CUSTOM_FIELD_FILTER_UNAVAILABLE` naming it. More than 10 `custom:` references or 100 chosen values in total are refused with 400 `VALIDATION_FAILED`. An operator that does not apply to a field's type, or an inverted range (a minimum above its maximum, a start date after its end), is refused with 400 `VALIDATION_FAILED` rather than ignored or answered empty. `builtin:` references keep the card rule. With `cardValues=true` (a board lane continued in the list) and on `GET /api/v1/admin/crm/board` nothing changes.
+
+  `GET /api/v1/admin/crm/opportunities/custom-field-filters` (`crm:read`) lists the Opportunity custom fields the list offers as filters.
+
+- 7995063: Custom-field filters on the Opportunities list, governed by the list-filter option.
+
+  - The list offers one filter per Opportunity custom field whose _Use as list filter_ option is
+    on — whether or not the board card shows the field — beside its existing filters.
+  - A filter is sent as a `custom:<key>` reference in `fieldFilters`, never with `cardValues`, so
+    the list-filter rule applies; any change returns the list to its first page.
+  - The filters live in the address as `cf.<key>.<op>`, so a filtered list can be bookmarked and
+    shared.
+  - A filter that is no longer available is reported by the field's name, with _Remove this
+    filter_.
+  - The panel shows the first three custom-field filters and puts the rest behind _More filters
+    (n)_; a hidden field with an active filter is always shown.
+  - The board, its card-field filters and its lanes are unchanged.
+
+- cf7a9c0: The Opportunity screen is edited in place, its free text is formatted, and an Order reference says what the Order is.
+
+  - **Inline editing.** The header's _Edit_ and its form are gone: the title, the description, the expected close date, the contact person, the Sales Channel and a typed value are each edited where they are shown, with _Save_ and _Cancel_. A save sends that field alone under `If-Match`; on `409 VERSION_CONFLICT` the newer Opportunity is shown and the draft kept.
+  - **Formatted text (WYSIWYG).** Descriptions, notes, messages and Event descriptions are written in a TipTap editor with a toolbar (bold, italic, strikethrough, lists, links) and keep the `@`, `@@` and `@@@` reference shortcuts. What is stored is the text grammar of `@endora-commerce/contracts` — no HTML. **New optional peer dependencies `@tiptap/react` and `@tiptap/starter-kit` (`^3`)** for the admin layer; the admin application already carries them.
+  - **Order references** show the status, total, date and customer, open the Order with a way back to the Opportunity, and have a button that opens it in a new tab. Every link from an Opportunity to an Order or a Quote Request carries `?returnTo=`.
+  - Admin API: an Order reference in `references[]` carries `order` (see `@endora-commerce/contracts`).
+
+- b0e1abd: A custom-field value that was not carried is recorded with the field's label, so its history line can name the field.
+
+  - **`customFieldCarryPort`** names every skipped key with the **source** definition's label as
+    it reads at that moment — `label: { labelDefault, labels }` — a `target_missing` skip
+    included.
+  - **Records keep the label.** The Order system note (`systemNote.skipped`), the Quote Request
+    `custom-field-carry-skipped` event and its `custom_field_carry_skipped` history entry, and the
+    Sales Opportunity audit member `customFieldCarry.skipped` store each skip's label next to its
+    key and reason. It is a snapshot: renaming the field later does not change history. Skips
+    recorded earlier have no label and read as before.
+  - An administrator who cannot read custom-field definitions can now be shown which field was
+    not carried and why. The values themselves stay visible only to readers with
+    `custom_fields:read`.
+
+- 96c07f5: Sales Opportunities created for, or joined by, an Order or a Quote Request receive the document's carried custom-field values.
+
+  - **On automatic creation.** An Opportunity created for a placed Order or a submitted Quote
+    Request receives every value whose Order or Quote Request definition carries to Opportunities.
+    The values are stored by the `crm.opportunity.create` Command, run on the system's behalf, and
+    are not re-validated against the Opportunity's other fields, so a required field cannot stop
+    the creation.
+  - **On joining.** An Order placed from a Quote Request linked to an Opportunity carries its values
+    into that Opportunity's **empty** fields inside the `crm.opportunity.link_add` Command; a value
+    the Opportunity already holds is kept. An operator's manual link and an origin link carry
+    nothing into the Opportunity.
+  - **History.** When anything was carried or skipped, the creation or link entry's `after` gains
+    `customFieldCarry: { source: { entityType, recordId }, carried, skipped }` (each skipped key
+    with its reason), and the link entry gains `customFieldValues` when values were carried. These
+    entries are what `GET /api/v1/admin/crm/opportunities/:id/history` returns.
+  - **From an Opportunity into its documents.** Once an Order or a Quote Request an administrator
+    created from an Opportunity is linked to it, the Opportunity's values are pushed to the
+    document's owner (`orderCustomFieldCarryPort`, `quoteRequestCustomFieldCarryPort`), which carries
+    them into empty fields and records what it skipped on the document. Only a link just made
+    carries; a refused origin carries nothing. The Quote Request receiver is reached only while
+    `quote_requests` is present — a new `degrades-without` entry for
+    `quoteRequestCustomFieldCarryPort` in the manifest.
+  - `OpportunityOriginLinkServiceDeps` gains the required `carryIntoDocument`.
+  - `OpportunityServiceDeps` and `OpportunityLinkServiceDeps` gain the required `customFieldCarry`
+    (`CustomFieldCarryPort`); `AutomaticOpportunityInput` and `AutomaticLink` gain an optional
+    `carry`.
+
+### Patch Changes
+
+- ee26beb: Documentation for custom-field list filters, in English and Polish.
+
+  - `@endora-commerce/mod-custom-fields` ships its first documentation page: the records that take
+    custom fields, creating and editing a field and the limits of editing, the _Use as list
+    filter_ option, how each type filters, and the list APIs.
+  - The `orders`, `quote_requests` and `crm` pages describe the custom-field filters on their admin
+    lists. The `quote_requests` page also says that its fields follow the module's activation. The
+    `crm` page explains how the Opportunities list's filters differ from the board's card-field
+    filters.
+
+- cec838d: The opportunity's _Change history_ labels the `customFieldCarry` member of a creation or a join: which kind of record the values came from and one line per key not carried with its reason, the field named by the label stored with the skip, for every reader of the opportunity. A reason the screen has no sentence for reads "the value could not be carried", never its code. A carry that skipped nothing adds no row.
+- 6f1e0ec: **Behaviour change for API clients — an Opportunity's change history serves custom-field values only to `custom_fields:read`.** `GET /api/v1/admin/crm/opportunities/:id/history` now leaves `customFieldValues` out of every entry's `before` and `after` for a caller who holds `crm:read` without `custom_fields:read` (the `requires` of `crm:read` is advisory, so such a role exists); the rest of each entry is unchanged, and `after.customFieldCarry` — keys, reasons and labels, never a value — is still served to every reader. Decided server-side, once per page, through `OwnerReadChecks.customFields`, a new member of that interface. A carry into a document created from an Opportunity that throws after the link has committed is now written to the log as a warning, with the document and the Opportunity, instead of reaching the event subscriber.
+- 8f08235: The opportunity's _Change history_ follows the server's custom-field rule on screen too. For a reader without `custom_fields:read` it shows no _Custom fields_ row, even if a response still carries values, and reads no field definitions. An edit whose only change was custom-field values no longer stands empty under its heading: it says "Custom field values changed. Your role does not give access to them." („Zmieniono wartości pól niestandardowych. Twoja rola nie daje do nich dostępu.").
+- 108955f: The formatted text field no longer throws `[tiptap error]: The editor view is not available` when React runs its effects with an editor the editor hook has already destroyed — effects reconnected after a lazy tab is revealed or a Suspense boundary resolves. Every effect that touches the editor's view now waits for the editor that replaces it.
+- e6f3a78: Unit prices are shown by the one rule of the owner ruling of 2026-10-25: two places when the third and fourth are zero, otherwise the significant places, up to four (`0,0125 zł`, `1,50 zł`, `1,505 zł`); line values and totals keep two.
+
+  - `@endora-commerce/mod-invoices`: the invoice PDF's unit net price column (new `unitMoney` beside `money` in the PDF sections), the admin invoice screen and the template preview.
+  - `@endora-commerce/mod-carts`, `@endora-commerce/mod-customers`: the admin cart and the customer's cart history.
+  - `@endora-commerce/mod-comparisons`: a compared product's price on the screen, the canvas and the PDF (`1.50 PLN`, `0.0125 PLN`), where it was rounded to two places.
+  - `@endora-commerce/mod-crm`: an Opportunity's value of a linked Quote Request adds the quote's line values, each rounded to the cent once, as the quote desk does; it rounded only the sum.
+  - `@endora-commerce/cms-components`: the CMS product card's price; the package now depends on `@endora-commerce/contracts` for the rule.
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+  - @endora-commerce/email-components@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- bf9881f: Each module contributes its record type to admin global search (`@endora-commerce/mod-admin-search`).
+
+  | Package              | Record type                           | Fields offered (default in bold)                                                 | Permission                             |
+  | -------------------- | ------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------- |
+  | `mod-orders`         | `orders.order`                        | **number**, **organizationName**, **customer**, billingCompanyName, billingTaxId | `orders:read`                          |
+  | `mod-quote-requests` | `quote_requests.quote_request`        | **number**, **organizationName**, **customer**, customerNote                     | `rfqs:handle`                          |
+  | `mod-crm`            | `crm.opportunity`                     | **number**, **title**, **organizationName**, description                         | `crm:read`                             |
+  | `mod-organizations`  | `organizations.organization`          | **name**, **taxId**, legalName                                                   | `customers:read` or `customers:manage` |
+  | `mod-customers`      | `customers.customer`                  | **email**, **name**                                                              | `customers:read`                       |
+  | `mod-catalog`        | `catalog.product`, `catalog.category` | **sku**, **name**, slug, quickSearchAttributes; **name**, **slug**               | `catalog:read`                         |
+
+  Every provider applies its own admin list's visibility: sales representatives see only their
+  organizations' orders, quote requests, opportunities and customers; organizations follow the
+  Organizations list, with a representative's assigned organizations ranked first. Each module declares
+  a `contributes-to` edge on `adminSearchProviderRegistry`, so none of them depends on global search and
+  none loses its switch. `mod-quote-requests`, `mod-organizations`, `mod-customers` and `mod-catalog`
+  now declare `_i18n` in `dependencies` (status labels in the admin's language), and each module's
+  bundle gains `adminSearch.*` keys in English and Polish.
+
+### Patch Changes
+
+- 2933bf0: `@endora-commerce/admin-kit/components` publishes two new components. `ModalDialog` (with `ModalDialogProps`) is the dialog primitive `crm` used to keep to itself: a titled panel over a scrim with an accessible name, a focus trap, Escape and scrim to close, and a `busy` flag that makes both inert. It gains two optional props, `initialFocusRef` (focused on open instead of the first focusable element) and `finalFocusRef` (focused after close instead of the opener, read at close time); without them it behaves as before. `useFocusTrap` accepts the same two refs through a new optional third argument (`FocusTrapOptions`). `SavedViewsControl` (with `SavedViewsControlProps` and `SavedViewState`) is the saved-views selector with _Save view_ and _Delete view_, both through dialogs rather than the browser's native prompts: the caller passes the list's saved-view endpoint, its current state and an `onApply` callback, and the control lists, creates and deletes views through the kit's `apiClient`. A name the server refuses as taken (`409`) is shown in the save dialog with the name field marked invalid until the next keystroke. It never sends an update.
+
+  `crm` imports `ModalDialog` from the kit instead of its own copy, which is deleted. No behaviour changes.
+
+  The `core` bundle gains eighteen `savedViews.*` keys in English and Polish — the copy `SavedViewsControl` and its dialogs render.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [ad55813]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+  - @endora-commerce/email-components@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { getSessionCookie } from '../../../lib/session';
 import { getServerContext } from '../../../lib/server-context';
 import { getMe } from '../../../lib/api/account';
@@ -11,6 +10,7 @@ import {
 } from '../../../lib/api/quick-order';
 import { StorefrontApiError } from '../../../lib/api/client';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../lib/i18n/navigation';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -40,7 +40,7 @@ export default async function PreferencesPage({
   searchParams: Promise<{ saved?: string; error?: string }>;
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/preferences');
+  if (!session) return await localeRedirect('/login?next=/preferences');
   const sp = await searchParams;
   const { locale, ctx } = await getServerContext();
 
@@ -145,7 +145,7 @@ export default async function PreferencesPage({
 async function saveAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const me = await getMe(session);
 
   const field = (name: string): string | null => {
@@ -163,8 +163,8 @@ async function saveAction(formData: FormData): Promise<void> {
       defaultShippingAddressId: field('defaultShippingAddressId'),
     });
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not save preferences.';
-    redirect(`/preferences?error=${encodeURIComponent(message)}`);
+    const message = err instanceof StorefrontApiError ? err.detail : 'Could not save preferences.';
+    return await localeRedirect(`/preferences?error=${encodeURIComponent(message)}`);
   }
-  redirect('/preferences?saved=1');
+  return await localeRedirect('/preferences?saved=1');
 }

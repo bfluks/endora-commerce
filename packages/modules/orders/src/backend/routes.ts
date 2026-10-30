@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
+  lineAmountHalfUp,
   adminAddOrderCommentRequestSchema,
   adminCreateOrderRequestSchema,
   adminOrderPaymentStatusTransitionSchema,
@@ -13,6 +14,8 @@ import {
   customFieldValuesSchema,
   customerAddOrderCommentRequestSchema,
   ERROR_CODES,
+  firstLanguageTag,
+  isCustomFieldFilterUnavailableFailure,
   isCustomFieldValidationFailure,
   OrganizationCannotTransactError,
   orderPreviewTotalRequestSchema,
@@ -20,19 +23,24 @@ import {
   setOrderTransitionsRequestSchema,
   updateOrderSavedViewRequestSchema,
   updateOrderStatusRequestSchema,
+  unitPriceHalfUp,
+  withChannelOrderRules,
 } from '@endora-commerce/contracts';
 import type {
   AdminOrderDetail,
   Order as OrderResponse,
   OrderPendingEffect,
   AssetReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
   DeliveryMethodReadPort,
   InvoicePdfPort,
   InvoiceReadPort,
   LinePricePort,
+  LinePricesPort,
   OrganizationDetailsPort,
   PaymentMethodReadPort,
 } from '@endora-commerce/contracts';
@@ -41,9 +49,15 @@ import { HttpError } from '@endora-commerce/platform/http';
 import { getResolvedChannel, rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import type { Command, CommandBus } from '@endora-commerce/platform/commands';
+import { orderTotalsMoney } from './services/order-money.js';
 import type { OrderService } from './services/order-service.js';
 import { assertMethodsOfferedInChannel } from './services/method-channel-gate.js';
-import { previewLineAvailability } from './services/preview-line-availability.js';
+import {
+  customerAudience,
+  previewBelowMinimums,
+  previewLineAvailability,
+} from './services/preview-line-availability.js';
+import { assertWithinAdminOrderItemBound } from './services/request-minimums.js';
 import type { OrderStatusGraphService } from './services/order-status-graph-service.js';
 import type { OrderTransitionService } from './services/order-transition-service.js';
 import type { OrderListService, OrderListScope } from './services/order-list-service.js';
@@ -101,7 +115,7 @@ export interface OrdersDeps {
    * the catalogue's legacy `defaultPrice` attribute", which is a price no price
    * list supports, on the form an operator is about to turn into an order.
    */
-  pricingService: LinePricePort;
+  pricingService: LinePricePort & LinePricesPort;
   /**
    * The same VAT authority `placeOrder` uses (issue #124). The preview used to
    * apply a hard-coded 23% — so it disagreed with the order it claims to mirror
@@ -142,6 +156,8 @@ export interface OrdersDeps {
    * returning rows from tables deactivation does not drop.
    */
   catalogProductRead: CatalogProductReadPort;
+  /** Feature 163 — the admin preview reports a line no longer available in the channel. */
+  catalogProductAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>;
   customerAccountRead: CustomerAccountReadPort;
   organizationDetails: OrganizationDetailsPort;
   /**
@@ -173,6 +189,11 @@ export interface OrdersDeps {
   assetRead: AssetReadPort;
   /** Feature 055 — validates + persists Order custom-field values (via the Command Bus). */
   customFieldValues?: CustomFieldValuePort;
+  /**
+   * Feature 157 — `customFieldListFilterPort`: the Order custom fields the
+   * admin list offers as filters. Absent ⇒ the list offers none.
+   */
+  customFieldListFilter?: CustomFieldListFilterPort;
   /** Feature 055 — audits the custom-field write co-transactionally when provided. */
   commandBus?: CommandBus;
 }
@@ -302,18 +323,17 @@ export async function registerOrderRoutes(
       // honoured. The comparison ignores case: a UUID is the same id in either,
       // and a client echoing one in upper case has named the same channel.
       //
-      // **What this does not do, so nobody reads it as more than it is.** It
-      // makes the order's channel and the request's channel one thing; it does
-      // not bind a buyer to a channel. `X-Sales-Channel` and `?salesChannel=`
-      // are as much the client's to send as the body field was, and nothing
-      // ties a customer or an Organization to the channels they may order on —
-      // a buyer who sends another channel's header is placed under that
-      // channel's rules. Closing that is a decision about who may shop where,
-      // not about this route. Nor does it reconcile the order with its basket:
-      // a basket is created on the system-default channel whatever the request
-      // (`CartService`), so its assortment gate, its line prices and its
-      // promotions were all answered for that channel, and an order placed on
-      // another one carries them as they are.
+      // **What else holds, and where.** This makes the order's channel and the
+      // request's channel one thing. Who may use that channel is not this
+      // route's question: the kernel's channel-access step answers it before
+      // any handler runs — a customer only on the channels their Organization
+      // is assigned to (`specs/154-sales-channel-access/`). And the order is
+      // placed from the basket **of** that channel: a customer holds one basket
+      // per channel, created and priced on the channel it is used on, so its
+      // assortment gate, its line prices and its promotions were answered for
+      // the channel the order records. `placeOrder` reads that channel's basket
+      // and refuses one of another channel with 422
+      // `ORDER_SALES_CHANNEL_MISMATCH`, never repricing it.
       //
       // Admin order creation and the API-key intake call `placeOrder` from
       // their own services with the operator's chosen channel and the key's
@@ -334,10 +354,11 @@ export async function registerOrderRoutes(
           },
         );
       }
-      const order = await orderService.placeOrder(ctx, {
-        ...body,
-        salesChannelId: requestChannel.id,
-      });
+      const order = await orderService.placeOrder(
+        ctx,
+        { ...body, salesChannelId: requestChannel.id },
+        { language: await request.responseLanguage() },
+      );
       reply.status(201);
       return { data: await serializeForBuyer(order, ctx.customerAccountId) };
     },
@@ -355,10 +376,11 @@ export async function registerOrderRoutes(
       const ctx = resolveCustomerContext(request);
       // The preview is for the channel the buyer is on, so it refuses a method
       // that channel does not offer — the same answer the placement will give.
-      const totals = await orderService.previewTotal(ctx, {
-        ...body,
-        salesChannelId: getResolvedChannel(request).id,
-      });
+      const totals = await orderService.previewTotal(
+        ctx,
+        { ...body, salesChannelId: getResolvedChannel(request).id },
+        { language: await request.responseLanguage() },
+      );
       return { data: totals };
     },
   );
@@ -597,13 +619,35 @@ export async function registerOrderRoutes(
     }
   };
 
+  /**
+   * A custom-field filter the list does not offer is the caller's mistake:
+   * 400, naming the first refused key (the sentence interpolates it) and all of
+   * them. Everything else is rethrown untouched.
+   */
+  const refuseUnavailableCustomFieldFilter = (error: unknown): never => {
+    if (isCustomFieldFilterUnavailableFailure(error)) {
+      throw new HttpError(400, ERROR_CODES.CUSTOM_FIELD_FILTER_UNAVAILABLE, error.message, {
+        key: error.keys[0] ?? '',
+        keys: [...error.keys],
+      });
+    }
+    throw error;
+  };
+
+  // Feature 157 — the Order custom fields the list offers as filters.
+  app.get(
+    '/api/v1/admin/orders/custom-field-filters',
+    { preHandler: requireAdmin('orders:read') },
+    async () => ({ data: (await deps.customFieldListFilter?.listFilterable('order')) ?? [] }),
+  );
+
   app.get(
     '/api/v1/admin/orders',
     { preHandler: requireAdmin('orders:read'), schema: { querystring: adminOrdersListQuerySchema } },
     async (request) => {
       const query = adminOrdersListQuerySchema.parse(request.query);
       const scope = await resolveListScope(request);
-      const result = await deps.orderListService.list(query, scope);
+      const result = await deps.orderListService.list(query, scope).catch(refuseUnavailableCustomFieldFilter);
       return {
         data: result.rows,
         pagination: { page: query.page, pageSize: query.pageSize, total: result.total },
@@ -626,7 +670,9 @@ export async function registerOrderRoutes(
     async (request, reply) => {
       const query = adminOrdersListQuerySchema.parse(request.query);
       const scope = await resolveListScope(request);
-      const { csv, rowCount, truncated } = await deps.orderExportService.exportCsv(query, scope);
+      const { csv, rowCount, truncated } = await deps.orderExportService
+        .exportCsv(query, scope)
+        .catch(refuseUnavailableCustomFieldFilter);
       reply.header('content-type', 'text/csv; charset=utf-8');
       reply.header('content-disposition', 'attachment; filename="orders.csv"');
       reply.header('x-export-row-count', String(rowCount));
@@ -786,7 +832,9 @@ export async function registerOrderRoutes(
       // to read: the row this route writes carries its organization inward, and
       // an INSERT passes through no filter on the way.
       await assertCustomerInScope(request, body.customerAccountId);
-      const order = await deps.orderCreationAdminService.create(resolveAdminUserId(request), body);
+      const order = await deps.orderCreationAdminService.create(resolveAdminUserId(request), body, {
+        language: await request.responseLanguage(),
+      });
       reply.code(201);
       return { data: await serializeOrderForAdmin(emFactory(), order) };
     },
@@ -800,6 +848,8 @@ export async function registerOrderRoutes(
     { preHandler: requireAdmin('orders:write'), schema: { body: adminOrderPreviewRequestSchema } },
     async (request) => {
       const body = adminOrderPreviewRequestSchema.parse(request.body);
+      // Feature 155 (FR-038) — first, before any line is read or evaluated.
+      assertWithinAdminOrderItemBound(body.items.length);
       // Before any price is resolved, and before the customer read below that
       // currently refuses first. See `assertCustomerInScope`: this route quotes
       // negotiated terms and persists nothing, which makes it the cheapest read
@@ -866,12 +916,14 @@ export async function registerOrderRoutes(
         unitPrice: string;
         currency: string;
         lineTotal: number;
+        /** Feature 159 — the rate the line is taxed at; priced lines only. */
+        taxRate?: number;
         unavailable?: boolean;
       }> = [];
-      const messages: Array<{ productId: string; code: string }> = [];
-      let subtotal = 0;
-      /** Net per product tax class, so VAT resolves the way `placeOrder` resolves it. */
-      const taxableByProductType = new Map<string, number>();
+      /** Each priced line with its product tax class (VAT resolves the way `placeOrder` resolves it). */
+      const pricedLines: Array<{ line: { quantity: number; taxRate?: number }; productType: string; unitPrice: string }> =
+        [];
+      const messages: Array<{ productId: string; code: string; minimum?: number }> = [];
 
       // One product read and one channel-membership read per preview (feature
       // 145). Default lookup options, not `liveOnly`: a soft-deleted product is
@@ -891,96 +943,162 @@ export async function registerOrderRoutes(
             inChannel: true,
           }).available,
       );
-      const inChannel = new Set(
+      const members =
         idsToCheck.length > 0
           ? await salesChannelMembership.filterEntityIdsInChannel(
               body.salesChannelId,
               'product',
               idsToCheck,
             )
-          : [],
-      );
+          : [];
+      // Feature 163 — a member that is not available in the channel now
+      // (switched off at the channel's default language — the operator's, N2 —,
+      // outside its window, or outside the channel's audience rule) is reported
+      // as not offered in the channel: the order placement would refuse it.
+      const availableHere =
+        members.length > 0
+          ? await deps.catalogProductAvailability.filterAvailable(members, {
+              channelId: body.salesChannelId,
+              languageCode: null,
+              audience: customerAudience(organizationId),
+            })
+          : new Set<string>();
+      const inChannel = new Set(members.filter((id) => availableHere.has(id)));
 
-      for (const it of body.items) {
+      // Steps 1–4 per line, first match wins; an orderable line keeps its price.
+      type EvaluatedLine =
+        | { item: (typeof body.items)[number]; code: string; currency: string }
+        | {
+            item: (typeof body.items)[number];
+            code: null;
+            product: NonNullable<ReturnType<typeof productsById.get>>;
+            unitPrice: string;
+            currency: string;
+          };
+      const evaluated: EvaluatedLine[] = [];
+      // Feature 160 — the orderable lines are priced in **one** batched call
+      // (it was one `resolveLinePrice` per line), on the cart's chain: a line no
+      // price book prices is unpriced, as the cart refuses it — there is no
+      // `defaultPrice` fallback any more (FR-018), so preview == order.
+      const availableByIndex = new Map<number, NonNullable<ReturnType<typeof productsById.get>>>();
+      for (const [index, it] of body.items.entries()) {
         const product = productsById.get(it.productId) ?? null;
         const availability = previewLineAvailability({
           product,
           organizationId,
           inChannel: inChannel.has(it.productId),
         });
-        // `!product` is implied by `available === false` with PRODUCT_NOT_FOUND;
-        // it is stated again only so the compiler narrows `product` below.
-        if (!availability.available || !product) {
-          messages.push({
-            productId: it.productId,
-            code: availability.available ? 'PRODUCT_NOT_FOUND' : availability.code,
+        if (availability.available && product) availableByIndex.set(index, product);
+      }
+      const resolvedByIndex =
+        availableByIndex.size > 0
+          ? await deps.pricingService.resolveLinePrices({
+              lines: [...availableByIndex].map(([index, product]) => ({
+                key: String(index),
+                product,
+                variantId: body.items[index]!.variantId ?? null,
+                quantity: body.items[index]!.quantity,
+              })),
+              context: {
+                organization: organization ?? null,
+                customerGroupId,
+                salesChannel,
+                currencyCode: currency,
+              },
+            })
+          : new Map();
+      for (const [index, it] of body.items.entries()) {
+        const product = availableByIndex.get(index);
+        if (!product) {
+          const availability = previewLineAvailability({
+            product: productsById.get(it.productId) ?? null,
+            organizationId,
+            inChannel: inChannel.has(it.productId),
           });
-          lines.push({
-            productId: it.productId,
-            variantId: it.variantId ?? null,
-            quantity: it.quantity,
-            unitPrice: '0',
+          evaluated.push({
+            item: it,
+            code: availability.available ? 'PRODUCT_NOT_FOUND' : availability.code,
             currency,
-            lineTotal: 0,
-            unavailable: true,
           });
           continue;
         }
-
-        const resolved = await deps.pricingService.resolveLinePrice({
-          product,
-          variantId: it.variantId ?? null,
-          context: {
-            quantity: it.quantity,
-            organization: organization ?? null,
-            customerGroupId,
-            salesChannel,
-            currencyCode: currency,
-          },
-        });
+        const resolved = resolvedByIndex.get(String(index)) ?? null;
 
         // Quote-only products (displayMode 'none') cannot be ordered directly —
         // CartService rejects them at add time, so the preview flags them.
         if (resolved && resolved.displayMode === 'none') {
-          messages.push({ productId: it.productId, code: 'QUOTE_ONLY' });
-          lines.push({
-            productId: it.productId,
-            variantId: it.variantId ?? null,
-            quantity: it.quantity,
-            unitPrice: '0',
-            currency: resolved.currency,
-            lineTotal: 0,
-            unavailable: true,
-          });
+          evaluated.push({ item: it, code: 'QUOTE_ONLY', currency: resolved.currency });
           continue;
         }
+        // `null` is `price_lists` answering "no tier prices it"; an absent
+        // `price_lists` never reaches here, because resolving the port above
+        // throws `MODULE_DISABLED` (issue #124).
+        if (!resolved) {
+          evaluated.push({ item: it, code: 'UNPRICED', currency });
+          continue;
+        }
+        evaluated.push({
+          item: it,
+          code: null,
+          product,
+          // Four places, unrounded, as the cart carries it (owner ruling of
+          // 2026-10-25); the line total below is the one rounding.
+          unitPrice: unitPriceHalfUp(resolved.amount),
+          currency: resolved.currency,
+        });
+      }
 
-        // Mirror CartService.addItem: the resolved engine price, else the legacy
-        // `defaultPrice` / `price` catalogue attribute (so preview == order).
-        // `resolved === null` is `price_lists` answering "no list applies"; an
-        // absent `price_lists` never reaches here, because resolving the port
-        // above throws `MODULE_DISABLED` (issue #124).
-        const unitPrice = resolved
-          ? Number(resolved.amount).toFixed(2)
-          : Number(
-              (product.attributeValues?.['defaultPrice'] as number | string | undefined) ??
-                (product.attributeValues?.['price'] as number | string | undefined) ??
-                0,
-            ).toFixed(2);
-        const lineCurrency = resolved?.currency ?? currency;
-        subtotal += Number(unitPrice) * it.quantity;
-        taxableByProductType.set(
-          product.type,
-          (taxableByProductType.get(product.type) ?? 0) + Number(unitPrice) * it.quantity,
-        );
-        lines.push({
+      // Step 5 (feature 155, FR-009, FR-035): the minimum, judged only over the
+      // lines that passed steps 1–4 — a line with an earlier code counts toward
+      // no total and never carries a minimum. Creating the order would refuse
+      // a marked line, so it is priced like any other unavailable line.
+      // Feature 163 (FR-100) — judged on the order channel's minimum, not the global one.
+      const orderableIds = [...new Set(evaluated.flatMap((e) => (e.code === null ? [e.product.id] : [])))];
+      const channelRules =
+        orderableIds.length > 0
+          ? await deps.catalogProductAvailability.effectiveOrderRules(orderableIds, body.salesChannelId)
+          : new Map<string, { minOrderQuantity: number | null; returnable: boolean }>();
+      const belowMinimum = previewBelowMinimums(
+        evaluated.map((e) =>
+          e.code === null
+            ? { product: withChannelOrderRules([e.product], channelRules)[0]!, quantity: e.item.quantity }
+            : null,
+        ),
+      );
+
+      const unavailableLine = (entry: EvaluatedLine) => ({
+        productId: entry.item.productId,
+        variantId: entry.item.variantId ?? null,
+        quantity: entry.item.quantity,
+        unitPrice: '0',
+        currency: entry.currency,
+        lineTotal: 0,
+        unavailable: true,
+      });
+      for (const [index, entry] of evaluated.entries()) {
+        const it = entry.item;
+        if (entry.code !== null) {
+          messages.push({ productId: it.productId, code: entry.code });
+          lines.push(unavailableLine(entry));
+          continue;
+        }
+        const minimum = belowMinimum.get(index);
+        if (minimum !== undefined) {
+          messages.push({ productId: it.productId, code: 'BELOW_MINIMUM_QUANTITY', minimum });
+          lines.push(unavailableLine(entry));
+          continue;
+        }
+        const { product, unitPrice } = entry;
+        const priced: (typeof lines)[number] = {
           productId: it.productId,
           variantId: it.variantId ?? null,
           quantity: it.quantity,
           unitPrice,
-          currency: lineCurrency,
-          lineTotal: Math.round(Number(unitPrice) * it.quantity * 100) / 100,
-        });
+          currency: entry.currency,
+          lineTotal: Number(lineAmountHalfUp(unitPrice, it.quantity)),
+        };
+        lines.push(priced);
+        pricedLines.push({ line: priced, productType: product.type, unitPrice });
       }
 
       // VAT from the same authority `placeOrder` uses, per product tax class —
@@ -991,31 +1109,40 @@ export async function registerOrderRoutes(
       // when nobody could tell it was wrong.
       const vatStatus = organization?.vatStatus ?? 'vat_payer';
       const taxCountry = organization?.registeredAddress?.country ?? null;
-      let taxTotal = 0;
-      for (const [productType, taxable] of taxableByProductType) {
+      const rateByProductType = new Map<string, number>();
+      for (const productType of new Set(pricedLines.map((p) => p.productType))) {
         const rate =
           vatStatus === 'vat_payer'
             ? await deps.resolveTaxRate({ country: taxCountry, productType, vatStatus })
             : 0;
-        taxTotal += taxable * rate;
+        rateByProductType.set(productType, rate);
       }
-      taxTotal = Math.round(taxTotal * 100) / 100;
-      const deliveryTotal = deliveryMethod ? Number(deliveryMethod.cost) : 0;
-      const paymentSurcharge = paymentMethod ? Number(paymentMethod.additionalPrice ?? '0') : 0;
-      const discountTotal = 0;
-      const total =
-        Math.round((subtotal + taxTotal + deliveryTotal + paymentSurcharge - discountTotal) * 100) / 100;
+      // Feature 159 (FR-060) — the create screen sums a group's VAT from these.
+      for (const { line, productType } of pricedLines) line.taxRate = rateByProductType.get(productType) ?? 0;
+      // The totals placement computes, with the same function (issue #417): VAT
+      // per rate on the sum of the nets at that rate (`vatByRate`), rounded once
+      // per rate, and the total rounded once.
+      const money = orderTotalsMoney({
+        lines: pricedLines.map(({ line, productType, unitPrice }) => ({
+          unitPrice,
+          quantity: line.quantity,
+          taxRate: rateByProductType.get(productType) ?? 0,
+        })),
+        deliveryTotal: deliveryMethod ? deliveryMethod.cost : 0,
+        paymentSurcharge: paymentMethod ? (paymentMethod.additionalPrice ?? '0') : 0,
+        discountTotal: 0,
+      });
 
       return {
         data: {
           lines,
           summary: {
-            subtotal: Math.round(subtotal * 100) / 100,
-            taxTotal,
-            deliveryTotal,
-            paymentSurcharge,
-            discountTotal,
-            total,
+            subtotal: Number(money.subtotal),
+            taxTotal: Number(money.taxTotal),
+            deliveryTotal: Number(money.deliveryTotal),
+            paymentSurcharge: Number(money.paymentSurcharge),
+            discountTotal: Number(money.discountTotal),
+            total: Number(money.total),
             currency,
           },
           messages,
@@ -1264,6 +1391,8 @@ export async function registerOrderRoutes(
       const result = await deps.orderReorderService.reorder(request.params.id, {
         customerAccountId: ctx.customerAccountId,
         organizationId: ctx.organizationId,
+        // The basket of the storefront the buyer reorders on.
+        salesChannelId: getResolvedChannel(request).id,
       });
       return { data: result };
     },
@@ -1277,7 +1406,14 @@ export async function registerOrderRoutes(
       if (!order) throw new HttpError(404, ERROR_CODES.ORDER_NOT_FOUND, 'Order not found.');
       const result = await deps.orderReorderService.reorder(
         request.params.id,
-        { customerAccountId: order.placedByCustomerAccountId, organizationId: order.organizationId },
+        {
+          customerAccountId: order.placedByCustomerAccountId,
+          organizationId: order.organizationId,
+          // An operator's request is on no storefront: the basket seeded is the
+          // one of the store the order was placed on, which is where the
+          // customer the e-mail invites back will find it.
+          salesChannelId: order.salesChannelId,
+        },
         { notifyCustomer: true },
       );
       return { data: { cartId: result.cartId, unavailableItems: result.unavailableItems } };
@@ -1291,10 +1427,12 @@ export async function registerOrderRoutes(
     async (request) => {
       const order = await emFactory().findOne(Order, { id: request.params.id });
       if (!order) throw new HttpError(404, ERROR_CODES.ORDER_NOT_FOUND, 'Order not found.');
-      const result = await deps.orderCloneToQuoteService.clone(request.params.id, {
-        customerAccountId: order.placedByCustomerAccountId,
-        organizationId: order.organizationId,
-      });
+      // Feature 155 (FR-012, threat F10) — the actor is this route's literal.
+      const result = await deps.orderCloneToQuoteService.clone(
+        request.params.id,
+        { customerAccountId: order.placedByCustomerAccountId, organizationId: order.organizationId },
+        { actor: 'operator' },
+      );
       return { data: result };
     },
   );
@@ -1305,10 +1443,18 @@ export async function registerOrderRoutes(
     async (request) => {
       const ctx = resolveCustomerContext(request);
       await orderService.getById(request.params.id, ctx); // authorize ownership
-      const result = await deps.orderCloneToQuoteService.clone(request.params.id, {
-        customerAccountId: ctx.customerAccountId,
-        organizationId: ctx.organizationId,
-      });
+      // Feature 155 — the buyer's clone: no actor, so a minimum refuses it (US4 #5a).
+      // Feature 163 — its lines are judged at the request's channel and scope language.
+      const languageTag = firstLanguageTag(request.headers['accept-language']);
+      const result = await deps.orderCloneToQuoteService.clone(
+        request.params.id,
+        { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId },
+        {
+          language: await request.responseLanguage(),
+          ...(languageTag ? { languageTag } : {}),
+          salesChannelId: getResolvedChannel(request).id,
+        },
+      );
       return { data: result };
     },
   );
@@ -1323,6 +1469,9 @@ export async function registerOrderRoutes(
 function serializeCommentForCustomer(c: OrderComment): Record<string, unknown> {
   const serialized = serializeComment(c);
   delete serialized.authorAdminUserId;
+  // Feature 162 — a system note is never listed to the buyer, and the member
+  // is the admin surface's.
+  delete serialized.systemNote;
   return serialized;
 }
 
@@ -1335,6 +1484,7 @@ function serializeComment(c: OrderComment): Record<string, unknown> {
     body: c.body,
     isCustomerVisible: c.isCustomerVisible,
     notifyCustomer: c.notifyCustomer,
+    systemNote: c.systemNote ?? null,
     createdAt: c.createdAt.toISOString(),
   };
 }

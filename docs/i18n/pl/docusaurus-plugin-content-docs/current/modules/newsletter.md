@@ -67,10 +67,45 @@ więcej workerach żadna wiadomość nie zostanie wysłana dwa razy.
 
 ## Zaangażowanie odbiorców
 
-Śledzenie otwarć korzysta z piksela 1×1; śledzenie kliknięć przepisuje linki na podpisane
-przekierowania. Liczniki wysłanych / dostarczonych / nieudanych / otwartych / klikniętych dla
-każdej kampanii (oraz kliknięcia poszczególnych linków) są sumowane z `newsletter_send_records` i
-`newsletter_engagement_events`. Śledzenie można wyłączyć w każdej kampanii.
+E-maile kampanii mogą zawierać śledzenie otwarć i kliknięć, dodawane w chwili wysyłki wiadomości
+do każdego odbiorcy. Oba rodzaje śledzenia są **wyłączone**, dopóki operator ich nie włączy
+(zobacz ustawienia poniżej); instancja bez zmienionych ustawień wysyła kampanie bez śledzenia.
+
+- **Otwarcia** — przed końcem treści wiadomości dodawany jest niewidoczny obrazek 1×1,
+  `GET /api/v1/newsletter/open.gif?token=…`. Jego wczytanie zapisuje otwarcie w rekordzie wysyłki
+  odbiorcy.
+- **Kliknięcia** — każdy bezwzględny link `http(s)` jest zamieniany na
+  `GET /api/v1/newsletter/click?token=…&u=<destination>`. Token jest podpisany i powiązany z
+  rekordem wysyłki, z identyfikatorem linku numerowanym w kolejności występowania w dokumencie
+  (`link-1`, `link-2`, …) oraz z adresem docelowym, więc przekierowanie prowadzi wyłącznie do
+  linku, z którym e-mail został wysłany. Token, którego nie da się zweryfikować, daje odpowiedź
+  `410`; adres docelowy niezgodny z tokenem prowadzi na stronę główną storefrontu. Linki
+  `mailto:` i `tel:`, kotwice w obrębie strony, linki względne oraz własne linki modułu
+  (wypisanie, potwierdzenie) pozostają bez zmian. Część tekstowa wiadomości jest wysyłana bez
+  zmian.
+
+Oba adresy są budowane na publicznym bazowym adresie API, z którego korzysta link do wypisania,
+a oba tokeny są ważne przez rok. Kliknięcie śledzonego linku liczy się także jako otwarcie, więc
+odbiorca, którego program pocztowy blokuje obrazki, zostaje policzony, gdy kliknie link.
+
+Dwa ustawienia w grupie **Newsletter** włączają i wyłączają oba rodzaje śledzenia niezależnie od
+siebie. Oba są domyślnie **wyłączone**, więc kampania jest śledzona dopiero wtedy, gdy operator
+włączy je na ekranie ustawień. Każde można ustawić osobno dla każdego kanału sprzedaży (kampania
+bez kanału sprzedaży korzysta z wartości domyślnego kanału sprzedaży):
+
+| Ustawienie | Gdy wyłączone (domyślnie) |
+| --- | --- |
+| `newsletter.tracking.opens_enabled` | obrazek nie jest dodawany, a otwarcia nie są liczone |
+| `newsletter.tracking.clicks_enabled` | linki prowadzą prosto do celu, a kliknięcia nie są liczone |
+
+Kampania utworzona przez API z `trackingEnabled: false` jest wysyłana bez obu rodzajów śledzenia.
+E-maile automatyzacji nie są śledzone.
+
+Liczniki wysłanych / dostarczonych / nieudanych / otwartych / klikniętych dla każdej kampanii
+(oraz kliknięcia poszczególnych linków) są sumowane z `newsletter_send_records` i
+`newsletter_engagement_events`. Liczba otwarć jest przybliżona: program pocztowy blokujący obrazki
+nie zgłasza żadnego otwarcia, a program, który wczytuje obrazki za czytelnika, zgłasza otwarcie,
+które mogło nie nastąpić.
 
 ## Uprawnienia
 
@@ -83,6 +118,61 @@ każdej kampanii (oraz kliknięcia poszczególnych linków) są sumowane z `news
 Komponent formularza zapisu wielokrotnego użytku (server action, z możliwością przypisania tagu),
 strona potwierdzenia podwójnej zgody, strona wypisania (z opcjonalnym powodem) oraz panel na koncie
 klienta pokazujący stan subskrypcji i tagi, z przyciskami zapisu i wypisania.
+
+### Blok zapisu w Page Builderze
+
+Moduł deklaruje blok Page Buildera `newsletter.Signup` (sekcja palety
+*Formularze*, etykieta **Zapis do newslettera**), dzięki któremu redaktor może
+umieścić formularz zapisu na dowolnej stronie CMS:
+
+| Opcja | Znaczenie |
+| --- | --- |
+| Nagłówek, tekst | Opcjonalny nagłówek (z poziomem) i tekst sformatowany nad formularzem. |
+| Etykieta pola e-mail, tekst zastępczy, etykieta przycisku | Własne teksty formularza. |
+| Tematy | Do 12 pól wyboru, każde z etykietą i **kodem tagu** newslettera; zaznaczone trafiają do subskrybenta jako tagi. **Topics required** wymaga zaznaczenia co najmniej jednego. Temat z nieprawidłowym kodem tagu nie jest pokazywany. |
+| Etykieta zgody | Tekst pola zgody, które jest zawsze pokazywane i zawsze wymagane. To tekst sformatowany w jednej linii, więc może zawierać link do polityki prywatności. |
+| Układ | W linii (pole i przycisk obok siebie) albo w ramce. |
+| Położenie przycisku, kształt pola | **Obok pola** (domyślnie) albo **Wewnątrz pola**: pole e-mail i przycisk mają wspólną ramkę, **Zaokrągloną** (domyślnie) albo w kształcie **Pigułki**. |
+| Kolumny tematów | Tematy w siatce 1–4 kolumn; pozostawione puste, układają się w jednym zawijanym rzędzie. |
+| Ukryj etykietę pola e-mail | Ukrywa wizualnie etykietę pola e-mail; pozostaje ona etykietą pola, więc czytniki ekranu nadal ją odczytują. Użyj tekstu zastępczego, aby widzący odwiedzający wiedzieli, co wpisać. |
+| Komunikaty | Teksty pokazywane po zapisie: oczekiwanie na potwierdzenie, zapisano oraz odmowy (brak zgody, nieprawidłowy e-mail, nie wybrano tematu, usługa niedostępna). |
+
+Każdy tekst można przetłumaczyć akcją **Przetłumacz** w Page Builderze. Na
+najwyższym poziomie strony blok ma też ustawienia sekcji (kotwicę, schemat
+kolorów, tło, odstępy, szerokość).
+
+**Droga zapisu.** Blok to zwykły formularz HTML wysyłany do własnego handlera
+storefrontu, `POST /newsletter/subscribe`
+(`storefront/app/newsletter/subscribe/route.ts`), więc działa bez JavaScriptu.
+Handler:
+
+- odpowiada `404`, dopóki moduł newslettera nie jest obecny;
+- sprawdza adres e-mail tą samą regułą co backend, wymaga `consent=on`,
+  zachowuje najwyżej 12 kodów tematów zgodnych z `^[a-z0-9_-]{1,64}$` i pomija
+  pozostałe, a jako `returnTo` przyjmuje tylko ścieżkę w tym samym źródle
+  (wszystko inne wraca na `/`);
+- zapisuje przez istniejący `POST /api/v1/newsletter/subscribe` w kanale
+  sprzedaży żądania, z zaznaczonymi tematami jako `tags` i
+  `source: 'cms-block'`;
+- bez JavaScriptu przekierowuje (`303`) z powrotem na stronę z
+  `?newsletter=pending|active|error&reason=consent|email|topics|unavailable`
+  i kotwicą sekcji jako fragmentem, a blok pokazuje odpowiedni komunikat;
+- z JavaScriptem blok wysyła formularz z `Accept: application/json` i dostaje
+  `{status: 'pending' | 'active'}` (200) albo `{error: …}` (400); komunikat
+  pojawia się na miejscu, a wpisany adres zostaje.
+
+To, czy odpowiedzią jest `pending` czy `active`, zależy od trybu potwierdzania
+zapisu w kanale. Subskrypcja jest zapisywana jak każda inna: ustawiane jest
+`consentAt`, wpis audytu `newsletter_subscribe` zawiera `source: 'cms-block'`,
+więc te zapisy można odróżnić od pozostałych, a kod tematu, który nie pasuje do
+żadnego istniejącego tagu, jest pomijany — storefront nie tworzy tagów.
+
+Gdy moduł jest wyłączony, blok nie jest oferowany w palecie, zapisany blok nic
+nie wyświetla, a handler odpowiada `404`.
+
+`newsletter.Signup` to własny newsletter platformy. Moduł CMS zachowuje osobny
+formularz **Zapis do newslettera**, `cms.NewsletterSignup`, który wysyła dane do
+dowolnego zewnętrznego endpointu, dla usługi newslettera spoza platformy.
 
 ## Schemat
 

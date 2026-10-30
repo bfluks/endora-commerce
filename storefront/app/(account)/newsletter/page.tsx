@@ -1,4 +1,3 @@
-import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { getSessionCookie } from '../../../lib/session';
 import {
@@ -7,6 +6,7 @@ import {
   selfUnsubscribeNewsletter,
 } from '../../../lib/api/newsletter';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../lib/i18n/navigation';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -22,25 +22,25 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
  */
 export default async function AccountNewsletterPage(): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/newsletter');
+  if (!session) return await localeRedirect('/login?next=/newsletter');
 
   const status = await getSelfNewsletter(session);
 
   async function subscribe(): Promise<void> {
     'use server';
     const s = await getSessionCookie();
-    if (!s) redirect('/login?next=/newsletter');
+    if (!s) return await localeRedirect('/login?next=/newsletter');
     await selfSubscribeNewsletter(s);
-    redirect('/newsletter');
+    return await localeRedirect('/newsletter');
   }
 
   async function unsubscribe(formData: FormData): Promise<void> {
     'use server';
     const s = await getSessionCookie();
-    if (!s) redirect('/login?next=/newsletter');
+    if (!s) return await localeRedirect('/login?next=/newsletter');
     const reason = String(formData.get('reason') ?? '').trim();
     await selfUnsubscribeNewsletter(s, reason || undefined);
-    redirect('/newsletter');
+    return await localeRedirect('/newsletter');
   }
 
   return (

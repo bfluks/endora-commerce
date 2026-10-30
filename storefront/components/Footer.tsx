@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { LocalizedAnchor, LocalizedForm } from '../lib/i18n/localized-link';
 
 /**
  * Industria-themed footer. Five-column dark layout with brand panel,
@@ -85,30 +86,30 @@ export function Footer(props: {
 
           <div>
             <h5 className={COL_HEADING}>Sklep</h5>
-            <a className={COL_LINK} href="/catalog">Katalog</a>
-            <a className={COL_LINK} href="/c/fasteners">Łączniki</a>
-            <a className={COL_LINK} href="/c/tools">Narzędzia</a>
-            <a className={COL_LINK} href="/c/electronics">Elektronika</a>
-            <a className={COL_LINK} href="/c/safety">BHP</a>
-            <a className={COL_LINK} href="/quick-order">Quick Order</a>
+            <LocalizedAnchor className={COL_LINK} href="/catalog">Katalog</LocalizedAnchor>
+            <LocalizedAnchor className={COL_LINK} href="/c/fasteners">Łączniki</LocalizedAnchor>
+            <LocalizedAnchor className={COL_LINK} href="/c/tools">Narzędzia</LocalizedAnchor>
+            <LocalizedAnchor className={COL_LINK} href="/c/electronics">Elektronika</LocalizedAnchor>
+            <LocalizedAnchor className={COL_LINK} href="/c/safety">BHP</LocalizedAnchor>
+            <LocalizedAnchor className={COL_LINK} href="/quick-order">Quick Order</LocalizedAnchor>
           </div>
 
           <div>
             <h5 className={COL_HEADING}>Konto B2B</h5>
-            <a className={COL_LINK} href="/account">Moje konto</a>
-            <a className={COL_LINK} href="/orders">Zamówienia</a>
-            <a className={COL_LINK} href="/invoices">Faktury</a>
-            <a className={COL_LINK} href="/quote-requests">RFQ — zapytania ofertowe</a>
-            <a className={COL_LINK} href="/shopping-lists">Listy zakupowe</a>
-            <a className={COL_LINK} href="/credit-limit">Limit kredytowy</a>
+            <LocalizedAnchor className={COL_LINK} href="/account">Moje konto</LocalizedAnchor>
+            <LocalizedAnchor className={COL_LINK} href="/orders">Zamówienia</LocalizedAnchor>
+            <LocalizedAnchor className={COL_LINK} href="/invoices">Faktury</LocalizedAnchor>
+            <LocalizedAnchor className={COL_LINK} href="/quote-requests">RFQ — zapytania ofertowe</LocalizedAnchor>
+            <LocalizedAnchor className={COL_LINK} href="/shopping-lists">Listy zakupowe</LocalizedAnchor>
+            <LocalizedAnchor className={COL_LINK} href="/credit-limit">Limit kredytowy</LocalizedAnchor>
           </div>
 
           <div>
             <h5 className={COL_HEADING}>Wsparcie</h5>
             {supportLinks.map((l) => (
-              <a key={l.path} className={COL_LINK} href={`/${l.path}`}>
+              <LocalizedAnchor key={l.path} className={COL_LINK} href={`/${l.path}`}>
                 {l.title}
-              </a>
+              </LocalizedAnchor>
             ))}
           </div>
 
@@ -117,7 +118,7 @@ export function Footer(props: {
             <p className="mb-3 text-[12px] text-[#a1a1aa]">
               Nowości katalogowe, promocje cenowe i raporty dostępności.
             </p>
-            <form action="/newsletter" method="POST">
+            <LocalizedForm action="/newsletter" method="POST">
               <input
                 className="mb-2 w-full rounded-md border border-white/12 bg-white/4 px-2.5 py-2 text-[13px] text-white placeholder:text-[#71717a]"
                 type="email"
@@ -128,7 +129,7 @@ export function Footer(props: {
               <button type="submit" className="btn btn--primary btn--block btn--sm">
                 Zapisz się
               </button>
-            </form>
+            </LocalizedForm>
           </div>
         </div>
 
@@ -140,11 +141,11 @@ export function Footer(props: {
           </span>
           {props.copyright}
           <span className="inline-flex gap-4">
-            <a className="text-[#a1a1aa] hover:text-white" href="/regulamin">Regulamin</a>
-            <a className="text-[#a1a1aa] hover:text-white" href="/polityka-prywatnosci">
+            <LocalizedAnchor className="text-[#a1a1aa] hover:text-white" href="/regulamin">Regulamin</LocalizedAnchor>
+            <LocalizedAnchor className="text-[#a1a1aa] hover:text-white" href="/polityka-prywatnosci">
               Polityka prywatności
-            </a>
-            <a className="text-[#a1a1aa] hover:text-white" href="/cookies">Cookies</a>
+            </LocalizedAnchor>
+            <LocalizedAnchor className="text-[#a1a1aa] hover:text-white" href="/cookies">Cookies</LocalizedAnchor>
           </span>
         </div>
 

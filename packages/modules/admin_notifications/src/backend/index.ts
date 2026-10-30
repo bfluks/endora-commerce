@@ -1,5 +1,9 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import type { AdminNotificationRecordPort } from '@endora-commerce/contracts';
+import {
+  ADMIN_PERMISSION_WILDCARD,
+  type AdminNotificationRecordPort,
+  type PermissionReadPort,
+} from '@endora-commerce/contracts';
 import { lazyPort, type ModuleContext } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import { registerAdminNotificationsRoutes } from './routes.admin.js';
@@ -79,6 +83,17 @@ export function registerModule(ctx: ModuleContext): void {
         'adminNotificationService',
       ),
       requireAdmin,
+      // Which audiences a reader sees is decided per request (issue #518):
+      // `admin:read` admits the broadcasts, and every admin reads their own.
+      // `listPermissions` rather than `hasPermission`, because the latter
+      // refuses an admin without a role with a 403 — and that admin still
+      // reads their own notifications; they simply hold no `admin:read`.
+      hasPermission: async (adminUserId, code) => {
+        const held = await lazyPort<PermissionReadPort>(ctx, 'permissionService').listPermissions(
+          adminUserId,
+        );
+        return held.includes(ADMIN_PERMISSION_WILDCARD) || held.includes(code);
+      },
     });
   });
 }

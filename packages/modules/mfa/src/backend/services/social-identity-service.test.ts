@@ -17,7 +17,13 @@ const IDENTITY: OAuthIdentity = {
   emailVerified: true,
 };
 
-function harness(deps: Partial<SocialIdentityDeps>): {
+/** The OAuth transaction's channel: the store the sign-in was started on. */
+const ON_B = { salesChannelId: 'channel-b' };
+
+function harness(
+  deps: Partial<SocialIdentityDeps>,
+  admitsNewAccount: (salesChannelId: string | null) => Promise<boolean> = async () => true,
+): {
   service: SocialIdentityService;
   persisted: unknown[];
   audited: unknown[];
@@ -46,6 +52,7 @@ function harness(deps: Partial<SocialIdentityDeps>): {
       ...deps,
     },
     audit,
+    { admitsNewAccount },
   );
   return { service, persisted, audited };
 }
@@ -58,7 +65,7 @@ describe('SocialIdentityService.signInCustomer', () => {
       autoCreateCustomer,
     });
 
-    expect(await service.signInCustomer(IDENTITY)).toEqual({ ok: false, reason: 'blocked' });
+    expect(await service.signInCustomer(IDENTITY, ON_B)).toEqual({ ok: false, reason: 'blocked' });
     expect(persisted).toEqual([]);
     expect(audited).toEqual([]);
     // A blocked account is an account: it is never answered by creating another.
@@ -70,7 +77,7 @@ describe('SocialIdentityService.signInCustomer', () => {
       resolveCustomerByEmail: async () => ({ id: 'c1', organizationId: 'o1', blocked: false }),
     });
 
-    expect(await service.signInCustomer(IDENTITY)).toEqual({
+    expect(await service.signInCustomer(IDENTITY, ON_B)).toEqual({
       ok: true,
       subjectId: 'c1',
       organizationId: 'o1',
@@ -83,11 +90,68 @@ describe('SocialIdentityService.signInCustomer', () => {
       autoCreateCustomer: async () => ({ id: 'c2', organizationId: 'o2' }),
     });
 
-    expect(await service.signInCustomer(IDENTITY)).toEqual({
+    expect(await service.signInCustomer(IDENTITY, ON_B)).toEqual({
       ok: true,
       subjectId: 'c2',
       organizationId: 'o2',
     });
+  });
+});
+
+describe('SocialIdentityService.signInCustomer — the started-on channel (feature 154, D6)', () => {
+  it('creates the account for the channel the sign-in was started on', async () => {
+    const autoCreateCustomer = vi.fn(async () => ({ id: 'c2', organizationId: 'o2' }));
+    const admits = vi.fn(async () => true);
+    const { service } = harness({ autoCreateCustomer }, admits);
+
+    await service.signInCustomer(IDENTITY, ON_B);
+
+    expect(admits).toHaveBeenCalledWith('channel-b');
+    expect(autoCreateCustomer).toHaveBeenCalledWith('buyer@example.com', {
+      salesChannelId: 'channel-b',
+    });
+  });
+
+  it('refuses to create an account on a channel closed to anonymous visitors', async () => {
+    const autoCreateCustomer = vi.fn(async () => ({ id: 'c2', organizationId: 'o2' }));
+    const { service, persisted, audited } = harness({ autoCreateCustomer }, async () => false);
+
+    expect(await service.signInCustomer(IDENTITY, ON_B)).toEqual({
+      ok: false,
+      reason: 'sales_channel_sign_in_required',
+    });
+    expect(autoCreateCustomer).not.toHaveBeenCalled();
+    expect(persisted).toEqual([]);
+    expect(audited).toEqual([]);
+  });
+
+  it('refuses to create an account when the sign-in was started on no channel', async () => {
+    const autoCreateCustomer = vi.fn(async () => ({ id: 'c2', organizationId: 'o2' }));
+    const admits = vi.fn(async () => true);
+    const { service } = harness({ autoCreateCustomer }, admits);
+
+    expect(await service.signInCustomer(IDENTITY, { salesChannelId: null })).toEqual({
+      ok: false,
+      reason: 'sales_channel_sign_in_required',
+    });
+    expect(autoCreateCustomer).not.toHaveBeenCalled();
+  });
+
+  it('does not ask about the channel for an account that already exists', async () => {
+    const admits = vi.fn(async () => false);
+    const { service } = harness(
+      { resolveCustomerByEmail: async () => ({ id: 'c1', organizationId: 'o1', blocked: false }) },
+      admits,
+    );
+
+    expect(await service.signInCustomer(IDENTITY, ON_B)).toEqual({
+      ok: true,
+      subjectId: 'c1',
+      organizationId: 'o1',
+    });
+    // Whether the existing account may use the store is the assignment rule's
+    // answer, which the callback asks next.
+    expect(admits).not.toHaveBeenCalled();
   });
 });
 

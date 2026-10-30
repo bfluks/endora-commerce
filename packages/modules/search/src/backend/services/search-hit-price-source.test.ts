@@ -6,7 +6,7 @@ import { searchHitSummary } from './search-query.service.js';
  * Issue #132 — a search hit prices through `price_lists`, like every other
  * listing.
  *
- * `search` hydrates its hits from Postgres precisely so the channel rule stays
+ * `search` hydrates its hits from Postgres precisely so the pricing rules stay
  * authoritative rather than trusting whatever the indexer snapshotted. It then
  * read `attributeValues.defaultPrice` off the hydrated row, which put the one
  * figure it was hydrating for outside the pricing engine.
@@ -15,7 +15,6 @@ import { searchHitSummary } from './search-query.service.js';
 const CHANNEL = {
   id: '00000000-0000-4000-8000-0000000000c1',
   code: 'pl_retail',
-  isPublic: true,
   defaultCurrency: 'PLN',
   defaultLanguage: 'pl-PL',
 };
@@ -75,7 +74,7 @@ describe('search hit price source (#132)', () => {
     expect(summaryFor({ source: 'none' }).price).toBeNull();
   });
 
-  it('renders no price when the channel withheld the resolution entirely', () => {
+  it('renders no price when the product was not resolved at all', () => {
     expect(summaryFor(undefined).price).toBeNull();
   });
 });

@@ -1,7 +1,5 @@
-import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { verifyCustomerMfa } from '../../../../lib/api/auth';
-import { StorefrontApiError } from '../../../../lib/api/client';
 import {
   clearMfaChallengeCookie,
   getMfaChallengeCookie,
@@ -9,7 +7,14 @@ import {
 } from '../../../../lib/session';
 import { Hook } from '../../../../components/Hook';
 import { MfaCodeForm } from '../../../../components/MfaCodeForm';
+import { getServerContext } from '../../../../lib/server-context';
+import {
+  CHANNEL_NOT_PERMITTED_ERROR,
+  signInErrorMessage,
+  signInErrorParam,
+} from '../../../../lib/auth/sign-in-errors';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -33,13 +38,16 @@ export default async function MfaPage({
   const nextPath = sanitiseNext(params.next);
   const challengeId = await getMfaChallengeCookie();
   if (!challengeId) {
-    redirect(`/login?next=${encodeURIComponent(nextPath)}`);
+    return await localeRedirect(`/login?next=${encodeURIComponent(nextPath)}`);
   }
+
+  const { locale } = await getServerContext();
+  const error = signInErrorMessage(params.error, locale);
 
   return (
     <>
       <Hook code="login.top" />
-      <MfaCodeForm action={verifyAction} next={nextPath} error={params.error} />
+      <MfaCodeForm action={verifyAction} next={nextPath} error={error} />
       <Hook code="login.bottom" />
     </>
   );
@@ -51,25 +59,31 @@ async function verifyAction(formData: FormData): Promise<void> {
   const next = sanitiseNext((formData.get('next') as string) ?? '/account');
   const challengeId = await getMfaChallengeCookie();
   if (!challengeId) {
-    redirect(`/login?next=${encodeURIComponent(next)}`);
+    return await localeRedirect(`/login?next=${encodeURIComponent(next)}`);
   }
 
   let result;
   try {
     result = await verifyCustomerMfa({ challengeId, code });
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError ? err.detail : 'Verification failed. Please try again.';
-    redirect(`/login/mfa?error=${encodeURIComponent(message)}&next=${encodeURIComponent(next)}`);
+    const message = signInErrorParam(err, 'Verification failed. Please try again.');
+    if (message === CHANNEL_NOT_PERMITTED_ERROR) {
+      // `specs/154-sales-channel-access/` — the account may not use this store.
+      // Another code would not change that, so the challenge is dropped and the
+      // buyer is shown the refusal on the sign-in page, as the password step does.
+      await clearMfaChallengeCookie();
+      return await localeRedirect(`/login?error=${message}&next=${encodeURIComponent(next)}`);
+    }
+    return await localeRedirect(`/login/mfa?error=${encodeURIComponent(message)}&next=${encodeURIComponent(next)}`);
   }
   if (!result.sessionCookieValue) {
-    redirect(
+    return await localeRedirect(
       `/login/mfa?error=${encodeURIComponent('Verification failed. Please try again.')}&next=${encodeURIComponent(next)}`,
     );
   }
   await setSessionCookie(result.sessionCookieValue);
   await clearMfaChallengeCookie();
-  redirect(next);
+  return await localeRedirect(next);
 }
 
 function sanitiseNext(input: string | undefined): string {

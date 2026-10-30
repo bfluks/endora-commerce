@@ -24,7 +24,8 @@ import type { MegamenuCrossModulePorts } from '../../../../packages/modules/mega
  * the asset stub carries a field, `kind`, and only because the validator
  * compares it.
  */
-const assetOf = (kind: AssetStoredKind): AssetRecord => ({ kind }) as AssetRecord;
+const assetOf = (kind: AssetStoredKind, id = '22222222-2222-4222-8222-222222222222'): AssetRecord =>
+  ({ id, kind }) as AssetRecord;
 /** A record whose only property the validator reads is that it is not `null`. */
 const present = <T>(): T => ({}) as T;
 
@@ -35,7 +36,10 @@ const stubPorts = (overrides: Partial<MegamenuCrossModulePorts> = {}): MegamenuC
     findById: async () => ({ id: 'b', code: 'hero', active: true }),
     findLocalizedById: async () => null,
   },
-  assets: { findById: async () => assetOf('image') },
+  assets: {
+    findById: async () => assetOf('image'),
+    visibleToCaller: async (ids: readonly string[]) => new Set(ids),
+  },
   assetLibrary: { getAsset: async () => present<AssetDetail>() },
   ...overrides,
 });
@@ -94,7 +98,7 @@ describe('target-validator (T011)', () => {
         // The target declares `image` and the library holds a video: the
         // comparison is against the record's stored kind, which is what the
         // root's `where id = ? and kind = ?` asked in SQL.
-        stubPorts({ assets: { findById: async () => assetOf('video') } }),
+        stubPorts({ assets: { findById: async () => assetOf('video'), visibleToCaller: async (ids) => new Set(ids) } }),
       ),
     ).rejects.toMatchObject({ code: ERROR_CODES.MEGAMENU_ASSET_KIND_MISMATCH });
   });
@@ -121,6 +125,7 @@ describe('target-validator (T011)', () => {
               // Icon must be an image; the library holds a video.
               return assetOf('video');
             },
+            visibleToCaller: async (ids) => new Set(ids),
           },
         }),
       ),
@@ -174,5 +179,68 @@ describe('target-validator (T011)', () => {
     await expect(
       validateTarget(item, ['ch-1'], stubPorts({ categories: { findById: async () => null } })),
     ).rejects.toBeInstanceOf(HttpError);
+  });
+
+  /**
+   * `specs/166-asset-reference-visibility/` FR-006, review T055 F-2: an asset
+   * the library hides from the caller is not there to link. A menu item is an
+   * unrestricted reference, so accepting one would make the file visible to
+   * every library reader; and a refusal that differed from a missing asset's
+   * would say the id exists.
+   */
+  describe('an asset the caller may not see answers as a missing one (FR-006)', () => {
+    const HIDDEN = '44444444-4444-4444-8444-444444444444';
+    const hiddenPorts = (asked: string[][]) =>
+      stubPorts({
+        assets: {
+          findById: async (id: string) => assetOf('image', id),
+          visibleToCaller: async (ids) => {
+            asked.push([...ids]);
+            return new Set();
+          },
+        },
+      });
+    const missingPorts = stubPorts({
+      assets: { findById: async () => null, visibleToCaller: async () => new Set() },
+    });
+    const refusal = async (item: MegamenuItem, ports: MegamenuCrossModulePorts) => {
+      const err = (await validateTarget(item, ['ch-1'], ports).then(
+        () => null,
+        (e: unknown) => e,
+      )) as HttpError | null;
+      expect(err).toBeInstanceOf(HttpError);
+      return [err!.statusCode, err!.code, err!.message];
+    };
+
+    it('an asset target', async () => {
+      const item = {
+        ...baseItem,
+        kind: 'asset' as const,
+        target: { assetId: HIDDEN, kind: 'image' as const },
+      } as MegamenuItem;
+      const asked: string[][] = [];
+      expect(await refusal(item, hiddenPorts(asked))).toEqual(await refusal(item, missingPorts));
+      expect(asked).toEqual([[HIDDEN]]);
+    });
+
+    it('an icon', async () => {
+      const item = {
+        ...baseItem,
+        kind: 'external-link' as const,
+        target: { url: 'https://example.com', iconAssetId: HIDDEN, iconPosition: 'left' as const },
+      } as MegamenuItem;
+      const asked: string[][] = [];
+      expect(await refusal(item, hiddenPorts(asked))).toEqual(await refusal(item, missingPorts));
+      expect(asked).toEqual([[HIDDEN]]);
+    });
+
+    it('a visible asset is still accepted', async () => {
+      const item = {
+        ...baseItem,
+        kind: 'asset' as const,
+        target: { assetId: HIDDEN, kind: 'image' as const },
+      } as MegamenuItem;
+      await expect(validateTarget(item, ['ch-1'], stubPorts())).resolves.toBeUndefined();
+    });
   });
 });

@@ -13,6 +13,7 @@ import {
 import { getServerContext } from '../../../lib/server-context';
 import { canonicalPath } from '../../../lib/seo/route-seo';
 import { seo } from './seo';
+import { localizedAlternates } from '../../../lib/i18n/navigation';
 
 interface PageProps {
   params: Promise<{ slug?: string[] }>;
@@ -39,15 +40,18 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
   if (!slug || slug.length === 0) {
     const payload = await getBlogIndex(ctx);
     if (!payload) return { title: 'Not found', robots: { index: false, follow: false } };
-    return { title: 'Blog', alternates: { canonical: canonicalPath(seo.route, {}) } };
+    const alternates = await localizedAlternates(canonicalPath(seo.route, {}));
+    return { title: 'Blog', alternates: { ...alternates, canonical: alternates.canonical } };
   }
 
   if (slug[0] === 'tag' && slug.length === 2) {
     const payload = await getBlogTagByCode(slug[1] as string, ctx, readPage(sp));
     if (!payload) return { title: 'Not found', robots: { index: false, follow: false } };
+    const alternates = await localizedAlternates(canonicalPath(seo.route, { slug }));
+
     return {
       title: `#${payload.tag.name} — Blog`,
-      alternates: { canonical: canonicalPath(seo.route, { slug }) },
+      alternates: { ...alternates, canonical: alternates.canonical },
     };
   }
 
@@ -55,18 +59,22 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
     const payload = await getBlogBySlug(slug[0] as string, ctx, readPage(sp));
     if (!payload) return { title: 'Not found', robots: { index: false, follow: false } };
     if (payload.kind === 'category') {
+      const alternates = await localizedAlternates(canonicalPath(seo.route, { slug }));
+
       return {
         title: payload.category.metaTitle ?? `${payload.category.name} — Blog`,
         description: payload.category.metaDescription ?? undefined,
         keywords: payload.category.metaKeywords ?? undefined,
-        alternates: { canonical: canonicalPath(seo.route, { slug }) },
+        alternates: { ...alternates, canonical: alternates.canonical },
       };
     }
+    const alternates = await localizedAlternates(canonicalPath(seo.route, { slug }));
+
     return {
       title: payload.post.metaTitle ?? payload.post.name,
       description: payload.post.metaDescription ?? undefined,
       keywords: payload.post.metaKeywords ?? undefined,
-      alternates: { canonical: canonicalPath(seo.route, { slug }) },
+      alternates: { ...alternates, canonical: alternates.canonical },
     };
   }
 

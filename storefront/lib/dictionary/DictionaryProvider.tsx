@@ -10,12 +10,8 @@ import {
   type ReactNode,
 } from 'react';
 import type { DictionaryEntryType } from '@endora-commerce/contracts';
-import {
-  fetchByCodeFromBrowser,
-  fetchDictionaryFromBrowser,
-  type DictionaryByCode,
-  type DictionaryRegistry,
-} from './client';
+import { fetchByCodeFromBrowser, fetchDictionaryFromBrowser } from './browser';
+import type { DictionaryByCode, DictionaryRegistry } from './types';
 
 export interface DictionaryContextValue extends DictionaryRegistry {
   locale?: string | undefined;
@@ -63,12 +59,13 @@ export function DictionaryProvider(props: {
           type,
           code,
           ...(props.locale !== undefined ? { locale: props.locale } : {}),
+          ...(props.channel !== undefined ? { channel: props.channel } : {}),
         });
       } catch {
         return null;
       }
     },
-    [props.locale],
+    [props.locale, props.channel],
   );
 
   const value = useMemo<DictionaryContextValue>(

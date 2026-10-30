@@ -6,15 +6,20 @@ import { ContactForm } from '../../components/contact/ContactForm';
 import { Breadcrumbs } from '../../components/Breadcrumbs';
 import { tForLocale } from '../../lib/i18n/messages';
 import { seo } from './seo';
+import { localizedAlternates } from '../../lib/i18n/navigation';
 
 /**
  * Indexable (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010/FR-012).
  */
-export const metadata: Metadata = {
-  title: 'Kontakt',
-  description: 'Skontaktuj się z nami — formularz kontaktowy.',
-  alternates: { canonical: seo.route },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const alternates = await localizedAlternates(seo.route);
+  return {
+    title: 'Kontakt',
+    description: 'Skontaktuj się z nami — formularz kontaktowy.',
+    // Feature 167 — canonical under the language prefix, with hreflang alternates.
+    alternates: { ...alternates, canonical: alternates.canonical },
+  };
+}
 
 /**
  * Contact page (feature 049). Renders the contact form (which fires the GA

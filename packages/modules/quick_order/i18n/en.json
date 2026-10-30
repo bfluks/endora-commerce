@@ -43,5 +43,14 @@
   "onBehalf.reason.variant_not_resolved": "Variant not resolved",
   "onBehalf.reason.variant_ambiguous": "Ambiguous variant",
   "onBehalf.reason.row_limit_exceeded": "Row limit exceeded",
+  "onBehalf.reason.below_minimum": "Below the minimum order quantity",
+  "onBehalf.reason.below_minimumDetail": "Below minimum ({minimum} pcs; {productTotal} pcs in the file)",
+  "onBehalf.minimum.badge": "Below minimum ({minimum} pcs)",
+  "onBehalf.minimum.fileTotal": "{productTotal} pcs of this product in the file",
+  "onBehalf.minimum.note": "Rows below the product minimum: {count}. A quote request keeps them with a below-minimum flag; a cart build leaves them out.",
+  "onBehalf.build.rejectedTitle": "Not added to the cart: below the minimum",
+  "onBehalf.build.rejectedPieces": "{product}: {quantity} pcs, minimum {minimum} pcs",
+  "onBehalf.build.rejectedUnits": "{product}: {quantity} pcs, minimum {minimum} × {unit}",
+  "onBehalf.build.rejectedUnitsUnnamed": "{product}: {quantity} pcs, minimum {minimum} packaging units",
   "orderEntry.tab.quick": "Quick order"
 }

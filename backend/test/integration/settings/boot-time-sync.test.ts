@@ -46,7 +46,6 @@ describe('boot-time manifest sync (T019)', () => {
       name: { en: 'Main' },
       defaultLanguage: 'en',
       defaultCurrency: 'USD',
-      isPublic: true,
     });
     await em.persistAndFlush(channel);
     return channel;
