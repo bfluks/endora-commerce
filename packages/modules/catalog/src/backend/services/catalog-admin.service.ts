@@ -407,7 +407,7 @@ export class CatalogAdminService {
         // to be allocated against the live table. Without this, two products
         // sharing a name collided on the slug index and the catch above
         // mislabelled the failure `SKU_ALREADY_EXISTS`.
-        const slug = await this.allocateUniqueSlug(em, this.anyValue(req.name) || req.sku);
+        const slug = await this.allocateUniqueSlug(em, req.name || req.sku);
         const product = em.create(Product, {
           id: productId,
           sku: req.sku,
@@ -459,7 +459,7 @@ export class CatalogAdminService {
           result: product,
           after: {
             sku: product.sku,
-            name: { ...product.name },
+            name: product.name,
             status: product.status,
             visibility: product.visibility,
             stockMode: product.stockMode,
@@ -615,8 +615,8 @@ export class CatalogAdminService {
     assertOrderMinimumAllowed(product.type, req.minOrderQuantity);
     const stateBefore: Record<string, unknown> = {
       sku: product.sku,
-      name: { ...product.name },
-      description: { ...product.description },
+      name: product.name,
+      description: product.description,
       stockMode: product.stockMode,
       visibility: product.visibility,
       status: product.status,
@@ -808,8 +808,8 @@ export class CatalogAdminService {
       }
     }
     const stateAfter: Record<string, unknown> = {
-      name: { ...product.name },
-      description: { ...product.description },
+      name: product.name,
+      description: product.description,
       stockMode: product.stockMode,
       visibility: product.visibility,
       status: product.status,
@@ -943,8 +943,8 @@ export class CatalogAdminService {
       type: source.type,
       status: 'inactive',
       archivedAt: null,
-      name: this.suffixCopyNames(source.name),
-      description: { ...source.description },
+      name: this.suffixCopyName(source.name),
+      description: source.description,
       stockMode: source.stockMode ?? null,
       visibility: source.visibility,
       attributeValues: { ...source.attributeValues },
@@ -1224,16 +1224,9 @@ export class CatalogAdminService {
    * duplicated product is obviously a clone in lists. Empty locales are
    * left untouched.
    */
-  private suffixCopyNames(name: Record<string, string>): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const [locale, value] of Object.entries(name)) {
-      if (!value || value.trim() === '') {
-        out[locale] = value;
-      } else {
-        out[locale] = `${value} (copy)`.slice(0, 255);
-      }
-    }
-    return out;
+  /** Feature 168 — the copy's Global name. Scoped name overrides are not copied (168-shim: US2 decides). */
+  private suffixCopyName(name: string): string {
+    return name.trim() === '' ? name : `${name} (copy)`.slice(0, 255);
   }
 
   /**
@@ -1374,7 +1367,7 @@ export class CatalogAdminService {
         const stateBefore = {
           status: product.status,
           sku: product.sku,
-          name: { ...product.name },
+          name: product.name,
           deletedAt: product.deletedAt ?? null,
         };
         // Feature 163 (FR-072) — a deleted product's old URL keys stop redirecting.
@@ -2319,10 +2312,6 @@ export class CatalogAdminService {
     return slugifyText(value, { maxLength: 160 });
   }
 
-  private anyValue(blob: Record<string, string>): string {
-    const key = Object.keys(blob)[0];
-    return key ? (blob[key] ?? '') : '';
-  }
 }
 
 /**
