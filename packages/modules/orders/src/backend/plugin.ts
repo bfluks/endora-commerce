@@ -183,7 +183,10 @@ export interface OrdersModuleOptions {
    * whose product is no longer available at the order's (channel, language)
    * to its Organization (FR-006), and the admin preview reports it.
    */
-  catalogProductAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>;
+  catalogProductAvailability: Pick<
+    CatalogProductAvailabilityPort,
+    'filterAvailable' | 'effectiveOrderRules' | 'effectiveTexts'
+  >;
   customerAccountRead: CustomerAccountReadPort;
   organizationDetails: OrganizationDetailsPort;
   /**
