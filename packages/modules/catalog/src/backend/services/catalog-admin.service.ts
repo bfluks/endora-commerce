@@ -628,8 +628,9 @@ export class CatalogAdminService {
     }
     // Feature 155 (FR-001, D5) — refused before anything on the row changes.
     assertOrderMinimumAllowed(product.type, req.minOrderQuantity);
-    // Feature 170 (R7) — a product-row write is Save-overwritable: it moves the editor's version.
-    await bumpScopeVersion(em, id);
+    // Feature 170 (R7, contract §6) — a product-row write is Save-overwritable: it moves the
+    // editor's version, and a `version` the caller sends is compared first (stale → 409).
+    await bumpScopeVersion(em, id, req.version);
     const stateBefore: Record<string, unknown> = {
       sku: product.sku,
       name: product.name,
