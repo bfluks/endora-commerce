@@ -19,6 +19,7 @@ import {
   type CustomFieldDefinitionReadPort,
   type CustomFieldValuePort,
   type OrganizationDetailsPort,
+  type SeoProductMetaWritePort,
 } from '@endora-commerce/contracts';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { StorefrontRevalidator } from '@endora-commerce/platform/http';
@@ -162,6 +163,11 @@ export interface CatalogModuleOptions {
    * scoped read; answers `null` while `seo` is not effectively present.
    */
   readSeoProductScoped?: ReadSeoProductScoped;
+  /**
+   * Feature 170 (T123, FR-091) — `seo`'s write port for the save's SEO cells, resolved only when a
+   * save changes SEO (a lazy port: with `seo` off resolving it answers `503 MODULE_DISABLED`).
+   */
+  seoProductMetaWrite?: () => Pick<SeoProductMetaWritePort<EntityManager>, 'readWithin' | 'applyWithin'>;
   /**
    * Feature 075 — `organizations`' read port. The external namespace's price
    * decoration resolves the calling organisation through it, where it used to
@@ -620,6 +626,7 @@ export function catalogModule(options: CatalogModuleOptions) {
               ...(options.assets ? { assets: options.assets } : {}),
               ...(options.organizations ? { organizations: options.organizations } : {}),
               ...(options.readSeoProductScoped ? { readSeo: options.readSeoProductScoped } : {}),
+              ...(options.seoProductMetaWrite ? { seoWrite: options.seoProductMetaWrite } : {}),
               gate: completenessGate,
               ...(urlKeyService
                 ? {
