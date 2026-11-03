@@ -404,7 +404,6 @@ describe('Issue #384 — public product reads honour channel value overrides', (
             sku: 'unused',
             slug,
             type: 'simple',
-            name: 'Indexed name',
             categorySlugs: [],
             primaryAssetUrl: null,
           },
