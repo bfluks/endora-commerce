@@ -214,6 +214,9 @@ import { Migration20260911T120000ErpConnectorInit } from '@endora-commerce/mod-e
 // ── google_analytics ────────────────────────────────────────────────────────
 import { Migration20260715T171116GoogleAnalyticsInit } from '@endora-commerce/mod-google-analytics/migrations';
 
+// ── import_export ───────────────────────────────────────────────────────────
+import { Migration20261103T154219ImportExportImportProfiles } from '@endora-commerce/mod-import-export/migrations';
+
 // ── inventory ───────────────────────────────────────────────────────────────
 import { Migration20260503T182812InventoryWorkflow } from '@endora-commerce/mod-inventory/migrations';
 import { Migration20260611T140347InventoryWarehouseDefaultLowStockThreshold } from '@endora-commerce/mod-inventory/migrations';
@@ -600,6 +603,9 @@ export const MIGRATION_REGISTRY: readonly MigrationRegistryEntry[] = [
 
   // ── google_analytics ────────────────────────────────────────────────────────
   migration('google_analytics', Migration20260715T171116GoogleAnalyticsInit),
+
+  // ── import_export ───────────────────────────────────────────────────────────
+  migration('import_export', Migration20261103T154219ImportExportImportProfiles),
 
   // ── inventory ───────────────────────────────────────────────────────────────
   migration('inventory', Migration20260503T182812InventoryWorkflow),
