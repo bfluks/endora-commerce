@@ -1,6 +1,8 @@
 import type {
+  CatalogAttributeReadPort,
   CatalogBulkImportPort,
   CatalogCategoryReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   InventoryStockImportPort,
@@ -10,7 +12,11 @@ import type {
 } from '@endora-commerce/contracts';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { lazyPort } from '@endora-commerce/platform/kernel';
-import type { RequireAdminAnyFactory, RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type {
+  RequireAdminAnyFactory,
+  RequireAdminFactory,
+  SalesChannelResolutionPort,
+} from '@endora-commerce/platform/kernel';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { ImportExportService } from './services/import-export-service.js';
@@ -70,6 +76,11 @@ export function registerModule(ctx: ModuleContext): void {
             orders: lazyPort<OrderReadPort>(ctx, 'orderReadPort'),
             customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
             organizations: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
+            // Feature 170 — the products file's attributes, channel memberships and channels.
+            catalogAttributes: lazyPort<CatalogAttributeReadPort>(ctx, 'catalogAttributeReadPort'),
+            catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
+            // A kernel registration: no module edge, nothing to switch off.
+            salesChannels: lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
           }),
       )
       .singleton(),
