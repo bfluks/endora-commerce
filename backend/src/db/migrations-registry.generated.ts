@@ -214,6 +214,9 @@ import { Migration20260911T120000ErpConnectorInit } from '@endora-commerce/mod-e
 // ── google_analytics ────────────────────────────────────────────────────────
 import { Migration20260715T171116GoogleAnalyticsInit } from '@endora-commerce/mod-google-analytics/migrations';
 
+// ── import_export ───────────────────────────────────────────────────────────
+import { Migration20261103T154219ImportExportImportProfiles } from '@endora-commerce/mod-import-export/migrations';
+
 // ── inventory ───────────────────────────────────────────────────────────────
 import { Migration20260503T182812InventoryWorkflow } from '@endora-commerce/mod-inventory/migrations';
 import { Migration20260611T140347InventoryWarehouseDefaultLowStockThreshold } from '@endora-commerce/mod-inventory/migrations';
@@ -385,6 +388,7 @@ import { Migration20260501T123145SearchPhraseRecordsInit } from '@endora-commerc
 // ── seo ─────────────────────────────────────────────────────────────────────
 import { Migration20260425T154404SeoInit } from '@endora-commerce/mod-seo/migrations';
 import { Migration20261025T215911SeoMetaOverrideChannelScope } from '@endora-commerce/mod-seo/migrations';
+import { Migration20261103T171312SeoProductMetaThreeLevels } from '@endora-commerce/mod-seo/migrations';
 
 // ── shipments ───────────────────────────────────────────────────────────────
 import { Migration20260817T194652ShipmentsOrderFk } from '@endora-commerce/mod-shipments/migrations';
@@ -601,6 +605,9 @@ export const MIGRATION_REGISTRY: readonly MigrationRegistryEntry[] = [
   // ── google_analytics ────────────────────────────────────────────────────────
   migration('google_analytics', Migration20260715T171116GoogleAnalyticsInit),
 
+  // ── import_export ───────────────────────────────────────────────────────────
+  migration('import_export', Migration20261103T154219ImportExportImportProfiles),
+
   // ── inventory ───────────────────────────────────────────────────────────────
   migration('inventory', Migration20260503T182812InventoryWorkflow),
   migration('inventory', Migration20260611T140347InventoryWarehouseDefaultLowStockThreshold),
@@ -772,6 +779,7 @@ export const MIGRATION_REGISTRY: readonly MigrationRegistryEntry[] = [
   // ── seo ─────────────────────────────────────────────────────────────────────
   migration('seo', Migration20260425T154404SeoInit),
   migration('seo', Migration20261025T215911SeoMetaOverrideChannelScope),
+  migration('seo', Migration20261103T171312SeoProductMetaThreeLevels),
 
   // ── shipments ───────────────────────────────────────────────────────────────
   migration('shipments', Migration20260817T194652ShipmentsOrderFk),

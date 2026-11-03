@@ -189,18 +189,6 @@ const ALLOWLIST: ReadonlyArray<{ file: string; reason: string }> = [
     reason: 'S2 — the derived meta fallback at (C, L), deferred to US10 (T117-T121)',
   },
   {
-    file: 'packages/modules/import_export/src/backend/services/adapters/products.adapter.ts',
-    reason: 'S2 — the CSV grammar of import-profiles-and-csv.md, deferred to US4 (T081, T087)',
-  },
-  {
-    file: 'packages/modules/inventory/src/backend/services/availability-notification-service.ts',
-    reason: "S2, blocked — the back-in-stock e-mail needs the subscription's channel and language, which availability_notifications does not store (T054/T067; needs a data-model row and a migration)",
-  },
-  {
-    file: 'packages/modules/inventory/src/backend/services/availability-worker.ts',
-    reason: 'S2, blocked — as availability-notification-service.ts (T054/T067)',
-  },
-  {
     file: 'packages/modules/quote_requests/src/admin/pages/RfqCreatePage.tsx',
     reason: "non-product map: a sales channel's name per language, through the kit's pickCategoryDisplayName",
   },
