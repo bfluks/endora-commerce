@@ -1111,7 +1111,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
               <StickyFormActions className="b2b-page-head__actions">
                 <button
                   type="button"
-                  className="b2b-btn b2b-btn--primary max-lg:min-h-11"
+                  className="b2b-btn b2b-btn--primary max-lg:min-h-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
                   // aria-disabled, not disabled: focus stays on Save after it has saved (WCAG 2.4.3).
                   aria-disabled={stagedCount === 0 || saving || !data}
                   aria-describedby="product-save-note"
