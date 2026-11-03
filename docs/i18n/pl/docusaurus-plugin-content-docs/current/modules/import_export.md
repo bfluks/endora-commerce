@@ -15,12 +15,13 @@ których import produktów mapuje języki źródłowe.
 | --- | --- | --- |
 | `GET /api/v1/admin/import-export/entities` | administrator (dowolne uprawnienie encji z tabeli poniżej) | Encje dostępne dla wywołującego, z `canExport` / `canImport` |
 | `GET /api/v1/admin/export/:entity.csv` | administrator (uprawnienie eksportu encji) | Strumieniowe pobranie CSV z nagłówkami załącznika |
-| `POST /api/v1/admin/import/:entity` | administrator (uprawnienie importu encji) | Zastosowanie treści `text/csv` (najwyżej 10 MiB) |
+| `POST /api/v1/admin/import/:entity` | administrator (uprawnienie importu encji) | Zastosowanie treści `text/csv` (plik produktów najwyżej 10 MiB; pozostałe encje domyślny limit serwera) |
 | `GET /api/v1/admin/import-export/profiles?entity=products` | administrator (`catalog:write`) | Lista profili importu |
 | `GET /api/v1/admin/import-export/profiles/:id` | administrator (`catalog:write`) | Jeden profil importu |
 | `POST /api/v1/admin/import-export/profiles` | administrator (`catalog:write`) | Utworzenie profilu importu |
 | `PATCH /api/v1/admin/import-export/profiles/:id` | administrator (`catalog:write`) | Zmiana profilu importu |
 | `DELETE /api/v1/admin/import-export/profiles/:id` | administrator (`catalog:write`) | Usunięcie profilu importu |
+| `GET /api/v1/admin/import-export/channel-targets` | administrator (`catalog:write`) | Kanały, do których profil może zapisywać: tylko identyfikator, kod i języki |
 
 ## Obsługiwane encje
 
@@ -105,6 +106,12 @@ kanału albo język, którego kanał nie oferuje, powodują odrzucenie **całego
 (`400 VALIDATION_FAILED`, nic nie zostaje zaimportowane). Plik jest odrzucany także powyżej
 50 000 wierszy lub 500 kolumn. Kolumna ceny jest odrzucana: ceny ustawia się w cennikach.
 
+**Aktualizacja pliku z kolumnami dla języków.** Przed funkcją 170 plik produktów miał osobną
+kolumnę dla każdego języka, na przykład `name_en` albo `description_pl`. Takie nagłówki powodują
+teraz odrzucenie całego pliku. Zmień nazwę każdego z nich na zakres, który ma zapisywać: `name_en`
+staje się `name@<channel>/en-US` dla każdego kanału sprzedającego po angielsku albo `name[en_US]`
+z profilem, który mapuje `en_US`.
+
 ### Wartości komórek
 
 | Komórka | Znaczenie |
@@ -121,8 +128,9 @@ tekst. `NULL` w polu wymaganym (`name`, `urlKey`, wymagany atrybut), `NULL` w `s
 
 **Ochrona przed formułami.** Arkusze kalkulacyjne wykonują komórkę zaczynającą się od `=`, `+`,
 `-`, `@`, tabulatora albo znaku powrotu karetki jako formułę. Dlatego eksport poprzedza taki tekst
-znakiem `'`, a import usuwa dokładnie jeden początkowy `'` z kolumny tekstowej. Kolumny liczbowe
-i logiczne nigdy nie są zmieniane.
+znakiem `'`, a import usuwa dokładnie jeden początkowy `'` z kolumny tekstowej. Kolumny wyboru
+i wielokrotnego wyboru są tu traktowane jak tekstowe: wartości ich opcji mogą pochodzić z PIM.
+Kolumny liczbowe i logiczne nigdy nie są zmieniane.
 
 ### Raport
 
@@ -138,6 +146,10 @@ i logiczne nigdy nie są zmieniane.
   }
 }
 ```
+
+Raport wymienia najwyżej 1 000 błędów wierszy i 1 000 odrzuconych komórek. Gdy jest ich więcej,
+zawiera też `"truncated": { "errors": <wszystkie błędy wierszy>, "fieldErrors": <wszystkie odrzucone komórki> }`;
+popraw wymienione i sprawdź plik ponownie.
 
 ### Eksport
 
