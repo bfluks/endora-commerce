@@ -100,7 +100,7 @@ describe('Products CSV — scoped status columns (spec 163, T121)', () => {
     ] as const) {
       await sql(
         `insert into products (id, sku, slug, type, status, name, description, created_at, updated_at)
-         values (?, ?, ?, 'simple', 'active', '{"en-US":"Csv product"}'::jsonb, '{}'::jsonb, now(), now())`,
+         values (?, ?, ?, 'simple', 'active', 'Csv product', '{}'::jsonb, now(), now())`,
         [id, skuValue, skuValue.toLowerCase()],
       );
     }
