@@ -4,7 +4,7 @@ import {
   ERROR_CODES,
   isSystemAttributeKey,
   scopedStatusColumn,
-  scopedValueColumn,
+  scopedColumn,
   toScopeChannel,
   type BulkImportReport,
   type BulkImportRowError,
@@ -16,6 +16,7 @@ import {
   type ProductStatus,
   type ScopeRef,
   type ScopedStatusExport,
+  type ScopedExportValue,
   type ScopedValuesExport,
   sameLanguage,
 } from '@endora-commerce/contracts';
@@ -248,6 +249,7 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
           ? await planScopedImport(scoped.emFactory(), scoped.importDeps, productId, cells, extras)
           : await runScopedImport(this.commandBus, scoped.importDeps, productId, cells, {
               source: 'import_export',
+              path: 'import',
               ...(extras ? { extras } : {}),
             });
         for (const refusal of result.refused) {
@@ -281,7 +283,7 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
     const [channels, overrides, channelRows, languageRows, keys, attributes] = await Promise.all([
       em.find(SalesChannel, {}, { orderBy: { code: 'asc' } }),
       em.find(ProductValueOverride, {}),
-      em.find(ProductChannelScope, { status: { $ne: null } }),
+      em.find(ProductChannelScope, {}),
       em.find(ProductChannelLanguageScope, {}),
       em.find(ProductUrlKey, {}),
       scoped.importDeps.listAttributes(),
@@ -291,19 +293,30 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
       ['description', ['G', 'C', 'CL']],
       ['status', ['G', 'C', 'CL']],
       ['urlKey', ['G', 'C', 'CL']],
+      ['minOrderQuantity', ['G', 'C']],
+      ['returnable', ['G', 'C']],
       ...attributes.map((attribute) => [`attribute:${attribute.key}`, attribute.scopeLevels] as const),
     ]);
-    const cells: Array<{ productId: string; field: string; channelId: string; languageCode: string | null; value: unknown }> = [];
-    const own = (v: unknown) => (v === null || v === undefined ? { empty: true } : v);
+    const cells: Array<{ productId: string; field: string; channelId: string; languageCode: string | null; value: ScopedExportValue }> = [];
+    const own = (v: unknown): ScopedExportValue =>
+      v === null || v === undefined
+        ? { kind: 'empty' }
+        : typeof v === 'string'
+          ? { kind: 'text', text: v }
+          : { kind: 'value', value: v as number | boolean | string[] };
     for (const row of overrides) {
       const field = isSystemAttributeKey(row.attributeKey) ? row.attributeKey : `attribute:${row.attributeKey}`;
       cells.push({ productId: row.productId, field, channelId: row.channelId, languageCode: row.languageCode ?? null, value: own(row.value?.v) });
     }
-    for (const row of channelRows) cells.push({ productId: row.productId, field: 'status', channelId: row.salesChannelId, languageCode: null, value: row.status });
-    for (const row of languageRows) {
-      cells.push({ productId: row.productId, field: 'status', channelId: row.salesChannelId, languageCode: row.languageCode, value: row.status });
+    const at = (row: { productId: string; salesChannelId: string }, field: string, value: ScopedExportValue, languageCode: string | null = null) =>
+      cells.push({ productId: row.productId, field, channelId: row.salesChannelId, languageCode, value });
+    for (const row of channelRows) {
+      if (row.status != null) at(row, 'status', { kind: 'text', text: row.status });
+      if (row.minOrderQuantityOverridden) at(row, 'minOrderQuantity', own(row.minOrderQuantity ?? null));
+      if (row.returnable != null) at(row, 'returnable', { kind: 'value', value: row.returnable });
     }
-    for (const row of keys) cells.push({ productId: row.productId, field: 'urlKey', channelId: row.salesChannelId, languageCode: row.languageCode, value: row.key });
+    for (const row of languageRows) at(row, 'status', { kind: 'text', text: row.status }, row.languageCode);
+    for (const row of keys) at(row, 'urlKey', { kind: 'text', text: row.key }, row.languageCode);
 
     const productIds = [...new Set(cells.map((cell) => cell.productId))];
     const members = new Map<string, Set<string>>();
@@ -320,11 +333,12 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
       if (!levels || !levels.includes(cell.languageCode === null ? 'C' : 'CL')) continue;
       const languageCode = cell.languageCode === null ? null : channel.languages.find((code) => sameLanguage(code, cell.languageCode));
       if (languageCode === undefined) continue;
-      const column = scopedValueColumn(cell.field, channel.code, languageCode);
+      const column = scopedColumn(cell.field, channel.code, languageCode);
       used.set(column, { field: cell.field as FieldPath, channelId: cell.channelId, channelCode: channel.code, languageCode });
       (values[cell.productId] ??= {})[column] = cell.value;
     }
-    const fieldRank = (field: string) => (field === 'name' ? 0 : field === 'description' ? 1 : field === 'status' ? 2 : field === 'urlKey' ? 3 : 4);
+    const RANK = ['name', 'description', 'status', 'urlKey', 'minOrderQuantity', 'returnable'];
+    const fieldRank = (field: string) => (RANK.includes(field) ? RANK.indexOf(field) : RANK.length);
     const columns = [...used.values()].sort((a, b) => {
       const languages = channelById.get(a.channelId)?.languages ?? [];
       return (
