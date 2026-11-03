@@ -162,7 +162,7 @@ export function ComparisonTable(props: {
                   <div className="industria-cmp-card">
                     <div className="industria-cmp-card__media">
                       {p.primaryAssetUrl ? (
-                        <img src={toAbsoluteAssetUrl(p.primaryAssetUrl)} alt={localised(p.name)} loading="lazy" />
+                        <img src={toAbsoluteAssetUrl(p.primaryAssetUrl)} alt={p.name} loading="lazy" />
                       ) : (
                         <PlaceholderGlyph />
                       )}
@@ -172,7 +172,7 @@ export function ComparisonTable(props: {
                       href={`/p/${p.slug}`}
                       className="industria-cmp-card__name"
                     >
-                      {localised(p.name)}
+                      {p.name}
                     </LocalizedAnchor>
                     <div className="industria-cmp-card__price">
                       {p.price
@@ -183,7 +183,7 @@ export function ComparisonTable(props: {
                       type="button"
                       className="industria-cmp-card__remove"
                       onClick={(): void => void onRemove(p.id)}
-                      aria-label={format(t('commerce.compare.removeProduct'), { name: localised(p.name) })}
+                      aria-label={format(t('commerce.compare.removeProduct'), { name: p.name })}
                       title={t('commerce.compare.remove')}
                     >
                       <XIcon />
