@@ -9,7 +9,12 @@ import {
 import { SCOPED_WRITE_CASES } from '../../../../../../contracts/src/scoped-write-encoding.cases.js';
 import type { ImportExportPorts } from '../adapter.js';
 import { productsAdapter } from './products.adapter.js';
-import { ProductsFileError, parseProductsHeader, PRODUCTS_CSV_COLUMNS_MAX } from './products-csv-grammar.js';
+import {
+  ProductsFileError,
+  parseProductsHeader,
+  PRODUCTS_CSV_COLUMNS_MAX,
+  PRODUCTS_REPORT_ERRORS_MAX,
+} from './products-csv-grammar.js';
 
 /**
  * Feature 170 (`specs/170-product-editor-scope-switcher/` T087; `contracts/import-profiles-and-csv.md`
@@ -529,5 +534,32 @@ describe('products file — the formula guard on option values (FR-118)', () => 
       { scope: { level: 'channel', channelId: VIP }, field: 'attribute:finish', op: { op: 'set', value: '=matte' } },
       { scope: { level: 'channel', channelId: VIP }, field: 'attribute:multi', op: { op: 'set', value: ['-red', 'blue'] } },
     ]);
+  });
+});
+
+/**
+ * C2/C3 security review (warn 2) — within the file caps a report could still list millions of
+ * refusals. The report lists at most `PRODUCTS_REPORT_ERRORS_MAX` row errors and as many field
+ * errors, and says how many there were in `truncated`.
+ */
+describe('products file — the bounded report', () => {
+  it('lists at most the cap of row and field errors and counts the rest', async () => {
+    const r = rig();
+    const total = PRODUCTS_REPORT_ERRORS_MAX + 7;
+    const records = [
+      ...Array.from({ length: total }, () => ({ sku: '', 'name@pl_b2b_vip': 'x' })),
+      ...Array.from({ length: total }, (_, i) => ({ sku: `S${i}`, 'name@pl_b2b_vip': "'" })),
+    ];
+    const report = await run(r, records);
+    expect(report.errors).toHaveLength(PRODUCTS_REPORT_ERRORS_MAX);
+    expect(report.fieldErrors).toHaveLength(PRODUCTS_REPORT_ERRORS_MAX);
+    expect(report.truncated).toEqual({ errors: total, fieldErrors: total });
+  });
+
+  it('has no truncation entry when every refusal is listed', async () => {
+    const r = rig();
+    const report = await run(r, [{ sku: '', 'name@pl_b2b_vip': 'x' }]);
+    expect(report.errors).toHaveLength(1);
+    expect(report.truncated).toBeUndefined();
   });
 });
