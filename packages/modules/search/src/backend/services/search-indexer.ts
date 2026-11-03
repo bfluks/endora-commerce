@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import { Meilisearch, type Index } from 'meilisearch';
 import {
   type CatalogAttributeReadPort,
+  type CatalogAttributeView,
   type CatalogCategoryReadPort,
   type CatalogProductReadPort,
   type CatalogProductAvailabilityPort,
@@ -334,6 +335,22 @@ export async function awaitIndexTask(
   });
 }
 
+/**
+ * Feature 170 (code review, note 5) — what one indexing run reads once and every channel batch
+ * of the run shares: the searchable select attributes and, per language, their option labels.
+ * A run is one {@link SearchIndexer.reindexAllChannels}, one {@link SearchIndexer.ensureQuerySettings},
+ * one category-subtree reindex or one incremental upsert; the next run reads them again, so a
+ * relabelled option reaches it.
+ */
+export interface IndexingRun {
+  searchableOptionAttributes?: Promise<CatalogAttributeView[]>;
+  readonly optionLabels: Map<string, Map<string, Map<string, string>>>;
+}
+
+export function newIndexingRun(): IndexingRun {
+  return { optionLabels: new Map() };
+}
+
 export class SearchIndexer {
   private readonly client: Meilisearch;
   private readonly attributeRead: CatalogAttributeReadPort;
@@ -385,7 +402,7 @@ export class SearchIndexer {
    * sortable settings, then push every product visible in that channel.
    * Returns counts so callers can log a summary.
    */
-  async reindexChannel(em: EntityManager, channel: SalesChannel): Promise<{
+  async reindexChannel(em: EntityManager, channel: SalesChannel, run: IndexingRun = newIndexingRun()): Promise<{
     indexUid: string;
     documentCount: number;
     searchableAttributes: string[];
@@ -420,7 +437,7 @@ export class SearchIndexer {
     // Feature 170 (`contracts/search-index.md` §2) — the texts of every channel language, from
     // one read of this batch's override rows and of the searchable attributes.
     const languages = indexLanguagesOf(channel);
-    const textInputs = await this.textInputs(em, languages, productIds);
+    const textInputs = await this.textInputs(em, languages, productIds, run);
     const documents: IndexedDocument[] = products.map((p) =>
       buildDocument(p, categoriesByProduct.get(p.id) ?? [], availability.get(p.id)!, {
         ...textInputs,
@@ -490,7 +507,7 @@ export class SearchIndexer {
    * Returns the channel codes that were touched so callers can log a
    * one-line summary.
    */
-  async upsertProduct(em: EntityManager, productId: string): Promise<string[]> {
+  async upsertProduct(em: EntityManager, productId: string, run: IndexingRun = newIndexingRun()): Promise<string[]> {
     const product = await this.products.findById(productId);
     if (!product) return [];
 
@@ -506,7 +523,7 @@ export class SearchIndexer {
     const categories = categoryRows.map((r) => ({ id: r.categoryId, slug: r.slug }));
     // Feature 170 — the override rows and searchable attributes once; the texts per channel below.
     const allLanguages = [...new Set(channels.flatMap((channel) => indexLanguagesOf(channel)))];
-    const textInputs = await this.textInputs(em, allLanguages, [productId]);
+    const textInputs = await this.textInputs(em, allLanguages, [productId], run);
 
     const touched: string[] = [];
     for (const channel of channels) {
@@ -547,8 +564,10 @@ export class SearchIndexer {
    */
   async reindexCategorySubtree(em: EntityManager, categoryId: string): Promise<number> {
     const productIds = await this.categories.listProductIdsInSubtree(categoryId);
+    // One run for the whole subtree: the option labels are read once, not once per product.
+    const run = newIndexingRun();
     for (const productId of productIds) {
-      await this.upsertProduct(em, productId);
+      await this.upsertProduct(em, productId, run);
     }
     return productIds.length;
   }
@@ -624,6 +643,7 @@ export class SearchIndexer {
   async ensureQuerySettings(em: EntityManager): Promise<string[]> {
     const channels = await em.find(SalesChannel, {});
     const wanted = await this.attributeSettings();
+    const run = newIndexingRun();
     const touched: string[] = [];
     for (const channel of channels) {
       const indexUid = indexUidFor(channel);
@@ -647,7 +667,7 @@ export class SearchIndexer {
       // Feature 170 (`contracts/search-index.md` §2) — a pre-170 index has no `texts` in its
       // documents: reindex the channel, which writes every setting with the documents.
       if (pending.reindex) {
-        await this.reindexChannel(em, channel);
+        await this.reindexChannel(em, channel, run);
         touched.push(channel.code);
         continue;
       }
@@ -665,8 +685,10 @@ export class SearchIndexer {
   > {
     const channels = await em.find(SalesChannel, {});
     const results: Array<{ channelCode: string; indexUid: string; documentCount: number }> = [];
+    // One run for every channel: the option labels are read once, not per channel per language.
+    const run = newIndexingRun();
     for (const channel of channels) {
-      const summary = await this.reindexChannel(em, channel);
+      const summary = await this.reindexChannel(em, channel, run);
       results.push({
         channelCode: channel.code,
         indexUid: summary.indexUid,
@@ -742,30 +764,19 @@ export class SearchIndexer {
     _em: EntityManager,
     locale: string,
   ): Promise<Map<string, Map<string, string>>> {
-    // Feature 061 — the option labels come from the composed view (backed by
-    // `custom_field_options`), restricted to isSearchable select-style
-    // attributes; no raw SQL against catalog storage.
-    const out = new Map<string, Map<string, string>>();
-    const attrs = (await this.attributeRead.listByFlag('isSearchable')).filter(
+    return optionLookupIn(await this.searchableOptionAttributes(), locale);
+  }
+
+  /**
+   * Feature 061 — the option labels come from the composed view (backed by
+   * `custom_field_options`), restricted to isSearchable select-style
+   * attributes; no raw SQL against catalog storage.
+   */
+  private async searchableOptionAttributes(): Promise<CatalogAttributeView[]> {
+    return (await this.attributeRead.listByFlag('isSearchable')).filter(
       (a) =>
         a.valueType === 'select' || a.valueType === 'enum' || a.valueType === 'multiselect',
     );
-    if (attrs.length === 0) return out;
-    for (const attr of attrs) {
-      let bucket = out.get(attr.key);
-      if (!bucket) {
-        bucket = new Map();
-        out.set(attr.key, bucket);
-      }
-      for (const o of attr.options) {
-        // Feature 170 (FR-033) — the label in `locale` itself, else the option's default label:
-        // never another language's label, which a shopper of this language would match by.
-        const labelMap = o.label ?? {};
-        const rendered = labelMap[locale] ?? o.labelDefault ?? o.value;
-        bucket.set(o.value, rendered);
-      }
-    }
-    return out;
   }
 
   /**
@@ -795,12 +806,13 @@ export class SearchIndexer {
    * Feature 170 — what every document of a batch needs for its `texts`: each product's override
    * rows (every channel; {@link documentTexts} reads the document's own), the searchable text
    * attributes with their scope sets, the option labels of the searchable select attributes per
-   * language, and the text keys `attributes` leaves out (searchable, filtered by nothing).
+   * language (read once per `run`), and the text keys `attributes` leaves out (searchable, filtered by nothing).
    */
   private async textInputs(
-    em: EntityManager,
+    _em: EntityManager,
     languages: readonly string[],
     productIds: readonly string[],
+    run: IndexingRun,
   ): Promise<{
     overridesByProduct: Map<string, OverrideRow[]>;
     textAttributes: SearchableTextAttribute[];
@@ -816,7 +828,13 @@ export class SearchIndexer {
       .map((a) => ({ key: a.key, scopeLevels: a.scopeLevels }));
     const optionLabels = new Map<string, Map<string, Map<string, string>>>();
     for (const language of languages) {
-      optionLabels.set(language, await this.loadSearchableOptionLookup(em, language));
+      let lookup = run.optionLabels.get(language);
+      if (!lookup) {
+        run.searchableOptionAttributes ??= this.searchableOptionAttributes();
+        lookup = optionLookupIn(await run.searchableOptionAttributes, language);
+        run.optionLabels.set(language, lookup);
+      }
+      optionLabels.set(language, lookup);
     }
     const overridesByProduct = new Map<string, OverrideRow[]>();
     for (const o of rows as CatalogProductValueOverrideRecord[]) {
@@ -881,6 +899,30 @@ export class SearchIndexer {
  */
 function isPublishableIn(availability: ChannelAvailability | undefined): boolean {
   return availability !== undefined && availability.liveLanguages.length > 0;
+}
+
+/**
+ * Feature 012 / FR-035 — (attributeKey, value) → the option label in `locale`. Feature 170
+ * (FR-033) — the label in `locale` itself, else the option's default label: never another
+ * language's label, which a shopper of this language would match by.
+ */
+function optionLookupIn(
+  attrs: readonly CatalogAttributeView[],
+  locale: string,
+): Map<string, Map<string, string>> {
+  const out = new Map<string, Map<string, string>>();
+  for (const attr of attrs) {
+    let bucket = out.get(attr.key);
+    if (!bucket) {
+      bucket = new Map();
+      out.set(attr.key, bucket);
+    }
+    for (const o of attr.options) {
+      const labelMap = o.label ?? {};
+      bucket.set(o.value, labelMap[locale] ?? o.labelDefault ?? o.value);
+    }
+  }
+  return out;
 }
 
 export function indexUidFor(channel: { code: string }): string {
