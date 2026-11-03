@@ -155,6 +155,44 @@ describe('170 US7 — immediate actions keep the version (T144)', () => {
     expect(await fx.sql(`select 1 from product_value_overrides where product_id = ?`, [id])).toEqual([]);
   });
 
+  it('PATCH /products/:id compares the version it is sent: a stale one is 409, nothing written (contract §6)', async () => {
+    const id = await fx.product({ channels: [channel] });
+    const v0 = await version(id);
+    const url = `/api/v1/admin/catalog/products/${id}`;
+    const fresh = await inject('PATCH', url, { name: 'Fresh', version: v0 });
+    expect(fresh.statusCode, fresh.body).toBe(200);
+    const v1 = await version(id);
+    expect(v1).not.toBe(v0);
+
+    const stale = await inject('PATCH', url, { name: 'Stale', version: v0 });
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(stale.json()).toMatchObject({ error: { code: ERROR_CODES.VERSION_CONFLICT } });
+    expect((await fx.read(id)).fields.name).toMatchObject({ value: 'Fresh' });
+    expect(await version(id)).toBe(v1);
+
+    const outOfRange = await inject('PATCH', url, { name: 'Overflow', version: '9999999999999999999' });
+    expect(outOfRange.statusCode, outOfRange.body).toBe(400);
+  });
+
+  it('a save with no cells and a URL-key write that changes nothing leave the version (code review warn)', async () => {
+    const id = await fx.product({ channels: [channel] });
+    const v0 = await version(id);
+    const empty = await fx.put(id, { channelId: channel }, {}, { version: v0 });
+    expect(empty.statusCode, empty.body).toBe(200);
+    const blank = await fx.put(id, { channelId: channel }, { name: '' }, { version: v0 });
+    expect(blank.statusCode, blank.body).toBe(200);
+    expect(await version(id)).toBe(v0);
+
+    const key = `t144-same-${fx.run}`;
+    const url = `/api/v1/admin/catalog/products/${id}/url-keys`;
+    expect((await inject('PUT', url, { channelKeys: [{ channelId: channel, languageCode: null, key }] })).statusCode).toBe(200);
+    const v1 = await version(id);
+    expect(v1).not.toBe(v0);
+    const same = await inject('PUT', url, { channelKeys: [{ channelId: channel, languageCode: null, key }] });
+    expect(same.statusCode, same.body).toBe(200);
+    expect(await version(id)).toBe(v1);
+  });
+
   it('scoped-value, scope-row, URL-key and product-row writes do move the version', async () => {
     const id = await fx.product({ channels: [channel] });
     let v = await version(id);

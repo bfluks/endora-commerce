@@ -30,6 +30,8 @@ import {
   type WriteProbe,
 } from '../services/scoped-values-save.service.js';
 import { cellChanges } from '../services/scoped-values-import.js';
+import { assertGlobalOnlyFields, useTargetAttributeSet } from '../services/scoped-values-global-only.js';
+import type { LinkableAssetReader } from '../services/linkable-asset.js';
 import { loadScopedState, resolveRequestScope, type ScopedProductState } from '../services/scoped-values-state.js';
 
 /**
@@ -58,6 +60,8 @@ export interface ScopedValuesCommandDeps {
   ) => Promise<{ before: Record<string, unknown>; after: Record<string, unknown> }>;
   /** Step 3a (R21) — the organisations an audience names must exist. */
   organizations?: Pick<OrganizationDetailsPort, 'findByIds'> | undefined;
+  /** Step 3a (code review 1) — a download file must be one the library shows. Absent = refused. */
+  assets?: LinkableAssetReader | undefined;
   /** Test seam (T104): called before each family writer; throwing simulates its failure. */
   probe?: WriteProbe | undefined;
 }
@@ -77,6 +81,17 @@ function snapshot(state: ScopedProductState): ScopeSnapshot {
   };
 }
 
+/**
+ * A save with no cells: thrown inside the Command so its transaction, and with it the version
+ * compare-and-set, rolls back — a no-op writes nothing, audits nothing and leaves the version, so
+ * no other open editor is sent a 409 for it. The caller answers {@link result}.
+ */
+export class ScopedSaveNothingChanged extends Error {
+  constructor(readonly result: ScopedValuesSaveResult) {
+    super('scoped-values save: nothing changed');
+  }
+}
+
 export function scopedValuesSaveCommand(
   deps: ScopedValuesCommandDeps,
   productId: string,
@@ -93,11 +108,15 @@ export function scopedValuesSaveCommand(
       const state = await loadScopedState(em, productId, deps);
       const removalOnly = isRemovalOnly(body.changes);
       const scope = resolveRequestScope(state.members, body.scope, { removalOnly });
+      // Step 3a (code review 1) — a set change plans the attribute cells against the new set.
+      if (scope.level === 'global') await useTargetAttributeSet(em, deps, state, body.changes.product?.attributeSetId);
       const plan = planScopedSave(state, scope, body.changes);
       if (plan.cells.length === 0) {
-        return { result: { state, scope, changedFields: [], warnings: [] }, skipAudit: true };
+        // Nothing to write: roll the version bump back with the transaction (code review warn).
+        throw new ScopedSaveNothingChanged({ state, scope, changedFields: [], warnings: [] });
       }
       await assertOrganizationsExist(deps, plan.cells, scope);
+      await assertGlobalOnlyFields(em, deps, state, plan);
       const before = ownValues(state, plan);
       const scopesBefore = snapshot(state);
 
