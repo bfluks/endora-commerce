@@ -109,18 +109,6 @@ function scan(file: string, source: string): Site[] {
  */
 const ALLOWLIST: ReadonlyArray<{ file: string; reason: string }> = [
   {
-    file: 'packages/modules/catalog/src/admin/components/ProductScopeOverview.tsx',
-    reason: 'S3 — catalog admin, removed by T127 / T132 (US12)',
-  },
-  {
-    file: 'packages/modules/catalog/src/admin/lib/attribute-scope.ts',
-    reason: 'S3 — catalog admin, removed by T113 (US9)',
-  },
-  {
-    file: 'packages/modules/catalog/src/admin/pages/AttributesManager.tsx',
-    reason: 'S3 — catalog admin, removed by T113 (US9)',
-  },
-  {
     file: 'packages/modules/catalog/src/admin/pages/AttachmentTypesPage.tsx',
     reason: "non-product map: an attachment type's own name per language (readers.md 'Not readers'), matched by `row.name[` — S3's file",
   },
@@ -131,18 +119,6 @@ const ALLOWLIST: ReadonlyArray<{ file: string; reason: string }> = [
   {
     file: 'packages/modules/catalog/src/backend/services/catalog-bulk-import.service.ts',
     reason: "S1 — channel codes in a products file's cells and the deprecated exportScopedStatuses, removed once import_export's adapter resolves codes and reads exportScopedValues (T087, S2)",
-  },
-  {
-    file: 'packages/modules/seo/src/admin/index.ts',
-    reason: 'S3 — seo admin, rewritten in US10 (T122+)',
-  },
-  {
-    file: 'packages/modules/seo/src/admin/pages/SeoMetaScopeEditor.tsx',
-    reason: 'S3 — seo admin, rewritten in US10 (T122+)',
-  },
-  {
-    file: 'packages/modules/seo/src/admin/zones/ProductSeoLink.tsx',
-    reason: 'S3 — seo admin, rewritten in US10 (T122+)',
   },
   {
     file: 'packages/modules/seo/src/backend/services/meta-tag-resolver.service.ts',

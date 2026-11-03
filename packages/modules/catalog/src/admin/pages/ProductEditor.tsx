@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Archive, ArchiveRestore, ChevronLeft, Copy, Lock, Save, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronDown, ChevronLeft, Copy, Lock, RotateCw, Save, Trash2 } from 'lucide-react';
 import {
   ERROR_CODES,
   type ScopeMissingValue,
@@ -28,6 +28,10 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Input,
   Label,
   Select,
@@ -69,6 +73,7 @@ import {
 import { getEditorPreference, getScopedValues, putEditorPreference, saveScopedValues } from '../lib/scoped-values-api.js';
 import {
   channelName,
+  languageName,
   parentScope,
   sameScope,
   scopeFromSearch,
@@ -125,7 +130,7 @@ type FormError =
   | { kind: 'seo' }
   | { kind: 'message'; text: string };
 
-type Guard = { kind: 'switch' | 'url'; target: ScopeRef; note?: string; field?: string } | { kind: 'leave' };
+type Guard = { kind: 'switch' | 'url'; target: ScopeRef; note?: string; field?: string; tab?: string } | { kind: 'leave' };
 
 export function ProductEditor(): ReactNode {
   const params = useParams<{ id: string }>();
@@ -151,6 +156,11 @@ function errorOf(err: unknown): { status: number; code: string; message: string;
   if (!(err instanceof ApiError)) return null;
   const e = err.envelope.error as { code: string; message: string; details?: Record<string, unknown> };
   return { status: err.status, code: e.code, message: e.message, ...(e.details ? { details: e.details } : {}) };
+}
+
+/** The tab a field lives on; a scope-map link without a field opens Details. */
+function tabOfField(field: string | undefined): TabId {
+  return field?.startsWith('attribute:') ? 'attributes' : 'details';
 }
 
 function familyOfPath(path: string): ImmediateFamily | null {
@@ -213,6 +223,9 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
   const [archiving, setArchiving] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [duplicating, setDuplicating] = useState(false);
+  const [wholeProductDialog, setWholeProductDialog] = useState<'duplicate' | 'delete' | null>(null);
+  const [wholeProductError, setWholeProductError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [categories, setCategories] = useState<Array<{ id: string; parentCategoryId: string | null; name: Record<string, string>; slug: string; sortOrder: number }>>([]);
   const [categoriesLoading, setCategoriesLoading] = useState(true);
   const [attributeSets, setAttributeSets] = useState<Array<{ id: string; code: string; isSystem: boolean }>>([]);
@@ -222,6 +235,25 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
   const words = (scope: ScopeRef, v: ValidScopes = valid): string => scopeInWords(scope, v, t, adminLanguage);
   const scopeLabel = scopeShortWords(state.scope, valid, t, adminLanguage);
   const parentLabel = scopeShortWords(parentScope(state.scope), valid, t, adminLanguage);
+  /** `key.one|few|many|other` by the admin language's plural rules (PL needs few / many). */
+  const plural = (key: string, count: number, params: Record<string, string> = {}): string =>
+    t(`${key}.${new Intl.PluralRules(adminLanguage).select(count)}`, { count: String(count), ...params });
+
+  // The live region is cleared first, so the same sentence twice is announced twice (WCAG 4.1.3).
+  const announceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const announce = useCallback((text: string): void => {
+    setAnnouncement('');
+    if (announceTimerRef.current) clearTimeout(announceTimerRef.current);
+    announceTimerRef.current = setTimeout(() => setAnnouncement(text), 50);
+  }, []);
+  useEffect(
+    () => (): void => {
+      if (announceTimerRef.current) clearTimeout(announceTimerRef.current);
+    },
+    [],
+  );
+  /** The scope the last successful read opened; a different one is announced once its data is in. */
+  const announcedScopeRef = useRef<string | null>(null);
 
   // The reference lists the Details tab picks from (global, read once).
   useEffect(() => {
@@ -261,10 +293,19 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
             loadedKeyRef.current = scopeKey(opened);
             setSearchParams((prev) => searchWithScope(prev, opened), { replace: true });
           }
-          const note = reason
-            ? t('productEditor.scope.openedAt', { scope: scopeInWords(opened, res.data.validScopes, t, adminLanguage), reason })
-            : (options.note ?? null);
-          if (note) setAnnouncement(note);
+          const openedWords = scopeInWords(opened, res.data.validScopes, t, adminLanguage);
+          const note = reason ? t('productEditor.scope.openedAt', { scope: openedWords, reason }) : (options.note ?? null);
+          // After the data is in (not when the switch starts): the scope, Global included.
+          const previous = announcedScopeRef.current;
+          announcedScopeRef.current = scopeKey(opened);
+          const switched = previous !== null && previous !== scopeKey(opened);
+          const where = switched
+            ? opened.level === 'global'
+              ? t('productEditor.scope.loadedAt', { scope: openedWords })
+              : t('productEditor.scope.banner', { scope: openedWords })
+            : null;
+          const spoken = [note, where].filter(Boolean).join(' ');
+          if (spoken) announce(spoken);
           if (prefTimerRef.current) clearTimeout(prefTimerRef.current);
           prefTimerRef.current = setTimeout(() => void putEditorPreference(productId, opened), 500);
           if (options.field) {
@@ -289,7 +330,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
         }
       }
     },
-    [productId, setSearchParams, t, adminLanguage],
+    [productId, setSearchParams, t, adminLanguage, announce],
   );
 
   // No scope in the URL: the preference seeds it (Global when there is none), replacing the entry.
@@ -334,7 +375,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
   useEffect(() => {
     if (state.dropped.length === 0) return;
     const family = familyOfPath(state.dropped[0]!);
-    setAnnouncement(
+    announce(
       t(
         family === 'attachments'
           ? 'productEditor.immediate.droppedAttachment'
@@ -343,18 +384,24 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
             : 'productEditor.immediate.droppedImage',
       ),
     );
-  }, [state.dropped, t]);
+  }, [state.dropped, t, announce]);
 
   useUnsavedChangesPrompt(state.staged.size > 0);
 
+  // "Saved N changes" belongs to the last save: a new staged edit clears it.
+  useEffect(() => {
+    if (state.staged.size > 0) setInfo(null);
+  }, [state.staged.size]);
+
   const go = useCallback(
-    (next: ScopeRef, note?: string, field?: string): void => {
+    (next: ScopeRef, note?: string, field?: string, tab?: string): void => {
       pendingNoteRef.current = note ?? null;
       skipGuardRef.current = true;
       setSearchParams((prev) => {
         const sp = searchWithScope(prev, next);
         sp.delete('field');
         if (field) sp.set('field', field);
+        if (tab) sp.set('tab', tab);
         return sp;
       });
     },
@@ -362,15 +409,26 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
   );
 
   const requestScope = useCallback(
-    (next: ScopeRef, note?: string, field?: string): void => {
-      if (sameScope(next, stateRef.current.scope)) return;
-      if (stateRef.current.staged.size > 0) {
-        setGuard({ kind: 'switch', target: next, ...(note ? { note } : {}), ...(field ? { field } : {}) });
+    (next: ScopeRef, note?: string, field?: string, tab?: string): void => {
+      if (sameScope(next, stateRef.current.scope)) {
+        if (tab) {
+          setSearchParams((prev) => {
+            const sp = new URLSearchParams(prev);
+            sp.set('tab', tab);
+            sp.delete('field');
+            return sp;
+          });
+        }
+        if (field) setTimeout(() => document.getElementById(fieldDomId(field))?.focus(), 0);
         return;
       }
-      go(next, note, field);
+      if (stateRef.current.staged.size > 0) {
+        setGuard({ kind: 'switch', target: next, ...(note ? { note } : {}), ...(field ? { field } : {}), ...(tab ? { tab } : {}) });
+        return;
+      }
+      go(next, note, field, tab);
     },
-    [go],
+    [go, setSearchParams],
   );
 
   const refreshFamily = useCallback(
@@ -434,7 +492,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
             }),
           );
         } else {
-          setInfo(t('productEditor.save.saved', { count: String(count), scope: scopeInWords(s.scope, s.data.validScopes, t, adminLanguage) }));
+          setInfo(plural('productEditor.save.saved', count, { scope: scopeInWords(s.scope, s.data.validScopes, t, adminLanguage) }));
         }
         return true;
       } catch (err) {
@@ -470,6 +528,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
     if (e.code === ERROR_CODES.URL_KEY_TAKEN) {
       dispatch({ type: 'errors', errors: { urlKey: urlKeyErrorMessage(err, t) ?? t('errors.URL_KEY_TAKEN') } });
       setFormError({ kind: 'validation', count: 1 });
+      setTimeout(() => document.getElementById(fieldDomId('urlKey'))?.focus(), 0);
       return;
     }
     if (e.code === ERROR_CODES.SCOPE_INCOMPLETE && Array.isArray(e.details?.['pairs'])) {
@@ -498,6 +557,8 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
       if (Object.keys(errors).length > 0) {
         dispatch({ type: 'errors', errors });
         setFormError({ kind: 'validation', count: Object.keys(errors).length });
+        const first = Object.keys(errors)[0]!;
+        setTimeout(() => document.getElementById(fieldDomId(first))?.focus(), 0);
       } else {
         setFormError({ kind: 'message', text: t('productEditor.save.error.subjectGone') });
       }
@@ -509,13 +570,16 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
   const reloadDiscarding = (): void => {
     dispatch({ type: 'discard' });
     setFormError(null);
-    void load(stateRef.current.scope, { note: t('productEditor.save.reloaded') });
+    // The Reload button goes with the alert: focus the panel the fresh values are in.
+    void load(stateRef.current.scope, { note: t('productEditor.save.reloaded') }).then(() =>
+      document.getElementById('product-tabpanel')?.focus(),
+    );
   };
 
   const dropSeoChanges = (): void => {
     dispatch({ type: 'dropPaths', paths: [...stateRef.current.staged.keys()].filter((p) => p.startsWith('seo:')) });
     setFormError(null);
-    setAnnouncement(t('productEditor.save.seoDropped'));
+    announce(t('productEditor.save.seoDropped'));
   };
 
   // --- Guard -------------------------------------------------------------------------------
@@ -530,7 +594,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
       void load(g.target, { field: searchParams.get('field') });
       return;
     }
-    go(g.target, g.note, g.field);
+    go(g.target, g.note, g.field, g.tab);
   };
   const stay = (g: Guard): void => {
     setGuard(null);
@@ -540,25 +604,40 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
 
   // --- Whole-product actions (each applies at once, at every scope) -------------------------
   const handleDelete = async (): Promise<void> => {
-    if (!confirm(t('productEditor.deleteConfirm'))) return;
+    if (deleting) return;
+    setDeleting(true);
+    setWholeProductError(null);
     try {
       await apiClient.delete<void>(PRODUCT_PATH(productId));
       navigate('/catalog/products');
     } catch (err) {
-      setFormError({ kind: 'message', text: errorOf(err)?.message ?? t('productEditor.error.delete') });
+      setWholeProductError(errorOf(err)?.message ?? t('productEditor.error.delete'));
+    } finally {
+      setDeleting(false);
     }
   };
+  /** FR-119: the copy takes every scope except status and URL keys; the dialog says so. */
   const handleDuplicate = async (): Promise<void> => {
-    if (duplicating || !confirm(t('productEditor.duplicateConfirm'))) return;
+    if (duplicating) return;
     setDuplicating(true);
+    setWholeProductError(null);
     try {
       const res = await apiClient.post<{ data: { id: string } }>(`${PRODUCT_PATH(productId)}/duplicate`, {});
       navigate(`/catalog/products/${res.data.id}`);
     } catch (err) {
-      setFormError({ kind: 'message', text: errorOf(err)?.message ?? t('productEditor.error.duplicate') });
+      setWholeProductError(errorOf(err)?.message ?? t('productEditor.error.duplicate'));
     } finally {
       setDuplicating(false);
     }
+  };
+  const openWholeProductDialog = (kind: 'duplicate' | 'delete' | 'archive'): void => {
+    setWholeProductError(null);
+    setArchiveError(null);
+    // After the menu has closed and handed focus back to its trigger.
+    setTimeout(() => {
+      if (kind === 'archive') setArchiveDialog('archive');
+      else setWholeProductDialog(kind);
+    }, 0);
   };
   const handleArchiveAction = async (): Promise<void> => {
     if (archiveDialog === null || archiving) return;
@@ -630,6 +709,101 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
     [state.data, state.scope, t, adminLanguage],
   );
 
+  // --- Completeness summary (§9, FR-097), from saved values -------------------------------
+  const fieldLabel = (path: string): string => {
+    if (path === 'name') return t('productEditor.field.name');
+    if (path === 'urlKey') return t('productEditor.field.urlKey');
+    const key = path.replace(/^attribute:/, '');
+    const attr = state.data?.attributes.find((a) => a.key === key);
+    const label = attr ? (Object.entries(attr.label).find(([code]) => code.split('-')[0] === adminLanguage)?.[1] ?? Object.values(attr.label)[0]) : undefined;
+    return label ?? key;
+  };
+  const fieldHref = (path: string): string => {
+    const sp = new URLSearchParams(searchParams);
+    sp.set('tab', path.startsWith('attribute:') ? 'attributes' : 'details');
+    sp.set('field', path);
+    return `?${sp.toString()}`;
+  };
+  const openField = (path: string): void => {
+    const tab: TabId = path.startsWith('attribute:') ? 'attributes' : 'details';
+    selectTab(tab);
+    setTimeout(() => document.getElementById(fieldDomId(path))?.focus(), 0);
+  };
+  const completenessNode = ((): ReactNode => {
+    const c = state.data?.completeness;
+    if (!c || !state.data) return null;
+    const linkClass = 'text-primary underline underline-offset-2 max-lg:inline-flex max-lg:min-h-11 max-lg:items-center';
+    const fieldLink = (path: string, text: string): ReactNode => (
+      <a
+        key={path}
+        href={fieldHref(path)}
+        data-own-unsaved-guard=""
+        className={linkClass}
+        onClick={(e): void => {
+          e.preventDefault();
+          openField(path);
+        }}
+      >
+        {text}
+      </a>
+    );
+    const joined = (items: ReactNode[]): ReactNode[] => items.flatMap((item, i) => (i === 0 ? [item] : [', ', item]));
+    let body: ReactNode = null;
+    if (c.level === 'channel_language' && c.missing.length > 0) {
+      body = (
+        <>
+          {t('productEditor.completeness.here')} {joined(c.missing.map((m) => fieldLink(m, fieldLabel(m))))}
+        </>
+      );
+    } else if (c.level === 'channel' && c.missing.length > 0) {
+      const channelId = state.scope.level === 'global' ? null : state.scope.channelId;
+      body = (
+        <>
+          {t('productEditor.completeness.channel')}{' '}
+          {joined(
+            c.missing.map((m) =>
+              fieldLink(
+                m.field,
+                t('productEditor.completeness.fieldLanguages', {
+                  field: fieldLabel(m.field),
+                  languages: m.languages.map((code) => languageName(state.data!.validScopes, channelId, code, adminLanguage)).join(', '),
+                }),
+              ),
+            ),
+          )}
+        </>
+      );
+    } else if (c.level === 'global' && c.incompleteScopes > 0) {
+      body = (
+        <>
+          {plural('productEditor.completeness.global', c.incompleteScopes)} —{' '}
+          <a
+            href={`?${(() => {
+              const sp = new URLSearchParams(searchParams);
+              sp.set('tab', 'scopes');
+              return sp.toString();
+            })()}`}
+            className={linkClass}
+            data-own-unsaved-guard=""
+            onClick={(e): void => {
+              e.preventDefault();
+              selectTab('scopes');
+            }}
+          >
+            {t('productEditor.scope.scopeMap')}
+          </a>
+        </>
+      );
+    }
+    if (!body) return null;
+    return (
+      <p className="m-0 inline-flex flex-wrap items-center gap-x-1 text-destructive" data-testid="completeness-summary">
+        <span className="sr-only">{t('productEditor.completeness.region')}: </span>
+        {body}
+      </p>
+    );
+  })();
+
   const contextValue = useMemo<ProductEditorContextValue>(
     () => ({
       productId,
@@ -680,6 +854,18 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
   for (const [path, message] of Object.entries(state.errors)) if (path.startsWith('seo:')) seoErrors[path.slice(4)] = message;
 
   const panel = (): ReactNode => {
+    if (!data && loadError) {
+      return (
+        <div className="flex flex-col items-start gap-3 py-6" data-testid="editor-load-error">
+          <p role="alert" className="m-0 text-sm text-destructive">
+            {loadError}
+          </p>
+          <Button type="button" variant="outline" size="sm" onClick={(): void => void load(state.scope)}>
+            <RotateCw size={14} aria-hidden="true" /> {t('productEditor.error.retry')}
+          </Button>
+        </div>
+      );
+    }
     if (!data) {
       return (
         <div className="space-y-3" data-testid="editor-skeleton">
@@ -689,7 +875,12 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
         </div>
       );
     }
-    if (GLOBAL_ONLY_TABS.has(activeTab) && !atGlobal) return globalOnlyNotice;
+    // Global-only tabs outside Global: the notice, then the content read-only (FR-081). The
+    // zone-backed tabs (Pricing, Channels) belong to their contributors, which take no read-only
+    // flag, so they show the notice alone.
+    const structuralReadOnly = readOnly || !atGlobal;
+    if (GLOBAL_ONLY_TABS.has(activeTab) && !atGlobal && (activeTab === 'pricing' || activeTab === 'channels')) return globalOnlyNotice;
+    const notice = GLOBAL_ONLY_TABS.has(activeTab) && !atGlobal ? globalOnlyNotice : null;
     switch (activeTab) {
       case 'details':
         return <DetailsTab attributeSets={attributeSets} categories={categories} categoriesLoading={categoriesLoading} />;
@@ -704,9 +895,23 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
           </div>
         );
       case 'variants':
-        return <VariantsSection productId={productId} />;
+        return (
+          <>
+            {notice}
+            <VariantsSection productId={productId} readOnly={structuralReadOnly} />
+          </>
+        );
       case 'composite':
-        return type === 'grouped' ? <GroupedItemsSection productId={productId} /> : <BundleSlotsSection productId={productId} />;
+        return (
+          <>
+            {notice}
+            {type === 'grouped' ? (
+              <GroupedItemsSection productId={productId} readOnly={structuralReadOnly} />
+            ) : (
+              <BundleSlotsSection productId={productId} readOnly={structuralReadOnly} />
+            )}
+          </>
+        );
       case 'media':
         return (
           <>
@@ -717,14 +922,19 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
       case 'inventory':
         return (
           <div className="b2b-col" style={{ gap: 16 }}>
-            {atGlobal ? (
-              <section aria-labelledby="product-stock-heading" className="space-y-2">
-                <SectionHeading id="product-stock-heading" title={t('productEditor.stock.title')} immediate={!readOnly} />
+            {atGlobal ? null : globalOnlyNotice}
+            <section aria-labelledby="product-stock-heading" className="space-y-2">
+              <SectionHeading id="product-stock-heading" title={t('productEditor.stock.title')} immediate={!structuralReadOnly} />
+              {structuralReadOnly ? (
+                // Stock outside Global (or without catalog:write) is shown, not edited: the panel
+                // has no read-only mode of its own, so its controls are disabled as a group.
+                <fieldset disabled className="m-0 min-w-0 border-0 p-0" data-testid="stock-read-only">
+                  <ProductInventoryTab productId={productId} />
+                </fieldset>
+              ) : (
                 <ProductInventoryTab productId={productId} />
-              </section>
-            ) : (
-              globalOnlyNotice
-            )}
+              )}
+            </section>
             <ProductOrderRulesCard productType={type ?? 'simple'} />
             {type === 'simple' || type === 'configurable' ? (
               <PackagingUnitsEditor
@@ -752,7 +962,12 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
           </>
         );
       case 'links':
-        return <ProductLinksSection productId={productId} />;
+        return (
+          <>
+            {notice}
+            <ProductLinksSection productId={productId} readOnly={structuralReadOnly} />
+          </>
+        );
       case 'channels':
         return (
           <div className="space-y-2">
@@ -761,7 +976,22 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
           </div>
         );
       case 'scopes':
-        return <ProductScopeOverview productId={productId} />;
+        return (
+          <ProductScopeOverview
+            productId={productId}
+            links={{
+              href: (scope, field): string => {
+                const sp = searchWithScope(searchParams, scope);
+                sp.set('tab', tabOfField(field));
+                sp.delete('field');
+                if (field) sp.set('field', field);
+                return `?${sp.toString()}`;
+              },
+              open: (scope, field): void => requestScope(scope, undefined, field, tabOfField(field)),
+              words: (scope): string => scopeShortWords(scope, valid, t, adminLanguage),
+            }}
+          />
+        );
       case 'seo':
         return (
           <AdminZone
@@ -811,52 +1041,67 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
               </div>
             ) : null}
           </div>
-          <StickyFormActions className="b2b-page-head__actions">
-            <div role="group" aria-label={t('productEditor.wholeProduct.caption')} className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-muted-foreground">{t('productEditor.wholeProduct.caption')}</span>
-              <button
-                type="button"
-                className="b2b-btn b2b-btn--default b2b-btn--sm"
-                onClick={(): void => void handleDuplicate()}
-                disabled={duplicating}
-              >
-                <Copy size={13} aria-hidden="true" /> {duplicating ? t('productEditor.action.duplicating') : t('productEditor.action.duplicate')}
-              </button>
-              {canWrite && !archivedAt ? (
+          {canWrite ? (
+            <div className="flex items-start gap-2">
+              {/* The whole-product actions (FR-084, §11): one menu, captioned; each applies at once. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="b2b-btn b2b-btn--default max-lg:min-h-11"
+                    aria-describedby="product-whole-caption"
+                    disabled={!data}
+                  >
+                    {t('productEditor.wholeProduct.menu')} <ChevronDown size={14} aria-hidden="true" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" aria-labelledby="product-whole-caption">
+                  <p aria-hidden="true" className="m-0 px-2 py-1.5 text-xs text-muted-foreground">
+                    {t('productEditor.wholeProduct.caption')}
+                  </p>
+                  <DropdownMenuItem className="max-lg:min-h-11" onSelect={(): void => openWholeProductDialog('duplicate')}>
+                    <Copy size={14} aria-hidden="true" /> {t('productEditor.action.duplicate')}
+                  </DropdownMenuItem>
+                  {!archivedAt ? (
+                    <DropdownMenuItem className="max-lg:min-h-11" onSelect={(): void => openWholeProductDialog('archive')}>
+                      <Archive size={14} aria-hidden="true" /> {t('productEditor.action.archive')}
+                    </DropdownMenuItem>
+                  ) : null}
+                  <DropdownMenuItem className="max-lg:min-h-11" destructive onSelect={(): void => openWholeProductDialog('delete')}>
+                    <Trash2 size={14} aria-hidden="true" /> {t('productEditor.action.delete')}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <span id="product-whole-caption" className="sr-only">
+                {t('productEditor.wholeProduct.caption')}
+              </span>
+              {/* Below 1024 px StickyFormActions is the bottom bar, so Save sits there (§11). */}
+              <StickyFormActions className="b2b-page-head__actions">
                 <button
                   type="button"
-                  className="b2b-btn b2b-btn--default b2b-btn--sm"
+                  className="b2b-btn b2b-btn--primary max-lg:min-h-11"
+                  // aria-disabled, not disabled: focus stays on Save after it has saved (WCAG 2.4.3).
+                  aria-disabled={stagedCount === 0 || saving || !data}
+                  aria-describedby="product-save-note"
                   onClick={(): void => {
-                    setArchiveError(null);
-                    setArchiveDialog('archive');
+                    if (stagedCount === 0 || saving || !data) return;
+                    void save();
                   }}
                 >
-                  <Archive size={13} aria-hidden="true" /> {t('productEditor.action.archive')}
+                  <Save size={14} aria-hidden="true" />
+                  {saving
+                    ? t('productEditor.save.saving')
+                    : stagedCount > 0
+                      ? plural('productEditor.save.actionCount', stagedCount)
+                      : t('productEditor.save.action')}{' '}
+                  <span className="sr-only">{t('productEditor.save.atScope', { scope: words(state.scope) })}</span>
                 </button>
-              ) : null}
-              <button type="button" className="b2b-btn b2b-btn--danger b2b-btn--sm" onClick={(): void => void handleDelete()}>
-                <Trash2 size={13} aria-hidden="true" /> {t('productEditor.action.delete')}
-              </button>
+                <span id="product-save-note" className="text-xs text-muted-foreground">
+                  {stagedCount === 0 ? t('productEditor.save.noChanges') : ''}
+                </span>
+              </StickyFormActions>
             </div>
-            <button
-              type="button"
-              className="b2b-btn b2b-btn--primary"
-              disabled={readOnly || stagedCount === 0 || saving || !data}
-              aria-describedby="product-save-note"
-              onClick={(): void => void save()}
-            >
-              <Save size={14} aria-hidden="true" />
-              {saving
-                ? t('productEditor.save.saving')
-                : stagedCount > 0
-                  ? t('productEditor.save.actionCount', { count: String(stagedCount) })
-                  : t('productEditor.save.action')}
-              <span className="sr-only"> {t('productEditor.save.atScope', { scope: words(state.scope) })}</span>
-            </button>
-            <span id="product-save-note" className="text-xs text-muted-foreground">
-              {stagedCount === 0 ? t('productEditor.save.noChanges') : ''}
-            </span>
-          </StickyFormActions>
+          ) : null}
         </div>
 
         <ProductScopeBar
@@ -867,20 +1112,15 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
           adminLanguage={adminLanguage}
           onRequestScope={(next, note): void => requestScope(next, note)}
           onOpenScopeMap={(): void => selectTab('scopes')}
+          completeness={completenessNode}
         />
 
         <p role="status" className="sr-only" data-testid="editor-announcer">
           {announcement}
         </p>
 
-        {loadError ? (
-          <Alert variant="destructive" className="mb-4">
-            <AlertDescription>{loadError}</AlertDescription>
-          </Alert>
-        ) : null}
-        <div role="alert">
-          {formError ? (
-            <Alert variant="destructive" className="mb-4" data-testid="product-save-error">
+        {formError ? (
+            <Alert variant="destructive" className="mb-4" data-testid="product-save-error" id="product-save-error" tabIndex={-1}>
               <AlertDescription>
                 {formError.kind === 'validation' ? (
                   t('productEditor.save.error.fields', { count: String(formError.count) })
@@ -904,12 +1144,13 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
               </AlertDescription>
             </Alert>
           ) : null}
+        <div role="status">
+          {info ? (
+            <Alert variant="success" role="none" className="mb-4" data-testid="product-save-info">
+              <AlertDescription>{info}</AlertDescription>
+            </Alert>
+          ) : null}
         </div>
-        {info ? (
-          <Alert variant="success" className="mb-4">
-            <AlertDescription>{info}</AlertDescription>
-          </Alert>
-        ) : null}
         <div role="status">
           {gateWarning ? (
             <Alert variant="warning" role="none" className="mb-4" data-testid="product-gate-warning">
@@ -973,7 +1214,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
             role="tabpanel"
             id="product-tabpanel"
             aria-labelledby={`product-tab-${activeTab}`}
-            aria-busy={state.busy}
+            aria-busy={state.busy && !loadError}
             tabIndex={-1}
           >
             {panel()}
@@ -1009,8 +1250,12 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
                   aria-busy={saving || undefined}
                   onClick={(): void => {
                     void save().then((ok) => {
-                      if (ok) proceed(guard);
-                      else setGuard(null);
+                      if (ok) {
+                        proceed(guard);
+                        return;
+                      }
+                      setGuard(null);
+                      setTimeout(() => document.getElementById('product-save-error')?.focus(), 0);
                     });
                   }}
                 >
@@ -1020,9 +1265,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
             }
           >
             <p id="product-guard-body" className="text-sm">
-              {t(guard.kind === 'leave' ? 'productEditor.guard.bodyLeave' : 'productEditor.guard.body', {
-                count: String(stagedCount),
-              })}
+              {plural(guard.kind === 'leave' ? 'productEditor.guard.bodyLeave' : 'productEditor.guard.body', stagedCount)}
             </p>
           </ModalDialog>
         ) : null}
@@ -1054,6 +1297,49 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
                 </li>
               ))}
             </ul>
+          </ModalDialog>
+        ) : null}
+
+        {wholeProductDialog !== null ? (
+          <ModalDialog
+            title={t(wholeProductDialog === 'duplicate' ? 'productEditor.duplicateTitle' : 'productEditor.deleteTitle')}
+            onClose={(): void => setWholeProductDialog(null)}
+            busy={duplicating || deleting}
+            aria-describedby="product-whole-confirm-body"
+            footer={
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={duplicating || deleting}
+                  onClick={(): void => setWholeProductDialog(null)}
+                >
+                  {t('productEditor.archive.cancel')}
+                </Button>
+                <Button
+                  type="button"
+                  variant={wholeProductDialog === 'delete' ? 'destructive' : 'default'}
+                  disabled={duplicating || deleting}
+                  aria-busy={duplicating || deleting || undefined}
+                  onClick={(): void => void (wholeProductDialog === 'duplicate' ? handleDuplicate() : handleDelete())}
+                >
+                  {wholeProductDialog === 'duplicate'
+                    ? duplicating
+                      ? t('productEditor.action.duplicating')
+                      : t('productEditor.duplicateAction')
+                    : t('productEditor.deleteAction')}
+                </Button>
+              </>
+            }
+          >
+            <p id="product-whole-confirm-body" className="text-sm">
+              {t(wholeProductDialog === 'duplicate' ? 'productEditor.duplicateConfirm' : 'productEditor.deleteConfirm')}
+            </p>
+            {wholeProductError ? (
+              <p role="alert" className="mt-3 text-sm text-destructive">
+                {wholeProductError}
+              </p>
+            ) : null}
           </ModalDialog>
         ) : null}
 
@@ -1106,7 +1392,7 @@ interface AdminVariant {
   updatedAt: string;
 }
 
-function VariantsSection({ productId }: { productId: string }): ReactNode {
+function VariantsSection({ productId, readOnly = false }: { productId: string; readOnly?: boolean }): ReactNode {
   const t = useTranslation('catalog');
   const [variants, setVariants] = useState<AdminVariant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1190,7 +1476,7 @@ function VariantsSection({ productId }: { productId: string }): ReactNode {
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle>{t('productEditor.variants.title')}<ImmediateBadge /></CardTitle>
+        <CardTitle>{t('productEditor.variants.title')}{readOnly ? null : <ImmediateBadge />}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {error ? (
@@ -1215,7 +1501,7 @@ function VariantsSection({ productId }: { productId: string }): ReactNode {
                 <TableHead>{t('productEditor.variants.column.sku')}</TableHead>
                 <TableHead>{t('productEditor.variants.column.attributes')}</TableHead>
                 <TableHead>{t('productEditor.variants.column.stock')}</TableHead>
-                <TableHead className="w-[1%] whitespace-nowrap">{t('productEditor.variants.column.actions')}</TableHead>
+                {readOnly ? null : <TableHead className="w-[1%] whitespace-nowrap">{t('productEditor.variants.column.actions')}</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1228,23 +1514,25 @@ function VariantsSection({ productId }: { productId: string }): ReactNode {
                       .join(', ') || '—'}
                   </TableCell>
                   <TableCell>{v.stockLevel ?? '—'}</TableCell>
-                  <TableCell>
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => void handleDelete(v.id, v.sku)}
-                    >
-                      {t('productEditor.variants.action.delete')}
-                    </Button>
-                  </TableCell>
+                  {readOnly ? null : (
+                    <TableCell>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => void handleDelete(v.id, v.sku)}
+                      >
+                        {t('productEditor.variants.action.delete')}
+                      </Button>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         )}
 
-        <CreateVariantInline onCreate={handleCreate} />
+        {readOnly ? null : <CreateVariantInline onCreate={handleCreate} />}
       </CardContent>
     </Card>
   );
@@ -1345,7 +1633,7 @@ function pickProductName(name: string | undefined | null, fallback: string): str
 
 const TARGETS_BATCH_PAGE_SIZE = 200;
 
-function ProductLinksSection({ productId }: { productId: string }): ReactNode {
+function ProductLinksSection({ productId, readOnly = false }: { productId: string; readOnly?: boolean }): ReactNode {
   const t = useTranslation('catalog');
   const [links, setLinks] = useState<AdminProductLink[]>([]);
   const [targetsById, setTargetsById] = useState<Map<string, AdminProductSummary>>(
@@ -1446,7 +1734,7 @@ function ProductLinksSection({ productId }: { productId: string }): ReactNode {
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle>{t('productEditor.links.title')}<ImmediateBadge /></CardTitle>
+        <CardTitle>{t('productEditor.links.title')}{readOnly ? null : <ImmediateBadge />}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {error ? (
@@ -1478,7 +1766,7 @@ function ProductLinksSection({ productId }: { productId: string }): ReactNode {
                         <TableHead>{t('productEditor.links.column.target')}</TableHead>
                         <TableHead>{t('productEditor.links.column.sku')}</TableHead>
                         <TableHead>{t('productEditor.links.column.position')}</TableHead>
-                        <TableHead className="w-[1%] whitespace-nowrap">{t('productEditor.links.column.actions')}</TableHead>
+                        {readOnly ? null : <TableHead className="w-[1%] whitespace-nowrap">{t('productEditor.links.column.actions')}</TableHead>}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1522,16 +1810,18 @@ function ProductLinksSection({ productId }: { productId: string }): ReactNode {
                               {target?.sku ?? '—'}
                             </TableCell>
                             <TableCell>{link.position}</TableCell>
-                            <TableCell>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => void handleDelete(link.id)}
-                              >
-                                {t('productEditor.links.action.remove')}
-                              </Button>
-                            </TableCell>
+                            {readOnly ? null : (
+                              <TableCell>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => void handleDelete(link.id)}
+                                >
+                                  {t('productEditor.links.action.remove')}
+                                </Button>
+                              </TableCell>
+                            )}
                           </TableRow>
                         );
                       })}
@@ -1543,7 +1833,7 @@ function ProductLinksSection({ productId }: { productId: string }): ReactNode {
           </div>
         )}
 
-        <CreateProductLinkInline onCreate={handleCreate} sourceProductId={productId} />
+        {readOnly ? null : <CreateProductLinkInline onCreate={handleCreate} sourceProductId={productId} />}
       </CardContent>
     </Card>
   );
@@ -1621,7 +1911,7 @@ interface AdminGroupedItem {
   position: number;
 }
 
-function GroupedItemsSection({ productId }: { productId: string }): ReactNode {
+function GroupedItemsSection({ productId, readOnly = false }: { productId: string; readOnly?: boolean }): ReactNode {
   const t = useTranslation('catalog');
   const [items, setItems] = useState<AdminGroupedItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1687,7 +1977,7 @@ function GroupedItemsSection({ productId }: { productId: string }): ReactNode {
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle>{t('productEditor.grouped.title')}<ImmediateBadge /></CardTitle>
+        <CardTitle>{t('productEditor.grouped.title')}{readOnly ? null : <ImmediateBadge />}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {error ? (
@@ -1712,7 +2002,7 @@ function GroupedItemsSection({ productId }: { productId: string }): ReactNode {
                 <TableHead>{t('productEditor.grouped.column.child')}</TableHead>
                 <TableHead>{t('productEditor.grouped.column.quantity')}</TableHead>
                 <TableHead>{t('productEditor.grouped.column.position')}</TableHead>
-                <TableHead className="w-[1%] whitespace-nowrap">{t('productEditor.grouped.column.actions')}</TableHead>
+                {readOnly ? null : <TableHead className="w-[1%] whitespace-nowrap">{t('productEditor.grouped.column.actions')}</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1721,23 +2011,25 @@ function GroupedItemsSection({ productId }: { productId: string }): ReactNode {
                   <TableCell className="font-mono text-xs">{item.childProductId}</TableCell>
                   <TableCell>{item.quantity}</TableCell>
                   <TableCell>{item.position}</TableCell>
-                  <TableCell>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => void handleDelete(item.id)}
-                    >
-                      {t('productEditor.grouped.action.remove')}
-                    </Button>
-                  </TableCell>
+                  {readOnly ? null : (
+                    <TableCell>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => void handleDelete(item.id)}
+                      >
+                        {t('productEditor.grouped.action.remove')}
+                      </Button>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         )}
 
-        <CreateGroupedItemInline onCreate={handleCreate} />
+        {readOnly ? null : <CreateGroupedItemInline onCreate={handleCreate} />}
       </CardContent>
     </Card>
   );
@@ -1818,7 +2110,7 @@ interface AdminBundleSlot {
   }>;
 }
 
-function BundleSlotsSection({ productId }: { productId: string }): ReactNode {
+function BundleSlotsSection({ productId, readOnly = false }: { productId: string; readOnly?: boolean }): ReactNode {
   const t = useTranslation('catalog');
   const [slots, setSlots] = useState<AdminBundleSlot[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1922,7 +2214,7 @@ function BundleSlotsSection({ productId }: { productId: string }): ReactNode {
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle>{t('productEditor.bundle.title')}<ImmediateBadge /></CardTitle>
+        <CardTitle>{t('productEditor.bundle.title')}{readOnly ? null : <ImmediateBadge />}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {error ? (
@@ -1949,12 +2241,13 @@ function BundleSlotsSection({ productId }: { productId: string }): ReactNode {
                 onAddOption={handleAddOption}
                 onRemoveOption={handleRemoveOption}
                 onDeleteSlot={handleDeleteSlot}
+                readOnly={readOnly}
               />
             ))}
           </div>
         )}
 
-        <CreateBundleSlotInline onCreate={handleCreateSlot} />
+        {readOnly ? null : <CreateBundleSlotInline onCreate={handleCreateSlot} />}
       </CardContent>
     </Card>
   );
@@ -1965,7 +2258,9 @@ function BundleSlotCard({
   onAddOption,
   onRemoveOption,
   onDeleteSlot,
+  readOnly = false,
 }: {
+  readOnly?: boolean;
   slot: AdminBundleSlot;
   onAddOption: (slotId: string, optionProductId: string) => Promise<void>;
   onRemoveOption: (slotId: string, optionId: string) => Promise<void>;
@@ -1987,14 +2282,16 @@ function BundleSlotCard({
             })}
           </span>
         </h3>
-        <Button
-          type="button"
-          size="sm"
-          variant="destructive"
-          onClick={() => void onDeleteSlot(slot.id)}
-        >
-          {t('productEditor.bundle.action.deleteSlot')}
-        </Button>
+        {readOnly ? null : (
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            onClick={() => void onDeleteSlot(slot.id)}
+          >
+            {t('productEditor.bundle.action.deleteSlot')}
+          </Button>
+        )}
       </div>
       <div className="mt-2">
         {slot.options.length === 0 ? (
@@ -2006,7 +2303,7 @@ function BundleSlotCard({
                 <TableHead>{t('productEditor.bundle.column.optionProductId')}</TableHead>
                 <TableHead>{t('productEditor.bundle.column.defaultQuantity')}</TableHead>
                 <TableHead>{t('productEditor.bundle.column.position')}</TableHead>
-                <TableHead className="w-[1%] whitespace-nowrap">{t('productEditor.bundle.column.actions')}</TableHead>
+                {readOnly ? null : <TableHead className="w-[1%] whitespace-nowrap">{t('productEditor.bundle.column.actions')}</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -2015,43 +2312,47 @@ function BundleSlotCard({
                   <TableCell className="font-mono text-xs">{opt.optionProductId}</TableCell>
                   <TableCell>{opt.defaultQuantity}</TableCell>
                   <TableCell>{opt.position}</TableCell>
-                  <TableCell>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => void onRemoveOption(slot.id, opt.id)}
-                    >
-                      {t('productEditor.bundle.action.removeOption')}
-                    </Button>
-                  </TableCell>
+                  {readOnly ? null : (
+                    <TableCell>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => void onRemoveOption(slot.id, opt.id)}
+                      >
+                        {t('productEditor.bundle.action.removeOption')}
+                      </Button>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         )}
       </div>
+      {readOnly ? null : (
       <div className="mt-3 flex items-end gap-2">
-        <div className="flex-1 space-y-1">
-          <Label htmlFor={`opt-${slot.id}`}>{t('productEditor.bundle.column.optionProductId')}</Label>
-          <ProductPicker
-            id={`opt-${slot.id}`}
-            mode="select"
-            value={optionId || null}
-            onChange={(v): void => setOptionId(v ?? '')}
-          />
+          <div className="flex-1 space-y-1">
+            <Label htmlFor={`opt-${slot.id}`}>{t('productEditor.bundle.column.optionProductId')}</Label>
+            <ProductPicker
+              id={`opt-${slot.id}`}
+              mode="select"
+              value={optionId || null}
+              onChange={(v): void => setOptionId(v ?? '')}
+            />
+          </div>
+          <Button
+            type="button"
+            onClick={() => {
+              void onAddOption(slot.id, optionId).then(() => {
+                setOptionId('');
+              });
+            }}
+          >
+            {t('productEditor.bundle.action.addOption')}
+          </Button>
         </div>
-        <Button
-          type="button"
-          onClick={() => {
-            void onAddOption(slot.id, optionId).then(() => {
-              setOptionId('');
-            });
-          }}
-        >
-          {t('productEditor.bundle.action.addOption')}
-        </Button>
-      </div>
+      )}
     </div>
   );
 }
