@@ -72,6 +72,7 @@ import { readContext as readCatalogContext, registerCatalogPublicRoutes } from '
 import { registerCatalogUrlKeyPublicRoutes } from './routes.public.url-keys.js';
 import { UrlKeyResolutionService } from './services/url-key-resolution.service.js';
 import type { ResolveSeoProductMeta } from './services/catalog-query.service.js';
+import type { ReadSeoProductScoped } from './services/scoped-values-read.service.js';
 import { registerCatalogAdminRoutes } from './routes.admin.js';
 import { registerCatalogApiKeyRoutes } from './routes.api-key.js';
 import { registerCatalogExternalRoutes } from './routes.external.js';
@@ -156,6 +157,11 @@ export interface CatalogModuleOptions {
    * no SEO field.
    */
   listSeoProductScopes?: ListSeoProductScopes;
+  /**
+   * Feature 170 (T123) — `seo`'s view of a product's metadata at one scope for the editor's
+   * scoped read; answers `null` while `seo` is not effectively present.
+   */
+  readSeoProductScoped?: ReadSeoProductScoped;
   /**
    * Feature 075 — `organizations`' read port. The external namespace's price
    * decoration resolves the calling organisation through it, where it used to
@@ -613,6 +619,7 @@ export function catalogModule(options: CatalogModuleOptions) {
               ...(options.languageService ? { languages: options.languageService } : {}),
               ...(options.assets ? { assets: options.assets } : {}),
               ...(options.organizations ? { organizations: options.organizations } : {}),
+              ...(options.readSeoProductScoped ? { readSeo: options.readSeoProductScoped } : {}),
               gate: completenessGate,
               ...(urlKeyService
                 ? {
