@@ -1,69 +1,145 @@
 import {
   ERROR_CODES,
-  parseScopedStatusColumn,
+  decodeCsvScopedCell,
+  encodeCsvScopedCell,
+  planLocaleWrites,
   productScopeStatusSchema,
-  productStatusSchema,
-  scopedStatusColumn,
   productVisibilitySchema,
+  sameSourceLocale,
+  scopedStatusColumn,
+  toScopeChannel,
+  validateScopedWrite,
   type BulkImportReport,
   type BulkImportRowError,
   type CatalogProductRecord,
+  type PimSourceValues,
   type ProductImportRow,
   type ProductScopedWriteCell,
-  decodeCsvScopedCell,
+  type ScopeLevel,
+  type ScopeRef,
+  type ScopedWriteOp,
 } from '@endora-commerce/contracts';
-import type { ImportExportAdapter, ImportExportPorts } from '../adapter.js';
+import type { ImportExportAdapter, ImportExportPorts, ImportRowsOptions } from '../adapter.js';
+import {
+  PRODUCTS_CSV_CELL_MAX,
+  PRODUCTS_CSV_ROWS_MAX,
+  ProductsFileError,
+  parseProductsHeader,
+  type FieldInfo,
+  type GrammarAttribute,
+  type GrammarChannel,
+  type ProductsColumn,
+} from './products-csv-grammar.js';
 
 /**
- * Products import/export. The CSV is intentionally flat — multilingual
- * `name`/`description` collapse to a single locale column (defaults to
- * `en-US`). Power users who need full multi-locale round-trip should use the
- * JSON API directly.
+ * Products import/export (feature 170, `specs/170-product-editor-scope-switcher/contracts/`
+ * `import-profiles-and-csv.md` §2–§3, `write-encoding.md`).
  *
- * Feature 075 / D-74 — `catalog` owns the write. The two enum columns are
- * parsed against the **published** schemas rather than a private allow-list
- * this module kept, so this path and the interactive admin API agree.
- * Feature 163 (FR-092, FR-112) — the status is `active` | `inactive`: `draft` and
- * the legacy `archived` alias are refused per record like any unknown value, and
- * `inactive` switches a product off without archiving it (archiving is its own
- * action, never a status).
+ * The file speaks one grammar (`products-csv-grammar.ts`) and one write encoding: an empty cell
+ * changes nothing, `NULL` is the deliberately empty value, `INHERIT` removes the own value, a
+ * leading `\` escapes a token, and every **text** column carries the formula guard (FR-118) —
+ * `encodeCsvScopedCell` on export and `decodeCsvScopedCell` on import, both here, so neither
+ * ships without the other. Locale columns (`name[pl_PL]`) are mapped by the run's import
+ * profile through `planLocaleWrites`; this module always hands the planner explicit ops, so a
+ * source value shaped like an op is never read as one.
+ *
+ * `catalog` owns the write (feature 075 / D-74). Each product row is its own call of the port —
+ * one transaction per product (`import-profiles-and-csv.md` §2) — and a dry run calls nothing.
  */
-const EXPORT_HEADER = [
-  'id',
-  'sku',
-  'slug',
-  'type',
-  'status',
-  'visibility',
-  'name_en',
-  'description_en',
-] as const;
+const EXPORT_HEADER = ['id', 'sku', 'slug', 'type', 'status', 'visibility', 'name', 'description'] as const;
+
+const text = (raw: string) => encodeCsvScopedCell({ kind: 'text', text: raw });
+const value = (raw: string) => encodeCsvScopedCell({ kind: 'text', text: raw }, { column: 'value' });
 
 function exportRowOf(p: CatalogProductRecord): string[] {
   return [
-    p.id,
-    p.sku,
-    p.slug,
-    p.type,
-    p.status,
-    p.visibility,
-    // 170-shim: the Global texts in the legacy columns; T081 / T087 replace the file grammar.
-    p.name,
-    p.description ?? '',
+    text(p.id),
+    text(p.sku),
+    text(p.slug),
+    value(p.type),
+    value(p.status),
+    value(p.visibility),
+    text(p.name),
+    // A product without a description holds the deliberately empty Global value.
+    p.description === null || p.description === undefined || p.description === ''
+      ? encodeCsvScopedCell({ kind: 'empty' })
+      : text(p.description),
   ];
 }
 
+type CellRead = { kind: 'no_change' } | { kind: 'op'; op: ScopedWriteOp<unknown> } | { kind: 'error'; code: string };
+
+/** The op a cell carries for its field, or why it carries none (`write-encoding.md` §3, §3a). */
+export function readProductsCell(info: FieldInfo, raw: string): CellRead {
+  if (raw.length > PRODUCTS_CSV_CELL_MAX) return { kind: 'error', code: 'too_long' };
+  const cell = decodeCsvScopedCell(info.text ? raw : raw.trim(), { column: info.text ? 'text' : 'value' });
+  if (cell.kind === 'no_change') return { kind: 'no_change' };
+  if (cell.kind === 'empty') return { kind: 'op', op: { op: 'empty' } };
+  if (cell.kind === 'inherit') return { kind: 'op', op: { op: 'inherit' } };
+  // A lone `'` decodes to empty text, which has no CSV form (`write-encoding.md` §2): refused,
+  // never guessed as "no change" or as the empty value.
+  if (cell.text === '') return { kind: 'error', code: 'invalid' };
+  switch (info.valueType) {
+    case 'status': {
+      const parsed = productScopeStatusSchema.safeParse(cell.text);
+      return parsed.success ? { kind: 'op', op: { op: 'set', value: parsed.data } } : { kind: 'error', code: 'invalid' };
+    }
+    case 'number':
+    case 'price': {
+      const number = Number(cell.text);
+      return Number.isFinite(number) ? { kind: 'op', op: { op: 'set', value: number } } : { kind: 'error', code: 'invalid' };
+    }
+    case 'boolean': {
+      const lowered = cell.text.toLowerCase();
+      if (lowered !== 'true' && lowered !== 'false') return { kind: 'error', code: 'invalid' };
+      return { kind: 'op', op: { op: 'set', value: lowered === 'true' } };
+    }
+    case 'multiselect':
+      return { kind: 'op', op: { op: 'set', value: cell.text.split('|').map((part) => part.trim()) } };
+    default:
+      return { kind: 'op', op: { op: 'set', value: cell.text } };
+  }
+}
+
+const levelOf = (scope: ScopeRef): ScopeLevel =>
+  scope.level === 'global' ? 'G' : scope.level === 'channel' ? 'C' : 'CL';
+
+function cellKey(field: string, scope: ScopeRef): string {
+  if (scope.level === 'global') return `${field}@G`;
+  if (scope.level === 'channel') return `${field}@${scope.channelId}`;
+  return `${field}@${scope.channelId}/${scope.languageCode.toLowerCase()}`;
+}
+
+const groupKey = (locale: string, sourceChannel: string | null) =>
+  `${locale.toLowerCase().replace(/-/g, '_')}|${sourceChannel ?? ''}`;
+
+type LocaleColumn = Extract<ProductsColumn, { kind: 'locale' }>;
+
 export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
+  async function channels(): Promise<GrammarChannel[]> {
+    // The languages a channel offers: its list, and its default language always (`toScopeChannel`).
+    return (await ports.salesChannels.listAll()).map((c) => ({ id: c.id, code: c.code, languages: toScopeChannel(c).languages }));
+  }
+
+  async function attributes(): Promise<Map<string, GrammarAttribute>> {
+    const all = await ports.catalogAttributes.listAll();
+    return new Map(
+      all.map((a) => [a.key, { key: a.key, valueType: a.valueType, scopable: a.scopable, isRequired: a.isRequired }]),
+    );
+  }
+
   return {
     name: 'products',
     owners: ['catalog'],
     exportPermission: 'catalog:read',
     importPermission: 'catalog:write',
+    requiresProfile: true,
     exportHeader: EXPORT_HEADER,
 
-    // Feature 163 (FR-092) — the fixed columns, then one `status@<channel code>` and
-    // one `status@<channel code>/<language>` column per scope: the override there,
-    // empty where the scope inherits. Importing the file unchanged changes nothing.
+    // The fixed columns, then one `status@<channel code>` and one
+    // `status@<channel code>/<language>` column per scope (feature 163, FR-092): the override
+    // there, `INHERIT` where the scope inherits (FR-043). Importing the file unchanged
+    // changes nothing (FR-114).
     async exportTable() {
       const [products, scoped] = await Promise.all([
         ports.catalogProducts.listAll(),
@@ -74,7 +150,13 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
         header: [...EXPORT_HEADER, ...columns],
         rows: products.map((p) => {
           const values = scoped.values[p.id] ?? {};
-          return [...exportRowOf(p), ...columns.map((column) => values[column] ?? '')];
+          return [
+            ...exportRowOf(p),
+            ...columns.map((column) => {
+              const own = values[column];
+              return own === undefined ? encodeCsvScopedCell({ kind: 'inherit' }) : value(own);
+            }),
+          ];
         }),
       };
     },
@@ -83,7 +165,7 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
       return (await ports.catalogProducts.listAll()).map(exportRowOf);
     },
 
-    importHeader: ['sku', 'status', 'visibility', 'name_en', 'description_en'] as const,
+    importHeader: ['sku'] as const,
     // Feature 160 (FR-043) — a product has no price of its own; prices are set
     // in price books. A file still carrying a price column is refused rather
     // than imported without it.
@@ -93,87 +175,185 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
       message: 'Prices are set in price books, not on the product: remove the price column.',
     })),
 
-    async importRows(records): Promise<BulkImportReport> {
-      const errors: BulkImportRowError[] = [];
-      const rows: ProductImportRow[] = [];
+    async importRows(records, options?: ImportRowsOptions): Promise<BulkImportReport> {
+      const profile = options?.profile;
+      if (profile === undefined) throw new Error('A products import runs with a profile.');
+      if (records.length > PRODUCTS_CSV_ROWS_MAX) {
+        throw new ProductsFileError([`The file has ${records.length} rows; at most ${PRODUCTS_CSV_ROWS_MAX} are accepted.`]);
+      }
+      const allChannels = await channels();
+      const header = options?.header ?? Object.keys(records[0] ?? {});
+      const parsed = parseProductsHeader(header, { channels: allChannels, attributes: await attributes() });
+      if (!parsed.ok) throw new ProductsFileError(parsed.errors);
+      const columns = parsed.columns;
+      const localeColumns = columns.filter((c): c is LocaleColumn => c.kind === 'locale');
 
+      const errors: BulkImportRowError[] = [];
+      const fieldErrors: NonNullable<BulkImportReport['fieldErrors']> = [];
+      const counts = new Map<string, { null: number; inherit: number }>();
+      const unmapped = new Map<string, { locale: string; sourceChannel: string | null; products: number }>();
+      const count = (column: string, op: ScopedWriteOp<unknown>) => {
+        if (op.op === 'set') return;
+        const entry = counts.get(column) ?? { null: 0, inherit: 0 };
+        if (op.op === 'empty') entry.null += 1;
+        else entry.inherit += 1;
+        counts.set(column, entry);
+      };
+      const skuOf = (record: Readonly<Record<string, string>>): string => {
+        const cell = decodeCsvScopedCell(record['sku'] ?? '');
+        return cell.kind === 'text' ? cell.text.trim() : '';
+      };
+
+      // The products' channel memberships, for the targets the profile names (FR-042).
+      const skus = [...new Set(records.map(skuOf).filter((sku) => sku !== ''))];
+      const found = skus.length > 0 && localeColumns.length > 0 ? await ports.catalogProducts.findBySkus(skus) : [];
+      const idBySku = new Map(found.map((p) => [p.sku, p.id]));
+      const members = new Map<string, Set<string>>();
+      for (const channelId of new Set(profile.localeMapping.flatMap((e) => e.targets.map((t) => t.channelId)))) {
+        if (found.length === 0 || !allChannels.some((c) => c.id === channelId)) continue;
+        const described = await ports.catalogAvailability.describeChannelAvailability(
+          found.map((p) => p.id),
+          channelId,
+        );
+        members.set(channelId, new Set(described.keys()));
+      }
+
+      const rows: Array<{ index: number; row: ProductImportRow }> = [];
       for (const [index, record] of records.entries()) {
-        const sku = record['sku']?.trim();
+        const sku = skuOf(record);
         if (!sku) {
           errors.push({ index, reason: 'sku is required' });
           continue;
         }
-
         const row: ProductImportRow = { sku };
-
-        const statusRaw = record['status']?.trim();
-        if (statusRaw) {
-          const parsed = productStatusSchema.safeParse(statusRaw);
-          if (!parsed.success) {
-            errors.push({ index, reason: `invalid status: ${statusRaw}` });
-            continue;
-          }
-          row.status = parsed.data;
-        }
-
-        const visibilityRaw = record['visibility']?.trim();
-        if (visibilityRaw) {
-          const parsed = productVisibilitySchema.safeParse(visibilityRaw);
-          if (!parsed.success) {
-            errors.push({ index, reason: `invalid visibility: ${visibilityRaw}` });
-            continue;
-          }
-          row.visibility = parsed.data;
-        }
-
-        // 170-shim: the legacy columns write the Global name and description; the profile-mapped
-        // grammar of `contracts/import-profiles-and-csv.md` is T081 / T087's.
         const cells: ProductScopedWriteCell[] = [];
-        const nameEn = record['name_en'];
-        if (nameEn !== undefined && nameEn !== '') {
-          cells.push({ scope: { level: 'global' }, field: 'name', op: { op: 'set', value: nameEn } });
-        }
-        const descEn = record['description_en'];
-        if (descEn !== undefined && descEn !== '') {
-          cells.push({ scope: { level: 'global' }, field: 'description', op: { op: 'set', value: descEn } });
-        }
+        const explicit = new Set<string>();
+        const fieldError = (column: string, code: string) => fieldErrors.push({ index, column, code });
+        const take = (scope: ScopeRef, field: ProductScopedWriteCell['field'], op: ScopedWriteOp<unknown>) => {
+          // The Global status is the product row's (catalog's import of today's file).
+          if (field === 'status' && scope.level === 'global' && op.op === 'set') {
+            row.status = op.value as NonNullable<ProductImportRow['status']>;
+            return;
+          }
+          cells.push({ scope, field, op });
+        };
 
-        // Feature 163 (FR-092), in the 170 write encoding (FR-116): `status@<channel code>[/<language>]`
-        // cells — empty = no change, `INHERIT` = inherit, `NULL` refused by catalog. 170-shim: the
-        // channel travels as its code in `channelId` until T081 resolves codes to ids here.
-        let scopedInvalid = false;
-        for (const [column, raw] of Object.entries(record)) {
-          const scope = parseScopedStatusColumn(column);
-          if (scope === null) continue;
-          const cell = decodeCsvScopedCell(raw.trim(), { column: 'value' });
-          if (cell.kind === 'no_change') continue;
-          const at =
-            scope.languageCode === null
-              ? ({ level: 'channel', channelId: scope.channelCode } as const)
-              : ({ level: 'channel_language', channelId: scope.channelCode, languageCode: scope.languageCode } as const);
-          if (cell.kind !== 'text') {
-            cells.push({ scope: at, field: 'status', op: { op: cell.kind } });
+        for (const column of columns) {
+          const raw = record[column.header] ?? '';
+          if (column.kind === 'visibility') {
+            const cell = decodeCsvScopedCell(raw.trim(), { column: 'value' });
+            if (cell.kind === 'no_change') continue;
+            if (cell.kind === 'empty') fieldError(column.header, 'not_emptyable');
+            else if (cell.kind === 'inherit') fieldError(column.header, 'inherit_at_global');
+            else {
+              const visibility = productVisibilitySchema.safeParse(cell.text);
+              if (visibility.success) row.visibility = visibility.data;
+              else fieldError(column.header, 'invalid');
+            }
             continue;
           }
-          const parsed = productScopeStatusSchema.safeParse(cell.text);
-          if (!parsed.success) {
-            errors.push({ index, reason: `invalid ${column.trim()}: ${cell.text}` });
-            scopedInvalid = true;
-            break;
+          if (column.kind !== 'scoped') continue;
+          const read = readProductsCell(column.info, raw);
+          if (read.kind === 'no_change') continue;
+          if (read.kind === 'error') {
+            fieldError(column.header, read.code);
+            continue;
           }
-          cells.push({ scope: at, field: 'status', op: { op: 'set', value: parsed.data } });
+          count(column.header, read.op);
+          const refusal = validateScopedWrite(column.info.spec, read.op, levelOf(column.scope));
+          if (refusal !== null) {
+            fieldError(column.header, refusal);
+            continue;
+          }
+          explicit.add(cellKey(column.info.field, column.scope));
+          take(column.scope, column.info.field, read.op);
         }
-        if (scopedInvalid) continue;
-        if (cells.length > 0) row.cells = cells;
 
-        // The `type` field is intentionally not editable post-create — see the
-        // FIELD_IMMUTABLE error code in catalog. Operators changing a product's
-        // structural type should issue a delete + recreate via the API.
-        rows.push(row);
+        // Locale columns, through the profile (`pim-locale-mapping.md` §2).
+        const groups = new Map<string, PimSourceValues['perLocale'][number]>();
+        for (const column of localeColumns) {
+          const read = readProductsCell(column.info, record[column.header] ?? '');
+          if (read.kind === 'no_change') continue;
+          if (read.kind === 'error') {
+            fieldError(column.header, read.code);
+            continue;
+          }
+          count(column.header, read.op);
+          const toGlobal =
+            profile.sourceLanguageForGlobal !== null && sameSourceLocale(profile.sourceLanguageForGlobal, column.locale);
+          const refusal = validateScopedWrite(column.info.spec, read.op, toGlobal ? 'G' : 'CL');
+          if (refusal !== null) {
+            fieldError(column.header, refusal);
+            continue;
+          }
+          const key = groupKey(column.locale, column.sourceChannel);
+          const group = groups.get(key) ?? { locale: column.locale, sourceChannel: column.sourceChannel, values: {} };
+          // Always an explicit op: a source value is never inspected for an op shape.
+          group.values[column.info.field] = read.op;
+          groups.set(key, group);
+        }
+
+        if (groups.size > 0) {
+          const productId = idBySku.get(sku);
+          const plan = planLocaleWrites({
+            source: { global: {}, perLocale: [...groups.values()] },
+            mapping: { sourceLanguageForGlobal: profile.sourceLanguageForGlobal, entries: profile.localeMapping },
+            validScopes: {
+              channels: allChannels
+                .filter((channel) => productId !== undefined && members.get(channel.id)?.has(productId) === true)
+                .map((channel) => ({ channelId: channel.id, languages: channel.languages })),
+            },
+          });
+          for (const group of plan.unmapped) {
+            const key = groupKey(group.locale, group.sourceChannel);
+            const entry = unmapped.get(key) ?? { locale: group.locale, sourceChannel: group.sourceChannel, products: 0 };
+            entry.products += 1;
+            unmapped.set(key, entry);
+          }
+          for (const skipped of plan.skipped) {
+            const target = skipped.scope.level === 'channel_language' ? skipped.scope : null;
+            const header = localeColumns.find((column) =>
+              profile.localeMapping.some(
+                (entry) =>
+                  sameSourceLocale(entry.sourceLocale, column.locale) &&
+                  entry.targets.some((t) => t.channelId === target?.channelId && t.languageCode === target?.languageCode),
+              ),
+            )?.header;
+            fieldError(header ?? 'sku', skipped.reason);
+          }
+          const conflict = plan.writes.find((write) => explicit.has(cellKey(write.field, write.scope)));
+          if (conflict !== undefined) {
+            errors.push({
+              index,
+              reason: `IMPORT_CELL_CONFLICT: "${conflict.field}" is written by a scope column and by a mapped locale column`,
+            });
+            continue;
+          }
+          for (const write of plan.writes) take(write.scope, write.field, write.op);
+        }
+
+        if (cells.length > 0) row.cells = cells;
+        if (row.cells === undefined && row.status === undefined && row.visibility === undefined) continue;
+        rows.push({ index, row });
       }
 
-      if (errors.length > 0) return { imported: 0, errors };
-      return ports.catalogBulkImport.importProducts(rows);
+      const extras = {
+        cellCounts: [...counts.entries()].map(([column, c]) => ({ column, null: c.null, inherit: c.inherit })),
+        warnings: [...unmapped.values()].map((u) => ({ kind: 'unmapped_locale' as const, ...u })),
+        fieldErrors,
+      };
+      if (options?.dryRun === true) return { imported: rows.length, errors, ...extras };
+
+      // One product, one call: each row is its own transaction (per-product atomicity).
+      let imported = 0;
+      for (const { index, row } of rows) {
+        const report = await ports.catalogBulkImport.importProducts([row]);
+        imported += report.imported;
+        for (const error of report.errors) errors.push({ index, reason: error.reason });
+        for (const error of report.fieldErrors ?? []) fieldErrors.push({ ...error, index });
+      }
+      errors.sort((a, b) => a.index - b.index);
+      return { imported, errors, ...extras };
     },
   };
 }
