@@ -327,7 +327,7 @@ US5, US6, US7 and US9 land; they are the acceptance of FR-004.
 - [x] T113 [US9] (S3) "Scopable" flag with the scope-change preview in `packages/modules/catalog/src/admin/pages/AttributesManager.tsx` and `lib/attribute-scope.ts`; test `admin/test/modules/catalog/AttributesManager.scopable.test.tsx` (RED first) (FR-012)
 - [x] T114 [P] [US9] (S1) **RED** `backend/test/contract/catalog/scoped-values-copy.test.ts` [PG]: `dryRun` lists overwrites; copy writes every target in one Command and one audit entry; `empty` only for optional fields; `source_inherits`; invalid target → `SCOPE_INVALID`; version CAS (FR-086) — plus `toChannelIds` deduplicated, `urlKey` and non-text fields `not_supported`, dry run side-effect free (R21)
 - [x] T115 [US9] (S1) Command `product.scoped_values.copy_to_channels` and `POST …/scoped-values/copy` in `commands/scoped-values.commands.ts` / `routes.admin.ts` — T114 green
-- [ ] T116 [US9] (S3) Copy dialog (`contracts/editor-ui.md` §8) in `packages/modules/catalog/src/admin/components/CopyToChannelsDialog.tsx` with `admin/test/modules/catalog/product-editor-copy.test.tsx` (RED first)
+- [x] T116 [US9] (S3) Copy dialog (`contracts/editor-ui.md` §8) in `packages/modules/catalog/src/admin/components/CopyToChannelsDialog.tsx` with `admin/test/modules/catalog/product-editor-copy.test.tsx` (RED first)
 
 ---
 
@@ -374,8 +374,8 @@ US5, US6, US7 and US9 land; they are the acceptance of FR-004.
 
 ## Phase 15: Polish and cross-cutting
 
-- [ ] T133 [P] (S3) Field zone scope props (FR-106): host passes `scope` and `languageCodes: null` to `product.editor.field.after`; `admin/test/modules/catalog/product-editor-field-zone.test.tsx` (RED first) proves a contributor ignoring `scope` still renders
-- [ ] T134 [P] (S3) **SC-013** `admin/test/modules/catalog/product-editor-a11y.test.tsx`: axe-core at G, C and C×L, read-only and with errors — 0 violations
+- [x] T133 [P] (S3) Field zone scope props (FR-106): host passes `scope` and `languageCodes: null` to `product.editor.field.after`; `admin/test/modules/catalog/product-editor-field-zone.test.tsx` (RED first) proves a contributor ignoring `scope` still renders
+- [x] T134 [P] (S3) **SC-013** `admin/test/modules/catalog/product-editor-a11y.test.tsx`: axe-core at G, C and C×L, read-only and with errors — 0 violations
 - [x] T135 [P] (S1) Palette (FR-108, XVI): `open-products` keywords (`scope`, `zakres`, `kanał`, `język`, `translation`, `tłumaczenie`) in `packages/modules/catalog/src/manifest.ts` and both catalog bundles (via S3); run `pnpm --filter backend run check:action-route-permissions`, `pnpm --filter admin exec vitest run test/unit/palette-coverage.test.ts`
 - [ ] T136 [P] (S2/S3) i18n sweep (FR-105): `pnpm --filter backend exec vitest run test/unit/_i18n/registered-bundles-shape.test.ts`; every new string in `en` and `pl` for catalog, seo, import_export, pim_connector, admin-kit; `pnpm run check:language`
 - [ ] T137 [P] (S1) Docs (en) and Polish mirrors per `specs/conventions/module-documentation.md`: `packages/modules/catalog/docs/` (three-level scopes, "Use value from <parent scope>", empty overrides, URL keys and redirects, the write encoding stated against JSON Merge Patch and Magento — FR-115), `import_export/docs/` (profiles, CSV grammar), `seo/docs/` (inline SEO, relaxed read), `search/docs/` (reindex, language-restricted match), `pim_connector/docs/` (T090); `docs/i18n/pl/…` and `docs/translation-cache/pl/…`
