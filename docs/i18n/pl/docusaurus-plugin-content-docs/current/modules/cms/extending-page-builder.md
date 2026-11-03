@@ -1,6 +1,6 @@
 ---
 title: Rozszerzanie Page Buildera
-sidebar_position: 2
+sidebar_position: 3
 ---
 
 # Rozszerzanie Page Buildera
@@ -8,8 +8,8 @@ sidebar_position: 2
 Moduł CMS dostarcza wbudowane komponenty — `Row`, `Columns`, `Text`, `Heading`, `Button`,
 `InsertBlock` i inne — ale każdy inny moduł backendu może dodawać własne komponenty.
 (`InsertTemplate` pozostaje zarejestrowany ze względu na dawne drzewa treści, ale nie ma go już w
-palecie komponentów). W ten sposób swoje bloki deklarują już moduły `cms`, `catalog`, `orders`,
-`invoices` i `transactional_emails`. Wyświetlają je nadal wbudowane komponenty z
+palecie komponentów). W ten sposób swoje bloki deklarują już moduły `cms`, `catalog`, `blog`,
+`newsletter`, `orders`, `invoices` i `transactional_emails`. Wyświetlają je nadal wbudowane komponenty z
 `@endora-commerce/cms-components` i `@endora-commerce/email-components`; pakiet modułu spoza
 platformy dostarcza własne, jak opisuje sekcja 2. Moduł, który dodaje komponent, robi to w dwóch
 miejscach:
@@ -615,6 +615,11 @@ zapisanej treści nic się nie zmienia:
 | E-mail | blok nie dodaje niczego do HTML ani do tekstu; wiadomość nadal jest wysyłana, a treść zawierającą blok nadal można zapisać |
 | Edytory w panelu | zapisany blok jest widocznym symbolem zastępczym, który zachowuje swoje właściwości; bloku nie ma w palecie |
 
+Edytory rozpoznają zapisany blok po jego miejscu w dokumencie — obiekcie z
+`type` obok `props` — więc węzły wewnątrz wartości tekstu sformatowanego
+(akapit, obraz, znacznik) nigdy nie są brane za bloki i nigdy nie stają się
+symbolami zastępczymi.
+
 Ponowne włączenie modułu przywraca wszystkie trzy, a żaden dokument nie zmienia
 się w międzyczasie. Storefront kieruje się listą modułów, które backend
 **zgłasza** jako nieobecne, więc blok, którego właściciela backend nie zna —
@@ -702,6 +707,15 @@ zmiennymi środowiskowymi `CMS_PB_BREAKPOINT_*`):
 - Tablet: 768–1023px
 - Komputer: ≥ 1024px
 
+Wartość responsywna jest zapisywana jako zwykła wartość (jedna dla wszystkich progów) albo jako
+`{ base, tablet?, desktop? }`, gdzie `base` to wartość dla telefonu. Edytor zawsze zapisuje `base`.
+Wartość zapisana bez niego — przez API albo import, na przykład `{ "desktop": 2 }` — oznacza
+**brak wartości poniżej pierwszego progu, który ją ma**: progi poniżej wyglądają tak, jakby opcja
+nie była ustawiona, a ten próg i wyższe przyjmują wartość. Tak odczytują ją `normalizeResponsive`
+i `resolveResponsive` z `@endora-commerce/page-builder-core`, więc renderer korzystający z nich
+nie potrzebuje niczego więcej; obiekt, którego kluczami nie są wyłącznie `base`, `tablet`
+i `desktop`, jest zwykłą wartością, nigdy responsywną.
+
 Edytory e-maili i faktur mają jedną szerokość układu i nie pokazują pól responsywnych.
 
 **Edytory e-maili** (transakcyjnych i newslettera) **nie** korzystają z podglądów CMS dla telefonu,
@@ -712,7 +726,10 @@ palety kolorów CMS.
 ## Zagnieżdżanie (sloty)
 
 Komponenty układu (`Row`, `Columns`) korzystają z pól Puck typu **slot** — zagnieżdżona treść jest
-przechowywana w `props`, a nie w dawnej mapie `zones`.
+przechowywana w `props`, a nie w dawnej mapie `zones`. Od funkcji 163 slotami są też panele
+`cms.Tabs` i `cms.Accordion` (`items[].panel`, który nie przyjmuje `cms.Column`, `cms.Tabs` ani
+`cms.Accordion`), a slot `slides` karuzeli przyjmuje oprócz `cms.Slide` cztery bloki elementów
+karuzeli. Nie deklaruj właściwości slotu jako `translatable`: bloki w jego wnętrzu deklarują własne.
 
 ## Model pudełkowy (komponenty układu i treści CMS)
 
@@ -722,6 +739,193 @@ każdej strony. **Columns** ma responsywną liczbę kolumn (1–12 dla każdego 
 
 Przy dodawaniu nowych komponentów CMS korzystaj z `createSpacingField`, `createBorderField` i
 `createColorField` z `@endora-commerce/page-builder-core`.
+
+## Sekcje
+
+Ustawienia sekcji — kotwica, schemat kolorów, tło, odstępy, szerokość,
+położenie treści i animacja wejścia — ma jeden blok, **`cms.Section`**, jako
+własne właściwości najwyższego poziomu obok miejsca na dowolne inne bloki (to,
+co widzi redaktor, opisuje strona modułu CMS): `anchor`, `scheme`,
+`background`, `width`, `customMaxWidthPx`, `reveal` oraz, dla każdego progu,
+`spaceTop`, `spaceBottom` i `contentPosition`. Te trzy właściwości to
+`responsiveFields` bloku; ich pola mają `PB_RESPONSIVE_METADATA`, więc edytor
+pokazuje je na karcie Responsive i edytują próg wybrany w jej przełączniku
+zakresu. `@endora-commerce/page-builder-core` eksportuje pola własne, których
+zwykłe pola Puck nie wyrażą — `createSectionBackgroundField`,
+`createSectionSpaceField` (responsywne), `createSectionAnchorField`,
+`createSectionRevealField` — oraz `isSectionBackgroundField`, po którym panel
+administracyjny daje tłu wybór zasobu z biblioteki. Żaden inny blok nie ma
+ustawień sekcji: blok poza sekcją wyświetla się dokładnie tak samo jak
+samodzielnie, a wygląd od krawędzi do krawędzi daje sekcja o szerokości
+**Bleed** albo **Full** wokół bloku.
+
+Proporcje dla każdego progu jako własna właściwość bloku (`cms.Video.aspectRatio`,
+`cms.Image.ratio`) daje `createAspectRatioField({ label, defaultRatio, allowAuto })`
+z tego samego pakietu: pole responsywne na karcie Responsive, z każdą gotową
+proporcją i własnym `szer.:wys.`. Proporcje zagnieżdżone w wartości złożonej
+(wideo w hero lub w bloku media i tekst) korzystają z `ResponsiveRatioControl`
+z `@endora-commerce/page-builder-admin`, przełącznika z pola obrazu.
+
+Sekcja stoi tylko na najwyższym poziomie strony:
+
+- każde miejsce na bloki każdego bloku jej nie przyjmuje — dopisz
+  `cms.Section` do `disallow` nowego slotu (albo pomiń ją w jego `allow`), jak
+  robią to wbudowane sloty;
+- strażnik edytora `shouldRevertPuckAction` z
+  `@endora-commerce/page-builder-core/editor/puck-guards` cofa wstawienie albo
+  przeniesienie bloku tylko dla najwyższego poziomu (`ROOT_ONLY_TYPES`) do
+  innego miejsca niż własna lista strony;
+- sekcja mimo to zapisana w zagnieżdżeniu wyświetla swoją zawartość bez
+  opakowania sekcji.
+
+Jedynym wyjątkiem jest **`cms.SectionGroup`**, kontener najwyższego poziomu,
+którego slot dopuszcza (`allow`) wyłącznie `cms.Section`. Sam także stoi tylko
+na najwyższym poziomie (jest w `ROOT_ONLY_TYPES`, więc dopisz go obok
+`cms.Section` do `disallow` nowego slotu); strażnik wpuszcza do strefy
+`content` grupy sekcję i nic poza nią (`isSectionGroupContentZone`,
+`SECTION_GROUP_CHILD_TYPES`). Grupa wyświetla się przez `SectionGroupFrame`:
+`<div class="cmsc-section-group">` z kotwicą, schematem i odstępami grupy
+(`--cmsc-group-p(t|b)(-md|-lg)`) oraz jedną warstwą
+`.cmsc-section-group__paint` — tło schematu, kolor, media i tło dekoracyjne, na
+całą szerokość okna — za wszystkimi jej sekcjami. Sekcja w grupie wyświetla się
+jak sekcja najwyższego poziomu (`data-in-group`), przezroczysta
+(`data-transparent`), gdy grupa coś maluje, a sekcja nie ma własnego tła ani
+innego schematu.
+
+Blok wyświetla się przez `SectionFrame` z `@endora-commerce/cms-components`,
+który na najwyższym poziomie (albo bezpośrednio w grupie najwyższego poziomu)
+rysuje `<section class="cmsc-section" id=… data-cmsb-scheme=… data-width=…>` z
+warstwą tła, wypełnieniem i ramką treści, a w innym zagnieżdżeniu wyświetla
+tylko zawartość. Tło z obrazem to `<picture>` (`object-fit` `cover` albo
+`contain`), chyba że jego `size` to `auto`, px lub %, albo ma `repeat`: wtedy
+jest jednym `.cmsc-section__tile` w warstwie mediów, malowanym jako tło CSS z
+`--cmsc-tile-image` (poniżej 768 px z `--cmsc-tile-image-mobile`).
+`decorativeSize`, `decorativeRepeat` i `decorativePosition` warstwy
+dekoracyjnej są zapisywane w stylu sekcji albo warstwy malowania grupy.
+
+Komponent, który musi wiedzieć, gdzie stoi, odczytuje `useSectionContext()` z
+`@endora-commerce/page-builder-core`: `{depth, topLevel}`. Hero używa go, by
+wczytywać media od razu tylko jako blok otwierający stronę — pierwszy blok
+najwyższego poziomu, pierwszy blok pierwszej sekcji najwyższego poziomu albo
+pierwszy blok pierwszej sekcji pierwszej grupy sekcji najwyższego poziomu.
+Głębokość pochodzi z `withHideOn`, które ma każdy blok; `EmbeddedBlockDepth`
+pozwala `cms.InsertBlock` wyświetlić osadzone drzewo na własnej głębokości,
+więc sekcja w osadzeniu na najwyższym poziomie jest sekcją, a w tym samym
+osadzeniu w kolumnie nie. Blok, który odsyła odwiedzającego z powrotem na
+stronę, odczytuje `useSectionAnchor()`, czyli kotwicę sekcji, w której stoi;
+tak robi `newsletter.Signup`.
+
+## Zmienne marki (`--cmsb-*`)
+
+Ustawienia marki trafiają na stronę jako zmienne CSS z prefiksem `--cmsb-` —
+kolory, kolory schematów, czcionki, skala typografii, kształt przycisków,
+odstępy i szerokości. Pełna lista jest na stronie ustawień marki modułu CMS.
+Arkusz stylów bloku, który ma podążać za marką, odczytuje je **zawsze z
+wartością zastępczą**:
+
+```css
+.acme_promotions-banner {
+  color: var(--cmsb-fg, #15202b);
+  background: var(--cmsb-bg, #ffffff);
+  border: 1px solid var(--cmsb-border, #d9e0e7);
+  font-family: var(--cmsb-font-body, Inter, system-ui, sans-serif);
+  padding-block: var(--cmsb-space-m, 24px);
+}
+.acme_promotions-banner__cta {
+  background: var(--cmsb-color-primary, #1261a6);
+  color: var(--cmsb-color-on-primary, #ffffff);
+  border-radius: var(--cmsb-btn-radius, 8px);
+}
+```
+
+- Wartość zastępcza to wygląd bloku bez ustawień marki — przy wyłączonym
+  module `cms`, nieudanym odczycie albo na powierzchni, która ich nie wstawia,
+  np. w edytorze e-maili. Użyj wartości, którą blok miał, zanim zaczął
+  odczytywać zmienną, a wprowadzenie zmiennej niczego nie zmieni w instancji,
+  w której nikt nie otworzy ekranu Marka.
+- Do tekstu i obramowań odczytuj zmienne schematu (`--cmsb-fg`, `--cmsb-bg`,
+  `--cmsb-fg-muted`, `--cmsb-border`, `--cmsb-link`) zamiast stałych kolorów.
+  Sekcja ze schematem kolorów je podmienia, więc blok dopasuje się do ciemnej
+  sekcji bez własnego kodu.
+- Właściwość koloru może zawierać odwołanie do koloru marki, `token:<role>`.
+  `resolveColorValue(value)` z `@endora-commerce/page-builder-core` zamienia je
+  na `var(--cmsb-color-<role>, <wartość wbudowana>)`, a wartość hex zostawia bez
+  zmian.
+- Wbudowane bloki stosują tę samą zasadę:
+  `packages/cms-components/src/brand/fallback-parity.test.tsx` wyświetla je bez
+  ustawień marki i porównuje wynik z wartościami sprzed zmiany.
+
+## Dane odczytywane po stronie serwera: punkt rozszerzenia block-data
+
+Blok pokazujący dane innego modułu — produkty, kategorie, wpisy na blogu — musi
+mieć te dane w HTML wyświetlanym przez serwer (zasada VII), dlatego odczyt jest
+wyniesiony poza blok:
+
+1. Blok **deklaruje** swoje żądanie jako dane. Rodzaje żądań tworzą zamkniętą
+   unię w `@endora-commerce/cms-components/utils/block-data`
+   (`packages/cms-components/src/utils/block-data.ts`):
+   `products-by-slugs`, `products-list` i `categories` (moduł `catalog`) oraz
+   `blog-posts` (moduł `blog`).
+2. Storefront **rozwiązuje** wszystkie żądania strony przed jej wyświetleniem
+   — `resolveBlockDataFor(documents, ctx, modules)` w
+   `storefront/lib/page-builder/block-data.ts`, podłączone przez
+   `storefront/components/BlockData.tsx` — i pomija żądanie, którego moduł
+   jest nieobecny (`blockDataOwnerOf`), więc wyłączony moduł nic stronę nie
+   kosztuje. Nieudany odczyt jest pomijany; blok wyświetla swój stan pusty, a
+   reszta strony działa normalnie.
+3. Blok **odczytuje** odpowiedź przez `useBlockData(request)` z
+   `@endora-commerce/cms-components/hooks/use-block-data` (kluczem jest
+   `blockDataKey(request)`). W edytorze w panelu, gdzie nie ma wyświetlania po
+   stronie serwera, ten sam hook pobiera dane przez czytniki podglądu
+   rejestrowane przez `AdminCatalogPreviewProvider`.
+
+Przed funkcją 163 ten punkt rozszerzenia obsługiwał tylko katalog; został
+uogólniony dla `blog.LatestPosts`. Jego dawna ścieżka,
+`@endora-commerce/cms-components/utils/catalog-block-data`, pozostaje jako
+**przestarzały** (deprecated) reeksport pod dawnymi nazwami
+(`collectCatalogBlockDataRequests`, `resolveCatalogBlockData`,
+`CatalogBlockDataSource` i pozostałe), bo importuje ją storefront utworzony
+przez wcześniejsze wydanie. Nowy kod importuje `utils/block-data`.
+
+Unia jest zamknięta: pakiet modułu nie może dziś dodać własnego rodzaju
+żądania. Hook danych serwerowych należący do modułu jest na liście propozycji
+poniżej.
+
+## Zmiana bloku, który jest już używany: rozszerzaj, nie zawężaj
+
+Wbudowany blok można przebudować, ale redaktor nie może stracić żadnej opcji,
+którą miał. Funkcja 163 przebudowała hero, nagłówek, przycisk, listę funkcji,
+statystyki, opinię, zakładki, akordeon, karuzelę i listy produktów według tych
+zasad, a autor bloku zmieniający dowolny blok powinien je stosować:
+
+1. **Zachowaj nadzbiór opcji.** Każde pole bloku zachowuje tę samą albo
+   równoważną kontrolkę. Przy każdej zmianie zapytaj: „co redaktor mógł zrobić
+   przed tą zmianą, czego nie może zrobić po niej?” — odpowiedź musi brzmieć
+   „nic”.
+2. **Tokeny to wartości domyślne, a nie klatka.** Tam, gdzie blok zaczyna
+   odczytywać token marki (rozmiar, czcionkę, kolor, odstęp), zostaw
+   nadpisanie **Custom** wartością dosłowną (px, hex, rodzina czcionek) w grupie
+   „Advanced”.
+3. **Neutralne wartości domyślne.** Nowe właściwości domyślnie zachowują
+   dotychczasowy wygląd: brak nakładki bez mediów, wyrównanie do początku,
+   chyba że blok był wyśrodkowany, nagłówki sekcji w rozmiarach `h2`/`h3`,
+   jeden przycisk główny.
+4. **Starsza treść nadal się wyświetla.** Przekształcaj dawne właściwości do
+   nowego kształtu w czystej funkcji (wbudowane bloki nazywają ją
+   `<block>FromLegacy`), stosuj ją przy wyświetlaniu i w `resolveData` bloku i
+   dbaj, by była idempotentna. Zapisana strona wyświetla się wtedy jak
+   wcześniej, a edytor przekształca ją przy następnym otwarciu (zob. *Starsza
+   treść musi się nadal wyświetlać* wyżej).
+5. **Udowodnij to.** Przed przebudową dodaj przypadek bloku do testu zgodności
+   opcji, `packages/cms-components/src/components/option-parity.test.ts`:
+   zapisuje on pola, które blok miał, jako wartości dosłowne i kończy się
+   błędem, dopóki któreś z nich nie ma odpowiednika. Dodaj domyślne
+   wyświetlenie bloku do testu zgodności wartości zastępczych.
+6. **Usuwaj blok tylko przy pełnym odpowiedniku.** `cms.ImageSlider` usunięto
+   dopiero wtedy, gdy jego przypadek zgodności wykazał, że elementy **Obraz
+   karuzeli** mają wszystkie jego opcje. Zapisana treść usuniętego bloku jest
+   zastępowana elementem zastępczym brakującego bloku; nazwy nigdy nie używa
+   się ponownie.
 
 ## Wbudowane komponenty Icons i Social
 
@@ -734,24 +938,22 @@ Przy dodawaniu nowych komponentów CMS korzystaj z `createSpacingField`, `create
 
 ## Dodatkowe komponenty stron docelowych
 
+Pełna lista bloków, z opisem tego, co oferuje każdy z nich, jest na stronie
+modułu CMS. Dwa z nich bywają mylone:
+
 | Komponent | Przeznaczenie |
 | --------- | ------- |
-| `Spacer` | Odstęp pionowy z opcjonalną linią oddzielającą |
-| `FeatureList` | Kolumny z ikoną, tytułem i opisem |
-| `Hero` | Tło, nagłówek i wezwanie do działania na górze strony |
-| `LogoStrip` | Logotypy partnerów lub klientów |
-| `Testimonial` | Cytat i autor |
-| `Stats` | Pasek wskaźników |
-| `AnnouncementBar` | Wąski pasek z komunikatem promocyjnym |
-| `SimpleTable` | Nagłówki i wiersze z kolumnami rozdzielonymi znakiem `\|` |
-| `NewsletterSignup` | Formularz zapisu (ustaw `actionUrl` na endpoint newslettera) |
-| `ContactFormEmbed` | Osadzony formularz w iframe albo link mailto |
+| `newsletter.Signup` | Zapisuje przez moduł `newsletter`: tematy jako tagi, wymagana zgoda, działa bez JavaScriptu. Jest obecny tylko wtedy, gdy obecny jest `newsletter`. |
+| `cms.NewsletterSignup` | Wysyła formularz do dowolnego zewnętrznego endpointu (`actionUrl`), dla usługi newslettera spoza platformy. |
 
 ## Propozycje dalszych zmian (głębsze integracje)
 
 | Priorytet | Pomysł | Dlaczego |
 | -------- | ---- | --- |
-| Średni | Zapis do newslettera ↔ moduł `newsletter` | Automatyczne podłączenie endpointu zapisu dla kanału |
+| Zrobione (funkcja 163) | Zapis do newslettera ↔ moduł `newsletter` | `newsletter.Signup` wysyła formularz do `/newsletter/subscribe` storefrontu, który zapisuje w kanale sprzedaży żądania ze źródłem `cms-block`. |
+| Średni | Hook danych serwerowych należący do modułu | Pozwoliłby warstwie `./storefront` modułu zadeklarować asynchroniczną funkcję odczytu dla własnych bloków, zamiast dodawać rodzaj żądania do zamkniętej unii block-data w `cms-components`. Zmienia granicę wyświetlania po stronie serwera w komponencie Page Buildera, więc wymaga własnej specyfikacji. |
+| Średni | Wyspy (islands) dla bloków statycznych | Dziś hydratowane jest całe drzewo Page Buildera. Wyświetlanie bloków statycznych jako wysp tylko po stronie serwera zmniejszyłoby ilość JavaScriptu wysyłanego ze stroną i pracę przy hydratacji. |
+| Średni | `hreflang` z adresami dla każdego języka | Jeden adres storefrontu obsługuje wszystkie języki, więc strony ogłaszają inne języki tylko jako `og:locale:alternate`. Alternatywy `hreflang` wymagają najpierw adresów zależnych od języka. |
 | Niski | Kontakt ↔ moduł formularzy | Wybór istniejącego formularza zamiast adresu iframe |
 
 `Accordion` i `Tabs` już obsługują sekcje w stylu FAQ; korzystaj z nich zamiast osobnego komponentu

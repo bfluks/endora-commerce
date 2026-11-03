@@ -25,7 +25,10 @@ export type QuoteRequestEventType =
   | 'note-added'
   // Feature 153 (owner answer Q4) — the quote PDF was e-mailed. Admin-only:
   // the customer reply leaves it out.
-  | 'pdf-sent';
+  | 'pdf-sent'
+  // Feature 162 — custom-field values a Sales Opportunity could not carry into
+  // the request. Admin-only: it names keys of possibly internal fields.
+  | 'custom-field-carry-skipped';
 
 @GlobalEntity()
 @Entity({ tableName: 'quote_request_events' })

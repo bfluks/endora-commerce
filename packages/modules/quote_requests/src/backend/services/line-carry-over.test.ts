@@ -114,6 +114,31 @@ describe('pairLines — customer patchDraft (no ids)', () => {
     expect(removed).toEqual([second]);
   });
 
+  it('FR-031 (b) — the stored unit id pairs a line whose unit was renamed, ahead of a name match', () => {
+    const renamed = row('renamed', { packagingUnitId: 'unit-pallet', packagingUnitName: 'Paleta' });
+    const sameName = row('same-name', { packagingUnitId: 'unit-other', packagingUnitName: 'Paleta EUR' });
+    const { paired } = pairLines(
+      [sameName, renamed],
+      [{ productId: P1, variantId: null, packagingUnitId: 'unit-pallet', packagingUnitName: 'Paleta EUR' }],
+      'customer',
+    );
+    expect(paired).toEqual([renamed]);
+  });
+
+  it('a line without a unit id still pairs by name, and an id never pairs a row without one', () => {
+    const legacy = row('legacy', { packagingUnitName: 'Paleta' });
+    expect(
+      pairLines([legacy], [{ productId: P1, variantId: null, packagingUnitName: 'Paleta' }], 'customer').paired,
+    ).toEqual([legacy]);
+    expect(
+      pairLines(
+        [legacy],
+        [{ productId: P1, variantId: null, packagingUnitId: 'unit-pallet', packagingUnitName: 'Paleta' }],
+        'customer',
+      ).paired,
+    ).toEqual([legacy]);
+  });
+
   it('an exact packaging match is not stolen by an earlier line that falls back to position', () => {
     const karton = row('karton', { packagingUnitName: 'Karton' });
     const paleta = row('paleta', { packagingUnitName: 'Paleta' });
@@ -129,19 +154,104 @@ describe('pairLines — customer patchDraft (no ids)', () => {
   });
 });
 
+/**
+ * Feature 159 (research N-32) — one product may sit on several lines, in
+ * different groups. With no id to go by, a line pairs with a row of its own
+ * group first, then one of its own quantity, before position decides.
+ */
+describe('pairLines — one product on several lines (feature 159)', () => {
+  const Y = 'group-y';
+  const Z = 'group-z';
+
+  it('a customer line pairs with the row of its quantity: removing the 5 keeps the 3 in its group', () => {
+    const five = row('five', { quantity: 5, groupId: Y });
+    const three = row('three', { quantity: 3, groupId: Z });
+    const { paired, removed } = pairLines(
+      [five, three],
+      [{ productId: P1, variantId: null, packagingUnitName: null, quantity: 3 }],
+      'customer',
+    );
+    expect(paired).toEqual([three]);
+    expect(removed).toEqual([five]);
+  });
+
+  it('a line naming its group pairs with the row of that group, ahead of quantity and position', () => {
+    const five = row('five', { quantity: 5, groupId: Y });
+    const three = row('three', { quantity: 3, groupId: Z });
+    const { paired } = pairLines(
+      [five, three],
+      [
+        { productId: P1, variantId: null, packagingUnitName: null, groupId: Z, quantity: 5 },
+        { productId: P1, variantId: null, packagingUnitName: null, groupId: Y, quantity: 3 },
+      ],
+      'customer',
+    );
+    expect(paired).toEqual([three, five]);
+  });
+
+  it('group and quantity together win over the group alone', () => {
+    const a = row('a', { quantity: 2, groupId: Y });
+    const b = row('b', { quantity: 7, groupId: Y });
+    const { paired } = pairLines(
+      [a, b],
+      [
+        { productId: P1, variantId: null, packagingUnitName: null, groupId: Y, quantity: 4 },
+        { productId: P1, variantId: null, packagingUnitName: null, groupId: Y, quantity: 2 },
+      ],
+      'customer',
+    );
+    // The 2 claims its exact row first; the 4 (changed) takes the other row of Y.
+    expect(paired).toEqual([b, a]);
+  });
+
+  it('`groupId: null` is a group too — the ungrouped section', () => {
+    const grouped = row('grouped', { quantity: 1, groupId: Y });
+    const ungrouped = row('ungrouped', { quantity: 1, groupId: null });
+    const { paired } = pairLines(
+      [grouped, ungrouped],
+      [{ productId: P1, variantId: null, packagingUnitName: null, groupId: null }],
+      'customer',
+    );
+    expect(paired).toEqual([ungrouped]);
+  });
+
+  it('an admin line without an id pairs by group within its variant wildcard', () => {
+    const y = row('y', { variantId: V1, quantity: 1, groupId: Y });
+    const z = row('z', { variantId: V1, quantity: 1, groupId: Z });
+    const { paired } = pairLines([y, z], [{ productId: P1, groupId: Z }], 'admin');
+    expect(paired).toEqual([z]);
+  });
+
+  it('a line saying nothing of group or quantity still pairs by position', () => {
+    const a = row('a', { quantity: 5, groupId: Y });
+    const b = row('b', { quantity: 3, groupId: Z });
+    const { paired } = pairLines(
+      [a, b],
+      [{ productId: P1, variantId: null, packagingUnitName: null }],
+      'customer',
+    );
+    expect(paired).toEqual([a]);
+  });
+});
+
 describe('carriedProposal — threat model T5', () => {
   it('a paired line whose body omits desiredUnitPrice carries the stored proposal', () => {
     expect(carriedProposal(undefined, { desiredUnitPrice: '95.00' })).toBe('95.00');
   });
 
   it('an explicit value replaces it', () => {
-    expect(carriedProposal(80, { desiredUnitPrice: '95.00' })).toBe('80.00');
-    expect(carriedProposal(0, { desiredUnitPrice: '95.00' })).toBe('0.00');
+    expect(carriedProposal(80, { desiredUnitPrice: '95.00' })).toBe('80.0000');
+    expect(carriedProposal(0, { desiredUnitPrice: '95.00' })).toBe('0.0000');
+  });
+
+  it('stores a typed proposal at its four places, unrounded (§10.18)', () => {
+    expect(carriedProposal(1.005, null)).toBe('1.0050');
+    expect(carriedProposal(0.0125, null)).toBe('0.0125');
   });
 
   it('a new line without a proposal has none', () => {
     expect(carriedProposal(undefined, null)).toBeNull();
-    expect(carriedProposal(12.5, null)).toBe('12.50');
+    expect(carriedProposal(12.5, null)).toBe('12.5000');
   });
 });
 
@@ -162,6 +272,16 @@ describe('referenceInputsUnchanged — whether a paired line keeps its stored re
         { productId: P1, quantity: 10 },
       ),
     ).toBe(true);
+  });
+
+  it('FR-031 (b) — the same unit id is the same unit, whatever it is called now', () => {
+    const withId = { ...stored, packagingUnitId: 'unit-pallet' };
+    expect(referenceInputsUnchanged(withId, { ...withId, packagingUnitName: 'Paleta EUR' })).toBe(true);
+    expect(referenceInputsUnchanged(withId, { ...withId, packagingUnitId: 'unit-other' })).toBe(false);
+    expect(referenceInputsUnchanged(withId, { ...withId, packagingUnitBaseQuantity: 6 })).toBe(false);
+    // Only one side carries an id: the name decides, as before.
+    expect(referenceInputsUnchanged(stored, { ...withId, packagingUnitName: 'Paleta EUR' })).toBe(false);
+    expect(referenceInputsUnchanged(stored, { ...withId })).toBe(true);
   });
 
   it('is false when any of them changed', () => {

@@ -50,6 +50,17 @@ export interface CmsPagePickerProps {
   ariaLabel?: string;
   id?: string;
   className?: string;
+  /**
+   * Pages never offered, whatever the search returns — a page editor's own
+   * page and its descendants, for a parent picker (feature 163). A filter on
+   * the client only: the server behind the write stays the authority.
+   */
+  excludeIds?: readonly string[];
+  /**
+   * The label shown for `value` until a search has returned that page — the
+   * host usually already knows it, and the cache below starts empty.
+   */
+  selectedLabel?: string;
 }
 
 const SEARCH_DEBOUNCE_MS = 250;
@@ -84,8 +95,9 @@ export function CmsPagePicker(props: CmsPagePickerProps): ReactNode {
           for (const p of res.data) next.set(p.id, p);
           return next;
         });
+        const excluded = new Set(props.excludeIds ?? []);
         setOptions(
-          res.data.map((p) => ({
+          res.data.filter((p) => !excluded.has(p.id)).map((p) => ({
             value: p.id,
             label: p.name,
             description: `/${p.slug}${p.status === 'published' ? '' : ` · ${p.status}`}`,
@@ -99,7 +111,7 @@ export function CmsPagePicker(props: CmsPagePickerProps): ReactNode {
         if (seq === seqRef.current) setSearching(false);
       }
     },
-    [props.salesChannelId],
+    [props.salesChannelId, props.excludeIds],
   );
 
   const handleSearchChange = useCallback(
@@ -113,8 +125,8 @@ export function CmsPagePicker(props: CmsPagePickerProps): ReactNode {
 
   const selectedLabel = useMemo(() => {
     if (!props.value) return '';
-    return cache.get(props.value)?.name ?? '';
-  }, [props.value, cache]);
+    return cache.get(props.value)?.name ?? props.selectedLabel ?? '';
+  }, [props.value, cache, props.selectedLabel]);
 
   const emptyMessage =
     props.emptyMessage ?? error ?? (searching ? 'Searching…' : 'No matching pages.');

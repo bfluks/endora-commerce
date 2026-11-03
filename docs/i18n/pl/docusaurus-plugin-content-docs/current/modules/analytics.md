@@ -56,6 +56,21 @@ i `(type, occurred_at)`. Pulpit nigdy nie pyta o nieograniczony zakres.
 - `NoopForwarder` — w przeciwnym razie. Przyjmowanie zdarzeń nigdy nie czeka na błąd
   przekazywania, a zdarzenia źródłowe i tak są trwale zapisane w `analytics_events`.
 
+## Strefa czasowa raportów
+
+Ustawienie **Strefa czasowa raportów** (`analytics.reporting_time_zone`, w sekcji
+*Analityka* ekranu ustawień) to kalendarz, w którym raporty liczą dni: raport za
+zakres dni bierze każdy dzień od północy do północy w tej strefie. Jest to nazwa
+strefy czasowej IANA, np. `Europe/Warsaw`, albo `UTC` — wartość domyślna; strefa,
+której środowisko uruchomieniowe nie zna, jest odrzucana z `422`
+`VALIDATION_FAILED`. Obecnie liczy w niej analityka projektów, a CRM ma do niej
+dołączyć.
+
+Inne moduły odczytują je przez bramkowany port `reportingTimeZonePort`
+(`ReportingTimeZonePort` w `@endora-commerce/contracts`, `timeZone()`), nigdy przez
+kod ustawienia. Moduł czytający deklaruje krawędź `degrades-without`, najpierw
+sprawdza obecność tego modułu i liczy w `UTC`, gdy Analityka jest wyłączona.
+
 ## Encje
 
 `AnalyticsEvent` — `type`, `occurredAt`, `recordedAt`, opcjonalnie `salesChannelId`,

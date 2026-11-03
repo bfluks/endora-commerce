@@ -1,5 +1,5 @@
-import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { LocalizedLink } from '../../lib/i18n/localized-link';
 
 /**
  * Feature 044 / US1 — mobile home strip (Industria Mobile design §01):
@@ -31,7 +31,7 @@ export function HomeMobileStrip(props: {
       </div>
       <div className="flex items-center gap-[8px] overflow-x-auto px-[16px] py-[10px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {props.chips.map((c) => (
-          <Link
+          <LocalizedLink
             key={c.href + c.label}
             href={c.href}
             className={
@@ -42,7 +42,7 @@ export function HomeMobileStrip(props: {
             }
           >
             {c.label}
-          </Link>
+          </LocalizedLink>
         ))}
       </div>
     </div>

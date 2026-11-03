@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, type RefObject } from 'react';
 import { useTranslation } from '../i18n/useTranslation.js';
 
 /**
@@ -22,7 +22,17 @@ import { useTranslation } from '../i18n/useTranslation.js';
  * @param message Optional override for the confirmation text. Defaults to the
  *                shared `core` namespace string.
  */
-export function useUnsavedChangesPrompt(when: boolean, message?: string): void {
+export interface UnsavedChangesPromptOptions {
+  /**
+   * Also ask before a `role="tab"` **outside** this element is activated
+   * (feature 161, FR-020). For a panel contributed into a host's tabbed screen
+   * — a zone in the product editor's Pricing tab — a host tab switch unmounts
+   * the panel and its edits with it, and is neither a link nor an unload.
+   */
+  guardTabsOutside?: RefObject<HTMLElement | null>;
+}
+
+export function useUnsavedChangesPrompt(when: boolean, message?: string, options: UnsavedChangesPromptOptions = {}): void {
   const t = useTranslation('core');
   const confirmMessage = message ?? t('form.unsavedChanges.confirm');
 
@@ -50,6 +60,9 @@ export function useUnsavedChangesPrompt(when: boolean, message?: string): void {
       const anchor = (e.target as HTMLElement | null)?.closest('a');
       if (!anchor) return;
       if (anchor.target === '_blank' || anchor.hasAttribute('download')) return;
+      // A link whose screen runs its own unsaved-changes guard (the product editor's scope
+      // links: Save / Discard / Stay) opts out, so the operator is not asked twice.
+      if (anchor.closest('[data-own-unsaved-guard]')) return;
 
       const href = anchor.getAttribute('href');
       if (!href) return;
@@ -70,4 +83,22 @@ export function useUnsavedChangesPrompt(when: boolean, message?: string): void {
     return (): void =>
       document.removeEventListener('click', onClickCapture, true);
   }, [when, confirmMessage]);
+
+  // 3. A host's tab outside the panel (opt-in, `guardTabsOutside`).
+  const panel = options.guardTabsOutside;
+  useEffect(() => {
+    if (!when || !panel) return undefined;
+    const onTabCapture = (e: MouseEvent): void => {
+      if (e.defaultPrevented) return;
+      const tab = (e.target as HTMLElement | null)?.closest('[role="tab"]');
+      if (!tab || panel.current?.contains(tab)) return;
+      if (tab.getAttribute('aria-selected') === 'true') return;
+      if (!window.confirm(confirmMessage)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    document.addEventListener('click', onTabCapture, true);
+    return (): void => document.removeEventListener('click', onTabCapture, true);
+  }, [when, confirmMessage, panel]);
 }

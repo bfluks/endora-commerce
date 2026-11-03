@@ -48,6 +48,9 @@ _None._
 | Action | Opens | Permission |
 | --- | --- | --- |
 | `new-post` | `/blog/posts/new` | `blog.write` |
+| `open-blog-categories` | `/blog/categories` | `blog.read` |
+| `open-blog-posts` | `/blog/posts` | `blog.read` |
+| `open-blog-tags` | `/blog/tags` | `blog.read` |
 
 ## Settings
 

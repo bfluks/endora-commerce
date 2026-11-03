@@ -982,6 +982,11 @@ export function planInstance(input: PlanInput): InstancePlan {
     // survives beside it for the operator who wants them (§3's User Story 3).
     setup: setupSteps.map((step) => `pnpm run ${step}`).join(' && '),
     start: 'pnpm -C backend run start',
+    // The separate worker tier, beside the API it is split from (issue #133).
+    // The member has declared `worker` all along and the queue-consumer page
+    // sends an operator to it; without this entry the root, where every other
+    // command runs, had no way to start it.
+    worker: 'pnpm -C backend run worker',
     // FR-110 — the admin bundle, served. Baseline step D1: `admin/package.json`
     // has declared `preview` all along and no root script and no printed step
     // named it, so a client who ran `build:admin` had a bundle and no way to
@@ -1613,7 +1618,7 @@ const README_COMMANDS: readonly (readonly [script: string, argument: string, not
   ['dev:services', '', 'PostgreSQL, Redis, Meilisearch and a mail catcher, from\n`compose.dev.yml` beside this file. It waits for each one to\nreport healthy'],
   ['dev:services:down', '', 'stops them, keeping their data'],
   ['setup', '', 'generate, build, migrate and install every module — the four\nsteps below, in one line. Each still exists on its own'],
-  ['generate', '', 'the files the admin and the docs site are built from,\nand your deployment\'s divergence report'],
+  ['generate', '', 'the files the admin and the docs site are built from,\nand your deployment\'s divergence report. A module of the\nrelease that an installed module needs is declared and\ninstalled first'],
   ['build', '', 'the entry points, compiled, and every member built'],
   ['build:backend', '', 'one layer at a time. Each of the three is deployed on its own\nhost, on its own schedule, so each is built on its own too'],
   ['build:admin', '', ''],
@@ -1621,6 +1626,7 @@ const README_COMMANDS: readonly (readonly [script: string, argument: string, not
   ['migrate', '', 'the schema, in the order the manifests compute'],
   ['module:install', ' --all', 'every module you declared, in dependency order'],
   ['start', '', 'the API'],
+  ['worker', '', 'the queue consumers on their own, for an API started with\n`BACKEND_ROLE=api`. Without that the API runs them itself'],
   ['preview:admin', '', 'the admin bundle you just built, served on its own port'],
   ['dev:all', '', 'the API, the admin preview and the storefront beside this\ndirectory, in one terminal. Ctrl-C stops all of them'],
   ['dev', '', 'the API, rebuilt and restarted as you edit your overlay'],

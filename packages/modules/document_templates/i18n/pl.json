@@ -165,8 +165,13 @@
   "itemsTable.totals.limit": "Najwyżej {max} sum.",
   "itemsTable.totals.empty": "Nie drukuje się żadnych sum.",
   "itemsTable.grouping.title": "Grupowanie",
+  "itemsTable.grouping.mode.sections": "Grupy z dokumentu",
+  "itemsTable.grouping.mode.field": "Według pola",
+  "itemsTable.grouping.mode.none": "Bez grupowania",
+  "itemsTable.grouping.otherItemsLabel": "Nagłówek pozostałych pozycji",
+  "itemsTable.grouping.showItemCount": "Pokaż liczbę pozycji",
+  "itemsTable.grouping.noSections": "Ten typ dokumentu nie ma grup.",
   "itemsTable.grouping.field": "Grupuj pozycje według",
-  "itemsTable.grouping.none": "Bez grupowania",
   "itemsTable.grouping.emptyLabel": "Nazwa grupy dla pozycji bez wartości",
   "itemsTable.grouping.subtotalField": "Suma częściowa",
   "itemsTable.grouping.noSubtotal": "Bez sumy częściowej",
@@ -176,5 +181,6 @@
   "itemsTable.style.headerBackground": "Tło nagłówka",
   "itemsTable.style.borderColor": "Kolor obramowania",
   "itemsTable.style.stripeColor": "Kolor pasków",
-  "itemsTable.columns.editShort": "Edytuj"
+  "itemsTable.columns.editShort": "Edytuj",
+  "actions.openDocumentTemplates.keywords": "szablon pdf, szablon faktury, porównanie, szablon oferty, zapytanie ofertowe pdf"
 }

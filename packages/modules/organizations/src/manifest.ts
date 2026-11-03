@@ -369,8 +369,22 @@ export const manifest = defineModuleManifest({
       icon: 'Building2',
       targetRoute: '/organizations',
       requiredPermission: 'customers:read',
-      keywords: ['org', 'orgs', 'customer', 'organization', 'organizacja', 'klient'],
+      keywords: ['org', 'orgs', 'customer', 'organization'],
+      keywordsKey: 'actions.openOrganizations.keywords',
       weight: 220,
+    },
+    // Feature 154 — the deep link to *New organization*, gated on the code its
+    // route and its write enforce.
+    {
+      id: 'new-organization',
+      labelKey: 'actions.newOrganization.label',
+      descriptionKey: 'actions.newOrganization.description',
+      icon: 'Building2',
+      targetRoute: '/organizations/new',
+      requiredPermission: 'customers:manage',
+      keywords: ['organization', 'new', 'create'],
+      keywordsKey: 'actions.newOrganization.keywords',
+      weight: 210,
     },
   ],
   // Feature 047 — admin-editable transactional emails owned by this module.
@@ -403,7 +417,12 @@ export const manifest = defineModuleManifest({
       variables: [
         { key: 'organizationName', label: 'Organization name', sampleValue: 'Acme Sp. z o.o.' },
         { key: 'taxId', label: 'Tax ID', sampleValue: 'PL1234567890' },
-        { key: 'statusLabel', label: 'Status', sampleValue: 'Oczekuje na weryfikację' },
+        {
+          key: 'statusLabel',
+          label: 'Status',
+          sampleValue: 'Awaiting verification',
+          sampleValueKey: 'emails.newOrgRegistration.sample.statusLabel',
+        },
         { key: 'linkPath', label: 'Admin link', sampleValue: '/organizations/…' },
       ],
     },

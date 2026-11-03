@@ -34,6 +34,7 @@ import {
   GenerateHostError,
   GenerateInputError,
   runGenerate,
+  type GenerateStep,
 } from '../src/generate/index.js';
 
 const SCOPE = '@endora-commerce';
@@ -52,13 +53,23 @@ function write(path: string, content: string): void {
 function installModule(
   root: string,
   id: string,
-  options: { admin: boolean; blocksCss?: 'published' | 'declared-only' } = { admin: true },
+  options: {
+    admin: boolean;
+    blocksCss?: 'published' | 'declared-only';
+    /** The npm name, when it is not `mod-<id>` — `document_templates` is `mod-document-templates`. */
+    name?: string;
+    /** The manifest's own `dependencies`. */
+    dependencies?: readonly string[];
+    /** The module ids of the manifest's `acknowledgedDependencies`. */
+    acknowledged?: readonly string[];
+  } = { admin: true },
 ): void {
-  const dir = join(root, 'node_modules', SCOPE, `mod-${id}`);
+  const name = options.name ?? `${SCOPE}/mod-${id}`;
+  const dir = join(root, 'node_modules', ...name.split('/'));
   write(
     join(dir, 'package.json'),
     JSON.stringify({
-      name: `${SCOPE}/mod-${id}`,
+      name,
       version: '1.0.0',
       endora: { type: 'module', id },
       exports: {
@@ -92,6 +103,14 @@ function installModule(
       `    name: '${id}',\n` +
       `    version: '1.0.0',\n` +
       `    docs: { dir: 'docs' },\n` +
+      (options.dependencies === undefined
+        ? ''
+        : `    dependencies: ${JSON.stringify(options.dependencies)},\n`) +
+      (options.acknowledged === undefined
+        ? ''
+        : `    acknowledgedDependencies: ${JSON.stringify(
+            options.acknowledged.map((moduleId) => ({ moduleId, port: `${moduleId}Port`, reason: 'a cycle' })),
+          )},\n`) +
       `};\n`,
   );
   write(
@@ -518,3 +537,367 @@ describe('endora generate (instance-tree.md §2.6)', () => {
     expect(() => readFileSync(orphan, 'utf8')).toThrow();
   });
 });
+
+
+/**
+ * A module a release makes required, declared by the run that renders the
+ * artefacts.
+ *
+ * 0.107.0's `invoices` lists `document_templates` in its manifest
+ * `dependencies`, and `document_templates` is a package that release
+ * publishes for the first time. `endora upgrade` runs the **previous**
+ * release's CLI and moves only the packages an instance already declares, so
+ * an instance upgraded from 0.106.0 installs `invoices` without the module it
+ * needs and the platform refuses to boot (`ReducedDeploymentError`). The
+ * upgrade's `setup` runs `endora generate` from the release just installed,
+ * which is the first program of the new release that runs at all — so that is
+ * where the module gets declared.
+ */
+describe('endora generate declares the release modules the installed ones need', () => {
+  const PLATFORM = `${SCOPE}/platform`;
+  const TEMPLATES = `${SCOPE}/mod-document-templates`;
+
+  /** The CLI's own index, as a release carrying `document_templates` writes it. */
+  function releaseIndex(
+    entries: ReadonlyArray<{ name: string; version: string; moduleId?: string }> = [
+      { name: `${SCOPE}/mod-invoices`, version: '0.107.0', moduleId: 'invoices' },
+      { name: TEMPLATES, version: '0.107.0', moduleId: 'document_templates' },
+      { name: PLATFORM, version: '0.107.0' },
+    ],
+  ): string {
+    const dir = mkdtempSync(join(tmpdir(), 'index-'));
+    scratch.push(dir);
+    const file = join(dir, 'release-index.json');
+    writeFileSync(file, JSON.stringify({ packages: entries }), 'utf8');
+    return file;
+  }
+
+  /** An instance on 0.107.0 whose `invoices` needs a module it does not declare. */
+  function upgraded(platformSpec: string, needs: { dependencies?: string[]; acknowledged?: string[] } = { dependencies: ['document_templates'] }): string {
+    const root = instance(['invoices']);
+    installModule(root, 'invoices', { admin: true, ...needs });
+    // Written the way `endora new instance` writes it: two-space JSON, sorted.
+    write(
+      join(root, 'package.json'),
+      `${JSON.stringify(
+        {
+          name: 'acme',
+          private: true,
+          scripts: { setup: 'pnpm run generate' },
+          dependencies: { [`${SCOPE}/mod-invoices`]: platformSpec, [PLATFORM]: platformSpec },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return root;
+  }
+
+  /**
+   * A `pnpm install` standing in for the real one: every package of the
+   * catalogue the root manifest declares lands in `node_modules`.
+   */
+  function fakeInstall(
+    root: string,
+    catalogue: Readonly<Record<string, { id: string; dependencies?: string[] }>>,
+    steps: GenerateStep[],
+    code = 0,
+  ): (step: GenerateStep) => Promise<number> {
+    return async (step) => {
+      steps.push(step);
+      if (code !== 0) return code;
+      const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+        dependencies: Record<string, string>;
+      };
+      for (const [name, pkg] of Object.entries(catalogue)) {
+        if (manifest.dependencies[name] === undefined) continue;
+        installModule(root, pkg.id, {
+          admin: true,
+          name,
+          ...(pkg.dependencies === undefined ? {} : { dependencies: pkg.dependencies }),
+        });
+      }
+      return 0;
+    };
+  }
+
+  it('declares it at the platform\'s exact pin, in place, installs it, and renders it', async () => {
+    const root = upgraded('0.107.0');
+    const steps: GenerateStep[] = [];
+    const result = await runGenerate({
+      cwd: root,
+      releaseIndexFile: releaseIndex(),
+      run: fakeInstall(root, { [TEMPLATES]: { id: 'document_templates' } }, steps),
+    });
+
+    // The manifest text, edited and not re-serialised: the entry lands in its
+    // alphabetical place at the file's own indentation, and nothing else moves.
+    expect(readFileSync(join(root, 'package.json'), 'utf8')).toBe(
+      `{\n` +
+        `  "name": "acme",\n` +
+        `  "private": true,\n` +
+        `  "scripts": {\n` +
+        `    "setup": "pnpm run generate"\n` +
+        `  },\n` +
+        `  "dependencies": {\n` +
+        `    "${TEMPLATES}": "0.107.0",\n` +
+        `    "${SCOPE}/mod-invoices": "0.107.0",\n` +
+        `    "${PLATFORM}": "0.107.0"\n` +
+        `  }\n` +
+        `}\n`,
+    );
+    expect(steps.map((step) => [step.command, step.bin, step.argv, step.cwd])).toEqual([
+      ['pnpm install', 'pnpm', ['install'], root],
+    ]);
+    expect(result.declared).toEqual([
+      {
+        packageName: TEMPLATES,
+        spec: '0.107.0',
+        moduleId: 'document_templates',
+        neededBy: [{ moduleId: 'invoices', field: 'dependencies' }],
+        written: true,
+      },
+    ]);
+    // The second scan saw what the install put there, so the artefacts name it.
+    expect(result.modules).toBe(2);
+    expect(readFileSync(join(root, 'admin', 'src', 'modules.generated.ts'), 'utf8')).toContain(
+      `from '${TEMPLATES}/admin'`,
+    );
+    expect(generateReport(result)).toContain(
+      `declared ${TEMPLATES} 0.107.0 in package.json — invoices needs document_templates ` +
+        `(dependencies); installed it`,
+    );
+  });
+
+  it('keeps the platform\'s caret, in a manifest written on one line', async () => {
+    const root = upgraded('^0.107.0');
+    write(
+      join(root, 'package.json'),
+      JSON.stringify({
+        name: 'acme',
+        dependencies: { [`${SCOPE}/mod-invoices`]: '^0.107.0', [PLATFORM]: '^0.107.0' },
+      }),
+    );
+    const steps: GenerateStep[] = [];
+    const result = await runGenerate({
+      cwd: root,
+      releaseIndexFile: releaseIndex(),
+      run: fakeInstall(root, { [TEMPLATES]: { id: 'document_templates' } }, steps),
+    });
+    expect(readFileSync(join(root, 'package.json'), 'utf8')).toBe(
+      JSON.stringify({
+        name: 'acme',
+        dependencies: {
+          [TEMPLATES]: '^0.107.0',
+          [`${SCOPE}/mod-invoices`]: '^0.107.0',
+          [PLATFORM]: '^0.107.0',
+        },
+      }),
+    );
+    expect(result.declared.map((entry) => entry.spec)).toEqual(['^0.107.0']);
+    expect(steps).toHaveLength(1);
+  });
+
+  it('takes the release\'s own version, exact, when the platform is not declared at a version', async () => {
+    const root = upgraded('0.107.0');
+    const manifest = readFileSync(join(root, 'package.json'), 'utf8').replace(
+      `"${PLATFORM}": "0.107.0"`,
+      `"${PLATFORM}": "file:../platform.tgz"`,
+    );
+    write(join(root, 'package.json'), manifest);
+    const result = await runGenerate({
+      cwd: root,
+      releaseIndexFile: releaseIndex(),
+      run: fakeInstall(root, { [TEMPLATES]: { id: 'document_templates' } }, []),
+    });
+    expect(result.declared.map((entry) => entry.spec)).toEqual(['0.107.0']);
+  });
+
+  it('counts an `acknowledgedDependencies` edge exactly as a `dependencies` one', async () => {
+    const root = upgraded('0.107.0', { acknowledged: ['document_templates'] });
+    const result = await runGenerate({
+      cwd: root,
+      releaseIndexFile: releaseIndex(),
+      run: fakeInstall(root, { [TEMPLATES]: { id: 'document_templates' } }, []),
+    });
+    expect(result.declared[0]?.neededBy).toEqual([
+      { moduleId: 'invoices', field: 'acknowledgedDependencies' },
+    ]);
+    expect(generateReport(result).join('\n')).toContain(
+      'invoices needs document_templates (acknowledgedDependencies)',
+    );
+  });
+
+  it('closes over what the module it added needs in turn, one install per round', async () => {
+    const root = upgraded('0.107.0');
+    const fonts = `${SCOPE}/mod-pdf-fonts`;
+    const steps: GenerateStep[] = [];
+    const result = await runGenerate({
+      cwd: root,
+      releaseIndexFile: releaseIndex([
+        { name: TEMPLATES, version: '0.107.0', moduleId: 'document_templates' },
+        { name: fonts, version: '0.107.0', moduleId: 'pdf_fonts' },
+        { name: PLATFORM, version: '0.107.0' },
+      ]),
+      run: fakeInstall(
+        root,
+        {
+          [TEMPLATES]: { id: 'document_templates', dependencies: ['pdf_fonts'] },
+          [fonts]: { id: 'pdf_fonts' },
+        },
+        steps,
+      ),
+    });
+    expect(result.declared.map((entry) => [entry.packageName, entry.neededBy])).toEqual([
+      [TEMPLATES, [{ moduleId: 'invoices', field: 'dependencies' }]],
+      [fonts, [{ moduleId: 'document_templates', field: 'dependencies' }]],
+    ]);
+    expect(steps).toHaveLength(2);
+    expect(result.modules).toBe(3);
+  });
+
+  it('declares nothing for a module every deployment omits', async () => {
+    const root = upgraded('0.107.0');
+    installPlatform(root);
+    write(
+      join(root, 'apps', 'acme', 'divergence.ts'),
+      `export const divergence = {\n` +
+        `  omittedModules: [{ moduleId: 'document_templates', reason: 'Invoices are issued in the ERP.' }],\n` +
+        `  decorationOrder: {},\n` +
+        `  reasons: {},\n` +
+        `} as const;\n`,
+    );
+    mkdirSync(join(root, 'apps', 'acme', 'modules'), { recursive: true });
+    // A registration the report can attribute, so it renders rather than refusing
+    // an owner map that resolved nothing.
+    write(
+      join(root, 'node_modules', SCOPE, 'mod-invoices', 'dist', 'backend', 'index.js'),
+      `export const entities = [];\n` +
+        `export function registerModule(ctx) {\n` +
+        `    ctx.di.register({ invoiceService: ctx.asClass(Service).singleton() });\n` +
+        `}\n`,
+    );
+    const before = readFileSync(join(root, 'package.json'), 'utf8');
+    const result = await runGenerate({
+      cwd: root,
+      releaseIndexFile: releaseIndex(),
+      run: () => Promise.reject(new Error('nothing is missing, so nothing is installed')),
+    });
+    expect(result.declared).toEqual([]);
+    expect(result.unlisted).toEqual([]);
+    expect(readFileSync(join(root, 'package.json'), 'utf8')).toBe(before);
+  });
+
+  it('leaves a module no release package carries alone, names it, and installs nothing', async () => {
+    const root = upgraded('0.107.0', { dependencies: ['document_templates', '_lifecycle'] });
+    installPlatform(root);
+    const before = readFileSync(join(root, 'package.json'), 'utf8');
+    const result = await runGenerate({
+      cwd: root,
+      releaseIndexFile: releaseIndex([{ name: PLATFORM, version: '0.107.0' }]),
+      run: () => Promise.reject(new Error('there is no package to install')),
+    });
+    expect(result.declared).toEqual([]);
+    // `_lifecycle` is the platform's own, so it is not missing at all.
+    expect(result.unlisted).toEqual([
+      { moduleId: 'document_templates', neededBy: [{ moduleId: 'invoices', field: 'dependencies' }] },
+    ]);
+    expect(readFileSync(join(root, 'package.json'), 'utf8')).toBe(before);
+    expect(generateReport(result).join('\n')).toMatch(/document_templates.*invoices/);
+  });
+
+  it('a dry run reports what it would declare, writes nothing and runs nothing', async () => {
+    const root = upgraded('0.107.0');
+    const before = readFileSync(join(root, 'package.json'), 'utf8');
+    const result = await runGenerate({
+      cwd: root,
+      dryRun: true,
+      releaseIndexFile: releaseIndex(),
+      run: () => Promise.reject(new Error('a dry run runs nothing')),
+    });
+    expect(readFileSync(join(root, 'package.json'), 'utf8')).toBe(before);
+    expect(result.declared.map((entry) => [entry.packageName, entry.spec])).toEqual([
+      [TEMPLATES, '0.107.0'],
+    ]);
+    expect(generateReport(result)).toContain(
+      `would declare ${TEMPLATES} 0.107.0 in package.json — invoices needs document_templates ` +
+        `(dependencies); and run \`pnpm install\``,
+    );
+  });
+
+  it('a failed install is exit 2, and the manifest already declares the module', async () => {
+    const root = upgraded('0.107.0');
+    let raised: unknown;
+    try {
+      await runGenerate({
+        cwd: root,
+        releaseIndexFile: releaseIndex(),
+        run: fakeInstall(root, {}, [], 1),
+      });
+    } catch (error: unknown) {
+      raised = error;
+    }
+    expect(raised).toBeInstanceOf(GenerateHostError);
+    expect((raised as Error).message).toContain('pnpm install');
+    expect((raised as Error).message).toContain('pnpm run setup');
+    expect(readFileSync(join(root, 'package.json'), 'utf8')).toContain(`"${TEMPLATES}": "0.107.0"`);
+  });
+
+  it('runs nothing when no installed module needs anything missing — the common case', async () => {
+    const root = instance(['blog', 'invoices']);
+    installModule(root, 'invoices', { admin: true, dependencies: ['blog'], acknowledged: ['blog'] });
+    const before = readFileSync(join(root, 'package.json'), 'utf8');
+    const result = await runGenerate({
+      cwd: root,
+      releaseIndexFile: releaseIndex(),
+      run: () => Promise.reject(new Error('nothing is missing, so nothing is installed')),
+    });
+    expect(result.declared).toEqual([]);
+    expect(result.unlisted).toEqual([]);
+    expect(readFileSync(join(root, 'package.json'), 'utf8')).toBe(before);
+  });
+});
+
+/**
+ * The host an instance installed: `endora.type: "platform"`, the
+ * `ModuleContext` declaration the divergence report classifies seams against,
+ * and the one module it carries itself.
+ */
+function installPlatform(root: string): void {
+  const dir = join(root, 'node_modules', SCOPE, 'platform');
+  write(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: `${SCOPE}/platform`,
+      version: '0.107.0',
+      endora: { type: 'platform' },
+      exports: {
+        './kernel': { types: './dist/kernel/index.d.ts', default: './dist/kernel/index.js' },
+        './composition': './dist/composition/index.js',
+        './lifecycle': './dist/lifecycle/index.js',
+      },
+    }),
+  );
+  // A name the composition root supplies, so the divergence report has an
+  // owner to resolve and renders rather than refusing a vacuous pass.
+  write(
+    join(dir, 'dist', 'composition', 'index.js'),
+    `export function composeApp(options) {\n` +
+      `    const container = createRootContainer();\n` +
+      `    registerValues(container, {\n` +
+      `        commandBus: buildCommandBus(),\n` +
+      `    });\n` +
+      `    return container;\n` +
+      `}\n`,
+  );
+  write(join(dir, 'dist', 'kernel', 'index.js'), 'export {};\n');
+  write(join(dir, 'dist', 'kernel', 'index.d.ts'), "export type { ModuleContext } from './module-context.js';\n");
+  write(
+    join(dir, 'dist', 'kernel', 'module-context.d.ts'),
+    `export interface ModuleContext {\n` +
+      `    readonly module: { readonly id: string };\n` +
+      `    routes(register: (app: unknown) => void): void;\n` +
+      `}\n`,
+  );
+  write(join(dir, 'dist', 'lifecycle', 'index.js'), "export const manifest = { id: '_lifecycle' };\n");
+}

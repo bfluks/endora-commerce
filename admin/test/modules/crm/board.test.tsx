@@ -8,6 +8,7 @@ import type {
 } from '@endora-commerce/contracts';
 import type { KanbanBoardProps } from '@endora-commerce/admin-kit/components';
 import {
+  core,
   crmLookupResponse,
   detail,
   en,
@@ -188,8 +189,8 @@ function movedTo(source: OpportunitySummary, status: OpportunityStatusRef, propa
 }
 
 async function openMoveMenu(title: string): Promise<HTMLElement> {
-  await userEvent.click(screen.getByRole('button', { name: en('board.moveTo.label', { title }) }));
-  return screen.getByRole('group', { name: en('board.moveTo.label', { title }) });
+  await userEvent.click(screen.getByRole('button', { name: core('kanban.moveTo.label', { title }) }));
+  return screen.getByRole('group', { name: core('kanban.moveTo.label', { title }) });
 }
 
 describe('OpportunityBoardPage — columns and cards', () => {
@@ -301,14 +302,14 @@ describe('OpportunityBoardPage — the "Move to…" menu', () => {
     await renderBoard();
     expect(screen.getByRole('link', { name: 'Closed deal' })).toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: en('board.moveTo.label', { title: 'Closed deal' }) }),
+      screen.queryByRole('button', { name: core('kanban.moveTo.label', { title: 'Closed deal' }) }),
     ).toBeNull();
   });
 
   it('offers neither the menu nor a drag handle to an operator who may only read', async () => {
     await renderBoard(['crm:read', 'orders:read']);
     expect(
-      screen.queryByRole('button', { name: en('board.moveTo.label', { title: 'Fleet renewal' }) }),
+      screen.queryByRole('button', { name: core('kanban.moveTo.label', { title: 'Fleet renewal' }) }),
     ).toBeNull();
     expect(
       screen.queryByRole('button', { name: en('board.drag.handle', { title: 'Fleet renewal' }) }),

@@ -32,9 +32,53 @@ administracyjnym. Usunięcie typu, którego nadal używa jakiś produkt, zwraca
 | `PATCH /api/v1/admin/catalog/attachment-types/:id` | administrator | Zmiana nazwy lub pozycji |
 | `DELETE /api/v1/admin/catalog/attachment-types/:id` | administrator | Usunięcie; odrzucane, gdy typ jest używany |
 | `GET /api/v1/admin/catalog/products/:id/attachments` | administrator | Lista załączników produktu |
-| `POST /api/v1/admin/catalog/products/:id/attachments` | administrator | Dołączenie istniejącego pliku |
-| `PATCH /api/v1/admin/catalog/products/:id/attachments/:attachmentId` | administrator | Zmiana nazwy, opisu, typu lub pozycji |
+| `POST /api/v1/admin/catalog/products/:id/attachments` | administrator | Dołączenie istniejącego pliku z typem oraz globalną nazwą i opisem |
+| `PATCH /api/v1/admin/catalog/products/:id/attachments/:attachmentId` | administrator | Zmiana typu lub pozycji |
+| `PUT /api/v1/admin/catalog/products/:id/scoped-values` | administrator | Nazwa, opis i ukrycie w zakresie globalnym, w kanale albo w kanale i języku (zob. niżej) |
 | `DELETE /api/v1/admin/catalog/products/:id/attachments/:attachmentId` | administrator | Usunięcie (plik pozostaje) |
+
+## W zakresie: globalnym, kanału, kanału × języka
+
+Załącznik to ten sam plik w każdym kanale sprzedaży. W poszczególnych zakresach różnić się mogą
+jego nazwa, opis i to, czy w ogóle jest pokazywany. Wszystkie trzy są polami zakresu, zapisywanymi
+razem z resztą zakresu przez `PUT …/products/:id/scoped-values`:
+
+```json
+{
+  "scope": { "channelId": "<retail-uuid>", "languageCode": "pl-PL" },
+  "version": "7",
+  "changes": {
+    "attachments": { "<attachmentId>": { "name": "Karta techniczna", "description": null, "hidden": false } }
+  }
+}
+```
+
+- **Nazwa** — najwyżej 160 znaków. W zakresie globalnym jest wymagana, więc pusta nazwa jest tam
+  odrzucana; w kanale albo w kanale i języku `null` zapisuje celowo pustą nazwę.
+- **Opis** — najwyżej 4000 znaków; `null` zapisuje celowo pusty opis, który pozostaje tam pusty,
+  nawet jeśli zakres nadrzędny ma opis.
+- **Ukrycie** — `true` albo `false`, w zakresie globalnym, w kanale albo w kanale i języku. Ukryty
+  załącznik nie jest w tym zakresie ani wymieniany na stronie produktu, ani z niej linkowany.
+
+`{ "inherit": true }` usuwa własną wartość zakresu, a pole pominięte w żądaniu pozostaje bez zmian.
+Zakres bez własnej wartości dziedziczy ją — kanał × język → kanał → globalny. Zapis w kanale, do
+którego produkt nie należy, albo w języku, którego kanał nie oferuje, kończy się błędem
+`422 SCOPE_INVALID`; usunięcie nadpisania jest zawsze dozwolone, także po usunięciu produktu z
+kanału.
+
+Ukrycie dotyczy tylko prezentacji, a nie kontroli dostępu. Ukryty załącznik nie jest pokazywany w
+danym zakresie, ale jego plik zachowuje stały adres URL i każdy, kto ten adres zna, nadal może go
+pobrać. Ukrycie nie zapewnia poufności dokumentu: pliku, który nie może być publiczny, nie należy
+dołączać do produktu.
+
+Utworzenie lub zmiana załącznika trafia do dziennika zdarzeń raz, jako `product_attachment.create`
+albo `product_attachment.update`, ze stanem załącznika przed zmianą i po niej. Zapis zakresu trafia
+do dziennika jako `product.scoped_values.save`. Oba ogłaszają zdarzenie `product.updated.v1`.
+Żądanie, które niczego nie zmienia, niczego nie zapisuje i niczego nie ogłasza. Usunięcie
+załącznika usuwa jego nadpisania we wszystkich zakresach.
+
+Bez nadpisań każdy kanał i język pokazuje wszystkie załączniki pod ich globalnymi nazwami i z
+globalnymi opisami.
 
 ## Błędy
 
@@ -45,11 +89,13 @@ administracyjnym. Usunięcie typu, którego nadal używa jakiś produkt, zwraca
 | `ATTACHMENT_TYPE_CODE_TAKEN` | 409 | Kolizja `code` przy tworzeniu |
 | `ATTACHMENT_TYPE_NOT_FOUND` | 404 | Brak `:id` |
 | `ATTACHMENT_NOT_FOUND` | 404 | Brak `:attachmentId` |
+| `SCOPE_INVALID` | 422 | Wartość załącznika w zakresie kanału, do którego produkt nie należy, albo języka, którego kanał nie oferuje |
 
 ## Storefront
 
 `productDetail.attachments[]` zawiera pełne metadane typu i pliku (filename, sizeBytes, mimeType,
-url). Komponent `<AttachmentsList>` grupuje załączniki według typu (w kolejności pierwszego
+url) w postaci, w jakiej pokazują je kanał sprzedaży i język żądania: bez załączników ukrytych w
+tym miejscu, z nazwą i opisem obowiązującymi w tym miejscu. Komponent `<AttachmentsList>` grupuje załączniki według typu (w kolejności pierwszego
 wystąpienia, aby pozycje ustawione przez administratora decydowały o kolejności sekcji), wyświetla
 jeden nagłówek dla każdego typu i tworzy linki do pobrania z `download={filename}`, aby pobrane pliki
 miały czytelne nazwy.
@@ -58,7 +104,10 @@ miały czytelne nazwy.
 
 `attachment_types` (id, code unique, name jsonb, position) +
 `product_attachments` (id, product_id FK CASCADE, asset_id FK RESTRICT,
-attachment_type_id FK RESTRICT, name, description, position).
+attachment_type_id FK RESTRICT, globalne nazwa, opis i ukrycie, position).
+`product_attachment_scope_overrides` przechowuje nazwę, opis lub ukrycie w kanale albo w kanale i
+języku; wskazuje załącznik razem z jego produktem, więc nadpisanie nie może wskazać załącznika
+innego produktu, a wiersz jest usuwany razem z załącznikiem, produktem i kanałem.
 
 Podstawa platformy nie ma publicznego `AssetsService` — katalog importuje encję `Asset` bezpośrednio
 z innego modułu. Przesyłanie plików w panelu administracyjnym to zmiana planowana na poziomie podstawy

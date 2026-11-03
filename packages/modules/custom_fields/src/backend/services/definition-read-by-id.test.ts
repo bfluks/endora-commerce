@@ -33,6 +33,8 @@ function cached(): CachedDefinition {
       required: true,
       sortOrder: 3,
       config: { filterable: true },
+      listFilter: true,
+      carryTo: ['opportunity'],
       createdAt: NOW,
       updatedAt: NOW,
       // The field an entity carries and a record does not — a copy drops it,
@@ -81,6 +83,8 @@ describe('CustomFieldDefinitionReadPort.getById', () => {
       required: true,
       sortOrder: 3,
       config: { filterable: true },
+      listFilter: true,
+      carryTo: ['opportunity'],
       createdAt: NOW,
       updatedAt: NOW,
     });

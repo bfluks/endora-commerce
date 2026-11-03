@@ -57,6 +57,31 @@ describe('ReceivePaymentHandler.reflectRefund', () => {
     await teardownBackendServer(h);
   });
 
+  it('refuses a refund amount with more than two decimal places instead of rounding it (#428)', async () => {
+    const warnings: Array<{ details: object; message: string }> = [];
+    const handler = new ReceivePaymentHandler(
+      () => h.em(),
+      h.container.resolve<PaymentMethodReadPort>('paymentMethodReadPort'),
+      h.container.resolve<OrderTransitionPort>('orderTransitionPort'),
+      h.container.resolve<OrderPaymentStatusApplyPort>('orderPaymentStatusApplyPort'),
+      { warn: (details, message) => warnings.push({ details, message }) },
+    );
+    // Answers normally, so the gateway's webhook is acknowledged and not redelivered.
+    const result = await handler.reflectRefund({ paymentId, refundedAmount: 1.005, currency: 'PLN', fullyRefunded: false });
+    expect(result).toEqual({ paymentId, changed: false });
+    const p = await h.em().fork().findOne(Payment, { id: paymentId });
+    // Neither rounded to 1.01 (#417's half-up) nor to 1.00 (`toFixed(2)`): not recorded at all.
+    expect(p!.refundedAmount).toBe('0.00');
+    expect(p!.status).toBe('paid');
+    expect(p!.providerDetails).toMatchObject({
+      refundAnomaly: { reason: 'amount_precision_exceeded', reportedRefundedAmount: '1.005' },
+    });
+    const order = await h.em().fork().findOne(Order, { id: orderId });
+    expect(order!.paymentStatus).toBe('paid');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.details).toMatchObject({ paymentId, orderId, reportedRefundedAmount: '1.005' });
+  });
+
   it('reflects a partial refund, then a full refund; idempotent and no downgrade', async () => {
     const quiet: SettlementLogger = { warn: () => undefined };
     const handler = new ReceivePaymentHandler(

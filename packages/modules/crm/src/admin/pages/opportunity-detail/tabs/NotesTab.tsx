@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
+import { CommentThread } from '@endora-commerce/admin-kit/components';
+import { useAuth } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
-import { CommentThread } from '../../../components/CommentThread.js';
+import { useCrmReferences, useOpportunityComments, useOrderStatusLabel } from '../../../lib/references.js';
 import type { OpportunityTabProps } from '../tabs.js';
 
 /**
@@ -9,11 +11,21 @@ import type { OpportunityTabProps } from '../tabs.js';
  */
 export function NotesTab(props: OpportunityTabProps): ReactNode {
   const t = useTranslation('crm');
+  const { hasPermission } = useAuth();
+  const { kinds, lookups } = useCrmReferences({
+    organizationId: props.opportunity.organization.id,
+    opportunityId: props.opportunity.id,
+  });
+  const api = useOpportunityComments(props.opportunity.id, 'note');
+  const orderStatusLabel = useOrderStatusLabel(props.orderStatuses);
   return (
     <CommentThread
-      opportunityId={props.opportunity.id}
-      organizationId={props.opportunity.organization.id}
       kind="note"
+      api={api}
+      canWrite={hasPermission('crm:write')}
+      referenceKinds={kinds}
+      lookups={lookups}
+      orderStatusLabel={orderStatusLabel}
       // The tab's label counts the notes; the page reads that count again.
       onCountChange={props.reload}
       copy={{
@@ -24,6 +36,7 @@ export function NotesTab(props: OpportunityTabProps): ReactNode {
         composerPlaceholder: t('comments.notes.composer.placeholder'),
         composerSubmit: t('comments.notes.composer.submit'),
         added: t('comments.notes.added'),
+        deleteBody: t('comments.delete.body'),
       }}
     />
   );

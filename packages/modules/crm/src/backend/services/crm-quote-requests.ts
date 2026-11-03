@@ -21,6 +21,12 @@ export interface CrmQuoteRequests {
    * owner off the port's gate throws, and nothing here catches it.
    */
   load(id: string): Promise<CrmQuoteRequestDocument | null>;
+  /**
+   * The Quote Request alone, without its lines — what a reference to one shows
+   * (`specs/163-projects-and-tasks/` FR-044). The same scope, the same
+   * precondition as {@link CrmQuoteRequests.load}.
+   */
+  findRecord(id: string): Promise<QuoteRequestRecord | null>;
 }
 
 /**
@@ -47,6 +53,7 @@ export interface CrmQuoteRequests {
 export function createCrmQuoteRequests(port: QuoteRequestReadPort): CrmQuoteRequests {
   return {
     isPresent: () => effectiveState.isPresent('quote_requests'),
+    findRecord: (id: string) => port.findById(id),
     async load(id: string): Promise<CrmQuoteRequestDocument | null> {
       const record = await port.findById(id);
       if (!record) return null;

@@ -1,20 +1,26 @@
-import { Entity, Formula, Index, OptionalProps, PrimaryKey, Property, Unique } from '@mikro-orm/core';
+import { Entity, Formula, Index, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';
 import { randomUUID } from 'crypto';
-import type { ApplicationRule } from '@endora-commerce/contracts';
 import { RuleScoped } from '@endora-commerce/platform/tenancy';
 
 /**
- * PriceList — feature-011 engine shape.
+ * PriceList — the **price-book header** (feature 160, D-287 P1;
+ * `specs/160-pricing-model-v2/data-model.md` §1).
  *
- * Carries lifecycle (`status`, `startsAt`, `endsAt`), type discriminator
- * (`type`), the application rule expressed as a JSONB AST, the system flag
- * marking the seeded `Default` row, and `modifiedAt` driving the resolver's
- * tie-break (FR-027).
+ * A price book fixes one currency (`currency`, stored as `currency_code`), an
+ * audience kind (`audienceKind`; its members are `price_list_audience_members`),
+ * a channel set (the `sales_channel_price_lists` bridge, reached only through
+ * `SalesChannelMembershipService`), a type (`regular` | `sale`), a schedule
+ * (`startsAt`, `endsAt`, evaluated at read time) and a `priority` (the
+ * same-cell tie-break). Its rows are `price_list_matrix_entries`. The system
+ * rows (`isSystem`) are the per-currency **base books**; the platform default
+ * currency's keeps the id the old `Default` list had (`…d51b`).
  *
- * Legacy columns from feature 014 (`code`, `currency`, `priority`,
- * `isDefault`) are preserved for the duration of the expand→migrate→contract
- * rollout. They will be dropped by a follow-up migration once US5 wires every
- * reader through the new resolver.
+ * `status` is still flipped by the sweeper for the admin; `version` moves on
+ * every write of the book and `everActivated` freezes the audience kind once
+ * the book has been active.
+ *
+ * The old model's columns — the Application rule, `code`, `is_default` and
+ * `modified_at` — were dropped by the conversion migration.
  */
 @RuleScoped()
 @Entity({ tableName: 'price_lists' })
@@ -23,43 +29,32 @@ export class PriceList {
     | 'id'
     | 'createdAt'
     | 'updatedAt'
-    | 'modifiedAt'
-    | 'isDefault'
     | 'isSystem'
     | 'priority'
     | 'type'
     | 'status'
     | 'startsAt'
     | 'endsAt'
-    | 'applicationRule'
+    | 'audienceKind'
+    | 'version'
+    | 'everActivated'
     | 'hasMatrixEntries';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
 
-  // ----- Legacy columns (kept until expand→migrate→contract completes) -----
-
-  @Property({ type: 'string', length: 64 })
-  @Unique()
-  code!: string;
-
   @Property({ type: 'string', length: 200 })
   name!: string;
 
-  @Property({ type: 'string', length: 3 })
+  @Property({ type: 'string', length: 3, columnType: 'char(3)', fieldName: 'currency_code' })
   currency!: string;
-
-  @Property({ type: 'boolean' })
-  isDefault: boolean = false;
 
   @Property({ type: 'integer' })
   priority: number = 0;
 
-  // ----- Engine columns (feature 011) -------------------------------------
-
   @Property({ type: 'string', length: 8 })
   @Index()
-  type: 'base' | 'sale' = 'base';
+  type: 'regular' | 'sale' = 'regular';
 
   @Property({ type: 'string', length: 16 })
   @Index()
@@ -71,29 +66,23 @@ export class PriceList {
   @Property({ type: 'datetime', nullable: true })
   endsAt?: Date | null;
 
-  @Property({ type: 'json' })
-  applicationRule: ApplicationRule = { kind: 'all' };
+  @Property({ type: 'string', length: 16 })
+  audienceKind: 'everyone' | 'customer_groups' | 'organizations' = 'everyone';
 
   @Property({ type: 'boolean' })
   isSystem: boolean = false;
 
-  @Property({ type: 'datetime' })
-  modifiedAt: Date = new Date();
+  @Property({ type: 'integer', default: 1 })
+  version: number = 1;
 
-  /**
-   * Feature 148 — whether the list carries any price matrix entry. Computed in
-   * the statement that loads the list (an index probe on
-   * `price_list_matrix_entries (price_list_id, …)`), never stored, so the
-   * resolver and the price-ordered listing skip the matrix read entirely for a
-   * viewer whose lists carry none instead of paying one statement to learn it.
-   */
+  @Property({ type: 'boolean', default: false })
+  everActivated: boolean = false;
+
   @Formula(
     (alias) =>
       `exists(select 1 from "price_list_matrix_entries" pme where pme."price_list_id" = ${alias}."id")`,
   )
   hasMatrixEntries?: boolean;
-
-  // ----- Timestamps -------------------------------------------------------
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

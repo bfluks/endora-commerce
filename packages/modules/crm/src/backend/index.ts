@@ -11,11 +11,15 @@ import type {
   AuthSessionReadPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
+  CustomFieldCarryPort,
+  CustomFieldCarryReceiverPort,
   CustomFieldDefinitionReadPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
   EmailDefaultsRegistryPort,
   OpportunityReadPort,
   OpportunityTransitionPort,
+  OrderListPort,
   OrderReadPort,
   OrderTransitionPort,
   OrganizationDetailsPort,
@@ -24,6 +28,8 @@ import type {
   SalesChannelAttributionRegistryPort,
   SalesRepAssignmentPort,
   SettingsAdminPort,
+  ProjectReadPort,
+  TaskReadPort,
   TransactionalEmailSender,
 } from '@endora-commerce/contracts';
 import { CRM_WEBHOOK_EVENT_TYPES, type WebhookEventRegistryPort } from '@endora-commerce/contracts';
@@ -66,9 +72,17 @@ import { registerCrmAuditReferences } from './services/crm-audit-references.js';
 import { CrmDocumentLookupService } from './services/crm-document-lookup-service.js';
 import { CrmLookupService } from './services/crm-lookup-service.js';
 import { createAdminReach } from './services/admin-reach.js';
-import { createOwnerReadChecks, type OwnerReadChecks } from './services/owner-read-permissions.js';
+import {
+  createOwnerReadCheck,
+  createOwnerReadChecks,
+  CRM_READ_PERMISSION,
+  type OwnerReadChecks,
+} from './services/owner-read-permissions.js';
 import { createCrmNotifier, type CrmNotifier } from './services/crm-notifier.js';
 import { createCrmQuoteRequests, type CrmQuoteRequests } from './services/crm-quote-requests.js';
+import { createCrmProjects, type CrmProjects } from './services/crm-projects.js';
+import { createCrmTasks, type CrmTasks } from './services/crm-tasks.js';
+import { createCarryIntoDocument } from './services/opportunity-document-carry.js';
 import { DocumentOpportunityService } from './services/document-opportunity-service.js';
 import { createEventReminderEmail } from './services/event-reminder-email.js';
 import { EventReminderService } from './services/event-reminder-service.js';
@@ -217,6 +231,9 @@ export function registerModule(ctx: ModuleContext): void {
             quoteRequests: crmQuoteRequests,
             linksChanged: (opportunityId) => crmOpportunityValueService.recalculate(opportunityId),
             mayRead: crmOwnerReadChecks,
+            // Feature 162 — an Order joining from its Quote Request carries its
+            // values into the Opportunity's empty fields.
+            customFieldCarry: lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort'),
           }),
       )
       .singleton(),
@@ -424,10 +441,22 @@ export function registerModule(ctx: ModuleContext): void {
    * non-destructive and reversible (Constitution XVII); the registry honours
    * an absent contributor for exactly this reason.
    */
+  //
+  // The descriptor is also **reader-restricted** (`specs/166-asset-reference-visibility/`
+  // FR-002, R-15): the library shows a file only to a reader who may see a
+  // record using it, and asks this module which Opportunities the caller
+  // reaches. It asks only while CRM is present — the library decides that, not
+  // this hook — and the permission read is a lazy port, resolved per call.
   ctx.onBoot(() => {
     registerCrmAssetReferences(
       lazyPort<AssetReferenceRegistryPort>(ctx, 'assetReferenceRegistry'),
       ctx.cradle<CrmCradle>().emFactory,
+      {
+        mayReadOpportunities: createOwnerReadCheck(
+          lazyPort<PermissionReadPort>(ctx, 'permissionService'),
+          CRM_READ_PERMISSION,
+        ),
+      },
     );
   });
 
@@ -475,6 +504,10 @@ export function registerModule(ctx: ModuleContext): void {
             // Commands write. The owner is non-deactivatable, so this is a
             // plain binding edge with no off state to degrade into.
             customFields: lazyPort<CustomFieldValuePort>(ctx, 'customFieldValueService'),
+            // Feature 157 — the list's custom-field filters.
+            customFieldListFilter: lazyPort<CustomFieldListFilterPort>(ctx, 'customFieldListFilterPort'),
+            // Feature 162 — a document's values carried into the Opportunity created for it.
+            customFieldCarry: lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort'),
             // --- end of Custom fields ----------------------------------------
             recalculateValue: (opportunityId) => crmOpportunityValueService.recalculate(opportunityId),
             liveFigure: (opportunity) => crmOpportunityValueService.liveFigure(opportunity),
@@ -746,12 +779,17 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.register({
     crmOpportunityOriginLinkService: ctx
       .asFunction(
-        ({ emFactory, crmOpportunityLinkService }: CrmCradle) =>
+        ({ emFactory, crmOpportunityLinkService, crmQuoteRequests }: CrmCradle & ValueCradle) =>
           new OpportunityOriginLinkService({
             emFactory,
             links: crmOpportunityLinkService,
             adminScope: lazyPort<AdminTenantScopePort>(ctx, 'adminTenantScopePort'),
             warn: (fields, message) => ctx.log.warn(fields, message),
+            carryIntoDocument: createCarryIntoDocument({
+              orders: lazyPort<CustomFieldCarryReceiverPort>(ctx, 'orderCustomFieldCarryPort'),
+              quoteRequests: lazyPort<CustomFieldCarryReceiverPort>(ctx, 'quoteRequestCustomFieldCarryPort'),
+              quoteRequestsPresent: () => crmQuoteRequests.isPresent(),
+            }),
           }),
       )
       .singleton(),
@@ -772,19 +810,49 @@ export function registerModule(ctx: ModuleContext): void {
   // --- end of Created from an Opportunity ----------------------------------------
 
   // --- References (User Story 12) -------------------------------------------
-  // Products, Orders and people mentioned in a description, a note or a message. The
-  // Opportunity and the comment services store a text's references in the
-  // Command that saves the text and resolve them when they render it; the
-  // names come from `catalog`'s, `orders`' and `admin_users`' read ports, under
+  // Products, Orders, people, Quote Requests and Tasks mentioned in a
+  // description, a note or a message (the last two since
+  // `specs/163-projects-and-tasks/` FR-044). The Opportunity and the comment
+  // services store a text's references in the Command that saves the text and
+  // resolve them when they render it; the names come from `catalog`'s,
+  // `orders`', `admin_users`', `quote_requests`' and `tasks`' read ports, under
   // the reader's scope, every time.
+  //
+  // `tasks` is operator-switchable and this module degrades without it (the
+  // manifest's `degrades-without` edge on `taskReadPort`): `crmTasks` is the one
+  // door to its read port, and every caller asks `isPresent()` before it goes
+  // through — as `crmQuoteRequests` is for the quote desk.
   ctx.di.register({
+    crmTasks: ctx.asFunction(() => createCrmTasks(lazyPort<TaskReadPort>(ctx, 'taskReadPort'))).singleton(),
+    // `projects` is operator-switchable too (the manifest's `degrades-without`
+    // edge on `projectReadPort`, `specs/165-task-management/` R-5): the same
+    // one-door rule, `isPresent()` first.
+    crmProjects: ctx.asFunction(() => createCrmProjects(lazyPort<ProjectReadPort>(ctx, 'projectReadPort'))).singleton(),
+    // An Opportunity referred to is this module's own: read through the same
+    // class the published port is, unregistered as a port, under the reader's scope.
+    crmOpportunityRecords: ctx
+      .asFunction(
+        ({ emFactory, crmWorkflowReadService }: CrmCradle) =>
+          new OpportunityReadPortService(emFactory, crmWorkflowReadService),
+      )
+      .singleton(),
     crmReferenceService: ctx
       .asFunction(
-        ({ crmOwnerReadChecks }: CrmCradle) =>
+        ({
+          crmOwnerReadChecks,
+          crmQuoteRequests,
+          crmTasks,
+          crmProjects,
+          crmOpportunityRecords,
+        }: CrmCradle & ValueCradle & ReferencesCradle) =>
           new ReferenceService({
             products: lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
             orders: lazyPort<OrderReadPort>(ctx, 'orderReadPort'),
             adminUsers: lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort'),
+            quoteRequests: crmQuoteRequests,
+            tasks: crmTasks,
+            opportunities: crmOpportunityRecords,
+            projects: crmProjects,
             mayRead: crmOwnerReadChecks,
           }),
       )
@@ -801,12 +869,19 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.register({
     crmOpportunityHistoryService: ctx
       .asFunction(
-        ({ emFactory, auditLogService, crmReferenceService }: CrmCradle & HistoryCradle & ReferencesCradle) =>
+        ({
+          emFactory,
+          auditLogService,
+          crmReferenceService,
+          crmOwnerReadChecks,
+        }: CrmCradle & HistoryCradle & ReferencesCradle) =>
           new OpportunityHistoryService({
             emFactory,
             auditLog: auditLogService,
             adminUsers: lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort'),
             references: crmReferenceService,
+            // Feature 162 (owner ruling P2 = a) — values only for `custom_fields:read`.
+            mayReadCustomFields: crmOwnerReadChecks.customFields,
           }),
       )
       .singleton(),
@@ -1006,14 +1081,32 @@ export function registerModule(ctx: ModuleContext): void {
   // The Quote Requests an Opportunity's link picker chooses from, through
   // `quote_requests`' read port and behind `crm:write` — the quote desk's own
   // list asks for the right to handle quotes. Absent with that module off.
+  //
+  // And the `@@` document list of an Opportunity's texts
+  // (`specs/163-projects-and-tasks/` FR-044): the Organization's Orders through
+  // `orders`' published list, its Quote Requests as above, and Tasks through
+  // `crmTasks` — each group only for a holder of its owner's read code and only
+  // while its owner is present.
   ctx.di.register({
     crmDocumentLookupService: ctx
       .asFunction(
-        ({ crmQuoteRequests, crmOwnerReadChecks }: CrmCradle & ValueCradle) =>
+        ({
+          emFactory,
+          crmQuoteRequests,
+          crmOwnerReadChecks,
+          crmTasks,
+          crmProjects,
+          crmOpportunityRecords,
+        }: CrmCradle & ValueCradle & ReferencesCradle) =>
           new CrmDocumentLookupService({
+            emFactory,
             quoteRequestPresence: crmQuoteRequests,
             quoteRequests: lazyPort<QuoteRequestReadPort>(ctx, 'quoteRequestReadPort'),
-            mayReadQuoteRequests: crmOwnerReadChecks.quoteRequests,
+            orders: lazyPort<OrderListPort>(ctx, 'orderListPort'),
+            tasks: crmTasks,
+            opportunities: crmOpportunityRecords,
+            projects: crmProjects,
+            mayRead: crmOwnerReadChecks,
           }),
       )
       .singleton(),
@@ -1246,6 +1339,12 @@ interface BoardCardCradle {
 /** What the references section registers. */
 interface ReferencesCradle {
   readonly crmReferenceService: ReferenceService;
+  /** The one door to `tasks`' read port (`specs/163-projects-and-tasks/` FR-044). */
+  readonly crmTasks: CrmTasks;
+  /** The one door to `projects`' read port (`specs/165-task-management/` R-5). */
+  readonly crmProjects: CrmProjects;
+  /** This module's own Opportunities as records — what a reference to one is named from. */
+  readonly crmOpportunityRecords: OpportunityReadPortService;
 }
 
 /** What the change-history section reads from the container. */
@@ -1338,7 +1437,7 @@ export const entities = [
  * needs a number. Taking it here keeps one statement of the format and one
  * sequence: a demo Opportunity and the next one an operator creates cannot
  * collide. D-168 bars an entity class from leaving by this door; a function is
- * not one, and `price_lists`' `DefaultPriceListMigrator` and `inventory`'s
+ * not one, and `price_lists`' `seedDemoPriceBooks` and `inventory`'s
  * `WarehouseChannelReconciler` are the precedent for exactly this shape.
  */
 export { nextOpportunityNumber } from './services/opportunity-number.js';

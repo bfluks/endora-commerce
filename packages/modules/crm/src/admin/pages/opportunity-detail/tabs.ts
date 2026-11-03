@@ -34,9 +34,6 @@ export interface OpportunityTabProps {
    * it the list is empty and a status is shown by its code).
    */
   orderStatuses: readonly OrderStatusOption[];
-  /** The edit form is open — the page's header opens it, the Overview tab shows it. */
-  editing: boolean;
-  onEditingChange: (editing: boolean) => void;
 }
 
 export interface OpportunityTab {

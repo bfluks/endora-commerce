@@ -1,5 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { EntityManager } from '@mikro-orm/postgresql';
+import { EventBus } from '@endora-commerce/platform/events';
+import { AuditLogService } from '@endora-commerce/platform/composition';
+import { transactionBoundCommandBus } from '../../helpers/sales-channels-service.js';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
 
 import type { DictionaryValidator } from '../../../../packages/modules/dictionaries/src/backend/services/dictionary-validator.js';
@@ -27,7 +30,13 @@ describe('Megamenu dictionary boundary', () => {
   beforeEach(async () => {
     em = await db.beginTx();
     validator = dictionaryValidatorFor(() => em);
-    service = new MegamenuService(() => em, undefined, validator);
+    // Every megamenu write is a Command since feature 168 (plan R-7).
+    service = new MegamenuService(
+      () => em,
+      transactionBoundCommandBus(() => em, new AuditLogService(() => em), new EventBus()),
+      undefined,
+      validator,
+    );
     const channel = em.create(SalesChannel, {
       code: `menu-${crypto.randomUUID().slice(0, 8)}`,
       name: { 'en-US': 'Menu Channel' },
@@ -37,7 +46,6 @@ describe('Megamenu dictionary boundary', () => {
       defaultCurrency: 'PLN',
       active: true,
       systemDefault: false,
-      isPublic: false,
       status: 'active',
     });
     await em.persistAndFlush(channel);

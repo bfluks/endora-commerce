@@ -8,6 +8,8 @@ import {
   PRODUCT_FEED_SETTING_CODES,
   type CatalogCategoryReadPort,
   type CatalogGalleryPort,
+  type CatalogProductAvailabilityPort,
+  type CatalogProductUrlKeyReadPort,
   type CatalogProductFilterPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
@@ -15,6 +17,7 @@ import {
   type CustomFieldDefinitionReadPort,
   type LanguageReadPort,
   type ObjectStoragePort,
+  type PinnedPriceBookPublishability,
   type PriceListReadPort,
   type TaxServicePort,
 } from '@endora-commerce/contracts';
@@ -299,17 +302,27 @@ function warn(message: string, detail: Record<string, unknown>): void {
  * `id` and `attributeValues`, and nothing else.
  */
 export interface FeedPricingPort extends NamedListPricePort {
-  resolveLinePrice(input: {
-    product: CatalogProductRecord;
-    variantId?: string | null;
+  /**
+   * Feature 160 (FR-029, owner ruling 2026-10-23) — whether a pinned book
+   * publishes prices now, and why not; while it does not, `namedListPrices`
+   * answers nothing. The admin feed row shows the reason, and a run withdraws
+   * the feed's published file while it does not.
+   */
+  namedListPublishability(input: {
+    priceListId: string;
+    currencyCode: string;
+    salesChannelId: string;
+  }): Promise<PinnedPriceBookPublishability>;
+  /** Feature 160 — the batched entry point; a feed resolves a batch in one call. */
+  resolveLinePrices(input: {
+    lines: ReadonlyArray<{ key: string; product: CatalogProductRecord; variantId?: string | null; quantity: number }>;
     context: {
-      quantity: number;
       organization?: null;
       customerGroupId?: string | null;
       salesChannel: { id: string; defaultCurrency: string };
       currencyCode?: string;
     };
-  }): Promise<{ amount: string; isSale: boolean } | null>;
+  }): Promise<Map<string, { amount: string; isSale: boolean } | null>>;
 }
 
 export interface ProductFeedsModuleOptions {
@@ -350,6 +363,10 @@ export interface ProductFeedsModuleOptions {
    * the whole sellable catalogue.
    */
   catalogGallery: CatalogGalleryPort;
+  /** Feature 167 (FR-033) — effective URL keys per channel language, for the feed `link`. */
+  catalogUrlKeys: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>;
+  /** Feature 170 (FR-030) — effective name and description at the feed's (channel, language). */
+  catalogTexts?: Pick<CatalogProductAvailabilityPort, 'effectiveTexts'>;
   /** Feed validation refuses a price list that no longer exists (FR-021). */
   priceLists: PriceListReadPort;
   resolveAvailability: FeedAvailabilityResolver;
@@ -512,8 +529,7 @@ export function productFeedsModule(
    * prices the platform is refusing to serve.
    */
   const namedListPrices = createNamedListPriceResolver(options.pricingService);
-  const resolveNamedListPrice: NamedListPriceResolver = async (input) =>
-    namedListPrices.one(input);
+  const resolveNamedListPrice: NamedListPriceResolver = async (input) => namedListPrices.many(input);
 
   /**
    * The anonymous storefront resolution: no organization, no customer group
@@ -533,18 +549,21 @@ export function productFeedsModule(
    * left to be re-derived by whoever widens the port.
    */
   const resolveAnonymousPrice: AnonymousPriceResolver = async (input) => {
-    const resolved = await options.pricingService.resolveLinePrice({
-      product: input.product,
-      variantId: input.variantId,
+    const out = new Map<string, { amount: string; isSale: boolean }>();
+    if (input.products.length === 0) return out;
+    const resolved = await options.pricingService.resolveLinePrices({
+      lines: input.products.map((product) => ({ key: product.id, product, variantId: null, quantity: 1 })),
       context: {
-        quantity: 1,
         organization: null,
         customerGroupId: null,
         salesChannel: input.salesChannel,
         currencyCode: input.currencyCode,
       },
     });
-    return resolved ? { amount: Number(resolved.amount), isSale: resolved.isSale } : null;
+    for (const [productId, price] of resolved) {
+      if (price) out.set(productId, { amount: price.amount, isSale: price.isSale });
+    }
+    return out;
   };
 
   /**
@@ -554,7 +573,7 @@ export function productFeedsModule(
    * is computed from the prices the next run will actually emit (FR-028).
    */
   const resolveSelectionPrices: SelectionPricePort = async (input) => {
-    const out = new Map<string, number>();
+    const out = new Map<string, string>();
     if (input.productIds.length === 0) return out;
     const em = options.emFactory();
 
@@ -566,6 +585,7 @@ export function productFeedsModule(
         priceListId: input.priceListId,
         productIds: input.productIds,
         currencyCode: input.currencyCode,
+        salesChannelId: input.salesChannelId,
       });
     }
 
@@ -575,15 +595,12 @@ export function productFeedsModule(
     // The ids come from the channel-scoped selection; the channel is bound above
     // so the scoping is visible here too (Principle XII's accessor clause).
     const products = await options.catalogProducts.findByIds(input.productIds);
-    for (const product of products) {
-      const resolved = await resolveAnonymousPrice({
-        product,
-        variantId: null,
-        salesChannel: { id: channel.id, defaultCurrency: channel.defaultCurrency },
-        currencyCode: input.currencyCode,
-      });
-      if (resolved) out.set(product.id, resolved.amount);
-    }
+    const resolved = await resolveAnonymousPrice({
+      products,
+      salesChannel: { id: channel.id, defaultCurrency: channel.defaultCurrency },
+      currencyCode: input.currencyCode,
+    });
+    for (const [productId, price] of resolved) out.set(productId, price.amount);
     return out;
   };
 
@@ -672,6 +689,8 @@ export function productFeedsModule(
     catalogProducts: options.catalogProducts,
     catalogCategories: options.catalogCategories,
     catalogGallery: options.catalogGallery,
+    catalogUrlKeys: options.catalogUrlKeys,
+    ...(options.catalogTexts ? { catalogTexts: options.catalogTexts } : {}),
     selection,
     runs,
     artefactStore,
@@ -721,6 +740,10 @@ export function productFeedsModule(
     resolver: options.itemFieldResolver ?? new ItemFieldResolver(),
     settings,
     resolveNamedListPrice,
+    pinnedPriceBookPublishability: (input) => options.pricingService.namedListPublishability(input),
+    // The withdrawal moved the pointer to nothing; drop this process's cached
+    // answers for the feed's tokens now rather than at the TTL.
+    onPublicationWithdrawn: (feedId) => tokenCache.dropAllForFeed(feedId),
     resolveAnonymousPrice,
     resolveTaxRate: async ({ countryCode, productType }) => {
       const resolved = await options.taxService.taxRateFor({
@@ -818,6 +841,7 @@ export function productFeedsModule(
     tokenEncryptionKey: options.tokenEncryptionKey,
     languages: options.languageService,
     priceLists: options.priceLists,
+    pinnedPriceBookPublishability: (input) => options.pricingService.namedListPublishability(input),
   });
 
   /**

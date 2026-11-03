@@ -15,7 +15,7 @@ import { ModalDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { useBlockContributions } from '@endora-commerce/admin-kit/zones';
 import { PageBuilderHeaderActions, PageBuilderOverlayBridge } from '@endora-commerce/page-builder-admin';
-import { countBlockNames, createColorField } from '@endora-commerce/page-builder-core';
+import { countComponentNames, createColorField } from '@endora-commerce/page-builder-core';
 import {
   DocumentSampleProvider,
   editorConfigFromDescriptor,
@@ -241,7 +241,7 @@ export function DocumentTemplateEditor(): ReactNode {
     [translateIn],
   );
 
-  const storedNamesKey = [...countBlockNames(draft).keys()].sort().join('\n');
+  const storedNamesKey = [...countComponentNames(draft).keys()].sort().join('\n');
   const puckConfig = useMemo((): Config | null => {
     if (!descriptor || !editors) return null;
     const components: Record<string, ComponentConfig> = {};

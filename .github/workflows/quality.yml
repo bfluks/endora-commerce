@@ -84,6 +84,18 @@ jobs:
       # nobody bracketed. The remedy differs when it is reached: on GitLab the
       # answer was "raise the runner's container memory first", and here there
       # is no container to raise, so the answer is this line.
+      #
+      # Raised to 3072 on 2026-10-24 (D-287 release, PR #419): under Node 22.20
+      # the single backend program died at 2560 (`heap out of memory`) and
+      # passed at 2816 and 3072, with tsc's `Memory used` at 2.74 GB.
+      #
+      # Lowered to 2560 the same day (issue #421): `backend` now type-checks
+      # two programs, `backend/tsconfig.json` and `backend/test/tsconfig.json`,
+      # and the larger dies at 1920 and passes at 2048, so 2560 keeps ~512 MB
+      # over it. Wall time goes from 64-65 s to 89-92 s. The brackets for both
+      # programs and the rejected three-way split are in `.gitlab-ci.yml`'s
+      # `quality` job, which carries the measurement; the two values move
+      # together.
       NODE_OPTIONS: --max-old-space-size=2560
     steps:
       - uses: actions/checkout@v7

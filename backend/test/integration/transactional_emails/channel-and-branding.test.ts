@@ -102,7 +102,13 @@ describe('transactional emails — per-channel + branding (US2)', () => {
     const get = await h.app.inject({ method: 'GET', url: `${BASE}/branding`, cookies: ADMIN_COOKIE });
     const b = (get.json() as { data: { logoAssetId: string; logoUrl: string } }).data;
     expect(b.logoAssetId).toBe(assetId);
-    expect(b.logoUrl).toBe(`${resolvePublicApiBaseUrl()}/assets/file/${assetId}`);
+    // specs/156-asset-stable-url/ T063 (deliberate, R-20): the logo is embedded
+    // in e-mails, so it carries the content version of the file it shows.
+    const [row] = await h
+      .em()
+      .getConnection()
+      .execute<Array<{ content_version: string }>>('select content_version from assets where id = ?', [assetId]);
+    expect(b.logoUrl).toBe(`${resolvePublicApiBaseUrl()}/assets/file/${assetId}?v=${row!.content_version}`);
   });
 
   it('persists and reads back branding accent color', async () => {

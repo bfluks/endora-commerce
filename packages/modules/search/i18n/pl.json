@@ -1,10 +1,10 @@
 {
-  "errors.QUERY_TOO_SHORT": "Błąd: query too short.",
-  "errors.QUERY_TOO_LONG": "Błąd: query too long.",
-  "errors.LIMIT_OUT_OF_RANGE": "Błąd: limit out of range.",
-  "errors.SEARCH_BACKEND_UNAVAILABLE": "Błąd: search backend unavailable.",
-  "errors.PHRASE_REQUIRED": "Błąd: phrase required.",
-  "errors.PHRASE_TOO_LONG": "Błąd: phrase too long.",
-  "errors.RESULT_COUNT_INVALID": "Błąd: result count invalid.",
+  "errors.QUERY_TOO_SHORT": "Wyszukiwana fraza jest za krótka.",
+  "errors.QUERY_TOO_LONG": "Wyszukiwana fraza jest za długa.",
+  "errors.LIMIT_OUT_OF_RANGE": "Limit wyników jest poza dozwolonym zakresem.",
+  "errors.SEARCH_BACKEND_UNAVAILABLE": "Wyszukiwarka jest chwilowo niedostępna. Spróbuj ponownie później.",
+  "errors.PHRASE_REQUIRED": "Wpisz wyszukiwaną frazę.",
+  "errors.PHRASE_TOO_LONG": "Wyszukiwana fraza jest za długa.",
+  "errors.RESULT_COUNT_INVALID": "Liczba wyników jest nieprawidłowa.",
   "errors.LLM_CONFIG_INCOMPLETE": "Konfiguracja wyszukiwania LLM jest niekompletna."
 }

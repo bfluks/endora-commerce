@@ -184,6 +184,7 @@ describe('the membership service over an unregistered member (FR-017)', () => {
       () => service.filterEntityIdsAvailableInChannel('c', 'cms-page', ['e']),
     ],
     ['listChannelsForEntity', () => service.listChannelsForEntity('cms-page', 'e')],
+    ['listChannelIdsForEntity', () => service.listChannelIdsForEntity('cms-page', 'e')],
     ['listEntityIdsForChannel', () => service.listEntityIdsForChannel('c', 'cms-page')],
     // Synchronous — it builds a fragment and reads nothing — so it is wrapped to
     // refuse the way the rest of the table does.

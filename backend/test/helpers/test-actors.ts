@@ -335,6 +335,17 @@ export const ADMIN_COOKIES: Record<string, { adminUserId: string }> = {
   'stub-product-views-no-catalog-session': {
     adminUserId: '00000000-0000-4000-8000-0000000147b3',
   },
+  // `specs/163-product-data-scopes/` — the product scopes routes' gates. A
+  // catalogue reader on a custom role (`catalog:read` only) reads a product's
+  // scopes and is refused the write; an admin without `catalog:read` is refused
+  // both. The users, and the custom roles, are created by
+  // `test/contract/catalog/product-scopes-api.test.ts`.
+  'stub-product-scopes-reader-session': {
+    adminUserId: '00000000-0000-4000-8000-0000000162a1',
+  },
+  'stub-product-scopes-no-catalog-session': {
+    adminUserId: '00000000-0000-4000-8000-0000000162a2',
+  },
   // `specs/147-saved-views/` — the Quote Request list's saved views, with ids
   // of their own for the same reason. A sales representative holding
   // `rfqs:handle`, assigned to `TEST_ORGANIZATION_ID` only, reads a shared view
@@ -378,6 +389,26 @@ export const ADMIN_COOKIES: Record<string, { adminUserId: string }> = {
   },
   'stub-document-templates-none-session': {
     adminUserId: '00000000-0000-4000-8000-0000000152a2',
+  },
+  // `specs/164-admin-user-preferences/` — per-admin Admin UI preferences. Admin
+  // B holds a role and admin C holds none (a role-less admin keeps preferences
+  // too); together with the shared wildcard admin they prove no admin reads or
+  // writes another's document. A fresh admin of its own proves `/admin/me`
+  // carries the defaults before anything is written, and one more is the
+  // integration file's, whose rows it deletes, deactivates and cascades. The
+  // users and the role are created by the files under
+  // `test/contract/admin_users/` and `test/integration/admin_users/` that use them.
+  'stub-admin-preferences-b-session': {
+    adminUserId: '00000000-0000-4000-8000-0000000164a1',
+  },
+  'stub-admin-preferences-c-session': {
+    adminUserId: '00000000-0000-4000-8000-0000000164a2',
+  },
+  'stub-admin-preferences-fresh-session': {
+    adminUserId: '00000000-0000-4000-8000-0000000164a3',
+  },
+  'stub-admin-preferences-persistence-session': {
+    adminUserId: '00000000-0000-4000-8000-0000000164b1',
   },
 };
 

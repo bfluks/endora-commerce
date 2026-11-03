@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import type { Field } from '@puckeditor/core';
-import { PB_DATA_METADATA } from '@endora-commerce/page-builder-core';
+import { PB_DATA_METADATA, PB_FIELD_INPUT_CLASS } from '@endora-commerce/page-builder-core';
 import { ChevronDown, ChevronRight, Search, X } from 'lucide-react';
 import { apiClient, normalize } from '@endora-commerce/admin-kit/lib';
 import { Button } from '@endora-commerce/admin-kit/ui';
 
-const inputClassName = '_Input-input_bsxfo_26';
+/** The page builder's field input class (feature 163, T116: Puck's own class name went stale in 0.23). */
+const inputClassName = PB_FIELD_INPUT_CLASS;
 /** Match shadcn Button `h-9` — Puck's input padding is taller by default. */
 const pickerInputClassName = `${inputClassName} !box-border !h-9 !min-h-9 !py-0 !px-3 !text-sm leading-9`;
 const pickerButtonClass = 'h-9 shrink-0 px-3';
@@ -35,7 +36,8 @@ function slugsKey(slugs: string[]): string {
 interface AdminProduct {
   id: string;
   slug: string;
-  name: Record<string, string> | string;
+  /** Feature 170 (FR-031) — the Global name; the admin list answers no per-language map. */
+  name: string;
   sku: string;
   status?: string;
 }
@@ -48,9 +50,18 @@ interface AdminCategory {
   sortOrder: number;
 }
 
-function pickName(name: Record<string, string> | string, fallback: string): string {
+/**
+ * A category's name in the editor's language: categories keep their per-language map (feature 170,
+ * `contracts/readers.md` "Not readers"); a product's name is one Global string, read as it is.
+ */
+function pickCategoryName(name: Record<string, string> | string, fallback: string): string {
   if (typeof name === 'string') return name || fallback;
   return name['pl-PL'] ?? name['en-US'] ?? Object.values(name)[0] ?? fallback;
+}
+
+/** Feature 170 (FR-031) — the product's Global name, else the fallback. */
+function productTitle(name: string, fallback: string): string {
+  return name || fallback;
 }
 
 function flattenCategories(categories: AdminCategory[]): { slug: string; label: string }[] {
@@ -66,7 +77,7 @@ function flattenCategories(categories: AdminCategory[]): { slug: string; label: 
     return nodes.flatMap((cat) => {
       const prefix = level > 0 ? `${'—'.repeat(level)} ` : '';
       return [
-        { slug: cat.slug, label: `${prefix}${pickName(cat.name, cat.slug)}` },
+        { slug: cat.slug, label: `${prefix}${pickCategoryName(cat.name, cat.slug)}` },
         ...walk(cat.id, level + 1),
       ];
     });
@@ -152,7 +163,7 @@ function ProductSearchModal({
   onApply: (slugs: string[]) => void;
 }): ReactElement | null {
   const [query, setQuery] = useState('');
-  const [status, setStatus] = useState<'all' | 'active' | 'draft' | 'inactive'>('active');
+  const [status, setStatus] = useState<'all' | 'active' | 'inactive'>('active');
   const [page, setPage] = useState(0);
   const [products, setProducts] = useState<AdminProduct[]>([]);
   const [total, setTotal] = useState(0);
@@ -233,7 +244,6 @@ function ProductSearchModal({
           >
             <option value="all">All statuses</option>
             <option value="active">Active</option>
-            <option value="draft">Draft</option>
             <option value="inactive">Inactive</option>
           </select>
         </div>
@@ -259,7 +269,7 @@ function ProductSearchModal({
                       />
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-medium">
-                          {pickName(product.name, product.slug)}
+                          {productTitle(product.name, product.slug)}
                         </span>
                         <span className="block font-mono text-xs text-muted-foreground">
                           {product.sku} · {product.slug}
@@ -496,7 +506,7 @@ function ProductSlugsFieldControl({
         const next: Record<string, string> = {};
         for (const product of res.data) {
           if (selected.includes(product.slug)) {
-            next[product.slug] = `${pickName(product.name, product.slug)} (${product.sku})`;
+            next[product.slug] = `${productTitle(product.name, product.slug)} (${product.sku})`;
           }
         }
         for (const slug of selected) {
@@ -590,7 +600,7 @@ function CategorySlugsFieldControl({
   );
 }
 
-function SingleCategoryFieldControl({
+export function SingleCategoryFieldControl({
   value,
   onChange,
   readOnly,
@@ -639,7 +649,7 @@ function SingleCategoryFieldControl({
   );
 }
 
-function SingleProductFieldControl({
+export function SingleProductFieldControl({
   value,
   onChange,
   readOnly,
@@ -671,7 +681,7 @@ function SingleProductFieldControl({
         const product = res.data.find((p) => p.slug === selected);
         if (!cancelled) {
           setSelectedLabel(
-            product ? `${pickName(product.name, product.slug)} (${product.sku})` : selected,
+            product ? `${productTitle(product.name, product.slug)} (${product.sku})` : selected,
           );
         }
       } catch {

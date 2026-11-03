@@ -4,8 +4,8 @@ import { join, resolve } from 'node:path';
 import ts from 'typescript';
 import { render, screen } from '@testing-library/react';
 import type { ReactElement, ReactNode } from 'react';
-import { TranslationProvider } from '../../../packages/admin-shell/src/i18n/TranslationProvider';
-import type { Bundle } from '../../../packages/admin-shell/src/i18n/types';
+import { TranslationProvider } from '@endora-commerce/admin-kit/i18n';
+import type { Bundle } from '@endora-commerce/admin-kit/i18n';
 import { CategoryTreePicker } from '@endora-commerce/admin-kit/components';
 
 /**
@@ -147,7 +147,7 @@ describe('R-1 — the kit names no translation namespace but `core`', () => {
       'en',
     );
     expect(screen.getByPlaceholderText('Filter categories…')).toBeTruthy();
-    expect(screen.getByRole('tree', { name: 'Catalog category tree' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Catalog category tree' })).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Expand branch' }).length).toBeGreaterThan(0);
     expectNoRawKeys(en.container);
     en.unmount();

@@ -1,8 +1,11 @@
-import type {
-  CatalogCategoryWritePort,
-  CatalogProductWritePort,
-  CatalogPromoAttributePort,
+import {
+  type CatalogCategoryWritePort,
+  type CatalogProductScopeWritePort,
+  type CatalogProductWritePort,
+  type CatalogPromoAttributePort,
 } from '@endora-commerce/contracts';
+import type { CommandBus } from '@endora-commerce/platform/commands';
+import { assertIntegrationCall, runScopedImport, type ScopedImportDeps } from './scoped-values-import.js';
 import type { CatalogAdminService } from './catalog-admin.service.js';
 import type { CatalogQueryService } from './catalog-query.service.js';
 import type { CategoryAdminService } from './category-admin.service.js';
@@ -84,5 +87,33 @@ export function createCatalogPromoAttributePort(
   return {
     promoRuleAttributeKeys: () => getService().promoRuleAttributeKeys(),
     getAttributeWithOptions: (key) => getService().getAttributeWithOptions(key),
+  };
+}
+
+/**
+ * Feature 170 (T083; `contracts/pim-locale-mapping.md` §4, R13a, R21) — the scoped write of a
+ * connector, v2: the call-level checks (a registered `source`, the cell cap, no duplicate cell),
+ * then one Command `product.scoped_values.import` on the save's planner and writers
+ * (`scoped-values-import.ts`): per-cell refusals, the integration allowlist, every subject bound to
+ * the product, no completeness gate (A-6), URL keys in `integration` mode (FR-093).
+ */
+export function createCatalogProductScopeWritePort(deps: {
+  commandBus: () => CommandBus;
+  importDeps: () => ScopedImportDeps;
+  /** Whether `moduleId` names a module of the registry (R21: `options.source`). */
+  isRegisteredModule: (moduleId: string) => boolean;
+}): CatalogProductScopeWritePort {
+  return {
+    async applyScopes(productId, input, options) {
+      assertIntegrationCall(input.cells, options.source, deps.isRegisteredModule);
+      const { changedFields: _changed, ...result } = await runScopedImport(
+        deps.commandBus(),
+        deps.importDeps(),
+        productId,
+        input.cells,
+        { source: options.source },
+      );
+      return result;
+    },
   };
 }

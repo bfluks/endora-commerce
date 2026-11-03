@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { PriceList } from '../entities/price-list.entity.js';
 import { anyRowExists } from './scheduled-work-probe.js';
+import type { SurfaceChange } from './surface-change.js';
 
 /**
  * Status worker (feature 011 / FR-009, SC-006, research §R4 + §R13).
@@ -25,7 +26,17 @@ export interface SweepResult {
 }
 
 export class PriceListStatusWorker {
-  constructor(private readonly emFactory: () => EntityManager) {}
+  constructor(
+    private readonly emFactory: () => EntityManager,
+    /**
+     * D-287 P0 — the pricing cache, told when a sweep flips anything. A list
+     * the sweep activates or expires changes what customers are charged, and
+     * the sweep used to tell nobody: a sale starting at midnight stayed
+     * invisible for up to a further cache TTL after the sweep that started it.
+     * Production hands in `PricingGeneration`, which reaches every process.
+     */
+    private readonly pricingCache?: { invalidateAll: (change?: SurfaceChange) => void | Promise<void> },
+  ) {}
 
   /**
    * Whether a {@link sweep} at `now` would flip anything — **yes or no, and
@@ -78,15 +89,33 @@ export class PriceListStatusWorker {
 
     for (const row of toActivate) {
       row.status = 'active';
-      row.modifiedAt = now;
     }
     for (const row of toExpire) {
       row.status = 'expired';
-      row.modifiedAt = now;
     }
 
     if (toActivate.length > 0 || toExpire.length > 0) {
       await em.flush();
+      // After the flush that wrote the transitions, and only when there were
+      // any — an idle tick clears nothing. On the price surface a flip is a
+      // status change of each swept book: its products, in the profiles
+      // containing it (`contracts/price-surface.md` §4). Each was live before
+      // (scheduled or active), which is what reaches them.
+      await this.pricingCache?.invalidateAll({
+        kind: 'books',
+        books: [...toActivate, ...toExpire].map((row) => ({
+          facts: [
+            {
+              bookId: row.id,
+              currencyCode: row.currency,
+              audienceKind: row.audienceKind,
+              isSystem: row.isSystem,
+              live: true,
+            },
+          ],
+          selections: 'stored' as const,
+        })),
+      });
     }
 
     return {

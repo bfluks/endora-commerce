@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   adminHostFilesWalked,
+  adminRegistryLayersWalked,
   adminSurfacesOf,
   analyzeSource,
   CANONICAL_SHARD_ENTRY_TYPE,
@@ -887,6 +888,105 @@ describe('checkModuleBoundary — the host shard (feature 091, P1)', () => {
   });
 });
 
+/**
+ * Issue #88 — a floor over the module packages' admin layers whose author the
+ * module walk cannot influence: the generated admin registry.
+ *
+ * Every module's admin surface lives in `packages/modules/<id>/src/admin` as
+ * `.tsx`, and none of the other coverage tokens is derived over those files:
+ * with `'.tsx'` taken out of `collectModuleFiles`' extension list the check
+ * went on printing `manifest-index:67/67` and exited 1 only because three
+ * ledger entries happened to name `.tsx` files and went stale — a ledger anchor,
+ * not a floor, and one that disappears with the drain. The registry names each
+ * layer by its bare `./admin` specifier; its `src/admin/index.ts` and every file
+ * that index imports by relative path (its screens, loaded through
+ * `() => import('./pages/…')`) must have been opened by the module walk.
+ */
+describe('the admin registry floor (issue #88)', () => {
+  const REGISTRY = [
+    "import type { AdminContributions } from '@endora-commerce/admin-kit/contributions';",
+    "import { contributions as contributions0 } from '@endora-commerce/mod-blog/admin';",
+    "import { contributions as contributions1 } from '@endora-commerce/mod-cms/admin';",
+  ].join('\n');
+  const BLOG_INDEX = [
+    "import type { AdminContributions } from '@endora-commerce/admin-kit/contributions';",
+    "import { blogNav } from './nav.js';",
+    'export const contributions: AdminContributions = {',
+    "  routes: [{ path: 'blog', component: () => import('./pages/BlogPage.js') }],",
+    '  nav: [blogNav],',
+    '};',
+  ].join('\n');
+  const FILES: Record<string, string> = {
+    'packages/modules/blog/src/admin/index.ts': BLOG_INDEX,
+    'packages/modules/blog/src/admin/nav.ts': 'export const blogNav = {};',
+    'packages/modules/blog/src/admin/pages/BlogPage.tsx': 'export default function BlogPage() {}',
+    'packages/modules/cms/src/admin/index.ts': 'export const contributions = {};',
+  };
+  const PACKAGES: Record<string, string> = {
+    '@endora-commerce/mod-blog': 'packages/modules/blog',
+    '@endora-commerce/mod-cms': 'packages/modules/cms',
+  };
+  const read = (walked: readonly string[], registry: string | null = REGISTRY) =>
+    adminRegistryLayersWalked({
+      registry,
+      registryKey: 'admin/src/modules.generated.ts',
+      packageDirectoryOf: (name) => PACKAGES[name] ?? null,
+      readText: (key) => FILES[key] ?? null,
+      walked: new Set(walked),
+    });
+
+  it('expects each registered index and every file it imports by relative path', () => {
+    expect(read(Object.keys(FILES))).toEqual({ expected: 4, covered: 4, missing: [] });
+  });
+
+  it('reports a walk that stopped reading `.tsx` — the deliberate-break probe', () => {
+    const walked = Object.keys(FILES).filter((key) => !key.endsWith('.tsx'));
+    const coverage = read(walked);
+    expect(coverage.covered).toBe(3);
+    expect(coverage.missing).toEqual(['packages/modules/blog/src/admin/pages/BlogPage.tsx']);
+    expect(vacuousReason({ ...REGISTRY_READ, adminRegistryMissing: coverage.missing })).toMatch(
+      /admin registry/,
+    );
+  });
+
+  it('reports a walk that lost a module package directory', () => {
+    const walked = Object.keys(FILES).filter((key) => !key.startsWith('packages/modules/cms/'));
+    expect(read(walked).missing).toEqual(['packages/modules/cms/src/admin/index.ts']);
+  });
+
+  it('reports a registered layer it cannot place, rather than skipping it', () => {
+    const coverage = adminRegistryLayersWalked({
+      registry: "import { contributions } from '@endora-commerce/mod-gone/admin';",
+      registryKey: 'admin/src/modules.generated.ts',
+      packageDirectoryOf: () => null,
+      readText: () => null,
+      walked: new Set(),
+    });
+    expect(coverage.expected).toBe(1);
+    expect(coverage.covered).toBe(0);
+    expect(coverage.missing[0]).toContain('@endora-commerce/mod-gone/admin');
+  });
+
+  it('reports a registry that is not on disk', () => {
+    const coverage = read(Object.keys(FILES), null);
+    expect(coverage.covered).toBe(0);
+    expect(coverage.missing).toEqual(['admin/src/modules.generated.ts (not on disk)']);
+  });
+
+  it('is silent when nothing is missing', () => {
+    expect(vacuousReason({ ...REGISTRY_READ, adminRegistryMissing: [] })).toBeNull();
+    expect(vacuousReason(REGISTRY_READ)).toBeNull();
+  });
+});
+
+const REGISTRY_READ = {
+  moduleFiles: ['modules/orders/a.ts'],
+  registeredModules: ['orders'],
+  ledgerDirectoryExists: true,
+  entityTables: 220,
+  migrationTables: 241,
+};
+
 describe('the host population’s floors (issues #113 and #215, over feature 091 P1)', () => {
   const READ_SOMETHING = {
     moduleFiles: ['modules/orders/a.ts', 'modules/catalog/b.ts'],
@@ -1552,6 +1652,81 @@ describe('a migration\u2019s cross-module SQL \u2014 R2, the ownership rule', ()
   });
 });
 
+describe('a migration’s cross-module SQL — DDL against an existing table (issue #108)', () => {
+  it('reports an index on another module’s table under both rules, as DDL', () => {
+    // The one real instance was an index on `cms_pages` created by another
+    // module's migration, repaired by hand while the rule stayed blind. The
+    // assertion is on `syntax`, or a DML implementation would satisfy it.
+    const found = migrationFindings(
+      'this.addSql(`create index "b_table_flag_idx" on "b_table" ("flag");`);',
+      { a: [], b: [] },
+    );
+    expect(rulesOf(found)).toEqual([
+      'undeclared-migration-table-reference',
+      'migration-writes-a-foreign-table',
+    ]);
+    expect(found[0]).toMatchObject({
+      moduleId: 'a',
+      target: 'b',
+      table: 'b_table',
+      syntax: 'ddl',
+      direction: 'write',
+    });
+  });
+
+  it('reports a declared `alter table` under R2 — a declaration orders, it does not own', () => {
+    const found = migrationFindings(
+      'this.addSql(`alter table "public"."b_table" add column "x" text null;`);',
+      { a: ['b'], b: [] },
+    );
+    expect(rulesOf(found)).toEqual(['migration-writes-a-foreign-table']);
+    expect(found[0]).toMatchObject({ syntax: 'ddl', table: 'b_table' });
+  });
+
+  it('attributes a `drop index` through the migration that created the index', () => {
+    // The drop names an index, and the create is in another file: the map has
+    // to be built from the whole migration population, not from one source.
+    const created = 'modules/b/migrations/20260901T090000_b_init.ts';
+    const dropping = 'this.addSql(`drop index if exists "b_table_flag_idx";`);';
+    const sources = new Map([
+      [created, 'this.addSql(`create index "b_table_flag_idx" on "b_table" ("flag");`);'],
+      [A_MIGRATION, dropping],
+    ]);
+    const found = findMigrationSql({
+      sources,
+      schema: new Map([...MIGRATION_SCHEMA, ...sources]),
+      dependencyClosures: dependencyClosures(new Map(Object.entries({ a: ['b'], b: [] }))),
+    }).found;
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
+      file: A_MIGRATION,
+      rule: 'migration-writes-a-foreign-table',
+      table: 'b_table',
+      syntax: 'ddl',
+    });
+  });
+
+  it('clears DDL against the module’s own and the kernel’s tables', () => {
+    expect(
+      migrationFindings(
+        [
+          'this.addSql(`create unique index "a_uq" on "a_table" ("id");`);',
+          'this.addSql(`alter table "sales_channels" add column "x" text;`);',
+        ].join('\n'),
+        { a: [], b: [] },
+      ),
+    ).toEqual([]);
+  });
+
+  it('does not widen the host predicate: DDL outside `migrations/` is not read', () => {
+    const file = 'modules/a/services/a-service.ts';
+    const source = 'const sql = `create index "x" on "b_table" ("flag");`;';
+    expect(
+      findCrossModuleSql({ sources: new Map([[file, source]]), schema: MIGRATION_SCHEMA }).found,
+    ).toEqual([]);
+  });
+});
+
 describe('a migration\u2019s cross-module SQL \u2014 what neither rule reaches', () => {
   it('clears a kernel-owned table under both rules', () => {
     // Decided from the owner map's own answer, never from a table-name list: the
@@ -1567,7 +1742,7 @@ describe('a migration\u2019s cross-module SQL \u2014 what neither rule reaches',
     ).toEqual([]);
   });
 
-  it('clears DDL — `fk-dependency-drift.test.ts` owns that and this must not duplicate it', () => {
+  it('clears `create table` — it is the owner map\u2019s declaration, not an access (issue #108)', () => {
     expect(
       migrationFindings(
         'this.addSql(`create table "b_table" ("id" uuid not null);`);',

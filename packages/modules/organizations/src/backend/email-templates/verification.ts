@@ -7,6 +7,12 @@ export interface BuildVerificationEmailInput {
   organizationName: string;
   /** Storefront base URL — verification UI submits token to API. */
   storefrontBaseUrl: string;
+  /**
+   * Puts the storefront language prefix on the page path (feature 167, FR-034) — the
+   * caller passes `storefrontPagePathFor` bound to the channel and the e-mail's
+   * language. Absent: the logical path.
+   */
+  pagePath?: (path: string) => string;
 }
 
 /**
@@ -15,7 +21,8 @@ export interface BuildVerificationEmailInput {
 export function buildVerificationEmail(input: BuildVerificationEmailInput): EmailMailerSendInput {
   const base = trimSlash(input.storefrontBaseUrl);
   /** Must match storefront `app/(auth)/verify/page.tsx` (path `/verify`). */
-  const verifyUrl = `${base}/verify?token=${encodeURIComponent(input.rawToken)}`;
+  const path = `/verify?token=${encodeURIComponent(input.rawToken)}`;
+  const verifyUrl = `${base}${input.pagePath ? input.pagePath(path) : path}`;
   const text = [
     `Welcome to the B2B platform.`,
     ``,

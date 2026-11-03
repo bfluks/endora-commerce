@@ -10,6 +10,7 @@ import {
 } from '../../helpers/test-actors.js';
 import { Product } from '../../helpers/package-entities.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
+import { seedOtherTestOrganization } from '../../helpers/seed-organizations.js';
 
 /**
  * Issue #227 — the public catalogue is the surface issue #174 was the warning
@@ -85,6 +86,10 @@ describe('public catalog reads honour visibility and the organisation allow-list
 
   beforeAll(async () => {
     h = await setupBackendServer();
+    // Feature 154 — the other-organisation buyer shops only if its Organization
+    // exists and is assigned the store; seeded before any request so no empty
+    // permitted-channel set is cached for it.
+    await seedOtherTestOrganization(h.em());
     const em = h.em();
 
     const retail = await em.findOne(SalesChannel, { code: 'pl_retail' });
@@ -110,8 +115,8 @@ describe('public catalog reads honour visibility and the organisation allow-list
         slug: slugFor(fixture.sku),
         type: 'simple',
         status: 'active',
-        name: { 'en-US': `Catalog visibility probe ${fixture.sku}` },
-        description: { 'en-US': 'Bound to pl_retail.' },
+        name: `Catalog visibility probe ${fixture.sku}`,
+        description: 'Bound to pl_retail.',
         visibility: fixture.visibility,
         allowedOrganizationIds: fixture.allowedOrganizationIds,
         attributeValues: { defaultPrice: 10 },

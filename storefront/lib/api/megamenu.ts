@@ -1,18 +1,23 @@
 import { MEGAMENU_STOREFRONT_CACHE_TAG, type ResolvedMegamenu } from '@endora-commerce/contracts';
-import { apiGet, StorefrontApiError, type RequestContext } from './client';
+import { apiGetForViewer, StorefrontApiError, type RequestContext } from './client';
 
 /**
  * Storefront client for the megamenu module — feature 015. Resolves the
  * active megamenu for the current `(channel, language)` scope. Returns
  * `null` when no megamenu is active so the layout can render a no-menu
  * fallback (a stripped-down `<header>` with no navigation panel).
+ *
+ * Feature 168: items carry an audience, so the menu is the viewer's. A
+ * signed-in buyer's read forwards their session and is stored nowhere
+ * (`apiGetForViewer`); a guest's stays the cached, tagged read below — the
+ * anonymous menu is still one entry per channel and language.
  */
 export async function getActiveMegamenu(ctx: RequestContext): Promise<ResolvedMegamenu | null> {
   const params = new URLSearchParams();
   if (ctx.locale) params.set('language', ctx.locale);
   const qs = params.toString();
   try {
-    const out = await apiGet<{ data: ResolvedMegamenu }>(
+    const out = await apiGetForViewer<{ data: ResolvedMegamenu }>(
       `/api/v1/megamenu/by-channel${qs ? `?${qs}` : ''}`,
       ctx,
       // Dropped by the backend's `megamenu` module on every menu write, and

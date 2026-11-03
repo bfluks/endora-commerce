@@ -228,4 +228,13 @@ describe('Enhanced Ecommerce gating', () => {
       expect.objectContaining({ currency: 'EUR', value: 18 }),
     );
   });
+
+  it('values a line as its unit price × quantity rounded once to the cent (§10.18)', () => {
+    configureGa({ ...baseConfig, enhancedEcommerce: true });
+    // 0.0125 × 10 000 = 125.00; 0.015 × 3 = 0.045 → 0.05 (the double product is 0.045000000000000005).
+    trackAddToCart({ sku: 'S1', name: 'Screw', price: 0.0125, quantity: 10_000, currency: 'PLN' });
+    expect(gtagSpy).toHaveBeenCalledWith('event', 'add_to_cart', expect.objectContaining({ value: 125 }));
+    trackAddToCart({ sku: 'S2', name: 'Washer', price: 0.015, quantity: 3, currency: 'PLN' });
+    expect(gtagSpy).toHaveBeenCalledWith('event', 'add_to_cart', expect.objectContaining({ value: 0.05 }));
+  });
 });

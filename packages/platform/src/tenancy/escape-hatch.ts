@@ -90,6 +90,27 @@ export function withSystemScope<T>(reason: string, fn: () => Promise<T>): Promis
   return runWithTenantContext(systemTenantContext(reason), fn);
 }
 
+/**
+ * Feature 163 (checkpoint C security review, S-W2) — the system scope of a worker
+ * finishing work an admin queued, **acting for that admin**: the context an admin
+ * request runs in (`actor: { kind: 'admin', id }`) with the worker's unrestricted
+ * `system` reach, so every Command it runs is audited with the admin who asked for it
+ * rather than a null actor. The admin id must be the one the queued work recorded
+ * server-side when it was requested — never a value from a job payload a client wrote.
+ */
+export function withSystemScopeActingFor<T>(adminUserId: string, reason: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    requireReason(reason);
+  } catch (err) {
+    return Promise.reject(err);
+  }
+  if (!adminUserId || adminUserId.trim().length === 0) {
+    return Promise.reject(new Error('withSystemScopeActingFor requires the admin id the work was queued by.'));
+  }
+  auditSink({ scope: 'system', reason });
+  return runWithTenantContext({ mode: 'system', actor: { kind: 'admin', id: adminUserId }, reason }, fn);
+}
+
 /** Run `fn` pinned to a single organization (e.g. a per-org background job). */
 export function withOrgScope<T>(organizationId: string, reason: string, fn: () => Promise<T>): Promise<T> {
   requireReason(reason);

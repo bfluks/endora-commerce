@@ -8,11 +8,15 @@ import { BlogTagPage } from '../_components/BlogTagPage';
 import {
   getBlogBySlug,
   getBlogIndex,
+  getBlogRelatedProducts,
   getBlogTagByCode,
 } from '../../../lib/api/blog';
 import { getServerContext } from '../../../lib/server-context';
 import { canonicalPath } from '../../../lib/seo/route-seo';
 import { seo } from './seo';
+import { localizedAlternates } from '../../../lib/i18n/navigation';
+import { format } from '../../../lib/i18n/format';
+import { tForLocale } from '../../../lib/i18n/messages';
 
 interface PageProps {
   params: Promise<{ slug?: string[] }>;
@@ -30,7 +34,8 @@ function readPage(searchParams: Record<string, string | string[] | undefined>): 
 export async function generateMetadata({ params, searchParams }: PageProps): Promise<Metadata> {
   const { slug } = await params;
   const sp = await searchParams;
-  const { ctx } = await getServerContext();
+  const { ctx, locale } = await getServerContext();
+  const t = tForLocale(locale);
 
   // Indexable (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010/FR-012).
   // One route file serves four views, so the canonical is composed from the
@@ -38,39 +43,46 @@ export async function generateMetadata({ params, searchParams }: PageProps): Pro
   // is `noindex`, because `page.tsx` answers it with `notFound()`.
   if (!slug || slug.length === 0) {
     const payload = await getBlogIndex(ctx);
-    if (!payload) return { title: 'Not found', robots: { index: false, follow: false } };
-    return { title: 'Blog', alternates: { canonical: canonicalPath(seo.route, {}) } };
+    if (!payload) return { title: t('content.notFound.title'), robots: { index: false, follow: false } };
+    const alternates = await localizedAlternates(canonicalPath(seo.route, {}));
+    return { title: t('content.blog.title'), alternates: { ...alternates, canonical: alternates.canonical } };
   }
 
   if (slug[0] === 'tag' && slug.length === 2) {
     const payload = await getBlogTagByCode(slug[1] as string, ctx, readPage(sp));
-    if (!payload) return { title: 'Not found', robots: { index: false, follow: false } };
+    if (!payload) return { title: t('content.notFound.title'), robots: { index: false, follow: false } };
+    const alternates = await localizedAlternates(canonicalPath(seo.route, { slug }));
+
     return {
-      title: `#${payload.tag.name} — Blog`,
-      alternates: { canonical: canonicalPath(seo.route, { slug }) },
+      title: format(t('content.blog.tagTitle'), { tag: payload.tag.name }),
+      alternates: { ...alternates, canonical: alternates.canonical },
     };
   }
 
   if (slug.length === 1) {
     const payload = await getBlogBySlug(slug[0] as string, ctx, readPage(sp));
-    if (!payload) return { title: 'Not found', robots: { index: false, follow: false } };
+    if (!payload) return { title: t('content.notFound.title'), robots: { index: false, follow: false } };
     if (payload.kind === 'category') {
+      const alternates = await localizedAlternates(canonicalPath(seo.route, { slug }));
+
       return {
-        title: payload.category.metaTitle ?? `${payload.category.name} — Blog`,
+        title: payload.category.metaTitle ?? format(t('content.blog.categoryTitle'), { category: payload.category.name }),
         description: payload.category.metaDescription ?? undefined,
         keywords: payload.category.metaKeywords ?? undefined,
-        alternates: { canonical: canonicalPath(seo.route, { slug }) },
+        alternates: { ...alternates, canonical: alternates.canonical },
       };
     }
+    const alternates = await localizedAlternates(canonicalPath(seo.route, { slug }));
+
     return {
       title: payload.post.metaTitle ?? payload.post.name,
       description: payload.post.metaDescription ?? undefined,
       keywords: payload.post.metaKeywords ?? undefined,
-      alternates: { canonical: canonicalPath(seo.route, { slug }) },
+      alternates: { ...alternates, canonical: alternates.canonical },
     };
   }
 
-  return { title: 'Not found', robots: { index: false, follow: false } };
+  return { title: t('content.notFound.title'), robots: { index: false, follow: false } };
 }
 
 export default async function BlogCatchAllPage({
@@ -79,29 +91,40 @@ export default async function BlogCatchAllPage({
 }: PageProps): Promise<ReactNode> {
   const { slug } = await params;
   const sp = await searchParams;
-  const { ctx, locale } = await getServerContext();
+  const { ctx, locale, modules } = await getServerContext();
   const language = ctx.locale ?? locale ?? 'en-US';
 
   // /blog → index
   if (!slug || slug.length === 0) {
     const payload = await getBlogIndex(ctx);
     if (!payload) notFound();
-    return <BlogIndexPage payload={payload} />;
+    return <BlogIndexPage payload={payload} locale={locale} />;
   }
 
   // /blog/tag/<code> → tag view
   if (slug[0] === 'tag' && slug.length === 2) {
     const payload = await getBlogTagByCode(slug[1] as string, ctx, readPage(sp));
     if (!payload) notFound();
-    return <BlogTagPage payload={payload} />;
+    return <BlogTagPage payload={payload} locale={locale} />;
   }
 
   // /blog/<slug> → category | post (one slug only at v1)
   if (slug.length === 1) {
     const payload = await getBlogBySlug(slug[0] as string, ctx, readPage(sp));
     if (!payload) notFound();
-    if (payload.kind === 'category') return <BlogCategoryPage payload={payload} />;
-    return <BlogPostPage payload={payload} language={language} />;
+    if (payload.kind === 'category') return <BlogCategoryPage payload={payload} locale={locale} />;
+    // Issue #590 — the related products are read as the viewer, here, and not
+    // in the post payload, which is cached for every visitor.
+    const relatedProducts = await getBlogRelatedProducts(payload.post.relatedProductIds, ctx, modules);
+    return (
+      <BlogPostPage
+        payload={payload}
+        language={language}
+        locale={locale}
+        relatedProducts={relatedProducts}
+        salesChannelCode={ctx.salesChannelCode}
+      />
+    );
   }
 
   notFound();

@@ -27,6 +27,11 @@ import { Migration20260505T130214CmsInit } from './20260505T130214_cms_init.js';
 import { Migration20260903T101741CmsNamespaceBlockNames } from './20260903T101741_cms_namespace_block_names.js';
 import { Migration20260912T094733CmsSalesChannelCmsPages } from './20260912T094733_cms_sales_channel_cms_pages.js';
 import { Migration20260912T125709CmsPageBodyAssetRefIndex } from './20260912T125709_cms_page_body_asset_ref_index.js';
+import { Migration20261022T163218CmsBrandTokens } from './20261022T163218_cms_brand_tokens.js';
+import { Migration20261023T052237CmsPageTreeAndShare } from './20261023T052237_cms_page_tree_and_share.js';
+import { Migration20261027T165458CmsPageParentPathInUrl } from './20261027T165458_cms_page_parent_path_in_url.js';
+import { Migration20261028T090524CmsPageBreadcrumbsOverlay } from './20261028T090524_cms_page_breadcrumbs_overlay.js';
+import { Migration20261029T131218CmsPageTranslations } from './20261029T131218_cms_page_translations.js';
 
 export const migrations = [
   Migration20260425T162418CmsPagesInit,
@@ -34,6 +39,11 @@ export const migrations = [
   Migration20260903T101741CmsNamespaceBlockNames,
   Migration20260912T094733CmsSalesChannelCmsPages,
   Migration20260912T125709CmsPageBodyAssetRefIndex,
+  Migration20261022T163218CmsBrandTokens,
+  Migration20261023T052237CmsPageTreeAndShare,
+  Migration20261027T165458CmsPageParentPathInUrl,
+  Migration20261028T090524CmsPageBreadcrumbsOverlay,
+  Migration20261029T131218CmsPageTranslations,
 ];
 
 export {
@@ -42,4 +52,9 @@ export {
   Migration20260903T101741CmsNamespaceBlockNames,
   Migration20260912T094733CmsSalesChannelCmsPages,
   Migration20260912T125709CmsPageBodyAssetRefIndex,
+  Migration20261022T163218CmsBrandTokens,
+  Migration20261023T052237CmsPageTreeAndShare,
+  Migration20261027T165458CmsPageParentPathInUrl,
+  Migration20261028T090524CmsPageBreadcrumbsOverlay,
+  Migration20261029T131218CmsPageTranslations,
 };

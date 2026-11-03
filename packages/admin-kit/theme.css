@@ -348,7 +348,13 @@ body,
   color: var(--sidebar-fg);
   display: flex; flex-direction: column;
   height: 100vh;
-  position: sticky; top: 0;
+  /* A sticky box is a stacking context of its own, so the collapsed rail's
+     fly-out (`.b2b-sidebar__rail-popover`) is only ever as high as the sidebar
+     itself. Above the topbar (35) and everything in the page — sticky
+     form-action bars (30), sticky table columns — so the fly-out is drawn over
+     the content (#380); below the mobile nav backdrop (40) and the
+     scrim, drawers and palette (50/60). The mobile drawer sets its own. */
+  position: sticky; top: 0; z-index: 36;
   border-right: 1px solid #000;
   width: 248px;
 }
@@ -495,9 +501,36 @@ body,
    one, so the order is logo, divider, release, divider, the rest. Its left
    edge is the brand link's (16px), so the badge lines up with the logo tile. */
 .b2b-sidebar__version {
-  display: flex; align-items: center;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 8px 16px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+/* *Send feedback* (#379): a quiet link beside the release, in the sidebar's
+   muted text (5.32:1 on the sidebar), brightening on hover like the nav. The
+   row grows its hit area to 44px on touch screens (Fitts). */
+.b2b-sidebar__feedback {
+  display: inline-flex; align-items: center; gap: 4px;
+  min-height: 24px;
+  padding: 0 4px;
+  margin-left: auto;
+  background: transparent; border: none; border-radius: var(--r-sm);
+  color: var(--sidebar-fg-muted);
+  font-size: 11px; font-weight: 500; line-height: 16px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.b2b-sidebar__feedback:hover { color: var(--sidebar-fg-active); background: var(--bg-sidebar-hover); }
+.b2b-sidebar__feedback:focus-visible,
+.b2b-sidebar__feedback-rail:focus-visible {
+  outline: 2px solid var(--ring-color);
+  outline-offset: 1px;
+}
+@media (pointer: coarse) {
+  .b2b-sidebar__feedback { min-height: 44px; }
+}
+.b2b-sidebar__feedback-rail-row {
+  display: flex; justify-content: center;
+  padding: 8px 0 0;
 }
 /* Sidebar tokens rather than the badge's own: the sidebar is #1a1c1e in both
    themes, and the `outline` variant's `text-foreground` is near-black in the
@@ -638,6 +671,76 @@ body,
 }
 .b2b-nav-item.is-active .b2b-nav-badge {
   background: hsl(var(--accent-h) 70% 50%); color: #fff;
+}
+
+/* Feature 164 — a sidebar row with its pin control (FR-004). The control is a
+   sibling of the link, revealed on the row's hover and focus, always shown with
+   a 44 px target on touch (the mobile drawer, and any coarse pointer). */
+.b2b-nav-row { display: flex; align-items: center; gap: 2px; }
+.b2b-nav-row > .b2b-nav-item { flex: 1; min-width: 0; }
+.b2b-nav-pin {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  width: 24px; height: 24px;
+  padding: 0;
+  border: none; border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--sidebar-fg-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .1s, background .1s, color .1s;
+}
+.b2b-nav-row:hover .b2b-nav-pin,
+.b2b-nav-row:focus-within .b2b-nav-pin { opacity: 1; }
+.b2b-nav-pin:hover { color: var(--sidebar-fg-active); background: var(--bg-sidebar-hover); }
+.b2b-nav-pin:focus-visible { opacity: 1; outline: 2px solid var(--ring-color); outline-offset: -2px; }
+.b2b-nav-pin--touch { opacity: 1; min-width: 44px; min-height: 44px; }
+@media (pointer: coarse) {
+  .b2b-nav-pin { opacity: 1; min-width: 44px; min-height: 44px; }
+}
+/* The Pinned section's reorder handle and touch buttons (FR-009). */
+.b2b-nav-row--pinned .b2b-nav-reorder-handle { cursor: grab; }
+.b2b-nav-row--pinned.is-grabbed .b2b-nav-reorder-handle,
+.b2b-nav-row--pinned.is-dragging .b2b-nav-reorder-handle { opacity: 1; cursor: grabbing; }
+.b2b-nav-row--pinned.is-grabbed { background: var(--bg-sidebar-hover); border-radius: var(--r-sm); }
+.b2b-nav-row--pinned.is-drop-target { box-shadow: inset 0 2px 0 hsl(var(--accent-h) 90% 75%); }
+.b2b-nav-row--pinned .b2b-touch-reorder { flex-direction: row; }
+.b2b-nav-row--pinned .b2b-touch-reorder__btn {
+  background: transparent; border-color: rgba(255,255,255,0.12); color: var(--sidebar-fg-muted);
+}
+.b2b-sidebar__rail-popover-row { display: flex; align-items: center; gap: 2px; }
+.b2b-sidebar__rail-popover-row > .b2b-sidebar__rail-popover-item { flex: 1; min-width: 0; }
+.b2b-sidebar__rail-popover-row > .b2b-nav-pin { opacity: 1; }
+
+/* The palette's pin control beside a result (FR-027). Out of the Tab order —
+   its keyboard equivalent is Alt+Enter on the highlighted row. */
+.b2b-palette__pin {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  padding: 0;
+  border: none; border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.b2b-palette__pin:hover { color: var(--fg); background: var(--bg-muted, rgba(0,0,0,0.06)); }
+.b2b-palette__pin[aria-pressed="true"] { color: var(--fg); }
+.b2b-palette__pin-hint {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--fg-muted);
+  white-space: nowrap;
+}
+@media (pointer: coarse) {
+  .b2b-palette__pin { min-width: 44px; min-height: 44px; }
+}
+
+/* The save-failure notice below the top bar (FR-017). */
+.b2b-preferences-notice:empty { display: none; }
+.b2b-preferences-notice__alert {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  border-radius: 0; border-left: 0; border-right: 0;
+  padding: 8px 16px;
 }
 
 .b2b-sidebar__foot {

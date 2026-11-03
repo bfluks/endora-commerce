@@ -6,7 +6,7 @@ import {
   type CustomerAccountRecord,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AuditPort, SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { Organization } from '../entities/organization.entity.js';
 
 /**
@@ -51,6 +51,17 @@ export class PersonalOrganizationService {
      * own; the write and its one audit row moved here together.
      */
     private readonly auditLog?: AuditPort,
+    /**
+     * Feature 154 — the kernel's audited channel-membership writer. An
+     * Organization with no sales channel may shop nowhere, so a created one is
+     * bound in the creating transaction: to the channel of the store the
+     * account registered on, or to the system default without one (FR-017,
+     * FR-019). Optional so a unit composition without it keeps working.
+     */
+    private readonly channelMembership?: Pick<
+      SalesChannelMembershipPort,
+      'bindToDefaultIfEmpty' | 'replaceChannelsForEntity'
+    >,
   ) {}
 
   /** Name an individual's organization from their profile, falling back to the email local-part. */
@@ -86,11 +97,21 @@ export class PersonalOrganizationService {
       email: string;
       firstName?: string | null;
       lastName?: string | null;
+      /**
+       * Feature 154 — the store the account registers on; the new personal
+       * organisation gets exactly this channel. Absent or `null`: the default.
+       */
+      salesChannelId?: string | null;
     },
   ): Promise<Organization> {
     const taxId = personalTaxId(input.customerAccountId);
     const existingByTaxId = await em.findOne(Organization, { taxId });
-    if (existingByTaxId) return existingByTaxId;
+    if (existingByTaxId) {
+      await this.channelMembership?.bindToDefaultIfEmpty('organization', existingByTaxId.id, {
+        em,
+      });
+      return existingByTaxId;
+    }
     const org = em.create(Organization, {
       name: PersonalOrganizationService.personalName({
         firstName: input.firstName ?? '',
@@ -108,6 +129,18 @@ export class PersonalOrganizationService {
     // is the caller's `EntityManager` and therefore the caller's transaction, so
     // a rollback takes this row with it.
     await em.persistAndFlush(org);
+    // Feature 154 — on the caller's `EntityManager`, so the bridge row shares
+    // the transaction that creates the account and its Organization.
+    if (input.salesChannelId) {
+      await this.channelMembership?.replaceChannelsForEntity(
+        'organization',
+        org.id,
+        [input.salesChannelId],
+        { em },
+      );
+    } else {
+      await this.channelMembership?.bindToDefaultIfEmpty('organization', org.id, { em });
+    }
     return org;
   }
 

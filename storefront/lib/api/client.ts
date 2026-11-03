@@ -8,7 +8,8 @@
  *     than a refusal here.
  *   - threads the active Sales Channel + locale through every request via
  *     the `X-Sales-Channel` and `Accept-Language` headers, so server-side
- *     tenancy + i18n resolution stays in one place.
+ *     tenancy + i18n resolution stays in one place. A caller that passes no
+ *     channel gets the request's stamped one (`activeChannelHeaders`).
  *   - opts every fetch into Next's native cache machinery; pages choose
  *     `revalidate` per route per Principle VII (SSR for catalog/PDP).
  *
@@ -18,6 +19,7 @@
  */
 
 import { backendBaseUrl } from '../env.mjs';
+import { activeChannelHeaders } from './channel-headers';
 
 /**
  * The backend's origin, read per call.
@@ -35,7 +37,11 @@ import { backendBaseUrl } from '../env.mjs';
  */
 
 export interface RequestContext {
-  /** Sales-channel code; backend defaults to the public one when undefined. */
+  /**
+   * Sales-channel code. When undefined, the transport sends the channel
+   * `middleware.ts` stamped on the request being served, and outside a request
+   * none — the backend then resolves its system default.
+   */
   salesChannelCode?: string | undefined;
   /** Effective storefront locale, e.g. `en-US`. */
   locale?: string | undefined;
@@ -87,10 +93,12 @@ export async function apiGet<T>(
   options: FetchOptions = {},
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
-  if (ctx.salesChannelCode) headers['X-Sales-Channel'] = ctx.salesChannelCode;
   if (ctx.locale) headers['Accept-Language'] = ctx.locale;
 
-  const init: RequestInit & { next?: { revalidate?: number | false; tags?: string[] } } = {
+  const init: RequestInit & {
+    headers: Record<string, string>;
+    next?: { revalidate?: number | false; tags?: string[] };
+  } = {
     method: 'GET',
     headers,
   };
@@ -102,7 +110,7 @@ export async function apiGet<T>(
     init.cache = 'no-store';
   }
 
-  return await send<T>(path, init);
+  return await send<T>(path, init, ctx);
 }
 
 /**
@@ -142,10 +150,9 @@ export async function apiGetForViewer<T>(
     Accept: 'application/json',
     Cookie: `b2b_session=${ctx.viewerSession}`,
   };
-  if (ctx.salesChannelCode) headers['X-Sales-Channel'] = ctx.salesChannelCode;
   if (ctx.locale) headers['Accept-Language'] = ctx.locale;
 
-  return await send<T>(path, { method: 'GET', headers, cache: 'no-store' });
+  return await send<T>(path, { method: 'GET', headers, cache: 'no-store' }, ctx);
 }
 
 /**
@@ -160,11 +167,25 @@ export function withoutViewer(ctx: RequestContext): RequestContext {
   return rest;
 }
 
+/**
+ * The one place a read reaches the backend, and so the one place the channel is
+ * added: the caller's `ctx.salesChannelCode`, or the request's stamped channel
+ * when the caller passed none (`activeChannelHeaders`). A read that names no
+ * channel is answered on the system default — a different store, with its own
+ * access rule and prices (`specs/154-sales-channel-access/`).
+ */
 async function send<T>(
   path: string,
-  init: RequestInit & { next?: { revalidate?: number | false; tags?: string[] } },
+  init: RequestInit & {
+    headers: Record<string, string>;
+    next?: { revalidate?: number | false; tags?: string[] };
+  },
+  ctx: RequestContext,
 ): Promise<T> {
-  const response = await fetch(`${backendBaseUrl()}${path}`, init);
+  const response = await fetch(`${backendBaseUrl()}${path}`, {
+    ...init,
+    headers: { ...init.headers, ...(await activeChannelHeaders(ctx)) },
+  });
   if (!response.ok) {
     const envelope = (await response.json().catch(() => null)) as
       | { error: { code: string; message: string; requestId?: string } }

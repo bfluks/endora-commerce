@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { DocumentFieldDefinition, DocumentItem, DocumentRenderContext, DocumentValue } from '@endora-commerce/contracts';
+import type {
+  DocumentFieldDefinition,
+  DocumentItem,
+  DocumentItemSection,
+  DocumentRenderContext,
+  DocumentValue,
+} from '@endora-commerce/contracts';
 import { numberItems, renderItemsTable, type ItemsTableInput } from './items-table.js';
 
 /**
@@ -341,3 +347,742 @@ describe('renderItemsTable — preview samples', () => {
     expect(rowTexts(real.table.body).map((row) => row[0])).toEqual(['L:attributes.colour', '', '', '']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Feature 159 — the document's groups (`specs/159-quote-request-item-groups/contracts/document-sections.md` §3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The flat definitions the table printed before feature 159, recorded from the
+ * pre-feature renderer (`FLAT_153`, at the end of this file). A document
+ * with no group must print them byte for byte (SC-004) whatever the table's
+ * grouping says and whether or not the type declares sections.
+ */
+const FLAT_CASES: Record<string, Record<string, unknown>> = {
+  bare: { columns: [column('c1', 'row.number'), column('c2', 'name'), column('c3', 'price')], grouping: null },
+  styled: {
+    columns: [column('c1', 'name', { width: 'fill' }), column('c2', 'discount', { visibleWhen: { op: 'any_has_value' } }), column('c3', 'price', { width: 80 })],
+    headerBackground: '#eeeeee',
+    stripedRows: true,
+    stripeColor: '#fafafa',
+    fontSize: 10,
+    borderColor: '#123456',
+    marginBottom: 20,
+  },
+  detailAndTotals: {
+    columns: [column('c1', 'row.number'), column('c2', 'name'), column('c3', 'price')],
+    detailRow: { enabled: true, entries: [{ field: 'note', label: 'Note', visibleWhen: { op: 'has_value' } }, { field: 'brand', label: '' }] },
+    totals: [
+      { field: 'net', label: 'Net', visibleWhen: { op: 'has_value' }, emphasis: true },
+      { field: 'discounts', label: 'Discounts', visibleWhen: { op: 'has_value' } },
+    ],
+    grouping: null,
+    emptyText: 'No lines',
+  },
+  byField: {
+    columns: [column('c1', 'row.number'), column('c2', 'name'), column('c3', 'price')],
+    grouping: { field: 'brand', emptyLabel: 'Other', subtotalField: 'price', subtotalLabel: 'Subtotal' },
+    totals: [{ field: 'net', label: '', visibleWhen: { op: 'always' } }],
+  },
+};
+const asJson = (node: unknown): unknown => JSON.parse(JSON.stringify(node));
+const recorded = (): Record<string, unknown> => FLAT_153;
+
+const priced = (amount: number | null): Record<string, DocumentValue> => ({ net: amount === null ? null : money(amount), discounts: null });
+const GROUPED: DocumentItemSection[] = [
+  { key: 'g-a', kind: 'group', label: 'Hall A', itemIndexes: [0, 1], summary: priced(12.5) },
+  { key: 'ungrouped', kind: 'ungrouped', label: null, itemIndexes: [2], summary: priced(null) },
+];
+const ONLY_UNGROUPED: DocumentItemSection[] = [{ key: 'ungrouped', kind: 'ungrouped', label: null, itemIndexes: [0, 1, 2], summary: priced(17.5) }];
+
+describe('renderItemsTable — a document without groups prints as before (159 SC-004)', () => {
+  it.each(Object.keys(FLAT_CASES))('%s: byte-identical to the pre-feature definition', (name) => {
+    const expected = recorded()[name];
+    const props = FLAT_CASES[name]!;
+    expect(asJson(render(props))).toEqual(expected);
+    expect(asJson(render(props, { sections: [] }))).toEqual(expected);
+    expect(asJson(render(props, { sections: ONLY_UNGROUPED }))).toEqual(expected);
+  });
+
+  it('null, absent and an explicit sections mode all print flat when no section is a group', () => {
+    const base = FLAT_CASES['detailAndTotals']!;
+    const expected = recorded()['detailAndTotals'];
+    const { grouping: _grouping, ...absent } = base;
+    expect(asJson(render(absent, { sections: ONLY_UNGROUPED }))).toEqual(expected);
+    expect(asJson(render({ ...base, grouping: { by: 'sections', otherItemsLabel: 'Rest', showItemCount: true } }, { sections: ONLY_UNGROUPED }))).toEqual(expected);
+  });
+});
+
+describe('renderItemsTable — sections (159 FR-042, FR-043)', () => {
+  const props = {
+    columns: [column('c1', 'row.number'), column('c2', 'name'), column('c3', 'price')],
+    totals: [
+      { field: 'net', label: 'Net', visibleWhen: { op: 'has_value' }, emphasis: true },
+      { field: 'discounts', label: '', visibleWhen: { op: 'always' } },
+      { field: 'net', label: 'Hidden', visibleWhen: { op: 'never' } },
+    ],
+    grouping: null,
+    headerBackground: '#eeeeee',
+  };
+
+  it('prints a heading, the rows and the table’s totals rows per section, Other items last, positions continuous', () => {
+    const node = render(props, { sections: GROUPED });
+    const table = tableOf(node);
+    expect(rowTexts(table.table.body)).toEqual([
+      ['L:row.number', 'L:name', 'L:price'],
+      ['Hall A · 2 items', '', ''],
+      ['1', 'Bolt', 'PLN\u00a010.00'],
+      ['2', 'Nut', 'PLN\u00a02.50'],
+      ['Net', '', 'PLN\u00a012.50'],
+      ['L:discounts', '', ''],
+      ['Other items · 1 item', '', ''],
+      ['3', 'Washer', ''],
+      ['L:discounts', '', ''],
+    ]);
+    expect(table.table.body[1]![0]).toMatchObject({ colSpan: 3, bold: true, fillColor: '#eeeeee' });
+    expect(table.table.body[4]![0]).toMatchObject({ colSpan: 2, alignment: 'right' });
+    expect(table.table.body[4]![0]!.bold).toBeUndefined();
+    expect(table.table.body[4]![2]).toMatchObject({ alignment: 'right' });
+    // The document's totals still follow, from the document's summary.
+    const totals = node.stack[1] as { columns: [unknown, { table: { body: Cell[][] } }] };
+    expect(rowTexts(totals.columns[1].table.body)[0]).toEqual(['Net', 'PLN\u00a017.50']);
+  });
+
+  it('the Other items heading: the template’s text, interpolated; the count can be switched off', () => {
+    const table = tableOf(
+      render({ ...props, totals: [], grouping: { by: 'sections', otherItemsLabel: 'Rest for {{who}}', showItemCount: false } }, { sections: GROUPED }),
+    );
+    expect(rowTexts(table.table.body).map((row) => row[0])).toEqual(['L:row.number', 'Hall A', '1', '2', 'Rest for Anna', '3']);
+  });
+
+  it('Polish: Pozostałe pozycje and the plural forms of the count', () => {
+    const many = numberItems(Array.from({ length: 6 }, (_, i) => ({ values: { name: text(`n${i}`) } })));
+    const sections: DocumentItemSection[] = [
+      { key: 'a', kind: 'group', label: 'Hala A', itemIndexes: [0], summary: {} },
+      { key: 'b', kind: 'group', label: 'Hala B', itemIndexes: [1, 2, 3, 4, 5], summary: {} },
+    ];
+    const table = tableOf(render({ columns: [column('c1', 'name')] }, { items: many, sections, language: 'pl-PL' }));
+    expect(rowTexts(table.table.body).filter((row) => row[0]!.startsWith('Hala'))).toEqual([['Hala A · 1 pozycja'], ['Hala B · 5 pozycji']]);
+    const withRest = tableOf(
+      render(
+        { columns: [column('c1', 'name')] },
+        { items: many.slice(0, 4), sections: [sections[0]!, { key: 'ungrouped', kind: 'ungrouped', label: null, itemIndexes: [1, 2, 3], summary: {} }], language: 'pl-PL' },
+      ),
+    );
+    expect(rowTexts(withRest.table.body).at(1 + 1 + 1)).toEqual(['Pozostałe pozycje · 3 pozycje']);
+  });
+
+  it('striping continues across sections; detail rows stay with their line', () => {
+    const table = tableOf(
+      render(
+        { ...props, totals: [], stripedRows: true, stripeColor: '#fafafa', detailRow: { enabled: true, entries: [{ field: 'note', label: '' }] } },
+        { sections: GROUPED },
+      ),
+    );
+    const body = table.table.body;
+    expect(rowTexts(body).map((row) => row[0])).toEqual(['L:row.number', 'Hall A · 2 items', '1', 'Urgent', '2', 'Other items · 1 item', '3']);
+    expect([body[2]![0]!.fillColor, body[4]![0]!.fillColor, body[6]![0]!.fillColor]).toEqual([undefined, '#fafafa', undefined]);
+  });
+
+  it('no totals rows: no subtotal rows', () => {
+    const table = tableOf(render({ ...props, totals: undefined }, { sections: GROUPED }));
+    expect(table.table.body).toHaveLength(1 + 1 + 2 + 1 + 1);
+  });
+
+  it('a one-column table prints the subtotal label and value in one right-aligned cell', () => {
+    const table = tableOf(render({ ...props, columns: [column('c2', 'name')] }, { sections: GROUPED }));
+    expect(table.table.body[4]).toEqual([{ text: 'Net PLN\u00a012.50', alignment: 'right' }]);
+  });
+
+  it('No grouping prints flat although the document has groups', () => {
+    const flat = asJson(render({ ...props, grouping: null }));
+    expect(asJson(render({ ...props, grouping: { by: 'none' } }, { sections: GROUPED }))).toEqual(flat);
+  });
+
+  it('grouping by a field ignores the document’s groups, exactly as 153', () => {
+    const expected = recorded()['byField'];
+    expect(asJson(render(FLAT_CASES['byField']!, { sections: GROUPED }))).toEqual(expected);
+    expect(asJson(render({ ...FLAT_CASES['byField']!, grouping: { by: 'field', ...(FLAT_CASES['byField']!['grouping'] as object) } }, { sections: GROUPED }))).toEqual(expected);
+  });
+
+  it('a partition the table cannot use prints flat', () => {
+    const flat = asJson(render(props));
+    const broken: DocumentItemSection[] = [
+      { key: 'g-a', kind: 'group', label: 'Hall A', itemIndexes: [0, 2], summary: {} },
+      { key: 'ungrouped', kind: 'ungrouped', label: null, itemIndexes: [1], summary: {} },
+    ];
+    expect(asJson(render(props, { sections: broken }))).toEqual(flat);
+    expect(asJson(render(props, { sections: [GROUPED[0]!] }))).toEqual(flat);
+  });
+
+  it('a group heading is the administrator’s name, never interpolated or translated', () => {
+    const sections: DocumentItemSection[] = [{ ...GROUPED[0]!, label: '{{who}} floor', itemIndexes: [0, 1, 2] }];
+    const table = tableOf(render({ ...props, totals: [] }, { sections }));
+    expect(table.table.body[1]![0]!.text).toBe('{{who}} floor · 3 items');
+  });
+});
+
+/**
+ * `FLAT_CASES` as the Line items table rendered them before feature 159 —
+ * recorded once from the renderer as 153 left it, as JSON (the table `layout`
+ * functions do not serialise; their code is unchanged). Never re-record this
+ * to make a test pass: a difference here is a change to every ungrouped PDF.
+ */
+const FLAT_153: Record<string, unknown> = {
+  "bare": {
+    "stack": [
+      {
+        "table": {
+          "headerRows": 1,
+          "dontBreakRows": true,
+          "widths": [
+            "auto",
+            "auto",
+            "auto"
+          ],
+          "body": [
+            [
+              {
+                "text": "L:row.number",
+                "bold": true,
+                "alignment": "right",
+                "fillColor": "#f1f5f9"
+              },
+              {
+                "text": "L:name",
+                "bold": true,
+                "alignment": "left",
+                "fillColor": "#f1f5f9"
+              },
+              {
+                "text": "L:price",
+                "bold": true,
+                "alignment": "right",
+                "fillColor": "#f1f5f9"
+              }
+            ],
+            [
+              {
+                "text": "1",
+                "alignment": "right"
+              },
+              {
+                "text": "Bolt",
+                "alignment": "left"
+              },
+              {
+                "text": "PLN 10.00",
+                "alignment": "right"
+              }
+            ],
+            [
+              {
+                "text": "2",
+                "alignment": "right"
+              },
+              {
+                "text": "Nut",
+                "alignment": "left"
+              },
+              {
+                "text": "PLN 2.50",
+                "alignment": "right"
+              }
+            ],
+            [
+              {
+                "text": "3",
+                "alignment": "right"
+              },
+              {
+                "text": "Washer",
+                "alignment": "left"
+              },
+              {
+                "text": "",
+                "alignment": "right"
+              }
+            ]
+          ]
+        },
+        "fontSize": 9,
+        "layout": {}
+      }
+    ],
+    "margin": [
+      0,
+      0,
+      0,
+      12
+    ]
+  },
+  "styled": {
+    "stack": [
+      {
+        "table": {
+          "headerRows": 1,
+          "dontBreakRows": true,
+          "widths": [
+            "*",
+            "auto",
+            80
+          ],
+          "body": [
+            [
+              {
+                "text": "L:name",
+                "bold": true,
+                "alignment": "left",
+                "fillColor": "#eeeeee"
+              },
+              {
+                "text": "L:discount",
+                "bold": true,
+                "alignment": "right",
+                "fillColor": "#eeeeee"
+              },
+              {
+                "text": "L:price",
+                "bold": true,
+                "alignment": "right",
+                "fillColor": "#eeeeee"
+              }
+            ],
+            [
+              {
+                "text": "Bolt",
+                "alignment": "left"
+              },
+              {
+                "text": "",
+                "alignment": "right"
+              },
+              {
+                "text": "PLN 10.00",
+                "alignment": "right"
+              }
+            ],
+            [
+              {
+                "text": "Nut",
+                "alignment": "left",
+                "fillColor": "#fafafa"
+              },
+              {
+                "text": "12.5 %",
+                "alignment": "right",
+                "fillColor": "#fafafa"
+              },
+              {
+                "text": "PLN 2.50",
+                "alignment": "right",
+                "fillColor": "#fafafa"
+              }
+            ],
+            [
+              {
+                "text": "Washer",
+                "alignment": "left"
+              },
+              {
+                "text": "",
+                "alignment": "right"
+              },
+              {
+                "text": "",
+                "alignment": "right"
+              }
+            ]
+          ]
+        },
+        "fontSize": 10,
+        "layout": {}
+      }
+    ],
+    "margin": [
+      0,
+      0,
+      0,
+      20
+    ]
+  },
+  "detailAndTotals": {
+    "stack": [
+      {
+        "table": {
+          "headerRows": 1,
+          "dontBreakRows": true,
+          "widths": [
+            "auto",
+            "auto",
+            "auto"
+          ],
+          "body": [
+            [
+              {
+                "text": "L:row.number",
+                "bold": true,
+                "alignment": "right",
+                "fillColor": "#f1f5f9"
+              },
+              {
+                "text": "L:name",
+                "bold": true,
+                "alignment": "left",
+                "fillColor": "#f1f5f9"
+              },
+              {
+                "text": "L:price",
+                "bold": true,
+                "alignment": "right",
+                "fillColor": "#f1f5f9"
+              }
+            ],
+            [
+              {
+                "text": "1",
+                "alignment": "right"
+              },
+              {
+                "text": "Bolt",
+                "alignment": "left"
+              },
+              {
+                "text": "PLN 10.00",
+                "alignment": "right"
+              }
+            ],
+            [
+              {
+                "text": "Note: Urgent · Acme",
+                "colSpan": 3,
+                "italics": true,
+                "fontSize": 8,
+                "color": "#475569"
+              },
+              {
+                "text": ""
+              },
+              {
+                "text": ""
+              }
+            ],
+            [
+              {
+                "text": "2",
+                "alignment": "right"
+              },
+              {
+                "text": "Nut",
+                "alignment": "left"
+              },
+              {
+                "text": "PLN 2.50",
+                "alignment": "right"
+              }
+            ],
+            [
+              {
+                "text": "Bolts Inc",
+                "colSpan": 3,
+                "italics": true,
+                "fontSize": 8,
+                "color": "#475569"
+              },
+              {
+                "text": ""
+              },
+              {
+                "text": ""
+              }
+            ],
+            [
+              {
+                "text": "3",
+                "alignment": "right"
+              },
+              {
+                "text": "Washer",
+                "alignment": "left"
+              },
+              {
+                "text": "",
+                "alignment": "right"
+              }
+            ],
+            [
+              {
+                "text": "Acme",
+                "colSpan": 3,
+                "italics": true,
+                "fontSize": 8,
+                "color": "#475569"
+              },
+              {
+                "text": ""
+              },
+              {
+                "text": ""
+              }
+            ]
+          ]
+        },
+        "fontSize": 9,
+        "layout": {}
+      },
+      {
+        "unbreakable": true,
+        "margin": [
+          0,
+          6,
+          0,
+          0
+        ],
+        "columns": [
+          {
+            "width": "*",
+            "text": ""
+          },
+          {
+            "width": "auto",
+            "table": {
+              "widths": [
+                "auto",
+                "auto"
+              ],
+              "body": [
+                [
+                  {
+                    "text": "Net",
+                    "alignment": "right",
+                    "bold": true,
+                    "border": [
+                      false,
+                      true,
+                      false,
+                      false
+                    ]
+                  },
+                  {
+                    "text": "PLN 17.50",
+                    "alignment": "right",
+                    "bold": true,
+                    "border": [
+                      false,
+                      true,
+                      false,
+                      false
+                    ]
+                  }
+                ]
+              ]
+            },
+            "layout": {}
+          }
+        ]
+      }
+    ],
+    "margin": [
+      0,
+      0,
+      0,
+      12
+    ]
+  },
+  "byField": {
+    "stack": [
+      {
+        "table": {
+          "headerRows": 1,
+          "dontBreakRows": true,
+          "widths": [
+            "auto",
+            "auto",
+            "auto"
+          ],
+          "body": [
+            [
+              {
+                "text": "L:row.number",
+                "bold": true,
+                "alignment": "right",
+                "fillColor": "#f1f5f9"
+              },
+              {
+                "text": "L:name",
+                "bold": true,
+                "alignment": "left",
+                "fillColor": "#f1f5f9"
+              },
+              {
+                "text": "L:price",
+                "bold": true,
+                "alignment": "right",
+                "fillColor": "#f1f5f9"
+              }
+            ],
+            [
+              {
+                "text": "Acme",
+                "colSpan": 3,
+                "bold": true,
+                "fillColor": "#f1f5f9"
+              },
+              {
+                "text": ""
+              },
+              {
+                "text": ""
+              }
+            ],
+            [
+              {
+                "text": "1",
+                "alignment": "right"
+              },
+              {
+                "text": "Bolt",
+                "alignment": "left"
+              },
+              {
+                "text": "PLN 10.00",
+                "alignment": "right"
+              }
+            ],
+            [
+              {
+                "text": "3",
+                "alignment": "right"
+              },
+              {
+                "text": "Washer",
+                "alignment": "left"
+              },
+              {
+                "text": "",
+                "alignment": "right"
+              }
+            ],
+            [
+              {
+                "text": "Subtotal",
+                "colSpan": 2,
+                "bold": true,
+                "alignment": "right"
+              },
+              {
+                "text": ""
+              },
+              {
+                "text": "PLN 10.00",
+                "bold": true,
+                "alignment": "right"
+              }
+            ],
+            [
+              {
+                "text": "Bolts Inc",
+                "colSpan": 3,
+                "bold": true,
+                "fillColor": "#f1f5f9"
+              },
+              {
+                "text": ""
+              },
+              {
+                "text": ""
+              }
+            ],
+            [
+              {
+                "text": "2",
+                "alignment": "right"
+              },
+              {
+                "text": "Nut",
+                "alignment": "left"
+              },
+              {
+                "text": "PLN 2.50",
+                "alignment": "right"
+              }
+            ],
+            [
+              {
+                "text": "Subtotal",
+                "colSpan": 2,
+                "bold": true,
+                "alignment": "right"
+              },
+              {
+                "text": ""
+              },
+              {
+                "text": "PLN 2.50",
+                "bold": true,
+                "alignment": "right"
+              }
+            ]
+          ]
+        },
+        "fontSize": 9,
+        "layout": {}
+      },
+      {
+        "unbreakable": true,
+        "margin": [
+          0,
+          6,
+          0,
+          0
+        ],
+        "columns": [
+          {
+            "width": "*",
+            "text": ""
+          },
+          {
+            "width": "auto",
+            "table": {
+              "widths": [
+                "auto",
+                "auto"
+              ],
+              "body": [
+                [
+                  {
+                    "text": "L:net",
+                    "alignment": "right",
+                    "border": [
+                      false,
+                      false,
+                      false,
+                      false
+                    ]
+                  },
+                  {
+                    "text": "PLN 17.50",
+                    "alignment": "right",
+                    "border": [
+                      false,
+                      false,
+                      false,
+                      false
+                    ]
+                  }
+                ]
+              ]
+            },
+            "layout": {}
+          }
+        ]
+      }
+    ],
+    "margin": [
+      0,
+      0,
+      0,
+      12
+    ]
+  }
+};

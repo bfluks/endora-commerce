@@ -10,6 +10,15 @@ import { FoldersService } from './services/folders.service.js';
 import { AssetReferenceRegistry } from './services/reference-registry.js';
 import { HmacSigner } from './services/hmac.js';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { CommandBus } from '@endora-commerce/platform/commands';
+import type { AdminUserReadPort, PermissionReadPort } from '@endora-commerce/contracts';
+import { getTenantContext } from '@endora-commerce/platform/tenancy';
+import { AssetVisibility } from './services/asset-visibility.js';
+import type { PlatformLogger } from '@endora-commerce/platform/kernel';
+import {
+  createAssetRetentionSweeper,
+  type AssetRetentionSweeper,
+} from './jobs/retention-sweeper.js';
 import { createSettingsView } from './services/storage/settings-view.js';
 import { Setting } from '@endora-commerce/platform/kernel';
 import { SettingValue } from '@endora-commerce/platform/kernel';
@@ -43,13 +52,43 @@ export interface AssetsLibraryModuleOptions {
   publicApiBaseUrl: string;
   /** Feature 054 — audits asset/folder writes co-transactionally when provided. */
   auditLog?: AuditPort;
+  /**
+   * Runs the Commands of feature 156 (`asset.replace`). Optional: a
+   * composition without it serves everything except a replace.
+   */
+  commandBus?: CommandBus;
+  /** Where a failed replace compensation is reported. */
+  logError?: (message: string, context: Record<string, unknown>) => void;
+  /** Names who replaced an asset's previous version; `replacedBy: null` without it. */
+  adminUserReadPort?: Pick<AdminUserReadPort, 'findById'>;
+  /** Where the retention sweep writes its one line per tick. */
+  log?: Pick<PlatformLogger, 'info'>;
+  /**
+   * Whether a module is effectively present — `effectiveState.isPresent`, read
+   * per evaluation. Required: an asset whose only references belong to a
+   * switched-off owner is hidden, and the owner is never asked
+   * (`specs/166-asset-reference-visibility/` research R-4).
+   */
+  isModulePresent: (moduleId: string) => boolean;
+  /**
+   * `admin_roles`' permission read, resolved per call. Required: it is how a
+   * holder of the platform wildcard is told from a reader whose files follow
+   * the records that use them (research R-3).
+   */
+  permissions: () => Pick<PermissionReadPort, 'listPermissions'>;
 }
 
 export interface AssetsLibraryModuleHandle {
   service: AssetsLibraryService;
+  /** Which assets the ambient caller may see (feature 166) — the one evaluator. */
+  visibility: AssetVisibility;
   folders: FoldersService;
   referenceRegistry: AssetReferenceRegistry;
   adapters: AdapterRegistry;
+  /** `assets.soft_delete_retention_days` as read now (at least one day). */
+  loadRetentionDays(): Promise<number>;
+  /** The retention sweep (specs/156-asset-stable-url/), as the module's clock runs it. */
+  sweeper: AssetRetentionSweeper;
 }
 
 
@@ -91,16 +130,26 @@ export function assetsLibraryModule(options: AssetsLibraryModuleOptions): {
     },
   });
   const referenceRegistry = new AssetReferenceRegistry();
+  const visibility = new AssetVisibility({
+    registry: referenceRegistry,
+    isPresent: options.isModulePresent,
+    permissions: options.permissions,
+    tenantContext: getTenantContext,
+  });
   const service = new AssetsLibraryService({
     emFactory: options.emFactory,
     adapters,
     referenceRegistry,
+    visibility,
     loadUploadPolicy: () => loadUploadPolicy(options.emFactory),
     loadRetentionDays,
     ...(options.auditLog ? { auditLog: options.auditLog } : {}),
+    ...(options.commandBus ? { commandBus: options.commandBus } : {}),
+    ...(options.logError ? { logError: options.logError } : {}),
+    ...(options.adminUserReadPort ? { adminUsers: options.adminUserReadPort } : {}),
   });
   const folders = new FoldersService(
-    options.emFactory, referenceRegistry, options.auditLog, loadRetentionDays,
+    options.emFactory, referenceRegistry, visibility, options.auditLog, loadRetentionDays,
   );
 
   const requireAdmin = options.requireAdmin;
@@ -138,6 +187,7 @@ export function assetsLibraryModule(options: AssetsLibraryModuleOptions): {
         adapters,
         emFactory: options.emFactory,
         requireAdmin,
+        visibility,
       });
     });
     await registerAssetsLibraryPublicRoutes(app, {
@@ -151,5 +201,24 @@ export function assetsLibraryModule(options: AssetsLibraryModuleOptions): {
     });
   };
 
-  return { plugin, handle: { service, folders, referenceRegistry, adapters } };
+  const sweeper = createAssetRetentionSweeper({
+    emFactory: options.emFactory,
+    adapters,
+    referenceRegistry,
+    loadRetentionDays,
+    ...(options.log ? { log: options.log } : {}),
+  });
+
+  return {
+    plugin,
+    handle: {
+      service,
+      visibility,
+      folders,
+      referenceRegistry,
+      adapters,
+      loadRetentionDays,
+      sweeper,
+    },
+  };
 }

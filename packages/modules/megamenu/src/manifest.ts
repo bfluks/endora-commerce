@@ -37,11 +37,19 @@ export const manifest = defineModuleManifest({
   // other two owners T118c's ports belong to — `cms` and `assets_library` — were
   // both already declared here, for the reference registries above, so the drain
   // adds one line to this array and no judgement beyond it.
+  //
+  // `customer_accounts` and `organizations` are new with feature 168: a menu
+  // item's customer-group audience names `customer_accounts`' groups, and the
+  // buyer's effective group is read off their account and their organisation
+  // (`effectiveCustomerGroupId`). Both declare themselves non-deactivatable, so
+  // the edges cost no operator a control and owe no `nonBindingDependencies`.
   dependencies: [
     'assets_library',
     'catalog',
     'cms',
+    'customer_accounts',
     'languages',
+    'organizations',
     'sales_channels',
     'auth',
     'dictionaries',
@@ -63,7 +71,10 @@ export const manifest = defineModuleManifest({
     ],
   },
   /**
-   * The ten error codes this module owns — feature 090, Phase 3.
+   * The error codes this module owns — feature 090, Phase 3; feature 168 added
+   * the three tree-rule refusals (`MEGAMENU_KIND_NOT_ALLOWED_AS_TAB`,
+   * `MEGAMENU_LINK_TAB_INVALID`, `MEGAMENU_LABEL_REQUIRED`), which the item save
+   * raises and the envelope renders from both bundles.
    *
    * **This list is the incumbent prefix chain's answer, copied from
    * `backend/test/fixtures/error-code-routing/chain-answers.ts`, not a
@@ -118,7 +129,10 @@ export const manifest = defineModuleManifest({
     { code: 'MEGAMENU_DEPTH_EXCEEDED' },
     { code: 'MEGAMENU_EMPTY_TREE' },
     { code: 'MEGAMENU_HAS_ACTIVE_BINDINGS' },
+    { code: 'MEGAMENU_KIND_NOT_ALLOWED_AS_TAB' },
+    { code: 'MEGAMENU_LABEL_REQUIRED' },
     { code: 'MEGAMENU_LANGUAGE_NOT_IN_CHANNEL_SCOPE' },
+    { code: 'MEGAMENU_LINK_TAB_INVALID' },
     { code: 'MEGAMENU_NOT_FOUND' },
     { code: 'MEGAMENU_REFERENCED' },
     { code: 'MEGAMENU_TARGET_OUT_OF_SCOPE' },
@@ -137,7 +151,8 @@ export const manifest = defineModuleManifest({
       icon: 'Menu',
       targetRoute: '/megamenu',
       requiredPermission: 'megamenu.write',
-      keywords: ['menu', 'edit', 'navigation', 'edytuj', 'nawigacja'],
+      keywords: ['menu', 'edit', 'navigation'],
+      keywordsKey: 'actions.editMegamenu.keywords',
       weight: 240,
     },
   ],

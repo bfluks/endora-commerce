@@ -36,6 +36,13 @@ export interface PersonalOrganizationProvisionInput {
   readonly email: string;
   readonly firstName?: string | null;
   readonly lastName?: string | null;
+  /**
+   * Feature 154 (owner decision D6) — the channel of the store the account is
+   * registering on. A newly provisioned personal organisation gets exactly this
+   * channel, in the caller's transaction; `null` — a path with no storefront
+   * channel — gets the system default. Required so a caller says which it is.
+   */
+  readonly salesChannelId: string | null;
 }
 
 export interface PersonalOrganizationProvisionApi {

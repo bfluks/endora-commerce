@@ -12,7 +12,19 @@ export type QuickOrderRejectionReason =
   | 'malformed_row'
   | 'variant_not_resolved'
   | 'variant_ambiguous'
-  | 'row_limit_exceeded';
+  | 'row_limit_exceeded'
+  /** Feature 155 — the product's total across the file is below its pieces minimum (buyer's import). */
+  | 'below_minimum';
+
+/**
+ * Feature 155 (FR-011 (a), P1 C) — the operator's import keeps a row whose
+ * product's file total is below the pieces minimum, and flags it instead.
+ */
+export interface QuickOrderMinimumWarning {
+  reason: 'below_minimum';
+  minimum: number;
+  productTotal: number;
+}
 
 export interface RecognizedQuickOrderItem {
   line: number;
@@ -22,18 +34,30 @@ export interface RecognizedQuickOrderItem {
   resolvedVariantSku?: string | null;
   quantity: number;
   mergedFromLines?: number[];
+  warning?: QuickOrderMinimumWarning;
 }
 
 export interface RejectedQuickOrderItem {
   line: number;
   raw: string;
   reason: QuickOrderRejectionReason;
+  /** Feature 155 — on `below_minimum`: the product's pieces minimum. */
+  minimum?: number;
+  /** Feature 155 — on `below_minimum`: the file total the verdict used. */
+  productTotal?: number;
 }
 
 export interface QuickOrderImportResponse {
   recognized: RecognizedQuickOrderItem[];
   rejected: RejectedQuickOrderItem[];
-  summary: { recognizedCount: number; rejectedCount: number; mergedCount: number; truncated: boolean };
+  summary: {
+    recognizedCount: number;
+    rejectedCount: number;
+    mergedCount: number;
+    truncated: boolean;
+    /** Feature 155 — operator's import: recognised rows carrying a `warning`. */
+    warningCount?: number;
+  };
 }
 
 export type QuickOrderTarget = 'cart' | 'quote_request';
@@ -43,6 +67,23 @@ export interface QuickOrderBuildResponse {
   cartId?: string;
   checkoutUrl?: string;
   quoteRequestId?: string;
+  /**
+   * Feature 155 (FR-011 (b)) — target `cart`: the lines not added because they
+   * would leave their product below a minimum. Absent for a quote request.
+   */
+  rejected?: QuickOrderBuildRejectedLine[];
+}
+
+export interface QuickOrderBuildRejectedLine {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+  productName: string;
+  reason: 'below_minimum';
+  kind: 'pieces' | 'packaging_unit';
+  minimum: number;
+  /** Feature 155 — on a `packaging_unit` refusal: the unit's name. */
+  packagingUnitName?: string;
 }
 
 export interface OnBehalfOf {

@@ -530,7 +530,7 @@
   .industria-nav__btn[aria-current="page"],
   .industria-nav__btn.is-active { @apply border-b-accent text-accent; }
   .industria-nav__sep { @apply mx-[6px] my-3 inline-block w-px bg-line; }
-  .industria-nav__right { @apply ml-auto flex items-center gap-2; }
+  .industria-nav__right { @apply ml-auto flex items-stretch gap-1; }
   .industria-nav__pill { @apply inline-flex items-center gap-[6px] rounded-full bg-ok-soft px-[10px] py-1 font-mono text-[11px] font-medium text-ok; }
   .industria-nav__pill__dot { @apply h-[6px] w-[6px] rounded-full bg-current; }
   .industria-nav__btn--primary { @apply ml-1 h-[32px] self-center rounded-sm border-b-0 bg-[color:var(--ink-900)] px-[14px] text-white; }
@@ -538,8 +538,9 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* Megamenu — full-width dropdown panel under the "Wszystkie kategorie" */
-/* trigger (ported from the Industria storefront-ui design spec).         */
+/* Megamenu — the navigation bar's panels (feature 168): a full-width     */
+/* panel under a `mega` or `catalog` tab, a narrow list under a `dropdown`*/
+/* one (ported from the Industria storefront-ui design spec).             */
 /* ------------------------------------------------------------------ */
 /* .industria-mega* megamenu panel → @apply (feature 041; markup untouched — hydrated). */
 @layer components{
@@ -552,13 +553,16 @@
   .industria-mega__list a { @apply flex items-center justify-between rounded-[6px] px-[12px] py-[8px] text-[13px] text-fg-soft transition-[background] duration-100; }
   .industria-mega__list a:hover,
   .industria-mega__list a[aria-current="true"] { @apply bg-surface-alt text-accent; }
-  .industria-mega__list a span { @apply font-mono text-[11px] text-line-strong; }
-  .industria-mega__heading { @apply mx-[12px] mb-[10px] text-[11px] font-semibold uppercase tracking-[0.12em] text-subtle; }
+  .industria-mega__heading { @apply mx-[12px] mb-[10px] block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted; }
   .industria-mega__cols { @apply grid grid-cols-3 gap-6; }
   .industria-mega__promo { @apply flex flex-col gap-[10px] rounded-md border border-line bg-surface-alt p-[18px]; }
   .industria-mega__promo h4 { @apply m-0 text-[14px]; }
   .industria-mega__promo p { @apply m-0 text-[12px] text-muted; }
   .industria-mega__promo__cta { @apply inline-flex items-center gap-[6px] text-[12px] font-medium text-accent; }
+  /* Feature 168 — a `dropdown` tab's narrow list, anchored under its tab. */
+  .industria-dropdown { @apply absolute left-0 top-full z-40 hidden min-w-[240px] rounded-b-md border border-line bg-surface p-[8px] shadow-lg; }
+  .industria-dropdown.is-open { @apply block; }
+  .industria-dropdown--end { @apply left-auto right-0; }
 }
 
 /* ------------------------------------------------------------------ */
@@ -617,6 +621,11 @@
   .b2b-pricing-block__amount--struck { @apply font-normal text-subtle line-through; }
   .b2b-pricing-block__label { @apply font-mono text-[10px] uppercase tracking-[0.04em] text-subtle; }
   .b2b-pricing-block__sale { @apply flex items-baseline gap-[6px]; }
+  /* Feature 161 (FR-026) — "list price / your price": the catalogue price is
+     context, not the offer, so it sits small and muted above the buyer's. */
+  .b2b-pricing-block__list { @apply flex items-baseline gap-[6px] text-[11px] text-muted; }
+  .b2b-pricing-block__amount--list { @apply font-normal text-muted; }
+  .b2b-pricing-block__yours { @apply flex items-baseline gap-[6px]; }
   .b2b-pricing-block__badge { @apply rounded bg-[#fee2e2] px-[6px] py-[2px] font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-[#b91c1c]; }
   .b2b-pricing-block__columns { @apply flex flex-wrap items-baseline gap-1; }
   .b2b-pricing-block__amount { @apply font-mono font-semibold text-fg; }
@@ -839,6 +848,8 @@
   .b2b-auth__social-btn:focus-visible { @apply outline-2 outline-offset-2 outline-[color:var(--brand-600)]; }
   .b2b-auth__error { @apply rounded-sm border border-bad-soft bg-bad-soft px-[12px] py-[10px] text-[13px] text-bad; }
   .b2b-auth__success { @apply rounded-sm border border-ok-soft bg-ok-soft px-[12px] py-[10px] text-[13px] text-ok; }
+  /* Why the visitor is on the sign-in page — information, not an error. */
+  .b2b-auth__notice { @apply m-0 rounded-sm border border-line bg-surface-alt px-[12px] py-[10px] text-[13px] text-fg-soft; }
   .b2b-auth__hint { @apply mt-4 text-[12px] text-muted; }
   .b2b-account { @apply mx-auto grid max-w-[1360px] grid-cols-[240px_minmax(0,1fr)] gap-6 p-[24px] max-[720px]:grid-cols-1 max-[720px]:p-[16px]; }
   .b2b-account__nav { @apply flex flex-col gap-[2px]; }

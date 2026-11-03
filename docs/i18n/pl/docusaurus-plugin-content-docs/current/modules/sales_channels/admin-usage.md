@@ -36,6 +36,8 @@ automatycznie dostaje kanał `default`).
    - **Currencies** / **Default currency** — te same dwie kontrolki dla Słownika walut, z tą samą
      regułą dla wartości domyślnej.
    - **Active** *(domyślnie `true`)*.
+   - **Open to anonymous visitors** *(domyślnie włączone)* — zob.
+     [Otwieranie i zamykanie sklepu dla niezalogowanych odwiedzających](#anonymous-access).
 3. Kliknij **Create channel**. System odrzuci operację, gdy kod jest już używany albo którykolwiek kod
    języka lub waluty jest nieznany.
 
@@ -46,6 +48,78 @@ automatycznie dostaje kanał `default`).
 3. Jeśli inny administrator zmienił ten sam kanał między wczytaniem strony a zapisem, zapis zwróci
    baner konfliktu 412 z bieżącą wersją. Odśwież stronę, aby pobrać aktualny stan, i ponownie
    wprowadź swoje zmiany.
+
+## Otwieranie i zamykanie sklepu dla niezalogowanych odwiedzających {#anonymous-access}
+
+Pole wyboru **Open to anonymous visitors** w formularzu kanału decyduje, kto może korzystać ze
+storefrontu kanału:
+
+- **Włączone** (domyślnie, i tak działał każdy kanał, zanim pojawiła się ta opcja) — każdy może
+  przeglądać sklep; zalogowani klienci mogą z niego korzystać, gdy ich organizacja jest przypisana do
+  kanału.
+- **Wyłączone** — sklep obsługuje wyłącznie zalogowanych klientów. Niezalogowany odwiedzający z
+  każdej strony sklepu trafia na stronę logowania z komunikatem, że sklep jest dostępny dla
+  zalogowanych klientów biznesowych; nie dostaje niczego z katalogu, cen ani treści. Rejestracja
+  firmy pozostaje dostępna ze strony logowania, a zarejestrowana tam organizacja otrzymuje ten kanał.
+  Samodzielna rejestracja klienta indywidualnego (B2C) nie jest w zamkniętym sklepie oferowana.
+
+Na liście kanałów zamknięty kanał ma etykietę **Sign-in required**.
+
+To, czy niezalogowani odwiedzający widzą **ceny**, to osobne ustawienie i nie ma go w tym
+formularzu: *tryb wyświetlania dla niezalogowanych* (`pricing.unauthenticated_display_mode`).
+Podpowiedź pod polem wyboru prowadzi do *Ustawień cenowych*, gdzie ustawia się go dla wszystkich
+kanałów; ekran *Ustawienia* ustawia go dla jednego kanału. Tryb *Żaden* ukrywa ceny do czasu
+zalogowania. Nadpisanie trybu dla produktu lub kategorii ma przed nim pierwszeństwo, także dla
+niezalogowanych odwiedzających. Zalogowani klienci widzą ceny zgodnie ze swoim trybem wyświetlania.
+Kanały miały kiedyś własną flagę widoczności cen, która ukrywała ceny także przed zalogowanymi
+klientami; została wycofana, a każdy kanał, który miał ją wyłączoną, dostał tryb *Żaden* dla
+niezalogowanych, więc ci nadal nie widzą tam cen.
+
+Zamykając sklep, pamiętaj o jednej sprawie:
+
+- **O tym, kto wejdzie przez rejestrację, decyduje moderacja.** Organizacja zarejestrowana w
+  zamkniętym sklepie otrzymuje jego kanał. Przy automatycznej moderacji jest od razu aktywna, więc
+  dostęp dostaje każdy, kto zarejestruje tam firmę; przy moderacji ręcznej nikt nie wejdzie, dopóki
+  operator nie zatwierdzi organizacji.
+
+## Decydowanie, którzy klienci mogą korzystać ze sklepu
+
+Zalogowany klient może korzystać ze sklepu tylko wtedy, gdy jego organizacja jest przypisana do
+kanału sklepu. Przypisania ustawia się na stronie organizacji, w panelu **Kanały sprzedaży** (zob.
+dokumentację modułu organizacji); organizacja musi zachować co najmniej jeden kanał. Klient, którego
+organizacja nie jest przypisana, przy logowaniu dostaje odmowę *„To konto nie ma dostępu do tego
+sklepu.”*, a jeśli przypisanie zostanie usunięte, gdy jest zalogowany, widzi ekran *Brak dostępu do
+tego sklepu* z listą sklepów, z których może korzystać.
+
+Na tej liście sklep jest linkiem, gdy ustawienie **Storefront URL** jego kanału jest wypełnione; w
+przeciwnym razie widać tylko nazwę sklepu.
+
+Przy wprowadzeniu tej reguły każda istniejąca organizacja otrzymała domyślny kanał systemowy oraz
+każdy kanał, w którym miała już zamówienia, więc żaden dotychczasowy klient nie stracił dostępu do
+sklepu, w którym kupował.
+
+## Prefiks języka domyślnego w adresach URL {#prefix-default-language}
+
+Na ekranie edycji kanału przełącznik **Prefiks języka domyślnego w adresach URL** decyduje,
+czy język domyślny kanału ma prefiks w adresach sklepu (`/pl/p/wiertarka`), czy nie
+(`/p/wiertarka`). Pozostałe języki kanału zawsze mają prefiks (`/en/p/drill`). Pod
+przełącznikiem ekran pokazuje prefiks każdego języka kanału, przeliczany przy zmianie języków.
+
+- Nowe kanały startują z przełącznikiem **włączonym**. Kanały istniejące przed aktualizacją,
+  która wprowadziła przełącznik, startują z **wyłączonym**, więc ich adresy się nie zmieniły.
+- **Włączenie** przenosi wszystkie adresy języka domyślnego pod jego prefiks. Stare adresy są
+  przekierowywane (307) do języka wskazanego przez `?lang=`, ciasteczko `lang` lub języki
+  przeglądarki odwiedzającego — nic zaindeksowanego ani zapisanego w zakładkach nie przestaje
+  działać.
+- **Wyłączenie** sprawia, że adres bez prefiksu znów oznacza język domyślny; adres z
+  prefiksem odpowiada trwałym przekierowaniem na niego.
+- **Zmiana języków kanału też zmienia adresy**: nowy język dostaje prefiks, a dodanie drugiego
+  wariantu języka (`en-GB` obok `en-US`) przełącza oba na pełne prefiksy (`/en-us`, `/en-gb`),
+  podczas gdy `/en` nadal przekierowuje.
+- Przeglądarki mogą pamiętać zapisane trwałe przekierowanie do godziny po zmianie.
+- Operatorzy z dostępem tylko do odczytu kanałów sprzedaży widzą przełącznik wyłączony.
+- Strony CMS, której slug zaczyna się od prefiksu języka (na przykład `en`), nie można
+  zapisać; istniejąca jest oznaczona na liście stron CMS jako zasłonięta prefiksem języka.
 
 ## Dezaktywacja kanału
 
@@ -96,8 +170,20 @@ backendzie zmienną środowiskową `SALES_CHANNEL_HOST_MAP`:
 SALES_CHANNEL_HOST_MAP=serwisA.com=channel-a,serwisB.com=channel-b
 ```
 
-Każde żądanie ze storefrontu jest wtedy automatycznie przypisywane do kanału hosta; nagłówek nie jest
-potrzebny. Każdy storefront widzi wyłącznie produkty, klientów i ceny należące do jego kanału.
+Host w tej mapie to host, pod którym wywoływany jest **backend**, więc nadaj każdemu storefrontowi
+własny adres backendu (jego `BACKEND_BASE_URL` i `NEXT_PUBLIC_API_BASE_URL`) i przypisz w mapie ten
+adres; wywołania każdego storefrontu trafiają wtedy do jego kanału i nagłówek nie jest potrzebny.
+Można też przed każdym storefrontem postawić serwer pośredniczący (reverse proxy), który ustawia
+nagłówek `X-Sales-Channel`. Niezależnie od sposobu wyznaczenia kanału storefront podaje go potem w
+każdym wywołaniu backendu, także w wywołaniach, które jego strony wykonują z przeglądarki.
+
+W każdym storefroncie:
+
+- **produkty, kategorie, ceny i promocje** to te przypisane do jego kanału;
+- **niezalogowani odwiedzający** są obsługiwani tylko wtedy, gdy kanał jest dla nich otwarty;
+- **zalogowani klienci** są obsługiwani tylko wtedy, gdy ich organizacja jest przypisana do kanału;
+- **koszyki** należą do sklepu, w którym je napełniono: klient kupujący w dwóch sklepach ma koszyk w
+  każdym z nich, wyceniony według cen danego sklepu.
 
 ## Czego administrator nie może zrobić
 

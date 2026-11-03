@@ -185,6 +185,15 @@ export const manifest = defineModuleManifest({
     // Raised by `orders` at placement, like `CART_EMPTY`: the noun is the cart
     // line's price, and the domain noun decides the owner, never the thrower.
     { code: 'CART_PRICE_CHANGED' },
+    // Issue #86 — the approval, admin-reject refusals `CartApprovalService` and
+    // `CartAdminService` raised as `VALIDATION_FAILED` with a machine token.
+    // The quote-conversion one (`quote_request_empty`) is `RFQ_EMPTY`,
+    // `quote_requests`' code: the noun is the quote request.
+    { code: 'CART_APPROVAL_NOT_REQUIRED' },
+    { code: 'CART_APPROVAL_ALREADY_SUBMITTED' },
+    { code: 'CART_APPROVAL_SELF_SUBMIT' },
+    { code: 'CART_APPROVAL_NOT_PENDING' },
+    { code: 'CART_ALREADY_TERMINAL' },
   ],
   settings,
   // Feature 074 (Constitution XVII), test C2 — functional base. This reverses
@@ -228,6 +237,22 @@ export const manifest = defineModuleManifest({
   ],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
+  // Principle XVI (issue #510): the platform-wide cart list was reachable from
+  // neither the sidebar nor the palette — only by typing its address. Gated on
+  // `carts:read`, the code its route and `GET /api/v1/admin/carts` enforce.
+  actions: [
+    {
+      id: 'open-carts',
+      labelKey: 'actions.openCarts.label',
+      descriptionKey: 'actions.openCarts.description',
+      icon: 'ShoppingCart',
+      targetRoute: '/carts',
+      requiredPermission: 'carts:read',
+      keywords: ['cart', 'carts', 'basket', 'abandoned'],
+      keywordsKey: 'actions.openCarts.keywords',
+      weight: 200,
+    },
+  ],
 });
 
 /** Legacy export retained for backward compatibility. */

@@ -118,18 +118,32 @@ export async function storedCrawlerText(
   return text;
 }
 
+/** What this service needs of the request's resolved sales channel. */
+export interface CrawlerFilesChannel {
+  readonly id: string;
+  /** `false` on a store closed to anonymous visitors (`specs/154-sales-channel-access/`). */
+  readonly anonymousAccess: boolean;
+}
+
 /**
  * The crawler-file configuration of one sales channel.
  *
- * `salesChannelId` is the request's resolved channel. Every read below is made
- * for that channel and no other, and the settings store resolves each one as
- * it resolves any setting: the channel's own value, else the all-channels
- * value, else the declared default.
+ * `channel` is the request's resolved channel. Every read below is made for
+ * that channel and no other, and the settings store resolves each one as it
+ * resolves any setting: the channel's own value, else the all-channels value,
+ * else the declared default.
+ *
+ * Whether the channel is open to anonymous visitors is answered beside what
+ * the operator configured, which is answered as stored either way: a closed
+ * store's files — `robots.txt` disallowing everything, an `llms.txt` that
+ * lists nothing — are the storefront's to build, as every other part of the
+ * files is.
  */
 export async function resolveCrawlerFiles(
   settings: CrawlerFilesSettingsPort,
-  salesChannelId: string,
+  channel: CrawlerFilesChannel,
 ): Promise<StorefrontCrawlerFiles> {
+  const salesChannelId = channel.id;
   const unreadable: string[] = [];
 
   // Read as whatever is stored and judged here, so that "the store could not
@@ -179,6 +193,7 @@ export async function resolveCrawlerFiles(
     shop: {
       name: shopName?.ok === true && typeof shopName.value === 'string' ? shopName.value : '',
     },
+    anonymousAccess: channel.anonymousAccess,
     // Said only when there is something to say: an answer in which everything
     // was read is the shape it has always had.
     ...(unreadable.length > 0 ? { unreadable } : {}),

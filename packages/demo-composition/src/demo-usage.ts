@@ -136,6 +136,17 @@ const USAGES = `promotion_usages redemption
    where ({redemption.order_id in ${ORDERS}} or redemption.organization_id in ${ORGANIZATIONS}
           or {redemption.customer_account_id in ${ACCOUNTS}})`;
 
+/**
+ * The Projects that are the demo organisation's alone: it is on them and no
+ * other organisation is. A Project shared with another organisation is that
+ * organisation's as much as the demo's and is never one of these; an internal
+ * Project names no organisation at all and is never found here either.
+ */
+const DEMO_PROJECTS = `(select project_id from project_organizations
+   where organization_id in ${ORGANIZATIONS}
+     and project_id not in (select project_id from project_organizations
+                             where organization_id not in ${ORGANIZATIONS}))`;
+
 /** One module's share of the withdrawal. */
 export interface DemoUsageSection {
   /** What an operator reads in the report. */
@@ -316,6 +327,29 @@ export const DEMO_USAGE_SECTIONS: readonly DemoUsageSection[] = [
     // links, comments, events and reminders go through `crm`'s own cascades.
     name: 'Sales Opportunities opened for the demo organisation',
     statements: [`delete from crm_opportunities where organization_id in ${ORGANIZATIONS}`],
+  },
+  {
+    // Feature 163 — a Task names its Project by a bare `uuid`, so it is found
+    // through the Projects the next section deletes, and goes first. The demo's
+    // own Project Tasks are withdrawn by id in their step; these are the ones
+    // on Projects an administrator opened since.
+    name: "Tasks of the demo organisation's Projects",
+    statements: [`delete from tasks where context_type = 'project' and context_id in ${DEMO_PROJECTS}`],
+  },
+  {
+    // Before the organisation, whose foreign key from `project_organizations`
+    // is `on delete restrict`. A Project that is the demo organisation's alone
+    // goes whole — Stages, members, links, comments and the rest through
+    // `projects`' own cascades. A Project it shares with another organisation
+    // stays: the demo organisation's links on it go, then its place on it —
+    // in that order, because a link's foreign key into
+    // `project_organizations` refuses the other.
+    name: 'Projects opened for the demo organisation',
+    statements: [
+      `delete from projects where id in ${DEMO_PROJECTS}`,
+      `delete from project_links where organization_id in ${ORGANIZATIONS}`,
+      `delete from project_organizations where organization_id in ${ORGANIZATIONS}`,
+    ],
   },
   {
     name: 'return cases of the demo organisation',
@@ -527,9 +561,11 @@ export const DEMO_USAGE_SECTIONS: readonly DemoUsageSection[] = [
     statements: [`delete from customer_addresses where customer_account_id in ${ACCOUNTS}`],
   },
   {
-    name: 'price lists and price display set for the demo organisation',
+    // Feature 160 — a price book naming the organisation in its audience set
+    // loses the member with it (`on delete cascade`); the display mode set for
+    // it has no foreign key and is withdrawn here.
+    name: 'price display set for the demo organisation',
     statements: [
-      `delete from price_list_assignments where organization_id in ${ORGANIZATIONS}`,
       `delete from price_display_mode_overrides
         where scope = 'organization' and target_id in ${ORGANIZATIONS}`,
     ],

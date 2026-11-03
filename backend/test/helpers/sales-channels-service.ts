@@ -2,9 +2,11 @@ import type {
   DictionaryValidator,
   SalesChannelAttributionRegistryPort,
 } from '@endora-commerce/contracts';
-import type { EntityManager } from '@mikro-orm/postgresql';
+import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
+import { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { AuditLogService } from '@endora-commerce/platform/composition';
+import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { SalesChannelsCacheInvalidation } from '@endora-commerce/platform/kernel';
 import {
   SalesChannelsService,
@@ -44,6 +46,7 @@ export function salesChannelsServiceFor(
     dictionaryValidator: DictionaryValidator;
     salesChannelAttributionRegistry: SalesChannelAttributionRegistryPort;
     salesChannelBridgeRegistry: ChannelBridgeRead;
+    commandBus: CommandBus;
   };
   return new SalesChannelsService(
     emFactory,
@@ -54,7 +57,35 @@ export function salesChannelsServiceFor(
     // reason the two above are: a service built here is then the one
     // `registerModule` builds, bridges included.
     cradle.salesChannelBridgeRegistry,
+    // Issue #467 — identity writes are Commands, so the service is built with
+    // the composed bus, as `registerModule` builds it. A caller still needs an
+    // ambient TenantContext around `create` / `update`: the bus refuses without
+    // one, which is the point.
+    cradle.commandBus,
     extras.auditLogService,
     extras.cache,
   );
 }
+
+/**
+ * A real {@link CommandBus} whose transaction runs **inside the test's own
+ * transaction** (issue #467), for the `setupTestDb` suites that seed rows in a
+ * `beginTx()` they roll back afterwards.
+ *
+ * The bus forks its EntityManager from `orm.em` and opens `em.transactional`
+ * on the fork. Handing it an `orm` whose `em.fork()` answers the test's
+ * transaction-bound manager turns that into a savepoint on the test's
+ * connection, so the command sees the uncommitted seed rows, its audit row and
+ * write land in the same transaction, and `rollbackTx()` removes all of it.
+ * Everything else — actor resolution from the ambient TenantContext (fail
+ * closed), the single audit row, the buffered event — is the bus's own code.
+ */
+export function transactionBoundCommandBus(
+  em: () => EntityManager,
+  audit: AuditPort,
+  events: EventBus,
+): CommandBus {
+  const orm = { em: { fork: () => em() } } as unknown as MikroORM;
+  return new CommandBus(orm, audit, events);
+}
+

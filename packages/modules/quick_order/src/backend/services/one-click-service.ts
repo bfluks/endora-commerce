@@ -1,6 +1,8 @@
 import {
   ERROR_CODES,
+  isOrderMinimumEligibleType,
   type CartWritePort,
+  type CatalogProductReadPort,
   type OrderPlacementPort,
   type PlacedOrderRecord,
   type QuickOrderOneClickEligibility,
@@ -22,9 +24,10 @@ export interface OneClickPlaceInput {
 
 /**
  * OneClickService (feature 039, US5). Computes whether the one-click button
- * should show, and places a one-click order by reusing the platform's
- * established single-active-cart flow: clear the cart, add the chosen product,
- * then run `OrderService.placeOrder` with the buyer's resolved default methods
+ * should show, and places a one-click order through the platform's one
+ * placement path: write the chosen product into a working basket (the buyer's
+ * active basket is left alone, issue #169), then run `OrderService.placeOrder`
+ * from it with the buyer's resolved default methods
  * and addresses. All order validation (org active, minimum value, credit limit,
  * stock) and the payment-routing `nextAction` come from `placeOrder` (FR-029 /
  * FR-030); no parallel ordering path (FR-031).
@@ -54,6 +57,11 @@ export class OneClickService {
     private readonly cartWrite: CartWritePort,
     private readonly orderPlacement: OrderPlacementPort,
     private readonly resolveOneClickEnabled: (salesChannelId: string | null) => Promise<boolean>,
+    /**
+     * Feature 155 (FR-010, R12.3) — where the default quantity comes from: the
+     * product's pieces minimum. `quick_order` already declares `catalog`.
+     */
+    private readonly catalogProducts: CatalogProductReadPort,
   ) {}
 
   async eligibility(
@@ -80,10 +88,18 @@ export class OneClickService {
     return { enabled: true, reason: null };
   }
 
+  /**
+   * `salesChannelId` is required here, unlike {@link eligibility}: the order is
+   * placed from the basket of the channel it is placed on
+   * (`specs/154-sales-channel-access/`), so the basket this fills and the order
+   * it places have to name the same one.
+   */
   async place(
     ctx: OneClickContext,
     input: OneClickPlaceInput,
-    salesChannelId: string | null,
+    salesChannelId: string,
+    /** The language a minimum refusal names the product in (feature 155, D3/D4). */
+    options: { language?: string } = {},
   ): Promise<PlacedOrderRecord> {
     const eligibility = await this.eligibility(ctx.customerAccountId, salesChannelId);
     if (!eligibility.enabled) {
@@ -95,32 +111,67 @@ export class OneClickService {
 
     // The same channel-aware read `eligibility` just made, so the methods used
     // below are the ones it vouched for — and the refusal above came before the
-    // basket is cleared.
+    // basket is touched.
     const defaults = await this.preferenceService.resolveForCustomer(
       ctx.customerAccountId,
       salesChannelId,
     );
     const customerCtx = { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId };
+    // Read before the basket is touched, so a failed read leaves it as it was.
+    const quantity = input.quantity ?? (await this.#defaultQuantity(input.productId));
 
-    // Clear-then-seed matches the single-active-cart model used by admin
-    // order-create and RFQ-convert.
-    await this.cartWrite.clearForCustomer(customerCtx);
-    await this.cartWrite.addItem(
-      { customer: customerCtx },
+    // The line is written into a working basket of the buyer's, and the order
+    // is placed from it: the buyer's own active basket — a quote-seeded one
+    // included — is not touched (issue #169). `addItems` creates the working
+    // basket only once nothing is left to refuse the line for — resolution,
+    // the minimums, the price — and placement removes it again when it refuses
+    // (stock, the organization, a method), so a refused one-click leaves
+    // nothing behind.
+    //
+    // The basket is one of the channel the order is placed on
+    // (`specs/154-sales-channel-access/`, contracts/basket-attribution.md §1).
+    const working = await this.cartWrite.addItems(
+      { customer: { ...customerCtx, salesChannelId } },
+      [
+        {
+          productId: input.productId,
+          ...(input.variantId ? { variantId: input.variantId } : {}),
+          quantity,
+        },
+      ],
       {
-        productId: input.productId,
-        ...(input.variantId ? { variantId: input.variantId } : {}),
-        quantity: input.quantity ?? 1,
+        onLineError: 'throw',
+        onBelowMinimum: 'throw',
+        workingBasket: true,
+        ...(options.language ? { language: options.language } : {}),
       },
     );
 
-    return this.orderPlacement.placeOrder(customerCtx, {
-      deliveryAddressId: defaults.shippingAddressId!,
-      billingAddressId: defaults.billingAddressId!,
-      deliveryMethodId: defaults.deliveryMethodId!,
-      paymentMethodId: defaults.paymentMethodId!,
-      ...(salesChannelId ? { salesChannelId } : {}),
-      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-    });
+    return this.orderPlacement.placeOrder(
+      customerCtx,
+      {
+        deliveryAddressId: defaults.shippingAddressId!,
+        billingAddressId: defaults.billingAddressId!,
+        deliveryMethodId: defaults.deliveryMethodId!,
+        paymentMethodId: defaults.paymentMethodId!,
+        salesChannelId,
+        ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      },
+      { ...(options.language ? { language: options.language } : {}), workingBasketId: working.cart.id },
+    );
+  }
+
+  /**
+   * Feature 155 (FR-010, R12.3, analyze F14) — the product's pieces minimum
+   * when its type carries one (`simple` / `configurable`) and it is above 1;
+   * otherwise 1. A product the read does not find gets 1, and the add path
+   * answers it with the unknown id's 404 — the minimum of a product the buyer
+   * may not see only ever sizes a line `addItem` then refuses as unknown.
+   */
+  async #defaultQuantity(productId: string): Promise<number> {
+    const product = await this.catalogProducts.findById(productId);
+    if (!product || !isOrderMinimumEligibleType(product.type)) return 1;
+    const minimum = product.minOrderQuantity;
+    return minimum !== null && minimum > 1 ? minimum : 1;
   }
 }
