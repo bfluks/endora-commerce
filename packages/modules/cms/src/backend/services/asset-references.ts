@@ -5,20 +5,26 @@
 //   - cms_pages.content
 //   - cms_blocks.content
 //   - cms_templates.content
+//   - cms_pages.share_image_asset_id (feature 163, data-model §1.1 — a
+//     plain uuid column, not an FK, because assets live in `assets_library`)
 //
-// Match shape: any node whose `assetId` (or any `*assetId` key under
-// `props`) equals the requested id. Caught by jsonb_path_exists with a
-// wildcard-key match — handles components like LibraryImage,
+// Match shape: any string value anywhere in the tree that equals the
+// requested id, whatever its key — handles components like LibraryImage,
 // Button.iconAssetId, Card.mainImageAssetId, etc.
 //
-// Asset id is validated upstream by Zod (UUID), so inlining it in the
-// jsonpath literal is safe; `?::text` parameter coercion confuses Knex
-// under MikroORM in some cases (carried over from feature 013).
+// One statement for the whole batch (`specs/166-asset-reference-visibility/`
+// research R-6): every string value of each document (`strict $.**` visits
+// every level, array elements included) is matched against the asked ids, so
+// a document is walked once however many ids are asked, and the matched value
+// is the asset id each hit is tagged with. It used to be one statement per
+// asked id. The ids travel as one `text[]` literal built from hex-and-dash
+// characters only — `em.execute` formats a JavaScript array as a list, not as
+// one array value.
 
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
-  AssetReference,
   AssetReferenceDescriptor,
+  AssetReferenceHit,
   AssetReferenceRegistryPort,
 } from '@endora-commerce/contracts';
 
@@ -34,39 +40,49 @@ function cmsAssetReferenceDescriptor(
 ): AssetReferenceDescriptor {
   return {
     ownerModuleId: 'cms',
-    async findReferences(assetIds: string[]): Promise<AssetReference[]> {
-      if (assetIds.length === 0) return [];
-      const em = emFactory();
-      const out: AssetReference[] = [];
-      for (const aidRaw of assetIds) {
-        const aid = aidRaw.replace(/[^0-9a-fA-F-]/g, '');
-        const path = `'$.** ? (@ == "${aid}")'::jsonpath`;
+    async findReferences(assetIds: string[]): Promise<AssetReferenceHit[]> {
+      const ids = [
+        ...new Set(assetIds.map((raw) => raw.replace(/[^0-9a-fA-F-]/g, '')).filter((id) => id !== '')),
+      ];
+      if (ids.length === 0) return [];
+      const asked = `{${ids.map((id) => `"${id}"`).join(',')}}`;
+      const rows = (await emFactory().execute(
+        `with asked as (select unnest(?::text[]) as aid)
+         select distinct p.id::text as id, p.name, 'cms_page' as kind, v.value #>> '{}' as asset_id
+           from cms_pages p
+           cross join lateral jsonb_path_query(p.content, 'strict $.**') as v(value)
+          where jsonb_typeof(v.value) = 'string'
+            and v.value #>> '{}' in (select aid from asked)
+         union all
+         select p.id::text as id, p.name, 'cms_page_share_image' as kind, a.aid as asset_id
+           from cms_pages p
+           join asked a on p.share_image_asset_id::text = lower(a.aid)
+         union all
+         select distinct b.id::text as id, b.name, 'cms_block' as kind, v.value #>> '{}' as asset_id
+           from cms_blocks b
+           cross join lateral jsonb_path_query(b.content, 'strict $.**') as v(value)
+          where jsonb_typeof(v.value) = 'string'
+            and v.value #>> '{}' in (select aid from asked)
+         union all
+         select distinct t.id::text as id, t.name, 'cms_template' as kind, v.value #>> '{}' as asset_id
+           from cms_templates t
+           cross join lateral jsonb_path_query(t.content, 'strict $.**') as v(value)
+          where jsonb_typeof(v.value) = 'string'
+            and v.value #>> '{}' in (select aid from asked)`,
+        [asked],
+      )) as Array<{ id: string; name: string; kind: string; asset_id: string }>;
 
-        const rows = (await em.execute(
-          `select id::text as id, name, 'cms_page' as kind
-           from cms_pages
-           where jsonb_path_exists(content, ${path})
-           union all
-           select id::text as id, name, 'cms_block' as kind
-           from cms_blocks
-           where jsonb_path_exists(content, ${path})
-           union all
-           select id::text as id, name, 'cms_template' as kind
-           from cms_templates
-           where jsonb_path_exists(content, ${path})`,
-        )) as Array<{ id: string; name: string; kind: string }>;
-
-        for (const r of rows) {
-          const label =
-            r.kind === 'cms_page'
-              ? `CMS page "${r.name}"`
+      return rows.map((r) => {
+        const label =
+          r.kind === 'cms_page'
+            ? `CMS page "${r.name}"`
+            : r.kind === 'cms_page_share_image'
+              ? `CMS page "${r.name}" (sharing image)`
               : r.kind === 'cms_block'
-                ? `CMS block "${r.name}"`
-                : `CMS template "${r.name}"`;
-          out.push({ kind: 'cms_body_embed', entityId: r.id, label });
-        }
-      }
-      return out;
+              ? `CMS block "${r.name}"`
+              : `CMS template "${r.name}"`;
+        return { assetId: r.asset_id, kind: 'cms_body_embed', entityId: r.id, label };
+      });
     },
   };
 }

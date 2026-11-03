@@ -118,6 +118,13 @@ describe('megamenu resolves its own cross-module targets (T118c)', () => {
     deactivatedCategoryId = deactivated.id;
     pageId = page.id;
     assetId = asset.id;
+
+    // A menu links a page only in a channel that serves it (feature 168 plan
+    // R-8, Principle XII): the link is the page's address in that channel.
+    await em.getConnection().execute(
+      `insert into cms_page_sales_channels (page_id, sales_channel_id, slug) values (?, ?, ?)`,
+      [pageId, channelId, pageSlug],
+    );
   });
 
   afterAll(async () => {
@@ -216,10 +223,12 @@ describe('megamenu resolves its own cross-module targets (T118c)', () => {
 
   it('resolves all four target kinds through their owners’ ports', async () => {
     const blockId = await seedBlock();
+    const panelId = randomUUID();
     await publish([
       {
         id: randomUUID(),
         parentId: null,
+        presentation: 'mega',
         position: 0,
         kind: 'category-link',
         labels: { 'en-US': 'Pumps' },
@@ -228,30 +237,42 @@ describe('megamenu resolves its own cross-module targets (T118c)', () => {
       {
         id: randomUUID(),
         parentId: null,
+        presentation: 'mega',
         position: 1,
         kind: 'cms-page-link',
         labels: { 'en-US': 'About' },
         target: { pageId },
       },
+      // Media and embeds open under a tab since feature 168 (FR-002).
+      {
+        id: panelId,
+        parentId: null,
+        presentation: 'mega',
+        position: 2,
+        kind: 'group',
+        labels: { 'en-US': 'Panel tab' },
+        target: {},
+      },
       {
         id: randomUUID(),
-        parentId: null,
-        position: 2,
+        parentId: panelId,
+        position: 0,
         kind: 'asset',
         labels: { 'en-US': 'Tile' },
         target: { assetId, kind: 'image' },
       },
       {
         id: randomUUID(),
-        parentId: null,
-        position: 3,
+        parentId: panelId,
+        position: 1,
         kind: 'cms-block-embed',
         labels: { 'en-US': 'Panel' },
         target: { blockId, embedSide: 'right' },
       },
     ]);
 
-    const items = await resolveMenu();
+    const resolved = await resolveMenu();
+    const items = resolved.flatMap((item) => [item, ...((item as { children?: ResolvedItem[] }).children ?? [])]);
     const byKind = (kind: string): ResolvedItem =>
       items.find((i) => i.kind === kind) ?? (expect.fail(`no ${kind} item resolved`) as never);
 
@@ -295,6 +316,7 @@ describe('megamenu resolves its own cross-module targets (T118c)', () => {
       {
         id: randomUUID(),
         parentId: null,
+        presentation: 'mega',
         position: 0,
         kind: 'category-link',
         labels: { 'en-US': 'Withdrawn' },
@@ -303,6 +325,7 @@ describe('megamenu resolves its own cross-module targets (T118c)', () => {
       {
         id: randomUUID(),
         parentId: null,
+        presentation: 'mega',
         position: 1,
         kind: 'external-link',
         labels: { 'en-US': 'Kept' },

@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import type { AssetReadPort } from '@endora-commerce/contracts';
+import type { AssetReadPort, GalleryLabel } from '@endora-commerce/contracts';
+import { effectiveGallery, loadGalleryChannelOverrides, type GalleryChannelOverrides } from './gallery-scopes.js';
 
 /**
  * "Which image represents this product" — resolved once, in one place
@@ -44,6 +45,11 @@ import type { AssetReadPort } from '@endora-commerce/contracts';
  *
  * Both statements order by `product_id` first, which is what lets a page-wide
  * call take the same first row per product that a one-id call took.
+ *
+ * **Per channel (feature 163, FR-076).** The chain runs over the gallery as the
+ * card's channel shows it (`effectiveGallery`): a hidden item is never a candidate,
+ * and a role is its channel holder's. One statement more per page, and only for a
+ * page whose products have a gallery.
  */
 
 interface CandidateRow {
@@ -52,18 +58,29 @@ interface CandidateRow {
   label: string | null;
 }
 
+interface GalleryRow extends CandidateRow {
+  item_id: string;
+}
+
 export async function resolvePrimaryAssetUrls(
   em: EntityManager,
   assets: AssetReadPort,
   productIds: readonly string[],
+  /**
+   * Feature 163 (FR-076, R14) — the sales channel the card is shown in: its hidden
+   * items are skipped and its own role holders replace the global ones
+   * (`effectiveGallery`). `null` = the global gallery (no channel to ask about).
+   */
+  channelId: string | null,
 ): Promise<Map<string, string | null>> {
   const result = new Map<string, string | null>();
   for (const id of productIds) result.set(id, null);
   if (productIds.length === 0) return result;
 
   const ids = [...productIds];
-  const galleryRows = await em.execute<CandidateRow[]>(
-    `select gi.product_id::text as product_id,
+  const galleryRows = await em.execute<GalleryRow[]>(
+    `select gi.id::text as item_id,
+            gi.product_id::text as product_id,
             gi.asset_id::text as asset_id,
             gil.label
        from gallery_items gi
@@ -72,24 +89,46 @@ export async function resolvePrimaryAssetUrls(
       order by gi.product_id, gi.position asc, gi.id asc`,
     ids,
   );
+  // Only a page with a gallery asks about the channel's overrides of it.
+  const overrides =
+    galleryRows.length > 0
+      ? await loadGalleryChannelOverrides(em, [...new Set(galleryRows.map((row) => row.product_id))], channelId)
+      : new Map<string, GalleryChannelOverrides>();
+
+  // One product's items in gallery order, each with its global labels.
+  const itemsByProduct = new Map<string, Array<{ id: string; assetId: string; labels: GalleryLabel[] }>>();
+  for (const row of galleryRows) {
+    const items = itemsByProduct.get(row.product_id) ?? [];
+    itemsByProduct.set(row.product_id, items);
+    let item = items.find((candidate) => candidate.id === row.item_id);
+    if (!item) {
+      item = { id: row.item_id, assetId: row.asset_id, labels: [] };
+      items.push(item);
+    }
+    if (row.label) item.labels.push(row.label as GalleryLabel);
+  }
+  const visible = new Map(
+    [...itemsByProduct].map(([productId, items]) => [productId, effectiveGallery(items, overrides.get(productId))]),
+  );
 
   // One call to the owner for every gallery candidate on the page.
   // `assets_library` is a binding dependency of this module, so an absent owner
   // fails closed here rather than quietly rendering an imageless catalogue.
-  const galleryUrls = await urlsFor(assets, galleryRows);
+  const galleryUrls = await urlsFor(
+    assets,
+    [...visible.values()].flat().map((item) => ({ asset_id: item.assetId })),
+  );
 
-  const galleryByProduct = new Map<string, CandidateRow[]>();
-  for (const row of galleryRows) {
-    if (!galleryUrls.has(row.asset_id)) continue;
-    const list = galleryByProduct.get(row.product_id) ?? [];
-    list.push(row);
-    galleryByProduct.set(row.product_id, list);
+  const galleryByProduct = new Map<string, Array<{ assetId: string; labels: GalleryLabel[] }>>();
+  for (const [productId, items] of visible) {
+    const withAsset = items.filter((item) => galleryUrls.has(item.assetId));
+    if (withAsset.length > 0) galleryByProduct.set(productId, withAsset);
   }
 
-  for (const [productId, rows] of galleryByProduct) {
-    const byLabel = (label: string): string | undefined =>
-      galleryUrls.get(rows.find((r) => r.label === label)?.asset_id ?? '');
-    const first = rows[0] ? galleryUrls.get(rows[0].asset_id) : undefined;
+  for (const [productId, items] of galleryByProduct) {
+    const byLabel = (label: GalleryLabel): string | undefined =>
+      galleryUrls.get(items.find((item) => item.labels.includes(label))?.assetId ?? '');
+    const first = items[0] ? galleryUrls.get(items[0].assetId) : undefined;
     result.set(productId, byLabel('thumbnail') ?? byLabel('base_image') ?? first ?? null);
   }
 
@@ -103,8 +142,17 @@ export async function resolvePrimaryAssetUrls(
       order by pa.product_id, pa.position asc`,
     missing,
   );
-  const legacyUrls = await urlsFor(assets, legacyRows);
-  for (const row of legacyRows) {
+  // An image hidden in the channel stays hidden when the legacy row names the same
+  // asset (the demo composition mirrors every legacy row into the gallery).
+  const hiddenAssets = new Set(
+    [...itemsByProduct].flatMap(([productId, items]) => {
+      const hidden = overrides.get(productId)?.hidden;
+      return hidden ? items.filter((item) => hidden.has(item.id)).map((item) => `${productId}|${item.assetId}`) : [];
+    }),
+  );
+  const legacyCandidates = legacyRows.filter((row) => !hiddenAssets.has(`${row.product_id}|${row.asset_id}`));
+  const legacyUrls = await urlsFor(assets, legacyCandidates);
+  for (const row of legacyCandidates) {
     if (result.get(row.product_id)) continue;
     const url = legacyUrls.get(row.asset_id);
     if (url !== undefined) result.set(row.product_id, url);
@@ -115,7 +163,7 @@ export async function resolvePrimaryAssetUrls(
 
 async function urlsFor(
   assets: AssetReadPort,
-  rows: readonly CandidateRow[],
+  rows: ReadonlyArray<Pick<CandidateRow, 'asset_id'>>,
 ): Promise<Map<string, string>> {
   const ids = [...new Set(rows.map((r) => r.asset_id))];
   if (ids.length === 0) return new Map();

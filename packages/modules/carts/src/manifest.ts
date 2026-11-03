@@ -96,6 +96,14 @@ export const manifest = defineModuleManifest({
     'quote_requests',
     'sales_channels',
     'settings',
+    // Issue #651 — `transactional_emails` owns the sender the three
+    // cart-approval e-mails go out through and `emailDefaultsPort`, the registry
+    // their default subject and body are pushed into. It is `nonDeactivatable`
+    // and does not reach back to this module, so the edge closes no cycle and
+    // makes no activation control a dead switch (the `quote_requests`
+    // precedent). The operator's "off" for one of these e-mails is the
+    // per-e-mail switch, which refuses the send and leaves the approval alone.
+    'transactional_emails',
   ],
   // Feature 073, Amendment A1 — a real port edge whose `dependencies` entry
   // would close a cycle. Read by the flip-time refusals and by
@@ -185,6 +193,15 @@ export const manifest = defineModuleManifest({
     // Raised by `orders` at placement, like `CART_EMPTY`: the noun is the cart
     // line's price, and the domain noun decides the owner, never the thrower.
     { code: 'CART_PRICE_CHANGED' },
+    // Issue #86 — the approval, admin-reject refusals `CartApprovalService` and
+    // `CartAdminService` raised as `VALIDATION_FAILED` with a machine token.
+    // The quote-conversion one (`quote_request_empty`) is `RFQ_EMPTY`,
+    // `quote_requests`' code: the noun is the quote request.
+    { code: 'CART_APPROVAL_NOT_REQUIRED' },
+    { code: 'CART_APPROVAL_ALREADY_SUBMITTED' },
+    { code: 'CART_APPROVAL_SELF_SUBMIT' },
+    { code: 'CART_APPROVAL_NOT_PENDING' },
+    { code: 'CART_ALREADY_TERMINAL' },
   ],
   settings,
   // Feature 074 (Constitution XVII), test C2 — functional base. This reverses
@@ -228,6 +245,67 @@ export const manifest = defineModuleManifest({
   ],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
+  // Issue #651 — the cart-approval e-mails, admin-editable on the templates
+  // screen. Sent by `services/cart-approval-emails.ts` after each transition.
+  transactionalEmails: [
+    {
+      code: 'cart_approval_requested',
+      name: 'Cart sent for approval',
+      group: 'carts',
+      description:
+        'Sent to each administrator of the Organization when a member sends a cart for approval.',
+      variables: [
+        { key: 'buyer.name', label: 'Buyer name', sampleValue: 'Anna Kowalska' },
+        { key: 'buyer.email', label: 'Buyer e-mail', sampleValue: 'anna.kowalska@example.com' },
+        { key: 'organization.name', label: 'Organization name', sampleValue: 'Acme Sp. z o.o.' },
+        { key: 'cart.id', label: 'Cart ID', sampleValue: '…' },
+      ],
+    },
+    {
+      code: 'cart_approved',
+      name: 'Cart approved',
+      group: 'carts',
+      description: 'Sent to the buyer when an administrator of their Organization approves their cart.',
+      variables: [
+        { key: 'approver.name', label: 'Approved by', sampleValue: 'Jan Nowak' },
+        { key: 'buyer.name', label: 'Buyer name', sampleValue: 'Anna Kowalska' },
+        { key: 'buyer.email', label: 'Buyer e-mail', sampleValue: 'anna.kowalska@example.com' },
+        { key: 'organization.name', label: 'Organization name', sampleValue: 'Acme Sp. z o.o.' },
+        { key: 'cart.id', label: 'Cart ID', sampleValue: '…' },
+      ],
+    },
+    {
+      code: 'cart_rejected',
+      name: 'Cart rejected',
+      group: 'carts',
+      description:
+        'Sent to the buyer when an administrator of their Organization rejects their cart, with the reason.',
+      variables: [
+        { key: 'rejector.name', label: 'Rejected by', sampleValue: 'Jan Nowak' },
+        { key: 'reason', label: 'Rejection reason', sampleValue: 'Over the monthly budget' },
+        { key: 'buyer.name', label: 'Buyer name', sampleValue: 'Anna Kowalska' },
+        { key: 'buyer.email', label: 'Buyer e-mail', sampleValue: 'anna.kowalska@example.com' },
+        { key: 'organization.name', label: 'Organization name', sampleValue: 'Acme Sp. z o.o.' },
+        { key: 'cart.id', label: 'Cart ID', sampleValue: '…' },
+      ],
+    },
+  ],
+  // Principle XVI (issue #510): the platform-wide cart list was reachable from
+  // neither the sidebar nor the palette — only by typing its address. Gated on
+  // `carts:read`, the code its route and `GET /api/v1/admin/carts` enforce.
+  actions: [
+    {
+      id: 'open-carts',
+      labelKey: 'actions.openCarts.label',
+      descriptionKey: 'actions.openCarts.description',
+      icon: 'ShoppingCart',
+      targetRoute: '/carts',
+      requiredPermission: 'carts:read',
+      keywords: ['cart', 'carts', 'basket', 'abandoned'],
+      keywordsKey: 'actions.openCarts.keywords',
+      weight: 200,
+    },
+  ],
 });
 
 /** Legacy export retained for backward compatibility. */

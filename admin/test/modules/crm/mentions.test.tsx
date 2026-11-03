@@ -51,6 +51,7 @@ const { OpportunityDetail } = await import(
 const DETAIL_PATH = `/api/v1/admin/crm/opportunities/${OPPORTUNITY_ID}`;
 const COMMENTS_PATH = `${DETAIL_PATH}/comments`;
 const MENTIONABLE_PATH = '/api/v1/admin/crm/lookups/mentionable';
+const DOCUMENTS_PATH = '/api/v1/admin/crm/lookups/documents';
 const PRODUCT_ID = '00000000-0000-4000-8000-00000000aa01';
 const GONE_ADMIN_ID = '00000000-0000-4000-8000-0000000000af';
 const ME = '00000000-0000-4000-8000-00000000ad01';
@@ -125,7 +126,7 @@ async function composer(permissions?: readonly string[]): Promise<{ panel: HTMLE
 }
 
 const people = (panel: HTMLElement): Promise<HTMLElement> =>
-  within(panel).findByRole('listbox', { name: en('references.suggest.title.person') });
+  within(panel).findByRole('listbox', { name: core('references.suggest.title.person') });
 
 describe('typing @ in a text of an Opportunity', () => {
   it('opens a list of people under the field, narrows it as letters are typed, and Enter puts the mention in', async () => {
@@ -212,11 +213,18 @@ describe('typing @ in a text of an Opportunity', () => {
     await userEvent.type(field, '@pio');
     await within(panel).findByRole('option', { name: 'Piotr Zielony' });
 
+    // As a browser sends it: the keys of a composition arrive between its start and its end.
+    fireEvent.compositionStart(field);
     fireEvent.keyDown(field, { key: 'Enter', isComposing: true });
     expect(storedText(field)).toBe('@pio');
     expect(within(panel).getByRole('listbox')).toBeInTheDocument();
     fireEvent.keyDown(field, { key: 'Tab', isComposing: true });
     expect(storedText(field)).toBe('@pio');
+    fireEvent.compositionEnd(field);
+    // jsdom reports itself as Safari, where the editor also ignores the one
+    // Enter that arrives within half a second of a composition's end — the key
+    // that confirmed the character. A later Enter is the operator's.
+    await new Promise((resolve) => setTimeout(resolve, 550));
 
     // Positive control: the same key, once the composition is over, chooses.
     fireEvent.keyDown(field, { key: 'Enter' });
@@ -251,34 +259,38 @@ describe('typing @ in a text of an Opportunity', () => {
     await waitFor(() => expect(storedText(field)).toBe(`[[admin_user:${OTHER_ADMIN_ID}]] `));
   });
 
-  it('never offers the people it listed as Orders while the Orders are still being fetched', async () => {
-    let releaseOrders: (() => void) | null = null;
+  // `specs/163-projects-and-tasks/` FR-044: `@@` is the document list now —
+  // CRM's own `lookups/documents` — where it was `orders`' Order list.
+  it('never offers the people it listed as documents while the documents are still being fetched', async () => {
+    let releaseDocuments: (() => void) | null = null;
     intercept = (path) => {
-      if (!path.startsWith('/api/v1/admin/orders?')) return undefined;
+      if (!path.startsWith(DOCUMENTS_PATH)) return undefined;
       return new Promise((resolve) => {
-        releaseOrders = (): void =>
-          resolve({ data: [{ id: ORDER_ID, businessId: 'ORD-1001', status: 'new', total: 990, currency: 'PLN' }] });
+        releaseDocuments = (): void =>
+          resolve({ groups: [{ kind: 'order', items: [{ id: ORDER_ID, label: 'ORD-1001' }] }] });
       });
     };
     const { panel, field } = await composer(WITH_CATALOG);
     await userEvent.type(field, '@');
     await people(panel);
     await userEvent.type(field, '@');
-    await waitFor(() => expect(releaseOrders).not.toBeNull());
+    await waitFor(() => expect(releaseDocuments).not.toBeNull());
 
-    // Under the Orders' title nothing is listed yet, and Enter is a new line — not `[[order:<a person's id>]]`.
-    expect(await within(panel).findByText(en('references.suggest.title.order'))).toBeInTheDocument();
+    // Under the documents' title nothing is listed yet, and Enter is a new line — not `[[order:<a person's id>]]`.
+    expect(await within(panel).findByText(core('references.suggest.title.document'))).toBeInTheDocument();
     expect(within(panel).queryByRole('option')).toBeNull();
     await userEvent.keyboard('{Enter}');
     expect(storedText(field)).toBe('@@\n');
-    const askedBefore = asked('/api/v1/admin/orders?').length;
+    const askedBefore = asked(DOCUMENTS_PATH).length;
     await userEvent.keyboard('{Backspace}');
     // The run is back, and asks again after its pause: that is the answer to release.
-    await waitFor(() => expect(asked('/api/v1/admin/orders?').length).toBe(askedBefore + 1));
+    await waitFor(() => expect(asked(DOCUMENTS_PATH).length).toBe(askedBefore + 1));
 
-    releaseOrders!();
-    const orders = await within(panel).findByRole('listbox', { name: en('references.suggest.title.order') });
-    expect(within(orders).getAllByRole('option').map((option) => option.textContent)).toEqual(['ORD-1001']);
+    releaseDocuments!();
+    const documents = await within(panel).findByRole('listbox', { name: core('references.suggest.title.document') });
+    expect(within(documents).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      expect.stringContaining('ORD-1001'),
+    ]);
   });
 
   it('refuses a choice that would not fit the field, says so, and leaves the text as typed', async () => {
@@ -286,13 +298,13 @@ describe('typing @ in a text of an Opportunity', () => {
     // Ten characters short of the limit: the letters fit, a token of 51 does not.
     const filler = 'x'.repeat(COMMENT_MAX_LENGTH - 10);
     field.focus();
-    fireEvent.paste(field, { clipboardData: { getData: (): string => `${filler} ` } });
-    expect(storedText(field)).toHaveLength(COMMENT_MAX_LENGTH - 9);
-    await userEvent.type(field, '@pio');
+    fireEvent.paste(field, { clipboardData: { getData: (type: string): string => (type === 'text/plain' ? filler : '') } });
+    expect(storedText(field)).toHaveLength(COMMENT_MAX_LENGTH - 10);
+    await userEvent.type(field, ' @pio');
     await within(panel).findByRole('option', { name: 'Piotr Zielony' });
     await userEvent.keyboard('{Enter}');
 
-    expect(await within(panel).findByText(en('references.error.tooLong'))).toBeInTheDocument();
+    expect(await within(panel).findByText(core('references.error.tooLong'))).toBeInTheDocument();
     expect(storedText(field)).toBe(`${filler} @pio`);
   });
 
@@ -311,7 +323,7 @@ describe('typing @ in a text of an Opportunity', () => {
     await userEvent.type(field, '@');
     await people(panel);
     await userEvent.click(screen.getByRole('heading', { level: 1 }));
-    await waitFor(() => expect(within(panel).queryByText(en('references.suggest.title.person'))).toBeNull());
+    await waitFor(() => expect(within(panel).queryByText(core('references.suggest.title.person'))).toBeNull());
     expect(storedText(field)).toBe('@');
   });
 
@@ -351,7 +363,7 @@ describe('typing @ in a text of an Opportunity', () => {
     const { panel, field } = await composer();
     await userEvent.type(field, 'Write to jan.kowalski@example.com about it');
     expect(within(panel).queryByRole('listbox')).toBeNull();
-    expect(within(panel).queryByText(en('references.suggest.title.person'))).toBeNull();
+    expect(within(panel).queryByText(core('references.suggest.title.person'))).toBeNull();
     expect(asked(MENTIONABLE_PATH)).toEqual([]);
     expect(storedText(field)).toBe('Write to jan.kowalski@example.com about it');
   });
@@ -359,69 +371,72 @@ describe('typing @ in a text of an Opportunity', () => {
   it('closes by itself once the typing has gone past every match, and the text stays', async () => {
     const { panel, field } = await composer();
     await userEvent.type(field, '@home tomorrow');
-    await waitFor(() => expect(within(panel).queryByText(en('references.suggest.title.person'))).toBeNull());
+    await waitFor(() => expect(within(panel).queryByText(core('references.suggest.title.person'))).toBeNull());
     expect(storedText(field)).toBe('@home tomorrow');
   });
 
   it('says so when nobody matches, and when the search fails — and lists nothing', async () => {
     const { panel, field } = await composer();
     await userEvent.type(field, '@xyz');
-    expect(await within(panel).findByText(en('references.suggest.empty.person'))).toBeInTheDocument();
+    expect(await within(panel).findByText(core('references.suggest.empty.person'))).toBeInTheDocument();
     expect(within(panel).queryByRole('listbox')).toBeNull();
     expect(field).toHaveAttribute('role', 'textbox');
 
     failPeople = true;
     await userEvent.type(field, 'q');
-    expect(await within(panel).findByText(en('references.suggest.error'))).toBeInTheDocument();
+    expect(await within(panel).findByText(core('references.suggest.error'))).toBeInTheDocument();
   });
 
-  it('@@ searches this Organization`s Orders and @@@ the Products', async () => {
+  it('@@ searches this Opportunity`s documents and @@@ the Products', async () => {
     const { panel, field } = await composer(WITH_CATALOG);
     await userEvent.type(field, '@@ord');
-    const orders = await within(panel).findByRole('listbox', { name: en('references.suggest.title.order') });
-    expect(within(orders).getAllByRole('option').map((option) => option.textContent)).toEqual(['ORD-1001']);
-    expect(asked('/api/v1/admin/orders?').some((path) => path.includes(`organizationId=${ORGANIZATION_ID}`))).toBe(true);
+    const documents = await within(panel).findByRole('listbox', { name: core('references.suggest.title.document') });
+    expect(within(documents).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      expect.stringContaining('ORD-1001'),
+    ]);
+    expect(asked(DOCUMENTS_PATH).some((path) => path.includes(`opportunityId=${OPPORTUNITY_ID}`))).toBe(true);
     await userEvent.keyboard('{Enter}');
     await waitFor(() => expect(storedText(field)).toBe(`[[order:${ORDER_ID}]] `));
 
     await userEvent.type(field, 'and @@@cargo');
-    const products = await within(panel).findByRole('listbox', { name: en('references.suggest.title.product') });
+    const products = await within(panel).findByRole('listbox', { name: core('references.suggest.title.product') });
     expect(within(products).getByRole('option', { name: /Cargo van L2/ })).toBeInTheDocument();
     await userEvent.keyboard('{Tab}');
     await waitFor(() => expect(storedText(field)).toBe(`[[order:${ORDER_ID}]] and [[product:${PRODUCT_ID}]] `));
   });
 
-  it('typed quickly, @@@ shows neither the people nor the Orders on its way, and asks for neither', async () => {
+  it('typed quickly, @@@ shows neither the people nor the documents on its way, and asks for neither', async () => {
     const { panel, field } = await composer(WITH_CATALOG);
     const titles: string[] = [];
     const watch = new MutationObserver(() => {
-      for (const key of ['person', 'order', 'product']) {
-        const title = en(`references.suggest.title.${key}`);
+      for (const key of ['person', 'document', 'product']) {
+        const title = core(`references.suggest.title.${key}`);
         if (within(panel).queryByText(title) && !titles.includes(title)) titles.push(title);
       }
     });
     watch.observe(panel, { childList: true, subtree: true });
     await userEvent.type(field, '@@@');
-    await within(panel).findByRole('listbox', { name: en('references.suggest.title.product') });
+    await within(panel).findByRole('listbox', { name: core('references.suggest.title.product') });
     watch.disconnect();
-    expect(titles).toEqual([en('references.suggest.title.product')]);
-    // The Orders' title never showing is what says no Order search was listed;
-    // who may be mentioned was never asked at all.
+    expect(titles).toEqual([core('references.suggest.title.product')]);
+    // The documents' title never showing is what says no document search was
+    // listed; who may be mentioned was never asked at all.
     expect(asked(MENTIONABLE_PATH)).toEqual([]);
   });
 
   it('a bare @ followed by a pause still opens the people list', async () => {
     const { panel, field } = await composer();
     await userEvent.type(field, '@');
-    expect(within(panel).queryByText(en('references.suggest.title.person'))).toBeNull();
+    expect(within(panel).queryByText(core('references.suggest.title.person'))).toBeNull();
     await people(panel);
   });
 
-  it('leaves @@ and @@@ as typed for a role that may read neither Orders nor Products, and asks neither owner', async () => {
+  it('leaves @@ and @@@ as typed for a role that may read neither documents nor Products, and asks neither', async () => {
     const { panel, field } = await composer(['crm:read', 'crm:write']);
     await userEvent.type(field, '@@ord and @@@cargo');
     expect(within(panel).queryByRole('listbox')).toBeNull();
-    expect(within(panel).queryByText(en('references.suggest.title.order'))).toBeNull();
+    expect(within(panel).queryByText(core('references.suggest.title.document'))).toBeNull();
+    expect(asked(DOCUMENTS_PATH)).toEqual([]);
     expect(asked('/api/v1/admin/orders?')).toEqual([]);
     expect(asked('/api/v1/admin/catalog/products')).toEqual([]);
     expect(storedText(field)).toBe('@@ord and @@@cargo');
@@ -433,29 +448,29 @@ describe('typing @ in a text of an Opportunity', () => {
   it('names the shortcuts it offers beside the field, and ties them to it', async () => {
     const { panel, field } = await composer(WITH_CATALOG);
     const list = [
-      en('references.shortcut.person'),
-      en('references.shortcut.order'),
-      en('references.shortcut.product'),
+      core('references.shortcut.person'),
+      core('references.shortcut.document'),
+      core('references.shortcut.product'),
     ].join(', ');
-    const hint = within(panel).getByText(en('references.shortcuts', { list }));
+    const hint = within(panel).getByText(core('references.shortcuts', { list }));
     expect(field.getAttribute('aria-describedby')?.split(' ')).toContain(hint.parentElement!.id);
   });
 
   it('names only the shortcuts the role has', async () => {
     const { panel } = await composer(['crm:read', 'crm:write']);
     expect(
-      within(panel).getByText(en('references.shortcuts', { list: en('references.shortcut.person') })),
+      within(panel).getByText(core('references.shortcuts', { list: core('references.shortcut.person') })),
     ).toBeInTheDocument();
   });
 
   it('the Mention a person button searches people and writes the mention where the caret was', async () => {
     const { panel, field } = await composer();
     await userEvent.type(field, 'Over to you: ');
-    await userEvent.click(within(panel).getByRole('button', { name: en('references.insert.person') }));
-    await userEvent.click(await within(panel).findByRole('combobox', { name: en('references.search.person') }));
+    await userEvent.click(within(panel).getByRole('button', { name: core('references.insert.person') }));
+    await userEvent.click(await within(panel).findByRole('combobox', { name: core('references.search.person') }));
     await userEvent.click(await screen.findByRole('option', { name: 'Piotr Zielony' }));
     await waitFor(() => expect(storedText(field)).toBe(`Over to you: [[admin_user:${OTHER_ADMIN_ID}]]`));
-    expect(within(panel).queryByRole('combobox', { name: en('references.search.person') })).toBeNull();
+    expect(within(panel).queryByRole('combobox', { name: core('references.search.person') })).toBeNull();
   });
 
   it('sends the token, and shows the saved mention as @ and the person`s name — not a link', async () => {
@@ -492,7 +507,7 @@ describe('a mention as it is read', () => {
       ]),
     ];
     const { panel } = await composer();
-    const shown = (await within(panel).findByText(en('references.unavailable.admin_user'))).closest('li') as HTMLElement;
+    const shown = (await within(panel).findByText(core('references.unavailable.admin_user'))).closest('li') as HTMLElement;
     expect(shown).toHaveTextContent('@Anna Nowak');
     expect(shown).not.toHaveTextContent(GONE_ADMIN_ID);
     expect(shown).not.toHaveTextContent('[[');

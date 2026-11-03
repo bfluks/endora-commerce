@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { adminPreferencesSchema } from './admin-preferences.js';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
 
 /**
@@ -53,6 +54,12 @@ export const adminMeResponseSchema = z.object({
   role: adminRoleSchema.nullable(),
   permissions: z.array(z.string()),
   idleLogoutMinutes: z.number().positive().nullable(),
+  /**
+   * The signed-in admin's own preferences (feature 164, FR-016). `null` when the
+   * server could not read them; the Admin UI then opens with the defaults and
+   * saves nothing (FR-018).
+   */
+  preferences: adminPreferencesSchema.nullable(),
 });
 export type AdminMeResponse = z.infer<typeof adminMeResponseSchema>;
 
@@ -315,4 +322,11 @@ export const auditLogEntrySchema = z.object({
   userAgent: z.string().nullable(),
   requestId: z.string().nullable(),
 });
-export type AuditLogEntry = z.infer<typeof auditLogEntrySchema>;
+export type AuditLogEntryResponse = z.infer<typeof auditLogEntrySchema>;
+/**
+ * @deprecated Use {@link AuditLogEntryResponse}. `@endora-commerce/platform/kernel`
+ * publishes `AuditLogEntry` as the MikroORM entity of an `audit_logs` row, a
+ * different thing under the same name (issue #84). This alias is removed in the
+ * next minor release.
+ */
+export type AuditLogEntry = AuditLogEntryResponse;

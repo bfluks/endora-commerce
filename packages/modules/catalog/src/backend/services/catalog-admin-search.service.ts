@@ -11,7 +11,7 @@ import type {
  * T048).
  *
  * The admin lists' rows: every product and category that is not deleted —
- * drafts and inactive ones included (FR-016) — with no channel or audience
+ * inactive and archived ones included (FR-016) — with no channel or audience
  * filter, because the admin screens have none (research R-19). Only the
  * selected fields are matched, literally (`likeEscaped`, Postgres' default
  * `\` LIKE escape). A name matches in **any** language (one value of the

@@ -2,9 +2,11 @@
 
 import type { ReactElement } from 'react';
 import type { Field } from '@puckeditor/core';
+import { PB_FIELD_INPUT_CLASS, PB_FIELD_LABEL_CLASS } from '@endora-commerce/page-builder-core';
 import { CATALOG_DATA_FIELD_META } from './catalog-data-fields.js';
 
-const inputClassName = '_Input-input_bsxfo_26';
+/** The page builder's field input class (feature 163, T116: Puck's own class name went stale in 0.23). */
+const inputClassName = PB_FIELD_INPUT_CLASS;
 
 function FieldShell({
   label,
@@ -14,8 +16,8 @@ function FieldShell({
   children: React.ReactNode;
 }): ReactElement {
   return (
-    <div className="flex flex-col gap-1">
-      <label className="text-xs font-medium opacity-80">{label}</label>
+    <div className="flex min-w-0 flex-col gap-1">
+      <label className={PB_FIELD_LABEL_CLASS}>{label}</label>
       {children}
     </div>
   );

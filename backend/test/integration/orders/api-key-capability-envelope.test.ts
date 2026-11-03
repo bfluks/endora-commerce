@@ -143,7 +143,6 @@ describe('external order intake — org capability envelope (062 / T022)', () =>
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
     await em.persistAndFlush(channel);
     channelId = channel.id;
@@ -332,7 +331,7 @@ describe('external order intake — org capability envelope (062 / T022)', () =>
     const keyRes = await postKey(orgAToken, keyPayload());
     expect(keyRes.statusCode).toBe(400);
     const err = (keyRes.json() as { error: MethodRefusal }).error;
-    expect(err.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    expect(err.code).toBe(ERROR_CODES.ORDER_PAYMENT_METHOD_UNAVAILABLE);
     expect(err.details?.code).toBe('payment_method_not_allowed_for_organization');
 
     const buyerRes = await placeAsBuyer();
@@ -353,7 +352,7 @@ describe('external order intake — org capability envelope (062 / T022)', () =>
     const keyRes = await postKey(orgAToken, keyPayload());
     expect(keyRes.statusCode).toBe(400);
     const err = (keyRes.json() as { error: MethodRefusal }).error;
-    expect(err.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    expect(err.code).toBe(ERROR_CODES.ORDER_DELIVERY_METHOD_UNAVAILABLE);
     expect(err.details?.code).toBe('delivery_method_not_allowed_for_organization');
 
     const buyerRes = await placeAsBuyer();

@@ -1,3 +1,4 @@
+import type { ChannelUrlFacts } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Redis } from 'ioredis';
@@ -27,6 +28,7 @@ import {
   type SocialIdentityDeps,
 } from './services/social-identity-service.js';
 import { SocialLinkService } from './services/social-link-service.js';
+import type { CustomerChannelAccess } from './services/customer-channel-access.js';
 import type { OAuthProviderPort } from './services/oauth-provider-service.js';
 import { SecretCipher } from './services/secret-cipher.js';
 import { registerMfaPublicRoutes } from './routes.public.js';
@@ -129,6 +131,14 @@ export interface MfaModuleOptions {
    * the reason the administrator one is.
    */
   customerAuthenticationThrottle: CustomerAuthenticationThrottlePort;
+  /**
+   * Feature 154 — the sales-channel access rule, asked by every route here
+   * that completes a customer sign-in. Required for the reason the throttles
+   * are: a composition without it would issue sessions the rule refuses.
+   */
+  customerChannelAccess: CustomerChannelAccess;
+  /** Feature 167 — the channel's URL-language facts for the storefront pages sign-in returns to. */
+  channelUrlFactsFor?: (salesChannelId: string | null) => Promise<ChannelUrlFacts | null>;
 }
 
 export interface MfaModuleHandle {
@@ -193,6 +203,7 @@ export function mfaModule(options: MfaModuleOptions): {
       auditLogService: options.auditLogService,
       adminAuthenticationThrottle: options.adminAuthenticationThrottle,
       customerAuthenticationThrottle: options.customerAuthenticationThrottle,
+      customerChannelAccess: options.customerChannelAccess,
     });
     // Storefront customer self-service (US1).
     await registerMfaSelfServiceRoutes(app, {
@@ -218,6 +229,7 @@ export function mfaModule(options: MfaModuleOptions): {
         options.emFactory,
         options.socialAccountResolvers,
         options.auditLogService,
+        options.customerChannelAccess,
       );
       await registerMfaOAuthRoutes(app, {
         oauthProvider: options.oauthProvider,
@@ -229,6 +241,8 @@ export function mfaModule(options: MfaModuleOptions): {
         backendBaseUrl: options.backendBaseUrl ?? 'http://localhost:8080',
         storefrontBaseUrl: options.storefrontBaseUrl ?? 'http://localhost:3000',
         adminBaseUrl: options.adminBaseUrl ?? 'http://localhost:3002',
+        customerChannelAccess: options.customerChannelAccess,
+        ...(options.channelUrlFactsFor ? { channelUrlFactsFor: options.channelUrlFactsFor } : {}),
       });
     }
     // Storefront org-admin enforcement (US3).

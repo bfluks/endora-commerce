@@ -1,6 +1,6 @@
 import type {
   ChannelMemberEntityType,
-  SalesChannelCreateBody,
+  SalesChannelCreateRequest,
   SalesChannelDetail,
   SalesChannelListResponse,
   SalesChannelSetDefaultResponse,
@@ -42,7 +42,7 @@ export const salesChannelsClient = {
     );
   },
 
-  create(body: SalesChannelCreateBody): Promise<SalesChannelDetail> {
+  create(body: SalesChannelCreateRequest): Promise<SalesChannelDetail> {
     return apiClient.post<SalesChannelDetail>('/api/v1/admin/sales-channels', body);
   },
 

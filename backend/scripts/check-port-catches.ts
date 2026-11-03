@@ -183,7 +183,9 @@
  * service to `queue` in one file and holds a BullMQ queue under the same
  * spelling in another. A **deps-object key** is module-scoped, because the
  * receiving class reads it as `this.deps.<key>` from another file and a property
- * name is not a lexical binding anybody can shadow. A root's container
+ * name is not a lexical binding anybody can shadow — **and it is a property, not
+ * a binding** (issue #100): it is reached only by an expression that reads a
+ * property, never by a bare identifier of the same spelling. A root's container
  * registration is visible everywhere, because a container name is global by
  * construction. A gated port's own name is global too, *except inside the module
  * that owns it*, where the same identifier normally denotes the module's own
@@ -258,8 +260,75 @@
  * to a site, it invents a site — and a site invented in one module is a site an
  * author deletes by renaming something in another.
  *
- * `PORT_CATCH_WHY=1` prints every alias with the site that introduced it, which
- * is the first question a newly-red site raises.
+ * ## A property is not a binding, and a binding is not a property (issue #100)
+ *
+ * `{ value: lazyPort(…) }` used to enter the same table as `const value = …`,
+ * so every bare `value` in the module read as the port — an unrelated
+ * `const value = makeEngine()` in a sibling file became a site. Deps-object keys
+ * now live in a **property table** of their own, and a key is reached only
+ * through an expression that reads a property, following the value:
+ *
+ *   - `x.key` and `x.key.method()` — a property read;
+ *   - `x.key()` when the key holds an **accessor**, a closure whose result is
+ *     the port (`{ sender: () => cradle().transactionalEmailSenderAccessor() }`)
+ *     — so `const sender = deps.sender(); … sender.send(…)` is seen whatever
+ *     the local is called. A closure that merely *uses* a port on the way to
+ *     data (`() => providers.resolveProvider()`) is not an accessor, and a method
+ *     called *on* a port is the gated call, whose result stays data;
+ *   - `const { key } = x`, `const { key: local } = x`, `({ key }: Deps) => …` —
+ *     a destructuring is a binding, file-scoped like a `const`;
+ *   - `this.#method()` when the class's own method returns a carrying value —
+ *     `const customFields = this.#requireCustomFields()`.
+ *
+ * The mirror holds as well: a property read answers to a container name, to a
+ * parameter the port was passed as (read back as `this.<param>` in its own
+ * file) and to a deps-object key — never to a local `const` of the same spelling.
+ *
+ * A local bound **inside** a site to the result of a call that site already
+ * reports (`const sender = this.deps.getTransactionalEmailSender()` inside the
+ * `try`) is that reach under a second name and is not reported twice. Bound
+ * **outside** the site, it is a reach of its own: the call that produced it is
+ * not guarded there.
+ *
+ * What property reads still cannot do is see their **receiver**: `x.next()`
+ * reads `next` whatever `x` is, so a method name that collides with a module's
+ * deps key reads as that key. Two `catalog` sites reach no port at all for that
+ * reason and are ledgered as artefacts rather than hidden; the alternative —
+ * resolving receivers — is a type-checker's job, not this analysis's.
+ *
+ * ## A holder built from a deps bag carries per method (issue #576)
+ *
+ * `new C({ k: lazyPort(…) })` carries nothing as a **value** — a bag that did
+ * would taint every method of `C`, the row reads included (D18 §2, half 2). It is
+ * followed as a **holder** instead, in tables of its own that bind a class
+ * instance, a closure or an object literal to a *declaration* (resolved
+ * lexically, destructurings included) and carry no gate. A call on one reaches
+ * what escapes the method it resolves to: `read.list()` reaches what
+ * `ProjectReadService#list` reaches, `this.deps.audience(id)` what the closure
+ * under that key of *this class's own bag* reaches, and `read.getOrFail()` —
+ * a row read — nothing, so it makes no site. A key is looked up in the literal
+ * the receiver holds, never by its spelling across the module; the container's
+ * names are the one name-keyed table, as a root's registrations already are.
+ *
+ * **What escapes**, not what is reached: a reach inside the callee's own `try`
+ * (or under its own `.catch`) whose handler consumes the presence answer is that
+ * inner site's to be judged for. `DeliveryService#deliverInline` records a
+ * switched-off `credentials` as a failed attempt on purpose, so the generation
+ * run's `.catch` around `deliverArtefact` swallows nothing. A handler lets the
+ * answer through when it ends in a `throw`, hands its variable to the narrowing
+ * or a re-throwing delegate, or re-throws it anywhere but under a negated
+ * `instanceof ModuleDisabledError` test.
+ *
+ * The holder resolution is consulted only for a call the value tables found
+ * nothing for, so every site they already judged keeps exactly its gates; the
+ * D-88 hop pulls a holder call's escaping gates into the method that makes it,
+ * which is how `tasks`' `#dueFor` reaches `permissionService` through
+ * `createTaskAudience`'s closure. `PORT_CATCH_UNIT=<regex>` prints what escapes
+ * each matching unit (a method, or a closure by position).
+ *
+ * `PORT_CATCH_WHY=1` prints every alias with the site that introduced it (and
+ * `PROP`/`PGATE` lines for the property table), which is the first question a
+ * newly-red site raises.
  *
  * ## What counts as handling it
  *
@@ -341,6 +410,7 @@ import {
   collectPortCatchFiles,
   findPortCatches,
   keyOf,
+  type PortCatchPin,
 } from '@endora-commerce/cli/rules/port-catches.js';
 import {
   loadManifestActivations,
@@ -351,6 +421,25 @@ import { requireModuleLayout } from './lib/module-roots.js';
 import { reportReadSize } from './lib/read-size.js';
 
 export * from '@endora-commerce/cli/rules/port-catches.js';
+
+/**
+ * Aliases this repository **declares** because the analysis provably cannot
+ * derive them (`PortCatchPin`; maintainer ruling on issue #100, 2026-10-30).
+ *
+ * Not a ledger of exemptions — the opposite: a pin puts a `catch` *into* the
+ * judged population, so a real port reach the value analysis cannot follow is
+ * still held to the rule. Two-way like the ledger: an entry reads stale, and
+ * fails the build, when its file is gone, when it names a gate nobody provides,
+ * when no site in its file reaches a port through the name, and when the
+ * analysis already follows the name on its own.
+ *
+ * **Empty since issue #576.** Its one entry, `projects`' `read` in
+ * `routes/routes.projects.ts`, was a holder built from a deps bag; the holder
+ * tables follow it now, the pin read stale on exactly that clause, and the site
+ * is judged under the four gates the pin had written by hand — derived instead.
+ * The mechanism stays for the next shape the analysis provably cannot follow.
+ */
+export const PORT_CATCH_PINS: Readonly<Record<string, PortCatchPin>> = {};
 
 export const PORT_CATCHES_TO_DRAIN: Readonly<Record<string, string>> = {
   'packages/modules/organizations/src/backend/routes.public.ts:onLogin':
@@ -400,9 +489,37 @@ export const PORT_CATCHES_TO_DRAIN: Readonly<Record<string, string>> = {
     'inside the worker, where `processById` answers the presence question for them. ' +
     '`rethrowIfModuleDisabled` is not available here and would not be an improvement: ' +
     'the chain is `void`ed at boot, so a re-throw is an unhandled rejection rather than ' +
-    'an answer to anybody, which is D-62/D-67 verbatim. Retires when the analysis ' +
-    "attributes a holder's gates per method rather than per value — not before, and " +
-    'not by renaming the binding, because the alias follows the value.',
+    'an answer to anybody, which is D-62/D-67 verbatim. Issue #576 attributes a holder ' +
+    'per method only where the value tables do not already carry it, and this one is ' +
+    'built from **positional** carrying arguments (#133), which still carry per value. ' +
+    'Retires when that rule is narrowed to per-method too — not by renaming the binding, ' +
+    'because the alias follows the value.',
+  'packages/modules/catalog/src/backend/services/catalog-attribute-read.service.ts:composeAll':
+    'NO GATED PORT IS REACHED HERE — an analysis artefact, ledgered so that it is ' +
+    'argued with rather than hidden (issue #100). The `try` in `listAll` guards ' +
+    '`this.composeAll(defs, extensions)` alone, an in-memory join of two arrays; both ' +
+    "port reads (`this.definitions.listForEntity`) sit outside it, and the `catch` " +
+    're-throws everything that is not a `CatalogAttributeIntegrityError` in any case. ' +
+    'The D-88 hop reaches `composeAll` because its body calls ' +
+    '`extByDefId.values().next()`, and `next` is a `catalog` deps-object key ' +
+    "(`{ …, next: entry.key }` in `url-key.service.ts`) — a property read matched by " +
+    'its spelling, which is the one thing a receiver-blind analysis cannot avoid. ' +
+    'Before #100 this site read OWNER LOCKED, and only by accident: the gates that ' +
+    "spelling lent it happened to be `languages`' alone. Retires when a property read " +
+    'is attributed through its receiver rather than its name.',
+  'packages/modules/catalog/src/backend/services/product-page-revalidation.ts:keysOf':
+    'NO GATED PORT IS REACHED HERE — an analysis artefact, ledgered so that it is ' +
+    'argued with rather than hidden (issue #100). `keysOf` is the closure ' +
+    '`catalog/backend/index.ts` hands `ProductPageRevalidation`: three `em.find` reads ' +
+    "of this module's own `Product`, `ProductUrlKey` and `ProductUrlRedirect` rows, " +
+    'nothing else. The analysis reads the closure as a carrier because its body reads ' +
+    '`k.key` / `r.key`, and `key` is a `catalog` deps-object key of the same ' +
+    'spelling. The `catch` in `#send` is the best-effort keys read the revalidation ' +
+    'was designed around (it degrades to the shared product tag); narrowing it would ' +
+    'be wrong as well as pointless — `#send` runs under `#inFlight`, which has only a ' +
+    '`.finally`, so a re-throw would be an unhandled rejection. Before #100 this site ' +
+    "read OWNER LOCKED, and only by accident: the lent gates were `languages`' alone. " +
+    'Retires when a property read is attributed through its receiver rather than its name.',
   'packages/modules/product_feeds/src/backend/index.ts:run':
     'BOOT HOOK, and now a genuine tolerance rather than a swallowed presence ' +
     'answer (issue #147, D-62). The hook asks ' +
@@ -419,6 +536,45 @@ export const PORT_CATCHES_TO_DRAIN: Readonly<Record<string, string>> = {
     'with the reason stated: the presence question this entry used to hold has been ' +
     'moved out of the `catch` and is pinned by ' +
     '`test/unit/product_feeds/boot-reconcile-presence.test.ts`.',
+  'packages/modules/crm/src/backend/services/opportunity-origin-link-service.ts:carryIntoDocument':
+    'AFTER THE FACT, and the presence answer is decided before the port is asked (issue ' +
+    "#576). Judged since per-method attribution: `carryIntoDocument` is the closure " +
+    '`createCarryIntoDocument` returns, and it reaches `orders` (locked) and ' +
+    "`quote_requests`' carry receivers — the latter only behind `deps.quoteRequestsPresent()`, " +
+    "`crmQuoteRequests.isPresent()`, a presence probe this analysis cannot read. `#carry` " +
+    'runs after the link has committed, and its own comment is the requirement: a carry ' +
+    'that throws must not undo the link or reach the subscriber, and the operator log names ' +
+    'the document that did not receive the values. Re-throwing would fail the ' +
+    '`order.created.v1` / `rfq.created_by_admin.v1` subscriber for work that succeeded. ' +
+    '(The site also lists gates the receiver-blind `.orders` / `.quoteRequests` property ' +
+    "names lend it from elsewhere in `crm` — #100's known limit.) Retires when the analysis " +
+    'reads a presence probe ahead of a reach, or when the carry receiver answers ' +
+    '"not present" in its return type.',
+  'packages/modules/product_feeds/src/backend/workers/feed-delivery-worker.ts:notifyExhausted#promise':
+    'A DEGRADE THE OWNER ALREADY ANSWERS (D-60), seen through a holder since issue #576. ' +
+    "`notifyExhausted` calls `FailedRunNotifier#notifyDeliveryExhausted`, whose `catch` " +
+    "re-throws `ModuleDisabledError` — so statically the `admin_notifications` gate escapes to " +
+    "this `.catch(() => undefined)`. It cannot arrive: the notifier's recorder is " +
+    "`presenceAwareRecorder`, which answers `'not-present'` from `effectiveState` before the " +
+    "port is reached, and the notifier's own `rethrowIfModuleDisabled` is there because the " +
+    'analysis cannot see that decision. Narrowing here would fail an already-exhausted ' +
+    'delivery job over a bell notification. Retires when the analysis reads a presence ' +
+    'decision inside a holder method (`effectiveState.isPresent` ahead of the reach).',
+  'packages/modules/product_feeds/src/backend/workers/feed-run-reaper-worker.ts:reaper':
+    'A DEGRADE THE OWNER ALREADY ANSWERS (D-60), seen through a holder since issue #576. ' +
+    "`reaper.releaseStaleClaims()` raises `notifyFailedRun`, i.e. `FailedRunNotifier#notify`, " +
+    "whose `catch` re-throws `ModuleDisabledError` — so the `admin_notifications` gate " +
+    "statically escapes to `reapTick`'s `catch`. It cannot arrive, for the reason the " +
+    "`notifyExhausted` entry gives (`presenceAwareRecorder` answers absence first), and the " +
+    'sweep is designed never to throw out of the handler (the header of this worker: a failed ' +
+    'tick is retried, logged and eventually disabled, while the next tick fixes the same ' +
+    'rows). Retires with the `notifyExhausted` entry.',
+  'packages/modules/product_feeds/src/backend/workers/taxonomy-refresh-worker.ts:refresh':
+    'A DEGRADE THE OWNER ALREADY ANSWERS (D-60), seen through a holder since issue #576. ' +
+    "`refresh.runCheck()` reaches `FailedRunNotifier#notifyTaxonomyNotFound`, whose `catch` " +
+    "re-throws `ModuleDisabledError`, so the `admin_notifications` gate statically escapes to " +
+    "this `catch`. It cannot arrive (`presenceAwareRecorder` answers absence first), and " +
+    'FR-093 requires the job not to fail here. Retires with the `notifyExhausted` entry.',
 };
 
 async function main(): Promise<void> {
@@ -465,14 +621,15 @@ async function main(): Promise<void> {
     sources,
     manifests,
     hostResidentModules: layout.hostResidentModules,
+    pins: PORT_CATCH_PINS,
   };
   // The ledger is passed, never defaulted: a host states which exemptions it is
   // judging against, and `PORT_CATCHES_TO_DRAIN` is this repository's.
   const result = checkPortCatches(catchInput, PORT_CATCHES_TO_DRAIN);
-  const result_all = listMode ? findPortCatches(catchInput) : [];
+  const resultAll = listMode ? findPortCatches(catchInput) : [];
 
   if (listMode) {
-    for (const entry of result_all) {
+    for (const entry of resultAll) {
       const tag = entry.handled
         ? 'HANDLED '
         : entry.ownerLocked
@@ -536,7 +693,8 @@ async function main(): Promise<void> {
       `violations=${result.violations.length} ledgered=${result.ledgered.length} ` +
       `owner-locked=${result.ownerLocked.length} ` +
       `rejection-handlers=${result.rejectionHandlerSites} ` +
-      `ledger-size=${Object.keys(PORT_CATCHES_TO_DRAIN).length} stale=${result.stale.length}`,
+      `ledger-size=${Object.keys(PORT_CATCHES_TO_DRAIN).length} stale=${result.stale.length} ` +
+      `pins=${Object.keys(PORT_CATCH_PINS).length} stale-pins=${result.stalePins.length}`,
   );
 
   if (result.violations.length > 0) {
@@ -558,7 +716,17 @@ async function main(): Promise<void> {
     for (const key of result.stale) console.error(`  - ${key}`);
   }
 
-  process.exit(result.violations.length > 0 || result.stale.length > 0 ? 1 : 0);
+  if (result.stalePins.length > 0) {
+    console.error(
+      '\nStale pins in PORT_CATCH_PINS (each no longer describes a site the analysis ' +
+        'cannot see — delete or correct it):',
+    );
+    for (const entry of result.stalePins) console.error(`  - ${entry}`);
+  }
+
+  process.exit(
+    result.violations.length > 0 || result.stale.length > 0 || result.stalePins.length > 0 ? 1 : 0,
+  );
 }
 
 // CLI only — importing this module (the unit self-test does) must not scan.

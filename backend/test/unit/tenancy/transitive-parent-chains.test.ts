@@ -100,12 +100,32 @@ describe('the committed platform’s transitive tenancy chains', () => {
     // `transitive-parent-module-ownership.test.ts` holds. The row follows the
     // account rather than copying an organization id that would go stale when
     // the account moves (research R10).
-    expect(transitive.map((meta) => meta.className).sort()).toEqual([
-      ...CRM_OPPORTUNITY_CHILDREN,
-      'Invoice',
-      'InvoiceExternalAttachment',
-      'QuoteRequestAccountPolicy',
-    ]);
+    // **Two more since `specs/159-quote-request-item-groups/`** (research R-7):
+    // `QuoteRequestItemGroup` -> `QuoteRequest` and `OrderItemGroup` -> `Order`,
+    // each a named group of its document's lines, one hop to a parent owned by
+    // the same module — the shape of the CRM children.
+    expect(transitive.map((meta) => meta.className).sort()).toEqual(
+      [
+        ...CRM_OPPORTUNITY_CHILDREN,
+        'Invoice',
+        'InvoiceExternalAttachment',
+        'OrderItemGroup',
+        'QuoteRequestAccountPolicy',
+        'QuoteRequestItemGroup',
+      ].sort(),
+    );
+    for (const [className, parentClassName, fk] of [
+      ['QuoteRequestItemGroup', 'QuoteRequest', 'quoteRequestId'],
+      ['OrderItemGroup', 'Order', 'orderId'],
+    ] as const) {
+      const group = transitive.find((meta) => meta.className === className);
+      expect(group, className).toMatchObject({ parentClassName, fk });
+      expect(resolveTransitiveParent(group!), className).toMatchObject({
+        className: parentClassName,
+        scope: 'org',
+        key: 'organizationId',
+      });
+    }
     const accountPolicy = transitive.find((meta) => meta.className === 'QuoteRequestAccountPolicy');
     expect(accountPolicy).toMatchObject({ parentClassName: 'CustomerAccount', fk: 'customerAccountId' });
     expect(resolveTransitiveParent(accountPolicy!)).toMatchObject({

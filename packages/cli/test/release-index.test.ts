@@ -79,6 +79,27 @@ describe('the derivation', () => {
     expect(names).toEqual([...names].sort());
   });
 
+  /**
+   * `endora generate` declares a module the instance's installed modules need
+   * and the instance does not declare yet, and the index is how it finds the
+   * package carrying a module id: a manifest names `document_templates`, never
+   * `@endora-commerce/mod-document-templates`.
+   */
+  it('carries the module id of every module package, read off its own `endora` block', () => {
+    const byName = new Map(everyManifest().map(({ manifest }) => [manifest['name'], manifest]));
+    let modules = 0;
+    for (const entry of index.packages) {
+      const endora = byName.get(entry.name)?.['endora'] as { type?: unknown; id?: unknown } | undefined;
+      if (endora?.type === 'module' && typeof endora.id === 'string') {
+        modules += 1;
+        expect(entry.moduleId, entry.name).toBe(endora.id);
+      } else {
+        expect(entry.moduleId, entry.name).toBeUndefined();
+      }
+    }
+    expect(modules).toBeGreaterThan(0);
+  });
+
   it('is the population `publishablePackages()` yields, narrowed to the scope — one rule', () => {
     const publishable = publishablePackages(PACKAGES_ROOT)
       .filter((pkg) => pkg.name.startsWith(SCOPE))
@@ -125,5 +146,21 @@ describe('parseReleaseIndex', () => {
       /\/x\/release-index\.json/,
     );
     expect(() => parseReleaseIndex('{"packages": []}', '/x/release-index.json')).toThrow(/no package/);
+  });
+
+  it('reads a module id back, and still reads an index an older build wrote without one', () => {
+    const parsed = parseReleaseIndex(
+      JSON.stringify({
+        packages: [
+          { name: '@endora-commerce/mod-invoices', version: '0.107.0', moduleId: 'invoices' },
+          { name: '@endora-commerce/platform', version: '0.107.0' },
+        ],
+      }),
+      '/x/release-index.json',
+    );
+    expect(parsed.packages).toEqual([
+      { name: '@endora-commerce/mod-invoices', version: '0.107.0', moduleId: 'invoices' },
+      { name: '@endora-commerce/platform', version: '0.107.0' },
+    ]);
   });
 });

@@ -17,10 +17,12 @@ import {
 } from './services/authentication-throttle.js';
 import { ImpersonationService } from './services/impersonation-service.js';
 import { AdminUserService } from './services/admin-user-service.js';
+import { AdminPreferenceService } from './services/admin-preference-service.js';
 import type { AuditPort, PlatformLogger } from '@endora-commerce/platform/kernel';
 import { registerAdminPublicRoutes } from './routes.public.js';
 import { registerImpersonationRoutes } from './routes.impersonation.js';
 import { registerAdminUsersAdminRoutes } from './routes.admin.js';
+import { registerAdminPreferenceRoutes } from './routes.preferences.js';
 import type { RequireAdminFactory, SettingsReadPort } from '@endora-commerce/platform/kernel';
 import type { TwoFactorEnrolmentReader } from './services/two-factor-enrolments.js';
 
@@ -87,6 +89,12 @@ export interface AdminModuleHandle {
    * now, and identity lookup is the one thing it still wants from here.
    */
   adminUserService: AdminUserService;
+  /**
+   * Feature 164 — the signed-in admin's own Admin UI preferences. On the handle
+   * for the composition and its tests to reach; deliberately **not** published
+   * as a port, because no other module has a demand for it.
+   */
+  adminPreferenceService: AdminPreferenceService;
 }
 
 /**
@@ -137,6 +145,7 @@ export function adminModule(
     options.auditLogService,
     options.getMfaLoginPort,
   );
+  const adminPreferenceService = new AdminPreferenceService(options.emFactory, options.log);
   const handle: AdminModuleHandle = {
     adminAuthService,
     authenticationThrottle,
@@ -144,6 +153,7 @@ export function adminModule(
     permissionService: options.permissionService,
     auditLogService: options.auditLogService,
     adminUserService,
+    adminPreferenceService,
   };
   return {
     handle,
@@ -172,6 +182,12 @@ export function adminModule(
         resolveAdminContext: options.resolveAdminContext,
         twoFactorEnrolments: options.twoFactorEnrolments,
         settingsReadPort: options.settingsReadPort,
+        adminPreferenceService,
+      });
+      await registerAdminPreferenceRoutes(app, {
+        adminPreferenceService,
+        requireAdmin: options.requireAdmin,
+        resolveAdminContext: options.resolveAdminContext,
       });
     },
   };

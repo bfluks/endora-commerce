@@ -11,7 +11,7 @@ import { randomUUID } from 'crypto';
 @GlobalEntity()
 @Entity({ tableName: 'gallery_items' })
 export class GalleryItem {
-  [OptionalProps]?: 'id' | 'position' | 'createdAt' | 'updatedAt';
+  [OptionalProps]?: 'id' | 'position' | 'altText' | 'createdAt' | 'updatedAt';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -25,6 +25,15 @@ export class GalleryItem {
 
   @Property({ type: 'integer' })
   position: number = 0;
+
+  /**
+   * Feature 163 (FR-077, R15) — the product's own alt text of this image per
+   * language, `{ "<lang>": "<text>" }`. A language absent here falls back to the
+   * asset's alt text. Product-specific, so it never changes another product using
+   * the same asset.
+   */
+  @Property({ type: 'json' })
+  altText: Record<string, string> = {};
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

@@ -47,7 +47,7 @@ function build(): {
   const redis = {
     scan: async (_cursor: string, _match: string, pattern: string) => {
       log.push(`scan:${pattern}`);
-      return ['0', ['megamenu:v1:default:en-US']];
+      return ['0', ['megamenu:v2:default:en-US']];
     },
     del: async (...keys: string[]) => {
       log.push(`del:${keys.join(',')}`);
@@ -59,6 +59,12 @@ function build(): {
   registerValues(container, {
     emFactory: () => {
       throw new Error('the subscription must not open a database connection');
+    },
+    // Every menu write runs on the bus since feature 168; the subscription writes nothing.
+    commandBus: {
+      run: () => {
+        throw new Error('the subscription must not run a command');
+      },
     },
     redis,
   });
@@ -111,8 +117,8 @@ describe('megamenu follows CMS content changes', () => {
     await settle();
 
     expect(log).toEqual([
-      'scan:megamenu:v1:*',
-      'del:megamenu:v1:default:en-US',
+      'scan:megamenu:v2:*',
+      'del:megamenu:v2:default:en-US',
       `post:${MEGAMENU_STOREFRONT_CACHE_TAG}`,
     ]);
   });

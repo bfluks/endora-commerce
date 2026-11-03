@@ -24,6 +24,21 @@ export interface StoragePutInput {
   /** Streaming source — must be consumed exactly once. */
   stream: NodeJS.ReadableStream;
   sizeBytes: number;
+  /** Written as object metadata on cloud; ignored on local. */
+  cacheControl?: string;
+  /** Written as object metadata on cloud; ignored on local. */
+  contentDisposition?: string;
+}
+
+/** A server-side copy of one object over another (specs/156-asset-stable-url/). */
+export interface StorageCopyInput {
+  from: string;
+  to: string;
+  /** ACL of the destination on cloud — always sent explicitly; ignored on local. */
+  visibility: AssetVisibility;
+  mimeType: string;
+  cacheControl?: string;
+  contentDisposition?: string;
 }
 
 export interface StorageResolveUrlInput {
@@ -67,6 +82,13 @@ export interface StorageAdapter {
    * removal — the worker relies on this for FR-031 block-then-retry.
    */
   delete(input: { locator: string }): Promise<void>;
+
+  /**
+   * Server-side copy, atomic at the destination: a reader of `to` sees the old
+   * object or the new one, never a partial one. Overwrites `to`. MUST throw
+   * when the copy cannot be confirmed.
+   */
+  copy(input: StorageCopyInput): Promise<void>;
 
   /**
    * Optional. Adapters whose visibility is enforced by per-request URL

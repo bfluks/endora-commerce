@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Plus, SlidersHorizontal, X } from 'lucide-react';
 import type {
@@ -21,9 +21,8 @@ import {
   PageHeader,
 } from '@endora-commerce/admin-kit/ui';
 import { useAppLanguage, useTranslation } from '@endora-commerce/admin-kit/i18n';
-import { crmApi } from '../api.js';
+import { crmApi, MAX_PAGE_LIMIT } from '../api.js';
 import { BoardFieldFilters } from '../components/BoardFieldFilters.js';
-import { MAX_PAGE_LIMIT } from '../components/CursorPagination.js';
 import { OpportunityBoard, type BoardColumnView } from '../components/OpportunityBoard.js';
 import {
   OpportunityFilterFields,
@@ -196,10 +195,24 @@ export function OpportunityBoardPage(): ReactNode {
     void loadWorkflow();
   }, [loadWorkflow]);
 
+  /**
+   * The address as this screen last knew it: what it last wrote itself, or
+   * what it last rendered. react-router hands `setSearchParams(fn)` the address
+   * of the last render, so two changes made in one turn — two filter boxes
+   * whose typing pause ends together — would each start from that one, and
+   * the second would write over the first (issue #418).
+   */
+  const latestAddress = useRef(address);
+  useLayoutEffect(() => {
+    latestAddress.current = address;
+  }, [address]);
+
   /** Replace the address's filters; the history keeps one entry for the board. */
   const applyFilters = useCallback(
     (next: (previous: BoardFilters) => BoardFilters): void => {
-      setSearchParams((previous) => writeBoardFilters(next(readBoardFilters(previous))), { replace: true });
+      const written = writeBoardFilters(next(readBoardFilters(new URLSearchParams(latestAddress.current))));
+      latestAddress.current = written.toString();
+      setSearchParams(written, { replace: true });
     },
     [setSearchParams],
   );
@@ -458,9 +471,10 @@ export function OpportunityBoardPage(): ReactNode {
     });
 
   const changeField = useCallback(
-    (ref: string, filter: OpportunityFieldFilter | null): void =>
+    (ref: string, change: (previous: OpportunityFieldFilter) => OpportunityFieldFilter | null): void =>
       applyFilters((previous) => {
         const fields = { ...previous.fields };
+        const filter = change(previous.fields[ref] ?? {});
         if (filter) fields[ref] = filter;
         else delete fields[ref];
         return { ...previous, fields };

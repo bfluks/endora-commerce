@@ -18,7 +18,8 @@ export class ReturnCaseItem {
     | 'reasonId'
     | 'description'
     | 'inspectionOutcome'
-    | 'approvedRefundAmount';
+    | 'approvedRefundAmount'
+    | 'defaultDiscountAmount';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -52,6 +53,14 @@ export class ReturnCaseItem {
 
   @Property({ type: 'decimal', precision: 14, scale: 2 })
   defaultRefundAmount!: string;
+
+  /**
+   * Issue #417 — the part of the order-level discount the default refund
+   * carries; a correction credits the goods at `refund + discount` and the
+   * discount back on the invoice's discount line. `0` for a line recorded before.
+   */
+  @Property({ type: 'decimal', precision: 14, scale: 2, default: '0' })
+  defaultDiscountAmount: string = '0';
 
   @Property({ type: 'decimal', precision: 14, scale: 2 })
   approvedRefundAmount: string = '0.00';

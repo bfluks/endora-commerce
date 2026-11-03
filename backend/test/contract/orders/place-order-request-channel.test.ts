@@ -14,8 +14,9 @@ import {
   seedCartForStubCustomer,
 } from '../../helpers/seed-commerce.js';
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
-import { TEST_CUSTOMER_ID } from '../../helpers/test-actors.js';
+import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { Cart, Order } from '../../helpers/package-entities.js';
+import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
 
 /**
  * `POST /api/v1/orders` — the order records the channel **the request resolved**.
@@ -82,6 +83,8 @@ describe('POST /api/v1/orders — the order records the resolved request channel
     });
     expect(created.statusCode).toBe(201);
     channelB = { id: (created.json() as { id: string }).id, code: 'request-channel-b' };
+    // Feature 154 — the buyer shops on channel B as well as on the default.
+    await addOrganizationChannels(h, TEST_ORGANIZATION_ID, ['request-channel-b']);
     expect(channelB.id).not.toBe(defaultChannel.id);
 
     // The order's channel has to sell what the order contains: admin order
@@ -101,11 +104,15 @@ describe('POST /api/v1/orders — the order records the resolved request channel
     await teardownBackendServer(h);
   });
 
-  /** A fresh active basket: a successful placement completes the previous one. */
-  async function freshBasket(): Promise<void> {
+  /**
+   * A fresh active basket: a successful placement completes the previous one.
+   * It is the basket of `channel` (the system default when absent) — an order is
+   * placed from the basket of its own channel (`specs/154-sales-channel-access/`).
+   */
+  async function freshBasket(channel?: { id: string }): Promise<void> {
     const em = h.em();
     await em.nativeDelete(Cart, { customerAccountId: TEST_CUSTOMER_ID, status: 'active' });
-    await seedCartForStubCustomer(em);
+    await seedCartForStubCustomer(em, channel?.id);
   }
 
   async function place(input: {
@@ -139,7 +146,7 @@ describe('POST /api/v1/orders — the order records the resolved request channel
   }
 
   it('records the channel named by X-Sales-Channel when the body names none', async () => {
-    await freshBasket();
+    await freshBasket(channelB);
     const res = await place({ channelHeader: channelB.code });
 
     expect(res.statusCode).toBe(201);
@@ -155,7 +162,7 @@ describe('POST /api/v1/orders — the order records the resolved request channel
   });
 
   it('accepts a body salesChannelId that agrees with the resolved channel', async () => {
-    await freshBasket();
+    await freshBasket(channelB);
     const res = await place({ channelHeader: channelB.code, bodyChannelId: channelB.id });
 
     expect(res.statusCode).toBe(201);
@@ -163,7 +170,7 @@ describe('POST /api/v1/orders — the order records the resolved request channel
   });
 
   it('accepts the resolved channel\'s id in upper case — the same id, spelled differently', async () => {
-    await freshBasket();
+    await freshBasket(channelB);
     const res = await place({
       channelHeader: channelB.code,
       bodyChannelId: channelB.id.toUpperCase(),

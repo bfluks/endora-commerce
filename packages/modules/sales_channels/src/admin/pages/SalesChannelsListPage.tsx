@@ -167,6 +167,13 @@ export function SalesChannelsListPage(): ReactNode {
                           {t('status.inactive')}
                         </Badge>
                       )}
+                      {/* Feature 154 — a store closed to anonymous visitors is
+                          visible from the roster without opening it. */}
+                      {c.anonymousAccess ? null : (
+                        <Badge variant="secondary" className="ml-1 text-[10px]">
+                          {t('list.badge.signInRequired')}
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell className="text-right text-xs text-muted-foreground">
                       v{c.version}

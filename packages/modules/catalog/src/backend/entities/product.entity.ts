@@ -31,7 +31,11 @@ export class Product {
     | 'lowStockThreshold'
     | 'lowStockThresholdMode'
     | 'fulfilmentStrategy'
-    | 'fulfilmentStrategyWarehouseOrder';
+    | 'fulfilmentStrategyWarehouseOrder'
+    | 'minOrderQuantity'
+    | 'returnable'
+    | 'publishFrom'
+    | 'publishUntil';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -48,9 +52,15 @@ export class Product {
   @Property({ type: 'string', length: 16 })
   type!: 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
 
+  /**
+   * Feature 163 (FR-010, FR-019, FR-110) — `active` | `inactive`; `inactive` is
+   * plain off and never archives. Archiving is `archivedAt`, written only by the
+   * Archive / Restore action. New and duplicated products start `inactive` (Q1-d);
+   * the database refuses any other value (`products_status_check`).
+   */
   @Property({ type: 'string', length: 16 })
   @Index()
-  status: 'draft' | 'active' | 'inactive' = 'draft';
+  status: 'active' | 'inactive' = 'inactive';
 
   @Property({ type: 'json' })
   name!: Record<string, string>;
@@ -191,4 +201,65 @@ export class Product {
    *  of warehouse UUIDs to walk. */
   @Property({ type: 'json', nullable: true })
   fulfilmentStrategyWarehouseOrder?: string[] | null;
+
+  /**
+   * Feature 155 (FR-001) — the minimum order quantity in pieces, 1…1 000 000,
+   * or `null` for none; `1` is equivalent to none. Meaningful for `simple`
+   * and `configurable` products only, and inherited by their variants.
+   */
+  @Property({ type: 'integer', nullable: true })
+  minOrderQuantity?: number | null;
+
+  /**
+   * Feature 155 (FR-003, FR-004) — whether the product may be returned.
+   * `false` unless an operator turns it on; snapshotted onto each order line
+   * at placement.
+   */
+  @Property({ type: 'boolean' })
+  returnable: boolean = false;
+
+  /**
+   * Feature 161 (G15, `specs/161-price-book-editor/research.md` R14) — the
+   * admin name key and search key per admin language: **generated stored**
+   * columns Postgres computes from `name` and `sku` on every write (migration
+   * `…_catalog_admin_name_keys`). Read-only here: the ORM never writes them,
+   * never loads them unless asked (`lazy`) and never serialises them
+   * (`hidden`); `pageProductsByAdminName` reads them in SQL.
+   */
+  @Property({ type: 'text', generated: `(catalog_admin_name_key("name", "sku", 'en')) stored`, lazy: true, hidden: true, nullable: true })
+  readonly adminNameKeyEn?: string;
+
+  @Property({ type: 'text', generated: `(catalog_admin_name_key("name", "sku", 'pl')) stored`, lazy: true, hidden: true, nullable: true })
+  readonly adminNameKeyPl?: string;
+
+  @Property({
+    type: 'text',
+    generated: `(catalog_admin_name_key("name", "sku", 'en') || ' ' || lower("sku")) stored`,
+    lazy: true,
+    hidden: true,
+    nullable: true,
+  })
+  readonly adminSearchKeyEn?: string;
+
+  @Property({
+    type: 'text',
+    generated: `(catalog_admin_name_key("name", "sku", 'pl') || ' ' || lower("sku")) stored`,
+    lazy: true,
+    hidden: true,
+    nullable: true,
+  })
+  readonly adminSearchKeyPl?: string;
+
+  /**
+   * Feature 163 (FR-023) — the global publication window, inclusive at both
+   * ends; `null` = open on that side. A channel may replace the pair
+   * (`product_channel_scopes.window_overridden`). Never changes `status`: the
+   * window is evaluated at read time (A-4).
+   */
+  @Property({ type: 'datetime', nullable: true })
+  publishFrom?: Date | null;
+
+  /** Feature 163 (FR-023) — the end of the global publication window, inclusive. */
+  @Property({ type: 'datetime', nullable: true })
+  publishUntil?: Date | null;
 }

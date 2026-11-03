@@ -112,7 +112,6 @@ describe('the anonymous notify-when-available endpoint answers one refusal for t
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
     const elsewhere = em.create(SalesChannel, {
       code: `${code}-elsewhere`,
@@ -122,7 +121,6 @@ describe('the anonymous notify-when-available endpoint answers one refusal for t
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
     await em.persistAndFlush([channel, elsewhere]);
 

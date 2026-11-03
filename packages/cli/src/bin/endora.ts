@@ -302,7 +302,12 @@ classes survive Tailwind's scan. Both are facts about the install rather than
 about the tree, so they are regenerated after every \`pnpm install\` and are
 git-ignored. Run it anywhere inside the instance; it finds the workspace root
 upwards. It reports every package the discovery excluded, because a linked
-package is invisible to this instance's runtime discovery too.
+package is invisible to this instance's runtime discovery too. Before rendering,
+it declares in the root package.json — at the platform's range — and installs
+every package of this CLI's release carrying a module an installed module needs
+and the instance does not have yet, unless every deployment omits it: that is
+how a module a release newly requires reaches an instance \`pnpm run upgrade\`
+moved. With --dry-run it names them, and writes and runs nothing.
 
 \`endora new storefront\` copies the reference storefront into a directory you
 then own outright — out of this repository when it is run inside a checkout of
@@ -665,7 +670,12 @@ async function runGenerateCommand(
     return 1;
   }
   try {
-    const result = await runGenerate({ cwd, dryRun: asFlag(parsed.values['dry-run']) });
+    const result = await runGenerate({
+      cwd,
+      dryRun: asFlag(parsed.values['dry-run']),
+      // Before a step runs, so the install's own output has a heading.
+      echo: (line) => process.stdout.write(`endora generate: ${line}\n`),
+    });
     process.stdout.write(
       `endora generate ${result.root}${result.dryRun ? ' — dry run, nothing written' : ''}\n`,
     );

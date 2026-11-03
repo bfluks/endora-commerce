@@ -36,9 +36,14 @@ export const TABLE_OWNER_OVERRIDES: Readonly<Record<string, string>> = {
   // Legacy outbound-integration table, read through the webhooks module.
   external_integrations: 'webhooks',
 
-  // Price-list child tables, reached through PriceList.
+  // Price-list child tables of the old model, reached through PriceList until
+  // feature 160's conversion migration dropped them with their entities: only
+  // these overrides still name the owner of the migrations that create and
+  // drop them (the `invoice_templates` precedent above).
   price_list_assignments: 'price_lists',
   price_list_items: 'price_lists',
+  price_list_products: 'price_lists',
+  price_list_price_brackets: 'price_lists',
 
   // Catalog junction tables.
   product_assets: 'catalog',
@@ -58,12 +63,16 @@ export const TABLE_OWNER_OVERRIDES: Readonly<Record<string, string>> = {
   // `test/unit/db/instance-migration-order.test.ts`, is what stops the next
   // relocation from leaving this map behind: it reconciles the two, and the nine
   // entries below were the only nine they disagreed on.
+  // `sales_channel_price_lists` joined them with feature 160 (a price book's
+  // channel set), on the same footing: registered by its owner, created by its
+  // owner's migration.
   sales_channel_categories: 'catalog',
   sales_channel_cms_pages: 'cms',
   sales_channel_customer_accounts: 'customer_accounts',
   sales_channel_delivery_methods: 'delivery_methods',
   sales_channel_organizations: 'organizations',
   sales_channel_payment_methods: 'payment_methods',
+  sales_channel_price_lists: 'price_lists',
   sales_channel_products: 'catalog',
   sales_channel_promotions: 'promotions',
   sales_channel_taxes: 'taxes',

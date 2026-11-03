@@ -23,10 +23,11 @@ import {
  *
  * Patterns mirror the prefixes each module's cache service writes with:
  *   - settings:        `settings:v1:*`        (SettingsCache)
- *   - sales_channels:  `sales-channels:v2:*`  (SalesChannelsCache)
+ *   - sales_channels:  `sales-channels:v5:*`  (SalesChannelsCache)
  *   - blog:            `blog:v1:*`            (BlogCacheService)
  *   - cms:             `cms:v1:*`             (CmsCache)
- *   - megamenu:        `megamenu:v1:*`        (MegamenuCache)
+ *   - cms-brand:       no key (storefront tag `cms:brand` only)
+ *   - megamenu:        `megamenu:v2:*`        (MegamenuCache)
  *   - dictionaries:    `dictionary:*`         (DictionaryCache)
  *   - carts:           `b2b:cart:recompute:*` (CartRecomputeCache)
  *
@@ -85,10 +86,20 @@ export const CACHE_NAMESPACES: readonly CacheNamespace[] = [
     ],
   },
   {
+    // Feature 163 (research R-3). Brand tokens keep no Redis copy — the read is
+    // one indexed query — so the storefront's Data Cache is the only copy to
+    // drop, and the namespace has no key pattern of its own.
+    key: 'cms-brand',
+    label: 'CMS brand',
+    description: 'Storefront brand tokens: colours, fonts, type scale and spacing.',
+    patterns: [],
+    storefrontTags: [CMS_STOREFRONT_CACHE_TAGS.brand],
+  },
+  {
     key: 'megamenu',
     label: 'Mega menu',
     description: 'Resolved storefront mega-menu trees.',
-    patterns: ['megamenu:v1:*'],
+    patterns: ['megamenu:v2:*'],
     storefrontTags: [MEGAMENU_STOREFRONT_CACHE_TAG],
   },
   {

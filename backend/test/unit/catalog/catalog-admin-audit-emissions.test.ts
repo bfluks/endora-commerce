@@ -14,6 +14,10 @@ import { AuditLogEntry } from '@endora-commerce/platform/kernel';
  * existing `updateProduct()` emission, so the dashboard's
  * `/recent-activity` endpoint surfaces them.
  *
+ * Feature 163 (T156c, research R30.3) — `archiveProduct()` is the Archive Command
+ * (`product.archive`, before / after `{ archivedAt }`), no longer an update with
+ * `status: 'inactive'`, and a product created without a status is `inactive`.
+ *
  * Tests run through the HTTP layer (same pattern as feature 022 / T002)
  * so the audit context wiring (`resolveAdminAuditContext` → service)
  * is exercised end-to-end.
@@ -63,7 +67,7 @@ describe('CatalogAdminService — audit emissions for create / archive', () => {
     const after = (row.stateAfter ?? {}) as Record<string, unknown>;
     expect(after).toMatchObject({
       sku: 'AUDIT-CREATE-001',
-      status: 'draft',
+      status: 'inactive',
       visibility: 'public',
     });
     expect(after['name']).toBeTruthy();
@@ -87,5 +91,24 @@ describe('CatalogAdminService — audit emissions for create / archive', () => {
     expect(row.objectType).toBe('product');
     const after = (row.stateAfter ?? {}) as Record<string, unknown>;
     expect(after['deletedAt']).toBeTruthy();
+  });
+
+  it('writes one product.archive audit entry on POST /catalog/products/:id/archive', async () => {
+    const id = await createProduct('AUDIT-ARCH-001');
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/catalog/products/${id}/archive`,
+      cookies: adminCookie,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const rows = await h.em().find(AuditLogEntry, { action: 'product.archive', objectId: id });
+    expect(rows.length).toBe(1);
+    const row = rows[0]!;
+    expect(row.objectType).toBe('product');
+    expect(row.actorAdminUserId).toBe('00000000-0000-4000-8000-0000000000b1');
+    expect(row.stateBefore).toEqual({ archivedAt: null });
+    expect((row.stateAfter as Record<string, unknown>)['archivedAt']).toBeTruthy();
+    expect(await h.em().find(AuditLogEntry, { action: 'product.update', objectId: id })).toHaveLength(0);
   });
 });

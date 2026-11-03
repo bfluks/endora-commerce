@@ -4,6 +4,7 @@ import type {
   CatalogCategoryReadPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
+  ErrorCode,
   InventoryStockImportPort,
   InventoryStockReadPort,
   OrderReadPort,
@@ -62,8 +63,22 @@ export interface ImportExportAdapter {
   exportHeader: readonly string[];
   /** The entity table as CSV-ready rows, read through the owners' ports. */
   exportRows(): Promise<string[][]>;
+  /**
+   * The whole table, header included, for an entity whose columns depend on the
+   * data — the products file's `status@<channel>` columns (feature 163, FR-092).
+   * When present the export uses it instead of {@link exportHeader} and
+   * {@link exportRows}; `exportHeader` stays the fixed part the screen lists.
+   */
+  exportTable?(): Promise<{ header: string[]; rows: string[][] }>;
   /** Header columns the import expects. Undefined when import is unsupported. */
   importHeader?: readonly string[];
+  /**
+   * Header columns the import **refuses**, with the refusal: a column that
+   * once carried data the owner no longer accepts from a file (feature 160 —
+   * a product's price, which is set in price books). Ignoring it would apply
+   * the rest of the row and drop the value without a word.
+   */
+  refusedHeader?: ReadonlyArray<{ readonly column: string; readonly code: ErrorCode; readonly message: string }>;
   /**
    * Map the parsed CSV records onto the owner's import port and return its
    * report.

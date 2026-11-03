@@ -1,12 +1,14 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES, isProductVisibleTo } from '@endora-commerce/contracts';
-import type { CartWritePort, CatalogProductReadPort, RfqCustomerPort } from '@endora-commerce/contracts';
+import { ERROR_CODES, isProductVisibleTo, scopeLanguageOf } from '@endora-commerce/contracts';
+import type {
+  CartWritePort,
+  CatalogProductAvailabilityPort,
+  CatalogProductReadPort,
+  RfqCustomerPort,
+} from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
-import {
-  outOfRequestChannel,
-  productIdsInRequestChannel,
-} from '@endora-commerce/platform/kernel';
+import { currentSalesChannel, productIdsInRequestChannel } from '@endora-commerce/platform/kernel';
 import { ShoppingList } from '../entities/shopping-list.entity.js';
 import { ShoppingListItem } from '../entities/shopping-list-item.entity.js';
 
@@ -36,7 +38,9 @@ export interface CustomerContext {
 export interface ConversionSkip {
   itemId: string;
   productId: string;
-  reason: 'product_archived' | 'variant_unavailable' | 'product_not_found';
+  reason: 'product_archived' | 'variant_unavailable' | 'product_not_found' | 'below_minimum';
+  /** Feature 155 — on `below_minimum`: the minimum the line missed. */
+  minimum?: number;
 }
 
 export interface ConvertToCartResult {
@@ -69,7 +73,21 @@ export class ShoppingListService {
      * gate `addItem` owes (issue #259).
      */
     private readonly channelMembership: SalesChannelMembershipPort,
+    /**
+     * Feature 163 — `catalog`'s one answer to "may this buyer acquire this
+     * product here, now" (FR-004). Optional only in the signature: a call on
+     * a request channel with it unwired fails loudly rather than saving or
+     * converting without it.
+     */
+    private readonly availability?: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>,
   ) {}
+
+  #requireAvailability(): Pick<CatalogProductAvailabilityPort, 'filterAvailable'> {
+    if (!this.availability) {
+      throw new Error('ShoppingListService: the availability port is not wired.');
+    }
+    return this.availability;
+  }
 
   async list(ctx: CustomerContext): Promise<ShoppingList[]> {
     const em = this.emFactory();
@@ -218,7 +236,14 @@ export class ShoppingListService {
   async addItem(
     ctx: CustomerContext,
     listId: string,
-    input: { productId: string; variantId?: string; quantity: number; note?: string },
+    input: {
+      productId: string;
+      variantId?: string;
+      quantity: number;
+      note?: string;
+      /** Feature 163 — the request's language tag; L is it resolved against the channel. */
+      languageTag?: string;
+    },
   ): Promise<ShoppingListItem> {
     // command-coverage-ignore: customer-owned personal saved list — self-service
     // convenience data; conversions delegate to the audited cart/RFQ paths.
@@ -229,22 +254,26 @@ export class ShoppingListService {
     // later read, so a product this buyer may not see may not be saved to it.
     // The audience comes off the same `CustomerContext` the list is owned by;
     // `organizationId` is what the allow-list is matched against.
-    if (
-      !product ||
-      !isProductVisibleTo(product, {
-        organizationId: ctx.organizationId,
-        authenticated: true,
-      })
-    ) {
-      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
-    }
-    // Issue #259 — the channel axis, read off the request scope rather than
-    // re-resolved. A saved list is read back on later visits and priced then,
-    // so what may be saved is what the channel the buyer is shopping on
-    // publishes; the refusal is the same 404 the visibility half above throws,
-    // so the two cannot be told apart.
-    if (await outOfRequestChannel(this.channelMembership, product.id)) {
-      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    const notFound = (): HttpError =>
+      new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    if (!product) throw notFound();
+    const audience = { organizationId: ctx.organizationId, authenticated: true };
+    // Issue #259 / feature 163 — the channel, read off the request scope
+    // rather than re-resolved. A saved list is read back on later visits and
+    // priced then, so what may be saved is what is available on the channel
+    // the buyer is shopping on, in their language, now; every refusal is the
+    // same 404, so the reasons cannot be told apart.
+    const channel = currentSalesChannel();
+    if (channel === null) {
+      // Outside a request there is no channel to ask about (FR-007).
+      if (!isProductVisibleTo(product, audience)) throw notFound();
+    } else {
+      const available = await this.#requireAvailability().filterAvailable([product.id], {
+        channelId: channel.id,
+        languageCode: scopeLanguageOf(channel, input.languageTag),
+        audience,
+      });
+      if (!available.has(product.id)) throw notFound();
     }
     const item = em.create(ShoppingListItem, {
       shoppingListId: list.id,
@@ -308,30 +337,63 @@ export class ShoppingListService {
 
   /**
    * Adds the given items (or every item on the list when itemIds is omitted)
-   * to the customer's authenticated cart. Archived products are skipped and
+   * to the customer's authenticated cart on `salesChannelId` — the channel of
+   * the caller's request, since a customer holds one basket per channel
+   * (`specs/154-sales-channel-access/`). Archived products are skipped and
    * reported in `skipped`.
    */
   async convertToCart(
     ctx: CustomerContext,
     listId: string,
     itemIds: string[] | undefined,
+    salesChannelId: string,
   ): Promise<ConvertToCartResult> {
     const em = this.emFactory();
     const list = await this.#owned(em, ctx, listId);
     const items = await this.#selectItems(em, list.id, itemIds);
-    const { skipped, kept } = await this.#partitionByProductStatus(items);
+    const { skipped, kept } = await this.#partitionByProductStatus(items, ctx);
 
     let added = 0;
-    for (const item of kept) {
-      await this.cartService.addItem(
-        { customer: ctx },
-        {
+    if (kept.length > 0) {
+      // Feature 155 (FR-011, R12.4) — one batch, judged with the cart as a
+      // whole; every per-line failure is reported, never thrown mid-way.
+      const { outcomes } = await this.cartService.addItems(
+        { customer: { ...ctx, salesChannelId } },
+        kept.map((item) => ({
           productId: item.productId,
           ...(item.variantId ? { variantId: item.variantId } : {}),
           quantity: item.quantity,
-        },
+        })),
+        { onLineError: 'report' },
       );
-      added += 1;
+      for (const outcome of outcomes) {
+        const item = kept[outcome.index];
+        if (item === undefined) continue;
+        if (outcome.status === 'added') {
+          added += 1;
+        } else if (outcome.status === 'below_minimum') {
+          skipped.push({
+            itemId: item.id,
+            productId: item.productId,
+            reason: 'below_minimum',
+            minimum: outcome.minimum,
+          });
+        } else if (outcome.error.status === 404) {
+          // Hidden from this buyer, out of the channel, or its variant gone:
+          // the same skip a deleted product gets, so the two cannot be told
+          // apart (FR-035, threat F1) — never a name, never a minimum.
+          skipped.push({ itemId: item.id, productId: item.productId, reason: 'product_not_found' });
+        } else {
+          // Anything else was thrown by `addItem` before the batch, and still
+          // is — with its details, so the answer is the one `addItem` gave.
+          throw new HttpError(
+            outcome.error.status,
+            outcome.error.code as ConstructorParameters<typeof HttpError>[1],
+            outcome.error.message,
+            outcome.error.details as ConstructorParameters<typeof HttpError>[3],
+          );
+        }
+      }
     }
 
     return { shoppingListId: list.id, added, skipped };
@@ -346,11 +408,17 @@ export class ShoppingListService {
     ctx: CustomerContext,
     listId: string,
     itemIds: string[] | undefined,
+    /**
+     * The language a refusal names a product in (feature 155, D3/D4); the
+     * request's language tag and channel, which the lines are judged at (feature
+     * 163 — `CreateForCustomerOptions.languageTag`, the rule of every buyer seam).
+     */
+    options: { language?: string; languageTag?: string; salesChannelId?: string } = {},
   ): Promise<ConvertToRfqResult> {
     const em = this.emFactory();
     const list = await this.#owned(em, ctx, listId);
     const items = await this.#selectItems(em, list.id, itemIds);
-    const { skipped, kept } = await this.#partitionByProductStatus(items);
+    const { skipped, kept } = await this.#partitionByProductStatus(items, ctx, options.languageTag);
 
     let rfqId: string | null = null;
     let added = 0;
@@ -364,6 +432,11 @@ export class ShoppingListService {
             ...(item.variantId ? { variantId: item.variantId } : {}),
             ...(item.note ? { lineNote: item.note } : {}),
           })),
+        },
+        {
+          ...(options.language ? { language: options.language } : {}),
+          ...(options.languageTag ? { languageTag: options.languageTag } : {}),
+          ...(options.salesChannelId ? { salesChannelId: options.salesChannelId } : {}),
         },
       );
       rfqId = rfq.id;
@@ -416,12 +489,29 @@ export class ShoppingListService {
    */
   async #partitionByProductStatus(
     items: ShoppingListItem[],
+    ctx: CustomerContext,
+    /** Feature 163 — the request's language tag; absent, the channel's default language. */
+    languageTag?: string,
   ): Promise<{ kept: ShoppingListItem[]; skipped: ConversionSkip[] }> {
     if (items.length === 0) return { kept: [], skipped: [] };
     const productIds = Array.from(new Set(items.map((i) => i.productId)));
     const products = await this.catalogProducts.findByIds(productIds);
     const byId = new Map(products.map((p) => [p.id, p]));
     const publishedHere = await productIdsInRequestChannel(this.channelMembership, productIds);
+    // Feature 163 — on a request channel, whatever else makes a member line
+    // unacquirable there now (switched off, outside its window, outside the
+    // audience) is `product_not_found`, the answer an out-of-channel line gets.
+    // The scope language the request's tag resolves to on that channel, as every
+    // buyer seam asks; the channel's default language when the caller has no tag.
+    const channel = currentSalesChannel();
+    const availableHere =
+      channel === null
+        ? null
+        : await this.#requireAvailability().filterAvailable(productIds, {
+            channelId: channel.id,
+            languageCode: languageTag === undefined ? null : scopeLanguageOf(channel, languageTag),
+            audience: { organizationId: ctx.organizationId, authenticated: true },
+          });
     const skipped: ConversionSkip[] = [];
     const kept: ShoppingListItem[] = [];
     for (const item of items) {
@@ -430,8 +520,14 @@ export class ShoppingListService {
         skipped.push({ itemId: item.id, productId: item.productId, reason: 'product_not_found' });
         continue;
       }
-      if (product.status === 'inactive' || product.deletedAt) {
+      // Feature 163 (FR-010, FR-019) — archived is `archivedAt`, whatever the
+      // status; a product merely switched off is the availability answer's below.
+      if (product.archivedAt || product.deletedAt) {
         skipped.push({ itemId: item.id, productId: item.productId, reason: 'product_archived' });
+        continue;
+      }
+      if (availableHere !== null && !availableHere.has(item.productId)) {
+        skipped.push({ itemId: item.id, productId: item.productId, reason: 'product_not_found' });
         continue;
       }
       kept.push(item);

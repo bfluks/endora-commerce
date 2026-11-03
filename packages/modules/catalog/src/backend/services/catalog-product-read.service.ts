@@ -1,20 +1,25 @@
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql';
 import type {
+  CatalogProductPricingRef,
   CatalogAttributeValueQuery,
+  CatalogAdminNamePageQuery,
   CatalogPackagingUnitRecord,
   CatalogProductLinkRow,
   CatalogProductLookupOptions,
   CatalogProductReadPort,
   CatalogProductRecord,
   CatalogProductValueOverrideRecord,
+  CatalogValueOverrideLookupOptions,
   CatalogProductVariantRecord,
   ProductLinkKind,
 } from '@endora-commerce/contracts';
+import { adminNameLanguage } from '@endora-commerce/contracts';
 import { Product } from '../entities/product.entity.js';
 import { ProductLink } from '../entities/product-link.entity.js';
 import { ProductPackagingUnit } from '../entities/product-packaging-unit.entity.js';
 import { ProductValueOverride } from '../entities/product-value-override.entity.js';
 import { ProductVariant } from '../entities/product-variant.entity.js';
+import { uuidArrayLiteral } from './sql-id-arrays.js';
 
 /**
  * The row-level read model `catalog` publishes (feature 075, Phase P).
@@ -34,7 +39,21 @@ import { ProductVariant } from '../entities/product-variant.entity.js';
  * wider read the default it already is.
  */
 export class CatalogProductReadService implements CatalogProductReadPort {
-  constructor(private readonly emFactory: () => EntityManager) {}
+  readonly #sparseSearchLimit: number;
+
+  constructor(
+    private readonly emFactory: () => EntityManager,
+    options: {
+      /**
+       * Feature 161 (G15): at most this many matching members, a searched page
+       * is cut from the trigram hits; above it, from the ordered index walk.
+       * Both answer the same page; a test forces each.
+       */
+      sparseSearchLimit?: number;
+    } = {},
+  ) {
+    this.#sparseSearchLimit = options.sparseSearchLimit ?? SPARSE_SEARCH_LIMIT;
+  }
 
   async findById(
     id: string,
@@ -96,6 +115,29 @@ export class CatalogProductReadService implements CatalogProductReadPort {
     return products.map(toCatalogProductRecord);
   }
 
+  /**
+   * Issue #416 — one statement over `products`, no entity built: the price
+   * surface's worker reads it per whole build, and `listAll` hydrated every
+   * product (3.8 s for 50 000) to use two fields.
+   */
+  async listPricingRefs(): Promise<CatalogProductPricingRef[]> {
+    const rows = await this.emFactory().execute<Array<{ id: string; attribute_values: Record<string, unknown> | null }>>(
+      `select "id", "attribute_values" from "products" order by "id"`,
+    );
+    return rows.map(toPricingRef);
+  }
+
+  async findPricingRefsByIds(ids: readonly string[]): Promise<CatalogProductPricingRef[]> {
+    if (ids.length === 0) return [];
+    // One array parameter, whatever the size of the set: a whole build's
+    // candidates can be the catalogue (review 2 of #424).
+    const rows = await this.emFactory().execute<Array<{ id: string; attribute_values: Record<string, unknown> | null }>>(
+      `select "id", "attribute_values" from "products" where "id" = any(?::uuid[]) order by "id"`,
+      [uuidArrayLiteral([...new Set(ids)])],
+    );
+    return rows.map(toPricingRef);
+  }
+
   async listVariantsByProductIds(
     productIds: readonly string[],
   ): Promise<CatalogProductVariantRecord[]> {
@@ -136,6 +178,23 @@ export class CatalogProductReadService implements CatalogProductReadPort {
     return unit ? toCatalogPackagingUnitRecord(unit) : null;
   }
 
+  /**
+   * Feature 155 — one query over every given product, ordered by product id,
+   * then position, then name (`contracts/catalog-api.md` §5). No policy: the
+   * caller passes ids it has already vetted (threat F12).
+   */
+  async listPackagingUnitsByProductIds(
+    productIds: readonly string[],
+  ): Promise<CatalogPackagingUnitRecord[]> {
+    if (productIds.length === 0) return [];
+    const units = await this.emFactory().find(
+      ProductPackagingUnit,
+      { productId: { $in: [...productIds] } },
+      { orderBy: { productId: 'asc', position: 'asc', name: 'asc' } },
+    );
+    return units.map(toCatalogPackagingUnitRecord);
+  }
+
   async listLinksBySourceIds(
     sourceProductIds: readonly string[],
     kind?: ProductLinkKind,
@@ -154,10 +213,12 @@ export class CatalogProductReadService implements CatalogProductReadPort {
 
   async listValueOverridesByProductIds(
     productIds: readonly string[],
+    options: CatalogValueOverrideLookupOptions = {},
   ): Promise<CatalogProductValueOverrideRecord[]> {
     if (productIds.length === 0) return [];
     const overrides = await this.emFactory().find(ProductValueOverride, {
       productId: { $in: [...productIds] },
+      ...(options.channelId !== undefined ? { channelId: options.channelId } : {}),
     });
     return overrides.map(toCatalogProductValueOverrideRecord);
   }
@@ -187,7 +248,115 @@ export class CatalogProductReadService implements CatalogProductReadPort {
     );
     return rows.map((row) => row.id);
   }
+
+  /**
+   * Feature 161 (G15, `specs/161-price-book-editor/research.md` R14) — a page
+   * of the products the caller's membership seam names, by the stored admin
+   * name key (`products_admin_order_<lang>`), then SKU, then id.
+   *
+   * - Without a search: **one** statement — the page walks the order index
+   *   and probes the seam as a hashed sub-plan (`(p.id in (…)) is true`, which
+   *   keeps the planner from turning it into a join that would sort), with the
+   *   count beside it unless `withTotal` is `false`.
+   * - With a search: a count of the matching members, then the page — from the
+   *   trigram hits when at most `sparseSearchLimit` match (few rows, sorted),
+   *   from the ordered walk otherwise (the first rows come quickly). The term
+   *   is folded by the same `catalog_admin_fold` the stored key is, and matched
+   *   literally (`%`, `_` and `\\` escaped); a variant's SKU finds its product.
+   */
+  async pageProductsByAdminName(query: CatalogAdminNamePageQuery): Promise<{ ids: string[]; total: number | null }> {
+    const lang = adminNameLanguage(query.language);
+    const key = `p."admin_name_key_${lang}"`;
+    const searchKey = `p."admin_search_key_${lang}"`;
+    const order = `${key}, p."sku", p."id"`;
+    const member = `(p."id" in (${query.membership.sql})) is true`;
+    const offset = Math.max(0, Math.floor(query.offset));
+    const limit = Math.max(0, Math.floor(query.limit));
+    const em = this.emFactory();
+    const term = query.search?.trim() ?? '';
+
+    if (term.length === 0) {
+      const withTotal = query.withTotal !== false;
+      const rows = await withSort(em, false, (tx) =>
+        tx.execute<Array<{ total: number | null; ids: string[] | null }>>(
+          `select ${withTotal ? `(select count(*)::int from "products" p where ${member})` : 'null::int'} as "total",
+                  array(select p."id" from "products" p where ${member} order by ${order} offset ? limit ?) as "ids"`,
+          [...(withTotal ? query.membership.params : []), ...query.membership.params, offset, limit],
+        ),
+      );
+      const row = rows[0];
+      return { ids: row?.ids ?? [], total: withTotal ? Number(row?.total ?? 0) : null };
+    }
+
+    const literal = term.replace(/[\\%_]/g, (c) => `\\${c}`);
+    const matches = `(${searchKey} like '%' || catalog_admin_fold(?) || '%'
+                      or (p."id" in (select v."parent_product_id" from "product_variants" v
+                                      where lower(v."sku") like '%' || lower(?) || '%')) is true)`;
+    const counted = await em.execute<Array<{ n: number }>>(
+      `select count(*)::int as "n" from "products" p where ${member} and ${matches}`,
+      [...query.membership.params, literal, literal],
+    );
+    const total = Number(counted[0]?.n ?? 0);
+    if (total === 0 || offset >= total || limit === 0) return { ids: [], total };
+    const page =
+      total <= this.#sparseSearchLimit
+        ? // Few matches: the trigram hits, materialised, then the members among them sorted.
+          // The sort this needs stays on — set explicitly, so both strategies issue
+          // the same statements whatever the count picked.
+          await withSort(em, true, (tx) =>
+            tx.execute<Array<{ id: string }>>(
+              `with "hits" as materialized (
+                 select p."id", ${key} as "k", p."sku" from "products" p where ${matches}
+               )
+               select h."id" from "hits" h
+                where (h."id" in (${query.membership.sql})) is true
+                order by h."k", h."sku", h."id" offset ? limit ?`,
+              [literal, literal, ...query.membership.params, offset, limit],
+            ),
+          )
+        : // Many: walk the order index, keeping the matching members.
+          await withSort(em, false, (tx) =>
+            tx.execute<Array<{ id: string }>>(
+              `select p."id" from "products" p where ${member} and ${matches} order by ${order} offset ? limit ?`,
+              [...query.membership.params, literal, literal, offset, limit],
+            ),
+          );
+    return { ids: page.map((r) => r.id), total };
+  }
 }
+
+/**
+ * Run an ordered page statement with the sort `off` — as an **index walk** of
+ * `products_admin_order_<lang>` — feature 161, G15 (Checkpoint 2b).
+ *
+ * The page orders by exactly that index, so walking it reads the members in
+ * order and stops at `offset + limit`; a sort reads and sorts every member
+ * instead. The planner cannot be trusted to see that: the hashed membership
+ * filter is estimated at a fixed half of the table, and on a table not yet
+ * analysed (right after a bulk import) it assumes a few thousand rows and an
+ * empty visibility map, so it prices the walk above a seq scan plus a sort and
+ * picks the sort — measured on 50 000 products: 84–92 ms with the sort, 32 ms
+ * walking after `VACUUM ANALYZE`, 59 ms walking before it (50 003 heap
+ * fetches, all buffer hits). No query shape tried (a fenced ordered subquery,
+ * `limit all`, a keyset walk in 2 000-row index-range chunks) keeps the walk on
+ * unanalysed data, so the statement runs in its own transaction with
+ * `set local enable_sort = off`: the setting ends with that transaction, and
+ * with the ordered index there the walk is the plan that remains.
+ *
+ * The sparse strategy (trigram hits, materialised) must sort — there is no
+ * index on a materialised set, and with the sort off the planner abandons the
+ * trigram index instead (measured: ≈ 400 ms) — so it runs with `on`, restated
+ * so that both strategies issue the same statements.
+ */
+async function withSort<T>(em: EntityManager, sort: boolean, run: (tx: EntityManager) => Promise<T>): Promise<T> {
+  return em.transactional(async (tx) => {
+    await tx.execute(`set local enable_sort = ${sort ? 'on' : 'off'}`);
+    return run(tx);
+  });
+}
+
+/** Feature 161 (G15): the most matching members a searched page is cut from the trigram hits for. */
+export const SPARSE_SEARCH_LIMIT = 2000;
 
 /**
  * `{}` by default — the wider read. `liveOnly` drops soft-deleted rows,
@@ -201,6 +370,10 @@ function productFilter(
   if (options?.activeOnly) return { deletedAt: null, status: 'active' };
   if (options?.liveOnly) return { deletedAt: null };
   return {};
+}
+
+function toPricingRef(row: { id: string; attribute_values: Record<string, unknown> | null }): CatalogProductPricingRef {
+  return { id: row.id, attributeValues: row.attribute_values ?? {} };
 }
 
 export function toCatalogProductRecord(product: Product): CatalogProductRecord {
@@ -229,6 +402,10 @@ export function toCatalogProductRecord(product: Product): CatalogProductRecord {
     lowStockThresholdMode: product.lowStockThresholdMode,
     fulfilmentStrategy: product.fulfilmentStrategy ?? null,
     fulfilmentStrategyWarehouseOrder: product.fulfilmentStrategyWarehouseOrder ?? null,
+    minOrderQuantity: product.minOrderQuantity ?? null,
+    returnable: product.returnable,
+    publishFrom: product.publishFrom ?? null,
+    publishUntil: product.publishUntil ?? null,
   };
 }
 
@@ -240,7 +417,6 @@ export function toCatalogProductVariantRecord(
     parentProductId: variant.parentProductId,
     sku: variant.sku,
     variantAttributeValues: variant.variantAttributeValues ?? {},
-    priceOverride: variant.priceOverride ?? null,
     stockLevel: variant.stockLevel ?? null,
     createdAt: variant.createdAt,
     updatedAt: variant.updatedAt,
@@ -259,6 +435,9 @@ export function toCatalogPackagingUnitRecord(
     isDefault: unit.isDefault,
     createdAt: unit.createdAt,
     updatedAt: unit.updatedAt,
+    minOrderUnits: unit.minOrderUnits ?? null,
+    // Feature 163 (FR-079) — the basket and quote-request snapshots take the name in the line's language.
+    nameTranslations: { ...(unit.nameTranslations ?? {}) },
   };
 }
 

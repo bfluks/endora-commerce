@@ -1,4 +1,5 @@
 import { type ComponentConfig } from '@puckeditor/core';
+import { EmbeddedBlockDepth } from '@endora-commerce/page-builder-core';
 import type { InsertBlockProps } from '../schema/component-types.js';
 import { useCmsRenderEmbeds } from './render-context.js';
 
@@ -26,7 +27,9 @@ export const InsertBlock: ComponentConfig<InsertBlockProps> = {
     const { blocks } = useCmsRenderEmbeds();
     const rendered = code ? blocks[code] : null;
 
-    if (rendered) return <>{rendered}</>;
+    // The embedded tree stands in this block's place, so its blocks take this
+    // block's depth: a `cms.Section` in an embed at the top level of a page is a section (R-8).
+    if (rendered) return <EmbeddedBlockDepth>{rendered}</EmbeddedBlockDepth>;
 
     return <div className={EMPTY_EMBED}>{code ? `Block "${code}"` : 'Choose a block code'}</div>;
   },

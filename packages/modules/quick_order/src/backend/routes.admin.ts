@@ -10,7 +10,7 @@ import { isOrgInScope } from '@endora-commerce/platform/tenancy';
 import type { QuickOrderImportPipeline } from './services/import-pipeline.js';
 import type { QuickOrderBuildService } from './services/quick-order-build-service.js';
 import { parseImportRequest } from './services/import-from-request.js';
-import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import { getResolvedChannel, type RequireAdminFactory } from '@endora-commerce/platform/kernel';
 
 /**
  * Admin quick-order routes (feature 039, FR-008). An operator imports a file
@@ -108,6 +108,10 @@ export async function registerQuickOrderAdminRoutes(
           customerAccountId: body.onBehalfOf.customerAccountId,
           organizationId: body.onBehalfOf.organizationId,
           isOrgAdmin: false,
+          // The basket of the channel this request resolves to — the system
+          // default unless the operator's request names another
+          // (`specs/154-sales-channel-access/`).
+          salesChannelId: getResolvedChannel(request).id,
         },
         {
           target: body.target,
@@ -116,6 +120,12 @@ export async function registerQuickOrderAdminRoutes(
             variantId: item.variantId ?? null,
             quantity: item.quantity,
           })),
+        },
+        {
+          // Feature 155 (FR-030, threat F10) — a literal: this route is the
+          // operator's, and no field of the body can say otherwise.
+          actor: 'operator',
+          language: await request.responseLanguage(),
         },
       );
       return { data: result };

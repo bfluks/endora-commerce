@@ -136,3 +136,20 @@ export function renderLlmsTxtBase({ shopName, unservedPaths }: LlmsTxtBaseInput)
     '',
   ].join('\n');
 }
+
+/**
+ * What a store closed to anonymous visitors says to AI assistants
+ * (`specs/154-sales-channel-access/`): its name, as the generated part names
+ * it, and that its content is for signed-in customers — the summary
+ * <https://llmstxt.org> puts under the heading. No page and no sitemap: every
+ * page answers an anonymous reader with the sign-in page, and the sitemap of
+ * a closed store is empty.
+ */
+export function renderClosedStoreLlmsTxt(shopName: string): string {
+  return [
+    `# ${headingText(shopName)}`,
+    '',
+    '> The content of this store is available to signed-in customers only.',
+    '',
+  ].join('\n');
+}

@@ -333,9 +333,9 @@ export const SettingDetailResponseSchema = SettingDtoSchema;
 /**
  * Public shop / company contact information resolved for the active sales
  * channel. Backs the storefront footer, the 404 "need help?" block and the
- * contact form. Every field is a string; an unset (or not-yet-registered)
- * setting resolves to an empty string so the storefront can decide what to
- * render. The contact-form recipient list is intentionally omitted — it is
+ * contact form. Every text field is a string; an unset (or not-yet-registered)
+ * setting resolves to an empty string (`logoUrl` to `null`, `socialProfiles`
+ * to `[]`) so the storefront can decide what to render. The contact-form recipient list is intentionally omitted — it is
  * an internal routing concern, not public information.
  */
 export const ShopInfoSchema = z.object({
@@ -344,6 +344,13 @@ export const ShopInfoSchema = z.object({
   contactEmail: z.string(),
   supportEmail: z.string(),
   phone: z.string(),
+  /**
+   * The public URL of the asset `shop.logo_asset_id` names, or `null` while it
+   * is unset or unresolvable (feature 163, FR-035).
+   */
+  logoUrl: z.string().nullable(),
+  /** `shop.social_profiles` — `https:` URLs only, for `sameAs` (feature 163, FR-035). */
+  socialProfiles: z.array(z.string()),
 });
 export type ShopInfo = z.infer<typeof ShopInfoSchema>;
 
@@ -410,6 +417,45 @@ export type HomepageConfig = z.infer<typeof HomepageConfigSchema>;
 
 export const HomepageConfigResponseSchema = z.object({ data: HomepageConfigSchema });
 export type HomepageConfigResponse = z.infer<typeof HomepageConfigResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Time-zone names, and the reporting time zone (owner decisions 2026-10-27, #465)
+// ---------------------------------------------------------------------------
+
+/**
+ * The reporting time zone: the calendar in which a report counts a day, a
+ * month or any other range of days. A setting of the `analytics` module, so
+ * that no single reporting module owns it — Projects analytics reads it, CRM
+ * may follow (#474). An IANA name; default `UTC`. Read it through
+ * {@link ReportingTimeZonePort}, never by code: `analytics` can be switched
+ * off, and a reader then counts in `UTC`.
+ */
+export const ANALYTICS_REPORTING_TIME_ZONE_SETTING = 'analytics.reporting_time_zone';
+
+/**
+ * Container name: `reportingTimeZonePort`. Owner: `analytics`. Gated — a
+ * reader decides `analytics`' presence first and counts in `UTC` without it
+ * (a `degrades-without` edge).
+ */
+export interface ReportingTimeZonePort {
+  /** `analytics.reporting_time_zone`, platform-wide. */
+  timeZone(): Promise<string>;
+}
+
+let knownTimeZones: Set<string> | null = null;
+
+/**
+ * Whether `value` is a time zone the runtime knows — an IANA name from
+ * `Intl.supportedValuesOf('timeZone')`, or `UTC`. A time-zone setting is held
+ * to this on write, because a zone the runtime does not know makes every
+ * calendar computation in it throw.
+ */
+export function isIanaTimeZone(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  if (value === 'UTC') return true;
+  knownTimeZones ??= new Set(Intl.supportedValuesOf('timeZone'));
+  return knownTimeZones.has(value);
+}
 
 // ---------------------------------------------------------------------------
 // --- ports -----------------------------------------------------------------

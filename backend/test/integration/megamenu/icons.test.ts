@@ -86,6 +86,7 @@ describe('Megamenu link icons (T059 + T060)', () => {
         items: [
           {
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { 'en-US': 'X' },
@@ -114,6 +115,7 @@ describe('Megamenu link icons (T059 + T060)', () => {
         items: [
           {
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { 'en-US': 'Phone' },

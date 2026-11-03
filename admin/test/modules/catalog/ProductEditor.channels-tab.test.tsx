@@ -85,7 +85,7 @@ const MOCK_PRODUCT = {
   sku: 'CHANNEL-TAB',
   slug: 'channel-tab',
   type: 'simple' as const,
-  status: 'draft' as const,
+  status: 'inactive' as const,
   name: { 'en-US': 'Test product', 'pl-PL': '' },
   description: { 'en-US': 'Desc', 'pl-PL': '' },
   visibility: 'public' as const,

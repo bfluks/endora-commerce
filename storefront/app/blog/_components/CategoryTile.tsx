@@ -1,12 +1,12 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
 import type { BlogCategoryTile } from '@endora-commerce/contracts';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 const BLOG_PREFIX = '/blog';
 
 export function CategoryTile({ category }: { category: BlogCategoryTile }): ReactNode {
   return (
-    <Link
+    <LocalizedLink
       href={`${BLOG_PREFIX}/${category.slug}`}
       data-test="category-tile"
       className="group flex flex-col overflow-hidden rounded-lg border border-[--line] bg-[--surface] transition hover:shadow-lg"
@@ -33,6 +33,6 @@ export function CategoryTile({ category }: { category: BlogCategoryTile }): Reac
           {category.name}
         </h3>
       </div>
-    </Link>
+    </LocalizedLink>
   );
 }

@@ -10,6 +10,7 @@ import { ApplicablePriceListsPanel } from '../panels/ApplicablePriceListsPanel.j
 import { HierarchyPanel } from '../panels/HierarchyPanel.js';
 import { VatValidationPanel } from '../panels/VatValidationPanel.js';
 import { RestrictionsPanel } from '../panels/RestrictionsPanel.js';
+import { SalesChannelsPanel } from '../panels/SalesChannelsPanel.js';
 import { CustomFieldValuesPanel } from '@endora-commerce/admin-kit/components';
 import { AdminZone } from '@endora-commerce/admin-kit/zones';
 import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
@@ -630,17 +631,21 @@ export function OrganizationDetail(): ReactNode {
           no prop that could tell two mounts apart, so a second one would render
           every contribution twice.
 
-          Four contributions arrive here, ordered by their declared weight:
-          `sales_channels`' channel membership (100), `price_lists`' display-mode
-          override (200), `quick_order`'s ordering defaults (300) and `carts`'
-          approval policy (400). The first three were three separate imports
-          scattered through this file at three different depths; the weights are
-          the order the operator already saw, and the panels are contiguous now
-          because a zone is one place.
+          Contributions arrive here ordered by their declared weight:
+          `price_lists`' display-mode override (200), `quick_order`'s ordering
+          defaults (300) and `carts`' approval policy (400). `sales_channels`'
+          channel membership (100) is gone since feature 154 — the panel just
+          above is this module's own editor of the same assignment, and two
+          editors of it on one page would disagree about who may change it.
 
           No chrome around it, unlike `catalog`'s category editor: every
           contribution here renders its own card, so a wrapper would nest one
           card inside another and an empty zone renders nothing at all. */}
+      {/* Feature 154 — the stores this Organization's members may use, first
+          among the panels below the members because it decides whether they can
+          sign in at all. */}
+      <SalesChannelsPanel organizationId={org.id} />
+
       <AdminZone name="organization.detail.after" props={{ organizationId: org.id }} />
 
       {/* Feature 056 US1 — organization hierarchy (parent picker + subtree view). */}

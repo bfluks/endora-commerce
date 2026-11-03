@@ -85,8 +85,8 @@ describe('Megamenu quickstart smoke (T087)', () => {
       cookies: adminCookie,
       payload: JSON.stringify({
         items: [
-          { id: rootA, parentId: null, position: 0, kind: 'external-link', labels: { 'en-US': 'Catalog' }, target: { url: 'https://example.com/catalog' } },
-          { id: rootB, parentId: null, position: 1, kind: 'external-link', labels: { 'en-US': 'Phone' }, target: { url: 'tel:+48123' } },
+          { id: rootA, parentId: null, presentation: 'mega', position: 0, kind: 'external-link', labels: { 'en-US': 'Catalog' }, target: { url: 'https://example.com/catalog' } },
+          { id: rootB, parentId: null, presentation: 'link', position: 1, kind: 'external-link', labels: { 'en-US': 'Phone' }, target: { url: 'tel:+48123' } },
           { id: childA1, parentId: rootA, position: 0, kind: 'external-link', labels: { 'en-US': 'Garden' }, target: { url: 'https://example.com/catalog/garden' } },
           { id: grandA1a, parentId: childA1, position: 0, kind: 'external-link', labels: { 'en-US': 'Tools' }, target: { url: 'https://example.com/catalog/garden/tools' } },
           { id: embed, parentId: rootA, position: 1, kind: 'cms-block-embed', labels: { 'en-US': 'Hero' }, target: { blockId: block.id, embedSide: 'right' } },

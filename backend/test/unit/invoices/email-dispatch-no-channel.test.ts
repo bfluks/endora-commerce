@@ -128,8 +128,25 @@ describe('invoices — dispatching the invoice e-mail with no sales channel (#10
     // without a read: `link` is the stored value, `attachment` the fallback.
     expect(sender.sent[0]!.attachments).toBeUndefined();
     const variables = sender.sent[0]!.variables as { invoice: { downloadUrl: string } };
-    expect(variables.invoice.downloadUrl).toContain('https://shop.example.com/orders/');
+    // Feature 167 (OR-14) — the storefront order page, which lists the invoice with
+    // its PDF download; no channel known, so no language prefix.
+    expect(variables.invoice.downloadUrl).toBe(`https://shop.example.com/orders/${ORDER_ID}`);
     expect(logged).toHaveLength(0);
+  });
+
+  it('links the order page under the e-mail language prefix of the channel (feature 167, OR-14)', async () => {
+    const sender = new CapturingSender();
+    const dispatcher = new InvoiceEmailDispatcher({
+      ...deps(fakeSettings(), sender, []),
+      channelUrlFactsFor: async () => ({
+        languages: ['pl-PL', 'en-US'],
+        defaultLanguage: 'pl-PL',
+        prefixDefaultLanguage: false,
+      }),
+    });
+    await expect(dispatcher.dispatch(INVOICE_ID)).resolves.toEqual({ sent: true });
+    const variables = sender.sent[0]!.variables as { invoice: { downloadUrl: string } };
+    expect(variables.invoice.downloadUrl).toBe(`https://shop.example.com/en/orders/${ORDER_ID}`);
   });
 
   it('reports and logs a send the transport did not accept', async () => {

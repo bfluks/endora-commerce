@@ -66,6 +66,12 @@ describe('buildComparisonDocumentData', () => {
       'https://shop.test/compare/share/sample0token',
     );
   });
+  it('puts the document language prefix on the share address (feature 167, FR-034)', () => {
+    expect(
+      buildComparisonDocumentData({ ...base, storefrontUrl: 'https://shop.test/', pagePath: (p) => `/en${p}` }).shareUrl,
+    ).toBe('https://shop.test/en/compare/share/sample0token');
+  });
+
   it('no storefront URL, or not an http(s) one, means no share address', () => {
     expect(buildComparisonDocumentData({ ...base, storefrontUrl: '' }).shareUrl).toBeNull();
     expect(buildComparisonDocumentData({ ...base, storefrontUrl: 'javascript:alert(1)' }).shareUrl).toBeNull();

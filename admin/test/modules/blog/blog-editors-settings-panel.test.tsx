@@ -511,3 +511,56 @@ describe.each(screens)('$name — the Translate action’s inputs (feature 151)'
     expect(stub.dataset['savedVersion']).toBe('3');
   });
 });
+
+/**
+ * Feature 163 (T065, data-model §1.2) — a post's main image, shown on its card
+ * in `blog.LatestPosts`, is picked from the asset library in the panel and
+ * saved with the other fields.
+ */
+describe('BlogPostEditor — the main image (feature 163)', () => {
+  const postScreen = screens[0]!;
+
+  it('offers the image picker in the panel, labelled from the bundle', async () => {
+    renderEditor(postScreen, 'entity-1');
+    await loaded();
+    expect(within(settingsPanel()).getByText(copy('fields.mainImage'))).toBeTruthy();
+    expect(within(settingsPanel()).getByText(copy('postEditor.mainImageHint'))).toBeTruthy();
+  });
+
+  it('saves the stored image id with the fields, and null for a post without one', async () => {
+    renderEditor(postScreen, 'entity-1');
+    await loaded();
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect((patch.mock.calls[0] as [string, Record<string, unknown>])[1]).toMatchObject({ mainImageAssetId: null });
+  });
+
+  it('keeps a stored image id on save', async () => {
+    const withImage = { ...storedPost, mainImageAssetId: '7d0c1e2a-3b4c-4d5e-8f6a-7b8c9d0e1f2a' };
+    vi.spyOn(apiClient, 'get').mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/sales-channels?')) {
+        return Promise.resolve({ items: [channel], page: 1, pageSize: 100, total: 1 } as never);
+      }
+      if (path.startsWith('/api/v1/admin/sales-channels/')) {
+        return Promise.resolve({ ...channel, languages: ['en-US', 'pl-PL'] } as never);
+      }
+      if (postScreen.detailPath.test(path)) return Promise.resolve({ data: withImage } as never);
+      return Promise.resolve({ data: [], pagination: { page: 1, perPage: 50, totalPages: 1, totalItems: 0 } } as never);
+    });
+    renderEditor(postScreen, 'entity-1');
+    await loaded();
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect((patch.mock.calls[0] as [string, Record<string, unknown>])[1]).toMatchObject({
+      mainImageAssetId: '7d0c1e2a-3b4c-4d5e-8f6a-7b8c9d0e1f2a',
+    });
+  });
+
+  it('ships its copy in both languages, translated', () => {
+    for (const key of ['fields.mainImage', 'postEditor.mainImageHint']) {
+      expect(en[key], key).toBeTruthy();
+      expect(pl[key], key).toBeTruthy();
+      expect(pl[key], key).not.toBe(en[key]);
+    }
+  });
+});

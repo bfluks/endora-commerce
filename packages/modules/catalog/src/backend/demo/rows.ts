@@ -29,9 +29,13 @@
  * module's own table and names those attributes by key, with no reference to
  * them.
  *
- * **Every join table.** A product's category, its sales channel, its price
- * bracket and its stock are all bridges the composition already owned before
- * this batch.
+ * **Every join table.** A product's category, its sales channel and its stock
+ * are all bridges the composition already owned before this batch.
+ *
+ * **The prices.** A product carries no price of its own (feature 160, FR-042):
+ * every demo product's base price is `price_lists`' demo data, written into its
+ * base book by the composition's price-book step and keyed on the SKU minted
+ * here.
  */
 
 /** How many simple products the demo catalogue holds. */
@@ -46,26 +50,32 @@ export const DEMO_ROOT_CATEGORY = {
   name: { 'en-US': 'Catalog', 'pl-PL': 'Katalog' },
 } as const;
 
-export const DEMO_SECTION_CATEGORIES: readonly { slug: string; nameEn: string }[] = [
-  { slug: 'fasteners', nameEn: 'Fasteners' },
-  { slug: 'tools', nameEn: 'Tools' },
-  { slug: 'electronics', nameEn: 'Electronics' },
-  { slug: 'safety', nameEn: 'Safety equipment' },
+/**
+ * `namePl` since feature 168: the demo's navigation expands this tree live, so
+ * a category's own names are what a Polish storefront shows — they used to be
+ * typed a second time as the demo menu's labels.
+ */
+export const DEMO_SECTION_CATEGORIES: readonly { slug: string; nameEn: string; namePl: string }[] = [
+  { slug: 'fasteners', nameEn: 'Fasteners', namePl: 'Łączniki' },
+  { slug: 'tools', nameEn: 'Tools', namePl: 'Narzędzia' },
+  { slug: 'electronics', nameEn: 'Electronics', namePl: 'Elektronika' },
+  { slug: 'safety', nameEn: 'Safety equipment', namePl: 'BHP' },
 ];
 
 export const DEMO_LEAF_CATEGORIES: readonly {
   parentSlug: string;
   slug: string;
   nameEn: string;
+  namePl: string;
 }[] = [
-  { parentSlug: 'fasteners', slug: 'screws', nameEn: 'Screws' },
-  { parentSlug: 'fasteners', slug: 'bolts', nameEn: 'Bolts' },
-  { parentSlug: 'tools', slug: 'wrenches', nameEn: 'Wrenches' },
-  { parentSlug: 'tools', slug: 'drills', nameEn: 'Drills' },
-  { parentSlug: 'electronics', slug: 'cables', nameEn: 'Cables' },
-  { parentSlug: 'electronics', slug: 'sensors', nameEn: 'Sensors' },
-  { parentSlug: 'safety', slug: 'gloves', nameEn: 'Gloves' },
-  { parentSlug: 'safety', slug: 'helmets', nameEn: 'Helmets' },
+  { parentSlug: 'fasteners', slug: 'screws', nameEn: 'Screws', namePl: 'Wkręty' },
+  { parentSlug: 'fasteners', slug: 'bolts', nameEn: 'Bolts', namePl: 'Śruby' },
+  { parentSlug: 'tools', slug: 'wrenches', nameEn: 'Wrenches', namePl: 'Klucze' },
+  { parentSlug: 'tools', slug: 'drills', nameEn: 'Drills', namePl: 'Wiertła' },
+  { parentSlug: 'electronics', slug: 'cables', nameEn: 'Cables', namePl: 'Kable' },
+  { parentSlug: 'electronics', slug: 'sensors', nameEn: 'Sensors', namePl: 'Czujniki' },
+  { parentSlug: 'safety', slug: 'gloves', nameEn: 'Gloves', namePl: 'Rękawice' },
+  { parentSlug: 'safety', slug: 'helmets', nameEn: 'Helmets', namePl: 'Kaski' },
 ];
 
 /** Every category slug the demo owns, deepest first — the order `reset` needs. */
@@ -169,7 +179,6 @@ export function demoProducts(
     const color = COLOR_VALUES[i % COLOR_VALUES.length]!;
     const material = MATERIAL_VALUES[i % MATERIAL_VALUES.length]!;
     const weight = Number(((i % 50) / 10 + 0.1).toFixed(1));
-    const price = 9.99 + (i % 100) * 1.5;
     const leafNameEn = leafNameBySlug(leaf.slug);
     const productName = `${leafNameEn} ${idx}`;
     const certification = i % 7 === 0 ? 'ISO9001' : null;
@@ -191,7 +200,6 @@ export function demoProducts(
         material,
         weight_kg: weight,
         certification,
-        defaultPrice: price,
       },
     });
   }

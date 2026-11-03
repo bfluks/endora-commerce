@@ -20,26 +20,23 @@ import { withModuleOff } from '../../helpers/off-state.js';
  * is resolved *here* — by the server, from the manifests, against the effective
  * enabled-set — so no admin-side test can see it.
  *
- * **`mfa` declares no action, and this file says so rather than omitting the
- * assertion.** `plan.md`'s Ruling 1 is explicit that a module contributing none
- * of a surface has nothing to assert absent *there*, and that *"the batch's own
- * test names the ones it does not contribute and why, derived from the manifest
- * and the contribution set rather than asserted"*. So the derivation is the
- * assertion: the manifest is read for an `actions` array, the registry is asked
- * what it advertises for this module, and the two are required to agree in both
- * states. Whoever gives `mfa` a palette action makes this file red, which is
- * the right moment to be asked for the off-state proof that goes with it.
+ * **`mfa` declared no action until issue #510**, and this file asserted that
+ * absence in both states so that whoever added one would be asked for the
+ * off-state proof that goes with it. Issue #510 added `open-security`
+ * (Principle XVI: an admin could not find the two-factor screen), so the file
+ * now asserts the action is advertised while on and withdrawn while off. It
+ * carries **no `requiredPermission`**, like the route it opens, so the stub
+ * admin session sees it whatever codes it holds.
  *
- * The positive control comes first and is deliberately about a **different**
- * module: an empty answer for `mfa` proves nothing until the registry has been
- * seen answering somebody, and asking `mfa` for its own control is impossible
- * when the expected answer is empty in both states.
+ * A positive control about a **different** module stays first: an empty answer
+ * for `mfa` while off proves nothing until the registry has been seen
+ * answering somebody in that same state.
  *
  * `mfa` is the batch's one **switchable** module, so the operator axis —
  * platform-available, activation withdrawn, the case Constitution XVII names —
  * is driven here for real rather than asserted to be inert.
  */
-describe('mfa contributes no palette action, off or on (Principle XVII item 5)', () => {
+describe('mfa advertises its palette action only while on (Principle XVII item 5)', () => {
   let h: BackendServerHandle;
   const admin = { b2b_session: 'stub-admin-session' };
 
@@ -69,28 +66,24 @@ describe('mfa contributes no palette action, off or on (Principle XVII item 5)',
     return grouped;
   };
 
-  it('declares none in its manifest, which is what makes the absence meaningful', () => {
-    // Read from the manifest, not written down here: this is the fact the
-    // assertions below rest on, and a batch that later adds an action changes
-    // it in one place.
+  it('declares exactly one action, ungated, which is what the cases below rest on', () => {
+    // Read from the manifest, not written down here: a later action fails this
+    // case and asks for its own off-state.
     const manifest = REGISTERED_MANIFESTS.find((entry) => entry.manifest.id === 'mfa')?.manifest;
     expect(manifest, 'mfa is not a registered module').toBeDefined();
-    expect(
-      manifest?.actions ?? [],
-      'mfa now declares a palette action — assert its off-state here rather than deleting this',
-    ).toEqual([]);
+    const actions = manifest?.actions ?? [];
+    expect(actions.map((action) => action.id)).toEqual(['open-security']);
+    expect(actions[0]?.targetRoute).toBe('/security');
+    expect(actions[0]?.requiredPermission).toBeUndefined();
   });
 
-  it('advertises none while on, with the registry demonstrably answering', async () => {
+  it('advertises it while on, with the registry demonstrably answering', async () => {
     const grouped = await actionsByModule();
-    // The positive control. `analytics` converted in batch two and declares one
-    // action; if the registry answered nobody, `mfa`'s empty answer below would
-    // be indistinguishable from a broken endpoint.
     expect(grouped.get('analytics'), 'the palette advertises nothing at all').toBeDefined();
-    expect(grouped.get('mfa') ?? []).toEqual([]);
+    expect(grouped.get('mfa') ?? []).toEqual(['open-security']);
   });
 
-  it('advertises none while deactivated either, and the flip really took', async () => {
+  it('advertises none while deactivated, and the flip really took', async () => {
     // The operator axis — the one an operator actually creates, and the one a
     // platform-availability flip would hide. `withModuleOff` asserts the module
     // is genuinely absent before the body observes anything (issue #141).
@@ -101,5 +94,6 @@ describe('mfa contributes no palette action, off or on (Principle XVII item 5)',
       // this module and not about the endpoint.
       expect(grouped.get('analytics')).toBeDefined();
     });
+    expect((await actionsByModule()).get('mfa') ?? []).toEqual(['open-security']);
   });
 });

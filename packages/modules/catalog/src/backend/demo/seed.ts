@@ -58,7 +58,6 @@ const COMPOSITES = [
     type: 'grouped',
     nameEn: 'Starter set (grouped)',
     descriptionEn: 'Starter set bundling two products with fixed quantities.',
-    price: 49.99,
   },
   {
     sku: 'DEMO-BUNDLE-0001',
@@ -66,7 +65,6 @@ const COMPOSITES = [
     type: 'bundle',
     nameEn: 'Configurable bundle',
     descriptionEn: 'Pick a color and quantity to configure your bundle.',
-    price: 99.99,
   },
   {
     sku: 'DEMO-VIRTUAL-0001',
@@ -74,7 +72,6 @@ const COMPOSITES = [
     type: 'virtual',
     nameEn: 'B2B Buyer Handbook (e-book)',
     descriptionEn: 'Digital e-book — instant download after purchase.',
-    price: 19.99,
     downloadUrl: 'https://example.test/b2b-buyer-handbook.pdf',
   },
 ] as const;
@@ -106,7 +103,7 @@ export async function seedDemo(
     if (!row) {
       row = em.create(Category, {
         parentCategoryId: root.id,
-        name: { 'en-US': section.nameEn },
+        name: { 'en-US': section.nameEn, 'pl-PL': section.namePl },
         slug: section.slug,
       });
       em.persist(row);
@@ -121,7 +118,7 @@ export async function seedDemo(
     if (!row) {
       row = em.create(Category, {
         parentCategoryId: sections.get(leaf.parentSlug)!.id,
-        name: { 'en-US': leaf.nameEn },
+        name: { 'en-US': leaf.nameEn, 'pl-PL': leaf.namePl },
         slug: leaf.slug,
       });
       em.persist(row);
@@ -181,7 +178,7 @@ export async function seedDemo(
         name: { 'en-US': composite.nameEn },
         description: { 'en-US': composite.descriptionEn },
         visibility: 'public',
-        attributeValues: { defaultPrice: composite.price },
+        attributeValues: {},
         ...('downloadUrl' in composite ? { downloadUrl: composite.downloadUrl } : {}),
       }),
     );

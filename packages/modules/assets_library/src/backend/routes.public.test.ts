@@ -25,6 +25,8 @@ interface FakeAsset {
   sizeBytes: string;
   updatedAt: Date;
   deletedAt: Date | null;
+  contentVersion: string;
+  permalink: string | null;
 }
 
 const SANDBOX_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
@@ -59,6 +61,8 @@ async function addAsset(
     sizeBytes: '3',
     updatedAt: new Date('2026-01-01T00:00:00Z'),
     deletedAt: null,
+    contentVersion: `cv${String(seq).padStart(10, '0')}`,
+    permalink: null,
     ...over,
   };
   assets.set(id, a);
@@ -81,6 +85,13 @@ beforeAll(async () => {
   });
   const em = {
     findOne: async (_entity: unknown, where: { id: string }) => assets.get(where.id) ?? null,
+    // The permalink lookup the route makes: `lower(permalink) = lower(?)`.
+    execute: async (_sql: string, params: unknown[]) => {
+      const wanted = String(params[0]).toLowerCase();
+      return [...assets.values()]
+        .filter((a) => a.permalink !== null && a.permalink.toLowerCase() === wanted)
+        .map((a) => ({ id: a.id }));
+    },
   } as unknown as EntityManager;
 
   app = Fastify();
@@ -236,5 +247,80 @@ describe('GET /assets/file/:assetId — private assets on every storage backend'
     const ok = await app.inject({ method: 'GET', url: `/assets/file/${a.id}?${signedQuery(a.id)}` });
     expect(ok.statusCode).toBe(200);
     expect(ok.headers['cache-control']).toContain('no-store');
+  });
+});
+
+// specs/156-asset-stable-url/ T055a — permalinks, the per-form private answer
+// and the refusal headers (contracts/file-serving.md §2, owner ruling P2).
+describe('GET /assets/file — permalinks and the private answer by form (feature 156)', () => {
+  function sameRefusal(a: { statusCode: number; body: string; headers: Record<string, unknown> }, b: typeof a) {
+    expect(a.statusCode).toBe(b.statusCode);
+    expect(a.body).toBe(b.body);
+    for (const h of ['x-content-type-options', 'content-security-policy', 'cache-control']) {
+      expect(a.headers[h]).toBe(b.headers[h]);
+    }
+  }
+
+  it.each(['local', 's3'] as const)(
+    'a private %s asset by permalink without a token answers exactly like an unknown permalink',
+    async (backend) => {
+      resolveUrl.mockClear();
+      await addAsset('secret.pdf', 'application/pdf', {
+        visibility: 'private',
+        storageBackend: backend,
+        permalink: `docs/secret-${backend}.pdf`,
+      });
+      const hidden = await app.inject({ method: 'GET', url: `/assets/file/docs/secret-${backend}.pdf` });
+      const unknown = await app.inject({ method: 'GET', url: '/assets/file/docs/nothing-here.pdf' });
+      expect(hidden.statusCode).toBe(404);
+      expect(hidden.json()).toMatchObject({ error: { code: 'ASSET_NOT_FOUND' } });
+      sameRefusal(hidden, unknown);
+      expect(hidden.headers['location']).toBeUndefined();
+      expect(resolveUrl).not.toHaveBeenCalled();
+    },
+  );
+
+  it('a soft-deleted private asset by id answers 403 without a token and 410 with one', async () => {
+    const a = await addAsset('secret.pdf', 'application/pdf', { visibility: 'private', deletedAt: new Date() });
+    const without = await app.inject({ method: 'GET', url: `/assets/file/${a.id}` });
+    expect(without.statusCode).toBe(403);
+    const withToken = await app.inject({ method: 'GET', url: `/assets/file/${a.id}?${signedQuery(a.id)}` });
+    expect(withToken.statusCode).toBe(410);
+  });
+
+  it('302, 403, 404 and 410 all carry nosniff, the sandbox policy and no-store', async () => {
+    const pub = await addAsset('photo.png', 'image/png');
+    const priv = await addAsset('secret.pdf', 'application/pdf', { visibility: 'private' });
+    const gone = await addAsset('gone.pdf', 'application/pdf', { deletedAt: new Date() });
+    const answers = [
+      await app.inject({ method: 'GET', url: `/assets/file/${pub.id}?v=stale` }),
+      await app.inject({ method: 'GET', url: `/assets/file/${priv.id}` }),
+      await app.inject({ method: 'GET', url: '/assets/file/no-such-name.pdf' }),
+      await app.inject({ method: 'GET', url: `/assets/file/${gone.id}` }),
+    ];
+    expect(answers.map((r) => r.statusCode)).toEqual([302, 403, 404, 410]);
+    for (const r of answers) {
+      expect(r.headers['x-content-type-options']).toBe('nosniff');
+      expect(r.headers['content-security-policy']).toBe(SANDBOX_CSP);
+      expect(r.headers['cache-control']).toBe('no-store');
+    }
+  });
+
+  it('serves a PNG by permalink with the same nosniff and policy as by id, on 200 and 304', async () => {
+    const a = await addAsset('photo.png', 'image/png', { permalink: 'img/Logo.png' });
+    const byId = await app.inject({ method: 'GET', url: `/assets/file/${a.id}` });
+    const byName = await app.inject({ method: 'GET', url: '/assets/file/IMG/logo.PNG' });
+    expect(byName.statusCode).toBe(200);
+    for (const h of ['x-content-type-options', 'content-security-policy', 'etag', 'content-type']) {
+      expect(byName.headers[h]).toBe(byId.headers[h]);
+    }
+    const conditional = await app.inject({
+      method: 'GET',
+      url: '/assets/file/img/Logo.png',
+      headers: { 'if-none-match': byName.headers['etag'] as string },
+    });
+    expect(conditional.statusCode).toBe(304);
+    expect(conditional.headers['content-security-policy']).toBe(byId.headers['content-security-policy']);
+    expect(conditional.headers['x-content-type-options']).toBe('nosniff');
   });
 });

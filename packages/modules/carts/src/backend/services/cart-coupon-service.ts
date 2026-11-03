@@ -10,6 +10,7 @@ import type {
 } from '@endora-commerce/contracts';
 import type { CartApprovalService } from './cart-approval-service.js';
 import { resolveCartCustomerGroupId } from './customer-group-resolver.js';
+import { cartShortfall, cartSubtotal } from './cart-money.js';
 
 /**
  * Cart-level coupon application (feature 027 US2).
@@ -54,9 +55,9 @@ export interface CouponReevaluateResult {
 export class CartCouponService {
   /**
    * `approvalService` is optional — when wired, applying or clearing a
-   * coupon on an `approved` cart re-arms approval to `pending`. Legacy
-   * compositions without the approval surface omit it (re-arm is a
-   * no-op when absent).
+   * coupon re-arms approval: an `approved` cart goes back to `pending`, a
+   * `pending` one to `not_required` (issue #649). Legacy compositions
+   * without the approval surface omit it (re-arm is a no-op when absent).
    */
   constructor(
     private readonly emFactory: () => EntityManager,
@@ -79,6 +80,18 @@ export class CartCouponService {
     private readonly organizations: OrganizationDetailsPort,
     private readonly approvalService?: CartApprovalService,
   ) {}
+
+  /**
+   * The approval re-arm of a coupon change, staged on `em` so the flush that
+   * writes the code writes the transition and its audit row with it (issue
+   * #649). A guest's basket has no approval to re-arm.
+   */
+  #reArmWithin(em: EntityManager, managedCart: Cart): void {
+    if (!this.approvalService || !managedCart.customerAccountId) return;
+    this.approvalService.reArmWithin(em, managedCart, {
+      customerAccountId: managedCart.customerAccountId,
+    });
+  }
 
   /** The buyer's effective group: their own, else their Organization's. */
   private customerGroupIdFor(cart: Cart): Promise<string | null> {
@@ -139,19 +152,16 @@ export class CartCouponService {
     }
 
     const items = await em.find(CartItem, { cartId: managedCart.id });
-    const subtotal = items.reduce(
-      (acc, it) => acc + Number(it.unitPrice) * it.quantity,
-      0,
-    );
+    const subtotal = cartSubtotal(items);
     const currency = items[0]?.currency ?? 'PLN';
 
     if (promotion.minCartSubtotal != null) {
-      const min = Number(promotion.minCartSubtotal);
-      if (min > subtotal) {
+      const shortfall = cartShortfall(subtotal, promotion.minCartSubtotal);
+      if (shortfall !== null) {
         return {
           outcome: 'dropped',
           reason: 'below_min_spend',
-          shortfall: { amount: round2(min - subtotal), currency },
+          shortfall: { amount: shortfall, currency },
         };
       }
     }
@@ -189,17 +199,13 @@ export class CartCouponService {
 
     managedCart.appliedPromotionCode = code;
     managedCart.lastActivityAt = new Date();
+    this.#reArmWithin(em, managedCart);
     await em.flush();
     // Mirror the persisted mutation onto the caller's in-memory cart so
     // serializeCart in the route handler reflects it without re-reading.
     cart.appliedPromotionCode = code;
     cart.lastActivityAt = managedCart.lastActivityAt;
-    if (this.approvalService && managedCart.customerAccountId) {
-      await this.approvalService.maybeReArm(managedCart, {
-        customerAccountId: managedCart.customerAccountId,
-      });
-      cart.approvalStatus = managedCart.approvalStatus;
-    }
+    mirrorApproval(cart, managedCart);
     return { outcome: 'applied', cart, appliedCode: code };
   }
 
@@ -237,15 +243,11 @@ export class CartCouponService {
     if (!managedCart) return;
     managedCart.appliedPromotionCode = null;
     managedCart.lastActivityAt = new Date();
+    this.#reArmWithin(em, managedCart);
     await em.flush();
     cart.appliedPromotionCode = null;
     cart.lastActivityAt = managedCart.lastActivityAt;
-    if (this.approvalService && managedCart.customerAccountId) {
-      await this.approvalService.maybeReArm(managedCart, {
-        customerAccountId: managedCart.customerAccountId,
-      });
-      cart.approvalStatus = managedCart.approvalStatus;
-    }
+    mirrorApproval(cart, managedCart);
   }
 
   /**
@@ -277,14 +279,10 @@ export class CartCouponService {
       return { dropped: { code, reason: 'expired' } };
     }
 
-    const subtotal = items.reduce(
-      (acc, it) => acc + Number(it.unitPrice) * it.quantity,
-      0,
-    );
+    const subtotal = cartSubtotal(items);
 
     if (promotion.minCartSubtotal != null) {
-      const min = Number(promotion.minCartSubtotal);
-      if (min > subtotal) {
+      if (cartShortfall(subtotal, promotion.minCartSubtotal) !== null) {
         await this.persistDrop(em, cart);
         return { dropped: { code, reason: 'below_min_spend' } };
       }
@@ -309,6 +307,8 @@ export class CartCouponService {
   }
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
+/** Keep the caller's in-memory cart in step with the re-armed approval. */
+function mirrorApproval(cart: Cart, managedCart: Cart): void {
+  cart.approvalStatus = managedCart.approvalStatus;
+  cart.submittedForApprovalAt = managedCart.submittedForApprovalAt ?? null;
 }

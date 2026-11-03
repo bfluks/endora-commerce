@@ -1,7 +1,9 @@
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { FilterDefinition } from '@endora-commerce/contracts';
 import { tForLocale } from '../lib/i18n/messages';
+import { format } from '../lib/i18n/format';
+import { formatCount } from '../lib/orderMinimum';
+import { LocalizedLink } from '../lib/i18n/localized-link';
 
 /**
  * Industria-themed filter panel. Submits as a plain HTML form so it
@@ -56,9 +58,9 @@ export function FilterPanel(props: {
       <div className="mb-[14px] flex items-center justify-between">
         <h3 className="text-[14px]">{t('catalog.filters')}</h3>
         {activeChips.length > 0 ? (
-          <Link className="text-[12px] text-accent hover:text-accent-hover" href={clearAllHref}>
-            Wyczyść
-          </Link>
+          <LocalizedLink className="text-[12px] text-accent hover:text-accent-hover" href={clearAllHref}>
+            {t('commerce.listing.clearFilters')}
+          </LocalizedLink>
         ) : null}
       </div>
 
@@ -75,7 +77,7 @@ export function FilterPanel(props: {
         {activeChips.length > 0 ? (
           <div className="pt-0">
             <h4 className="mb-[10px] text-[12px] font-medium uppercase tracking-[0.06em] text-muted">
-              Aktywne ({activeChips.length})
+              {format(t('commerce.listing.activeFilters'), { count: formatCount(activeChips.length, props.locale) })}
             </h4>
             <div className="flex flex-wrap gap-[5px]">
               {activeChips.map((chip) => (
@@ -84,18 +86,18 @@ export function FilterPanel(props: {
                   className="inline-flex items-center gap-1 rounded-full border border-[var(--brand-100)] bg-accent-soft py-[4px] pr-[4px] pl-[8px] font-mono text-[11px] text-accent"
                 >
                   {chip.label}
-                  <Link
+                  <LocalizedLink
                     href={buildHref(
                       props.basePath,
                       props.baseQuery,
                       omitFilter(props.selected, chip.attributeKey, chip.value),
                     )}
-                    aria-label={`Usuń filtr: ${chip.label}`}
-                    title="Usuń filtr"
+                    aria-label={format(t('commerce.listing.removeFilterNamed'), { filter: chip.label })}
+                    title={t('commerce.listing.removeFilter')}
                     className="inline-flex h-[18px] w-[18px] items-center justify-center rounded-full text-accent hover:bg-[var(--brand-100)]"
                   >
                     <XIcon />
-                  </Link>
+                  </LocalizedLink>
                 </span>
               ))}
             </div>

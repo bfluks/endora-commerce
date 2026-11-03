@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
 import {
-  ChevronLeft,
   Eye,
   EyeOff,
   Filter,
@@ -11,8 +9,11 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { DisplayMode } from '@endora-commerce/contracts';
-import { ApiError, apiClient, normalize } from '@endora-commerce/admin-kit/lib';
+import { ApiError, apiClient, normalize, useAuth } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { useLocalizedName } from '../lib/localized-name.js';
+import { PrecedenceView } from '../components/PrecedenceView.js';
+import { ShowListPriceSwitch } from '../components/ShowListPriceSwitch.js';
 type Scope = 'organization' | 'category' | 'product';
 
 interface DisplayModeOverrideRow {
@@ -27,20 +28,24 @@ interface OrganizationRow {
   name: string;
   taxId: string;
 }
+/** A category as `…/price-books/targets/categories` answers it: `name` by language tag. */
 interface CategoryRow {
   id: string;
   slug: string;
-  name: string;
+  name: Record<string, string>;
 }
+/** A product as `/api/v1/admin/catalog/products` answers it: `name` by language tag. */
 interface ProductRow {
   id: string;
   sku: string;
-  name: string;
+  name: Record<string, string>;
 }
 
-
 /**
- * Display-mode overrides + pricing settings (US7 / T087 + T088).
+ * *Pricing settings* (feature 161 renamed the page from "Price display
+ * modes"): display-mode defaults and overrides (US7 / T087 + T088 of the
+ * pricing feature that introduced them), the list-price switch (feature 161,
+ * FR-026) and the precedence in force, read-only (FR-025).
  *
  * Single admin landing page with:
  *   - The two `pricing.*` settings keys at the top, edited inline.
@@ -57,6 +62,10 @@ interface ProductRow {
  */
 export function DisplayModeOverridesPage(): ReactNode {
   const t = useTranslation('core');
+  const tl = useTranslation('price_lists');
+  // FR-028 (feature 161, Checkpoint 10 ruling): a reader sees every value and
+  // no control that would change one — absent, not refused by the server.
+  const mayWrite = useAuth().hasPermission('price_lists:write');
   const MODE_LABEL: Record<DisplayMode, string> = {
     gross_only: t('priceLists.displayMode.grossOnly'),
     net_only: t('priceLists.displayMode.netOnly'),
@@ -78,6 +87,7 @@ export function DisplayModeOverridesPage(): ReactNode {
   const [orgs, setOrgs] = useState<Record<string, OrganizationRow>>({});
   const [cats, setCats] = useState<Record<string, CategoryRow>>({});
   const [products, setProducts] = useState<Record<string, ProductRow>>({});
+  const localizedName = useLocalizedName();
 
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -106,10 +116,10 @@ export function DisplayModeOverridesPage(): ReactNode {
       try {
         const [orgsRes, catsRes, prodRes] = await Promise.all([
           apiClient.get<{ data: { items: OrganizationRow[] } }>(
-            '/api/v1/admin/pricing/rule-targets/organizations?limit=200',
+            '/api/v1/admin/price-books/targets/organizations?limit=200',
           ),
           apiClient.get<{ data: { items: CategoryRow[] } }>(
-            '/api/v1/admin/pricing/rule-targets/categories',
+            '/api/v1/admin/price-books/targets/categories',
           ),
           apiClient.get<{ data: ProductRow[] }>('/api/v1/admin/catalog/products'),
         ]);
@@ -124,8 +134,12 @@ export function DisplayModeOverridesPage(): ReactNode {
 
   const labelFor = (row: DisplayModeOverrideRow): string => {
     if (row.scope === 'organization') return orgs[row.targetId]?.name ?? row.targetId;
-    if (row.scope === 'category') return cats[row.targetId]?.name ?? row.targetId;
-    return products[row.targetId]?.name ?? row.targetId;
+    if (row.scope === 'category') {
+      const cat = cats[row.targetId];
+      return cat ? localizedName(cat.name, cat.slug) : row.targetId;
+    }
+    const product = products[row.targetId];
+    return product ? localizedName(product.name, product.sku) : row.targetId;
   };
 
   const subtitleFor = (row: DisplayModeOverrideRow): string => {
@@ -143,7 +157,7 @@ export function DisplayModeOverridesPage(): ReactNode {
       return label.includes(q) || subtitle.includes(q) || normalize(row.targetId).includes(q);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overrides, search, orgs, cats, products]);
+  }, [overrides, search, orgs, cats, products, localizedName]);
 
   const handleUpsert = async (
     targetId: string,
@@ -166,10 +180,8 @@ export function DisplayModeOverridesPage(): ReactNode {
     <div className="b2b-page b2b-page--wide">
       <div className="b2b-page-head">
         <div className="b2b-grow">
-          <Link to="/price-lists" className="b2b-page-head__back">
-            <ChevronLeft size={14} /> {t('priceLists.page.title')}
-          </Link>
-          <div className="b2b-page-head__title">{t('priceLists.displayModes.title')}</div>
+          {/* Feature 161 (FR-025): the page is *Pricing settings*. */}
+          <h1 className="b2b-page-head__title">{t('priceLists.displayModes.title')}</h1>
           <div className="b2b-page-head__sub">
             {t('priceLists.displayModes.description')}
           </div>
@@ -184,6 +196,9 @@ export function DisplayModeOverridesPage(): ReactNode {
       ) : null}
 
       <PricingSettingsCard onError={setError} onInfo={setInfo} />
+
+      {/* Feature 161 (FR-026): "list price / your price" on the storefront. */}
+      <ShowListPriceSwitch />
 
       <div className="b2b-card" style={{ marginTop: 16 }}>
         <div
@@ -220,13 +235,15 @@ export function DisplayModeOverridesPage(): ReactNode {
               onChange={(e): void => setSearch(e.target.value)}
             />
           </div>
-          <button
-            type="button"
-            className="b2b-btn b2b-btn--primary b2b-btn--sm"
-            onClick={(): void => setPicker(true)}
-          >
-            <Filter size={12} /> {t('priceLists.displayModes.addOverride')}
-          </button>
+          {mayWrite ? (
+            <button
+              type="button"
+              className="b2b-btn b2b-btn--primary b2b-btn--sm"
+              onClick={(): void => setPicker(true)}
+            >
+              <Filter size={12} /> {t('priceLists.displayModes.addOverride')}
+            </button>
+          ) : null}
         </div>
 
         <div className="b2b-card__body b2b-card__body--flush">
@@ -253,7 +270,7 @@ export function DisplayModeOverridesPage(): ReactNode {
                   <th>{SCOPE_LABEL[scope]}</th>
                   <th>{t('priceLists.displayModes.column.mode')}</th>
                   <th>{t('priceLists.displayModes.column.updated')}</th>
-                  <th></th>
+                  {mayWrite ? <th><span className="sr-only">{tl('settings.displayModes.actions')}</span></th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -266,37 +283,44 @@ export function DisplayModeOverridesPage(): ReactNode {
                       </div>
                     </td>
                     <td>
-                      <select
-                        className="b2b-field"
-                        value={row.mode}
-                        onChange={(e): void => {
-                          void handleUpsert(row.targetId, e.target.value as DisplayMode);
-                        }}
-                      >
-                        {(Object.keys(MODE_LABEL) as DisplayMode[]).map((m) => (
-                          <option key={m} value={m}>
-                            {MODE_LABEL[m]}
-                          </option>
-                        ))}
-                      </select>
+                      {mayWrite ? (
+                        <select
+                          className="b2b-field"
+                          aria-label={tl('settings.displayModes.modeFor', { name: labelFor(row) })}
+                          value={row.mode}
+                          onChange={(e): void => {
+                            void handleUpsert(row.targetId, e.target.value as DisplayMode);
+                          }}
+                        >
+                          {(Object.keys(MODE_LABEL) as DisplayMode[]).map((m) => (
+                            <option key={m} value={m}>
+                              {MODE_LABEL[m]}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span style={{ fontSize: 13 }}>{MODE_LABEL[row.mode]}</span>
+                      )}
                     </td>
                     <td>
                       <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
                         {new Date(row.updatedAt).toLocaleString()}
                       </span>
                     </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="b2b-btn b2b-btn--ghost b2b-btn--sm"
-                        style={{ color: 'hsl(8 80% 50%)' }}
-                        onClick={(): void => {
-                          void handleUpsert(row.targetId, 'inherit');
-                        }}
-                      >
-                        <Trash2 size={12} /> {t('priceLists.displayModes.remove')}
-                      </button>
-                    </td>
+                    {mayWrite ? (
+                      <td>
+                        <button
+                          type="button"
+                          className="b2b-btn b2b-btn--ghost b2b-btn--sm"
+                          style={{ color: 'hsl(8 80% 50%)' }}
+                          onClick={(): void => {
+                            void handleUpsert(row.targetId, 'inherit');
+                          }}
+                        >
+                          <Trash2 size={12} /> {t('priceLists.displayModes.remove')}
+                        </button>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
@@ -304,6 +328,9 @@ export function DisplayModeOverridesPage(): ReactNode {
           )}
         </div>
       </div>
+
+      {/* Feature 161 (FR-025): the precedence in force, read-only. */}
+      <PrecedenceView />
 
       {picker ? (
         <AddOverrideDialog
@@ -331,6 +358,7 @@ function PricingSettingsCard({
   onInfo: (msg: string) => void;
 }): ReactNode {
   const t = useTranslation('core');
+  const mayWrite = useAuth().hasPermission('price_lists:write');
   const MODE_LABEL: Record<DisplayMode, string> = {
     gross_only: t('priceLists.displayMode.grossOnly'),
     net_only: t('priceLists.displayMode.netOnly'),
@@ -378,67 +406,73 @@ function PricingSettingsCard({
     }
   };
 
+  const fields = [
+    { key: 'pricing.default_display_mode', id: 'pl-default-display', label: t('priceLists.displayModes.settings.defaultLabel'), value: defaultMode, set: setDefaultMode },
+    { key: 'pricing.unauthenticated_display_mode', id: 'pl-unauth-display', label: t('priceLists.displayModes.settings.unauthLabel'), value: unauthMode, set: setUnauthMode },
+  ] as const;
+
   return (
-    <div className="b2b-card" style={{ padding: 16 }}>
+    <section className="b2b-card" style={{ padding: 16 }} aria-labelledby="pl-default-modes-title">
       <div
         className="b2b-row"
         style={{ alignItems: 'center', gap: 8, marginBottom: 8 }}
       >
-        <SettingsIcon size={14} />
-        <div style={{ fontSize: 13, fontWeight: 600 }}>{t('priceLists.displayModes.settings.title')}</div>
+        <SettingsIcon size={14} aria-hidden="true" />
+        <h2 id="pl-default-modes-title" style={{ fontSize: 13, fontWeight: 600 }}>
+          {t('priceLists.displayModes.settings.title')}
+        </h2>
         <span className="b2b-help">{t('priceLists.displayModes.settings.subtitle')}</span>
       </div>
       {loading ? (
         <div className="b2b-help">{t('priceLists.loading')}</div>
       ) : (
         <div className="b2b-row" style={{ gap: 16, alignItems: 'flex-end' }}>
-          <div className="b2b-grow">
-            <label className="b2b-label" htmlFor="pl-default-display">
-              {t('priceLists.displayModes.settings.defaultLabel')}
-            </label>
-            <select
-              id="pl-default-display"
-              className="b2b-field"
-              value={defaultMode}
-              onChange={(e): void => {
-                const v = e.target.value as DisplayMode;
-                setDefaultMode(v);
-                void save('pricing.default_display_mode', v);
-              }}
-              disabled={savingKey === 'pricing.default_display_mode'}
-            >
-              {(Object.keys(MODE_LABEL) as DisplayMode[]).map((m) => (
-                <option key={m} value={m}>
-                  {MODE_LABEL[m]}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="b2b-grow">
-            <label className="b2b-label" htmlFor="pl-unauth-display">
-              {t('priceLists.displayModes.settings.unauthLabel')}
-            </label>
-            <select
-              id="pl-unauth-display"
-              className="b2b-field"
-              value={unauthMode}
-              onChange={(e): void => {
-                const v = e.target.value as DisplayMode;
-                setUnauthMode(v);
-                void save('pricing.unauthenticated_display_mode', v);
-              }}
-              disabled={savingKey === 'pricing.unauthenticated_display_mode'}
-            >
-              {(Object.keys(MODE_LABEL) as DisplayMode[]).map((m) => (
-                <option key={m} value={m}>
-                  {MODE_LABEL[m]}
-                </option>
-              ))}
-            </select>
-          </div>
+          {fields.map((field) => (
+            <div key={field.key} className="b2b-grow">
+              {/* FR-028 (Checkpoint 10 ruling): a reader sees the value, no select. */}
+              {mayWrite ? (
+                <>
+                  <label className="b2b-label" htmlFor={field.id}>
+                    {field.label}
+                  </label>
+                  <select
+                    id={field.id}
+                    className="b2b-field"
+                    value={field.value}
+                    onChange={(e): void => {
+                      const v = e.target.value as DisplayMode;
+                      field.set(v);
+                      void save(field.key, v);
+                    }}
+                    disabled={savingKey === field.key}
+                  >
+                    {(Object.keys(MODE_LABEL) as DisplayMode[]).map((m) => (
+                      <option key={m} value={m}>
+                        {MODE_LABEL[m]}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              ) : (
+                <>
+                  <div className="b2b-label">{field.label}</div>
+                  <div style={{ fontSize: 13 }}>{MODE_LABEL[field.value]}</div>
+                </>
+              )}
+            </div>
+          ))}
         </div>
       )}
-    </div>
+      {/* Issue #492 — the owner's ruling of 2026-10-28: the chain is unchanged,
+          so a product or category override beats the unauthenticated mode for
+          anonymous visitors too. With the channel's public flag retired it is
+          the only way a guest sees a price where that mode is `none`, so the
+          card says so beside the two defaults it qualifies — and that a
+          channel's own value, written on the Settings screen, beats both. */}
+      <p className="b2b-help" style={{ marginTop: 8 }}>
+        {t('priceLists.displayModes.settings.precedenceHint')}
+      </p>
+    </section>
   );
 }
 
@@ -499,6 +533,7 @@ function AddOverrideDialog(props: {
     product: t('priceLists.displayModes.scope.product'),
   };
   const { scope, existing, orgs, cats, products, onClose, onPick } = props;
+  const localizedName = useLocalizedName();
   const [search, setSearch] = useState('');
   const [picked, setPicked] = useState<string | null>(null);
   const [mode, setMode] = useState<DisplayMode>('gross_only');
@@ -508,9 +543,9 @@ function AddOverrideDialog(props: {
     if (scope === 'organization') {
       for (const o of Object.values(orgs)) rows.push({ id: o.id, label: o.name, subtitle: o.taxId });
     } else if (scope === 'category') {
-      for (const c of Object.values(cats)) rows.push({ id: c.id, label: c.name, subtitle: c.slug });
+      for (const c of Object.values(cats)) rows.push({ id: c.id, label: localizedName(c.name, c.slug), subtitle: c.slug });
     } else {
-      for (const p of Object.values(products)) rows.push({ id: p.id, label: p.name, subtitle: p.sku });
+      for (const p of Object.values(products)) rows.push({ id: p.id, label: localizedName(p.name, p.sku), subtitle: p.sku });
     }
     rows.sort((a, b) => a.label.localeCompare(b.label));
     const q = normalize(search);
@@ -520,7 +555,7 @@ function AddOverrideDialog(props: {
         !existing.has(r.id) &&
         (normalize(r.label).includes(q) || normalize(r.subtitle).includes(q)),
     );
-  }, [scope, orgs, cats, products, existing, search]);
+  }, [scope, orgs, cats, products, existing, search, localizedName]);
 
   return (
     <>

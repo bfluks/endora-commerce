@@ -30,13 +30,16 @@
 
 import { Migration20260506T081055BlogInit } from './20260506T081055_blog_init.js';
 import { Migration20260903T101744BlogNamespaceBlockNames } from './20260903T101744_blog_namespace_block_names.js';
+import { Migration20261023T063013BlogPostMainImage } from './20261023T063013_blog_post_main_image.js';
 
 export const migrations = [
   Migration20260506T081055BlogInit,
   Migration20260903T101744BlogNamespaceBlockNames,
+  Migration20261023T063013BlogPostMainImage,
 ];
 
 export {
   Migration20260506T081055BlogInit,
   Migration20260903T101744BlogNamespaceBlockNames,
+  Migration20261023T063013BlogPostMainImage,
 };

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Cart, CartItem, Order, QuoteRequest } from '../../helpers/package-entities.js';
+import { Cart, CartItem, Order, QuoteRequest, QuoteRequestItem } from '../../helpers/package-entities.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -87,6 +87,47 @@ describe('Convert RFQ to order — integration (US5)', () => {
     // Locked unit price flows through unchanged.
     expect(Number(cartItems[0]?.unitPrice)).toBe(11.25);
     expect(cartItems[0]?.quantity).toBe(7);
+  });
+
+  /**
+   * `specs/pricing/worked-examples.md` §10.18 U4 (owner ruling of 2026-10-25) —
+   * a quote agreed at four places is carried unrounded through the quote, the
+   * basket and the order; only the line value is rounded: 0.0125 × 10 000 is
+   * 125.00, where a two-place agreed price would have been 0.01 and 100.00.
+   */
+  it('§10.18 U4 — a quote agreed at four places reaches the basket and the order unrounded', async () => {
+    await h
+      .em()
+      .getConnection()
+      .execute(`update "stock_levels" set "on_hand" = 100000, "reserved" = 0 where "product_id" = ?`, [SEED_PRODUCT_101_ID]);
+    const rfq = await acceptedQuoteRequest(h, { quantity: 10_000, agreedUnitPrice: 0.0125 });
+
+    const quote = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/quote-requests/${rfq.id}`,
+      cookies: { b2b_session: 'stub-customer-session' },
+    });
+    const quoteItem = (quote.json() as { data: { items: Array<{ agreedUnitPrice: number }> } }).data.items[0]!;
+    expect(quoteItem.agreedUnitPrice).toBe(0.0125);
+    const row = await h.em().fork().findOneOrFail(QuoteRequestItem, { quoteRequestId: rfq.id }, { filters: false });
+    expect(row.agreedUnitPrice).toBe('0.0125');
+
+    const cartId = await convertQuoteRequestToCart(h, rfq.id);
+    const [cartItem] = await h.em().fork().find(CartItem, { cartId });
+    expect(cartItem?.unitPrice).toBe('0.0125');
+    const cart = await h.app.inject({ method: 'GET', url: '/api/v1/cart', cookies: { b2b_session: 'stub-customer-session' } });
+    const cartLine = (cart.json() as { data: { items: Array<{ unitPrice: { amount: number }; lineTotal: { amount: number } }> } }).data
+      .items[0]!;
+    expect([cartLine.unitPrice.amount, cartLine.lineTotal.amount]).toEqual([0.0125, 125]);
+
+    const placed = await checkOutBasket(h);
+    const order = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/orders/${placed.id}`,
+      cookies: { b2b_session: 'stub-admin-session' },
+    });
+    const o = (order.json() as { data: { subtotal: number; items: Array<{ unitPrice: number }> } }).data;
+    expect([o.items[0]!.unitPrice, o.subtotal]).toEqual([0.0125, 125]);
   });
 
   /**

@@ -78,6 +78,8 @@ const BUNDLE = passthroughBundle('catalog', [
   'productsList.bulk.selected',
   'productsList.bulk.edit',
   'productsList.bulk.editPrice',
+  'productsList.bulk.editPriceUnavailable',
+  'productsList.bulk.restore',
   'productsList.bulk.delete',
   'productsList.bulk.deleteConfirm',
   'productsList.bulk.deleteFailed',
@@ -100,7 +102,6 @@ const BUNDLE = passthroughBundle('catalog', [
   'productsList.empty.action',
   'productsList.tab.all',
   'productsList.tab.active',
-  'productsList.tab.draft',
   'productsList.tab.inactive',
   'productsList.error.load',
 ]);
@@ -134,7 +135,7 @@ describe('ProductsList — streamlined selection toolbar (T041)', () => {
     answerList({
       data: [productRow('00000000-0000-4000-8000-000000000a01', 'ROW-A', 'Row A widget')],
       pagination: { page: 0, pageSize: 25, total: 1 },
-      counts: { all: 1, active: 1, draft: 0, inactive: 0 },
+      counts: { all: 1, active: 1, inactive: 0, archived: 0 },
     });
 
     renderWithI18n(
@@ -165,7 +166,13 @@ describe('ProductsList — streamlined selection toolbar (T041)', () => {
     await waitFor(() =>
       expect(screen.getByText('productsList.bulk.edit')).toBeInTheDocument(),
     );
-    expect(screen.getByText('productsList.bulk.editPrice')).toBeInTheDocument();
+    // D17 — Edit price has no flow behind it (prices live in price books): it is
+    // disabled and says why, rather than a button that does nothing.
+    const editPrice = screen.getByRole('button', { name: /productsList\.bulk\.editPrice/ });
+    expect(editPrice).toBeDisabled();
+    expect(document.getElementById(editPrice.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
+      'productsList.bulk.editPriceUnavailable',
+    );
     expect(screen.getByText('productsList.bulk.delete')).toBeInTheDocument();
 
     // The removed actions must not be present.
@@ -178,7 +185,7 @@ describe('ProductsList — streamlined selection toolbar (T041)', () => {
     answerList({
       data: [productRow('00000000-0000-4000-8000-000000000a02', 'ROW-B', 'Row B widget')],
       pagination: { page: 0, pageSize: 25, total: 1 },
-      counts: { all: 1, active: 1, draft: 0, inactive: 0 },
+      counts: { all: 1, active: 1, inactive: 0, archived: 0 },
     });
 
     renderWithI18n(
@@ -209,12 +216,48 @@ describe('ProductsList — streamlined selection toolbar (T041)', () => {
     ).toBeTruthy();
   });
 
+  // Feature 163, owner decision P-4 → B (2026-10-26). The bar keeps three actions on every
+  // tab, but on the Archived tab they are Restore (primary) / Bulk edit / Delete: bringing
+  // archived products back is what that selection is for, and the placeholder Edit price
+  // has nothing to do there. The two cases above still hold the other tabs to Bulk edit /
+  // Edit price / Delete.
+  it('on the Archived tab the bar is Restore (primary) / Bulk edit / Delete — no Edit price', async () => {
+    answerList({
+      data: [{ ...(productRow('00000000-0000-4000-8000-000000000a09', 'ROW-Z', 'Row Z widget') as object), archivedAt: '2026-10-20T00:00:00.000Z' }],
+      pagination: { page: 0, pageSize: 25, total: 1 },
+      counts: { all: 0, active: 0, inactive: 0, archived: 1 },
+    });
+
+    renderWithI18n(
+      withSession(
+        <MemoryRouter initialEntries={['/catalog/products?status=archived']}>
+          <ProductsList />
+        </MemoryRouter>,
+        { session: adminSession({ permissions: ['*'] }) },
+      ),
+      BUNDLE,
+    );
+
+    await screen.findByText('Row Z widget');
+    const user = userEvent.setup();
+    await user.click((screen.getAllByRole('checkbox') as HTMLInputElement[])[1]!);
+
+    const restoreBtn = (await screen.findByText('productsList.bulk.restore')).closest('button')!;
+    const editBtn = screen.getByText('productsList.bulk.edit').closest('button')!;
+    const deleteBtn = screen.getByText('productsList.bulk.delete').closest('button')!;
+    expect(screen.queryByText('productsList.bulk.editPrice')).toBeNull();
+    expect(restoreBtn.className).toContain('b2b-btn--primary');
+    expect(editBtn.className).not.toContain('b2b-btn--primary');
+    expect(restoreBtn.compareDocumentPosition(editBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(editBtn.compareDocumentPosition(deleteBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('Delete calls DELETE for each selected product after confirm', async () => {
     const id = '00000000-0000-4000-8000-000000000a03';
     answerList({
       data: [productRow(id, 'ROW-C', 'Row C widget')],
       pagination: { page: 0, pageSize: 25, total: 1 },
-      counts: { all: 1, active: 1, draft: 0, inactive: 0 },
+      counts: { all: 1, active: 1, inactive: 0, archived: 0 },
     });
 
     renderWithI18n(

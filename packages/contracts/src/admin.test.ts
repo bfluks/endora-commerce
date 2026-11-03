@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { updateAdminUserRequestSchema, updateAdminUserSelfRequestSchema } from './admin.js';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import type { z } from 'zod';
+import type { AuditLogEntry, AuditLogEntryResponse, auditLogEntrySchema } from './admin.js';
+import {
+  adminMeResponseSchema,
+  updateAdminUserRequestSchema,
+  updateAdminUserSelfRequestSchema,
+} from './admin.js';
+import { ADMIN_PREFERENCES_DEFAULTS } from './admin-preferences.js';
 
 /**
  * `PATCH /api/v1/admin/me` — the self-update payload.
@@ -65,5 +72,62 @@ describe('updateAdminUserRequestSchema', () => {
     expect(
       updateAdminUserRequestSchema.safeParse({ firstName: 'Ada', status: 'inactive' }).success,
     ).toBe(true);
+  });
+});
+
+/**
+ * `GET /api/v1/admin/me` carries the admin's own preferences (feature 164, FR-016),
+ * `null` when the server could not read them (FR-018). The server always sends
+ * the key.
+ */
+describe('adminMeResponseSchema — preferences', () => {
+  const me = {
+    adminUser: {
+      id: '00000000-0000-4000-8000-000000000001',
+      email: 'ada@example.com',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      adminRoleId: null,
+      twoFactorEnabled: false,
+      status: 'active',
+      lastLoginAt: null,
+      createdAt: '2026-10-27T00:00:00.000Z',
+      updatedAt: '2026-10-27T00:00:00.000Z',
+    },
+    role: null,
+    permissions: [],
+    idleLogoutMinutes: null,
+  };
+
+  it('accepts a full preferences document', () => {
+    const parsed = adminMeResponseSchema.safeParse({
+      ...me,
+      preferences: { ...ADMIN_PREFERENCES_DEFAULTS, sidebarPins: ['/orders'] },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('accepts `null` preferences', () => {
+    expect(adminMeResponseSchema.safeParse({ ...me, preferences: null }).success).toBe(true);
+  });
+
+  it('refuses a response without the key', () => {
+    expect(adminMeResponseSchema.safeParse(me).success).toBe(false);
+  });
+});
+
+/**
+ * The audit-log row as the API returns it (issue #84). `@endora-commerce/platform/kernel`
+ * publishes `AuditLogEntry` as the MikroORM entity of an `audit_logs` row, so the
+ * contract's type carries the package's `…Response` suffix instead. `AuditLogEntry`
+ * stays for one minor release as a deprecated alias of the same type.
+ */
+describe('AuditLogEntryResponse', () => {
+  it('is the shape inferred from `auditLogEntrySchema`', () => {
+    expectTypeOf<AuditLogEntryResponse>().toEqualTypeOf<z.infer<typeof auditLogEntrySchema>>();
+  });
+
+  it('keeps the deprecated `AuditLogEntry` as an alias of it', () => {
+    expectTypeOf<AuditLogEntry>().toEqualTypeOf<AuditLogEntryResponse>();
   });
 });

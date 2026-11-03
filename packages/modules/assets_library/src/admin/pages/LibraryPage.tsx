@@ -133,8 +133,19 @@ export function LibraryPage(): ReactNode {
 
   const onDeleteFolder = async (id: string): Promise<void> => {
     try {
+      // Name the files whose shareable links live in this folder (owner ruling
+      // S4). The contents move to the parent, links and all; a count that
+      // cannot be read leaves the plain confirmation.
+      let permalinked = 0;
+      try {
+        permalinked = await assetsLibraryClient.countFolderPermalinks(id);
+      } catch {
+        permalinked = 0;
+      }
       const choice = window.confirm(
-        t('folders.deleteConfirm'),
+        permalinked > 0
+          ? `${t('folders.deleteConfirm')}\n\n${t('folders.permalinkNotice', { count: permalinked })}`
+          : t('folders.deleteConfirm'),
       );
       if (!choice) return;
       const out = await assetsLibraryClient.deleteFolder(id, {
@@ -270,6 +281,7 @@ export function LibraryPage(): ReactNode {
         {selected ? (
           <div className="col-span-3">
             <AssetDetailDrawer
+              key={selected}
               assetId={selected}
               onChanged={(): void => {
                 void loadItems();

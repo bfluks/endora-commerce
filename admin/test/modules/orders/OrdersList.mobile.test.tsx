@@ -45,6 +45,9 @@ function wireGet(): void {
     if (path.startsWith('/api/v1/admin/orders/list-views')) {
       return Promise.resolve({ data: [] });
     }
+    if (path.startsWith('/api/v1/admin/orders/custom-field-filters')) {
+      return Promise.resolve({ data: [] });
+    }
     return Promise.resolve({
       data: [
         {

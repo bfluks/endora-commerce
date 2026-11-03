@@ -100,8 +100,11 @@ export function MegamenuEditor(): ReactNode {
       parentId,
       position: items.filter((i) => i.parentId === parentId).length,
       kind,
-      labels: { 'en-US': t('editor.newItemLabel') },
+      labels: { [languages[0] ?? 'en-US']: t('editor.newItemLabel') },
       target: defaultTargetFor(kind) as MegamenuItem['target'],
+      // Feature 168: a top-level item is a tab of the bar and needs a
+      // presentation; a new one starts as a plain link at the start.
+      ...(parentId === null ? { presentation: 'link' as const, alignment: 'start' as const } : {}),
     } as IndexedItem;
     setItems([...items, next]);
     setSelectedItemId(id);

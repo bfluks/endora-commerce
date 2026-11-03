@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   OPPORTUNITY_BOARD_BUILTIN_FIELD_KEYS,
   calendarScopeSchema,
+  customFieldCarrySkipReasonSchema,
   opportunityEventReminderChannelSchema,
   opportunityEventReminderStateSchema,
   opportunityEventRuleSchema,
@@ -107,6 +108,9 @@ describe('crm admin contributions', () => {
       'open-crm-analytics',
       // Added with its route, never before (Principle XVI).
       'open-crm-calendar',
+      // The two configuration screens the sidebar lists (issue #516).
+      'open-crm-tags',
+      'open-crm-workflow',
     ]);
     for (const action of actions) {
       expect(paths.has(action.targetRoute), action.id).toBe(true);
@@ -202,24 +206,14 @@ describe('crm admin copy', () => {
       // One label per field the history can show — the set the tab itself reads.
       'history.field.': [...LABELLED_HISTORY_FIELDS],
       'history.notFollowed.': ['skipped', 'failed'],
-      'references.kind.': ['product', 'order', 'admin_user'],
-      'references.inserted.': ['product', 'order', 'admin_user'],
-      'references.unavailable.': ['product', 'order', 'admin_user'],
-      // The search a button opens: its name, its placeholder and its empty state.
-      'references.search.': [
-        'person',
-        'personPlaceholder',
-        'personEmpty',
-        'order',
-        'orderPlaceholder',
-        'orderEmpty',
-        'product',
-        'productPlaceholder',
-        'productEmpty',
-      ],
-      // The list an `@` opens (User Story 18): one title and one empty state per kind.
-      'references.suggest.title.': ['person', 'order', 'product'],
-      'references.suggest.empty.': ['person', 'order', 'product'],
+      // Feature 162 — what a carry into the Opportunity skipped: the record it
+      // came from, and every reason the contract can answer.
+      'history.customFieldCarry.from.': ['order', 'quote_request'],
+      'history.carryReason.': [...customFieldCarrySkipReasonSchema.options],
+      // The reference editor's families (`references.*`, `editor.format.*`) left
+      // this bundle with the editor, for the kit's `core` one
+      // (`specs/163-projects-and-tasks/` research R-17); `admin/test/kit/
+      // kit-collaboration-bundle.test.ts` holds them there.
       // What a board card shows (User Story 19): one name per built-in field,
       // the names of a range's two boxes, and the two groups of the section.
       'board.field.': [...OPPORTUNITY_BOARD_BUILTIN_FIELD_KEYS],

@@ -43,11 +43,12 @@ function sourceOf(relativePath: string): string {
  * `App.tsx`'s, and a test that mounted the component directly would prove the
  * component renders, which nobody doubted.
  *
- * The palette half of Principle XVII item 5 is proved server-side. This module
- * declares no action — it is not one of the fifteen
- * `specs/deferred-defects.md` still owes one, that population being the modules
- * with a **nav entry** — and the backend file asserts the manifest and the
- * registry agree about it in both states rather than omitting the question.
+ * **Issue #510 gave the module a sidebar entry and a palette action** (Principle
+ * XVI): the list had been reachable from neither, only by its address. The
+ * sidebar half of the off-state is driven below beside the route; the palette
+ * half of Principle XVII item 5 is proved server-side, in
+ * `backend/test/integration/carts/off-state.test.ts`, because the server
+ * resolves the Actions group.
  */
 
 let presentModules = new Set<string>(['carts']);
@@ -133,6 +134,7 @@ const bundle = {
     'app.notFound',
   ]),
   ...passthroughBundle('carts', [
+    'nav.carts.label',
     'carts.page.title',
     'carts.page.description',
     'carts.loading',
@@ -158,6 +160,11 @@ function renderAt(path: string): RenderResult {
  * *there*, not how many nodes carry its title.
  */
 const screenIsRendered = (): boolean => screen.queryAllByText(/carts\.page\.title/).length > 0;
+
+/** Every sidebar link's `href`, in rendered order. */
+function sidebarHrefs(): (string | null)[] {
+  return [...document.querySelectorAll('.b2b-sidebar a')].map((a) => a.getAttribute('href'));
+}
 
 /** The admin's own unknown-path answer, rendered by `ModuleRoute`'s gate. */
 const notFoundIsRendered = (): boolean => screen.queryAllByText(/app\.notFound/).length > 0;
@@ -209,14 +216,42 @@ describe('carts owns its admin surface, and its proof is the route', () => {
   });
 });
 
+describe('carts is in the sidebar, gated like its route (issue #510)', () => {
+  it('contributes its entry, labelled in its own namespace, while present and permitted', () => {
+    presentModules = new Set(['carts']);
+    permissions = new Set(['carts:read']);
+    renderAt('/');
+    expect(sidebarHrefs()).toContain('/carts');
+    expect(screen.getByRole('link', { name: /nav\.carts\.label/ })).toBeTruthy();
+  });
+
+  it('withdraws the entry while the module is absent, and restores it after', () => {
+    permissions = new Set(['carts:read']);
+    presentModules = new Set();
+    const off = renderAt('/');
+    expect(sidebarHrefs()).not.toContain('/carts');
+    off.unmount();
+
+    presentModules = new Set(['carts']);
+    renderAt('/');
+    expect(sidebarHrefs()).toContain('/carts');
+  });
+
+  it('withdraws the entry for an operator without the read code', () => {
+    presentModules = new Set(['carts']);
+    permissions = new Set(['carts:reject']);
+    renderAt('/');
+    expect(sidebarHrefs()).not.toContain('/carts');
+  });
+});
+
 describe('the shell no longer names carts by hand', () => {
-  it('has no host route for either screen, and never had a nav entry', () => {
+  it('has no host route for either screen, and no hand-written nav entry', () => {
     // The evidence that the conversion converted something. `App.tsx` is one of
     // the two registries 11 of the last 12 module additions edited; it no longer
     // mentions this module, and both screens are still there. `AppShell.tsx` is
-    // asserted too although this module has no sidebar row — that absence is
-    // the module's shape, and asserting it keeps a later batch from adding one
-    // by hand instead of declaring it.
+    // asserted too: the sidebar row is the module's declaration (issue #510),
+    // and asserting the shell's silence keeps it from being added by hand.
     const app = sourceOf('../packages/admin-shell/src/App.tsx');
     const shell = sourceOf('../packages/admin-shell/src/components/AppShell.tsx');
     expect(app).not.toContain('CartsList');
@@ -234,18 +269,19 @@ describe('the shell no longer names carts by hand', () => {
     expect(registry).not.toContain('packages/modules');
   });
 
-  it('declares two lazily-loaded routes, one gate each, and no nav entry', async () => {
-    // FR-013, and the declaration this whole file is about. `nav` being absent
-    // is the contribution set saying so, which is what Ruling 1 asks a nav-less
-    // batch member's test to derive rather than assert by omission. Both routes
-    // gate on `carts:read` — the code the two reads enforce; the detail screen's
-    // reject action enforces `carts:reject` on the API, which is deliberately
-    // not the route's requirement.
+  it('declares two lazily-loaded routes and one nav entry, each on the read gate', async () => {
+    // FR-013, and the declaration this whole file is about. Both routes gate on
+    // `carts:read` — the code the two reads enforce; the detail screen's reject
+    // action enforces `carts:reject` on the API, which is deliberately not the
+    // route's requirement. The nav entry (issue #510) points at the list and
+    // carries the list's code.
     const { contributions } = await import('@endora-commerce/mod-carts/admin');
     const routes = contributions.routes ?? [];
     expect(routes.map((route) => route.path)).toEqual(['/carts', '/carts/:id']);
     expect(routes.map((route) => route.requiredPermission)).toEqual(['carts:read', 'carts:read']);
-    expect(contributions.nav ?? []).toEqual([]);
+    expect((contributions.nav ?? []).map((entry) => [entry.to, entry.requiredPermission])).toEqual([
+      ['/carts', 'carts:read'],
+    ]);
     for (const route of routes) expect(typeof route.component).toBe('function');
     const loaded = await routes[0]!.component();
     expect(typeof loaded.default).toBe('function');

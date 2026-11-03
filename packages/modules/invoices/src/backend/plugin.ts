@@ -1,3 +1,4 @@
+import type { ChannelUrlFacts } from '@endora-commerce/contracts';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
@@ -9,7 +10,12 @@ import type {
   OrderRecord,
   TransactionalEmailSender,
 } from '@endora-commerce/contracts';
-import { InvoiceService, type InvoiceAuditRecorder } from './services/invoice-service.js';
+import {
+  InvoiceService,
+  type CapturedPaymentsLookup,
+  type InvoiceAuditRecorder,
+  type ReturnRefundsLookup,
+} from './services/invoice-service.js';
 import type { LedgerNumberingLookup } from './services/vendor-number-hold.js';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { LoadAssetImage } from './pdf-components/embed-logo-images.js';
@@ -20,6 +26,7 @@ import { createAutoIssueReactor } from './services/auto-issue-reactor.js';
 import { registerInvoicesAdminRoutes } from './routes.admin.js';
 import { registerInvoicesCustomerRoutes } from './routes.customer.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { InvoicesTranslate } from './invoices-prose.js';
 
 /**
  * The attach function this module hands its composition root.
@@ -52,6 +59,12 @@ export interface InvoicesModuleOptions {
    * switched off.
    */
   orderReadPort: OrderReadPort;
+  /**
+   * This module's bundle, for the names of the lines an invoice itemises
+   * beside the products, written in the invoice's language when it is issued
+   * (issue #95). Absent, they are written in English.
+   */
+  translate?: InvoicesTranslate;
   assetReadPort: AssetReadPort;
   assetsLibrary: AssetsLibraryPort;
   saleDocumentAttachments: InvoiceAttachmentFetchPort;
@@ -81,6 +94,8 @@ export interface InvoicesModuleOptions {
   resolveRecipientEmail: (order: OrderRecord) => Promise<string | null>;
   /** US5 — channel default language (BCP-47). */
   resolveLanguage: (salesChannelId: string | null) => Promise<string>;
+  /** Feature 167 (OR-14) — a channel's URL-language facts, for the e-mail's order-page link. */
+  channelUrlFactsFor?: (salesChannelId: string | null) => Promise<ChannelUrlFacts | null>;
   /** Feature 059 — emits `invoice.issued.v1` / `invoice.corrected.v1`. */
   eventBus?: InvoicesEventBus;
   /** FR-035 — audit-log recorder for issuance / correction. */
@@ -95,6 +110,10 @@ export interface InvoicesModuleOptions {
   loadAssetImage: LoadAssetImage;
   /** Mode B wait. Absent ledger degrades to today's ready path. */
   ledgerRouting?: LedgerNumberingLookup;
+  /** What was captured for an order — `null` when `payments` is absent (issue #417). */
+  capturedPayments?: CapturedPaymentsLookup;
+  /** What the order's settled returns refunded — empty when `returns` is absent (issue #428). */
+  returnRefunds?: ReturnRefundsLookup;
   /**
    * `document_templates`' render port — every invoice PDF is produced through
    * it since `specs/152-compare-pdf-template/` (the download, the regenerate,
@@ -147,6 +166,9 @@ export function invoicesModule(options: InvoicesModuleOptions): {
       await emailOnReadyHolder.dispatch?.(invoiceId);
     },
     options.ledgerRouting,
+    options.capturedPayments,
+    options.returnRefunds,
+    { translate: options.translate },
   );
   // T118c — built unconditionally. The three inputs used to be optional bridge
   // members, so a composition that supplied two of the three got no dispatcher
@@ -161,6 +183,7 @@ export function invoicesModule(options: InvoicesModuleOptions): {
     getSender: options.getTransactionalEmailSender,
     resolveRecipientEmail: options.resolveRecipientEmail,
     resolveLanguage: options.resolveLanguage,
+    ...(options.channelUrlFactsFor ? { channelUrlFactsFor: options.channelUrlFactsFor } : {}),
   });
   emailOnReadyHolder.dispatch = async (invoiceId) => {
     await emailDispatcher.dispatch(invoiceId);

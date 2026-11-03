@@ -61,8 +61,8 @@ function view(id: string, name: string, filters: Record<string, unknown>): Saved
   return { id, name, shared: false, ownerAdminUserId: OWNER, ownedByCaller: true, canModify: true, filters };
 }
 
-const DRAFT_CHAIRS = view('11111111-1111-4111-8111-111111111111', 'Draft chairs', {
-  status: 'draft',
+const INACTIVE_CHAIRS = view('11111111-1111-4111-8111-111111111111', 'Inactive chairs', {
+  status: 'inactive',
   type: 'configurable',
   q: 'chair',
 });
@@ -73,7 +73,17 @@ const STALE = view('22222222-2222-4222-8222-222222222222', 'Stale', {
   colour: 'red',
 });
 
-const VIEWS = [DRAFT_CHAIRS, STALE];
+/**
+ * Feature 163 (FR-010, R30.4) — a view saved before `draft` was removed. It opens as
+ * *All*, as any value the page no longer offers does; owner decision P-2 → A
+ * (2026-10-26) keeps that rather than mapping it onto `inactive`, and the list says so
+ * once, when the view is applied.
+ */
+const LEGACY_DRAFT = view('44444444-4444-4444-8444-444444444444', 'Legacy drafts', { status: 'draft' });
+/** Feature 163 — the Archived tab is saved as its own key, never as a status. */
+const ARCHIVED = view('55555555-5555-4555-8555-555555555555', 'Archived', { archived: 'only' });
+
+const VIEWS = [INACTIVE_CHAIRS, STALE, LEGACY_DRAFT, ARCHIVED];
 
 function product(id: string, name: string): unknown {
   return {
@@ -107,7 +117,7 @@ beforeEach(() => {
           product('00000000-0000-4000-8000-000000000c02', 'Pine desk'),
         ],
         pagination: { page: 0, pageSize: 20, total: 60 },
-        counts: { all: 60, active: 40, draft: 15, inactive: 5 },
+        counts: { all: 60, active: 40, inactive: 20, archived: 5 },
       };
     }
     return { data: [] };
@@ -146,7 +156,7 @@ async function renderList(): Promise<ReturnType<typeof userEvent.setup>> {
   );
   await screen.findByText('Oak chair');
   // StrictMode requests the views twice; only the option proves they arrived.
-  await screen.findByRole('option', { name: DRAFT_CHAIRS.name });
+  await screen.findByRole('option', { name: INACTIVE_CHAIRS.name });
   return user;
 }
 
@@ -193,7 +203,7 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     const options = within(savedViewsSelect())
       .getAllByRole('option')
       .map((option) => option.textContent);
-    expect(options).toEqual(['— Select a view —', 'Draft chairs', 'Stale']);
+    expect(options).toEqual(['— Select a view —', 'Inactive chairs', 'Stale', 'Legacy drafts', 'Archived']);
     expect(screen.getByRole('button', { name: 'Save view' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Delete view' })).toBeDisabled();
   });
@@ -201,7 +211,7 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
   it('saves status, type and search, and nothing for stock', async () => {
     const user = await renderList();
 
-    await user.click(tab('Draft'));
+    await user.click(tab('Inactive'));
     await user.click(screen.getByRole('button', { name: 'Type' }));
     await user.click(screen.getByRole('button', { name: 'Type: simple' }));
     await user.type(searchBox(), '  chair ');
@@ -211,7 +221,7 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     const body = (await saveAs(user, 'Mine')) as Record<string, unknown>;
     expect(body['name']).toBe('Mine');
     expect(body['shared']).toBe(false);
-    expect(body['filters']).toEqual({ status: 'draft', type: 'configurable', q: 'chair' });
+    expect(body['filters']).toEqual({ status: 'inactive', type: 'configurable', q: 'chair' });
     expect(api.patch).not.toHaveBeenCalled();
   });
 
@@ -237,9 +247,9 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     expect(screen.getByRole('button', { name: 'Low stock' })).toBeInTheDocument();
 
     const before = listRequests().length;
-    await user.selectOptions(savedViewsSelect(), DRAFT_CHAIRS.id);
+    await user.selectOptions(savedViewsSelect(), INACTIVE_CHAIRS.id);
 
-    expect(tab('Draft')).toHaveAttribute('aria-selected', 'true');
+    expect(tab('Inactive')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('button', { name: 'Type: configurable' })).toBeInTheDocument();
     expect(searchBox().value).toBe('chair');
     expect(screen.getByRole('button', { name: 'Stock' })).toBeInTheDocument();
@@ -248,7 +258,7 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     await waitFor(() => expect(listRequests().length).toBeGreaterThan(before));
     // FR-011: the very next list request already carries the first page.
     const next = new URLSearchParams(listRequests()[before]!.slice(LIST.length));
-    expect(next.get('status')).toBe('draft');
+    expect(next.get('status')).toBe('inactive');
     expect(next.get('type')).toBe('configurable');
     expect(next.get('q')).toBe('chair');
     expect(next.get('page')).toBe('0');
@@ -264,7 +274,7 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     await user.click(rowCheckbox);
     expect(await screen.findByTestId('selection-summary')).toBeInTheDocument();
 
-    await user.selectOptions(savedViewsSelect(), DRAFT_CHAIRS.id);
+    await user.selectOptions(savedViewsSelect(), INACTIVE_CHAIRS.id);
     await waitFor(() => expect(screen.queryByTestId('selection-summary')).toBeNull());
   });
 
@@ -292,5 +302,59 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     // Neither the stale values nor the unknown key survive into the next save.
     const body = (await saveAs(user, 'Copy')) as Record<string, unknown>;
     expect(body['filters']).toEqual({});
+  });
+
+  it('a view saved with the removed draft status opens as All and never sends draft (feature 163)', async () => {
+    const user = await renderList();
+    await user.click(tab('Active'));
+
+    const before = listRequests().length;
+    await user.selectOptions(savedViewsSelect(), LEGACY_DRAFT.id);
+
+    expect(tab('All')).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(listRequests().length).toBeGreaterThan(before));
+    for (const path of listRequests().slice(before)) {
+      const params = new URLSearchParams(path.slice(LIST.length));
+      expect(params.get('status')).toBeNull();
+      expect(params.get('archived')).toBeNull();
+    }
+    expect(screen.queryByText('Failed to load.')).toBeNull();
+  });
+
+  it('says once that a draft view now shows all products, until a tab is chosen or it is dismissed (P-2)', async () => {
+    const user = await renderList();
+    const note = (catalog as Record<string, string>)['productsList.savedView.draftRemoved']!;
+    expect(screen.queryByText(note)).toBeNull();
+
+    await user.selectOptions(savedViewsSelect(), LEGACY_DRAFT.id);
+    const shown = await screen.findByText(note);
+    expect(shown.closest('[role="status"]')).not.toBeNull();
+
+    await user.click(tab('Inactive'));
+    expect(screen.queryByText(note)).toBeNull();
+
+    await user.selectOptions(savedViewsSelect(), INACTIVE_CHAIRS.id);
+    expect(screen.queryByText(note)).toBeNull();
+    await user.selectOptions(savedViewsSelect(), LEGACY_DRAFT.id);
+    await screen.findByText(note);
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(note)).toBeNull();
+  });
+
+  it('saves the Archived tab as archived: only, and a view holding it opens the Archived tab (feature 163)', async () => {
+    const user = await renderList();
+
+    await user.click(tab('Archived'));
+    const body = (await saveAs(user, 'Gone')) as Record<string, unknown>;
+    expect(body['filters']).toEqual({ archived: 'only' });
+
+    await user.click(tab('All'));
+    const before = listRequests().length;
+    await user.selectOptions(savedViewsSelect(), ARCHIVED.id);
+    expect(tab('Archived')).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(listRequests().length).toBeGreaterThan(before));
+    const next = new URLSearchParams(listRequests()[before]!.slice(LIST.length));
+    expect(next.get('archived')).toBe('only');
+    expect(next.get('status')).toBeNull();
   });
 });

@@ -5,7 +5,7 @@ import type {
   ProductScopeChannel,
   ProductScopeContextResponse,
 } from '@endora-commerce/contracts';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, toScopeChannel } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
@@ -65,7 +65,8 @@ export class ProductScopeContextService {
           id: c.id,
           code: c.code,
           name,
-          languages: [...c.languages].sort(),
+          // The default is offered even when the list omits it (`toScopeChannel`, spec 163).
+          languages: [...toScopeChannel(c).languages].sort(),
           isDefault: c.systemDefault,
         };
       })

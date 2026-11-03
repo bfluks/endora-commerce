@@ -14,7 +14,6 @@ import type {
   CatalogCategoryRecord,
 } from '@endora-commerce/contracts';
 import { PriceListService } from './price-list-service.js';
-import { PricingService } from './pricing-service.js';
 import type { PriceListTargetReads } from './price-list-service.js';
 
 /**
@@ -27,6 +26,11 @@ import type { PriceListTargetReads } from './price-list-service.js';
  * `catalog` was in — which is exactly the reach `check:module-boundary`'s
  * second predicate exists to see and this module's ledger shard recorded.
  *
+ * Feature 160 kept the display-mode half of this file. The pricing half
+ * asserted the old engine's membership reads; the price-book engine reads the
+ * batch's memberships through the same port, once per batch
+ * (`BookPricing`'s `#categoryMemberships`), which `book-statement-budget.test.ts`
+ * holds to a constant number of statements per page.
  * Two properties, and both matter for a module that decides what a customer
  * pays. The **boundary** one: no statement this module issues may name
  * `product_categories`. The **shape** one: the batched paths make one port call
@@ -121,7 +125,7 @@ describe('price_lists reads category memberships through catalog’s port [unit]
   it('resolveDisplayMode takes the product’s categories from the port', async () => {
     const { em, statements } = fakeEm([{ scope: 'category', targetId: 'cat-1', mode: 'net_only' }]);
     const spy = categoryPortSpy(new Map([['prod-1', ['cat-1']]]));
-    const service = new PriceListService(em, undefined, undefined, undefined, spy.targetReads);
+    const service = new PriceListService(em, undefined, spy.targetReads);
 
     const mode = await service.resolveDisplayMode({
       productId: 'prod-1',
@@ -136,7 +140,10 @@ describe('price_lists reads category memberships through catalog’s port [unit]
     expect(mode).toBe('net_only');
   });
 
-  it('resolveDisplayModes asks the port once for the whole page', async () => {
+  // The engine's composition (`pricing-service.ts`) wires the two halves of
+  // the chain as `BookPricing`'s `productDisplayModes` and `viewerDisplayMode`:
+  // the product and category steps for the batch, and the viewer's tail once.
+  it('the product and category steps ask the port once for the whole page', async () => {
     const { em, statements } = fakeEm([{ scope: 'category', targetId: 'cat-1', mode: 'both' }]);
     const spy = categoryPortSpy(
       new Map([
@@ -145,10 +152,10 @@ describe('price_lists reads category memberships through catalog’s port [unit]
         ['prod-3', []],
       ]),
     );
-    const service = new PriceListService(em, undefined, undefined, undefined, spy.targetReads);
+    const service = new PriceListService(em, undefined, spy.targetReads);
 
-    const modes = await service.resolveDisplayModes({
-      productIds: ['prod-1', 'prod-2', 'prod-3'],
+    const modes = await service.resolveProductDisplayModes({ productIds: ['prod-1', 'prod-2', 'prod-3'] });
+    const tail = await service.resolvePageDisplayMode({
       organizationId: null,
       salesChannelId: CHANNEL.id,
       customerKind: 'guest',
@@ -158,49 +165,9 @@ describe('price_lists reads category memberships through catalog’s port [unit]
     expect(spy.reads).toEqual([['prod-1', 'prod-2', 'prod-3']]);
     expect(modes.get('prod-1')).toBe('both');
     expect(modes.get('prod-2')).toBe('both');
-    // No membership, so no category override applies and the chain falls
-    // through to the settings tier.
-    expect(modes.get('prod-3')).toBe('gross_only');
-  });
-
-  it('resolveEngine takes the resolution context’s categories from the port', async () => {
-    const { em, statements } = fakeEm([]);
-    const spy = categoryPortSpy(new Map([['prod-1', ['cat-1', 'cat-2']]]));
-    const service = new PricingService(em, undefined, undefined, spy.targetReads);
-
-    await service.resolveEngine({
-      product: { id: 'prod-1', attributeValues: {} },
-      context: { quantity: 1, salesChannel: CHANNEL },
-    });
-
-    expect(namesTheBridge(statements)).toEqual([]);
-    expect(spy.reads.length).toBeGreaterThan(0);
-    for (const read of spy.reads) expect(read).toEqual(['prod-1']);
-  });
-
-  it('resolveListingPrices asks the port once for a whole page of products', async () => {
-    const { em, statements } = fakeEm([]);
-    const spy = categoryPortSpy(
-      new Map([
-        ['prod-1', ['cat-1']],
-        ['prod-2', ['cat-2']],
-        ['prod-3', []],
-      ]),
-    );
-    const service = new PricingService(em, undefined, undefined, spy.targetReads);
-
-    await service.resolveListingPrices({
-      products: [
-        { id: 'prod-1', attributeValues: {} },
-        { id: 'prod-2', attributeValues: {} },
-        { id: 'prod-3', attributeValues: {} },
-      ],
-      context: { salesChannel: CHANNEL },
-    });
-
-    expect(namesTheBridge(statements)).toEqual([]);
-    // The page's memberships are read once and handed to `resolveDisplayModes`,
-    // so the drain must not turn one round trip into one per card.
-    expect(spy.reads).toEqual([['prod-1', 'prod-2', 'prod-3']]);
+    // No membership, so no category override decides it: the product is left
+    // to the viewer's tail, which falls through to the settings tier.
+    expect(modes.has('prod-3')).toBe(false);
+    expect(tail).toBe('gross_only');
   });
 });

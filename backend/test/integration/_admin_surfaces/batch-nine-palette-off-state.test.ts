@@ -34,13 +34,13 @@ import { withModuleOff, type OffStateAxis } from '../../helpers/off-state.js';
  * the two declarations are read from the two artefacts and compared here rather
  * than copied into a table.
  *
- * `assets_library` declares **none**, and that is asserted rather than skipped:
- * a module with no action has nothing to advertise, so the honest test is that
- * the registry answers nothing for it in both states — which also fails if
- * somebody adds one without adding it to this table. It is a Principle XVI
- * entry the register still owes; it is not this batch's to pay, because
- * inventing a landing action for a screen is a product decision and not a file
- * move.
+ * `assets_library` declared none when this batch landed, and paid that
+ * Principle XVI entry later (`specs/156-asset-stable-url/`): it now declares
+ * `open-assets-library` ("Assets library", `assets.read`), so it is held to the
+ * same two proofs — the advertisement goes when the module does, and the
+ * declared permission is the one its own `./admin` route enforces. The table
+ * below names its action ids, so adding or dropping one without updating it
+ * fails here.
  *
  * ## The axis is chosen from the manifest, not guessed
  *
@@ -62,7 +62,7 @@ interface Subject {
 const SUBJECTS: readonly Subject[] = [
   // Both locked: `activation.nonDeactivatable`, asserted below in the
   // manifests' own words rather than restated here.
-  { module: 'assets_library', actions: [], axis: 'platform-unavailable' },
+  { module: 'assets_library', actions: ['open-assets-library'], axis: 'platform-unavailable' },
   { module: 'custom_fields', actions: ['open-custom-fields'], axis: 'platform-unavailable' },
 ];
 
@@ -147,18 +147,21 @@ describe('batch 9 contributes no palette action while off (Constitution XVII ite
     expect(target?.requiredPermission).toBe(actions[0]?.requiredPermission);
   });
 
-  it('assets_library declares no action, and its admin layer still declares a route', () => {
-    // The absence, kept honest from both sides. A module with no action and no
-    // route would satisfy the first case vacuously; this says the screen is
-    // there and only the advertisement is missing, which is the Principle XVI
-    // debt `specs/deferred-defects.md` records rather than a defect this batch
-    // introduced.
+  it('assets_library’s action targets the route its own admin layer declares', () => {
+    // Its "Assets library" action (`specs/156-asset-stable-url/` research R-16)
+    // paid the Principle XVI debt this case used to record as an absence; the
+    // pairing is now the same as custom_fields' above.
     const manifest = REGISTERED_MANIFESTS.find(
       (entry) => entry.manifest.id === 'assets_library',
     )?.manifest;
-    expect(manifest?.actions ?? []).toEqual([]);
+    const actions = manifest?.actions ?? [];
+    expect(actions.map((action) => action.id)).toEqual(['open-assets-library']);
     expect((assetsLibraryAdmin.routes ?? []).map((route) => route.path)).toEqual([
       '/assets-library',
     ]);
+    const target = (assetsLibraryAdmin.routes ?? []).find(
+      (route) => route.path === actions[0]?.targetRoute,
+    );
+    expect(target?.requiredPermission).toBe(actions[0]?.requiredPermission);
   });
 });

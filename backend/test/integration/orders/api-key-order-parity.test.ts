@@ -62,7 +62,6 @@ describe('external order intake — storefront order parity (062 / SC-004)', () 
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
     await em.persistAndFlush(channel);
     await h.salesChannels.cache.invalidate('ext-parity');

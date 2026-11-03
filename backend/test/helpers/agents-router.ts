@@ -22,6 +22,9 @@ import { join } from 'node:path';
  * 2. Does every pointer **resolve** to a file that is there?
  * 3. Has a routed subject **come back** into `AGENTS.md` as a heading?
  * 4. Has `AGENTS.md` **grown back**?
+ * 5. Has the speckit appendix **grown back**? It is outside the body ceiling,
+ *    and that is how it reached 51 near-identical items (~3 500 tokens) before
+ *    2026-10-21; it now has caps of its own, below.
  *
  * ## Two independent derivations, which is what stops a vacuous green
  *
@@ -85,6 +88,21 @@ export const APPENDIX_MARKER = '<!-- Everything below is appended automatically'
  */
 export const ROUTER_BODY_CEILING = 330;
 
+/**
+ * The caps on the speckit appendix, which the body ceiling deliberately does not
+ * see. `update-agent-context.sh` writes one *Active Technologies* item per feature
+ * that declares a new runtime, dev or workspace dependency — what § Stack does not
+ * already say — and keeps the newest three *Recent Changes* slugs. A merge of
+ * parallel feature branches can still push either past its cap, and a plan can
+ * still word a declaration at length; these are what notice.
+ *
+ * Breaching one means **prune the appendix** — fold settled dependencies into
+ * § Stack, drop the oldest slugs — never raise the number.
+ */
+export const APPENDIX_TECHNOLOGIES_CAP = 15;
+export const APPENDIX_CHANGES_CAP = 3;
+export const APPENDIX_ITEM_MAX_CHARS = 200;
+
 export type RouterFindingKind =
   /** A document in the routed directory that `AGENTS.md` points at from nowhere. */
   | 'unrouted-document'
@@ -99,7 +117,12 @@ export type RouterFindingKind =
   /** A routing-table row that does not say *when* to open the document. */
   | 'routeless-row'
   /** `AGENTS.md`'s body has grown past {@link ROUTER_BODY_CEILING}. */
-  | 'oversized-router';
+  | 'oversized-router'
+  /**
+   * The speckit appendix breaches {@link APPENDIX_TECHNOLOGIES_CAP},
+   * {@link APPENDIX_CHANGES_CAP} or {@link APPENDIX_ITEM_MAX_CHARS}.
+   */
+  | 'oversized-appendix';
 
 export interface RouterFinding {
   readonly kind: RouterFindingKind;
@@ -190,6 +213,24 @@ export function bodyLineCount(routerText: string): number {
   const lines = routerText.split('\n');
   const marker = lines.findIndex((l) => l.includes(APPENDIX_MARKER));
   return marker === -1 ? lines.length : marker;
+}
+
+/**
+ * The `- ` items of one `## <heading>` section of the speckit appendix, or an
+ * empty list when the appendix or the section is absent (the wiring test asks
+ * that both anchors exist; this only measures them).
+ */
+export function appendixItems(routerText: string, heading: string): readonly string[] {
+  const lines = routerText.split('\n');
+  const marker = lines.findIndex((l) => l.includes(APPENDIX_MARKER));
+  if (marker === -1) return [];
+  const start = lines.findIndex((l, i) => i > marker && l === `## ${heading}`);
+  if (start === -1) return [];
+  const items: string[] = [];
+  for (let i = start + 1; i < lines.length && !lines[i]!.startsWith('## '); i++) {
+    if (lines[i]!.startsWith('- ')) items.push(lines[i]!);
+  }
+  return items;
 }
 
 /**
@@ -302,6 +343,34 @@ export function analyseRouter(inputs: RouterInputs): RouterAnalysis {
         `${bodyLines} lines above the appendix, ceiling ${ROUTER_BODY_CEILING}. Extract to a ` +
         `routed document; never raise the ceiling to make a run pass.`,
     });
+  }
+
+  for (const [heading, cap] of [
+    ['Active Technologies', APPENDIX_TECHNOLOGIES_CAP],
+    ['Recent Changes', APPENDIX_CHANGES_CAP],
+  ] as const) {
+    const items = appendixItems(inputs.routerText, heading);
+    if (items.length > cap) {
+      findings.push({
+        kind: 'oversized-appendix',
+        subject: heading,
+        detail:
+          `the speckit appendix's ${heading} holds ${items.length} items, cap ${cap}. Prune it — ` +
+          `fold settled dependencies into § Stack, drop the oldest slugs; never raise the cap.`,
+      });
+    }
+    for (const item of items) {
+      if (item.length > APPENDIX_ITEM_MAX_CHARS) {
+        findings.push({
+          kind: 'oversized-appendix',
+          subject: `${heading}: ${item.slice(0, 40)}`,
+          detail:
+            `an item of ${item.length} characters, cap ${APPENDIX_ITEM_MAX_CHARS}. The appendix ` +
+            `records the declared dependency, not the plan's whole stack — that is § Stack and ` +
+            `the plan.`,
+        });
+      }
+    }
   }
 
   return { findings, rows, bodyLines, headingCount: routerHeadings.size };

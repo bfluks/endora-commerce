@@ -51,6 +51,7 @@ describe('Megamenu activation atomic swap (T052)', () => {
         items: [
           {
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { [language]: name },

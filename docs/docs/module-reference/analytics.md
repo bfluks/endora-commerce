@@ -30,6 +30,7 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | Module | Binding | What it means |
 | --- | --- | --- |
 | `auth` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
+| `settings` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 
 ## Permissions
 
@@ -48,6 +49,7 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | Code | Name | Type |
 | --- | --- | --- |
 | `analytics.enabled` | Analytics enabled | `boolean` |
+| `analytics.reporting_time_zone` | Reporting time zone | `string` |
 
 ## Translations
 

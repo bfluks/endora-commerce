@@ -52,6 +52,7 @@ describe('POST /api/v1/admin/orders/preview — the membership port is required'
       },
       organizationDetails: { findById: touchedAfterGuard.organizationDetails },
       catalogProductRead: { findByIds: touchedAfterGuard.findByIds },
+      catalogProductAvailability: { filterAvailable: touchedAfterGuard.findByIds },
       pricingService: { resolveLinePrice: touchedAfterGuard.resolveLinePrice },
       orderService: {
         assertMethodsAllowedForOrganization: touchedAfterGuard.assertMethodsAllowedForOrganization,

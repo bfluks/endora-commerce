@@ -7,7 +7,7 @@
 // running at all.
 
 import { describe, expect, it } from 'vitest';
-import { countBlockNames, mapBlockNames, renameBlockNames } from './block-tree.js';
+import { countBlockNames, countComponentNames, mapBlockNames, renameBlockNames } from './block-tree.js';
 
 const RENAMES = { Row: 'cms.Row', Column: 'cms.Column', Text: 'cms.Text', Slide: 'cms.Slide' };
 
@@ -152,6 +152,51 @@ describe('countBlockNames', () => {
     const counts = countBlockNames(doc);
     expect(counts.get('Text')).toBe(2);
     expect(counts.get('Mystery')).toBe(1);
+    expect(JSON.stringify(doc)).toBe(before);
+  });
+});
+
+/**
+ * Feature 163, T197 — the editor's question is narrower than the migration's:
+ * which Puck components a document places. A rich-text prop holds a TipTap
+ * document whose nodes and marks carry a `type` too (`doc`, `paragraph`,
+ * `text`, `image`, `bold`, …) and no `props`; offered to the editor's
+ * degradation merge, each became a "(missing renderer)" block.
+ */
+describe('countComponentNames', () => {
+  const tiptap = {
+    type: 'doc',
+    content: [
+      { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Hi', marks: [{ type: 'bold' }] }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'A' }, { type: 'hardBreak' }, { type: 'inlineIcon', attrs: { name: 'star' } }] },
+      { type: 'image', attrs: { src: '/a.png' } },
+      { type: 'readMore', content: [{ type: 'paragraph' }] },
+    ],
+  };
+  const doc = {
+    root: { props: {} },
+    content: [
+      { type: 'cms.Hero', props: { id: 'h', body: tiptap, title: { type: 'doc', content: [] } } },
+      { type: 'cms.RichContent', props: { id: 'r', content: tiptap } },
+      { type: 'cms.Row', props: { id: 'row', content: [{ type: 'cms.Column', props: { id: 'c', content: [{ type: 'cms.Text', props: {} }] } }] } },
+    ],
+    zones: { 'row:extra': [{ type: 'crm.Badge', props: { id: 'b' } }] },
+  };
+
+  it('counts only Puck component positions: a string `type` beside a `props` object', () => {
+    expect([...countComponentNames(doc).keys()].sort()).toEqual(['cms.Column', 'cms.Hero', 'cms.RichContent', 'cms.Row', 'cms.Text', 'crm.Badge']);
+    expect(countComponentNames(doc).get('cms.Hero')).toBe(1);
+  });
+
+  it('leaves the migration walk as it was: every node `type`, `props` or not', () => {
+    const all = countBlockNames(doc);
+    expect(all.get('paragraph')).toBeGreaterThan(0);
+    expect(all.get('cms.Hero')).toBe(1);
+  });
+
+  it('writes nothing', () => {
+    const before = JSON.stringify(doc);
+    countComponentNames(doc);
     expect(JSON.stringify(doc)).toBe(before);
   });
 });

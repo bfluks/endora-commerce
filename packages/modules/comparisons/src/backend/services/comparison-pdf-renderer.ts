@@ -31,6 +31,7 @@ import type {
   ComparisonDisplayMode,
   ComparisonProductSummary,
 } from '@endora-commerce/contracts';
+import { unitPriceDisplayText } from '@endora-commerce/contracts';
 import { AssetByteFetcher } from './asset-byte-fetcher.js';
 import { filterRowsByMode, imageDataUri, pickOrientation } from './comparison-pdf-shared.js';
 
@@ -197,7 +198,8 @@ function buildHeaderRow(
     }
     stack.push({ text: localised(p.name), style: 'productName', alignment: 'center' });
     stack.push({
-      text: p.price ? `${p.price.amount} ${p.price.currency}` : '—',
+      // A unit price: its significant places, up to four (owner ruling of 2026-10-25).
+      text: p.price ? `${unitPriceDisplayText(p.price.amount)} ${p.price.currency}` : '—',
       style: 'productPrice',
       alignment: 'center',
     });

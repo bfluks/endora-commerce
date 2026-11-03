@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   ERROR_CODES,
+  listingCurrencyQuerySchema,
+  resolveListingCurrency,
   RecordPhraseRequestSchema,
   SearchSuggestQuerySchema,
   SEARCH_PHRASE_MAX_LENGTH,
@@ -52,7 +54,8 @@ const acceptLanguageHeaderSchema = z.string().optional();
  * degrades to the legacy `ProductSummary.price` projection.
  */
 /**
- * The signed-in customer's organization, or `null`.
+ * The signed-in customer's organization and account, or `null`s. The account
+ * is for the customer's own customer group (D-287 P0).
  *
  * `request.actor` is not on `FastifyRequest`: it is a declaration-merging
  * augmentation the `auth` module contributes (`modules/auth/plugin.ts`). Inside
@@ -60,15 +63,21 @@ const acceptLanguageHeaderSchema = z.string().optional();
  * nothing in this module ever named it; a package compiles against its own
  * manifest and `auth` publishes nothing a package can name, so the property is
  * simply not there (TS2339). Read structurally and narrowed rather than
- * asserted — an absent actor answers `null`, which is the guest price, exactly
+ * asserted — an absent actor answers `null`s, which is the guest price, exactly
  * as before.
  */
-function customerOrganizationId(request: FastifyRequest): string | null {
+function customerOf(request: FastifyRequest): {
+  organizationId: string | null;
+  customerAccountId: string | null;
+} {
   const { actor } = request as FastifyRequest & {
-    actor?: { kind?: string; organizationId?: string | null };
+    actor?: { kind?: string; organizationId?: string | null; customerAccountId?: string | null };
   };
-  if (actor?.kind !== 'customer') return null;
-  return actor.organizationId ?? null;
+  if (actor?.kind !== 'customer') return { organizationId: null, customerAccountId: null };
+  return {
+    organizationId: actor.organizationId ?? null,
+    customerAccountId: actor.customerAccountId ?? null,
+  };
 }
 
 export type SuggestionPricingEnricher = (
@@ -78,6 +87,16 @@ export type SuggestionPricingEnricher = (
     resolvedChannel: { id: string; defaultCurrency: string };
     /** Organization of the signed-in customer, or null for guests. */
     organizationId?: string | null;
+    /**
+     * D-287 P0 — the signed-in customer account, whose own customer group
+     * overrides the organisation's; null for guests.
+     */
+    customerAccountId?: string | null;
+    /**
+     * Feature 160 — the currency the request is priced in (`?currency=`, else
+     * the channel's default), so a suggestion quotes what its card quotes.
+     */
+    currencyCode?: string;
   },
 ) => Promise<SearchSuggestItem[]>;
 
@@ -173,11 +192,18 @@ export async function registerSearchPublicRoutes(
       // and a guest sees the public one. Enrichment failures degrade to the
       // raw projection — the popup must never 500 over a pricing hiccup.
       if (enrichSuggestionPricing) {
-        const organizationId = customerOrganizationId(request);
+        const { organizationId, customerAccountId } = customerOf(request);
         try {
+          const requested = (request.query as Record<string, unknown> | undefined)?.['currency'];
+          const currencyCode = resolveListingCurrency(
+            requested === undefined ? undefined : listingCurrencyQuerySchema.parse(requested),
+            getResolvedChannel(request),
+          );
           const enriched = await enrichSuggestionPricing(result.data, {
             resolvedChannel: ctx.resolvedChannel,
             organizationId,
+            customerAccountId,
+            currencyCode,
           });
           return {
             data: enriched,
@@ -287,9 +313,10 @@ function readContext(request: FastifyRequest): {
     resolvedChannel: {
       id: ch.id,
       code: ch.code,
-      isPublic: ch.isPublic,
       defaultCurrency: ch.defaultCurrency,
       defaultLanguage: ch.defaultLanguage,
+      // Feature 163 — the channel's content languages, from the resolved record.
+      languages: ch.languages,
     },
     audience: productAudienceOf(request),
     ...(preferredLanguage !== undefined ? { preferredLanguage } : {}),
