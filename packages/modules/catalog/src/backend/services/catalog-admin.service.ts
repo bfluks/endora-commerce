@@ -124,6 +124,12 @@ import {
   type AttributeOptionResult,
 } from '../commands/attribute-commands.js';
 import { requireLinkableAsset, type LinkableAssetReader } from './linkable-asset.js';
+import {
+  findSkuHolder,
+  missingRequiredAttributeKeys,
+  PRODUCT_SKU_MAX,
+  reconcileProductCategories,
+} from './product-global-field-rules.js';
 
 // Feature 061 — the API-form mapping helpers moved next to the R7 map; the
 // re-exports keep the long-standing import site (routes, tests) stable.
@@ -661,28 +667,22 @@ export class CatalogAdminService {
       // create contract enforces. This guard used to read 160 while the
       // column held 64, so a 100-character rename passed validation and then
       // failed at the database; all three now agree.
-      if (trimmed.length === 0 || trimmed.length > 255) {
+      if (trimmed.length === 0 || trimmed.length > PRODUCT_SKU_MAX) {
         throw new HttpError(
           400,
           ERROR_CODES.VALIDATION_FAILED,
           'invalid_sku',
         );
       }
-      const conflict = await em.findOne(Product, { sku: trimmed });
-      if (conflict && conflict.id !== product.id) {
-        throw new HttpError(
-          400,
-          ERROR_CODES.VALIDATION_FAILED,
-          `sku_in_use { conflictingProductId: ${conflict.id}, conflictingSku: ${trimmed} }`,
-        );
-      }
       // Feature 025 — SKUs share a global namespace with variants (see createVariant).
-      const variantConflict = await em.findOne(ProductVariant, { sku: trimmed });
-      if (variantConflict) {
+      const holder = await findSkuHolder(em, product.id, trimmed);
+      if (holder) {
         throw new HttpError(
           400,
           ERROR_CODES.VALIDATION_FAILED,
-          `sku_in_use { conflictingVariantId: ${variantConflict.id}, conflictingSku: ${trimmed} }`,
+          'productId' in holder
+            ? `sku_in_use { conflictingProductId: ${holder.productId}, conflictingSku: ${trimmed} }`
+            : `sku_in_use { conflictingVariantId: ${holder.variantId}, conflictingSku: ${trimmed} }`,
         );
       }
       product.sku = trimmed;
@@ -859,41 +859,7 @@ export class CatalogAdminService {
     productId: string,
     categoryIds: readonly string[],
   ): Promise<boolean> {
-    const conn = em.getConnection();
-    const txCtx = em.getTransactionContext();
-    const currentRows = (await conn.execute<Array<{ category_id: string }>>(
-      `select category_id from product_categories where product_id = ?`,
-      [productId],
-      'all',
-      txCtx,
-    )) as Array<{ category_id: string }>;
-    const current = new Set(currentRows.map((r) => r.category_id));
-    const target = new Set(categoryIds);
-    const toAdd = [...target].filter((id) => !current.has(id));
-    const toRemove = [...current].filter((id) => !target.has(id));
-    if (toRemove.length > 0) {
-      const placeholders = toRemove.map(() => '?').join(',');
-      await conn.execute(
-        `delete from product_categories where product_id = ? and category_id in (${placeholders})`,
-        [productId, ...toRemove],
-        'run',
-        txCtx,
-      );
-    }
-    if (toAdd.length > 0) {
-      const placeholders = toAdd.map(() => '(?,?)').join(',');
-      const params: unknown[] = [];
-      for (const cid of toAdd) {
-        params.push(productId, cid);
-      }
-      await conn.execute(
-        `insert into product_categories (product_id, category_id) values ${placeholders}`,
-        params,
-        'run',
-        txCtx,
-      );
-    }
-    return toAdd.length > 0 || toRemove.length > 0;
+    return reconcileProductCategories(em, productId, categoryIds);
   }
 
   /**
@@ -2313,14 +2279,12 @@ export class CatalogAdminService {
     )) as Array<{ custom_field_definition_id: string }>;
     const views = await this.#requireAttributeRead().listAll();
     const viewByDefinitionId = new Map(views.map((v) => [v.customFieldDefinitionId, v]));
-    const missing = rows
-      .map((r) => viewByDefinitionId.get(r.custom_field_definition_id))
-      .filter((v): v is CatalogAttributeView => v !== undefined && v.isRequired)
-      .map((v) => v.key)
-      .filter((k) => {
-        const v = mergedAttributeValues[k];
-        return v === undefined || v === null || v === '';
-      });
+    const missing = missingRequiredAttributeKeys(
+      rows
+        .map((r) => viewByDefinitionId.get(r.custom_field_definition_id))
+        .filter((v): v is CatalogAttributeView => v !== undefined),
+      mergedAttributeValues,
+    );
     if (missing.length > 0) {
       throw new HttpError(
         400,
