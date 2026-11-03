@@ -60,13 +60,11 @@ import { GroupedService } from './services/grouped.service.js';
 import { BundleService } from './services/bundle.service.js';
 import { ProductEditorPreferencesService } from './services/product-editor-preferences.service.js';
 import { ProductListViewService } from './services/product-list-view-service.js';
-import { ProductOverridesService } from './services/product-overrides.service.js';
 import { ProductScopesService } from './services/product-scopes.service.js';
 import { UrlKeyService } from './services/url-key.service.js';
 import { ScopeOverviewService, type ListSeoProductScopes } from './services/scope-overview.service.js';
 import { composeCompletenessGate } from './services/scope-completeness.js';
 import { AttributeScopePreviewService } from './services/attribute-scope-preview.js';
-import { ProductScopeContextService } from './services/product-scope-context.service.js';
 import { ScopedValuesService } from './services/scoped-values.service.js';
 import { ProductValueResolverService } from './services/product-value-resolver.service.js';
 import { readContext as readCatalogContext, registerCatalogPublicRoutes } from './routes.public.js';
@@ -576,23 +574,6 @@ export function catalogModule(options: CatalogModuleOptions) {
           attributeReadService,
         )
       : undefined;
-    const scopeContextService =
-      options.salesChannelMembership && options.languageService
-        ? new ProductScopeContextService(
-            options.emFactory,
-            options.salesChannelMembership,
-            options.languageService,
-            editorPreferencesService,
-          )
-        : undefined;
-    const overridesService = options.salesChannelMembership
-      ? new ProductOverridesService(
-          options.emFactory,
-          options.salesChannelMembership,
-          options.commandBus,
-          attributeReadService,
-        )
-      : undefined;
 
     // Feature 163 — the scope overview (US4) reads membership through the kernel
     // accessor and, for a product in no channel, the active platform languages.
@@ -665,11 +646,9 @@ export function catalogModule(options: CatalogModuleOptions) {
         ? { resolveAdminAuditContext: options.resolveAdminAuditContext }
         : {}),
       ...(options.auditLogService ? { auditLogService: options.auditLogService } : {}),
-      ...(scopeContextService ? { productScopeContextService: scopeContextService } : {}),
       productEditorPreferencesService: editorPreferencesService,
       productListViewService: listViewService,
       ...(valueResolverService ? { productValueResolverService: valueResolverService } : {}),
-      ...(overridesService ? { productOverridesService: overridesService } : {}),
       ...(scopesService ? { productScopesService: scopesService } : {}),
       ...(scopedValuesService ? { scopedValuesService } : {}),
       ...(scopeOverviewService ? { scopeOverviewService } : {}),
