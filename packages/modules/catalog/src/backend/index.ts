@@ -41,6 +41,9 @@ import type {
   CatalogProductUrlKeyReadPort,
   CatalogProductScopeWritePort,
   SeoProductMetaPort,
+  SeoProductMetaWritePort,
+  ScopeRef,
+  ScopedWriteOp,
   InventoryProductThresholdWritePort,
   SearchQueryPort,
   SearchReindexPort,
@@ -127,6 +130,7 @@ import {
 } from './services/catalog-write-ports.js';
 import type {
   CatalogEventBus,
+  CatalogSeoProductMetaCopy,
   CatalogWarehouseThresholdCopy,
 } from './services/catalog-admin.service.js';
 import { registerCatalogAssetReferences } from './services/asset-references.js';
@@ -439,6 +443,41 @@ export function registerModule(ctx: ModuleContext): void {
   const copyWarehouseThresholds: CatalogWarehouseThresholdCopy = async (input) => {
     if (!effectiveState.isPresent('inventory')) return 'not-present';
     return inventoryThresholds.copyProductWarehouseThresholds(input);
+  };
+
+  /**
+   * Feature 170 (FR-119, T151) — a duplicate's SEO values at every scope its source holds, read
+   * and written through `seo`'s write port on the duplicate Command's em, so they commit or roll
+   * back with the copy and its one audit entry. The same D-44 shape as the threshold copy: presence
+   * is decided here, in front of both ports — with `seo` off a duplicate copies no metadata and is
+   * not refused for it — and the write port is resolved only when the source holds SEO rows.
+   */
+  const seoProductMetaRead = lazyPort<SeoProductMetaPort>(ctx, 'seoProductMetaPort');
+  const seoProductMetaWrite = lazyPort<SeoProductMetaWritePort<EntityManager>>(ctx, 'seoProductMetaWritePort');
+  const copySeoProductMeta: CatalogSeoProductMetaCopy = async (em, { sourceProductId, targetProductId }) => {
+    if (!effectiveState.isPresent('seo')) return 'not-present';
+    let copied = 0;
+    for (const held of await seoProductMetaRead.listScopesForProduct(sourceProductId)) {
+      // A locale-only row has no product scope any more (FR-010): nothing to copy it to.
+      if (held.channelId === null && held.languageCode !== null) continue;
+      if (held.fields.length === 0) continue;
+      const scope: ScopeRef =
+        held.channelId === null
+          ? { level: 'global' }
+          : held.languageCode === null
+            ? { level: 'channel', channelId: held.channelId }
+            : { level: 'channel_language', channelId: held.channelId, languageCode: held.languageCode };
+      const own = await seoProductMetaWrite.readWithin(em, { productId: sourceProductId, scope, fields: held.fields });
+      const changes: Partial<Record<keyof typeof own, ScopedWriteOp<string>>> = {};
+      for (const [field, value] of Object.entries(own) as Array<[keyof typeof own, (typeof own)[keyof typeof own]]>) {
+        if (value === undefined || !('own' in value)) continue;
+        changes[field] = typeof value.own === 'string' ? { op: 'set', value: value.own } : { op: 'empty' };
+      }
+      if (Object.keys(changes).length === 0) continue;
+      await seoProductMetaWrite.applyWithin(em, { productId: targetProductId, scope, changes });
+      copied += 1;
+    }
+    return { copied };
   };
 
   /**
@@ -759,8 +798,11 @@ export function registerModule(ctx: ModuleContext): void {
             resolveSeoProductMeta: (input) => cradle().catalogSeoProductMeta(input),
             listSeoProductScopes: (productId) => cradle().catalogSeoProductScopes(productId),
             readSeoProductScoped: (productId, scope) => cradle().catalogSeoProductScoped(productId, scope),
+            // Feature 170 (T123) — the save's SEO cells, written on its Command's em (refuses-without).
+            seoProductMetaWrite: () => seoProductMetaWrite,
             categoryRevalidator: cradle().catalogCategoryRevalidator,
             copyWarehouseThresholds,
+            copySeoProductMeta,
           }),
       )
       .singleton(),
@@ -1067,6 +1109,8 @@ export function registerModule(ctx: ModuleContext): void {
             undefined,
             // Feature 166 (FR-006) — a download file the caller may not see is not linked.
             lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
+            // Feature 170 (FR-119) — a duplicate made through the port copies SEO as well.
+            copySeoProductMeta,
           ),
       )
       .singleton(),
