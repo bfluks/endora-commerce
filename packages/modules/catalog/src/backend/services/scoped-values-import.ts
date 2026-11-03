@@ -19,7 +19,7 @@ import type { Command } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 
-import { auditStates, ownValues, planScopedSave, writeScopedSave, type ScopedSavePlan } from './scoped-values-save.service.js';
+import { auditStates, ownValues, planScopedSave, withoutUnchangedCells, writeScopedSave, type ScopedSavePlan } from './scoped-values-save.service.js';
 import { bumpScopeVersion, loadScopedState, resolveRequestScope, type ScopedProductState } from './scoped-values-state.js';
 import type { UrlKeyService, UrlKeyWrite } from './url-key.service.js';
 
@@ -80,6 +80,15 @@ export function assertIntegrationCall(
       field: 'cells',
     });
   }
+  // C2/C3 security review warn 2 — the op's shape, at runtime: an untyped caller's malformed op
+  // is refused here and never read as an inherit (which would delete an override).
+  const malformed = cells.findIndex((cell) => !isWriteOp(cell.op));
+  if (malformed !== -1) {
+    throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'A cell carries no valid write operation.', {
+      field: 'cells',
+      index: malformed,
+    });
+  }
   const duplicate = firstDuplicateCell(cells);
   if (duplicate !== null) {
     throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'The same (field, scope) cell appears twice.', {
@@ -87,6 +96,15 @@ export function assertIntegrationCall(
       index: duplicate,
     });
   }
+}
+
+/** Exactly `{ op: 'set', value }`, `{ op: 'empty' }` or `{ op: 'inherit' }` — no other keys. */
+function isWriteOp(op: unknown): op is ScopedWriteOp<unknown> {
+  if (typeof op !== 'object' || op === null || Array.isArray(op)) return false;
+  const keys = Object.keys(op).sort().join(',');
+  const kind = (op as { op?: unknown }).op;
+  if (kind === 'set') return keys === 'op,value' && (op as { value?: unknown }).value !== undefined;
+  return (kind === 'empty' || kind === 'inherit') && keys === 'op';
 }
 
 /** The index of the first cell whose (field, scope) an earlier cell already named, else `null`. */
@@ -100,7 +118,13 @@ export function firstDuplicateCell(cells: readonly ProductScopedWriteCell[]): nu
   return null;
 }
 
-const raw = (op: ScopedWriteOp<unknown>): unknown => (op.op === 'set' ? op.value : op.op === 'empty' ? null : { inherit: true });
+const raw = (op: ScopedWriteOp<unknown>): unknown => {
+  if (op.op === 'set') return op.value;
+  if (op.op === 'empty') return null;
+  if (op.op === 'inherit') return { inherit: true };
+  // Fail closed: an op that is none of the three never becomes an inherit.
+  throw new Error(`scoped import: not a write operation: ${String((op as { op?: unknown }).op)}`);
+};
 
 /** One allowlisted cell as the save's `changes` body, or `null` when the path names no such field. */
 export function cellChanges(field: string, op: ScopedWriteOp<unknown>): Record<string, unknown> | null {
@@ -284,6 +308,8 @@ export async function runScopedImport(
       await bumpScopeVersion(em, productId);
       const state = await loadScopedState(em, productId, deps);
       const planned = planIntegrationCells(state, cells, trustedChangesOf(state, options.extras), options.path ?? 'connector');
+      // FR-114 — a cell that writes what the scope already holds is not a change.
+      planned.plans = planned.plans.map((plan) => withoutUnchangedCells(state, plan)).filter((plan) => plan.cells.length > 0);
       const audit: { before: Record<string, unknown>; after: Record<string, unknown> } = { before: {}, after: {} };
       for (const plan of planned.plans) {
         const states = auditStates(plan, ownValues(state, plan));
@@ -305,7 +331,7 @@ export async function runScopedImport(
           const key = write.op.op === 'set' ? write.op.key.normalize('NFC').toLowerCase() : null;
           const issue = key === null ? undefined : effects.issues.find((candidate) => candidate.key === key);
           urlKeys.push(issue ? { written: false, issue } : { written: true });
-          if (!issue) urlKeysWritten += 1;
+          if (!issue && effects.changed) urlKeysWritten += 1;
         }
         if (effects.changed) urlKeyEffects = { before: effects.before, after: effects.after };
       }
@@ -317,7 +343,8 @@ export async function runScopedImport(
         urlKeys,
         changedFields,
       };
-      if (result.applied === 0 && planned.plans.length === 0) throw new NothingApplied(result);
+      // Nothing written (every cell refused, or each already what the scope holds): roll back.
+      if (planned.plans.length === 0 && urlKeysWritten === 0) throw new NothingApplied(result);
       return {
         result,
         before: { source: options.source, cells: audit.before, ...(urlKeyEffects ? { urlKey: urlKeyEffects.before } : {}) },

@@ -18,7 +18,7 @@ import { ORDER_MINIMUM_MAX } from './order-minimums.js';
 import { SCOPED_SOURCES, type ScopeRef, type ScopedSource } from './product-scope-model.js';
 import { fieldPathSchema, scopeMissingValueSchema, scopeRequestSchema, scopeWarningSchema } from './product-scopes.js';
 import { PRODUCT_URL_KEY_MAX, productSlugSchema, URL_KEY_TAKEOVER_MAX } from './product-url-keys.js';
-import { scopedWrite } from './scoped-write-encoding.js';
+import { scopeVersionTokenSchema, scopedWrite } from './scoped-write-encoding.js';
 
 // --- Bounds (R21) -----------------------------------------------------------------------------
 
@@ -80,7 +80,7 @@ function boundedRecord<K extends z.ZodType<string>, V extends z.ZodType>(keySche
 export const httpUrlSchema = z
   .string()
   .max(SEO_PRODUCT_META_MAX.ogImageUrl)
-  .regex(/^https?:\/\/[^\s/?#\\]+[^\s\\]*$/i, 'http(s) URL');
+  .regex(/^https?:\/\/[^\s/?#\\@]+(?:[/?#][^\s\\]*)?$/i, 'http(s) URL');
 
 // --- §1 Scope ---------------------------------------------------------------------------------
 
@@ -97,6 +97,10 @@ export { scopeRequestSchema };
 export const scopedSourceSchema = z.enum(SCOPED_SOURCES as unknown as [ScopedSource, ...ScopedSource[]]);
 export const scopeLevelShortSchema = z.enum(['G', 'C', 'CL']);
 
+/** The level an inherited value comes from: the channel (`C`) or Global (`G`). */
+export const INHERITED_LEVELS = ['G', 'C'] as const;
+export type InheritedLevel = (typeof INHERITED_LEVELS)[number];
+
 /** One field at the read's scope (FR-109). */
 export function scopedFieldViewSchema<S extends z.ZodType>(valueSchema: S) {
   return z.object({
@@ -105,6 +109,16 @@ export function scopedFieldViewSchema<S extends z.ZodType>(valueSchema: S) {
     source: scopedSourceSchema,
     /** Present when the source is `set` / `set_empty`: the value stored at this scope. */
     ownValue: valueSchema.nullable().optional(),
+    /**
+     * Present at Channel and Channel × language, absent at Global (owner decision 2026-11-03):
+     * what the field would read if it inherited at this scope — the parent's effective value
+     * (`null` for a deliberately empty parent, or for no value at Global) and the level it comes
+     * from.
+     */
+    inheritedValue: z
+      .object({ value: valueSchema.nullable(), level: z.enum(INHERITED_LEVELS) })
+      .strict()
+      .optional(),
     levels: z.array(scopeLevelShortSchema),
     /** The scope's level is in `levels` (FR-082). */
     supportedHere: z.boolean(),
@@ -116,6 +130,7 @@ export type ScopedFieldView<T> = {
   value: T | null;
   source: ScopedSource;
   ownValue?: T | null;
+  inheritedValue?: { value: T | null; level: InheritedLevel } | undefined;
   levels: Array<'G' | 'C' | 'CL'>;
   supportedHere: boolean;
   required: boolean;
@@ -386,7 +401,7 @@ export function countChangedCells(changes: ScopedValueChanges): number {
 export const saveScopedValuesRequestSchema = z
   .object({
     scope: scopeRequestSchema,
-    version: z.string().regex(/^\d{1,19}$/),
+    version: scopeVersionTokenSchema,
     changes: scopedValueChangesSchema,
   })
   .strict()
@@ -409,7 +424,7 @@ export const copyScopedValueRequestSchema = z
     field: fieldPathSchema,
     from: z.object({ channelId: uuidSchema, languageCode: z.string().min(1).max(16) }).strict(),
     toChannelIds: z.array(uuidSchema).min(1).max(SCOPED_COPY_TARGETS_MAX),
-    version: z.string().regex(/^\d{1,19}$/),
+    version: scopeVersionTokenSchema,
     dryRun: z.boolean().optional(),
   })
   .strict();

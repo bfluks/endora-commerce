@@ -19,6 +19,7 @@ import {
   type CustomFieldDefinitionReadPort,
   type CustomFieldValuePort,
   type OrganizationDetailsPort,
+  type SeoProductMetaWritePort,
 } from '@endora-commerce/contracts';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { StorefrontRevalidator } from '@endora-commerce/platform/http';
@@ -34,6 +35,7 @@ import { CatalogQueryService, type CatalogCursorSeal } from './services/catalog-
 import {
   CatalogAdminService,
   type CatalogWarehouseThresholdCopy,
+  type CatalogSeoProductMetaCopy,
   type CatalogEventBus,
 } from './services/catalog-admin.service.js';
 import { CatalogAttributeReadService } from './services/catalog-attribute-read.service.js';
@@ -71,6 +73,7 @@ import { readContext as readCatalogContext, registerCatalogPublicRoutes } from '
 import { registerCatalogUrlKeyPublicRoutes } from './routes.public.url-keys.js';
 import { UrlKeyResolutionService } from './services/url-key-resolution.service.js';
 import type { ResolveSeoProductMeta } from './services/catalog-query.service.js';
+import type { ReadSeoProductScoped } from './services/scoped-values-read.service.js';
 import { registerCatalogAdminRoutes } from './routes.admin.js';
 import { registerCatalogApiKeyRoutes } from './routes.api-key.js';
 import { registerCatalogExternalRoutes } from './routes.external.js';
@@ -156,6 +159,16 @@ export interface CatalogModuleOptions {
    */
   listSeoProductScopes?: ListSeoProductScopes;
   /**
+   * Feature 170 (T123) — `seo`'s view of a product's metadata at one scope for the editor's
+   * scoped read; answers `null` while `seo` is not effectively present.
+   */
+  readSeoProductScoped?: ReadSeoProductScoped;
+  /**
+   * Feature 170 (T123, FR-091) — `seo`'s write port for the save's SEO cells, resolved only when a
+   * save changes SEO (a lazy port: with `seo` off resolving it answers `503 MODULE_DISABLED`).
+   */
+  seoProductMetaWrite?: () => Pick<SeoProductMetaWritePort<EntityManager>, 'readWithin' | 'applyWithin'>;
+  /**
    * Feature 075 — `organizations`' read port. The external namespace's price
    * decoration resolves the calling organisation through it, where it used to
    * run `em.findOne(Organization, …)` against another module's table.
@@ -201,6 +214,11 @@ export interface CatalogModuleOptions {
    * and reaches the service in its return type.
    */
   copyWarehouseThresholds?: CatalogWarehouseThresholdCopy;
+  /**
+   * Feature 170 (FR-119) — `seo`'s product metadata copied by a duplicate, on the duplicate
+   * Command's em. Presence-decided by the wiring, like the threshold copy above.
+   */
+  copySeoProductMeta?: CatalogSeoProductMetaCopy;
   /**
    * Feature 022 — language admin service used by the product scope
    * editor's scope-context endpoint (for the primary admin language)
@@ -387,6 +405,7 @@ export function catalogModule(options: CatalogModuleOptions) {
       options.copyWarehouseThresholds,
       completenessGate,
       options.assets,
+      options.copySeoProductMeta,
     );
     // Feature 163 — scoped values per channel and channel × language. Needs the
     // membership accessor for FR-014 and the C4 warning, like the overrides.
@@ -606,6 +625,8 @@ export function catalogModule(options: CatalogModuleOptions) {
               ...(options.languageService ? { languages: options.languageService } : {}),
               ...(options.assets ? { assets: options.assets } : {}),
               ...(options.organizations ? { organizations: options.organizations } : {}),
+              ...(options.readSeoProductScoped ? { readSeo: options.readSeoProductScoped } : {}),
+              ...(options.seoProductMetaWrite ? { seoWrite: options.seoProductMetaWrite } : {}),
               gate: completenessGate,
               ...(urlKeyService
                 ? {

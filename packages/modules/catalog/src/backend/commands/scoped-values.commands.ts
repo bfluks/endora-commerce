@@ -10,7 +10,16 @@ import type {
   ScopeSnapshot,
   ScopeWarning,
 } from '@endora-commerce/contracts';
-import { ERROR_CODES, scopedValueChangesSchema, type OrganizationDetailsPort, type ScopedWriteOp } from '@endora-commerce/contracts';
+import {
+  ERROR_CODES,
+  scopedValueChangesSchema,
+  toScopedWriteOp,
+  type OrganizationDetailsPort,
+  type ScopedWriteOp,
+  type SeoProductMetaField,
+  type SeoProductMetaOwnValue,
+  type SeoProductMetaWritePort,
+} from '@endora-commerce/contracts';
 import type { Command } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
@@ -20,7 +29,9 @@ import { toChannelRecord, toLanguageRecord } from '../services/product-scopes.se
 import type { ScopeCompletenessGate } from '../services/scope-completeness.js';
 import {
   auditStates,
+  boundedAuditCell,
   bumpScopeVersion,
+  SCOPE_KEY,
   isRemovalOnly,
   ownValues,
   planScopedSave,
@@ -30,6 +41,8 @@ import {
   type WriteProbe,
 } from '../services/scoped-values-save.service.js';
 import { cellChanges } from '../services/scoped-values-import.js';
+import { assertGlobalOnlyFields, useTargetAttributeSet } from '../services/scoped-values-global-only.js';
+import type { LinkableAssetReader } from '../services/linkable-asset.js';
 import { loadScopedState, resolveRequestScope, type ScopedProductState } from '../services/scoped-values-state.js';
 
 /**
@@ -58,8 +71,16 @@ export interface ScopedValuesCommandDeps {
   ) => Promise<{ before: Record<string, unknown>; after: Record<string, unknown> }>;
   /** Step 3a (R21) — the organisations an audience names must exist. */
   organizations?: Pick<OrganizationDetailsPort, 'findByIds'> | undefined;
+  /** Step 3a (code review 1) — a download file must be one the library shows. Absent = refused. */
+  assets?: LinkableAssetReader | undefined;
   /** Test seam (T104): called before each family writer; throwing simulates its failure. */
   probe?: WriteProbe | undefined;
+  /**
+   * Steps 4 and 8 (T123, FR-091) — `seo`'s write port on the Command's `em`, resolved only when
+   * the save changes SEO; with `seo` off resolving it answers `503 MODULE_DISABLED`, so such a
+   * save is refused and the rest of it rolls back (`refuses-without`). Absent = SEO cells refused.
+   */
+  seoWrite?: (() => Pick<SeoProductMetaWritePort<EntityManager>, 'readWithin' | 'applyWithin'>) | undefined;
 }
 
 export interface ScopedValuesSaveResult {
@@ -75,6 +96,17 @@ function snapshot(state: ScopedProductState): ScopeSnapshot {
     channelRows: state.channelRows.map(toChannelRecord),
     languageRows: state.languageRows.map(toLanguageRecord),
   };
+}
+
+/**
+ * A save with no cells: thrown inside the Command so its transaction, and with it the version
+ * compare-and-set, rolls back — a no-op writes nothing, audits nothing and leaves the version, so
+ * no other open editor is sent a 409 for it. The caller answers {@link result}.
+ */
+export class ScopedSaveNothingChanged extends Error {
+  constructor(readonly result: ScopedValuesSaveResult) {
+    super('scoped-values save: nothing changed');
+  }
 }
 
 export function scopedValuesSaveCommand(
@@ -93,13 +125,23 @@ export function scopedValuesSaveCommand(
       const state = await loadScopedState(em, productId, deps);
       const removalOnly = isRemovalOnly(body.changes);
       const scope = resolveRequestScope(state.members, body.scope, { removalOnly });
+      // Step 3a (code review 1) — a set change plans the attribute cells against the new set.
+      if (scope.level === 'global') await useTargetAttributeSet(em, deps, state, body.changes.product?.attributeSetId);
       const plan = planScopedSave(state, scope, body.changes);
-      if (plan.cells.length === 0) {
-        return { result: { state, scope, changedFields: [], warnings: [] }, skipAudit: true };
+      const seoChanges = seoChangesOf(body.changes);
+      if (plan.cells.length === 0 && Object.keys(seoChanges).length === 0) {
+        // Nothing to write: roll the version bump back with the transaction (code review warn).
+        throw new ScopedSaveNothingChanged({ state, scope, changedFields: [], warnings: [] });
       }
       await assertOrganizationsExist(deps, plan.cells, scope);
+      await assertGlobalOnlyFields(em, deps, state, plan);
       const before = ownValues(state, plan);
       const scopesBefore = snapshot(state);
+
+      // Step 4 — the SEO cells' before-state, read through `seo` on this transaction.
+      const seoFields = Object.keys(seoChanges) as SeoProductMetaField[];
+      const seo = seoFields.length > 0 ? seoPort(deps) : undefined;
+      const seoBefore = seo ? await seo.readWithin(em, { productId, scope, fields: seoFields }) : {};
 
       const urlKeyCell = plan.cells.find((cell) => cell.family === 'urlKey');
       let urlKeySideEffects: { before: Record<string, unknown>; after: Record<string, unknown> } | undefined;
@@ -115,18 +157,26 @@ export function scopedValuesSaveCommand(
         });
       }
 
+      // Step 8 — the SEO writes, on the same `em`: a refusal rolls the catalog rows back with it.
+      if (seo) {
+        deps.probe?.('seo');
+        await seo.applyWithin(em, { productId, scope, changes: seoChanges });
+      }
+
       const warnings =
         completeness && deps.gate && plan.cells.some((cell) => cell.family === 'status')
           ? await deps.gate.enforce(em, state.product, scopesBefore, snapshot(state), state.members, completeness)
           : [];
 
       const audit = auditStates(plan, before);
+      const changedFields = seoFields.length > 0 ? [...new Set([...plan.changedFields, 'seo'])] : plan.changedFields;
+      if (seoFields.length > 0) addSeoAudit(audit, scope, seoBefore, seoChanges, changedFields);
       if (urlKeySideEffects) {
         audit.before['urlKey'] = urlKeySideEffects.before;
         audit.after['urlKey'] = urlKeySideEffects.after;
       }
       return {
-        result: { state, scope, changedFields: plan.changedFields, warnings },
+        result: { state, scope, changedFields, warnings },
         before: audit.before,
         after: audit.after,
       };
@@ -139,6 +189,51 @@ export function scopedValuesSaveCommand(
             payload: { eventId: randomUUID(), occurredAt: new Date().toISOString(), productId, changedFields },
           },
   };
+}
+
+/** The SEO cells of a save as write ops; absent and `""` cells are no change. */
+function seoChangesOf(changes: SaveScopedValuesRequest['changes']): Partial<Record<SeoProductMetaField, ScopedWriteOp<string>>> {
+  const out: Partial<Record<SeoProductMetaField, ScopedWriteOp<string>>> = {};
+  for (const [field, raw] of Object.entries(changes.seo ?? {}) as Array<[SeoProductMetaField, unknown]>) {
+    if (raw === undefined) continue;
+    const op = toScopedWriteOp(raw as never) as ScopedWriteOp<string> | undefined;
+    if (op !== undefined) out[field] = op;
+  }
+  return out;
+}
+
+function seoPort(deps: ScopedValuesCommandDeps): Pick<SeoProductMetaWritePort<EntityManager>, 'readWithin' | 'applyWithin'> {
+  if (!deps.seoWrite) {
+    throw new HttpError(503, ERROR_CODES.MODULE_DISABLED, 'SEO is not available, so SEO fields cannot be saved.');
+  }
+  return deps.seoWrite();
+}
+
+/** Step 9 — the SEO cells in the audit entry, keyed `seo:<field>@<scope>`, and in the re-applicable body. */
+function addSeoAudit(
+  audit: { before: Record<string, unknown>; after: Record<string, unknown> },
+  scope: ScopeRef,
+  before: Partial<Record<SeoProductMetaField, SeoProductMetaOwnValue>>,
+  changes: Partial<Record<SeoProductMetaField, ScopedWriteOp<string>>>,
+  changedFields: string[],
+): void {
+  const key = SCOPE_KEY(scope);
+  const beforeCells = audit.before['cells'] as Record<string, unknown>;
+  const afterCells = audit.after['cells'] as Record<string, unknown>;
+  const beforeBody = ((audit.before['changes'] as Record<string, unknown>)['seo'] ??= {}) as Record<string, unknown>;
+  const afterBody = ((audit.after['changes'] as Record<string, unknown>)['seo'] ??= {}) as Record<string, unknown>;
+  for (const [field, op] of Object.entries(changes) as Array<[SeoProductMetaField, ScopedWriteOp<string>]>) {
+    const was = before[field];
+    const wasBody = !was || 'inherited' in was ? { inherit: true } : typeof was.own === 'string' ? was.own : null;
+    const nowBody = op.op === 'set' ? op.value : op.op === 'empty' ? null : { inherit: true };
+    const display = (value: unknown) =>
+      value === null ? { empty: true } : typeof value === 'object' ? { inherited: true } : boundedAuditCell(value);
+    beforeCells[`seo:${field}@${key}`] = display(wasBody);
+    afterCells[`seo:${field}@${key}`] = display(nowBody);
+    beforeBody[field] = boundedAuditCell(wasBody);
+    afterBody[field] = boundedAuditCell(nowBody);
+  }
+  audit.after['changedFields'] = changedFields;
 }
 
 /** Step 3a (R21) — every organisation id an audience cell names exists; else `invalid`, nothing written. */

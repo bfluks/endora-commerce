@@ -9,6 +9,7 @@ import {
   type CatalogAttributeView,
   type CompletenessSummary,
   type FieldScopeSpec,
+  type InheritedLevel,
   type LanguageReadPort,
   type OrganizationDetailsPort,
   type ScopeMissingValue,
@@ -40,8 +41,8 @@ import {
 /**
  * Feature 170 (T036; `contracts/scoped-values-api.md` §2) — `GET …/products/:id/scoped-values`:
  * every scoped field of the product at one scope, with its source, in **one** request per scope
- * switch (FR-109). Orphaned rows never contribute. `seo` is `null` until US10 wires
- * `seoProductMetaPort.readScoped`.
+ * switch (FR-109). Orphaned rows never contribute. `seo` is `seo`'s own view at the scope
+ * (`seoProductMetaPort.readScoped`, US10), `null` while `seo` is off.
  */
 
 /** The camelCase role keys of the API (Principle VI) for the stored labels. */
@@ -57,6 +58,24 @@ export interface ScopedValuesReadDeps {
   languages?: Pick<LanguageReadPort, 'list'>;
   assets?: Pick<AssetReadPort, 'findByIds'>;
   organizations?: Pick<OrganizationDetailsPort, 'findByIds'>;
+  /**
+   * Feature 170 (T123, FR-090, FR-092) — `seo`'s view of the product's metadata at one scope
+   * (`seoProductMetaPort.readScoped`), `null` while `seo` is not effectively present. Absent = no
+   * SEO block.
+   */
+  readSeo?: ReadSeoProductScoped;
+}
+
+/** `seo`'s five fields at one scope, or `null` while `seo` is off (presence decided by the wiring). */
+export type ReadSeoProductScoped = (productId: string, scope: ScopeRef) => Promise<ScopedValuesData['seo']>;
+
+/** The scope is one the product sells at now — `seo`'s scoped read refuses any other (422). */
+function isLiveScope(state: ScopedProductState, scope: ScopeRef): boolean {
+  if (scope.level === 'global') return true;
+  const channel = state.members.find((member) => member.id === scope.channelId);
+  if (!channel) return false;
+  if (scope.level === 'channel') return true;
+  return channel.languages.some((code) => code.toLowerCase() === scope.languageCode.toLowerCase());
 }
 
 /** One field's view at `scope` (FR-109): the effective value, its source and the own value. */
@@ -67,16 +86,40 @@ export function fieldView<T>(
   scope: ScopeRef,
   members: readonly MemberChannel[],
 ): ScopedFieldView<T> {
-  const resolved = resolveScoped<T>({ global: global ?? null, rows: atValidScopes(rows, members), scope, levels: spec.levels });
+  const valid = atValidScopes(rows, members);
+  const resolved = resolveScoped<T>({ global: global ?? null, rows: valid, scope, levels: spec.levels });
   const own = resolved.source === 'set' || resolved.source === 'set_empty';
   return {
     value: resolved.value,
     source: resolved.source,
     ...(own ? { ownValue: resolved.value } : {}),
+    ...(scope.level === 'global' ? {} : { inheritedValue: inheritedAt(spec, global ?? null, valid, scope) }),
     levels: [...spec.levels],
     supportedHere: spec.levels.includes(levelOf(scope)),
     required: spec.required,
   };
+}
+
+/**
+ * What the field would read if it inherited at `scope` (owner decision 2026-11-03): the same
+ * resolution without the scope's own row, so an empty parent stays empty rather than falling
+ * through to Global.
+ */
+function inheritedAt<T>(
+  spec: FieldScopeSpec,
+  global: T | null,
+  rows: readonly ScopedRow<T>[],
+  scope: Exclude<ScopeRef, { level: 'global' }>,
+): { value: T | null; level: InheritedLevel } {
+  const isOwn = (row: ScopedRow<T>) =>
+    row.channelId === scope.channelId &&
+    (scope.level === 'channel'
+      ? row.languageCode === null
+      : row.languageCode !== null && row.languageCode.toLowerCase() === scope.languageCode.toLowerCase());
+  const resolved = resolveScoped<T>({ global, rows: rows.filter((row) => !isOwn(row)), scope, levels: spec.levels });
+  // Without its own row a non-Global scope resolves to the channel row or to Global (which may
+  // hold no value: `value: null`, level `G`).
+  return { value: resolved.value, level: resolved.source === 'inherited_channel' ? 'C' : 'G' };
 }
 
 const textOf = (name: Record<string, string> | string | null, fallback: string): string => {
@@ -219,6 +262,10 @@ export function scopedViews(
       // A holder effectively hidden at this scope holds the role for nobody (163 rule kept).
       const held = items.find((item) => item.id === view.value);
       if (view.value !== null && (!held || held.hidden.value === true)) view.value = null;
+      const inheritedHolder = view.inheritedValue ? items.find((item) => item.id === view.inheritedValue!.value) : undefined;
+      if (view.inheritedValue && view.inheritedValue.value !== null && (!inheritedHolder || inheritedHolder.hidden.value === true)) {
+        view.inheritedValue.value = null;
+      }
       return [GALLERY_ROLE_KEYS[label], view];
     }),
   ) as ScopedValuesData['gallery']['roles'];
@@ -336,7 +383,8 @@ export class ScopedValuesReadService {
       gallery: views.gallery,
       attachments: views.attachments,
       packagingUnits: views.packagingUnits,
-      seo: null,
+      // An orphaned scope (a removal-only save's answer) has no SEO view: seo refuses that scope.
+      seo: this.deps.readSeo && isLiveScope(state, scope) ? await this.deps.readSeo(product.id, scope) : null,
       completeness: completenessSummary(state, scope),
       organizations,
     };
