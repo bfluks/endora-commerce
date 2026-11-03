@@ -79,6 +79,7 @@ function rig(options: { products?: CatalogProductRecord[]; members?: Record<stri
         { key: 'weight', valueType: 'number', scopable: true, isRequired: false },
         { key: 'code', valueType: 'string', scopable: false, isRequired: false },
         { key: 'multi', valueType: 'multiselect', scopable: true, isRequired: false },
+        { key: 'finish', valueType: 'select', scopable: true, isRequired: false },
       ],
     },
     catalogAvailability: {
@@ -490,5 +491,43 @@ describe('products file — export of every scoped value (§3)', () => {
     ]);
     expect(table.rows[0]!.slice(10)).toEqual(["'=SUM(A1)", 'NULL', 'inactive', 'INHERIT', '12', 'red|blue']);
     expect(table.rows[1]!.slice(10)).toEqual(['INHERIT', 'INHERIT', 'INHERIT', '\\INHERIT', 'NULL', 'INHERIT']);
+  });
+});
+
+/**
+ * C2/C3 security review (warn 1) — option values are text a PIM sync can create, so a select or
+ * multiselect cell takes the formula guard like any text cell: guarded on export, the guard
+ * stripped on import, and the two symmetric. A spreadsheet reads a formula only at the start of a
+ * cell, so one guard per cell covers a multiselect whose first element starts one; numbers and
+ * booleans stay unguarded.
+ */
+describe('products file — the formula guard on option values (FR-118)', () => {
+  it('guards a select and a multiselect cell on export', async () => {
+    const r = rig({ products: [product('p1', 'A')] });
+    (r.ports.catalogBulkImport as unknown as Record<string, unknown>).exportScopedValues = async () => ({
+      columns: [
+        { field: 'attribute:finish', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: null },
+        { field: 'attribute:multi', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: null },
+        { field: 'attribute:weight', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: null },
+      ],
+      values: {
+        p1: {
+          'attribute:finish@pl_b2b_vip': { kind: 'value', value: '=HYPERLINK("x")' },
+          'attribute:multi@pl_b2b_vip': { kind: 'value', value: ['@cmd', 'blue'] },
+          'attribute:weight@pl_b2b_vip': { kind: 'value', value: -5 },
+        },
+      },
+    });
+    const table = await productsAdapter(r.ports).exportTable!();
+    expect(table.rows[0]!.slice(10)).toEqual(["'=HYPERLINK(\"x\")", "'@cmd|blue", '-5']);
+  });
+
+  it('strips the guard from a select and a multiselect cell on import', async () => {
+    const r = rig();
+    await run(r, [{ sku: 'A', 'attribute:finish@pl_b2b_vip': "'=matte", 'attribute:multi@pl_b2b_vip': "'-red|blue" }]);
+    expect(r.calls[0]![0]!.cells).toEqual([
+      { scope: { level: 'channel', channelId: VIP }, field: 'attribute:finish', op: { op: 'set', value: '=matte' } },
+      { scope: { level: 'channel', channelId: VIP }, field: 'attribute:multi', op: { op: 'set', value: ['-red', 'blue'] } },
+    ]);
   });
 });
