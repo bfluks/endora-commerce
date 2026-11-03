@@ -171,13 +171,13 @@ export function methodsOfferedInChannel<M extends { salesChannelIds?: string[] }
 function toMethodOptions(methods: readonly MethodSummary[]): ComboboxOption<string>[] {
   return methods.map((m) => ({
     value: m.id,
-    label: pickName(m.name, m.code),
+    label: localizedLabel(m.name, m.code),
     description: m.code,
   }));
 }
 
 /** Sales-channel / method names are localized maps; pick a display string. */
-function pickName(name: Record<string, string> | undefined | null, fallback: string): string {
+function localizedLabel(name: Record<string, string> | undefined | null, fallback: string): string {
   if (!name) return fallback;
   return name['en-US'] ?? Object.values(name)[0] ?? fallback;
 }
@@ -693,7 +693,7 @@ export function OrderCreatePage(): ReactNode {
         setChannelOptions(
           channels.items.map((c) => ({
             value: c.id,
-            label: pickName(c.name, c.code),
+            label: localizedLabel(c.name, c.code),
             description: c.code,
           })),
         );
