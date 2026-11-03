@@ -192,6 +192,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
     onStage: () => undefined,
     readOnly: true,
     errors: {},
+    version: null,
   });
 
   const urlScope = scopeFromSearch(searchParams);
@@ -536,6 +537,12 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
       setFormError({ kind: 'seo' });
       return;
     }
+    if (e.code === ERROR_CODES.SKU_ALREADY_EXISTS) {
+      dispatch({ type: 'errors', errors: { 'product:sku': t('errors.SKU_ALREADY_EXISTS') } });
+      setFormError({ kind: 'validation', count: 1 });
+      setTimeout(() => document.getElementById(fieldDomId('product:sku'))?.focus(), 0);
+      return;
+    }
     if (e.code === ERROR_CODES.URL_KEY_TAKEN) {
       dispatch({ type: 'errors', errors: { urlKey: urlKeyErrorMessage(err, t) ?? t('errors.URL_KEY_TAKEN') } });
       setFormError({ kind: 'validation', count: 1 });
@@ -555,16 +562,28 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
     if (Array.isArray(fields) && fields.length > 0) {
       const errors: Record<string, string> = {};
       const gone: string[] = [];
+      let download = false;
       for (const entry of fields as Array<string | { field: string; reason?: string }>) {
-        const field = typeof entry === 'string' ? `product:${entry}` : entry.field;
+        // The Global-only family answers `product.<key>`; the editor's path is `product:<key>`.
+        const raw = typeof entry === 'string' ? `product:${entry}` : entry.field;
+        const field = raw.startsWith('product.') ? `product:${raw.slice('product.'.length)}` : raw;
         const reason =
           typeof entry === 'string'
             ? 'global_only'
             : (entry.reason ?? (e.code === ERROR_CODES.FIELD_NOT_AT_SCOPE ? 'not_at_scope' : 'invalid'));
-        if (reason === 'subject_not_found') gone.push(field);
+        if (field === 'product:downloadAssetId' || field === 'product:downloadUrl') download = true;
+        else if (field === 'product:attributeSetId' || field === 'product:categoryIds') {
+          // A Global-only reference that names nothing: the field's own words, the change kept.
+          errors[field] = reason === 'subject_not_found' ? t(`productEditor.save.reason.${field.replace(':', '.')}`) : t(`productEditor.save.reason.${reason}`);
+        } else if (reason === 'subject_not_found') gone.push(field);
         else errors[field] = t(`productEditor.save.reason.${reason}`);
       }
       if (gone.length > 0) dispatch({ type: 'dropPaths', paths: gone });
+      if (download && Object.keys(errors).length === 0) {
+        // The download rules have no field in the editor (virtual products, feature 002).
+        setFormError({ kind: 'message', text: t('productEditor.save.error.download') });
+        return;
+      }
       if (Object.keys(errors).length > 0) {
         dispatch({ type: 'errors', errors });
         setFormError({ kind: 'validation', count: Object.keys(errors).length });
@@ -1019,6 +1038,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
                 dispatch({ type: 'stage', path: `seo:${field}`, op }),
               readOnly,
               errors: seoErrors,
+              version: state.version,
             }}
           />
         );
