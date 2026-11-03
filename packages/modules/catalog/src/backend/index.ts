@@ -284,6 +284,8 @@ export interface CatalogCradle {
   readonly catalogSeoProductMeta: NonNullable<CatalogModuleOptions['resolveSeoProductMeta']>;
   /** Feature 163 (T118c) — `seo`'s scopes of a product, `[]` while `seo` is off. */
   readonly catalogSeoProductScopes: NonNullable<CatalogModuleOptions['listSeoProductScopes']>;
+  /** Feature 170 (T123) — `seo`'s view of a product at one scope, `null` while `seo` is off. */
+  readonly catalogSeoProductScoped: NonNullable<CatalogModuleOptions['readSeoProductScoped']>;
   /**
    * Owned by `assets_library`: the registry that refuses to delete an asset a
    * product gallery, attachment, virtual download or category image points at.
@@ -524,6 +526,19 @@ export function registerModule(ctx: ModuleContext): void {
      * overview lists no SEO field and answers no error, and there is no `catch` to
      * hide a genuine `seo` failure behind that absence.
      */
+    /**
+     * Feature 170 (T123, FR-092) — `seo`'s view of the product at the editor's scope, by the same
+     * probe-before-resolve: with `seo` off the read answers `seo: null` and no SEO section shows.
+     */
+    catalogSeoProductScoped: ctx
+      .asFunction((): CatalogCradle['catalogSeoProductScoped'] => {
+        const seoMeta = lazyPort<SeoProductMetaPort>(ctx, 'seoProductMetaPort');
+        return async (productId, scope) => {
+          if (!effectiveState.isPresent('seo')) return null;
+          return seoMeta.readScoped(productId, scope);
+        };
+      })
+      .singleton(),
     catalogSeoProductScopes: ctx
       .asFunction((): CatalogCradle['catalogSeoProductScopes'] => {
         const seoMeta = lazyPort<SeoProductMetaPort>(ctx, 'seoProductMetaPort');
@@ -743,6 +758,7 @@ export function registerModule(ctx: ModuleContext): void {
             reindexSearchIndexes: () => cradle().catalogSearchReindex(),
             resolveSeoProductMeta: (input) => cradle().catalogSeoProductMeta(input),
             listSeoProductScopes: (productId) => cradle().catalogSeoProductScopes(productId),
+            readSeoProductScoped: (productId, scope) => cradle().catalogSeoProductScoped(productId, scope),
             categoryRevalidator: cradle().catalogCategoryRevalidator,
             copyWarehouseThresholds,
           }),
