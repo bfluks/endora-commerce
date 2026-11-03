@@ -26,6 +26,7 @@ import {
   PRODUCTS_CSV_CELL_MAX,
   PRODUCTS_CSV_ROWS_MAX,
   ProductsFileError,
+  isGuardedAttributeType,
   parseProductsHeader,
   type FieldInfo,
   type GrammarAttribute,
@@ -86,9 +87,12 @@ function exportRowOf(p: CatalogProductRecord): string[] {
   ];
 }
 
-/** Whether a field's column is text (formula guard both ways) — the grammar's rule (`fieldInfo`). */
-function isTextField(field: string, attributeDefs: ReadonlyMap<string, GrammarAttribute>): boolean {
-  if (field.startsWith('attribute:')) return attributeDefs.get(field.slice('attribute:'.length))?.valueType === 'string';
+/** Whether a field's column takes the formula guard both ways — the grammar's rule (`fieldInfo.guarded`). */
+function isGuardedField(field: string, attributeDefs: ReadonlyMap<string, GrammarAttribute>): boolean {
+  if (field.startsWith('attribute:')) {
+    const def = attributeDefs.get(field.slice('attribute:'.length));
+    return def !== undefined && isGuardedAttributeType(def.valueType);
+  }
   return field === 'name' || field === 'description' || field === 'urlKey';
 }
 
@@ -106,7 +110,7 @@ type CellRead = { kind: 'no_change' } | { kind: 'op'; op: ScopedWriteOp<unknown>
 /** The op a cell carries for its field, or why it carries none (`write-encoding.md` §3, §3a). */
 export function readProductsCell(info: FieldInfo, raw: string): CellRead {
   if (raw.length > PRODUCTS_CSV_CELL_MAX) return { kind: 'error', code: 'too_long' };
-  const cell = decodeCsvScopedCell(info.text ? raw : raw.trim(), { column: info.text ? 'text' : 'value' });
+  const cell = decodeCsvScopedCell(info.text ? raw : raw.trim(), { column: info.guarded ? 'text' : 'value' });
   if (cell.kind === 'no_change') return { kind: 'no_change' };
   if (cell.kind === 'empty') return { kind: 'op', op: { op: 'empty' } };
   if (cell.kind === 'inherit') return { kind: 'op', op: { op: 'inherit' } };
@@ -183,7 +187,7 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
       ]);
       const columns = scoped.columns.map((c) => ({
         key: scopedColumn(c.field, c.channelCode, c.languageCode),
-        text: isTextField(c.field, attributeDefs),
+        text: isGuardedField(c.field, attributeDefs),
       }));
       return {
         header: [...EXPORT_HEADER, ...columns.map((c) => c.key)],
