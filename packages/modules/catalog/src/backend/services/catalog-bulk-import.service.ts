@@ -3,7 +3,6 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
   isSystemAttributeKey,
-  scopedStatusColumn,
   scopedColumn,
   toScopeChannel,
   type BulkImportReport,
@@ -13,9 +12,6 @@ import {
   type FieldPath,
   type ProductImportCell,
   type ProductImportRow,
-  type ProductStatus,
-  type ScopeRef,
-  type ScopedStatusExport,
   type ScopedExportValue,
   type ScopedValuesExport,
   sameLanguage,
@@ -99,39 +95,6 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
       importDeps?: ScopedImportDeps;
     },
   ) {}
-
-  /**
-   * Feature 163 (FR-092) — every channel's scope columns, and each product's overrides in them.
-   * 170-shim: replaced by {@link exportScopedValues}; deleted once `import_export`'s adapter reads
-   * that (T087, S2).
-   */
-  async exportScopedStatuses(): Promise<ScopedStatusExport> {
-    if (!this.scoped) throw new Error('CatalogBulkImportService: the scoped-status export is not wired.');
-    const em = this.scoped.emFactory();
-    const channels = await em.find(SalesChannel, {}, { orderBy: { code: 'asc' } });
-    const columns: ScopedStatusExport['columns'] = [];
-    const codeById = new Map<string, string>();
-    for (const channel of channels) {
-      codeById.set(channel.id, channel.code);
-      columns.push({ channelCode: channel.code, languageCode: null });
-      for (const languageCode of toScopeChannel(channel).languages) {
-        columns.push({ channelCode: channel.code, languageCode });
-      }
-    }
-    const values: ScopedStatusExport['values'] = {};
-    const put = (productId: string, column: string, status: ProductStatus): void => {
-      (values[productId] ??= {})[column] = status;
-    };
-    for (const row of await em.find(ProductChannelScope, { status: { $ne: null } })) {
-      const code = codeById.get(row.salesChannelId);
-      if (code && row.status) put(row.productId, scopedStatusColumn(code, null), row.status);
-    }
-    for (const row of await em.find(ProductChannelLanguageScope, {})) {
-      const code = codeById.get(row.salesChannelId);
-      if (code) put(row.productId, scopedStatusColumn(code, row.languageCode), row.status);
-    }
-    return { columns, values };
-  }
 
   async importCategories(rows: readonly CategoryImportRow[]): Promise<BulkImportReport> {
     if (rows.length === 0) return { imported: 0, errors: [] };
@@ -224,7 +187,6 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
     const em = scoped.emFactory();
     const products = await em.find(Product, { sku: { $in: [...new Set(rows.map((row) => row.sku))] } }, { fields: ['id', 'sku'] });
     const idBySku = new Map(products.map((product) => [product.sku, product.id]));
-    const channelIdOf = await this.#channelIdsByCode(em, rows);
 
     const errors: BulkImportRowError[] = [];
     const fieldErrors: NonNullable<BulkImportReport['fieldErrors']> = [];
@@ -236,7 +198,7 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
         errors.push({ index, reason: `unknown sku: ${row.sku}` });
         continue;
       }
-      const cells: ProductImportCell[] = (row.cells ?? []).map((cell) => ({ ...cell, scope: channelIdOf(cell.scope) }));
+      const cells: ProductImportCell[] = [...(row.cells ?? [])];
       if (row.status !== undefined) cells.push({ scope: { level: 'global' }, field: 'status', op: { op: 'set', value: row.status }, column: 'status' });
       const duplicate = firstDuplicateCell(cells);
       if (duplicate !== null) {
@@ -275,6 +237,11 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
    * value there, and each product's own values. Orphans (a channel the product left, a language
    * the channel dropped, a level the attribute's scope set no longer has) are not exported: a
    * re-import of the file must write nothing.
+   *
+   * Not paged (C2/C3 code review note): the products export is one in-memory file. Its adapter
+   * reads every product (`catalogProducts.listAll()`) and needs the whole column set for the
+   * header before it writes the first row, so paging this read alone would bound nothing. The
+   * export's memory is bounded when the file itself streams, which is a follow-up of its own.
    */
   async exportScopedValues(): Promise<ScopedValuesExport> {
     const scoped = this.#requireScoped();
@@ -354,27 +321,6 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
   #requireScoped(): { emFactory: () => EntityManager; importDeps: ScopedImportDeps } {
     if (!this.scoped?.importDeps) throw new Error('CatalogBulkImportService: the scoped import is not wired.');
     return { emFactory: this.scoped.emFactory, importDeps: this.scoped.importDeps };
-  }
-
-  /**
-   * 170-shim: the products file still names a channel by its code in `channelId` (`status@<code>`)
-   * until `import_export` resolves codes to ids against the header (T087, S2); a uuid passes as is.
-   */
-  async #channelIdsByCode(em: EntityManager, rows: readonly ProductImportRow[]): Promise<(scope: ScopeRef) => ScopeRef> {
-    const isUuid = (value: string): boolean => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-    const codes = [
-      ...new Set(
-        rows.flatMap((row) => (row.cells ?? []).flatMap((cell) => (cell.scope.level === 'global' || isUuid(cell.scope.channelId) ? [] : [cell.scope.channelId]))),
-      ),
-    ];
-    const byCode = new Map(
-      codes.length === 0 ? [] : (await em.find(SalesChannel, { code: { $in: codes } })).map((channel) => [channel.code, channel.id] as const),
-    );
-    return (scope) => {
-      if (scope.level === 'global' || isUuid(scope.channelId)) return scope;
-      const channelId = byCode.get(scope.channelId);
-      return channelId === undefined ? scope : { ...scope, channelId };
-    };
   }
 }
 

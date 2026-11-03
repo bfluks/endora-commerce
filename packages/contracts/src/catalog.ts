@@ -2805,28 +2805,6 @@ export function scopedColumn(field: string, channelCode: string, languageCode: s
   return languageCode === null ? `${field}@${channelCode}` : `${field}@${channelCode}/${languageCode}`;
 }
 
-/** The scoped-status columns a products export carries, and each product's overrides in them. */
-export interface ScopedStatusExport {
-  /** Every channel scope, then its channel × language scopes, in a stable order. */
-  columns: Array<{ channelCode: string; languageCode: string | null }>;
-  /** Product id → column name ({@link scopedStatusColumn}) → the override there. An inherited scope is absent. */
-  values: Record<string, Record<string, ProductStatus>>;
-}
-
-const SCOPED_STATUS_COLUMN = /^status@([^/]+)(?:\/(.+))?$/;
-
-/** The products-file column of a scope: `status@<channel code>` or `status@<channel code>/<language>`. */
-export function scopedStatusColumn(channelCode: string, languageCode: string | null): string {
-  return languageCode === null ? `status@${channelCode}` : `status@${channelCode}/${languageCode}`;
-}
-
-/** The scope a products-file column names, or `null` when it is not a scoped-status column. */
-export function parseScopedStatusColumn(column: string): { channelCode: string; languageCode: string | null } | null {
-  const match = SCOPED_STATUS_COLUMN.exec(column.trim());
-  if (!match) return null;
-  return { channelCode: match[1]!, languageCode: match[2] ?? null };
-}
-
 /**
  * Container name: `catalogBulkImportPort`. Owner: `catalog`.
  *
@@ -2858,12 +2836,6 @@ export interface CatalogBulkImportPort {
   importProducts(rows: readonly ProductImportRow[], options?: { dryRun?: boolean }): Promise<BulkImportReport>;
   /** Feature 170 (FR-043, FR-114) — the scoped columns of a products export, and their own values. */
   exportScopedValues(): Promise<ScopedValuesExport>;
-  /**
-   * Feature 163 (FR-092) — the scoped-status columns of a products export, and their values.
-   * @deprecated replaced by {@link exportScopedValues}; removed once `import_export`'s
-   * adapter reads that (T087, S2).
-   */
-  exportScopedStatuses(): Promise<ScopedStatusExport>;
 }
 
 // --- the attribute read model ------------------------------------------------
