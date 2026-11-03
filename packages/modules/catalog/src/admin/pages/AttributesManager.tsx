@@ -567,8 +567,7 @@ function AttributeForm({ mode, attribute, onSubmit, onCancel }: AttributeFormPro
     setQuickSearchable(false);
     setIsPromoRule(false);
     setIsPriceRule(false);
-    setChannelScoped(false);
-    setLanguageScoped(false);
+    setScopable(false);
   };
 
   return (
