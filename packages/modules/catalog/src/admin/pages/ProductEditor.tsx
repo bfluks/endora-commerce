@@ -444,6 +444,17 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
     [productId],
   );
 
+  // The copy (§8) bumped the version: the next Save sends it; staged cells stay (R7).
+  const afterCopy = useCallback(
+    (version: string, fieldLabel: string, count: number): void => {
+      dispatch({ type: 'version', version });
+      announce(plural('productEditor.copy.done', count, { field: fieldLabel }));
+    },
+    // `plural` reads `t` and the admin language only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [announce, t, adminLanguage],
+  );
+
   // --- Save --------------------------------------------------------------------------------
   const save = useCallback(
     async (confirmTakeover?: string[]): Promise<boolean> => {
@@ -815,8 +826,9 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
       jumpTo: (scope, field) => requestScope(scope, undefined, field),
       refreshFamily,
       missingText,
+      afterCopy,
     }),
-    [productId, state, readOnly, scopeLabel, parentLabel, requestScope, refreshFamily, missingText],
+    [productId, state, readOnly, scopeLabel, parentLabel, requestScope, refreshFamily, missingText, afterCopy],
   );
 
   const archivedAt = archivedOverride !== undefined ? archivedOverride : (data?.product.archivedAt ?? null);
