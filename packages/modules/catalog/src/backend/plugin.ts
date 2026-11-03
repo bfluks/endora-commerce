@@ -67,6 +67,7 @@ import { ScopeOverviewService, type ListSeoProductScopes } from './services/scop
 import { composeCompletenessGate } from './services/scope-completeness.js';
 import { AttributeScopePreviewService } from './services/attribute-scope-preview.js';
 import { ProductScopeContextService } from './services/product-scope-context.service.js';
+import { ScopedValuesService } from './services/scoped-values.service.js';
 import { ProductValueResolverService } from './services/product-value-resolver.service.js';
 import { readContext as readCatalogContext, registerCatalogPublicRoutes } from './routes.public.js';
 import { registerCatalogUrlKeyPublicRoutes } from './routes.public.url-keys.js';
@@ -614,6 +615,23 @@ export function catalogModule(options: CatalogModuleOptions) {
       ? new UrlKeyService(options.emFactory, options.salesChannelMembership, options.commandBus)
       : undefined;
 
+    // Feature 170 — the editor's scoped-values read and save (one Command per save).
+    const scopedValuesService =
+      options.salesChannelMembership && attributeReadService
+        ? new ScopedValuesService(
+            options.emFactory,
+            {
+              membership: options.salesChannelMembership,
+              listAttributes: () => attributeReadService.listAll(),
+              ...(options.languageService ? { languages: options.languageService } : {}),
+              ...(options.assets ? { assets: options.assets } : {}),
+              ...(options.organizations ? { organizations: options.organizations } : {}),
+              gate: completenessGate,
+            },
+            options.commandBus,
+          )
+        : undefined;
+
     await registerCatalogAdminRoutes(app, {
       adminService,
       categoryAdminService,
@@ -641,6 +659,7 @@ export function catalogModule(options: CatalogModuleOptions) {
       ...(valueResolverService ? { productValueResolverService: valueResolverService } : {}),
       ...(overridesService ? { productOverridesService: overridesService } : {}),
       ...(scopesService ? { productScopesService: scopesService } : {}),
+      ...(scopedValuesService ? { scopedValuesService } : {}),
       ...(scopeOverviewService ? { scopeOverviewService } : {}),
       ...(attributeScopePreviewService ? { attributeScopePreviewService } : {}),
       ...(urlKeyService ? { urlKeyService } : {}),
