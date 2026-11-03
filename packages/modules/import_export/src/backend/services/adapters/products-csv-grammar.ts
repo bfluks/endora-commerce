@@ -46,6 +46,11 @@ export const PRODUCTS_CSV_COLUMNS_MAX = 500;
 export const PRODUCTS_CSV_ROWS_MAX = 50_000;
 /** The longest cell (a description, `scoped-values-api.md` R21 bounds). */
 export const PRODUCTS_CSV_CELL_MAX = 20_000;
+/**
+ * The most row errors, and the most field errors, one report lists (C2/C3 security review): the
+ * file caps alone allow 25 million refused cells. The rest are counted, never listed.
+ */
+export const PRODUCTS_REPORT_ERRORS_MAX = 1_000;
 
 export interface GrammarChannel {
   id: string;
@@ -65,11 +70,17 @@ export interface ProductsHeaderContext {
   attributes: ReadonlyMap<string, GrammarAttribute>;
 }
 
-/** How a column's cells read: a text column takes the formula guard (FR-118); a value column does not. */
+/**
+ * How a column's cells read. A text column is read verbatim (never trimmed); a guarded column
+ * takes the formula guard both ways (FR-118). Every text column is guarded, and so is an option
+ * column (select, enum, multiselect): its values are text a PIM sync can create (C2/C3 security
+ * review). Numbers, prices, booleans, dates and the status are neither.
+ */
 export interface FieldInfo {
   field: FieldPath;
   spec: FieldScopeSpec;
   text: boolean;
+  guarded: boolean;
   valueType: AttributeValueType | 'text' | 'status';
 }
 
@@ -91,6 +102,11 @@ const VALUE_FIELDS: Readonly<Record<string, FieldInfo['valueType']>> = {
   returnable: 'boolean',
 };
 
+/** Whether an attribute's cells take the formula guard: text and option values do. */
+export function isGuardedAttributeType(valueType: AttributeValueType): boolean {
+  return valueType === 'string' || valueType === 'select' || valueType === 'enum' || valueType === 'multiselect';
+}
+
 function fieldInfo(field: string, ctx: ProductsHeaderContext): FieldInfo | string {
   if (field.startsWith('attribute:')) {
     const key = field.slice('attribute:'.length);
@@ -100,12 +116,19 @@ function fieldInfo(field: string, ctx: ProductsHeaderContext): FieldInfo | strin
       field: field as FieldPath,
       spec: attributeFieldSpec(def),
       text: def.valueType === 'string',
+      guarded: isGuardedAttributeType(def.valueType),
       valueType: def.valueType,
     };
   }
   const spec = (PRODUCT_FIELD_SCOPE_SETS as Record<string, FieldScopeSpec>)[field]!;
   const valueType = VALUE_FIELDS[field];
-  return { field: field as FieldPath, spec, text: valueType === undefined, valueType: valueType ?? 'text' };
+  return {
+    field: field as FieldPath,
+    spec,
+    text: valueType === undefined,
+    guarded: valueType === undefined,
+    valueType: valueType ?? 'text',
+  };
 }
 
 const levelOf = (scope: ScopeRef): ScopeLevel =>

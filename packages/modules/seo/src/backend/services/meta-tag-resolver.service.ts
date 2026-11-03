@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import { ERROR_CODES, resolveScoped, toScopeChannel } from '@endora-commerce/contracts';
 import type { ScopeRef, ScopedFieldView, ScopedRow } from '@endora-commerce/contracts';
 import type {
+  CatalogProductAvailabilityPort,
   CatalogCategoryReadPort,
   CatalogCategoryRecord,
   CatalogProductReadPort,
@@ -59,6 +60,8 @@ const FIELDS: readonly SeoProductMetaField[] = ['title', 'description', 'ogTitle
 
 export interface RuleBuilderInput {
   product?: CatalogProductRecord;
+  /** The product's effective texts at the request's scope; absent = its Global texts. */
+  texts?: { name: string; description: string | null };
   category?: CatalogCategoryRecord;
   cmsPage?: CmsPageRecord;
 }
@@ -112,18 +115,20 @@ export function seoMetaAddress(request: SeoMetaScopeRequest): SeoMetaOverrideAdd
 function scopeChain(
   rows: readonly SeoMetaOverride[],
   channelId: string | null,
-  languageCode: string,
+  languageCode: string | null,
 ): Array<{ row: SeoMetaOverride; source: Exclude<SeoProductMetaSource, 'derived'> }> {
   const chain: Array<{ row: SeoMetaOverride; source: Exclude<SeoProductMetaSource, 'derived'> }> = [];
   if (channelId !== null) {
-    const cxl = rows.find((r) => r.salesChannelId === channelId && sameLanguage(r.locale ?? null, languageCode));
-    if (cxl) chain.push({ row: cxl, source: 'set' });
+    if (languageCode !== null) {
+      const cxl = rows.find((r) => r.salesChannelId === channelId && sameLanguage(r.locale ?? null, languageCode));
+      if (cxl) chain.push({ row: cxl, source: 'set' });
+    }
     const c = rows.find((r) => r.salesChannelId === channelId && (r.locale ?? null) === null);
-    if (c) chain.push({ row: c, source: 'inherited_channel' });
+    if (c) chain.push({ row: c, source: languageCode === null ? 'set' : 'inherited_channel' });
   }
   // Feature 170 (FR-010) — the Global row, never a Language-only one.
   const g = rows.find((r) => (r.salesChannelId ?? null) === null && (r.locale ?? null) === null);
-  if (g) chain.push({ row: g, source: 'inherited_global' });
+  if (g) chain.push({ row: g, source: channelId === null ? 'set' : 'inherited_global' });
   return chain;
 }
 
@@ -136,7 +141,7 @@ function scopeChain(
 export function walkSeoScopes(
   rows: readonly SeoMetaOverride[],
   channelId: string | null,
-  languageCode: string,
+  languageCode: string | null,
   fallback: SeoProductMetaValues,
 ): SeoProductMetaValues & { sources: Record<SeoProductMetaField, SeoProductMetaSource> } {
   const chain = scopeChain(rows, channelId, languageCode);
@@ -167,6 +172,11 @@ export class MetaTagResolverService implements SeoProductMetaPort {
     private readonly cmsPages: CmsPageReadPort,
     /** A product's channels and their languages, for the FR-014 check of a scoped write. */
     private readonly membership: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>,
+    /**
+     * Feature 170 (`contracts/readers.md` §1) — the product's effective name and description at
+     * (C, L), which the derived metadata there is built from.
+     */
+    private readonly productTexts: Pick<CatalogProductAvailabilityPort, 'effectiveTexts'>,
   ) {}
 
   async resolve(input: SeoMetaScopeRequest): Promise<ResolvedMeta> {
@@ -183,12 +193,24 @@ export class MetaTagResolverService implements SeoProductMetaPort {
     const address = seoMetaAddress(input);
     const locale = address.locale ?? FALLBACK_LOCALE;
     const ruleSource = await this.loadRuleSource(input.entityType, input.entityId);
+    if (ruleSource.product && address.channelId !== null) {
+      // Feature 170 — the derived values at a Channel or Channel × language scope come from the
+      // product's effective texts there (C×L → C → G), not from its Global texts.
+      const texts = await this.productTexts.effectiveTexts([ruleSource.product.id], {
+        channelId: address.channelId,
+        languageCode: address.locale,
+      });
+      const effective = texts.get(ruleSource.product.id);
+      if (effective) ruleSource.texts = effective;
+    }
     const rule = buildRuleMeta(input.entityType, ruleSource, locale);
     const rows = await this.emFactory().find(SeoMetaOverride, {
       entityType: input.entityType,
       entityId: input.entityId,
     });
-    const walked = walkSeoScopes(rows, address.channelId, locale, {
+    // A product walks from its own address (G, C or C×L); a category or CMS page has no channel.
+    const walkLanguage = input.entityType === 'product' ? address.locale : locale;
+    const walked = walkSeoScopes(rows, address.channelId, walkLanguage, {
       title: rule.title,
       description: rule.description,
       ogTitle: rule.openGraph.title,
@@ -383,9 +405,9 @@ export function buildRuleMeta(
   locale: string,
 ): { title: string; description: string; openGraph: ResolvedMeta['openGraph'] } {
   if (entityType === 'product' && source.product) {
-    // 170-shim: the Global texts; the derived fallback at (C, L) through `effectiveTexts` is T121's.
-    const name = source.product.name;
-    const description = source.product.description ?? '';
+    // Feature 170 — the texts at the request's scope (`effectiveTexts`), else the Global ones.
+    const name = source.texts?.name ?? source.product.name;
+    const description = (source.texts ? source.texts.description : source.product.description) ?? '';
     return {
       title: trim(name, TITLE_MAX),
       description: trim(description, DESCRIPTION_MAX),

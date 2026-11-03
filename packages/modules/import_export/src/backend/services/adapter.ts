@@ -45,6 +45,14 @@ export interface ImportExportPorts {
 }
 
 /** Feature 170 — what a run hands an adapter besides its records. */
+/**
+ * What an adapter's import answers: the owner's report, plus — when the report would list more
+ * refusals than it may — how many there were (`truncated`; products only, C2/C3 security review).
+ */
+export interface AdapterImportReport extends BulkImportReport {
+  truncated?: { errors: number; fieldErrors: number };
+}
+
 export interface ImportRowsOptions {
   /** The run's import profile, snapshotted at run start (products only). */
   readonly profile?: ImportProfile;
@@ -118,5 +126,5 @@ export interface ImportExportAdapter {
    * A local failure short-circuits the run before any port is called, which is what
    * keeps all-or-nothing true across the two halves.
    */
-  importRows?(records: ReadonlyArray<Record<string, string>>, options?: ImportRowsOptions): Promise<BulkImportReport>;
+  importRows?(records: ReadonlyArray<Record<string, string>>, options?: ImportRowsOptions): Promise<AdapterImportReport>;
 }

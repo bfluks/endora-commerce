@@ -15,12 +15,13 @@ the products import maps source languages with.
 | --- | --- | --- |
 | `GET /api/v1/admin/import-export/entities` | admin (any entity code below) | The entities this caller may use, with `canExport` / `canImport` |
 | `GET /api/v1/admin/export/:entity.csv` | admin (the entity's export code) | Streaming CSV download with attachment headers |
-| `POST /api/v1/admin/import/:entity` | admin (the entity's import code) | Apply a `text/csv` body (at most 10 MiB) |
+| `POST /api/v1/admin/import/:entity` | admin (the entity's import code) | Apply a `text/csv` body (the products file at most 10 MiB; other entities the server's default limit) |
 | `GET /api/v1/admin/import-export/profiles?entity=products` | admin (`catalog:write`) | List the import profiles |
 | `GET /api/v1/admin/import-export/profiles/:id` | admin (`catalog:write`) | One import profile |
 | `POST /api/v1/admin/import-export/profiles` | admin (`catalog:write`) | Create an import profile |
 | `PATCH /api/v1/admin/import-export/profiles/:id` | admin (`catalog:write`) | Change an import profile |
 | `DELETE /api/v1/admin/import-export/profiles/:id` | admin (`catalog:write`) | Delete an import profile |
+| `GET /api/v1/admin/import-export/channel-targets` | admin (`catalog:write`) | The channels a profile may target: id, code and languages only |
 
 ## Supported entities
 
@@ -102,6 +103,11 @@ channel code or a language the channel does not offer refuses the **whole file**
 (`400 VALIDATION_FAILED`, nothing imported). A file is also refused above 50 000 rows or
 500 columns. A price column is refused: prices are set in price books.
 
+**Upgrading from a file with per-language columns.** Before feature 170 the products file carried
+one column per language, such as `name_en` or `description_pl`. Those headers now refuse the
+whole file. Rename each to the scope it should write: `name_en` becomes `name@<channel>/en-US` for
+each channel that sells in English, or `name[en_US]` with a profile that maps `en_US`.
+
 ### Cell values
 
 | Cell | Meaning |
@@ -118,8 +124,8 @@ The tokens are upper case and must fill the whole cell: `null` or ` NULL ` is or
 
 **Formula guard.** Spreadsheet programs run a cell that starts with `=`, `+`, `-`, `@`, a tab or
 a carriage return as a formula. The export therefore prefixes such a text with `'`, and the
-import removes exactly one leading `'` from a text column. Numeric and boolean columns are never
-changed.
+import removes exactly one leading `'` from a text column. Select and multiselect columns count as
+text here: their option values can come from a PIM. Numeric and boolean columns are never changed.
 
 ### Report
 
@@ -135,6 +141,10 @@ changed.
   }
 }
 ```
+
+The report lists at most 1 000 row errors and 1 000 refused cells. When there are more, it also
+carries `"truncated": { "errors": <all row errors>, "fieldErrors": <all refused cells> }`; fix the
+listed ones and check the file again.
 
 ### Export
 

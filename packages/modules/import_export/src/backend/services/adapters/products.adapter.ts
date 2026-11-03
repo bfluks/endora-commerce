@@ -21,11 +21,13 @@ import {
   type ScopeRef,
   type ScopedWriteOp,
 } from '@endora-commerce/contracts';
-import type { ImportExportAdapter, ImportExportPorts, ImportRowsOptions } from '../adapter.js';
+import type { AdapterImportReport, ImportExportAdapter, ImportExportPorts, ImportRowsOptions } from '../adapter.js';
 import {
   PRODUCTS_CSV_CELL_MAX,
   PRODUCTS_CSV_ROWS_MAX,
+  PRODUCTS_REPORT_ERRORS_MAX,
   ProductsFileError,
+  isGuardedAttributeType,
   parseProductsHeader,
   type FieldInfo,
   type GrammarAttribute,
@@ -86,9 +88,12 @@ function exportRowOf(p: CatalogProductRecord): string[] {
   ];
 }
 
-/** Whether a field's column is text (formula guard both ways) — the grammar's rule (`fieldInfo`). */
-function isTextField(field: string, attributeDefs: ReadonlyMap<string, GrammarAttribute>): boolean {
-  if (field.startsWith('attribute:')) return attributeDefs.get(field.slice('attribute:'.length))?.valueType === 'string';
+/** Whether a field's column takes the formula guard both ways — the grammar's rule (`fieldInfo.guarded`). */
+function isGuardedField(field: string, attributeDefs: ReadonlyMap<string, GrammarAttribute>): boolean {
+  if (field.startsWith('attribute:')) {
+    const def = attributeDefs.get(field.slice('attribute:'.length));
+    return def !== undefined && isGuardedAttributeType(def.valueType);
+  }
   return field === 'name' || field === 'description' || field === 'urlKey';
 }
 
@@ -106,7 +111,7 @@ type CellRead = { kind: 'no_change' } | { kind: 'op'; op: ScopedWriteOp<unknown>
 /** The op a cell carries for its field, or why it carries none (`write-encoding.md` §3, §3a). */
 export function readProductsCell(info: FieldInfo, raw: string): CellRead {
   if (raw.length > PRODUCTS_CSV_CELL_MAX) return { kind: 'error', code: 'too_long' };
-  const cell = decodeCsvScopedCell(info.text ? raw : raw.trim(), { column: info.text ? 'text' : 'value' });
+  const cell = decodeCsvScopedCell(info.text ? raw : raw.trim(), { column: info.guarded ? 'text' : 'value' });
   if (cell.kind === 'no_change') return { kind: 'no_change' };
   if (cell.kind === 'empty') return { kind: 'op', op: { op: 'empty' } };
   if (cell.kind === 'inherit') return { kind: 'op', op: { op: 'inherit' } };
@@ -183,7 +188,7 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
       ]);
       const columns = scoped.columns.map((c) => ({
         key: scopedColumn(c.field, c.channelCode, c.languageCode),
-        text: isTextField(c.field, attributeDefs),
+        text: isGuardedField(c.field, attributeDefs),
       }));
       return {
         header: [...EXPORT_HEADER, ...columns.map((c) => c.key)],
@@ -208,7 +213,7 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
       message: 'Prices are set in price books, not on the product: remove the price column.',
     })),
 
-    async importRows(records, options?: ImportRowsOptions): Promise<BulkImportReport> {
+    async importRows(records, options?: ImportRowsOptions): Promise<AdapterImportReport> {
       const profile = options?.profile;
       if (profile === undefined) throw new Error('A products import runs with a profile.');
       if (records.length > PRODUCTS_CSV_ROWS_MAX) {
@@ -221,8 +226,19 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
       const columns = parsed.columns;
       const localeColumns = columns.filter((c): c is LocaleColumn => c.kind === 'locale');
 
+      // Bounded lists (`PRODUCTS_REPORT_ERRORS_MAX`): every refusal is counted, the first ones listed.
       const errors: BulkImportRowError[] = [];
       const fieldErrors: NonNullable<BulkImportReport['fieldErrors']> = [];
+      let errorTotal = 0;
+      let fieldErrorTotal = 0;
+      const rowError = (error: BulkImportRowError): void => {
+        errorTotal += 1;
+        if (errors.length < PRODUCTS_REPORT_ERRORS_MAX) errors.push(error);
+      };
+      const listFieldError = (error: NonNullable<BulkImportReport['fieldErrors']>[number]): void => {
+        fieldErrorTotal += 1;
+        if (fieldErrors.length < PRODUCTS_REPORT_ERRORS_MAX) fieldErrors.push(error);
+      };
       const counts = new Map<string, { null: number; inherit: number }>();
       const unmapped = new Map<string, { locale: string; sourceChannel: string | null; products: number }>();
       const count = (column: string, op: ScopedWriteOp<unknown>) => {
@@ -255,13 +271,13 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
       for (const [index, record] of records.entries()) {
         const sku = skuOf(record);
         if (!sku) {
-          errors.push({ index, reason: 'sku is required' });
+          rowError({ index, reason: 'sku is required' });
           continue;
         }
         const row: ProductImportRow = { sku };
         const cells: ProductImportCell[] = [];
         const explicit = new Set<string>();
-        const fieldError = (column: string, code: string) => fieldErrors.push({ index, column, code });
+        const fieldError = (column: string, code: string) => listFieldError({ index, column, code });
         const take = (
           scope: ScopeRef,
           field: ProductScopedWriteCell['field'],
@@ -362,7 +378,7 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
           }
           const conflict = plan.writes.find((write) => explicit.has(cellKey(write.field, write.scope)));
           if (conflict !== undefined) {
-            errors.push({
+            rowError({
               index,
               reason: `IMPORT_CELL_CONFLICT: "${conflict.field}" is written by a scope column and by a mapped locale column`,
             });
@@ -390,11 +406,15 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
       for (const { index, row } of rows) {
         const report = await ports.catalogBulkImport.importProducts([row], dryRun ? { dryRun: true } : undefined);
         imported += report.imported;
-        for (const error of report.errors) errors.push({ index, reason: error.reason });
-        for (const error of report.fieldErrors ?? []) fieldErrors.push({ ...error, index });
+        for (const error of report.errors) rowError({ index, reason: error.reason });
+        for (const error of report.fieldErrors ?? []) listFieldError({ ...error, index });
       }
       errors.sort((a, b) => a.index - b.index);
-      return { imported, errors, ...extras };
+      const truncated =
+        errorTotal > errors.length || fieldErrorTotal > fieldErrors.length
+          ? { truncated: { errors: errorTotal, fieldErrors: fieldErrorTotal } }
+          : {};
+      return { imported, errors, ...extras, ...truncated };
     },
   };
 }
