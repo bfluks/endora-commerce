@@ -60,13 +60,12 @@ import { GroupedService } from './services/grouped.service.js';
 import { BundleService } from './services/bundle.service.js';
 import { ProductEditorPreferencesService } from './services/product-editor-preferences.service.js';
 import { ProductListViewService } from './services/product-list-view-service.js';
-import { ProductOverridesService } from './services/product-overrides.service.js';
 import { ProductScopesService } from './services/product-scopes.service.js';
 import { UrlKeyService } from './services/url-key.service.js';
 import { ScopeOverviewService, type ListSeoProductScopes } from './services/scope-overview.service.js';
 import { composeCompletenessGate } from './services/scope-completeness.js';
 import { AttributeScopePreviewService } from './services/attribute-scope-preview.js';
-import { ProductScopeContextService } from './services/product-scope-context.service.js';
+import { ScopedValuesService } from './services/scoped-values.service.js';
 import { ProductValueResolverService } from './services/product-value-resolver.service.js';
 import { readContext as readCatalogContext, registerCatalogPublicRoutes } from './routes.public.js';
 import { registerCatalogUrlKeyPublicRoutes } from './routes.public.url-keys.js';
@@ -575,23 +574,6 @@ export function catalogModule(options: CatalogModuleOptions) {
           attributeReadService,
         )
       : undefined;
-    const scopeContextService =
-      options.salesChannelMembership && options.languageService
-        ? new ProductScopeContextService(
-            options.emFactory,
-            options.salesChannelMembership,
-            options.languageService,
-            editorPreferencesService,
-          )
-        : undefined;
-    const overridesService = options.salesChannelMembership
-      ? new ProductOverridesService(
-          options.emFactory,
-          options.salesChannelMembership,
-          options.commandBus,
-          attributeReadService,
-        )
-      : undefined;
 
     // Feature 163 — the scope overview (US4) reads membership through the kernel
     // accessor and, for a product in no channel, the active platform languages.
@@ -609,10 +591,39 @@ export function catalogModule(options: CatalogModuleOptions) {
     const attributeScopePreviewService = attributeReadService
       ? new AttributeScopePreviewService(options.emFactory, attributeReadService)
       : undefined;
-    // Feature 163 — URL keys per language and channel × language, and their redirects.
+    // Feature 163 / 170 (T039) — URL keys at G, C and C×L, and their redirects: the one key writer.
     const urlKeyService = options.salesChannelMembership
       ? new UrlKeyService(options.emFactory, options.salesChannelMembership, options.commandBus)
       : undefined;
+    // Feature 170 — the editor's scoped-values read and save (one Command per save).
+    const scopedValuesService =
+      options.salesChannelMembership && attributeReadService
+        ? new ScopedValuesService(
+            options.emFactory,
+            {
+              membership: options.salesChannelMembership,
+              listAttributes: () => attributeReadService.listAll(),
+              ...(options.languageService ? { languages: options.languageService } : {}),
+              ...(options.assets ? { assets: options.assets } : {}),
+              ...(options.organizations ? { organizations: options.organizations } : {}),
+              gate: completenessGate,
+              ...(urlKeyService
+                ? {
+                    writeUrlKey: (em, input) =>
+                      urlKeyService
+                        .lockAndCheck(
+                          em,
+                          input.productId,
+                          [{ scope: input.scope, op: input.cell.op.op === 'set' ? { op: 'set', key: String(input.cell.op.value) } : { op: 'inherit' } }],
+                          { mode: 'interactive', confirmTakeover: input.confirmTakeover },
+                        )
+                        .then((effects) => ({ before: effects.before, after: effects.after })),
+                  }
+                : {}),
+            },
+            options.commandBus,
+          )
+        : undefined;
 
     await registerCatalogAdminRoutes(app, {
       adminService,
@@ -635,12 +646,11 @@ export function catalogModule(options: CatalogModuleOptions) {
         ? { resolveAdminAuditContext: options.resolveAdminAuditContext }
         : {}),
       ...(options.auditLogService ? { auditLogService: options.auditLogService } : {}),
-      ...(scopeContextService ? { productScopeContextService: scopeContextService } : {}),
       productEditorPreferencesService: editorPreferencesService,
       productListViewService: listViewService,
       ...(valueResolverService ? { productValueResolverService: valueResolverService } : {}),
-      ...(overridesService ? { productOverridesService: overridesService } : {}),
       ...(scopesService ? { productScopesService: scopesService } : {}),
+      ...(scopedValuesService ? { scopedValuesService } : {}),
       ...(scopeOverviewService ? { scopeOverviewService } : {}),
       ...(attributeScopePreviewService ? { attributeScopePreviewService } : {}),
       ...(urlKeyService ? { urlKeyService } : {}),
