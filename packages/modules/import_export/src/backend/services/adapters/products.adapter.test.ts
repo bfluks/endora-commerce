@@ -9,7 +9,12 @@ import {
 import { SCOPED_WRITE_CASES } from '../../../../../../contracts/src/scoped-write-encoding.cases.js';
 import type { ImportExportPorts } from '../adapter.js';
 import { productsAdapter } from './products.adapter.js';
-import { ProductsFileError, parseProductsHeader, PRODUCTS_CSV_COLUMNS_MAX } from './products-csv-grammar.js';
+import {
+  ProductsFileError,
+  parseProductsHeader,
+  PRODUCTS_CSV_COLUMNS_MAX,
+  PRODUCTS_REPORT_ERRORS_MAX,
+} from './products-csv-grammar.js';
 
 /**
  * Feature 170 (`specs/170-product-editor-scope-switcher/` T087; `contracts/import-profiles-and-csv.md`
@@ -79,6 +84,7 @@ function rig(options: { products?: CatalogProductRecord[]; members?: Record<stri
         { key: 'weight', valueType: 'number', scopable: true, isRequired: false },
         { key: 'code', valueType: 'string', scopable: false, isRequired: false },
         { key: 'multi', valueType: 'multiselect', scopable: true, isRequired: false },
+        { key: 'finish', valueType: 'select', scopable: true, isRequired: false },
       ],
     },
     catalogAvailability: {
@@ -490,5 +496,70 @@ describe('products file — export of every scoped value (§3)', () => {
     ]);
     expect(table.rows[0]!.slice(10)).toEqual(["'=SUM(A1)", 'NULL', 'inactive', 'INHERIT', '12', 'red|blue']);
     expect(table.rows[1]!.slice(10)).toEqual(['INHERIT', 'INHERIT', 'INHERIT', '\\INHERIT', 'NULL', 'INHERIT']);
+  });
+});
+
+/**
+ * C2/C3 security review (warn 1) — option values are text a PIM sync can create, so a select or
+ * multiselect cell takes the formula guard like any text cell: guarded on export, the guard
+ * stripped on import, and the two symmetric. A spreadsheet reads a formula only at the start of a
+ * cell, so one guard per cell covers a multiselect whose first element starts one; numbers and
+ * booleans stay unguarded.
+ */
+describe('products file — the formula guard on option values (FR-118)', () => {
+  it('guards a select and a multiselect cell on export', async () => {
+    const r = rig({ products: [product('p1', 'A')] });
+    (r.ports.catalogBulkImport as unknown as Record<string, unknown>).exportScopedValues = async () => ({
+      columns: [
+        { field: 'attribute:finish', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: null },
+        { field: 'attribute:multi', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: null },
+        { field: 'attribute:weight', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: null },
+      ],
+      values: {
+        p1: {
+          'attribute:finish@pl_b2b_vip': { kind: 'value', value: '=HYPERLINK("x")' },
+          'attribute:multi@pl_b2b_vip': { kind: 'value', value: ['@cmd', 'blue'] },
+          'attribute:weight@pl_b2b_vip': { kind: 'value', value: -5 },
+        },
+      },
+    });
+    const table = await productsAdapter(r.ports).exportTable!();
+    expect(table.rows[0]!.slice(10)).toEqual(["'=HYPERLINK(\"x\")", "'@cmd|blue", '-5']);
+  });
+
+  it('strips the guard from a select and a multiselect cell on import', async () => {
+    const r = rig();
+    await run(r, [{ sku: 'A', 'attribute:finish@pl_b2b_vip': "'=matte", 'attribute:multi@pl_b2b_vip': "'-red|blue" }]);
+    expect(r.calls[0]![0]!.cells).toEqual([
+      { scope: { level: 'channel', channelId: VIP }, field: 'attribute:finish', op: { op: 'set', value: '=matte' } },
+      { scope: { level: 'channel', channelId: VIP }, field: 'attribute:multi', op: { op: 'set', value: ['-red', 'blue'] } },
+    ]);
+  });
+});
+
+/**
+ * C2/C3 security review (warn 2) — within the file caps a report could still list millions of
+ * refusals. The report lists at most `PRODUCTS_REPORT_ERRORS_MAX` row errors and as many field
+ * errors, and says how many there were in `truncated`.
+ */
+describe('products file — the bounded report', () => {
+  it('lists at most the cap of row and field errors and counts the rest', async () => {
+    const r = rig();
+    const total = PRODUCTS_REPORT_ERRORS_MAX + 7;
+    const records = [
+      ...Array.from({ length: total }, () => ({ sku: '', 'name@pl_b2b_vip': 'x' })),
+      ...Array.from({ length: total }, (_, i) => ({ sku: `S${i}`, 'name@pl_b2b_vip': "'" })),
+    ];
+    const report = await run(r, records);
+    expect(report.errors).toHaveLength(PRODUCTS_REPORT_ERRORS_MAX);
+    expect(report.fieldErrors).toHaveLength(PRODUCTS_REPORT_ERRORS_MAX);
+    expect(report.truncated).toEqual({ errors: total, fieldErrors: total });
+  });
+
+  it('has no truncation entry when every refusal is listed', async () => {
+    const r = rig();
+    const report = await run(r, [{ sku: '', 'name@pl_b2b_vip': 'x' }]);
+    expect(report.errors).toHaveLength(1);
+    expect(report.truncated).toBeUndefined();
   });
 });
