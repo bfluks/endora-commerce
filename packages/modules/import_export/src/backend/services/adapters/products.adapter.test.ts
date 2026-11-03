@@ -4,7 +4,7 @@ import {
   type CatalogProductRecord,
   type ImportProfile,
   type ProductImportRow,
-  type ScopedStatusExport,
+  type ScopedValuesExport,
 } from '@endora-commerce/contracts';
 import { SCOPED_WRITE_CASES } from '../../../../../../contracts/src/scoped-write-encoding.cases.js';
 import type { ImportExportPorts } from '../adapter.js';
@@ -47,19 +47,26 @@ const PROFILE: ImportProfile = {
 
 interface Rig {
   ports: ImportExportPorts;
+  /** The rows each writing call carried, cells without their echoed `column`. */
   calls: ProductImportRow[][];
+  /** The same, for `dryRun` calls (validation only). */
+  dryCalls: ProductImportRow[][];
+  /** The `column` each written cell echoed, in call order. */
+  columns: Array<string | undefined>;
 }
 
 function rig(options: { products?: CatalogProductRecord[]; members?: Record<string, string[]> } = {}): Rig {
   const calls: ProductImportRow[][] = [];
+  const dryCalls: ProductImportRow[][] = [];
+  const columns: Array<string | undefined> = [];
   const products = options.products ?? [product('p1', 'A'), product('p2', 'B')];
   const members = options.members ?? { [VIP]: ['p1', 'p2'], [RETAIL]: ['p1'] };
-  const scoped: ScopedStatusExport = {
+  const scoped: ScopedValuesExport = {
     columns: [
-      { channelCode: 'pl_b2b_vip', languageCode: null },
-      { channelCode: 'pl_b2b_vip', languageCode: 'pl-PL' },
+      { field: 'status', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: null },
+      { field: 'status', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: 'pl-PL' },
     ],
-    values: { p1: { 'status@pl_b2b_vip': 'inactive' } },
+    values: { p1: { 'status@pl_b2b_vip': { kind: 'text', text: 'inactive' } } },
   };
   const ports = {
     catalogProducts: {
@@ -85,14 +92,19 @@ function rig(options: { products?: CatalogProductRecord[]; members?: Record<stri
       ],
     },
     catalogBulkImport: {
-      exportScopedStatuses: async () => scoped,
-      importProducts: async (rows: readonly ProductImportRow[]) => {
-        calls.push([...rows]);
+      exportScopedValues: async () => scoped,
+      importProducts: async (rows: readonly ProductImportRow[], options?: { dryRun?: boolean }) => {
+        const stripped = rows.map((row) => {
+          if (row.cells === undefined) return row;
+          if (options?.dryRun !== true) for (const cell of row.cells) columns.push(cell.column);
+          return { ...row, cells: row.cells.map(({ column: _column, ...cell }) => cell) };
+        });
+        (options?.dryRun === true ? dryCalls : calls).push(stripped);
         return { imported: rows.length, errors: [] };
       },
     },
   } as unknown as ImportExportPorts;
-  return { ports, calls };
+  return { ports, calls, dryCalls, columns };
 }
 
 async function run(
@@ -379,12 +391,20 @@ describe('products file — the run (§2)', () => {
       dryRun: true,
     });
     expect(r.calls).toEqual([]);
+    // catalog validates the row too (its own refusals join the report) and writes nothing.
+    expect(r.dryCalls).toHaveLength(1);
     expect(report.imported).toBe(1);
     expect(report.fieldErrors).toEqual([{ index: 0, column: 'name@pl_b2b_vip', code: 'required_empty' }]);
     expect(report.cellCounts).toEqual([
       { column: 'name@pl_b2b_vip', null: 1, inherit: 0 },
       { column: 'description@pl_b2b_vip', null: 0, inherit: 1 },
     ]);
+  });
+
+  it('names the file column on every cell it hands catalog, so catalog refusals point at it', async () => {
+    const r = rig();
+    await run(r, [{ sku: 'A', 'description@pl_b2b_vip': 'Kept', 'name@pl_retail/pl-PL': 'Nazwa' }]);
+    expect(r.columns).toEqual(['description@pl_b2b_vip', 'name@pl_retail/pl-PL']);
   });
 
   it('refuses the whole file for a header error before any port write', async () => {
@@ -429,29 +449,34 @@ describe('products file — export (§3, write-encoding §3a)', () => {
 });
 
 /**
- * T087 export half, **pending S1's T083**: `CatalogBulkImportPort.exportScopedValues()` replaces
- * `exportScopedStatuses()` (proposed shape in the S2 block 2 report, "Changes needed in other
- * streams' files" #3). A column appears where any product holds an own value; an absent entry
- * is `INHERIT`; an empty own value is `NULL`; text columns are guarded, value columns are not.
- * Un-skip when the port lands and switch `exportTable()` to it.
+ * T087 export half: `CatalogBulkImportPort.exportScopedValues()`. A column appears where any
+ * product holds an own value; an absent entry is `INHERIT`; an empty own value is `NULL`; text
+ * columns are guarded, value columns are not; a multiselect joins with `|`.
  */
-describe.skip('products file — export of every scoped value (pending catalog exportScopedValues, T083)', () => {
+describe('products file — export of every scoped value (§3)', () => {
   it('writes one column per (field, scope) holding an own value, with tokens and the guard', async () => {
     const r = rig({ products: [product('p1', 'A'), product('p2', 'B')] });
     (r.ports.catalogBulkImport as unknown as Record<string, unknown>).exportScopedValues = async () => ({
       columns: [
-        { field: 'name', channelCode: 'pl_b2b_vip', languageCode: 'pl-PL' },
-        { field: 'description', channelCode: 'pl_b2b_vip', languageCode: null },
-        { field: 'status', channelCode: 'pl_b2b_vip', languageCode: null },
-        { field: 'attribute:material', channelCode: 'pl_retail', languageCode: null },
+        { field: 'name', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: 'pl-PL' },
+        { field: 'description', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: null },
+        { field: 'status', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: null },
+        { field: 'attribute:material', channelId: RETAIL, channelCode: 'pl_retail', languageCode: null },
+        { field: 'minOrderQuantity', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: null },
+        { field: 'attribute:multi', channelId: VIP, channelCode: 'pl_b2b_vip', languageCode: null },
       ],
       values: {
         p1: {
           'name@pl_b2b_vip/pl-PL': { kind: 'text', text: '=SUM(A1)' },
           'description@pl_b2b_vip': { kind: 'empty' },
           'status@pl_b2b_vip': { kind: 'text', text: 'inactive' },
+          'minOrderQuantity@pl_b2b_vip': { kind: 'value', value: 12 },
+          'attribute:multi@pl_b2b_vip': { kind: 'value', value: ['red', 'blue'] },
         },
-        p2: { 'attribute:material@pl_retail': { kind: 'text', text: 'INHERIT' } },
+        p2: {
+          'attribute:material@pl_retail': { kind: 'text', text: 'INHERIT' },
+          'minOrderQuantity@pl_b2b_vip': { kind: 'empty' },
+        },
       },
     });
     const table = await productsAdapter(r.ports).exportTable!();
@@ -460,8 +485,10 @@ describe.skip('products file — export of every scoped value (pending catalog e
       'description@pl_b2b_vip',
       'status@pl_b2b_vip',
       'attribute:material@pl_retail',
+      'minOrderQuantity@pl_b2b_vip',
+      'attribute:multi@pl_b2b_vip',
     ]);
-    expect(table.rows[0]!.slice(10)).toEqual(["'=SUM(A1)", 'NULL', 'inactive', 'INHERIT']);
-    expect(table.rows[1]!.slice(10)).toEqual(['INHERIT', 'INHERIT', 'INHERIT', '\\INHERIT']);
+    expect(table.rows[0]!.slice(10)).toEqual(["'=SUM(A1)", 'NULL', 'inactive', 'INHERIT', '12', 'red|blue']);
+    expect(table.rows[1]!.slice(10)).toEqual(['INHERIT', 'INHERIT', 'INHERIT', '\\INHERIT', 'NULL', 'INHERIT']);
   });
 });

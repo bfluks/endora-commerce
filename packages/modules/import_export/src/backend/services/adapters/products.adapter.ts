@@ -6,7 +6,7 @@ import {
   productScopeStatusSchema,
   productVisibilitySchema,
   sameSourceLocale,
-  scopedStatusColumn,
+  scopedColumn,
   toScopeChannel,
   validateScopedWrite,
   type BulkImportReport,
@@ -14,7 +14,9 @@ import {
   type CatalogProductRecord,
   type PimSourceValues,
   type ProductImportRow,
+  type ProductImportCell,
   type ProductScopedWriteCell,
+  type ScopedExportValue,
   type ScopeLevel,
   type ScopeRef,
   type ScopedWriteOp,
@@ -82,6 +84,21 @@ function exportRowOf(p: CatalogProductRecord): string[] {
       : value(String(p.minOrderQuantity)),
     value(String(p.returnable)),
   ];
+}
+
+/** Whether a field's column is text (formula guard both ways) — the grammar's rule (`fieldInfo`). */
+function isTextField(field: string, attributeDefs: ReadonlyMap<string, GrammarAttribute>): boolean {
+  if (field.startsWith('attribute:')) return attributeDefs.get(field.slice('attribute:'.length))?.valueType === 'string';
+  return field === 'name' || field === 'description' || field === 'urlKey';
+}
+
+/** One exported scoped cell: absent = `INHERIT`, empty = `NULL`, else the value in its column's form. */
+function exportCell(own: ScopedExportValue | undefined, textColumn: boolean): string {
+  if (own === undefined) return encodeCsvScopedCell({ kind: 'inherit' });
+  if (own.kind === 'empty') return encodeCsvScopedCell({ kind: 'empty' });
+  const raw =
+    own.kind === 'text' ? own.text : Array.isArray(own.value) ? own.value.join('|') : String(own.value);
+  return textColumn ? text(raw) : value(raw);
 }
 
 type CellRead = { kind: 'no_change' } | { kind: 'op'; op: ScopedWriteOp<unknown> } | { kind: 'error'; code: string };
@@ -153,27 +170,26 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
     requiresProfile: true,
     exportHeader: EXPORT_HEADER,
 
-    // The fixed columns, then one `status@<channel code>` and one
-    // `status@<channel code>/<language>` column per scope (feature 163, FR-092): the override
-    // there, `INHERIT` where the scope inherits (FR-043). Importing the file unchanged
-    // changes nothing (FR-114).
+    // The fixed Global columns, then one `<field>@<channel code>[/<language>]` column per
+    // (field, scope) at which any product holds an own value (`import-profiles-and-csv.md` §3):
+    // the own value there, `NULL` for a deliberately empty one, `INHERIT` where the product
+    // inherits (FR-043). Text columns carry the formula guard exactly where the import strips
+    // it, so importing the file unchanged changes nothing (FR-114, FR-118).
     async exportTable() {
-      const [products, scoped] = await Promise.all([
+      const [products, scoped, attributeDefs] = await Promise.all([
         ports.catalogProducts.listAll(),
-        ports.catalogBulkImport.exportScopedStatuses(),
+        ports.catalogBulkImport.exportScopedValues(),
+        attributes(),
       ]);
-      const columns = scoped.columns.map((c) => scopedStatusColumn(c.channelCode, c.languageCode));
+      const columns = scoped.columns.map((c) => ({
+        key: scopedColumn(c.field, c.channelCode, c.languageCode),
+        text: isTextField(c.field, attributeDefs),
+      }));
       return {
-        header: [...EXPORT_HEADER, ...columns],
+        header: [...EXPORT_HEADER, ...columns.map((c) => c.key)],
         rows: products.map((p) => {
           const values = scoped.values[p.id] ?? {};
-          return [
-            ...exportRowOf(p),
-            ...columns.map((column) => {
-              const own = values[column];
-              return own === undefined ? encodeCsvScopedCell({ kind: 'inherit' }) : value(own);
-            }),
-          ];
+          return [...exportRowOf(p), ...columns.map((c) => exportCell(values[c.key], c.text))];
         }),
       };
     },
@@ -243,16 +259,22 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
           continue;
         }
         const row: ProductImportRow = { sku };
-        const cells: ProductScopedWriteCell[] = [];
+        const cells: ProductImportCell[] = [];
         const explicit = new Set<string>();
         const fieldError = (column: string, code: string) => fieldErrors.push({ index, column, code });
-        const take = (scope: ScopeRef, field: ProductScopedWriteCell['field'], op: ScopedWriteOp<unknown>) => {
+        const take = (
+          scope: ScopeRef,
+          field: ProductScopedWriteCell['field'],
+          op: ScopedWriteOp<unknown>,
+          column?: string,
+        ) => {
           // The Global status is the product row's (catalog's import of today's file).
           if (field === 'status' && scope.level === 'global' && op.op === 'set') {
             row.status = op.value as NonNullable<ProductImportRow['status']>;
             return;
           }
-          cells.push({ scope, field, op });
+          // The file column rides along, so catalog's per-cell refusals name it (`fieldErrors`).
+          cells.push(column === undefined ? { scope, field, op } : { scope, field, op, column });
         };
 
         for (const column of columns) {
@@ -283,7 +305,7 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
             continue;
           }
           explicit.add(cellKey(column.info.field, column.scope));
-          take(column.scope, column.info.field, read.op);
+          take(column.scope, column.info.field, read.op, column.header);
         }
 
         // Locale columns, through the profile (`pim-locale-mapping.md` §2).
@@ -359,12 +381,14 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
         warnings: [...unmapped.values()].map((u) => ({ kind: 'unmapped_locale' as const, ...u })),
         fieldErrors,
       };
-      if (options?.dryRun === true) return { imported: rows.length, errors, ...extras };
+      const dryRun = options?.dryRun === true;
 
-      // One product, one call: each row is its own transaction (per-product atomicity).
+      // One product, one call: each row is its own transaction (per-product atomicity). A dry run
+      // makes the same calls with `dryRun`, so catalog's own refusals are in its report too and
+      // nothing is written.
       let imported = 0;
       for (const { index, row } of rows) {
-        const report = await ports.catalogBulkImport.importProducts([row]);
+        const report = await ports.catalogBulkImport.importProducts([row], dryRun ? { dryRun: true } : undefined);
         imported += report.imported;
         for (const error of report.errors) errors.push({ index, reason: error.reason });
         for (const error of report.fieldErrors ?? []) fieldErrors.push({ ...error, index });
