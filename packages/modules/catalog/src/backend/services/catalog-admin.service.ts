@@ -71,6 +71,18 @@ export type CatalogWarehouseThresholdCopy = (input: {
   sourceProductId: string;
   targetProductId: string;
 }) => Promise<{ copied: number } | 'not-present'>;
+
+/**
+ * Feature 170 (FR-119, T151) — `seo`'s product metadata copied at every scope a duplicate's
+ * source holds, through `seo`'s write port **on the duplicate Command's em** (no audit of its
+ * own: the duplicate's entry covers it). Presence is decided by the wiring in front of the port;
+ * with `seo` off the copy is skipped and the answer is `'not-present'` — a duplicate nobody asked
+ * SEO of is not refused for it (Principle XVII).
+ */
+export type CatalogSeoProductMetaCopy = (
+  em: EntityManager,
+  input: { sourceProductId: string; targetProductId: string },
+) => Promise<{ copied: number } | 'not-present'>;
 import { HttpError } from '@endora-commerce/platform/http';
 import { Category } from '../entities/category.entity.js';
 import { Product } from '../entities/product.entity.js';
@@ -246,6 +258,8 @@ export class CatalogAdminService {
      * closed ({@link CatalogAdminService.#requireAssets}).
      */
     private readonly assets?: LinkableAssetReader,
+    /** Feature 170 (FR-119) — `seo`'s metadata copy for a duplicate, presence-decided by the wiring. */
+    private readonly copySeoProductMeta?: CatalogSeoProductMetaCopy,
   ) {}
 
   #requireAssets(): LinkableAssetReader {
@@ -884,8 +898,9 @@ export class CatalogAdminService {
   /**
    * Duplicate an existing Product: copies the core row plus bridge tables
    * (categories, sales-channel memberships, gallery items + labels,
-   * attachments, related/up-sell/cross-sell links, grouped children,
-   * bundle slots + options, variants).
+   * attachments, packaging units, related/up-sell/cross-sell links, grouped
+   * children, bundle slots + options, variants) and, since feature 170
+   * (FR-119), every scoped value at Global, Channel and Channel × language.
    *
    * The duplicated row gets a fresh UUID; the SKU is derived from the
    * source by appending `-copy`, then `-copy-2`, `-copy-3`, … until a
@@ -930,9 +945,12 @@ export class CatalogAdminService {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
 
-    // The dup product row + its audit are co-transactional; the bridge copies
-    // run AFTER on this em (matches the pre-054 two-step) — the dup FK target
-    // exists once committed, and a partially-copied dup is no worse than today.
+    // Feature 170 (FR-119, T151) — the copy is ONE Command: the product row, every catalog-owned
+    // bridge and every scoped value at Global, Channel and Channel × language, empty overrides and
+    // inherit states included, commit or roll back together with the one audit entry. What other
+    // modules own runs through their own audited Commands after it (the channel memberships, the
+    // warehouse thresholds): a Command cannot nest inside another's transaction. URL keys are never
+    // copied beyond the fresh Global key, and status is reset at every scope (163 Q1-d).
     const dupId = randomUUID();
     const dup = await this.#auditedWrite('product.duplicate', 'product', dupId, async (cem) => {
       // Inside the Command's transaction (Phase 16 review): the slug's URL-key lock is
@@ -943,55 +961,61 @@ export class CatalogAdminService {
         id: dupId,
         sku: newSku,
         slug: newSlug,
-      type: source.type,
-      status: 'inactive',
-      archivedAt: null,
-      name: this.suffixCopyName(source.name),
-      description: source.description,
-      stockMode: source.stockMode ?? null,
-      visibility: source.visibility,
-      attributeValues: { ...source.attributeValues },
-      allowedOrganizationIds: [...source.allowedOrganizationIds],
-      attributeSetId: source.attributeSetId,
-      ...(source.downloadAssetId !== undefined && source.downloadAssetId !== null
-        ? { downloadAssetId: source.downloadAssetId }
-        : {}),
-      ...(source.downloadUrl !== undefined && source.downloadUrl !== null
-        ? { downloadUrl: source.downloadUrl }
-        : {}),
-      manageStock: source.manageStock,
-      backorderEnabled: source.backorderEnabled,
-      ...(source.lowStockThreshold !== undefined && source.lowStockThreshold !== null
-        ? { lowStockThreshold: source.lowStockThreshold }
-        : {}),
-      lowStockThresholdMode: source.lowStockThresholdMode,
-      ...(source.fulfilmentStrategy !== undefined && source.fulfilmentStrategy !== null
-        ? { fulfilmentStrategy: source.fulfilmentStrategy }
-        : {}),
-      ...(source.fulfilmentStrategyWarehouseOrder !== undefined &&
-      source.fulfilmentStrategyWarehouseOrder !== null
-        ? {
-            fulfilmentStrategyWarehouseOrder: [
-              ...source.fulfilmentStrategyWarehouseOrder,
-            ],
-          }
-        : {}),
+        type: source.type,
+        status: 'inactive',
+        archivedAt: null,
+        name: this.suffixCopyName(source.name),
+        description: source.description,
+        stockMode: source.stockMode ?? null,
+        visibility: source.visibility,
+        attributeValues: { ...source.attributeValues },
+        allowedOrganizationIds: [...source.allowedOrganizationIds],
+        attributeSetId: source.attributeSetId,
+        ...(source.downloadAssetId !== undefined && source.downloadAssetId !== null
+          ? { downloadAssetId: source.downloadAssetId }
+          : {}),
+        ...(source.downloadUrl !== undefined && source.downloadUrl !== null
+          ? { downloadUrl: source.downloadUrl }
+          : {}),
+        manageStock: source.manageStock,
+        backorderEnabled: source.backorderEnabled,
+        ...(source.lowStockThreshold !== undefined && source.lowStockThreshold !== null
+          ? { lowStockThreshold: source.lowStockThreshold }
+          : {}),
+        lowStockThresholdMode: source.lowStockThresholdMode,
+        ...(source.fulfilmentStrategy !== undefined && source.fulfilmentStrategy !== null
+          ? { fulfilmentStrategy: source.fulfilmentStrategy }
+          : {}),
+        ...(source.fulfilmentStrategyWarehouseOrder !== undefined &&
+        source.fulfilmentStrategyWarehouseOrder !== null
+          ? {
+              fulfilmentStrategyWarehouseOrder: [
+                ...source.fulfilmentStrategyWarehouseOrder,
+              ],
+            }
+          : {}),
+        // Feature 170 (FR-119) — the Global order rules and publication window.
+        minOrderQuantity: source.minOrderQuantity ?? null,
+        returnable: source.returnable,
+        publishFrom: source.publishFrom ?? null,
+        publishUntil: source.publishUntil ?? null,
       });
       await cem.flush();
+      const copied = await this.#copyCatalogRows(cem, source, dupId);
+      const seo = this.copySeoProductMeta
+        ? await this.copySeoProductMeta(cem, { sourceProductId: source.id, targetProductId: dupId })
+        : 'not-present';
       return {
         result: created,
         before: null,
-        after: { sku: newSku, slug: newSlug, sourceProductId: id },
+        after: {
+          sku: newSku,
+          slug: newSlug,
+          sourceProductId: id,
+          copied: { ...copied, seoScopes: seo === 'not-present' ? null : seo.copied },
+        },
       };
     });
-
-
-    // product_categories (bridge)
-    await em.execute(
-      `insert into "product_categories" ("product_id", "category_id")
-         select ?, "category_id" from "product_categories" where "product_id" = ?`,
-      [dup.id, source.id],
-    );
 
     // The channel assortment, through the kernel's membership service (issue
     // #185). This was an `insert … select` against the bridge table, which is
@@ -1003,48 +1027,156 @@ export class CatalogAdminService {
       await this.salesChannelMembership.copyMemberships('product', source.id, dup.id);
     }
 
-    // gallery_items + gallery_item_labels — we need a fresh UUID per item
-    // and to rewrite the bridge rows to the new ids.
-    const galleryRows = (await em.execute(
-      `select "id", "asset_id", "position" from "gallery_items"
-         where "product_id" = ? order by "position" asc`,
-      [source.id],
-    )) as Array<{ id: string; asset_id: string; position: number }>;
-    if (galleryRows.length > 0) {
-      const idMap = new Map<string, string>();
-      for (const row of galleryRows) {
-        const newId = randomUUID();
-        idMap.set(row.id, newId);
-        await em.execute(
-          `insert into "gallery_items"
-             ("id", "product_id", "asset_id", "position", "created_at", "updated_at")
-             values (?, ?, ?, ?, now(), now())`,
-          [newId, dup.id, row.asset_id, row.position],
-        );
-      }
-      const labelRows = (await em.execute(
-        `select "gallery_item_id", "label" from "gallery_item_labels"
-           where "product_id" = ?`,
-        [source.id],
-      )) as Array<{ gallery_item_id: string; label: string }>;
-      for (const lbl of labelRows) {
-        const mapped = idMap.get(lbl.gallery_item_id);
-        if (!mapped) continue;
-        await em.execute(
-          `insert into "gallery_item_labels"
-             ("gallery_item_id", "product_id", "label") values (?, ?, ?)`,
-          [mapped, dup.id, lbl.label],
-        );
-      }
+    // Per-(product, warehouse) low-stock thresholds, so the duplicate inherits
+    // the source's alerting profile. `inventory`'s rows and `inventory`'s
+    // Command since issue #185 — this used to be an `insert … select` into that
+    // module's table from here, which kept writing while an operator had the
+    // module switched off. No `catch` around it: the wiring decides presence in
+    // front of the gate and the degrade arrives as `'not-present'`.
+    if (this.copyWarehouseThresholds) {
+      await this.copyWarehouseThresholds({
+        sourceProductId: source.id,
+        targetProductId: dup.id,
+      });
     }
 
-    // product_attachments
+    this.events.emit('product.created.v1', {
+      eventId: randomUUID(),
+      occurredAt: new Date().toISOString(),
+      productId: dup.id,
+      sku: dup.sku,
+    });
+
+    return dup;
+  }
+
+  /**
+   * Feature 170 (FR-119, T151) — every catalog-owned row of `source` copied onto `targetId`, on the
+   * Command's em: the bridges (categories, gallery with its Global roles, attachments, packaging
+   * units, links, grouped children, bundle slots, variants) and every scoped value at Channel and
+   * Channel × language — value overrides (texts and attributes), channel scope rows, gallery item,
+   * gallery role, attachment and packaging-unit overrides — verbatim, so a deliberately empty
+   * override stays empty and a scope holding nothing still inherits. Child-row overrides are
+   * re-pointed through an old → new id map passed as one JSON parameter.
+   *
+   * Not copied: URL keys and redirects (unique per channel; the copy has its fresh Global key),
+   * status at Channel and Channel × language (the copy starts `inactive` everywhere, 163 Q1-d).
+   * Orphaned rows (a scope the source no longer sells on) are copied like the rest: they keep
+   * what the source keeps, and come back to life in the same way when the scope does.
+   */
+  async #copyCatalogRows(em: EntityManager, source: Product, targetId: string): Promise<Record<string, number>> {
+    const count = async (sql: string, params: unknown[]): Promise<number> =>
+      ((await em.execute(sql, params)) as unknown[]).length;
+    const idMap = async (table: string): Promise<Record<string, string>> => {
+      const rows = (await em.execute(`select "id" from "${table}" where "product_id" = ?`, [source.id])) as Array<{
+        id: string;
+      }>;
+      return Object.fromEntries(rows.map((row) => [row.id, randomUUID()]));
+    };
+    const remap = (column: string) => `(?::jsonb ->> o."${column}"::text)::uuid`;
+
+    // product_categories (bridge)
     await em.execute(
+      `insert into "product_categories" ("product_id", "category_id")
+         select ?, "category_id" from "product_categories" where "product_id" = ?`,
+      [targetId, source.id],
+    );
+
+    // Texts and attributes at C and C×L.
+    const valueOverrides = await count(
+      `insert into "product_value_overrides"
+         ("id", "product_id", "attribute_key", "channel_id", "language_code", "value", "created_at", "updated_at")
+         select gen_random_uuid(), ?, o."attribute_key", o."channel_id", o."language_code", o."value", now(), now()
+           from "product_value_overrides" o where o."product_id" = ?
+         returning "id"`,
+      [targetId, source.id],
+    );
+
+    // Window, audience, MOQ and returnable at C; status inherits (the copy is reviewed first).
+    const channelScopes = await count(
+      `insert into "product_channel_scopes"
+         ("product_id", "sales_channel_id", "status", "window_overridden", "publish_from", "publish_until",
+          "visibility", "allowed_organization_ids", "min_order_quantity_overridden", "min_order_quantity",
+          "returnable", "created_at", "updated_at")
+         select ?, o."sales_channel_id", null, o."window_overridden", o."publish_from", o."publish_until",
+                o."visibility", o."allowed_organization_ids", o."min_order_quantity_overridden",
+                o."min_order_quantity", o."returnable", now(), now()
+           from "product_channel_scopes" o where o."product_id" = ?
+         returning "product_id"`,
+      [targetId, source.id],
+    );
+
+    // Gallery: the items with their Global alt text and hidden flag, the Global roles, the overrides.
+    const items = await idMap('gallery_items');
+    const itemsJson = JSON.stringify(items);
+    const galleryItems = await count(
+      `insert into "gallery_items" ("id", "product_id", "asset_id", "position", "alt_text", "hidden", "created_at", "updated_at")
+         select ${remap('id')}, ?, o."asset_id", o."position", o."alt_text", o."hidden", now(), now()
+           from "gallery_items" o where o."product_id" = ?
+         returning "id"`,
+      [itemsJson, targetId, source.id],
+    );
+    const galleryRoles = await count(
+      `insert into "gallery_item_labels" ("gallery_item_id", "product_id", "label")
+         select ${remap('gallery_item_id')}, ?, o."label"
+           from "gallery_item_labels" o where o."product_id" = ?
+         returning "label"`,
+      [itemsJson, targetId, source.id],
+    );
+    const galleryItemOverrides = await count(
+      `insert into "gallery_item_scope_overrides"
+         ("id", "gallery_item_id", "product_id", "sales_channel_id", "language_code", "field", "value", "created_at", "updated_at")
+         select gen_random_uuid(), ${remap('gallery_item_id')}, ?, o."sales_channel_id", o."language_code", o."field", o."value", now(), now()
+           from "gallery_item_scope_overrides" o where o."product_id" = ?
+         returning "id"`,
+      [itemsJson, targetId, source.id],
+    );
+    // An empty role (no holder) keeps its `null`: `->>` of a null key is null.
+    const galleryRoleOverrides = await count(
+      `insert into "gallery_role_scope_overrides"
+         ("id", "product_id", "sales_channel_id", "language_code", "label", "gallery_item_id", "created_at", "updated_at")
+         select gen_random_uuid(), ?, o."sales_channel_id", o."language_code", o."label", ${remap('gallery_item_id')}, now(), now()
+           from "gallery_role_scope_overrides" o where o."product_id" = ?
+         returning "id"`,
+      [targetId, itemsJson, source.id],
+    );
+
+    // Attachments with their Global hidden flag, then their overrides.
+    const attachmentIds = JSON.stringify(await idMap('product_attachments'));
+    const attachments = await count(
       `insert into "product_attachments"
-         ("id", "product_id", "asset_id", "attachment_type_id", "name", "description", "position", "created_at", "updated_at")
-         select gen_random_uuid(), ?, "asset_id", "attachment_type_id", "name", "description", "position", now(), now()
-           from "product_attachments" where "product_id" = ?`,
-      [dup.id, source.id],
+         ("id", "product_id", "asset_id", "attachment_type_id", "name", "description", "position", "hidden", "created_at", "updated_at")
+         select ${remap('id')}, ?, o."asset_id", o."attachment_type_id", o."name", o."description", o."position", o."hidden", now(), now()
+           from "product_attachments" o where o."product_id" = ?
+         returning "id"`,
+      [attachmentIds, targetId, source.id],
+    );
+    const attachmentOverrides = await count(
+      `insert into "product_attachment_scope_overrides"
+         ("id", "attachment_id", "product_id", "sales_channel_id", "language_code", "field", "value", "created_at", "updated_at")
+         select gen_random_uuid(), ${remap('attachment_id')}, ?, o."sales_channel_id", o."language_code", o."field", o."value", now(), now()
+           from "product_attachment_scope_overrides" o where o."product_id" = ?
+         returning "id"`,
+      [attachmentIds, targetId, source.id],
+    );
+
+    // Packaging units, then their name overrides.
+    const unitIds = JSON.stringify(await idMap('product_packaging_units'));
+    const packagingUnits = await count(
+      `insert into "product_packaging_units"
+         ("id", "product_id", "name", "base_quantity", "position", "is_default", "min_order_units", "created_at", "updated_at")
+         select ${remap('id')}, ?, o."name", o."base_quantity", o."position", o."is_default", o."min_order_units", now(), now()
+           from "product_packaging_units" o where o."product_id" = ?
+         returning "id"`,
+      [unitIds, targetId, source.id],
+    );
+    const packagingUnitOverrides = await count(
+      `insert into "product_packaging_unit_scope_overrides"
+         ("id", "packaging_unit_id", "product_id", "sales_channel_id", "language_code", "field", "value", "created_at", "updated_at")
+         select gen_random_uuid(), ${remap('packaging_unit_id')}, ?, o."sales_channel_id", o."language_code", o."field", o."value", now(), now()
+           from "product_packaging_unit_scope_overrides" o where o."product_id" = ?
+         returning "id"`,
+      [unitIds, targetId, source.id],
     );
 
     // product_links (only outgoing links are copied — incoming links from
@@ -1054,7 +1186,7 @@ export class CatalogAdminService {
          ("id", "source_product_id", "target_product_id", "kind", "position", "created_at", "updated_at")
          select gen_random_uuid(), ?, "target_product_id", "kind", "position", now(), now()
            from "product_links" where "source_product_id" = ?`,
-      [dup.id, source.id],
+      [targetId, source.id],
     );
 
     // grouped_items (children of a grouped product)
@@ -1064,7 +1196,7 @@ export class CatalogAdminService {
            ("id", "parent_product_id", "child_product_id", "quantity", "position", "created_at", "updated_at")
            select gen_random_uuid(), ?, "child_product_id", "quantity", "position", now(), now()
              from "grouped_items" where "parent_product_id" = ?`,
-        [dup.id, source.id],
+        [targetId, source.id],
       );
     }
 
@@ -1089,7 +1221,7 @@ export class CatalogAdminService {
              values (?, ?, ?::jsonb, ?, ?, ?, now(), now())`,
           [
             newSlotId,
-            dup.id,
+            targetId,
             JSON.stringify(slot.name),
             slot.min_quantity,
             slot.max_quantity,
@@ -1106,19 +1238,6 @@ export class CatalogAdminService {
       }
     }
 
-    // Per-(product, warehouse) low-stock thresholds, so the duplicate inherits
-    // the source's alerting profile. `inventory`'s rows and `inventory`'s
-    // Command since issue #185 — this used to be an `insert … select` into that
-    // module's table from here, which kept writing while an operator had the
-    // module switched off. No `catch` around it: the wiring decides presence in
-    // front of the gate and the degrade arrives as `'not-present'`.
-    if (this.copyWarehouseThresholds) {
-      await this.copyWarehouseThresholds({
-        sourceProductId: source.id,
-        targetProductId: dup.id,
-      });
-    }
-
     // product_variants (configurable products) — each variant has its own
     // unique SKU; we allocate copies the same way as the parent SKU.
     if (source.type === 'configurable') {
@@ -1126,7 +1245,7 @@ export class CatalogAdminService {
       for (const v of variants) {
         const variantSku = await this.allocateCopySku(em, v.sku);
         const newVariant = em.create(ProductVariant, {
-          parentProductId: dup.id,
+          parentProductId: targetId,
           sku: variantSku,
           variantAttributeValues: { ...v.variantAttributeValues },
           ...(v.stockLevel != null ? { stockLevel: v.stockLevel } : {}),
@@ -1136,14 +1255,18 @@ export class CatalogAdminService {
       await em.flush();
     }
 
-    this.events.emit('product.created.v1', {
-      eventId: randomUUID(),
-      occurredAt: new Date().toISOString(),
-      productId: dup.id,
-      sku: dup.sku,
-    });
-
-    return dup;
+    return {
+      valueOverrides,
+      channelScopes,
+      galleryItems,
+      galleryItemOverrides,
+      galleryRoles,
+      galleryRoleOverrides,
+      attachments,
+      attachmentOverrides,
+      packagingUnits,
+      packagingUnitOverrides,
+    };
   }
 
   /**
@@ -1217,9 +1340,7 @@ export class CatalogAdminService {
 
   /**
    * Feature 170 — the copy's Global name with a "(copy)" suffix, so the duplicate is obviously a
-   * clone in lists. Like every other Channel and Channel × language override (scope rows, value
-   * overrides, URL keys), its scoped names are not copied (170-shim: the spec does not say whether
-   * a duplicate copies scoped values — a product question in the S1 block 2 report).
+   * clone in lists. Its Channel and Channel × language names are copied verbatim (FR-119).
    */
   private suffixCopyName(name: string): string {
     return name.trim() === '' ? name : `${name} (copy)`.slice(0, 255);
