@@ -610,11 +610,10 @@ export function catalogModule(options: CatalogModuleOptions) {
     const attributeScopePreviewService = attributeReadService
       ? new AttributeScopePreviewService(options.emFactory, attributeReadService)
       : undefined;
-    // Feature 163 — URL keys per language and channel × language, and their redirects.
+    // Feature 163 / 170 (T039) — URL keys at G, C and C×L, and their redirects: the one key writer.
     const urlKeyService = options.salesChannelMembership
       ? new UrlKeyService(options.emFactory, options.salesChannelMembership, options.commandBus)
       : undefined;
-
     // Feature 170 — the editor's scoped-values read and save (one Command per save).
     const scopedValuesService =
       options.salesChannelMembership && attributeReadService
@@ -627,6 +626,19 @@ export function catalogModule(options: CatalogModuleOptions) {
               ...(options.assets ? { assets: options.assets } : {}),
               ...(options.organizations ? { organizations: options.organizations } : {}),
               gate: completenessGate,
+              ...(urlKeyService
+                ? {
+                    writeUrlKey: (em, input) =>
+                      urlKeyService
+                        .lockAndCheck(
+                          em,
+                          input.productId,
+                          [{ scope: input.scope, op: input.cell.op.op === 'set' ? { op: 'set', key: String(input.cell.op.value) } : { op: 'inherit' } }],
+                          { mode: 'interactive', confirmTakeover: input.confirmTakeover },
+                        )
+                        .then((effects) => ({ before: effects.before, after: effects.after })),
+                  }
+                : {}),
             },
             options.commandBus,
           )
