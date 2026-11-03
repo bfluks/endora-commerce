@@ -46,7 +46,19 @@ import {
  * `catalog` owns the write (feature 075 / D-74). Each product row is its own call of the port —
  * one transaction per product (`import-profiles-and-csv.md` §2) — and a dry run calls nothing.
  */
-const EXPORT_HEADER = ['id', 'sku', 'slug', 'type', 'status', 'visibility', 'name', 'description'] as const;
+const EXPORT_HEADER = [
+  'id',
+  'sku',
+  'slug',
+  'type',
+  'status',
+  'visibility',
+  'name',
+  'description',
+  // Coordinator ruling 2026-11-03 (`import-profiles-and-csv.md` §2.1): Global value columns.
+  'minOrderQuantity',
+  'returnable',
+] as const;
 
 const text = (raw: string) => encodeCsvScopedCell({ kind: 'text', text: raw });
 const value = (raw: string) => encodeCsvScopedCell({ kind: 'text', text: raw }, { column: 'value' });
@@ -64,6 +76,11 @@ function exportRowOf(p: CatalogProductRecord): string[] {
     p.description === null || p.description === undefined || p.description === ''
       ? encodeCsvScopedCell({ kind: 'empty' })
       : text(p.description),
+    // No minimum is the deliberately empty value (FR-110); numbers and booleans take no guard.
+    p.minOrderQuantity === null || p.minOrderQuantity === undefined
+      ? encodeCsvScopedCell({ kind: 'empty' })
+      : value(String(p.minOrderQuantity)),
+    value(String(p.returnable)),
   ];
 }
 

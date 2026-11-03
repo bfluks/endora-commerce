@@ -6,6 +6,7 @@ import {
   type ProductImportRow,
   type ScopedStatusExport,
 } from '@endora-commerce/contracts';
+import { SCOPED_WRITE_CASES } from '../../../../../../contracts/src/scoped-write-encoding.cases.js';
 import type { ImportExportPorts } from '../adapter.js';
 import { productsAdapter } from './products.adapter.js';
 import { ProductsFileError, parseProductsHeader, PRODUCTS_CSV_COLUMNS_MAX } from './products-csv-grammar.js';
@@ -70,6 +71,7 @@ function rig(options: { products?: CatalogProductRecord[]; members?: Record<stri
         { key: 'material', valueType: 'string', scopable: true, isRequired: false },
         { key: 'weight', valueType: 'number', scopable: true, isRequired: false },
         { key: 'code', valueType: 'string', scopable: false, isRequired: false },
+        { key: 'multi', valueType: 'multiselect', scopable: true, isRequired: false },
       ],
     },
     catalogAvailability: {
@@ -144,6 +146,87 @@ describe('products file — header grammar (§2.1, R14)', () => {
   it('refuses more columns than the cap', () => {
     const header = ['sku', ...Array.from({ length: PRODUCTS_CSV_COLUMNS_MAX }, (_, i) => `attribute:material@c${i}`)];
     expect(parseProductsHeader(header, ctx).ok).toBe(false);
+  });
+});
+
+/**
+ * Coordinator ruling (2026-11-03, `import-profiles-and-csv.md` §2.1): the file carries
+ * `minOrderQuantity`, `returnable` and multiselect attribute columns at G and C. This is the
+ * parser side of the shared case rows for those fields (`write-encoding.md` §4) — what the
+ * adapter hands `catalog`; the catalog-side acceptance is S1's (T084).
+ */
+describe('products file — minimum order quantity, returnable and multiselect columns (§2.1)', () => {
+  const column = (field: string, level: string) =>
+    level === 'G' ? field : level === 'C' ? `${field}@pl_b2b_vip` : `${field}@pl_b2b_vip/pl-PL`;
+  const scopeOf = (level: string) => (level === 'G' ? { level: 'global' as const } : { level: 'channel' as const, channelId: VIP });
+  /** The typed value a decoded text becomes in the field's column. */
+  const typed = (field: string, text: string): unknown =>
+    field === 'minOrderQuantity' ? Number(text) : field === 'returnable' ? text === 'true' : text.split('|');
+  const cases = SCOPED_WRITE_CASES.filter(
+    (c) => c.csv !== undefined && ['minOrderQuantity', 'returnable', 'attribute:multi'].includes(c.field),
+  );
+
+  it('has case rows to run', () => {
+    expect(cases.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it.each(cases.map((c) => [c.name, c] as const))('%s', async (_name, c) => {
+    const r = rig();
+    const header = column(c.field, c.level);
+    const report = await run(r, [{ sku: 'A', [header]: c.csv! }]);
+    expect(report.errors).toEqual([]);
+    const cells = r.calls[0]?.[0]?.cells ?? [];
+    if (typeof c.expect === 'string') {
+      if (c.expect === 'no_change') {
+        expect(cells).toEqual([]);
+        return;
+      }
+      expect(report.fieldErrors).toEqual([{ index: 0, column: header, code: c.expect }]);
+      expect(cells).toEqual([]);
+      return;
+    }
+    if (c.expect.op !== 'set') {
+      expect(report.fieldErrors ?? []).toEqual([]);
+      expect(cells).toEqual([{ scope: scopeOf(c.level), field: c.field, op: c.expect }]);
+      return;
+    }
+    const value = typed(c.field, c.expect.value as string);
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      // The decoded text is no number (`'5` keeps its quote in a value column): refused per cell.
+      expect(report.fieldErrors).toEqual([{ index: 0, column: header, code: 'invalid' }]);
+      return;
+    }
+    expect(cells).toEqual([{ scope: scopeOf(c.level), field: c.field, op: { op: 'set', value } }]);
+  });
+
+  it('reads a minimum order quantity, a returnable flag and a multiselect at G and C', async () => {
+    const r = rig();
+    await run(r, [
+      {
+        sku: 'A',
+        minOrderQuantity: '6',
+        'minOrderQuantity@pl_b2b_vip': 'NULL',
+        returnable: 'false',
+        'returnable@pl_b2b_vip': 'INHERIT',
+        'attribute:multi': 'red|blue',
+        'attribute:multi@pl_b2b_vip': 'NULL',
+      },
+    ]);
+    const VIP_C = { level: 'channel' as const, channelId: VIP };
+    expect(r.calls[0]![0]!.cells).toEqual([
+      { scope: { level: 'global' }, field: 'minOrderQuantity', op: { op: 'set', value: 6 } },
+      { scope: VIP_C, field: 'minOrderQuantity', op: { op: 'empty' } },
+      { scope: { level: 'global' }, field: 'returnable', op: { op: 'set', value: false } },
+      { scope: VIP_C, field: 'returnable', op: { op: 'inherit' } },
+      { scope: { level: 'global' }, field: 'attribute:multi', op: { op: 'set', value: ['red', 'blue'] } },
+      { scope: VIP_C, field: 'attribute:multi', op: { op: 'empty' } },
+    ]);
+  });
+
+  it('refuses a C x L column of minimum order quantity or returnable (their levels are G and C)', async () => {
+    const r = rig();
+    await expect(run(r, [{ sku: 'A', 'minOrderQuantity@pl_b2b_vip/pl-PL': '2' }])).rejects.toBeInstanceOf(ProductsFileError);
+    await expect(run(r, [{ sku: 'A', 'returnable@pl_b2b_vip/pl-PL': 'true' }])).rejects.toBeInstanceOf(ProductsFileError);
   });
 });
 
@@ -321,16 +404,18 @@ describe('products file — export (§3, write-encoding §3a)', () => {
   it('writes tokens for inherited and empty scopes and guards every text column', async () => {
     const r = rig({
       products: [
-        product('p1', 'A', { name: '=HYPERLINK("x")', description: null as never }),
-        product('p2', 'B', { name: 'NULL', description: "'quoted" }),
+        product('p1', 'A', { name: '=HYPERLINK("x")', description: null as never, minOrderQuantity: null, returnable: true }),
+        product('p2', 'B', { name: 'NULL', description: "'quoted", minOrderQuantity: 6, returnable: false }),
       ],
     });
     const table = await productsAdapter(r.ports).exportTable!();
     expect(table.header).toEqual([
-      'id', 'sku', 'slug', 'type', 'status', 'visibility', 'name', 'description', 'status@pl_b2b_vip', 'status@pl_b2b_vip/pl-PL',
+      'id', 'sku', 'slug', 'type', 'status', 'visibility', 'name', 'description', 'minOrderQuantity', 'returnable',
+      'status@pl_b2b_vip', 'status@pl_b2b_vip/pl-PL',
     ]);
-    expect(table.rows[0]!.slice(6)).toEqual(["'=HYPERLINK(\"x\")", 'NULL', 'inactive', 'INHERIT']);
-    expect(table.rows[1]!.slice(6)).toEqual(['\\NULL', "''quoted", 'INHERIT', 'INHERIT']);
+    // No minimum is the deliberately empty value; numbers and booleans take no formula guard.
+    expect(table.rows[0]!.slice(6)).toEqual(["'=HYPERLINK(\"x\")", 'NULL', 'NULL', 'true', 'inactive', 'INHERIT']);
+    expect(table.rows[1]!.slice(6)).toEqual(['\\NULL', "''quoted", '6', 'false', 'INHERIT', 'INHERIT']);
   });
 
   it('round-trips every exported text cell through the import decoder (FR-114, FR-118)', async () => {
@@ -340,5 +425,43 @@ describe('products file — export (§3, write-encoding §3a)', () => {
     for (const [i, row] of table.rows.entries()) {
       expect(decodeCsvScopedCell(row[6]!, { column: 'text' })).toEqual({ kind: 'text', text: texts[i] });
     }
+  });
+});
+
+/**
+ * T087 export half, **pending S1's T083**: `CatalogBulkImportPort.exportScopedValues()` replaces
+ * `exportScopedStatuses()` (proposed shape in the S2 block 2 report, "Changes needed in other
+ * streams' files" #3). A column appears where any product holds an own value; an absent entry
+ * is `INHERIT`; an empty own value is `NULL`; text columns are guarded, value columns are not.
+ * Un-skip when the port lands and switch `exportTable()` to it.
+ */
+describe.skip('products file — export of every scoped value (pending catalog exportScopedValues, T083)', () => {
+  it('writes one column per (field, scope) holding an own value, with tokens and the guard', async () => {
+    const r = rig({ products: [product('p1', 'A'), product('p2', 'B')] });
+    (r.ports.catalogBulkImport as unknown as Record<string, unknown>).exportScopedValues = async () => ({
+      columns: [
+        { field: 'name', channelCode: 'pl_b2b_vip', languageCode: 'pl-PL' },
+        { field: 'description', channelCode: 'pl_b2b_vip', languageCode: null },
+        { field: 'status', channelCode: 'pl_b2b_vip', languageCode: null },
+        { field: 'attribute:material', channelCode: 'pl_retail', languageCode: null },
+      ],
+      values: {
+        p1: {
+          'name@pl_b2b_vip/pl-PL': { kind: 'text', text: '=SUM(A1)' },
+          'description@pl_b2b_vip': { kind: 'empty' },
+          'status@pl_b2b_vip': { kind: 'text', text: 'inactive' },
+        },
+        p2: { 'attribute:material@pl_retail': { kind: 'text', text: 'INHERIT' } },
+      },
+    });
+    const table = await productsAdapter(r.ports).exportTable!();
+    expect(table.header.slice(10)).toEqual([
+      'name@pl_b2b_vip/pl-PL',
+      'description@pl_b2b_vip',
+      'status@pl_b2b_vip',
+      'attribute:material@pl_retail',
+    ]);
+    expect(table.rows[0]!.slice(10)).toEqual(["'=SUM(A1)", 'NULL', 'inactive', 'INHERIT']);
+    expect(table.rows[1]!.slice(10)).toEqual(['INHERIT', 'INHERIT', 'INHERIT', '\\INHERIT']);
   });
 });
