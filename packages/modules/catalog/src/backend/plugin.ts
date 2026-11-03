@@ -34,6 +34,7 @@ import { CatalogQueryService, type CatalogCursorSeal } from './services/catalog-
 import {
   CatalogAdminService,
   type CatalogWarehouseThresholdCopy,
+  type CatalogSeoProductMetaCopy,
   type CatalogEventBus,
 } from './services/catalog-admin.service.js';
 import { CatalogAttributeReadService } from './services/catalog-attribute-read.service.js';
@@ -201,6 +202,11 @@ export interface CatalogModuleOptions {
    * and reaches the service in its return type.
    */
   copyWarehouseThresholds?: CatalogWarehouseThresholdCopy;
+  /**
+   * Feature 170 (FR-119) — `seo`'s product metadata copied by a duplicate, on the duplicate
+   * Command's em. Presence-decided by the wiring, like the threshold copy above.
+   */
+  copySeoProductMeta?: CatalogSeoProductMetaCopy;
   /**
    * Feature 022 — language admin service used by the product scope
    * editor's scope-context endpoint (for the primary admin language)
@@ -387,6 +393,7 @@ export function catalogModule(options: CatalogModuleOptions) {
       options.copyWarehouseThresholds,
       completenessGate,
       options.assets,
+      options.copySeoProductMeta,
     );
     // Feature 163 — scoped values per channel and channel × language. Needs the
     // membership accessor for FR-014 and the C4 warning, like the overrides.
