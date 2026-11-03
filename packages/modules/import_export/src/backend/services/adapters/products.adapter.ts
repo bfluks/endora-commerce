@@ -47,7 +47,7 @@ function exportRowOf(p: CatalogProductRecord): string[] {
     p.type,
     p.status,
     p.visibility,
-    // 168-shim: the Global texts in the legacy columns; T081 / T087 replace the file grammar.
+    // 170-shim: the Global texts in the legacy columns; T081 / T087 replace the file grammar.
     p.name,
     p.description ?? '',
   ];
@@ -126,7 +126,7 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
           row.visibility = parsed.data;
         }
 
-        // 168-shim: the legacy columns write the Global name and description; the profile-mapped
+        // 170-shim: the legacy columns write the Global name and description; the profile-mapped
         // grammar of `contracts/import-profiles-and-csv.md` is T081 / T087's.
         const cells: ProductScopedWriteCell[] = [];
         const nameEn = record['name_en'];
@@ -138,8 +138,8 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
           cells.push({ scope: { level: 'global' }, field: 'description', op: { op: 'set', value: descEn } });
         }
 
-        // Feature 163 (FR-092), in the 168 write encoding (FR-116): `status@<channel code>[/<language>]`
-        // cells — empty = no change, `INHERIT` = inherit, `NULL` refused by catalog. 168-shim: the
+        // Feature 163 (FR-092), in the 170 write encoding (FR-116): `status@<channel code>[/<language>]`
+        // cells — empty = no change, `INHERIT` = inherit, `NULL` refused by catalog. 170-shim: the
         // channel travels as its code in `channelId` until T081 resolves codes to ids here.
         let scopedInvalid = false;
         for (const [column, raw] of Object.entries(record)) {
