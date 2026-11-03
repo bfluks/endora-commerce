@@ -1,16 +1,31 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { z } from 'zod';
+import {
+  ERROR_CODES,
+  createImportProfileRequestSchema,
+  importProfileListQuerySchema,
+  productsImportQuerySchema,
+  updateImportProfileRequestSchema,
+  uuidSchema,
+} from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { ImportExportService } from './services/import-export-service.js';
+import type { ImportProfileService } from './services/import-profile.service.js';
 import type { RequireAdminAnyFactory, RequireAdminFactory } from '@endora-commerce/platform/kernel';
 
 export interface ImportExportRoutesDeps {
   service: ImportExportService;
+  profiles: ImportProfileService;
   requireAdmin: RequireAdminFactory;
   requireAdminAny: RequireAdminAnyFactory;
 }
 
 const FILENAME_RE = /^[a-z][a-z0-9_]*$/;
+const profileParams = z.object({ id: uuidSchema });
+/** The largest CSV an import accepts (`import-profiles-and-csv.md` §2: 10 MiB). */
+const IMPORT_BODY_LIMIT = 10 * 1024 * 1024;
+/** A profile body: at most 100 entries x 16 targets of short strings fit well under this. */
+const PROFILE_BODY_LIMIT = 256 * 1024;
 
 type EntityRequest = FastifyRequest<{ Params: { entity: string } }>;
 
@@ -18,7 +33,7 @@ export async function registerImportExportRoutes(
   app: FastifyInstance,
   deps: ImportExportRoutesDeps,
 ): Promise<void> {
-  const { service, requireAdmin, requireAdminAny } = deps;
+  const { service, profiles, requireAdmin, requireAdminAny } = deps;
 
   /**
    * Holding one of the codes an entity of the centre is gated by — the owning
@@ -128,6 +143,9 @@ export async function registerImportExportRoutes(
       ],
       // Receive the raw CSV body — operators can `curl --data-binary @file.csv`
       // and the admin SPA can read the file as text and POST it directly.
+      // Feature 170 — the cap is explicit rather than the server default; rows,
+      // columns and cell lengths are bounded by the products adapter.
+      bodyLimit: IMPORT_BODY_LIMIT,
     },
     async (request, reply) => {
       const { entity } = request.params;
@@ -139,8 +157,55 @@ export async function registerImportExportRoutes(
         typeof request.body === 'string'
           ? request.body
           : (request.body as unknown as Buffer | undefined)?.toString('utf8') ?? '';
-      const report = await service.importFromCsv(entity, body);
+      // Feature 170 (FR-048) — `profileId` / `dryRun` for products; other entities take none.
+      const query =
+        entity === 'products'
+          ? productsImportQuerySchema.parse(request.query ?? {})
+          : ({} as { profileId?: string; dryRun?: 'true' | 'false' });
+      const report = await service.importFromCsv(entity, body, {
+        profileId: query.profileId,
+        dryRun: query.dryRun === 'true',
+        loadProfile: (id) => profiles.snapshot(id),
+      });
       return { data: report };
     },
   );
+
+  /**
+   * Feature 170 (`contracts/import-profiles-and-csv.md` §1; FR-048) — import profiles. Every
+   * route, reads included, is `catalog:write`: a profile decides where an import writes, so it is
+   * part of the write (no new permission code). The any-of gate first, like every route of the
+   * centre, then the literal code so the permission inventory reads it.
+   */
+  const profilesBase = '/api/v1/admin/import-export/profiles';
+
+  app.get(profilesBase, { preHandler: [anyImportExportCode, requireAdmin('catalog:write')] }, async (request) => {
+    const query = importProfileListQuerySchema.parse(request.query ?? {});
+    return { data: await profiles.list(query) };
+  });
+
+  app.get(`${profilesBase}/:id`, { preHandler: [anyImportExportCode, requireAdmin('catalog:write')] }, async (request) => {
+    const { id } = profileParams.parse(request.params);
+    return { data: await profiles.get(id) };
+  });
+
+  app.post(profilesBase, { preHandler: [anyImportExportCode, requireAdmin('catalog:write')], bodyLimit: PROFILE_BODY_LIMIT }, async (request, reply) => {
+    const body = createImportProfileRequestSchema.parse(request.body ?? {});
+    const data = await profiles.create(body);
+    reply.status(201);
+    return { data };
+  });
+
+  app.patch(`${profilesBase}/:id`, { preHandler: [anyImportExportCode, requireAdmin('catalog:write')], bodyLimit: PROFILE_BODY_LIMIT }, async (request) => {
+    const { id } = profileParams.parse(request.params);
+    const body = updateImportProfileRequestSchema.parse(request.body ?? {});
+    return { data: await profiles.update(id, body) };
+  });
+
+  app.delete(`${profilesBase}/:id`, { preHandler: [anyImportExportCode, requireAdmin('catalog:write')] }, async (request, reply) => {
+    const { id } = profileParams.parse(request.params);
+    await profiles.delete(id);
+    reply.status(204);
+    return null;
+  });
 }

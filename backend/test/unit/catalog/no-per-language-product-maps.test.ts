@@ -169,52 +169,12 @@ const ALLOWLIST: ReadonlyArray<{ file: string; reason: string }> = [
     reason: "non-product map: an attachment type's own name per language (readers.md 'Not readers'), matched by `row.name[` — S3's file",
   },
   {
-    file: 'packages/modules/catalog/src/backend/services/attachment-packaging-scopes.ts',
-    reason: "S1 — catalog backend 170-shim, rewritten in US2 / US3 (T035, T040-T047); not S2's file",
-  },
-  {
-    file: 'packages/modules/catalog/src/backend/services/attribute-scope-preview.ts',
-    reason: "S1 — catalog backend 170-shim, rewritten in US2 / US3 (T035, T040-T047); not S2's file",
-  },
-  {
     file: 'packages/modules/catalog/src/backend/services/catalog-admin.service.ts',
-    reason: "S1 — catalog backend 170-shim, rewritten in US2 / US3 (T035, T040-T047); not S2's file",
+    reason: "S1 — the duplicate's scoped names are not copied: a product question (S1 block 2 report), not a task yet",
   },
   {
     file: 'packages/modules/catalog/src/backend/services/catalog-bulk-import.service.ts',
-    reason: "S1 — catalog backend 170-shim, rewritten in US2 / US3 (T035, T040-T047); not S2's file",
-  },
-  {
-    file: 'packages/modules/catalog/src/backend/services/catalog-product-read.service.ts',
-    reason: "S1 — catalog backend 170-shim, rewritten in US2 / US3 (T035, T040-T047); not S2's file — also drops `CatalogAdminNamePageQuery.language`",
-  },
-  {
-    file: 'packages/modules/catalog/src/backend/services/catalog-query.service.ts',
-    reason: "S1 — catalog backend 170-shim, rewritten in US2 / US3 (T035, T040-T047); not S2's file — the public gallery's empty alt override (T035)",
-  },
-  {
-    file: 'packages/modules/catalog/src/backend/services/catalog-write-ports.ts',
-    reason: "S1 — catalog backend 170-shim, rewritten in US2 / US3 (T035, T040-T047); not S2's file — port v2 (T083)",
-  },
-  {
-    file: 'packages/modules/catalog/src/backend/services/gallery-scopes.ts',
-    reason: "S1 — catalog backend 170-shim, rewritten in US2 / US3 (T035, T040-T047); not S2's file",
-  },
-  {
-    file: 'packages/modules/catalog/src/backend/services/gallery.service.ts',
-    reason: "S1 — catalog backend 170-shim, rewritten in US2 / US3 (T035, T040-T047); not S2's file — still queries the dropped gallery_item_channel_* tables",
-  },
-  {
-    file: 'packages/modules/catalog/src/backend/services/product-overrides.service.ts',
-    reason: "S1 — catalog backend 170-shim, rewritten in US2 / US3 (T035, T040-T047); not S2's file",
-  },
-  {
-    file: 'packages/modules/catalog/src/backend/services/url-key-resolution.service.ts',
-    reason: "S1 — catalog backend 170-shim, rewritten in US2 / US3 (T035, T040-T047); not S2's file",
-  },
-  {
-    file: 'packages/modules/catalog/src/backend/services/url-key.service.ts',
-    reason: "S1 — catalog backend 170-shim, rewritten in US2 / US3 (T035, T040-T047); not S2's file",
+    reason: "S1 — channel codes in a products file's cells and the deprecated exportScopedStatuses, removed once import_export's adapter resolves codes and reads exportScopedValues (T087, S2)",
   },
   {
     file: 'packages/modules/seo/src/admin/index.ts',
@@ -231,18 +191,6 @@ const ALLOWLIST: ReadonlyArray<{ file: string; reason: string }> = [
   {
     file: 'packages/modules/seo/src/backend/services/meta-tag-resolver.service.ts',
     reason: 'S2 — the derived meta fallback at (C, L), deferred to US10 (T117-T121)',
-  },
-  {
-    file: 'packages/modules/import_export/src/backend/services/adapters/products.adapter.ts',
-    reason: 'S2 — the CSV grammar of import-profiles-and-csv.md, deferred to US4 (T081, T087)',
-  },
-  {
-    file: 'packages/modules/inventory/src/backend/services/availability-notification-service.ts',
-    reason: "S2, blocked — the back-in-stock e-mail needs the subscription's channel and language, which availability_notifications does not store (T054/T067; needs a data-model row and a migration)",
-  },
-  {
-    file: 'packages/modules/inventory/src/backend/services/availability-worker.ts',
-    reason: 'S2, blocked — as availability-notification-service.ts (T054/T067)',
   },
   {
     file: 'packages/modules/quote_requests/src/admin/pages/RfqCreatePage.tsx',

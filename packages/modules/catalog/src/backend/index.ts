@@ -35,8 +35,6 @@ import type {
   CatalogProductLinkPort,
   CatalogProductReadPort,
   CatalogProductWritePort,
-  CatalogProductValueOverrideUpsert,
-  CatalogProductValueOverrideWritePort,
   CatalogPromoAttributePort,
   CatalogQuickSearchPort,
   CatalogProductAvailabilityPort,
@@ -100,7 +98,6 @@ import { CatalogBulkImportService } from './services/catalog-bulk-import.service
 import { ProductAvailabilityService } from './services/product-availability.service.js';
 import { ProductUrlKeyReadService } from './services/url-key-resolution.service.js';
 import { ProductPageRevalidation } from './services/product-page-revalidation.js';
-import { ProductScopesService } from './services/product-scopes.service.js';
 import { UrlKeyService } from './services/url-key.service.js';
 import {
   PublicationWindowSweep,
@@ -120,7 +117,6 @@ import { CatalogProductFilterService } from './services/catalog-product-filter.s
 import { CatalogProductReadService } from './services/catalog-product-read.service.js';
 import { CatalogQueryService, type CatalogCursorSeal } from './services/catalog-query.service.js';
 import { CatalogQuickSearchService } from './services/catalog-quick-search.service.js';
-import { ProductOverridesService } from './services/product-overrides.service.js';
 import { AttributeValueKeyService } from './services/attribute-value-key.service.js';
 import type { CatalogAttributeValueKeyApi } from '../ports/index.js';
 import {
@@ -823,32 +819,8 @@ export function registerModule(ctx: ModuleContext): void {
       .singleton(),
   );
 
-  /**
-   * Feature 089 — channel/locale-scoped product value writes for PIM importers.
-   * Narrows `ProductOverridesService.applyBulk` so a foreign module never holds
-   * the class (and never reaches `product_value_overrides` by SQL).
-   */
-  ctx.di.providePort<CatalogProductValueOverrideWritePort>(
-    'catalogProductValueOverrideWritePort',
-    ctx
-      .asFunction(({ emFactory, commandBus }: CatalogCradle) => {
-        const service = new ProductOverridesService(
-          emFactory,
-          lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
-          commandBus,
-          lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort'),
-        );
-        return {
-          async applyBulk(
-            productId: string,
-            input: { upserts: readonly CatalogProductValueOverrideUpsert[] },
-          ) {
-            await service.applyBulk(productId, { upserts: [...input.upserts], deletes: [] });
-          },
-        };
-      })
-      .singleton(),
-  );
+  // Feature 170 (T083) — `catalogProductValueOverrideWritePort` (feature 089) is retired: a
+  // connector's Channel and Channel × language values go through `catalogProductScopeWritePort` v2.
 
   /**
    * The value-key rename seam (`specs/134-paid-module-extraction/research.md`
@@ -881,13 +853,17 @@ export function registerModule(ctx: ModuleContext): void {
     'catalogBulkImportPort',
     ctx
       .asFunction(
-        ({ commandBus, emFactory, eventBus }: CatalogCradle) =>
-          new CatalogBulkImportService(
-            commandBus,
-            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
-            // Feature 163 (FR-092) — the scoped-status columns of the products file.
-            { emFactory, eventBus },
-          ),
+        ({ commandBus, emFactory, eventBus }: CatalogCradle) => {
+          const membership = lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort');
+          const attributes = lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort');
+          const urlKeys = new UrlKeyService(emFactory, membership, commandBus);
+          return new CatalogBulkImportService(commandBus, membership, {
+            emFactory,
+            eventBus,
+            // Feature 170 (T084) — each product row through the scoped import's planner and writers.
+            importDeps: { membership, listAttributes: () => attributes.listAll(), urlKeys: () => urlKeys },
+          });
+        },
       )
       .singleton(),
   );
@@ -960,22 +936,27 @@ export function registerModule(ctx: ModuleContext): void {
   );
 
   /**
-   * Feature 163 (R17) — the scoped write of connectors and importers: only the
-   * scopes named are written (FR-091); a URL key another product holds is
-   * reported, never taken over (FR-093). Through the operator's own services and
-   * Commands, so validation, audit and events are theirs.
+   * Feature 170 (T083; `contracts/pim-locale-mapping.md` §4) — the scoped write of connectors, v2:
+   * one Command `product.scoped_values.import` per call on the save's planner and writers, per-cell
+   * refusals, the integration allowlist (R13a); a URL key another product holds is reported, never
+   * taken over (FR-093). `source` must be a module of the registry (R21).
    */
   ctx.di.providePort<CatalogProductScopeWritePort>(
     'catalogProductScopeWritePort',
     ctx
       .asFunction(({ emFactory, commandBus }: CatalogCradle) => {
         const membership = lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort');
-        const scopes = new ProductScopesService(emFactory, membership, commandBus);
         const urlKeys = new UrlKeyService(emFactory, membership, commandBus);
-        return createCatalogProductScopeWritePort(
-          () => scopes,
-          () => urlKeys,
-        );
+        const attributes = lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort');
+        return createCatalogProductScopeWritePort({
+          commandBus: () => commandBus,
+          importDeps: () => ({
+            membership,
+            listAttributes: () => attributes.listAll(),
+            urlKeys: () => urlKeys,
+          }),
+          isRegisteredModule: (moduleId) => effectiveState.presence(moduleId) !== undefined,
+        });
       })
       .singleton(),
   );
