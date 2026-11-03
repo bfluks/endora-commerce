@@ -12,7 +12,7 @@ import type { BulkImportReport } from './import-export.js';
 import type { AttributeScope } from './product-value-resolver.js';
 import { ORDER_MINIMUM_MAX } from './order-minimums.js';
 import { productPagePathsSchema } from './product-url-keys.js';
-import type { ScopeLevel } from './product-scope-model.js';
+import type { FieldPath, ScopeLevel } from './product-scope-model.js';
 import type { ProductScopedWriteCell } from './product-scopes.js';
 
 /**
@@ -406,9 +406,11 @@ export const productDetailSchema = productSummarySchema.extend({
           url: z.string(),
         }),
         /**
-         * Feature 163 (FR-077) — the image's alt text at the request's scope language:
-         * the product's own, else the asset's; `null` = none. Optional so other
-         * builders of the DTO keep compiling; `catalog` always emits it.
+         * Feature 163 (FR-077), feature 170 (`data-model.md` §6, T035) — the image's alt text
+         * at the request's (channel, language): its override there, else its Global alt text,
+         * else the asset's. `''` = an empty override — a decorative image, rendered `alt=""`;
+         * `null` = none at all. Optional so other builders of the DTO keep compiling;
+         * `catalog` always emits it.
          */
         altText: z.string().nullable().optional(),
       }),
@@ -1695,10 +1697,14 @@ export const createGalleryItemRequestSchema = z
   .strict();
 export type CreateGalleryItemRequest = z.infer<typeof createGalleryItemRequestSchema>;
 
+/**
+ * Feature 170 (`contracts/scoped-values-api.md` §6) — a collection operation only: the item's
+ * position. Its roles (`galleryRole:<label>`), alt text and hidden flag are scoped fields, written
+ * at every scope, Global included, through `PUT …/products/:id/scoped-values`.
+ */
 export const updateGalleryItemRequestSchema = z
   .object({
     position: z.number().int().nonnegative().optional(),
-    labels: z.array(galleryLabelSchema).optional(),
   })
   .strict();
 export type UpdateGalleryItemRequest = z.infer<typeof updateGalleryItemRequestSchema>;
@@ -1796,11 +1802,14 @@ export const createAttachmentRequestSchema = z
   .strict();
 export type CreateAttachmentRequest = z.infer<typeof createAttachmentRequestSchema>;
 
+/**
+ * Feature 170 (`contracts/scoped-values-api.md` §6) — the attachment's type and position. Its
+ * name, description and hidden flag are scoped fields, written at every scope, Global included,
+ * through `PUT …/products/:id/scoped-values`.
+ */
 export const updateAttachmentRequestSchema = z
   .object({
     attachmentTypeId: uuidSchema.optional(),
-    name: z.string().min(1).max(160).optional(),
-    description: z.string().nullable().optional(),
     position: z.number().int().nonnegative().optional(),
   })
   .strict();
@@ -1846,9 +1855,13 @@ export const createPackagingUnitRequestSchema = z
   .strict();
 export type CreatePackagingUnitRequest = z.infer<typeof createPackagingUnitRequestSchema>;
 
+/**
+ * Feature 170 (`contracts/scoped-values-api.md` §6) — base quantity, default flag, position and
+ * minimum. The unit's name is a scoped field, written at every scope, Global included, through
+ * `PUT …/products/:id/scoped-values`.
+ */
 export const updatePackagingUnitRequestSchema = z
   .object({
-    name: z.string().trim().min(1).max(160).optional(),
     baseQuantity: z.number().int().positive().optional(),
     isDefault: z.boolean().optional(),
     position: z.number().int().nonnegative().optional(),
@@ -2532,7 +2545,7 @@ export interface CatalogProductReadPort {
   /**
    * Feature 161 (G15, `specs/161-price-book-editor/research.md` R14) — one page
    * of the products a caller's **membership seam** names, ordered by the stored
-   * admin name key of the admin language (`en`, `pl`; any other reads `en`),
+   * admin name key (feature 170: one key over the Global name, for every admin language),
    * then SKU, then id, and how many there are. `search` narrows to the products
    * whose stored search key (folded shown name and SKU) or one of whose
    * variants' SKU contains it — case- and accent-folded, taken literally. How
@@ -2565,8 +2578,6 @@ export interface CatalogProductMembership {
 export interface CatalogAdminNamePageQuery {
   readonly membership: CatalogProductMembership;
   readonly search?: string | null;
-  /** A language tag (`pl`, `pl-PL`); its primary subtag picks the key, `en` when it has none. */
-  readonly language: string | null;
   readonly offset: number;
   readonly limit: number;
   /** Default `true`. Without a search, `false` skips the count. */
@@ -2754,10 +2765,43 @@ export interface ProductImportRow {
   /**
    * Feature 170 (`contracts/import-profiles-and-csv.md` §2; FR-043, FR-110) — every scoped cell
    * of the row, Global included, already decoded with `decodeCsvScopedCell` and mapped through
-   * the run's profile. A (field, scope) the file has no column for is untouched; refusals are
-   * per cell (the row's other cells apply).
+   * the run's profile, channels by id. A (field, scope) the file has no column for is untouched;
+   * refusals are per cell (the row's other cells apply) and reported in
+   * `BulkImportReport.fieldErrors` under the cell's `column`.
    */
-  cells?: ProductScopedWriteCell[];
+  cells?: ProductImportCell[];
+}
+
+/** One cell of a {@link ProductImportRow}: a scoped write and the file column it came from. */
+export interface ProductImportCell extends ProductScopedWriteCell {
+  /** Echoed in `BulkImportReport.fieldErrors[].column`; absent → `<field>@<scope>`. */
+  column?: string;
+}
+
+/** One own value of a {@link ScopedValuesExport} cell: deliberately empty, a text, or a non-text value. */
+export type ScopedExportValue =
+  | { kind: 'empty' }
+  | { kind: 'text'; text: string }
+  /** A minimum order quantity, a returnable flag, a number, date-less non-text or multiselect attribute value. */
+  | { kind: 'value'; value: number | boolean | string[] };
+
+/**
+ * Feature 170 (`contracts/import-profiles-and-csv.md` §3; FR-043, FR-114) — the scoped columns of
+ * a products export: one per (field, scope) at which any product holds an own value, and each
+ * product's own values there. Fields: `name`, `description`, `status`, `urlKey`, every
+ * `attribute:<key>`, and at C `minOrderQuantity` and `returnable`; scopes C and C×L (the Global
+ * values are the products' own records). Orphans are not exported.
+ */
+export interface ScopedValuesExport {
+  /** In a stable order: field, then channel code, then the channel scope before its languages. */
+  columns: Array<{ field: FieldPath; channelId: string; channelCode: string; languageCode: string | null }>;
+  /** Product id → column key ({@link scopedColumn}) → the own value there. A scope that inherits is absent (`INHERIT`). */
+  values: Record<string, Record<string, ScopedExportValue>>;
+}
+
+/** The products-file column of a scope: `<field>@<channel code>` or `<field>@<channel code>/<language>`. */
+export function scopedColumn(field: string, channelCode: string, languageCode: string | null): string {
+  return languageCode === null ? `${field}@${channelCode}` : `${field}@${channelCode}/${languageCode}`;
 }
 
 /** The scoped-status columns a products export carries, and each product's overrides in them. */
@@ -2797,8 +2841,27 @@ export function parseScopedStatusColumn(column: string): { channelCode: string; 
  */
 export interface CatalogBulkImportPort {
   importCategories(rows: readonly CategoryImportRow[]): Promise<BulkImportReport>;
-  importProducts(rows: readonly ProductImportRow[]): Promise<BulkImportReport>;
-  /** Feature 163 (FR-092) — the scoped-status columns of a products export, and their values. */
+  /**
+   * Feature 170 (`contracts/import-profiles-and-csv.md` §2) — **per product**: each row applies in
+   * its own Command `product.scoped_values.import` (one audit entry, `source: 'import_export'`), so
+   * one row's failure leaves the others applied. An unknown SKU is a row error; each refused cell
+   * a field error (the codes of `ProductScopedWriteRefusalCode`, or `URL_KEY_TAKEN` for a key
+   * another product holds), the row's other cells applying. The integration allowlist of
+   * `integrationWritableField` applies to the cells, widened for the products file by
+   * `minOrderQuantity` and `returnable` at G and C (the CSV grammar covers every scoped product
+   * value; multiselect attributes are `attribute:<key>` cells). `status` / `visibility` write
+   * Global. A stored `''` Global description counts as none: an empty cell there writes nothing.
+   * `dryRun` validates every row and cell the same way and writes nothing (URL keys are checked
+   * for grammar only).
+   */
+  importProducts(rows: readonly ProductImportRow[], options?: { dryRun?: boolean }): Promise<BulkImportReport>;
+  /** Feature 170 (FR-043, FR-114) — the scoped columns of a products export, and their own values. */
+  exportScopedValues(): Promise<ScopedValuesExport>;
+  /**
+   * Feature 163 (FR-092) — the scoped-status columns of a products export, and their values.
+   * @deprecated replaced by {@link exportScopedValues}; removed once `import_export`'s
+   * adapter reads that (T087, S2).
+   */
   exportScopedStatuses(): Promise<ScopedStatusExport>;
 }
 
@@ -3154,34 +3217,11 @@ export interface CatalogProductWritePort {
   deleteVariant(parentProductId: string, variantId: string): Promise<void>;
 }
 
-/**
- * One channel/language override upsert — feature 022 / product-scope-overrides.
- * Used by PIM importers (feature 089) to land channel-locale-scoped names and
- * descriptions without reaching `product_value_overrides` directly (Principle XII).
+/*
+ * Feature 170 (T083) — `catalogProductValueOverrideWritePort` (feature 089) is retired: a connector's
+ * Channel and Channel × language values are cells of `catalogProductScopeWritePort` v2
+ * (`ProductScopedWriteInput`, `contracts/pim-locale-mapping.md` §4).
  */
-export interface CatalogProductValueOverrideUpsert {
-  attributeKey: string;
-  channelId: string;
-  languageCode: string | null;
-  value: { v: unknown };
-}
-
-/**
- * Container name: `catalogProductValueOverrideWritePort`. Owner: `catalog`.
- *
- * Bulk upsert of per-channel / per-language product attribute overrides. The
- * only consumer today is `pim_unopim` (feature 089 / FR-023); the admin SPA
- * still goes through `ProductOverridesService` inside catalog's own routes.
- *
- * **Owner off:** resolving this port throws `ModuleDisabledError` (503).
- */
-export interface CatalogProductValueOverrideWritePort {
-  applyBulk(
-    productId: string,
-    input: { upserts: readonly CatalogProductValueOverrideUpsert[] },
-  ): Promise<void>;
-}
-
 
 /** The patch `updateCategory` accepts. Absent keys are left alone. */
 export interface UpdateCategoryInput {
