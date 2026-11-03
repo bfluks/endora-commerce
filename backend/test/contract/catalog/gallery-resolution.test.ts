@@ -43,8 +43,8 @@ describe('Gallery-aware asset resolution (T096 + T097)', () => {
       payload: {
         sku: `GAL-RES-${suffix}`,
         type: 'simple',
-        name: { 'en-US': `Gallery resolution ${suffix}` },
-        description: { 'en-US': 'desc' },
+        name: `Gallery resolution ${suffix}`,
+        description: 'desc',
         categoryIds: [],
         attributeValues: {},
         visibility: 'public',
@@ -66,7 +66,7 @@ describe('Gallery-aware asset resolution (T096 + T097)', () => {
         [retail.id, data.id],
       );
     }
-    // Admin POST creates products in 'draft' status; the public listing
+    // Admin POST creates products `inactive` (spec 163, Q1-d); the public listing
     // only surfaces active products. Activate so the listing/detail
     // endpoints behave like a published catalogue would.
     await conn.execute(`update products set status = 'active' where id = ?`, [data.id]);

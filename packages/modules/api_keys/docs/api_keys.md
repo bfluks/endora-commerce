@@ -37,6 +37,7 @@ Creation validates scopes against the typed catalog in
 | `catalog:write` | PIM by-SKU upsert — **unbound keys only** |
 | `orders:read` | External order reads — **bound keys only** |
 | `orders:write` | External order intake — **bound keys only** |
+| `platform.api_description.read` | The API description — `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` |
 
 Enforcement stays membership-based, so legacy free-text scopes on existing
 keys remain readable and enforceable — only creation is validated.

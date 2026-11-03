@@ -128,12 +128,12 @@ describe('product feeds — criteria preview [contract]', () => {
           kind: 'condition',
           field: { kind: 'builtin', key: 'status' },
           op: 'eq',
-          values: ['draft'],
+          values: ['inactive'],
         },
       },
     });
     expect(res.statusCode).toBe(200);
-    // Draft products can never pass the eligibility floor (FR-026).
+    // Inactive products can never pass the eligibility floor (FR-026).
     expect((res.json() as { data: { matchedCount: number } }).data.matchedCount).toBe(0);
   });
 

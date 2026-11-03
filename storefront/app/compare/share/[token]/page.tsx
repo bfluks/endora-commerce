@@ -23,27 +23,24 @@ export default async function SharedComparePage(props: {
   params: Promise<{ token: string }>;
 }): Promise<ReactNode> {
   const { token } = await props.params;
-  const { locale } = await getServerContext();
+  const { locale, ctx } = await getServerContext();
   const t = tForLocale(locale);
   return (
     <div className="mx-auto max-w-[1360px] px-[24px]" style={{ paddingTop: 24, paddingBottom: 56 }}>
-      <Breadcrumbs
+      <Breadcrumbs locale={locale}
         crumbs={[
           { href: '/', label: t('nav.home') },
-          { href: '/compare', label: 'Porównywarka' },
-          { href: `/compare/share/${token}`, label: 'Udostępniona' },
+          { href: '/compare', label: t('commerce.compare.title') },
+          { href: `/compare/share/${token}`, label: t('commerce.compare.shared.crumb') },
         ]}
       />
       <div className="industria-catalog__title">
         <div>
-          <h1>Udostępniona porównywarka</h1>
-          <p>
-            Tylko do odczytu — autor porównywarki udostępnił ci ten zestaw produktów. Zmiany trybu
-            wyświetlania są lokalne i nie wpływają na widok autora.
-          </p>
+          <h1>{t('commerce.compare.shared.heading')}</h1>
+          <p>{t('commerce.compare.shared.intro')}</p>
         </div>
       </div>
-      <SharedComparisonTable token={token} locale={locale} />
+      <SharedComparisonTable token={token} locale={locale} salesChannelCode={ctx.salesChannelCode} />
     </div>
   );
 }

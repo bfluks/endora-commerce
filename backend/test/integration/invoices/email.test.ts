@@ -147,7 +147,8 @@ audit);
     const last = sender.sent.at(-1)!;
     expect(last.attachments).toBeUndefined();
     const vars = last.variables as { invoice: { downloadUrl: string } };
-    expect(vars.invoice.downloadUrl).toContain('https://shop.example.com/orders/');
+    // Feature 167 (OR-14) — the storefront order page, not an unserved PDF path.
+    expect(vars.invoice.downloadUrl).toMatch(/^https:\/\/shop\.example\.com\/(?:[a-z]{2,3}\/)?orders\/[0-9a-f-]+$/);
   });
 
   it('uses an idempotent messageId per invoice by default', async () => {

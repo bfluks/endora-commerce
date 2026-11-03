@@ -1,8 +1,8 @@
 {
-  "errors.COMPARISON_FULL": "Comparison Full.",
-  "errors.COMPARISON_NOT_FOUND": "Comparison Not Found.",
-  "errors.COMPARISON_EMPTY": "Comparison Empty.",
-  "errors.PDF_GENERATION_FAILED": "Pdf Generation Failed.",
+  "errors.COMPARISON_FULL": "The comparison is full. Remove a product from it to add another.",
+  "errors.COMPARISON_NOT_FOUND": "Comparison not found.",
+  "errors.COMPARISON_EMPTY": "The comparison is empty, so it cannot be exported.",
+  "errors.PDF_GENERATION_FAILED": "The PDF could not be generated. Try again later.",
   "error.load": "Failed to load.",
   "common.loading": "Loading…",
   "list.page.title": "Comparisons",
@@ -62,5 +62,6 @@
   "blocks.comparisonTable.description": "One column per product and one row per compared attribute.",
   "blocks.comparisonShareLink.label": "Share link",
   "blocks.comparisonShareLink.description": "The comparison's share page address, optionally as a QR code.",
-  "list.pdfTemplate": "PDF template"
+  "list.pdfTemplate": "PDF template",
+  "actions.openComparisons.keywords": "comparison, comparisons"
 }

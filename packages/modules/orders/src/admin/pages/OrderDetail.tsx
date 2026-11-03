@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   ClipboardList,
   Copy,
@@ -10,10 +10,10 @@ import {
   RotateCcw,
   Truck,
 } from 'lucide-react';
-import { ApiError, apiBaseUrl, apiClient, cn, formatDateTime, formatMoney, issueInvoiceNotice, statusBadgeStyle, useUnsavedChangesPrompt } from '@endora-commerce/admin-kit/lib';
+import { ApiError, apiBaseUrl, apiClient, cn, formatDateTime, formatMoney, issueInvoiceNotice, readReturnTo, statusBadgeStyle, useUnsavedChangesPrompt } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Badge, Button, Card, CardContent, Label, PageHeader, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Section } from '@endora-commerce/admin-kit/ui';
-import { CustomFieldValuesPanel } from '@endora-commerce/admin-kit/components';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { CustomFieldValuesPanel, resolveCustomFieldLabel } from '@endora-commerce/admin-kit/components';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { AdminZone, useAdminZone } from '@endora-commerce/admin-kit/zones';
 import { OrderPendingEffectsNotice } from '../components/OrderPendingEffectsNotice.js';
 import { OrderShipmentsTab } from '../components/OrderShipmentsTab.js';
@@ -22,7 +22,17 @@ import {
   paymentStatusLabelKey,
   paymentStatusOptions,
 } from '../lib/paymentStatus.js';
-import type { IssueInvoiceEmailOutcome, OrderPendingEffect } from '@endora-commerce/contracts';
+import {
+  arrangeLineGroups,
+  customFieldCarrySkipReasonSchema,
+  lineAmountHalfUp,
+  orderCommentSystemNoteSchema,
+  type IssueInvoiceEmailOutcome,
+  type LineGroup,
+  type OrderCommentSystemNote,
+  type OrderPendingEffect,
+} from '@endora-commerce/contracts';
+import { OrderSectionSummary, orderSectionTotals, useOrderSectionSummaryText } from '../line-groups.js';
 
 type OrderTab = 'overview' | 'payment' | 'delivery' | 'comments';
 
@@ -35,6 +45,9 @@ interface OrderItem {
   unitPrice: number;
   taxRate: number;
   lineTotal: number;
+  /** Feature 159 — the line's group (`itemGroups[].id`), `null` = ungrouped. */
+  groupId?: string | null;
+  position?: number;
 }
 
 interface OrderAddress {
@@ -76,6 +89,9 @@ interface OrderDetail {
   billingAddress: OrderAddress;
   deliveryMethod: { code: string; name: Record<string, string>; cost: number };
   paymentMethod: { code: string; name: Record<string, string>; kind: string };
+  /** Feature 159 — the order's groups, by position; absent from an older server. */
+  itemGroups?: LineGroup[];
+  /** In display order. */
   items: OrderItem[];
   subtotal: number;
   taxTotal: number;
@@ -135,7 +151,75 @@ interface OrderCommentRow {
   notifyCustomer: boolean;
   authorAdminUserId: string | null;
   authorCustomerAccountId: string | null;
+  /** Feature 162 — present on a note the platform wrote (both authors `null`). */
+  systemNote?: OrderCommentSystemNote | null;
   createdAt: string;
+}
+
+/** A field name shown to an operator is cut here. */
+const SHOWN_KEY_LIMIT = 64;
+const SKIP_REASONS: ReadonlySet<string> = new Set(customFieldCarrySkipReasonSchema.options);
+// The note's own schema names the sources, so this host page names no contributor module.
+const NOTE_SOURCES: ReadonlySet<string> = new Set(orderCommentSystemNoteSchema.shape.source.shape.entityType.options);
+
+type Translate = (key: string, params?: Record<string, string | number>) => string;
+
+/**
+ * The name a skip line gives its field (owner ruling V3, 2026-10-21): the
+ * source field's label as stored with the skip, in the reader's language,
+ * then its default label, then — for a note written before the label was
+ * stored — the key; cut at {@link SHOWN_KEY_LIMIT}. Needs no definition read,
+ * so whoever may read the Order reads the name.
+ */
+function skippedFieldName(skip: OrderCommentSystemNote['skipped'][number], language: string): string {
+  const name = skip.label ? resolveCustomFieldLabel(skip.label.labels, skip.label.labelDefault, language) : '';
+  const shown = name === '' ? skip.key : name;
+  return shown.length > SHOWN_KEY_LIMIT ? `${shown.slice(0, SHOWN_KEY_LIMIT)}…` : shown;
+}
+
+/**
+ * A system note as the operator reads it, in their language (feature 162,
+ * `specs/162-custom-fields-value-carry/contracts/admin-surfaces.md` §2): which
+ * record the values came from, then a line per value not carried — the
+ * field's stored label, else its key — with the reason. A source or a reason
+ * this screen has no sentence for falls back to the stored English `body`,
+ * never to a code.
+ */
+function SystemNoteBody({
+  note,
+  body,
+  language,
+  t,
+}: {
+  note: OrderCommentSystemNote;
+  body: string;
+  language: string;
+  t: Translate;
+}): ReactNode {
+  const readable =
+    note.kind === 'custom_field_carry_skipped' &&
+    NOTE_SOURCES.has(note.source.entityType) &&
+    note.skipped.every((skip) => SKIP_REASONS.has(skip.reason));
+  if (!readable) return <p className="whitespace-pre-wrap break-words">{body}</p>;
+  return (
+    <div className="space-y-1">
+      <p className="break-words">
+        {t(`orderDetail.comments.systemNote.customFieldCarrySkipped.${note.source.entityType}`, {
+          reference: note.source.reference,
+        })}
+      </p>
+      <ul className="list-disc space-y-0.5 pl-5">
+        {note.skipped.map((skip) => (
+          <li key={skip.key} className="break-words">
+            {t('orderDetail.comments.carryLine', {
+              field: skippedFieldName(skip, language),
+              reason: t(`orderDetail.comments.carryReason.${skip.reason}`),
+            })}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 /** Invoice row for this order, from the admin invoices list endpoint. */
@@ -150,7 +234,13 @@ interface OrderInvoiceRow {
 
 export function OrderDetail(): ReactNode {
   const t = useTranslation('core');
+  const tOrders = useTranslation('orders');
+  const sectionSummaryText = useOrderSectionSummaryText();
+  // Feature 162 — the system note's sentences are this module's own.
+  const { language } = useTranslationContext();
   const { id = '' } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const returnTo = readReturnTo(searchParams);
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [invoices, setInvoices] = useState<OrderInvoiceRow[]>([]);
   const [graph, setGraph] = useState<StatusGraph | null>(null);
@@ -352,7 +442,11 @@ export function OrderDetail(): ReactNode {
   return (
     <>
       <PageHeader
-        back={{ label: t('orders.page.title'), to: '/orders' }}
+        back={
+          // Opened from another screen that named its own address: the way back leads
+          // there, and says only "Back".
+          returnTo ? { label: t('common.action.back'), to: returnTo } : { label: t('orders.page.title'), to: '/orders' }
+        }
         title={
           <>
             <button
@@ -636,32 +730,59 @@ export function OrderDetail(): ReactNode {
                       <TableHead className="text-right">{t('orderDetail.columns.line')}</TableHead>
                     </TableRow>
                   </TableHeader>
-                  <TableBody>
-                    {order.items.map((it) => (
-                      <TableRow key={it.id}>
-                        <TableCell>
-                          <Link
-                            to={`/catalog/products/${it.productId}`}
-                            className="font-medium text-primary hover:underline"
-                          >
-                            {it.productSnapshot.name}
-                          </Link>
-                          <div className="font-mono text-xs text-muted-foreground">
-                            {it.variantSnapshot ? `${it.variantSnapshot.label} · ` : ''}
-                            {it.productSnapshot.sku}
-                          </div>
-                        </TableCell>
-                        <TableCell>{it.quantity}</TableCell>
-                        <TableCell className="tabular-nums">
-                          {formatMoney(it.unitPrice, order.currency)}
-                        </TableCell>
-                        <TableCell>{(it.taxRate * 100).toFixed(1)}%</TableCell>
-                        <TableCell className="tabular-nums text-right">
-                          {formatMoney(it.lineTotal, order.currency)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
+                  {/* Feature 159 — with groups, one row group per section (FR-032); read-only (FR-063). */}
+                  {orderLineSections(order, tOrders('lineGroups.otherItems')).map((section) => (
+                    <TableBody key={section.key} aria-label={section.heading ?? undefined}>
+                      {section.heading !== null ? (
+                        <TableRow className="bg-muted/40 hover:bg-muted/40">
+                          <TableHead colSpan={5} scope="colgroup" className="font-semibold text-foreground">
+                            {section.heading}
+                          </TableHead>
+                        </TableRow>
+                      ) : null}
+                      {section.items.map((it) => (
+                        <TableRow key={it.id}>
+                          <TableCell>
+                            <Link
+                              to={`/catalog/products/${it.productId}`}
+                              className="font-medium text-primary hover:underline"
+                            >
+                              {it.productSnapshot.name}
+                            </Link>
+                            <div className="font-mono text-xs text-muted-foreground">
+                              {it.variantSnapshot ? `${it.variantSnapshot.label} · ` : ''}
+                              {it.productSnapshot.sku}
+                            </div>
+                          </TableCell>
+                          <TableCell>{it.quantity}</TableCell>
+                          <TableCell className="tabular-nums">
+                            {formatMoney(it.unitPrice, order.currency, undefined, { unitPrice: true })}
+                          </TableCell>
+                          <TableCell>{(it.taxRate * 100).toFixed(1)}%</TableCell>
+                          <TableCell className="tabular-nums text-right">
+                            {formatMoney(it.lineTotal, order.currency)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {section.heading !== null ? (
+                        <TableRow>
+                          <TableCell colSpan={5}>
+                            <OrderSectionSummary
+                              text={sectionSummaryText(
+                                orderSectionTotals(
+                                  section.items.map((it) => ({
+                                    net: lineAmountHalfUp(it.unitPrice, it.quantity),
+                                    taxRate: it.taxRate,
+                                  })),
+                                ),
+                                order.currency,
+                              )}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </TableBody>
+                  ))}
                   <tfoot className="border-t [&_td]:p-2 [&_th]:p-2">
                     <tr>
                       <th colSpan={4} className="text-right font-medium text-muted-foreground">
@@ -740,7 +861,9 @@ export function OrderDetail(): ReactNode {
                     <li key={c.id} className="rounded-md border p-3 text-sm" data-testid="order-comment">
                       <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
                         <span>{formatDateTime(c.createdAt)}</span>
-                        {c.authorCustomerAccountId ? (
+                        {c.systemNote ? (
+                          <span>{tOrders('orderDetail.comments.systemAuthor')}</span>
+                        ) : c.authorCustomerAccountId ? (
                           <span>{t('orderDetail.comments.byCustomer')}</span>
                         ) : (
                           <span>{t('orderDetail.comments.byStaff')}</span>
@@ -751,7 +874,16 @@ export function OrderDetail(): ReactNode {
                           </span>
                         ) : null}
                       </div>
-                      <p>{c.body}</p>
+                      {c.systemNote ? (
+                        <SystemNoteBody
+                          note={c.systemNote}
+                          body={c.body}
+                          language={language}
+                          t={tOrders}
+                        />
+                      ) : (
+                        <p>{c.body}</p>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -831,3 +963,24 @@ function TabBtn(props: {
  * own siblings and tests use.
  */
 export default OrderDetail;
+
+/**
+ * Feature 159 — the items table's sections: with no group holding a line, one
+ * section with no heading (the table as it was, FR-033); otherwise each group by
+ * name, then the ungrouped lines under `otherItems`. Empty groups are never
+ * shown read-only, and an order stores none (D2).
+ */
+function orderLineSections(
+  order: OrderDetail,
+  otherItems: string,
+): Array<{ key: string; heading: string | null; items: OrderItem[] }> {
+  const sections = arrangeLineGroups(order.itemGroups ?? [], order.items);
+  if (!sections.some((section) => section.kind === 'group')) {
+    return [{ key: 'all', heading: null, items: order.items }];
+  }
+  return sections.map((section) => ({
+    key: section.group?.id ?? 'ungrouped',
+    heading: section.group?.name ?? otherItems,
+    items: [...section.lines],
+  }));
+}

@@ -262,20 +262,20 @@ function nextStepsFor(
       `unregistered migration does not run and an unregistered manifest is a module the ` +
       `platform does not compose.`;
   return [
-    `declare "${packageName}": "workspace:*" in backend/package.json — the generated manifest ` +
-      `index imports a packaged module by **bare specifier**, so an application that does not ` +
-      `depend on it gets no node_modules link and every tool that loads that index dies with ` +
-      `ERR_MODULE_NOT_FOUND.${
+    `pnpm install, then commit pnpm-lock.yaml with the manifests the generator wrote — a new ` +
+      `workspace member changes what the workspace declares, and ` +
+      `\`pnpm install --frozen-lockfile\` is the first thing every CI job does. The ` +
+      `application manifests are among them: the generator declares "${packageName}": ` +
+      `"workspace:*" in the backend's dependencies, because the generated manifest index ` +
+      `imports a packaged module by **bare specifier**${
         hasAdminLayer
-          ? ' The admin\'s own dependency on this package is not yours to add: the manifest ' +
-            'generator reconciles it from the same layer inventory it renders `exports` from, ' +
-            'so a module that grows or drops `src/admin/` moves both in one run.'
+          ? ', and in the admin\'s, reconciled from the same layer inventory it renders ' +
+            '`exports` from'
           : ''
-      }`,
-    `pnpm install, then commit pnpm-lock.yaml — a new workspace member changes what the ` +
-      `workspace declares, and \`pnpm install --frozen-lockfile\` is the first thing every CI ` +
-      `job does.`,
-    `pnpm --filter ${packageName} run build — a module package resolves at its \`dist\`.`,
+      }. That is not yours to write by hand.`,
+    `pnpm --filter ${packageName} run build — a module package resolves at its \`dist\`, ` +
+      `and until it has one a second \`manifests:generate\` and \`manifests:check\` both ` +
+      `refuse: which reaches are peers is read off the package's emitted declarations.`,
     composerNote,
     `pnpm --filter backend run manifests:check — confirms the manifest this command produced ` +
       `is the one the generator renders.`,

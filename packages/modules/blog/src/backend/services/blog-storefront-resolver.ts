@@ -28,8 +28,15 @@ export interface BlogStorefrontDeps {
   /**
    * Resolves a Catalog Product id to a card payload (or null when the
    * product is soft-deleted / out-of-channel — handled at the upstream
-   * port, not here). Optional: when omitted, related-products lists
-   * always render as empty (R6 storefront-filter contract).
+   * port, not here). Optional: when omitted, `relatedProducts` is empty.
+   *
+   * @deprecated Since issue #590 — no composition in this repository ever
+   * passed it, and the storefront no longer reads what it produces. The post
+   * payload names its related products in `relatedProductIds`, and the
+   * storefront reads them from the catalogue listing as the viewer. A card
+   * made here is cached for every visitor, so it must never carry a
+   * buyer-specific figure. Kept for one minor release so a deployment that
+   * passes it still compiles.
    */
   resolveProductCard?: (
     productId: string,
@@ -166,6 +173,69 @@ export class BlogStorefrontResolver {
       latestPosts,
       topLevelCategories,
     };
+    if (this.cache) await this.cache.set(cacheKey, out);
+    return out;
+  }
+
+  /**
+   * The newest published posts of the resolved channel as cards, optionally
+   * from one category (feature 163, `GET /api/v1/blog/posts`). Returns `[]`
+   * when the blog is disabled in the channel or the category is unknown there,
+   * so a page block with a stale setting renders nothing instead of failing.
+   * Both the post and the category are joined to the channel (Constitution XII).
+   */
+  async listPosts(input: {
+    resolvedChannel: ResolvedChannel;
+    language?: string | undefined;
+    limit: number;
+    categorySlug?: string | undefined;
+  }): Promise<BlogPostCard[]> {
+    const em = this.emFactory();
+    const channel = toChannelRow(input.resolvedChannel);
+    const language = input.language ?? channel.default_language;
+    const settings = await this.settingsResolver.getResolved(channel.id);
+    if (!settings.enabled) return [];
+
+    const cacheKey = BlogCacheService.composeListKey(
+      channel.code,
+      language,
+      input.limit,
+      input.categorySlug ?? null,
+    );
+    if (this.cache) {
+      const cached = await this.cache.get<BlogPostCard[]>(cacheKey);
+      if (cached) return cached;
+    }
+
+    const categoryJoin = input.categorySlug
+      ? `join blog_post_categories pc on pc.blog_post_id = p.id
+         join blog_categories c on c.id = pc.blog_category_id
+          and c.deleted_at is null
+          and c.enabled = true
+         join blog_category_sales_channels csc on csc.blog_category_id = c.id
+          and csc.sales_channel_id = psc.sales_channel_id
+          and csc.slug = ?
+          and csc.deleted_at is null`
+      : '';
+    const rows = (await em.execute(
+      `select p.*
+         from blog_posts p
+         join blog_post_sales_channels psc on psc.blog_post_id = p.id
+         ${categoryJoin}
+        where p.deleted_at is null
+          and p.active = true
+          and p.status = 'published'
+          and psc.sales_channel_id = ?
+          and psc.deleted_at is null
+        order by p.published_at desc nulls last, p.created_at desc
+        limit ?`,
+      [...(input.categorySlug ? [input.categorySlug] : []), channel.id, input.limit],
+    )) as PostRow[];
+
+    const channelDefault = channel.default_language;
+    const out = await Promise.all(
+      rows.map((r) => this.toPostCard(em, r, language, channelDefault)),
+    );
     if (this.cache) await this.cache.set(cacheKey, out);
     return out;
   }
@@ -477,7 +547,7 @@ export class BlogStorefrontResolver {
   ): Promise<BlogPostCard> {
     // Pull the primary category slug if any (the first one assigned).
     const catRows = (await em.execute(
-      `select c.slug
+      `select c.slug, c.name
          from blog_post_categories pc
          join blog_categories c on c.id = pc.blog_category_id
         where pc.blog_post_id = ?
@@ -485,8 +555,11 @@ export class BlogStorefrontResolver {
         order by c.is_system desc, c.position asc, c.slug asc
         limit 1`,
       [row.id],
-    )) as Array<{ slug: string }>;
+    )) as Array<{ slug: string; name: Record<string, string> | null }>;
     const primaryCategorySlug = catRows[0]?.slug ?? null;
+    const primaryCategoryName = catRows[0]
+      ? (this.pickName(catRows[0].name, language, channelDefault) ?? catRows[0].slug)
+      : null;
 
     const name = this.pickName(row.name, language, channelDefault) ?? row.slug;
     const excerpt =
@@ -501,6 +574,7 @@ export class BlogStorefrontResolver {
       excerpt,
       mainImageUrl: await this.maybeAssetUrl(row.main_image_asset_id),
       primaryCategorySlug,
+      primaryCategoryName,
     };
   }
 
@@ -561,17 +635,23 @@ export class BlogStorefrontResolver {
       relatedPostRows.map((r) => this.toPostCard(em, r, language, channelDefault)),
     );
 
-    // Related products via the optional port.
-    const relatedProductIds = (await em.execute(
+    // Related products, by id and in the editor's order (issue #590). The
+    // storefront reads them from the catalogue listing as the viewer, which is
+    // where availability and the viewer's price are decided; this payload is
+    // cached for every visitor and so carries nothing about one.
+    const relatedProductRows = (await em.execute(
       `select product_id::text as id
          from blog_post_related_products
         where blog_post_id = ?
         order by position`,
       [post.id],
     )) as Array<{ id: string }>;
+    const relatedProductIds = relatedProductRows.map((r) => r.id);
+    // Deprecated (issue #590): filled only when a composition passes
+    // `resolveProductCard`, which none in this repository does.
     const relatedProducts: BlogProductCard[] = [];
     if (this.deps.resolveProductCard) {
-      for (const r of relatedProductIds) {
+      for (const r of relatedProductRows) {
         const card = await this.deps.resolveProductCard(r.id, channel.id, language);
         if (card) relatedProducts.push(card);
       }
@@ -619,6 +699,7 @@ export class BlogStorefrontResolver {
       tags,
       relatedPosts,
       relatedProducts,
+      relatedProductIds,
       categories,
       breadcrumb,
     };

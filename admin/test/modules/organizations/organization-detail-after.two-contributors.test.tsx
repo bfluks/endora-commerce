@@ -19,13 +19,17 @@ import { adminSession, modulePresence, withSession } from '../../helpers/render-
  * `pim_pimcore` half of `admin/test/modules/pim_ergonode/field-protection-zone.test.tsx`,
  * removed by `039e78c67`, and that file's header records the premise that
  * `product.editor.*` is the only multi-contributor zone over real declarations. The
- * premise is false: `organization.detail.after` has four free contributors —
- * `sales_channels` (100), `price_lists` (200), `quick_order` (300), `carts` (400) — each
- * tested alone by its own zone file and none mounted beside another.
+ * premise is false: `organization.detail.after` has several free contributors —
+ * `price_lists` (200), `quick_order` (300), `carts` (400) among them — each tested alone
+ * by its own zone file and none mounted beside another.
  *
  * W2.3 refuses deleting the last driver of a mechanism member, so this is the surviving
- * driver `pim_ergonode`'s extraction names: `quick_order`, which is switchable, beside
- * `sales_channels`, which is not.
+ * driver `pim_ergonode`'s extraction names: `quick_order`, which is switchable, beside a
+ * contributor that is not. That was `sales_channels` (100) until feature 154 withdrew its
+ * contribution here — `organizations` edits an Organization's channels in a panel of its
+ * own — and it is `carts` (400) since: also `nonDeactivatable`, and weighted on the
+ * **other** side of `quick_order`, so the weight-order case still has two weights to
+ * order.
  *
  * ## What is real and what is instrumented
  *
@@ -56,8 +60,8 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
   };
 });
 
-const salesChannels = await import('@endora-commerce/mod-sales-channels/admin');
-const { manifest: salesChannelsManifest } = await import('@endora-commerce/mod-sales-channels');
+const carts = await import('@endora-commerce/mod-carts/admin');
+const { manifest: cartsManifest } = await import('@endora-commerce/mod-carts');
 const quickOrder = await import('@endora-commerce/mod-quick-order/admin');
 const { manifest: quickOrderManifest } = await import('@endora-commerce/mod-quick-order');
 
@@ -65,22 +69,22 @@ const ZONE = 'organization.detail.after';
 const ORG_ID = '00000000-0000-4000-8000-0000000000a1';
 
 /** The text each panel renders first, through a passthrough bundle. */
-const SALES_CHANNELS_PANEL = 'membership.title';
+const CARTS_PANEL = 'policy.title';
 const QUICK_ORDER_PANEL = 'defaultPreferences.title';
 
 const BUNDLE = {
-  sales_channels: Object.fromEntries(
+  carts: Object.fromEntries(
     [
-      'membership.title',
-      'membership.loading',
-      'membership.empty',
-      'membership.error.load',
-      'membership.action.add',
-      'membership.action.remove',
-      'membership.action.pickChannel',
-      'membership.defaultSuffix',
-      'badge.systemDefault',
-      'status.inactive',
+      'policy.title',
+      'policy.description',
+      'policy.on',
+      'policy.off',
+      'policy.hint',
+      'policy.saving',
+      'policy.turnedOn',
+      'policy.turnedOff',
+      'policy.loadError',
+      'policy.saveError',
     ].map((key) => [key, key]),
   ),
   core: Object.fromEntries(
@@ -136,10 +140,7 @@ function instrumentedRegistry(): {
   return {
     entries: [
       { moduleId: 'quick_order', contributions: { zones: wrap('quick_order', quickOrder.contributions.zones) } },
-      {
-        moduleId: 'sales_channels',
-        contributions: { zones: wrap('sales_channels', salesChannels.contributions.zones) },
-      },
+      { moduleId: 'carts', contributions: { zones: wrap('carts', carts.contributions.zones) } },
     ],
     loads,
   };
@@ -166,8 +167,8 @@ function renderZone(options: {
   return { container, loads: registry.loads, unmount };
 }
 
-const BOTH_PERMISSIONS = ['sales_channels:read', 'orders:write'] as const;
-const BOTH_PRESENT = ['sales_channels', 'quick_order'] as const;
+const BOTH_PERMISSIONS = ['customers:manage', 'orders:write'] as const;
+const BOTH_PRESENT = ['carts', 'quick_order'] as const;
 
 const quickOrderRequests = (): unknown[] =>
   getSpy.mock.calls
@@ -176,21 +177,20 @@ const quickOrderRequests = (): unknown[] =>
 
 async function bothRenderedInWeightOrder(container: HTMLElement): Promise<void> {
   await waitFor(() => {
-    expect(container.textContent).toContain(SALES_CHANNELS_PANEL);
+    expect(container.textContent).toContain(CARTS_PANEL);
     expect(container.textContent).toContain(QUICK_ORDER_PANEL);
   });
   const text = container.textContent ?? '';
-  expect(text.indexOf(SALES_CHANNELS_PANEL)).toBeLessThan(text.indexOf(QUICK_ORDER_PANEL));
+  expect(text.indexOf(QUICK_ORDER_PANEL)).toBeLessThan(text.indexOf(CARTS_PANEL));
 }
 
 describe('organization.detail.after — two real contributors, one switchable', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getSpy.mockImplementation(async (url: string) => {
-      if (url.includes('/sales-channels/by-entity/')) {
-        return { entityType: 'organization', entityId: ORG_ID, channels: [] };
+      if (url === `/api/v1/admin/organizations/${ORG_ID}/cart-approval-policy`) {
+        return { data: { organizationId: ORG_ID, requiresCartApproval: false, updatedAt: 'x' } };
       }
-      if (url.includes('/sales-channels')) return { items: [], page: 1, pageSize: 20, total: 0 };
       if (url.startsWith('/api/v1/admin/quick-order/preferences')) return { data: null };
       if (url.includes('/addresses')) return { data: [] };
       if (url.startsWith('/api/v1/admin/payment-methods')) return { data: [] };
@@ -202,18 +202,16 @@ describe('organization.detail.after — two real contributors, one switchable', 
   it('has the population this file depends on — one locked contributor, one switchable, weights apart', () => {
     // Read from the real manifests and declarations, so a change to either axis or to
     // the order re-opens the question this driver answers instead of passing over it.
-    expect(salesChannelsManifest.activation).toEqual(
-      expect.objectContaining({ nonDeactivatable: true }),
-    );
+    expect(cartsManifest.activation).toEqual(expect.objectContaining({ nonDeactivatable: true }));
     expect(quickOrderManifest.activation).toEqual(
       expect.objectContaining({ settingCode: 'quick_order.enabled' }),
     );
 
-    const sales = zoneOf('sales_channels', salesChannels.contributions.zones);
+    const locked = zoneOf('carts', carts.contributions.zones);
     const quick = zoneOf('quick_order', quickOrder.contributions.zones);
-    expect(sales.requiredPermission).toBe('sales_channels:read');
+    expect(locked.requiredPermission).toBe('customers:manage');
     expect(quick.requiredPermission).toBe('orders:write');
-    expect(sales.weight).toBeLessThan(quick.weight);
+    expect(quick.weight).toBeLessThan(locked.weight);
   });
 
   it('renders both panels, in weight order, each chunk loaded once', async () => {
@@ -222,38 +220,38 @@ describe('organization.detail.after — two real contributors, one switchable', 
       present: BOTH_PRESENT,
     });
     await bothRenderedInWeightOrder(container);
-    expect(Object.fromEntries(loads)).toEqual({ sales_channels: 1, quick_order: 1 });
+    expect(Object.fromEntries(loads)).toEqual({ carts: 1, quick_order: 1 });
   });
 
   it('withdraws only the quick_order panel while it is switched off, and fetches no chunk of it', async () => {
     const { container, loads } = renderZone({
       permissions: BOTH_PERMISSIONS,
-      present: ['sales_channels'],
+      present: ['carts'],
     });
-    await waitFor(() => expect(container.textContent).toContain(SALES_CHANNELS_PANEL));
+    await waitFor(() => expect(container.textContent).toContain(CARTS_PANEL));
     expect(container.textContent).not.toContain(QUICK_ORDER_PANEL);
     expect(loads.get('quick_order')).toBeUndefined();
-    expect(loads.get('sales_channels')).toBe(1);
+    expect(loads.get('carts')).toBe(1);
     expect(quickOrderRequests()).toEqual([]);
   });
 
   it('withdraws only the quick_order panel without orders:write, and fetches no chunk of it', async () => {
     const { container, loads } = renderZone({
-      permissions: ['sales_channels:read'],
+      permissions: ['customers:manage'],
       present: BOTH_PRESENT,
     });
-    await waitFor(() => expect(container.textContent).toContain(SALES_CHANNELS_PANEL));
+    await waitFor(() => expect(container.textContent).toContain(CARTS_PANEL));
     expect(container.textContent).not.toContain(QUICK_ORDER_PANEL);
     expect(loads.get('quick_order')).toBeUndefined();
-    expect(loads.get('sales_channels')).toBe(1);
+    expect(loads.get('carts')).toBe(1);
     expect(quickOrderRequests()).toEqual([]);
   });
 
   it('puts the quick_order panel back in its place when the module comes back, with no rebuild', async () => {
     // Same imported declarations, same bundle: only the presence projection changes,
     // which is all an operator's activation flip changes on the client.
-    const off = renderZone({ permissions: BOTH_PERMISSIONS, present: ['sales_channels'] });
-    await waitFor(() => expect(off.container.textContent).toContain(SALES_CHANNELS_PANEL));
+    const off = renderZone({ permissions: BOTH_PERMISSIONS, present: ['carts'] });
+    await waitFor(() => expect(off.container.textContent).toContain(CARTS_PANEL));
     expect(off.container.textContent).not.toContain(QUICK_ORDER_PANEL);
     off.unmount();
 

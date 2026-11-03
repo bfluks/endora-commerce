@@ -957,7 +957,10 @@ interface BootObservation {
   readonly healthStatus: number | null;
   /** The module ids the presence route enumerated, in its own order. */
   readonly enumerated: readonly string[] | null;
-  /** `"<METHOD> <path>"` for every endpoint the served OpenAPI document holds. */
+  /**
+   * `"<METHOD> <path>"` for every endpoint the served OpenAPI document holds;
+   * `null` when no administrator session was available to read it with.
+   */
   readonly servedRoutes: readonly string[] | null;
   /** One entry per extra path the caller asked for: its status and its body. */
   readonly probes: ReadonlyMap<string, { status: number; body: unknown }>;
@@ -1018,10 +1021,14 @@ async function bootOnce(
     actorScope: null,
     output,
   });
-  const ask = async (path: string): Promise<{ status: number; body: unknown } | null> => {
+  const ask = async (
+    path: string,
+    cookie?: string,
+  ): Promise<{ status: number; body: unknown } | null> => {
     try {
       const response = await fetch(`http://127.0.0.1:${String(port)}${path}`, {
         signal: AbortSignal.timeout(30_000),
+        ...(cookie === undefined ? {} : { headers: { cookie } }),
       });
       const text = await response.text();
       let body: unknown = text;
@@ -1053,20 +1060,6 @@ async function bootOnce(
             .filter((id): id is string => typeof id === 'string')
         : null;
 
-      // The API surface, read off the document the platform generates from the
-      // routes Fastify actually registered — never off a list of what this
-      // composition was supposed to serve.
-      const document = await ask(OPENAPI_PATH);
-      const paths = (document?.body as { paths?: Record<string, unknown> } | undefined)?.paths;
-      const servedRoutes =
-        document?.status === 200 && paths !== undefined && paths !== null
-          ? Object.entries(paths).flatMap(([path, operations]) =>
-              Object.keys(operations as Record<string, unknown>).map(
-                (method) => `${method.toUpperCase()} ${path}`,
-              ),
-            )
-          : null;
-
       const probes = new Map<string, { status: number; body: unknown }>();
       for (const path of probePaths) {
         const answer = await ask(path);
@@ -1077,6 +1070,7 @@ async function bootOnce(
       // process whose failure would be a different finding.
       let loginStatus: number | null = null;
       let sessionCookie = false;
+      let adminCookie: string | null = null;
       let loginBody = '';
       if (withLogin) {
         try {
@@ -1087,9 +1081,11 @@ async function bootOnce(
             signal: AbortSignal.timeout(20_000),
           });
           loginStatus = login.status;
-          sessionCookie = (login.headers.getSetCookie?.() ?? []).some((cookie) =>
+          const issued = (login.headers.getSetCookie?.() ?? []).find((cookie) =>
             cookie.startsWith(`${ADMIN_SESSION_COOKIE_NAME}=`),
           );
+          sessionCookie = issued !== undefined;
+          adminCookie = issued === undefined ? null : (issued.split(';')[0] ?? null);
           loginBody = await login.text();
         } catch (thrown) {
           // Not a `catch` that decides anything: the transport failing is a
@@ -1098,6 +1094,23 @@ async function bootOnce(
           loginBody = thrown instanceof Error ? thrown.message : String(thrown);
         }
       }
+      // The API surface, read off the document the platform generates from the
+      // routes Fastify actually registered — never off a list of what this
+      // composition was supposed to serve. The document is served to an
+      // administrator holding `platform.api_description.read`, which the
+      // administrator A15 signed in as holds through the wildcard role, so it is
+      // read with that session; without one it is not served and A7 says so.
+      const document = adminCookie === null ? null : await ask(OPENAPI_PATH, adminCookie);
+      const paths = (document?.body as { paths?: Record<string, unknown> } | undefined)?.paths;
+      const servedRoutes =
+        document?.status === 200 && paths !== undefined && paths !== null
+          ? Object.entries(paths).flatMap(([path, operations]) =>
+              Object.keys(operations as Record<string, unknown>).map(
+                (method) => `${method.toUpperCase()} ${path}`,
+              ),
+            )
+          : null;
+
       // A17, after the login it depends on and on the same boot. A login that
       // did not earn a session is A15's finding; asking as nobody would only
       // report it a second time.

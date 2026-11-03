@@ -1,14 +1,45 @@
 'use client';
 
-import Link from 'next/link';
 import { Fragment, useState, type ReactNode } from 'react';
 import type { ResolvedMegamenu, ResolvedMenuItem } from '@endora-commerce/contracts';
 import { MenuAsset } from './MenuAsset';
 import { MenuButton } from './MenuButton';
 import { MenuCmsBlockEmbed } from './MenuCmsBlockEmbed';
+import { LocalizedLink, LocalizedAnchor } from '../../lib/i18n/localized-link';
+
+/** The drawer's own chrome text, translated by the server (feature 168, FR-011). */
+export interface DrawerLabels {
+  /** The burger trigger's accessible name. */
+  open: string;
+  close: string;
+  /** The root level's title and the breadcrumb's first step. */
+  title: string;
+  seeAll: string;
+  /** The featured link to a drilled-into item itself; `{label}` is its name. */
+  allIn: string;
+  account: string;
+  login: string;
+  /** The hint under a drilled-into page or link's own row. */
+  go: string;
+}
+
+/**
+ * The featured row at the top of a drilled-into level: the way to the item
+ * itself, whose own row only drills. "All in …" names what is under a
+ * category; a page or an external link is named by itself.
+ */
+export function featuredRowText(
+  item: ResolvedMenuItem,
+  labels: Pick<DrawerLabels, 'allIn' | 'seeAll' | 'go'>,
+): { title: string; hint: string } {
+  return item.kind === 'category-link'
+    ? { title: labels.allIn.replace('{label}', item.label), hint: labels.seeAll }
+    : { title: item.label, hint: labels.go };
+}
 
 interface MegamenuMobileDrawerProps {
   megamenu: ResolvedMegamenu;
+  labels: DrawerLabels;
   /** Logged-in buyer summary for the footer (null when signed out). */
   account?: { initials: string; name: string; subtitle: string } | null;
 }
@@ -17,11 +48,17 @@ interface MegamenuMobileDrawerProps {
  * Mobile drill-down mega-menu drawer (feature 015 / US6, restyled in feature
  * 044 to the Industria Mobile design §02 — `.mm*` in globals.css). The trigger
  * is an icon-button in the header; the panel slides in, each level animates,
- * and rows render as icon + name + chevron. The root shows a Quick Order promo
- * and an account footer; a drilled-in level shows a breadcrumb and a featured
- * "All <department>" shortcut.
+ * and rows render as icon + name + chevron. A drilled-in level shows a
+ * breadcrumb and a featured "All <item>" shortcut; the root shows an account
+ * footer.
+ *
+ * Feature 168 (US6, FR-026): the root lists the navigation bar's tabs — a
+ * `link` tab navigates, any other drills into its panel — and a group renders
+ * as a section heading with its items under it, as its column does on desktop.
+ * The root's Quick Order promo is gone with the hard-coded chrome: it is a tab
+ * an operator configures.
  */
-export function MegamenuMobileDrawer({ megamenu, account }: MegamenuMobileDrawerProps): ReactNode {
+export function MegamenuMobileDrawer({ megamenu, labels, account }: MegamenuMobileDrawerProps): ReactNode {
   const [open, setOpen] = useState(false);
   const [stack, setStack] = useState<ResolvedMenuItem[]>([]);
 
@@ -41,27 +78,27 @@ export function MegamenuMobileDrawer({ megamenu, account }: MegamenuMobileDrawer
 
   return (
     <div className="md:hidden">
-      <button type="button" className="icon-btn" onClick={() => setOpen(true)} aria-label="Menu">
+      <button type="button" className="icon-btn" onClick={() => setOpen(true)} aria-label={labels.open}>
         <MenuIcon />
       </button>
       {open ? (
-        <div className="m-drawer mm fixed inset-0 z-[60]" role="dialog" aria-modal="true">
+        <div className="m-drawer mm fixed inset-0 z-[60]" role="dialog" aria-modal="true" aria-label={labels.title}>
           <div className="mm__head">
             {currentLevel ? (
               <button type="button" className="mm__back" onClick={back}>
                 <ChevLeftIcon /> {currentLevel.label}
               </button>
             ) : (
-              <span className="mm__title">{megamenu.name || 'Wszystkie kategorie'}</span>
+              <span className="mm__title">{labels.title}</span>
             )}
-            <button type="button" className="mm__close" onClick={reset} aria-label="Zamknij">
+            <button type="button" className="mm__close" onClick={reset} aria-label={labels.close}>
               <XIcon />
             </button>
           </div>
 
           {currentLevel ? (
             <div className="mm__crumb">
-              Kategorie
+              {labels.title}
               {stack.map((s) => (
                 <Fragment key={s.id}>
                   <ChevRightIcon size={11} /> {s.label}
@@ -74,59 +111,44 @@ export function MegamenuMobileDrawer({ megamenu, account }: MegamenuMobileDrawer
             <ul key={stack.length} className="m-drawer__level mm__list">
               {currentLevel && currentLevel.url ? (
                 <li>
-                  <Link href={currentLevel.url} className="mm__row feat" onClick={reset}>
+                  <LocalizedLink href={currentLevel.url} className="mm__row feat" onClick={reset}>
                     <span className="mm__row__ic">
                       <LayersIcon />
                     </span>
                     <span className="mm__row__main">
-                      <b>Wszystkie: {currentLevel.label}</b>
-                      <span>Zobacz wszystko →</span>
+                      <b>{featuredRowText(currentLevel, labels).title}</b>
+                      <span>{featuredRowText(currentLevel, labels).hint}</span>
                     </span>
-                  </Link>
+                  </LocalizedLink>
                 </li>
               ) : null}
-              {items.map((item) => (
-                <li key={item.id}>{renderRow(item, drillInto, reset)}</li>
-              ))}
+              <DrawerRows items={items} onDrill={drillInto} onNavigate={reset} />
             </ul>
-
-            {atRoot ? (
-              <div className="mm__promo">
-                <span className="mm__promo__head">
-                  <LightningIcon />
-                  <b>Quick Order</b>
-                </span>
-                <p>Wklej listę SKU + ilości z ERP/CSV i utwórz zamówienie w 30 sekund.</p>
-                <Link href="/quick-order" className="mm__promo__cta" onClick={reset}>
-                  Otwórz Quick Order <ArrowRightIcon />
-                </Link>
-              </div>
-            ) : null}
           </div>
 
           {atRoot ? (
             <div className="mm__foot">
               {account ? (
                 <>
-                  <Link href="/account" className="mm__login" onClick={reset}>
+                  <LocalizedLink href="/account" className="mm__login" onClick={reset}>
                     <span className="mm__login__av">{account.initials}</span>
                     <span className="min-w-0">
                       <b>{account.name}</b>
                       <span>{account.subtitle}</span>
                     </span>
-                  </Link>
-                  <Link href="/account" className="btn btn--ghost btn--sm" onClick={reset}>
-                    <UserIcon /> Konto
-                  </Link>
+                  </LocalizedLink>
+                  <LocalizedLink href="/account" className="btn btn--ghost btn--sm" onClick={reset}>
+                    <UserIcon /> {labels.account}
+                  </LocalizedLink>
                 </>
               ) : (
-                <Link
+                <LocalizedLink
                   href="/login"
                   className="btn btn--outline btn--sm w-full justify-center"
                   onClick={reset}
                 >
-                  <UserIcon /> Zaloguj się
-                </Link>
+                  <UserIcon /> {labels.login}
+                </LocalizedLink>
               )}
             </div>
           ) : null}
@@ -136,17 +158,50 @@ export function MegamenuMobileDrawer({ megamenu, account }: MegamenuMobileDrawer
   );
 }
 
+/**
+ * One level of the drawer, as list items. A group is a section heading with its
+ * items under it rather than a level of its own; an item with children drills
+ * in, unless it is a `link` tab, which always navigates.
+ */
+export function DrawerRows({
+  items,
+  onDrill,
+  onNavigate,
+}: {
+  items: readonly ResolvedMenuItem[];
+  onDrill: (item: ResolvedMenuItem) => void;
+  onNavigate: () => void;
+}): ReactNode {
+  return (
+    <>
+      {items.map((item) =>
+        item.kind === 'group' && (item.presentation === undefined || item.children.length === 0) ? (
+          <Fragment key={item.id}>
+            <li className="mm__crumb" role="presentation">
+              {item.label}
+            </li>
+            <DrawerRows items={item.children} onDrill={onDrill} onNavigate={onNavigate} />
+          </Fragment>
+        ) : (
+          <li key={item.id}>{renderRow(item, onDrill, onNavigate)}</li>
+        ),
+      )}
+    </>
+  );
+}
+
 function renderRow(
   item: ResolvedMenuItem,
   drillInto: (item: ResolvedMenuItem) => void,
   onNavigate: () => void,
 ): ReactNode {
-  const hasChildren = item.children.length > 0;
+  const drills = item.children.length > 0 && item.presentation !== 'link';
   switch (item.kind) {
     case 'category-link':
     case 'cms-page-link':
     case 'external-link':
-      if (hasChildren) {
+    case 'group':
+      if (drills) {
         return (
           <button type="button" className="mm__row" onClick={() => drillInto(item)}>
             <span className="mm__row__ic">
@@ -164,7 +219,7 @@ function renderRow(
       }
       if (!item.url) return null;
       return (
-        <a href={item.url} className="mm__row" onClick={onNavigate}>
+        <LocalizedAnchor href={item.url} className="mm__row" onClick={onNavigate}>
           <span className="mm__row__ic">
             <RowIcon item={item} />
           </span>
@@ -175,7 +230,7 @@ function renderRow(
           <span className="mm__row__chev">
             <ArrowUpRightIcon />
           </span>
-        </a>
+        </LocalizedAnchor>
       );
     case 'button':
       return (
@@ -198,7 +253,6 @@ function renderRow(
   }
 }
 
-/** Row icon: the item's resolved icon image when set, else a default glyph. */
 function RowIcon({ item }: { item: ResolvedMenuItem }): ReactNode {
   if (item.icon?.url) {
     // eslint-disable-next-line @next/next/no-img-element
@@ -267,18 +321,6 @@ function TagIcon(): ReactNode {
       <path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
       <line x1="7" y1="7" x2="7.01" y2="7" />
     </>,
-  );
-}
-function LightningIcon(): ReactNode {
-  return svg(<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />, 18);
-}
-function ArrowRightIcon(): ReactNode {
-  return svg(
-    <>
-      <line x1="5" y1="12" x2="19" y2="12" />
-      <polyline points="12 5 19 12 12 19" />
-    </>,
-    14,
   );
 }
 function ArrowUpRightIcon(): ReactNode {

@@ -20,6 +20,7 @@ import {
 } from '../../helpers/package-entities.js';
 import { ADMIN_COOKIES, TEST_ADMIN_ID, TEST_CUSTOMER_ID } from '../../helpers/test-actors.js';
 import { deepStrict, disagreements } from '../../helpers/strict-schema.js';
+import { bindOrganizationToDefaultChannel } from '../../helpers/sales-channel-access.js';
 import { withSystemScope } from '../../../src/tenancy/escape-hatch.js';
 
 /**
@@ -435,6 +436,10 @@ describe('146 — readable history: authority and bounds [integration]', () => {
       outsiderCookie = `stub-146-history-outsider-${stamp}`;
       ADMIN_COOKIES[outsiderCookie] = { adminUserId: outsider.id };
     });
+    // The admin request below names no channel, so it is raised on the system
+    // default, which `createOnBehalf` accepts only for an Organization assigned
+    // to it (feature 163, owner decision 2026-10-29 "A").
+    await bindOrganizationToDefaultChannel(h, strangerOrgId);
 
     const created = await h.app.inject({
       method: 'POST',

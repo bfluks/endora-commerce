@@ -15,7 +15,11 @@ import type {
   MfaEnrolmentStatePort,
   MfaLoginPort,
 } from '@endora-commerce/contracts';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type {
+  AuditPort,
+  SalesChannelAccessPort,
+  SalesChannelResolutionPort,
+} from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { lazyPort } from '@endora-commerce/platform/kernel';
@@ -36,6 +40,7 @@ import { MfaEnrolmentCountService } from './services/mfa-enrolment-count.service
 import { MfaDeactivationGuardService } from './services/mfa-deactivation-guard.service.js';
 import { MfaEnrolmentStateService } from './services/mfa-enrolment-state.service.js';
 import type { SocialIdentityDeps } from './services/social-identity-service.js';
+import { createCustomerChannelAccess } from './services/customer-channel-access.js';
 import { mfaModule, type MfaModuleHandle } from './plugin.js';
 import { MfaEnrolment } from './entities/mfa-enrolment.entity.js';
 import { MfaOrganizationPolicy } from './entities/mfa-organization-policy.entity.js';
@@ -210,6 +215,13 @@ export function registerModule(ctx: ModuleContext): void {
           );
           const adminUsers = lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort');
           const resolveOrganizationAdmin = createOrganizationAdminResolver(customerAccounts);
+          // Feature 154 — kernel-provided and ungated, like the membership
+          // port; a proxy so the singleton holds no captured value.
+          const customerChannelAccess = createCustomerChannelAccess(
+            customerAccounts,
+            lazyPort<SalesChannelAccessPort>(ctx, 'salesChannelAccessPort'),
+            lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
+          );
           return mfaModule({
             emFactory,
             redis,
@@ -287,6 +299,12 @@ export function registerModule(ctx: ModuleContext): void {
             // Spread rather than assigned: `exactOptionalPropertyTypes` makes
             // "absent" and "present as undefined" different types, and these
             // two are genuinely absent on a deployment without social sign-in.
+            customerChannelAccess,
+            // Feature 167 — the started-on channel, else the system default.
+            channelUrlFactsFor: async (salesChannelId) => {
+              const resolution = lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort');
+              return salesChannelId ? resolution.getById(salesChannelId) : resolution.getSystemDefault();
+            },
             ...(oauthProvider === undefined ? {} : { oauthProvider }),
             ...(socialAccountResolvers === undefined ? {} : { socialAccountResolvers }),
           });

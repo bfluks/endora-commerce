@@ -13,7 +13,7 @@ const MISSING_PRODUCT_ID = '00000000-0000-4000-8000-0000000009ff';
 
 interface PreviewBody {
   data: {
-    lines: Array<{ productId: string; unitPrice: string; lineTotal: number; unavailable?: boolean }>;
+    lines: Array<{ productId: string; unitPrice: string; lineTotal: number; taxRate?: number; unavailable?: boolean }>;
     summary: {
       subtotal: number;
       taxTotal: number;
@@ -65,6 +65,8 @@ describe('Admin create-order pricing preview (US3)', () => {
     expect(line.unavailable).toBeUndefined();
     expect(Number(line.unitPrice)).toBeGreaterThan(0);
     expect(line.lineTotal).toBeCloseTo(Number(line.unitPrice) * 2, 2);
+    // Feature 159 — the rate the line is taxed at (none configured here: 0).
+    expect(line.taxRate).toBe(0);
 
     // subtotal + resolved tax + delivery + surcharge == total (placeOrder math).
     //
@@ -98,6 +100,7 @@ describe('Admin create-order pricing preview (US3)', () => {
     expect(res.statusCode).toBe(200);
     const { data } = res.json() as PreviewBody;
     expect(data.lines[0]!.unavailable).toBe(true);
+    expect(data.lines[0]).not.toHaveProperty('taxRate');
     expect(data.summary.subtotal).toBe(0);
     expect(data.messages.map((m) => m.productId)).toContain(MISSING_PRODUCT_ID);
   });

@@ -52,6 +52,10 @@ describe('PWA module — admin + storefront', () => {
     process.env['SETTINGS_SECRET_ENCRYPTION_KEY'] =
       originalSecretKey ?? randomBytes(32).toString('base64');
     h = await setupBackendServer();
+    // Feature 154 — the other-organisation buyer shops only if its Organization
+    // exists and is assigned the store; seeded before any request so no empty
+    // permitted-channel set is cached for it.
+    await seedOtherTestOrganization(h.em());
   });
   afterAll(async () => {
     await teardownBackendServer(h);

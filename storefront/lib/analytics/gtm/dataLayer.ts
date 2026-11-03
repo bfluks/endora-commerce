@@ -7,6 +7,7 @@ import {
   type GtmStorefrontConfig,
 } from '@endora-commerce/contracts';
 import { readConsent } from '../consent';
+import { channelHeaders } from '../../channel/channel-header';
 
 /**
  * Google Tag Manager `dataLayer` emitter (feature 066).
@@ -34,8 +35,17 @@ declare global {
 
 let config: GtmStorefrontConfig | null = null;
 
-export function configureGtm(next: GtmStorefrontConfig): void {
+/**
+ * The storefront's active sales channel, sent as `X-Sales-Channel` on the
+ * collect beacon. The provider passes the code the layout resolved; the
+ * build-time `NEXT_PUBLIC_SALES_CHANNEL_CODE` is the fallback for a caller
+ * that names none.
+ */
+let channelCode: string | undefined;
+
+export function configureGtm(next: GtmStorefrontConfig, salesChannelCode?: string): void {
   config = next;
+  if (salesChannelCode !== undefined) channelCode = salesChannelCode;
 }
 
 export function getGtmConfig(): GtmStorefrontConfig | null {
@@ -117,13 +127,13 @@ function pageContext(): GtmPageContext {
 
 async function postToCollect(name: string, params: GtmEventParams): Promise<void> {
   const base = process.env['NEXT_PUBLIC_API_BASE_URL'] ?? '';
-  const channel = process.env['NEXT_PUBLIC_SALES_CHANNEL_CODE'] ?? '';
+  const channel = channelCode ?? process.env['NEXT_PUBLIC_SALES_CHANNEL_CODE'];
   try {
     await fetch(`${base}/api/v1/storefront/google-tag-manager/collect`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(channel ? { 'X-Sales-Channel': channel } : {}),
+        ...channelHeaders(channel),
       },
       body: JSON.stringify({
         clientId: resolveGtmClientId(),

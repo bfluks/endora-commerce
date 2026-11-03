@@ -26,7 +26,7 @@ function refusingPort<T extends object>(name: string): T {
 
 const NEIGHBOUR_READS: Pick<
   PriceListsModuleOptions,
-  'targetReads' | 'customerAccountRead' | 'salesRepScope'
+  'targetReads' | 'customerAccountRead' | 'salesRepScope' | 'catalogAvailability'
 > = {
   targetReads: {
     catalogProductRead: refusingPort('catalogProductReadPort'),
@@ -37,6 +37,7 @@ const NEIGHBOUR_READS: Pick<
   },
   customerAccountRead: refusingPort('customerAccountReadPort'),
   salesRepScope: refusingPort('organizationSalesRepScopePort'),
+  catalogAvailability: refusingPort('catalogProductAvailabilityPort'),
 };
 
 /**
@@ -178,7 +179,6 @@ async function seedRows(db: TestDb): Promise<SeededRows> {
   const longPast = new Date(Date.now() - 4 * 86_400_000);
 
   const scheduled = em.create(PriceList, {
-    code: `sweep-scheduled-${suffix}`,
     name: `Sweep scheduled ${suffix}`,
     currency: 'PLN',
     type: 'sale',
@@ -186,7 +186,6 @@ async function seedRows(db: TestDb): Promise<SeededRows> {
     startsAt: past,
   });
   const active = em.create(PriceList, {
-    code: `sweep-active-${suffix}`,
     name: `Sweep active ${suffix}`,
     currency: 'PLN',
     type: 'sale',

@@ -43,7 +43,10 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | `transactional_emails` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `admin_notifications` | no | degrades-without `adminNotificationRecordPort` — CRM stops notifying people about assignments and messages; everything else in CRM keeps working |
 | `admin_search` | no | contributes-to `adminSearchProviderRegistry` |
+| `projects` | no | degrades-without `projectReadPort` — References to Projects show as unavailable and Projects are not offered after @@. |
+| `quote_requests` | no | degrades-without `quoteRequestCustomFieldCarryPort` — Values of Sales Opportunities are not carried into Quote Requests created from them |
 | `quote_requests` | no | degrades-without `quoteRequestReadPort` — Quote Requests linked to Opportunities show as unavailable, stop counting toward computed values, and can no longer be linked or created from one. Opportunities and their Orders keep working |
+| `tasks` | no | degrades-without `taskReadPort` — References to Tasks show as unavailable and Tasks are not offered after @@. |
 | `webhooks` | no | contributes-to `webhookEventRegistry` |
 
 ## Permissions
@@ -62,6 +65,8 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | `new-opportunity` | `/crm/opportunities/new` | `crm:write` |
 | `open-crm-analytics` | `/crm/analytics` | `crm:analytics` |
 | `open-crm-calendar` | `/crm/calendar` | `crm:read` |
+| `open-crm-tags` | `/crm/tags` | `crm:configure` |
+| `open-crm-workflow` | `/crm/workflow` | `crm:configure` |
 | `open-opportunities` | `/crm/opportunities` | `crm:read` |
 | `open-opportunity-board` | `/crm/board` | `crm:read` |
 

@@ -1,26 +1,27 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
 import type { BlogPostCard } from '@endora-commerce/contracts';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 const BLOG_PREFIX = '/blog';
 
-function formatDate(iso: string | null): string | null {
+function formatDate(iso: string | null, locale: string): string | null {
   if (!iso) return null;
   try {
-    return new Date(iso).toLocaleDateString();
+    return new Date(iso).toLocaleDateString(locale);
   } catch {
     return null;
   }
 }
 
-export function PostCard({ post }: { post: BlogPostCard }): ReactNode {
-  const date = formatDate(post.publishedAt);
+/** `locale` is the page language: the date is written the way its readers write one. */
+export function PostCard({ post, locale }: { post: BlogPostCard; locale: string }): ReactNode {
+  const date = formatDate(post.publishedAt, locale);
   return (
     <article
       data-test="post-card"
       className="group flex flex-col overflow-hidden rounded-lg border border-[--line] bg-[--surface] transition hover:shadow-lg"
     >
-      <Link href={`${BLOG_PREFIX}/${post.slug}`} className="block">
+      <LocalizedLink href={`${BLOG_PREFIX}/${post.slug}`} className="block">
         {post.mainImageUrl ? (
           <div className="relative aspect-[16/9] overflow-hidden bg-[--surface-alt]">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -52,7 +53,7 @@ export function PostCard({ post }: { post: BlogPostCard }): ReactNode {
             <p className="line-clamp-3 text-sm text-[--ink-400]">{post.excerpt}</p>
           ) : null}
         </div>
-      </Link>
+      </LocalizedLink>
     </article>
   );
 }

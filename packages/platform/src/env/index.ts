@@ -97,8 +97,8 @@ export const PLATFORM_ENVIRONMENT_INPUTS: readonly EnvironmentInput[] = [
   {
     name: 'SESSION_COOKIE_SECRET',
     describes: {
-      en: "The key this instance signs session cookies with. Changing it signs every operator and customer out.",
-      pl: 'Klucz, którym ta instancja podpisuje ciasteczka sesji. Zmiana wylogowuje wszystkich operatorów i klientów.',
+      en: "The key this instance signs session cookies with, and seals price-sorted catalogue cursors with. Changing it signs every operator and customer out, and sends a price-sorted catalogue page in flight back to its first page.",
+      pl: 'Klucz, którym ta instancja podpisuje ciasteczka sesji i pieczętuje kursory katalogu sortowanego po cenie. Zmiana wylogowuje wszystkich operatorów i klientów, a otwartą stronę katalogu sortowanego po cenie przenosi z powrotem na pierwszą stronę.',
     },
     requirement: { kind: 'required' },
     secret: true,

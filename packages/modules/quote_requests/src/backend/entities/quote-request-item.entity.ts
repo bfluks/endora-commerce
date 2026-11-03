@@ -26,9 +26,12 @@ export class QuoteRequestItem {
     | 'discountPercent'
     | 'packagingUnitName'
     | 'packagingUnitBaseQuantity'
+    | 'packagingUnitId'
     | 'referenceUnitPrice'
     | 'referenceCurrency'
-    | 'referenceCapturedAt';
+    | 'referenceCapturedAt'
+    | 'groupId'
+    | 'position';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -65,13 +68,21 @@ export class QuoteRequestItem {
   @Property({ type: 'integer', nullable: true })
   packagingUnitBaseQuantity?: number | null;
 
+  /**
+   * Feature 155 (FR-026) — the catalogue packaging unit this line resolved
+   * to, beside the name / base-quantity snapshot above. No foreign key:
+   * units are hard-deleted and the snapshot outlives them.
+   */
+  @Property({ type: 'uuid', nullable: true })
+  packagingUnitId?: string | null;
+
   @Property({ type: 'text', nullable: true })
   lineNote?: string | null;
 
-  @Property({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Property({ type: 'decimal', precision: 14, scale: 4, nullable: true })
   desiredUnitPrice?: string | null;
 
-  @Property({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Property({ type: 'decimal', precision: 14, scale: 4, nullable: true })
   agreedUnitPrice?: string | null;
 
   @Property({ type: 'decimal', precision: 5, scale: 2, nullable: true })
@@ -88,7 +99,7 @@ export class QuoteRequestItem {
    * constraint `quote_request_items_reference_all_or_none`); all `null` means
    * no stored reference. Admin-only: never on the customer reply.
    */
-  @Property({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Property({ type: 'decimal', precision: 14, scale: 4, nullable: true })
   referenceUnitPrice?: string | null;
 
   @Property({ type: 'string', length: 3, nullable: true })
@@ -96,6 +107,21 @@ export class QuoteRequestItem {
 
   @Property({ type: 'datetime', nullable: true })
   referenceCapturedAt?: Date | null;
+
+  /**
+   * Feature 159 — the line's group (`quote_request_item_groups`, same quote),
+   * `null` = ungrouped. On delete set null (D2).
+   */
+  @Property({ type: 'uuid', nullable: true })
+  groupId?: string | null = null;
+
+  /**
+   * Feature 159 — 0-based order within the line's section (its group, or the
+   * ungrouped lines). Lines stored before the feature read `0`; readers break
+   * ties by `(createdAt, id)` (research R-6).
+   */
+  @Property({ type: 'integer', default: 0 })
+  position: number = 0;
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

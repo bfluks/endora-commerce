@@ -12,6 +12,7 @@ import {
   type PutBlogCategoryDescriptionRequest,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
+import { assertLinkableAsset, type LinkableAssetReader } from './linkable-asset.js';
 import { assertSlugAvailable } from './blog-slug-collision.js';
 import type { BlogCacheService } from './blog-cache.js';
 
@@ -58,6 +59,8 @@ export class BlogCategoryService {
     private readonly emFactory: () => EntityManager,
     private readonly cache?: BlogCacheService,
     private readonly dictionaryValidator?: DictionaryValidator,
+    /** Feature 166 (FR-006) — `assets_library`'s read port, asked before a main image is linked. */
+    private readonly assets?: LinkableAssetReader,
   ) {}
 
   // ────────────────────────────────────────────────────────────────────
@@ -113,6 +116,8 @@ export class BlogCategoryService {
     const em = this.emFactory();
     const id = randomUUID();
     const now = new Date();
+    // Feature 166 (FR-006) — a main image the caller may not see answers as a missing one.
+    if (input.mainImageAssetId) await assertLinkableAsset(this.assets, input.mainImageAssetId);
 
     const created = await em.transactional(async (tx) => {
       // Slug-collision guard runs first so we don't pollute the row.
@@ -200,6 +205,8 @@ export class BlogCategoryService {
         );
       }
       this.assertVersion(existing.version, input.version);
+      // Feature 166 (FR-006) — a main image the caller may not see answers as a missing one.
+      if (input.mainImageAssetId) await assertLinkableAsset(this.assets, input.mainImageAssetId);
 
       // Slug-collision guard whenever slug or channel scope changes.
       const slugChange = input.slug !== undefined && input.slug !== existing.slug;

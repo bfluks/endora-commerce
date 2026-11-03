@@ -86,6 +86,18 @@ export function MenuItemTree({
             <Badge variant="outline" className="ml-2 text-[10px] uppercase tracking-wide">
               {kindLabel(t, item.kind)}
             </Badge>
+            {item.parentId === null && item.presentation ? (
+              <Badge variant="outline" className="ml-1 text-[10px]">
+                {t(`presentation.${item.presentation}`)}
+              </Badge>
+            ) : null}
+            {item.audience && item.audience.kind !== 'everyone' ? (
+              // Feature 168 (FR-021): who may see an item is visible in the tree,
+              // so a hidden branch is not a surprise on the storefront.
+              <Badge variant="secondary" className="ml-1 text-[10px]">
+                {t(`audience.${item.audience.kind}`)}
+              </Badge>
+            ) : null}
           </button>
           <Button
             type="button"

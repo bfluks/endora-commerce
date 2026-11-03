@@ -12,6 +12,11 @@ import { SalesChannelResolverService } from './sales-channel-resolver.service.js
 import { SalesChannelMembershipService } from './sales-channel-membership.service.js';
 import { channelBridges, type ChannelBridgeRegistry } from './channel-bridge-registry.js';
 import { registerSalesChannelResolverMiddleware } from './sales-channel-resolver.middleware.js';
+import {
+  SALES_CHANNEL_ACCESS_CACHE_NAMESPACE,
+  SalesChannelAccessCache,
+} from './sales-channel-access-cache.js';
+import { SalesChannelAccessPolicy } from './sales-channel-access-policy.js';
 
 /**
  * The sales-channel resolution machinery, composed as kernel infrastructure
@@ -33,6 +38,13 @@ export interface SalesChannelsKernelOptions {
   readonly emFactory: () => EntityManager;
   readonly eventBus: EventBus;
   readonly redis: Redis;
+  /**
+   * Feature 154 — the subscriber-mode connection the access cache listens on
+   * for `b2b:sales-channel-access:changed`, armed when the resolver plugin is
+   * mounted. Absent, other processes' assignment changes reach this one within
+   * the LRU window.
+   */
+  readonly redisSubscriber?: Redis;
   readonly auditLogService?: AuditPort;
   /**
    * The bridge registry the owning modules contribute into (feature 120,
@@ -52,6 +64,18 @@ export interface SalesChannelsKernel {
   readonly cache: SalesChannelsCache;
   readonly resolver: SalesChannelResolverService;
   readonly membershipService: SalesChannelMembershipService;
+  /**
+   * Feature 154 — the per-Organization permitted-channel cache. A composition
+   * root contributes it as `salesChannelAccessCache` (narrowed by its readers
+   * to the invalidating half) and arms its cross-process subscription with
+   * {@link SalesChannelAccessCache.watch}.
+   */
+  readonly accessCache: SalesChannelAccessCache;
+  /**
+   * Feature 154 — the access rule, run by the resolver middleware and
+   * contributed as `salesChannelAccessPort` for the sign-in paths.
+   */
+  readonly accessPolicy: SalesChannelAccessPolicy;
   /**
    * The channel-bridge contribution registry (feature 120, FR-015).
    *
@@ -77,12 +101,21 @@ export function composeSalesChannelsKernel(
   const cache = new SalesChannelsCache(options.redis);
   const resolver = new SalesChannelResolverService(options.emFactory, cache);
   const bridgeRegistry = options.bridgeRegistry ?? channelBridges;
-  const membershipService = new SalesChannelMembershipService(
+  // Built before the membership service, which drops it as part of every write
+  // of an Organization's channels; its loader reads through that same service,
+  // late-bound, so neither has to exist first.
+  let membershipService!: SalesChannelMembershipService;
+  const accessCache = new SalesChannelAccessCache(options.redis, (organizationId) =>
+    membershipService.listChannelIdsForEntity('organization', organizationId),
+  );
+  membershipService = new SalesChannelMembershipService(
     options.emFactory,
     options.eventBus,
     options.auditLogService,
     bridgeRegistry,
+    accessCache,
   );
+  const accessPolicy = new SalesChannelAccessPolicy(accessCache, (id) => resolver.getById(id));
   /**
    * The one thing composing the cache still has to *do*: announce it to the
    * operator-facing "clear cache" action (issue #33). The clear runs in this
@@ -96,16 +129,31 @@ export function composeSalesChannelsKernel(
    * the registration is not, because it never had anything to do with the bus.
    */
   const unregister = inProcessCaches.register(SALES_CHANNELS_CACHE_NAMESPACE, cache);
+  const unregisterAccess = inProcessCaches.register(
+    SALES_CHANNEL_ACCESS_CACHE_NAMESPACE,
+    accessCache,
+  );
 
   return {
     cache,
     resolver,
     membershipService,
+    accessCache,
+    accessPolicy,
     bridgeRegistry,
-    cacheRegistration: { dispose: unregister },
+    cacheRegistration: {
+      dispose: () => {
+        unregister();
+        unregisterAccess();
+      },
+    },
     plugin: async (app) => {
+      // Never fatal: a lost notification channel means stale for the LRU
+      // window, not open.
+      if (options.redisSubscriber) await accessCache.watch(options.redisSubscriber);
       await registerSalesChannelResolverMiddleware(app, {
         resolver,
+        accessPolicy,
         ...(options.strictAdmin !== undefined ? { strictAdmin: options.strictAdmin } : {}),
         // Feature 062 — audit sink for bound-key channel-mismatch refusals.
         ...(options.auditLogService !== undefined

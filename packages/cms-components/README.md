@@ -32,6 +32,7 @@ Everything below is a **peer** dependency, so the application resolves exactly o
 
 **Bundled dependencies**
 
+- `@endora-commerce/contracts`
 - `@tiptap/core` ^3.31.3
 - `@tiptap/extension-color` ^3.31.3
 - `@tiptap/extension-highlight` ^3.31.3

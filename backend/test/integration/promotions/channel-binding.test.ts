@@ -38,7 +38,6 @@ describe('PromotionService — sales-channel gate (feature 052 US3)', () => {
       defaultCurrency: 'PLN',
       languages: ['en-US'],
       currencies: ['PLN'],
-      isPublic: false,
       active: true,
       systemDefault: false,
       version: 1,

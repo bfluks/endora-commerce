@@ -9,6 +9,9 @@ import { MobileFilterSheet } from '../../../components/mobile/MobileFilterSheet'
 import { listProducts, getFilters } from '../../../lib/api/catalog';
 import { getServerContext } from '../../../lib/server-context';
 import { tForLocale } from '../../../lib/i18n/messages';
+import { format } from '../../../lib/i18n/format';
+import { pluralKey } from '../../../lib/i18n/plural';
+import { formatCount } from '../../../lib/orderMinimum';
 import {
   parseCatalogPriceQuery,
   parsePriceBound,
@@ -17,6 +20,7 @@ import {
 } from '../../../lib/catalog-price-query';
 import type { ProductListSort } from '@endora-commerce/contracts';
 import { seo } from './seo';
+import { localizedAlternates } from '../../../lib/i18n/navigation';
 
 /**
  * Indexable (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010/FR-012). The
@@ -25,9 +29,13 @@ import { seo } from './seo';
  * at the same canonical is what stops a crawler indexing them as separate
  * pages.
  */
-export const metadata: Metadata = {
-  alternates: { canonical: seo.route },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const alternates = await localizedAlternates(seo.route);
+  return {
+    // Feature 167 — canonical under the language prefix, with hreflang alternates.
+    alternates: { ...alternates, canonical: alternates.canonical },
+  };
+}
 
 interface PageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -61,14 +69,15 @@ export default async function CatalogPage({ searchParams }: PageProps): Promise<
   const clearHref = buildClearHref('/catalog', query.baseQuery);
   const filterLabels = {
     filters: t('catalog.filters'),
-    clear: 'Wyczyść',
-    applyTemplate: 'Pokaż {count} wyników',
-    close: 'Zamknij',
+    clear: t('commerce.listing.clearFilters'),
+    // The sheet fills `{count}`; the form is chosen here, where the count is known.
+    applyTemplate: t(pluralKey('commerce.listing.showResults', products.data.length, locale)),
+    close: t('commerce.common.close'),
   };
 
   return (
     <div className="mx-auto max-w-[1360px] px-[24px]">
-      <Breadcrumbs
+      <Breadcrumbs locale={locale}
         crumbs={[
           { href: '/', label: t('nav.home') },
           { href: '/catalog', label: t('catalog.heading') },
@@ -90,7 +99,11 @@ export default async function CatalogPage({ searchParams }: PageProps): Promise<
           <div className="industria-catalog__title">
             <div>
               <h1>{heading}</h1>
-              <p>{products.data.length.toLocaleString('pl-PL')} produktów</p>
+              <p>
+                {format(t(pluralKey('commerce.listing.productCount', products.data.length, locale)), {
+                  count: formatCount(products.data.length, locale),
+                })}
+              </p>
             </div>
           </div>
           <CatalogToolbar
@@ -128,6 +141,8 @@ export default async function CatalogPage({ searchParams }: PageProps): Promise<
             locale={locale}
             columns={3}
             view={query.view}
+            salesChannelCode={ctx.salesChannelCode}
+            more={products.pagination.hasMore}
           />
           <Pagination
             basePath="/catalog"

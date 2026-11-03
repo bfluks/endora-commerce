@@ -1,26 +1,50 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { listProducts, getCategoryTree } from '../lib/api/catalog';
 import { getCmsPageBySlug } from '../lib/api/cms';
 import { getHomepageConfig } from '../lib/api/homepage';
-import { getResolvedPricesBulk, type ResolvedPrice } from '../lib/api/pricing';
 import { getServerContext } from '../lib/server-context';
 import { ProductCard } from '../components/ProductCard';
 import { CmsPageRenderer } from '../components/CmsPageRenderer';
 import { HomeMobileStrip } from '../components/mobile/HomeMobileStrip';
 import { Hook } from '../components/Hook';
 import { OrganizationJsonLd } from '../components/seo/OrganizationJsonLd';
+import { cmsSocialMetadata } from '../lib/seo/cms-share-metadata';
+import { cmsRenderLocation, type PageSearchParams } from '../lib/page-builder/render-location';
 import { seo } from './seo';
+import { LocalizedLink } from '../lib/i18n/localized-link';
+import { localizedAlternates } from '../lib/i18n/navigation';
+import { tForLocale, type MessageKey } from '../lib/i18n/messages';
+import { format } from '../lib/i18n/format';
+import { productCountLabel } from '../lib/i18n/chrome-counts';
 
 /**
  * Indexable (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010/FR-012). The
  * canonical is the route pattern itself; `metadataBase` in the root layout
  * turns it into an absolute URL.
+ *
+ * Feature 163 (FR-033, FR-034): a CMS-backed home page carries the same title,
+ * description and sharing card as that page has at its own route, at `/`. The
+ * page read is the one the component below makes, deduplicated by Next's
+ * fetch cache.
  */
-export const metadata: Metadata = {
-  alternates: { canonical: seo.route },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const { ctx } = await getServerContext();
+  const { cmsPageSlug } = await getHomepageConfig(ctx);
+  const cmsPage = cmsPageSlug ? await getCmsPageBySlug(cmsPageSlug, ctx).catch(() => null) : null;
+  // Feature 167 — canonical under the language prefix, hreflang alternates, x-default.
+  const alternates = await localizedAlternates(seo.route);
+  if (!cmsPage) return { alternates: { ...alternates, canonical: alternates.canonical } };
+  const social = cmsSocialMetadata(cmsPage, alternates.canonical);
+  return {
+    title: social.title,
+    description: cmsPage.meta.description ?? undefined,
+    keywords: cmsPage.meta.keywords ?? undefined,
+    alternates: { ...alternates, canonical: alternates.canonical },
+    openGraph: social.openGraph,
+    twitter: social.twitter,
+  };
+}
 
 interface CatTile {
   href: string;
@@ -35,8 +59,12 @@ interface CatTile {
  * → "Home page CMS page"), that page is rendered here. Otherwise we fall back
  * to the built-in Industria-themed landing page below.
  */
-export default async function HomePage(): Promise<ReactNode> {
-  const { ctx, locale } = await getServerContext();
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams?: Promise<PageSearchParams>;
+}): Promise<ReactNode> {
+  const { ctx, locale, modules } = await getServerContext();
 
   // Operator-selected CMS home page takes precedence when it resolves to a
   // published page; any miss (unset, unpublished, deleted) falls through to
@@ -51,7 +79,12 @@ export default async function HomePage(): Promise<ReactNode> {
       return (
         <>
           <OrganizationJsonLd ctx={ctx} />
-          <CmsPageRenderer page={cmsPage} ctx={ctx} />
+          <CmsPageRenderer
+            page={cmsPage}
+            ctx={ctx}
+            modules={modules}
+            location={cmsRenderLocation('/', (await searchParams) ?? {})}
+          />
         </>
       );
     }
@@ -67,15 +100,23 @@ export default async function HomePage(): Promise<ReactNode> {
     })),
   ]);
 
-  // Resolve settings-driven prices for the bestseller cards so their net/gross
-  // presentation matches the PDP and cart. Without a `resolved` payload the
-  // card falls back to a hardcoded "net + gross" pair that ignores the display
-  // setting (the inconsistency this section otherwise showed).
-  const bestsellerPrices: Map<string, ResolvedPrice> = products.data.length > 0
-    ? await getResolvedPricesBulk(products.data.map((p) => p.id), {}, ctx).catch(
-        () => new Map<string, ResolvedPrice>(),
-      )
-    : new Map<string, ResolvedPrice>();
+  // The bestseller cards' settings-driven prices, so their net/gross
+  // presentation matches the PDP and cart. They come with the listing itself —
+  // `resolvedPrice`, from the resolution that priced `price` (D-287 P0) — where
+  // this page used to fan out one `resolved-price` request per card.
+
+  const t = tForLocale(locale);
+  const n = (value: number, options?: Intl.NumberFormatOptions): string =>
+    new Intl.NumberFormat(locale, options).format(value);
+  const cutoff = new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(
+    DEMO_CUTOFF,
+  );
+  const availability = n(DEMO_AVAILABILITY, { style: 'percent', minimumFractionDigits: 1 });
+  const mm = (value: number): string => n(value, { style: 'unit', unit: 'millimeter' });
+  const mb = (value: number): string => n(value, { style: 'unit', unit: 'megabyte', maximumFractionDigits: 1 });
+  const pln = (value: number): string =>
+    n(value, { style: 'currency', currency: 'PLN', minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const [titleBefore, titleAfter] = t('chrome.home.hero.titleLine2').split('{emphasis}');
 
   const categoryTiles: CatTile[] = tree.length > 0
     ? tree.slice(0, 6).map((c) => ({
@@ -85,12 +126,12 @@ export default async function HomePage(): Promise<ReactNode> {
       }))
     : FALLBACK_CATEGORIES.map((c) => ({
         href: `/c/${c.slug}`,
-        name: c.name,
+        name: t(c.nameKey),
         count: c.count,
       }));
 
   const mobileChips = [
-    { label: 'Wszystko', href: '/catalog', active: true },
+    { label: t('chrome.home.mobile.all'), href: '/catalog', active: true },
     ...categoryTiles.slice(0, 4).map((c) => ({ label: c.name, href: c.href })),
   ];
 
@@ -101,9 +142,9 @@ export default async function HomePage(): Promise<ReactNode> {
       {/* Feature 044 / US1 — mobile-only benefit strip + category chips. */}
       <HomeMobileStrip
         benefits={[
-          { icon: 'truck', label: 'Wysyłka dziś' },
-          { icon: 'wallet', label: 'Limit kredytowy' },
-          { icon: 'doc', label: 'Faktura VAT' },
+          { icon: 'truck', label: t('chrome.home.mobile.shipsToday') },
+          { icon: 'wallet', label: t('chrome.shared.creditLimit') },
+          { icon: 'doc', label: t('chrome.shared.vatInvoice') },
         ]}
         chips={mobileChips}
       />
@@ -111,33 +152,36 @@ export default async function HomePage(): Promise<ReactNode> {
         <div className="mx-auto grid max-w-[1360px] grid-cols-[minmax(0,5fr)_minmax(0,4fr)] items-center gap-[56px] px-[24px] max-[920px]:grid-cols-1">
           <div>
             <span className="mb-6 inline-flex items-center gap-2 rounded-full border border-line bg-surface-alt px-[10px] py-[6px] font-mono text-[11px] tracking-[0.04em] text-muted">
-              <span className="inline-block h-[6px] w-[6px] rounded-full bg-ok" /> 120 000+ SKU · 84
-              producentów · wysyłka dziś
+              <span className="inline-block h-[6px] w-[6px] rounded-full bg-ok" />{' '}
+              {format(t('chrome.home.hero.badge'), {
+                skus: `${n(DEMO_SKU_COUNT)}+`,
+                makers: n(DEMO_MANUFACTURERS),
+              })}
             </span>
             <h1 className="text-[56px] leading-[1.04] tracking-[-0.03em] max-[720px]:text-[38px] [&_em]:not-italic [&_em]:text-accent">
-              Komponenty przemysłowe
+              {t('chrome.home.hero.titleLine1')}
               <br />
-              dostępne <em>od ręki</em>.
+              {titleBefore}
+              <em>{t('chrome.home.hero.titleEmphasis')}</em>
+              {titleAfter}
             </h1>
             <p className="mt-6 mb-8 max-w-[540px] text-[16px] leading-[1.6] text-muted">
-              Hurtownia B2B dla utrzymania ruchu, integratorów automatyki i działów produkcji.
-              Ceny netto, limit kredytowy, karty katalogowe, certyfikaty 3.1 — wszystko w jednym
-              miejscu.
+              {t('chrome.home.hero.intro')}
             </p>
             <div className="mb-10 flex flex-wrap gap-3">
-              <Link href="/catalog" className="btn btn--dark btn--lg">
-                Przeglądaj katalog <ArrowRightIcon />
-              </Link>
-              <Link href="/quick-order" className="btn btn--outline btn--lg">
-                <LightningIcon /> Quick Order z CSV
-              </Link>
+              <LocalizedLink href="/catalog" className="btn btn--dark btn--lg">
+                {t('chrome.shared.browseCatalog')} <ArrowRightIcon />
+              </LocalizedLink>
+              <LocalizedLink href="/quick-order" className="btn btn--outline btn--lg">
+                <LightningIcon /> {t('chrome.home.hero.quickOrderCsv')}
+              </LocalizedLink>
             </div>
             <div className="grid grid-cols-4 gap-[24px] max-[720px]:grid-cols-2">
               {[
-                ['120k+', 'Pozycji w magazynie'],
-                ['84', 'Producentów'],
-                ['14:00', 'Cut-off wysyłki'],
-                ['98,4%', 'Dostępność on-stock'],
+                [`${n(DEMO_SKU_COUNT, { notation: 'compact' })}+`, t('chrome.home.stats.items')],
+                [n(DEMO_MANUFACTURERS), t('chrome.home.stats.manufacturers')],
+                [cutoff, t('chrome.home.stats.cutoff')],
+                [availability, t('chrome.home.stats.availability')],
               ].map(([num, label]) => (
                 <div key={label}>
                   <div className="font-mono text-[22px] font-semibold tracking-[-0.02em] text-fg">
@@ -152,17 +196,27 @@ export default async function HomePage(): Promise<ReactNode> {
           </div>
           <div className="relative overflow-hidden rounded-xl bg-[var(--ink-900)] p-[24px] text-[#f4f4f5]">
             <div className="mb-[18px] flex items-baseline justify-between font-mono text-[12px] text-[#a1a1aa]">
-              <span className="font-medium text-white">SKU 6205-2RS · SKF</span>
-              <span>on-stock · 1 280 szt. · WAW-01</span>
+              <span className="font-medium text-white">
+                {format(t('chrome.home.demo.sku'), { sku: DEMO_SKU, brand: DEMO_BRAND })}
+              </span>
+              <span>
+                {format(t('chrome.home.demo.stock'), { count: n(DEMO_STOCK), warehouse: DEMO_WAREHOUSE })}
+              </span>
             </div>
             <div className="mt-[12px] mb-[16px] font-mono text-[56px] font-semibold leading-none tracking-[-0.03em]">
               <small className="mb-2 block text-[11px] font-medium uppercase tracking-[0.08em] text-[#a1a1aa]">
-                NOŚNOŚĆ DYNAMICZNA
+                {t('chrome.home.demo.loadRating')}
               </small>
-              14,0 kN
+              {n(DEMO_LOAD_RATING_KN, { minimumFractionDigits: 1 })} {KILONEWTON}
             </div>
             <div className="mb-[24px] flex flex-wrap gap-2">
-              {['d 25 mm', 'D 52 mm', 'B 15 mm', '14 000 obr/min', 'ISO 15:2017'].map((tag) => (
+              {[
+                `${BORE_SYMBOL} ${mm(25)}`,
+                `${OUTER_DIAMETER_SYMBOL} ${mm(52)}`,
+                `${WIDTH_SYMBOL} ${mm(15)}`,
+                format(t('chrome.home.demo.speed'), { value: n(14000) }),
+                DEMO_STANDARD,
+              ].map((tag) => (
                 <span
                   key={tag}
                   className="rounded-full border border-white/12 bg-white/8 px-[10px] py-[4px] font-mono text-[11px] text-[#e5e7eb]"
@@ -173,9 +227,9 @@ export default async function HomePage(): Promise<ReactNode> {
             </div>
             <div className="grid grid-cols-3 gap-2">
               {[
-                [<DocIcon key="d" />, 'Karta katalogowa', 'PDF · 1,2 MB'],
-                [<ShieldIcon key="s" />, 'Certyfikat 3.1', 'EN 10204'],
-                [<LayersIcon key="l" />, 'Model 3D STEP', '2,8 MB'],
+                [<DocIcon key="d" />, t('chrome.home.demo.datasheet'), `${PDF} · ${mb(1.2)}`],
+                [<ShieldIcon key="s" />, t('chrome.home.demo.certificate'), DEMO_CERTIFICATE_STANDARD],
+                [<LayersIcon key="l" />, t('chrome.home.demo.model'), mb(2.8)],
               ].map(([icon, title, sub]) => (
                 <div
                   key={title as string}
@@ -198,22 +252,19 @@ export default async function HomePage(): Promise<ReactNode> {
       <section className="mx-auto max-w-[1360px] px-[24px] section">
         <div className="section__head">
           <div>
-            <span className="section__eyebrow">01 / Asortyment</span>
-            <h2>Sześć kluczowych działów</h2>
-            <p>
-              Drzewo kategorii odzwierciedla katalogi producentów — łatwo trafisz do tego, czego
-              szukasz.
-            </p>
+            <span className="section__eyebrow">{t('chrome.home.categories.eyebrow')}</span>
+            <h2>{t('chrome.home.categories.heading')}</h2>
+            <p>{t('chrome.home.categories.intro')}</p>
           </div>
-          <Link href="/catalog" className="btn btn--ghost">
-            Zobacz wszystkie <ArrowRightIcon />
-          </Link>
+          <LocalizedLink href="/catalog" className="btn btn--ghost">
+            {t('chrome.home.categories.seeAll')} <ArrowRightIcon />
+          </LocalizedLink>
         </div>
         <div className="grid grid-cols-6 gap-[16px] max-[1100px]:grid-cols-3 max-[600px]:grid-cols-2">
           {categoryTiles.map((c, i) => {
             const glyph = GLYPH_KEYS[i % GLYPH_KEYS.length] as keyof typeof GLYPHS;
             return (
-              <Link
+              <LocalizedLink
                 key={c.href}
                 href={c.href}
                 className="relative block rounded-lg border border-line bg-surface p-[22px] transition hover:-translate-y-[2px] hover:border-[var(--ink-700)]"
@@ -223,12 +274,12 @@ export default async function HomePage(): Promise<ReactNode> {
                 </div>
                 <h3 className="m-0 mb-1 block text-[14px] font-semibold text-fg">{c.name}</h3>
                 <span className="font-mono text-[12px] text-muted">
-                  {c.count.toLocaleString('pl-PL')} produktów
+                  {productCountLabel(c.count, locale)}
                 </span>
                 <span className="absolute right-[22px] top-[22px] text-line-strong">
                   <ArrowUpRightIcon />
                 </span>
-              </Link>
+              </LocalizedLink>
             );
           })}
         </div>
@@ -241,8 +292,8 @@ export default async function HomePage(): Promise<ReactNode> {
               <TruckIcon size={20} />
             </div>
             <div>
-              <h4>Wysyłka tego samego dnia</h4>
-              <p>Cut-off 14:00. 98,4% pozycji on-stock w magazynie centralnym Warszawa-Okęcie.</p>
+              <h4>{t('chrome.home.features.shipping.heading')}</h4>
+              <p>{format(t('chrome.home.features.shipping.body'), { time: cutoff, share: availability })}</p>
             </div>
           </div>
           <div className="flex gap-[14px] rounded-lg border border-line bg-surface-alt p-[20px]">
@@ -250,8 +301,8 @@ export default async function HomePage(): Promise<ReactNode> {
               <WalletIcon size={20} />
             </div>
             <div>
-              <h4>Limit kredytowy</h4>
-              <p>Od 5 000 do 500 000 PLN. Faktura z odroczonym terminem 14/30/60 dni.</p>
+              <h4>{t('chrome.shared.creditLimit')}</h4>
+              <p>{format(t('chrome.home.features.credit.body'), { min: pln(5000), max: pln(500000) })}</p>
             </div>
           </div>
           <div className="flex gap-[14px] rounded-lg border border-line bg-surface-alt p-[20px]">
@@ -259,8 +310,8 @@ export default async function HomePage(): Promise<ReactNode> {
               <DocIcon size={20} />
             </div>
             <div>
-              <h4>Karty katalogowe i CAD</h4>
-              <p>Każdy produkt ma kartę PDF, model 3D STEP/DXF, deklarację RoHS.</p>
+              <h4>{t('chrome.home.features.datasheets.heading')}</h4>
+              <p>{t('chrome.home.features.datasheets.body')}</p>
             </div>
           </div>
           <div className="flex gap-[14px] rounded-lg border border-line bg-surface-alt p-[20px]">
@@ -268,8 +319,8 @@ export default async function HomePage(): Promise<ReactNode> {
               <SettingsIcon size={20} />
             </div>
             <div>
-              <h4>Integracja z ERP</h4>
-              <p>API REST, webhooki, eksport CSV/EDI. Quick Order dla 200+ pozycji.</p>
+              <h4>{t('chrome.home.features.erp.heading')}</h4>
+              <p>{t('chrome.home.features.erp.body')}</p>
             </div>
           </div>
         </div>
@@ -279,18 +330,23 @@ export default async function HomePage(): Promise<ReactNode> {
         <section className="mx-auto max-w-[1360px] px-[24px] section">
           <div className="section__head">
             <div>
-              <span className="section__eyebrow">02 / Bestsellery</span>
-              <h2>Najczęściej zamawiane w tym tygodniu</h2>
-              <p>Gotowe do wysyłki, sprawdzone w utrzymaniu ruchu.</p>
+              <span className="section__eyebrow">{t('chrome.home.bestsellers.eyebrow')}</span>
+              <h2>{t('chrome.home.bestsellers.heading')}</h2>
+              <p>{t('chrome.home.bestsellers.intro')}</p>
             </div>
-            <Link href="/catalog" className="btn btn--ghost">
-              Cały bestseller <ArrowRightIcon />
-            </Link>
+            <LocalizedLink href="/catalog" className="btn btn--ghost">
+              {t('chrome.home.bestsellers.seeAll')} <ArrowRightIcon />
+            </LocalizedLink>
           </div>
           <ul className="m-0 grid list-none grid-cols-4 gap-[16px] p-0 max-[1100px]:grid-cols-2">
             {products.data.map((p) => (
               <li key={p.id}>
-                <ProductCard product={p} locale={locale} resolved={bestsellerPrices.get(p.id) ?? null} />
+                <ProductCard
+                  product={p}
+                  locale={locale}
+                  resolved={p.resolvedPrice ?? null}
+                  salesChannelCode={ctx.salesChannelCode}
+                />
               </li>
             ))}
           </ul>
@@ -301,14 +357,38 @@ export default async function HomePage(): Promise<ReactNode> {
   );
 }
 
-const FALLBACK_CATEGORIES = [
-  { slug: 'fasteners', name: 'Łączniki', count: 4218 },
-  { slug: 'tools', name: 'Narzędzia', count: 2851 },
-  { slug: 'electronics', name: 'Elektronika', count: 6104 },
-  { slug: 'safety', name: 'BHP', count: 5293 },
-  { slug: 'screws', name: 'Wkręty', count: 3162 },
-  { slug: 'bolts', name: 'Śruby', count: 1947 },
+const FALLBACK_CATEGORIES: ReadonlyArray<{ slug: string; nameKey: MessageKey; count: number }> = [
+  { slug: 'fasteners', nameKey: 'chrome.shared.category.fasteners', count: 4218 },
+  { slug: 'tools', nameKey: 'chrome.shared.category.tools', count: 2851 },
+  { slug: 'electronics', nameKey: 'chrome.shared.category.electronics', count: 6104 },
+  { slug: 'safety', nameKey: 'chrome.shared.category.safety', count: 5293 },
+  { slug: 'screws', nameKey: 'chrome.shared.category.screws', count: 3162 },
+  { slug: 'bolts', nameKey: 'chrome.shared.category.bolts', count: 1947 },
 ];
+
+/*
+ * The demo landing's figures and the demo bearing's data sheet. Numbers are
+ * formatted for the reader's locale where they are rendered; the words around
+ * them are in the `chrome` catalogue. Part numbers, standards, unit and
+ * dimension symbols are not words and read the same in every language.
+ */
+const DEMO_SKU_COUNT = 120_000;
+const DEMO_MANUFACTURERS = 84;
+/** The 14:00 shipping cut-off, as a time of day (read in UTC, so the zone never moves it). */
+const DEMO_CUTOFF = new Date(Date.UTC(2000, 0, 1, 14, 0));
+const DEMO_AVAILABILITY = 0.984;
+const DEMO_SKU = '6205-2RS';
+const DEMO_BRAND = 'SKF';
+const DEMO_STOCK = 1280;
+const DEMO_WAREHOUSE = 'WAW-01';
+const DEMO_LOAD_RATING_KN = 14;
+const KILONEWTON = 'kN';
+const BORE_SYMBOL = 'd';
+const OUTER_DIAMETER_SYMBOL = 'D';
+const WIDTH_SYMBOL = 'B';
+const DEMO_STANDARD = 'ISO 15:2017';
+const DEMO_CERTIFICATE_STANDARD = 'EN 10204';
+const PDF = 'PDF';
 
 const GLYPH_KEYS = ['bearing', 'gear', 'plc', 'spark', 'valve', 'wrench'] as const;
 

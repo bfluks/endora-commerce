@@ -1,15 +1,20 @@
 import type { Redis } from 'ioredis';
-import type { ResolvedMegamenu } from '@endora-commerce/contracts';
+import type { AudiencedMegamenu } from './storefront-resolver.js';
 
 /**
  * Storefront read-through cache for the Megamenu module — feature 015 / T017.
  *
  * Mirrors feature 014's `CmsCache` shape exactly: same key-prefix scheme,
  * same TTL, same SCAN-based coarse invalidation. Keys live under
- * `megamenu:v1:<channelCode>:<language>`.
+ * `megamenu:v2:<channelCode>:<language>`.
+ *
+ * `v2` since feature 168: an entry holds the audienced tree — every audience's
+ * items, each with its audience — which the route filters per visitor. A `v1`
+ * entry has no audiences and would be served to everyone as if it were one, so
+ * the prefix moved rather than the entries being trusted to expire first.
  */
 
-export const MEGAMENU_CACHE_KEY_PREFIX = 'megamenu:v1:';
+export const MEGAMENU_CACHE_KEY_PREFIX = 'megamenu:v2:';
 export const MEGAMENU_CACHE_DEFAULT_TTL_SECONDS = 5 * 60;
 
 export interface MegamenuCacheOptions {
@@ -31,19 +36,19 @@ export class MegamenuCache {
     return `${MEGAMENU_CACHE_KEY_PREFIX}${channelCode}:${language}`;
   }
 
-  async get(channelCode: string, language: string): Promise<ResolvedMegamenu | null> {
+  async get(channelCode: string, language: string): Promise<AudiencedMegamenu | null> {
     if (!this.enabled) return null;
     const raw = await this.redis.get(MegamenuCache.composeKey(channelCode, language));
     if (raw === null) return null;
     try {
-      return JSON.parse(raw) as ResolvedMegamenu;
+      return JSON.parse(raw) as AudiencedMegamenu;
     } catch {
       await this.redis.del(MegamenuCache.composeKey(channelCode, language));
       return null;
     }
   }
 
-  async set(channelCode: string, language: string, payload: ResolvedMegamenu): Promise<void> {
+  async set(channelCode: string, language: string, payload: AudiencedMegamenu): Promise<void> {
     if (!this.enabled) return;
     await this.redis.set(
       MegamenuCache.composeKey(channelCode, language),

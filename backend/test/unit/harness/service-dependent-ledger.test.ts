@@ -428,23 +428,35 @@ const SERVICE_BOUND_BEYOND_THE_SCREEN: Readonly<Record<string, string>> = {
     '`connect ECONNREFUSED 127.0.0.1:1`, the `beforeAll` fails and all 4 cases are skipped. ' +
     'Correctly III(c).',
   'test/integration/demo/demo-shop.test.ts':
-    'It provisions two PostgreSQL databases of its own with `pg` and spawns the migration ' +
-    'runner and the demo command as child processes, so it reaches the database through a ' +
-    'client it constructs and through `spawn` — neither of which is an import the closure ' +
-    'screen can follow. Measured under `BACKEND_TEST_SERVICES=none`: `connect ECONNREFUSED ' +
-    '127.0.0.1:1`, the `beforeAll` fails and every case is skipped. Correctly III(c).',
+    'It takes a PostgreSQL database of its own through `migratedDatabase()` (a template clone, ' +
+    'or a migration from empty under shared isolation), reads it with `pg` and spawns the demo ' +
+    'command as child processes, so it reaches the database through clients it constructs and ' +
+    'through `spawn` — neither of which is an import the closure screen can follow. Measured ' +
+    'under `BACKEND_TEST_SERVICES=none` (2026-10-20): `connect ECONNREFUSED 127.0.0.1:1`, the ' +
+    '`beforeAll` fails and all 26 cases are skipped. Correctly III(c).',
   'test/integration/demo/demo-instance-shape.test.ts':
-    'The same shape as `demo-shop.test.ts`: it provisions a PostgreSQL database of its own ' +
-    'with `pg` and spawns the migration runner and an instance-shaped operator CLI as child ' +
-    'processes, so it reaches the database through a client it constructs and through ' +
-    '`spawn`. Measured under `BACKEND_TEST_SERVICES=none`: `connect ECONNREFUSED ' +
+    'The same shape as `demo-shop.test.ts`: it takes a PostgreSQL database of its own through ' +
+    '`migratedDatabase()`, reads it with `pg` and spawns an instance-shaped operator CLI as ' +
+    'child processes, so it reaches the database through clients it constructs and through ' +
+    '`spawn`. Measured under `BACKEND_TEST_SERVICES=none` (2026-10-20): `connect ECONNREFUSED ' +
     '127.0.0.1:1`, the `beforeAll` fails and all 9 cases are skipped. Correctly III(c).',
   'test/integration/demo/demo-pipeline-off-state.test.ts':
     'The same shape as `demo-shop.test.ts`, with CRM switched off between the runs: it ' +
-    'provisions a PostgreSQL database of its own with `pg`, writes the activation setting ' +
-    'through that client and spawns the migration runner and the demo command as child ' +
-    'processes. Measured under `BACKEND_TEST_SERVICES=none`: `connect ECONNREFUSED ' +
-    '127.0.0.1:1`, the `beforeAll` fails and all 8 cases are skipped. Correctly III(c).',
+    'takes a PostgreSQL database of its own through `migratedDatabase()`, writes the ' +
+    'activation setting with `pg` and spawns the demo command as child processes. Measured ' +
+    'under `BACKEND_TEST_SERVICES=none` (2026-10-20): `connect ECONNREFUSED 127.0.0.1:1`, the ' +
+    '`beforeAll` fails and all 9 cases are skipped. Correctly III(c).',
+  'test/integration/price_lists/fresh-install.test.ts':
+    'Feature 160 (T116), the same shape as `demo-shop.test.ts`: it takes a PostgreSQL database ' +
+    'of its own through `migratedDatabase()`, spawns `module:install --all` into it as a child ' +
+    'process and reads it with `pg` — none of which is an import the closure screen can ' +
+    'follow. Correctly III(c).',
+  'test/integration/demo/migrated-clone-parity.test.ts':
+    'It creates a PostgreSQL database with `pg`, spawns the migration runner into it, takes a ' +
+    'template clone through `migratedDatabase()` and compares the two through `pg` clients — ' +
+    'none of which is an import the closure screen can follow. Measured under ' +
+    '`BACKEND_TEST_SERVICES=none` (2026-10-20): `connect ECONNREFUSED 127.0.0.1:1`, the ' +
+    '`beforeAll` fails and all 3 cases are skipped. Correctly III(c).',
 };
 
 function outerTestFiles(): string[] {

@@ -165,6 +165,14 @@ describe('admin_roles demo data', () => {
     expect(SALES_REPRESENTATIVE_PERMISSIONS).not.toContain('*');
   });
 
+  it('lets the representative open and work the Tasks assigned to them (feature 165)', () => {
+    // The demo assigns Tasks to its representatives; without these two codes
+    // a representative's *My Tasks* is a 403 and the assignee lookup skips them.
+    expect(SALES_REPRESENTATIVE_PERMISSIONS).toEqual(
+      expect.arrayContaining(['tasks:read', 'tasks:write']),
+    );
+  });
+
   it('is declared over the entity this module owns', () => {
     expect(AdminRole.name).toBe('AdminRole');
   });

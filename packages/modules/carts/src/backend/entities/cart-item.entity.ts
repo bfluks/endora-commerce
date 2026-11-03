@@ -31,7 +31,9 @@ export class CartItem {
     | 'packagingUnitBaseQuantity'
     | 'agreedQuantity'
     | 'agreedUnitPrice'
-    | 'agreedCurrency';
+    | 'agreedCurrency'
+    | 'quoteRequestId'
+    | 'priceSource';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -49,19 +51,31 @@ export class CartItem {
   @Property({ type: 'integer' })
   quantity!: number;
 
-  /** The unit price the line is ordered at, for its current quantity. */
-  @Property({ type: 'decimal', precision: 12, scale: 2 })
+  /**
+   * The unit price the line is ordered at, for its current quantity — at four
+   * places, unrounded (owner ruling of 2026-10-25): only the line value
+   * `unitPrice × quantity` is rounded, to two places.
+   */
+  @Property({ type: 'decimal', precision: 14, scale: 4 })
   unitPrice!: string;
 
   @Property({ type: 'string', length: 3 })
   currency!: string;
 
   /**
+   * Feature 160 (D-287 P1, FR-030) — which tier priced `unitPrice` (`base`,
+   * `catalogue`, `buyer`, `sale`), or `agreed` for a quote's agreed price.
+   * Written with `unitPrice`; `null` on a line priced before the feature.
+   */
+  @Property({ type: 'string', length: 16, nullable: true })
+  priceSource?: 'agreed' | 'base' | 'catalogue' | 'buyer' | 'sale' | null = null;
+
+  /**
    * Most-recent re-resolved unit price (per feature 011 PricingService).
    * Stale beyond the cache TTL → re-resolve on next read. Cleared on every
    * cart-side write so the next read forces a fresh resolution.
    */
-  @Property({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Property({ type: 'decimal', precision: 14, scale: 4, nullable: true })
   recomputedUnitPrice?: string | null;
 
   @Property({ type: 'datetime', nullable: true })
@@ -91,15 +105,31 @@ export class CartItem {
    * `agreedQuantity`; at any other quantity it is priced like any other line,
    * and returning to the agreed quantity restores the agreed price. All three
    * are null on every other line.
+   *
+   * Feature 155 (FR-028) reads `agreedQuantity` too: while `quantity` equals
+   * it and the basket still carries its quote source, the line is exempt from
+   * the catalogue's order minimums (`isQuoteSeededLineExempt`).
    */
   @Property({ type: 'integer', nullable: true })
   agreedQuantity?: number | null;
 
-  @Property({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  @Property({ type: 'decimal', precision: 14, scale: 4, nullable: true })
   agreedUnitPrice?: string | null;
 
   @Property({ type: 'string', length: 3, nullable: true })
   agreedCurrency?: string | null;
+
+  /**
+   * Issue #167 — the accepted Quote Request the agreement above came from;
+   * null on every line that carries none. Written with the agreement, by the
+   * quote seed alone. A claim, like `Cart.sourceQuoteRequestId`: `orders`
+   * reads the request again at placement and refuses the line at its agreed
+   * price once the quote's validity has ended or it is no longer in force. No
+   * foreign key — the request is another module's row, and a request that has
+   * gone resolves to nothing, which placement refuses.
+   */
+  @Property({ type: 'uuid', nullable: true })
+  quoteRequestId?: string | null;
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

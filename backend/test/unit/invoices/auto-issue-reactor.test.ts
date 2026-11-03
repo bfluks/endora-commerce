@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { ERROR_CODES } from '@endora-commerce/contracts';
+import { HttpError } from '@endora-commerce/platform/http';
 import type { z } from 'zod';
 import {
   createAutoIssueReactor,
@@ -176,6 +178,22 @@ describe('invoices — the auto-issue reactor observes the dispatch result (#115
     expect(logged).toHaveLength(1);
     expect(logged[0]!.context).toMatchObject({ orderId: ORDER_ID });
     expect(String(logged[0]!.context['error'])).toContain('numbering counter locked');
+  });
+
+  // Owner ruling of 2026-10-24 — an order refunded in full before it is
+  // invoiced is skipped, and the log says why; the subscriber does not fail.
+  it('skips an order refunded in full and logs the reason', async () => {
+    const { logged, dispatched, deps } = fakes({
+      issue: async () => {
+        throw new HttpError(422, ERROR_CODES.INVOICE_ORDER_REFUNDED, 'Refunded in full.');
+      },
+    });
+
+    await expect(createAutoIssueReactor(deps).onOrderStatusChanged(PAID)).resolves.toBeUndefined();
+    expect(dispatched).toEqual([]);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]!.message).toContain('refunded in full');
+    expect(logged[0]!.context).toMatchObject({ orderId: ORDER_ID, reason: ERROR_CODES.INVOICE_ORDER_REFUNDED });
   });
 
   it('treats an unregistered trigger setting as "no trigger" and nothing else', async () => {

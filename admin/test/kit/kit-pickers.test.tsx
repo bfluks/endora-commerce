@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode, type ReactElement, type ReactNode } from 'react';
-import { AppLanguageContext } from '../../../packages/admin-shell/src/i18n/app-language-context';
+import { AppLanguageContext } from '@endora-commerce/admin-kit/i18n';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { renderWithI18n } from '../helpers/render-with-i18n';
+import { shippedCoreBundle } from '../helpers/core-bundle';
 import { adminSession } from '../helpers/render-with-session';
 
 /**
@@ -59,10 +60,10 @@ const { AuthProvider } = await import('@endora-commerce/admin-kit/lib');
  * provider; `SalesChannelPicker` additionally reads the admin language, which is
  * a context with no fallback — `useAppLanguage` throws rather than defaulting.
  */
-function withLanguage(ui: ReactElement): ReactElement {
+function withLanguage(ui: ReactElement, language: 'en' | 'pl' = 'en'): ReactElement {
   const node = ((): ReactNode => ui)();
   return (
-    <AppLanguageContext.Provider value={{ language: 'en', setLanguage: (): void => {} }}>
+    <AppLanguageContext.Provider value={{ language, setLanguage: (): void => {} }}>
       <>{node}</>
     </AppLanguageContext.Provider>
   );
@@ -102,6 +103,81 @@ describe('SalesChannelPicker', () => {
     await user.click(screen.getByRole('combobox'));
     await waitFor(() => {
       expect(screen.getByText('Web store')).toBeDefined();
+    });
+  });
+
+  it('labels the channels in the admin language (#562)', async () => {
+    // Channel names are keyed by locale (`pl-PL`), the admin language by its
+    // short code (`pl`); indexing one by the other matched nothing, so a Polish
+    // admin saw every channel under its English name.
+    getSpy.mockResolvedValue({
+      items: [
+        { id: 'ch-1', code: 'web', name: { 'en-US': 'Web store', 'pl-PL': 'Sklep' }, active: true },
+        { id: 'ch-2', code: 'b2b', name: { 'en-US': 'Wholesale' }, active: true },
+      ],
+      page: 1,
+      pageSize: 200,
+      total: 2,
+    });
+
+    renderWithI18n(withLanguage(<SalesChannelPicker value={null} onChange={vi.fn()} />, 'pl'));
+    await userEvent.setup().click(screen.getByRole('combobox'));
+    const options = await screen.findAllByRole('option');
+    expect(options.map((o) => o.textContent)).toEqual(['Sklepweb', 'Wholesaleb2b']);
+  });
+
+  it('speaks Polish to a Polish admin, and an inactive channel says so', async () => {
+    getSpy.mockResolvedValue({
+      items: [{ id: 'ch-3', code: 'old', name: { 'pl-PL': 'Stary sklep' }, active: false }],
+      page: 1,
+      pageSize: 200,
+      total: 1,
+    });
+    renderWithI18n(
+      withLanguage(<SalesChannelPicker value={null} onChange={vi.fn()} />, 'pl'),
+      shippedCoreBundle('pl'),
+      { language: 'pl' },
+    );
+
+    const input = screen.getByRole('combobox', { name: 'Wybierz kanał sprzedaży' });
+    expect(input.getAttribute('placeholder')).toBe('Wybierz kanał sprzedaży…');
+    await userEvent.setup().click(input);
+    const [option] = await screen.findAllByRole('option');
+    expect(option!.textContent).toBe('Stary sklepold · nieaktywny');
+  });
+
+  it('shows a failed load even when the caller passes an empty message', async () => {
+    getSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+    renderWithI18n(
+      withLanguage(
+        <SalesChannelPicker value={null} onChange={vi.fn()} emptyMessage="Create a channel first." />,
+        'pl',
+      ),
+      shippedCoreBundle('pl'),
+      { language: 'pl' },
+    );
+
+    await userEvent.setup().click(screen.getByRole('combobox', { name: 'Wybierz kanał sprzedaży' }));
+    await waitFor(() => {
+      expect(screen.getByRole('listbox').textContent).toBe(
+        'Nie udało się wczytać kanałów sprzedaży.',
+      );
+    });
+  });
+
+  it('reports a response with no channel list as a failed load, not a crash', async () => {
+    // A body of another endpoint's shape (`{ data: [] }`) used to fail inside
+    // the load's own `.then` and land in its `.catch`; holding `undefined` in
+    // state instead throws at render, outside every handler.
+    getSpy.mockResolvedValue({ data: [], meta: { limit: 20, nextCursor: null } });
+    renderWithI18n(
+      withLanguage(<SalesChannelPicker value={null} onChange={vi.fn()} />),
+      shippedCoreBundle('en'),
+    );
+
+    await userEvent.setup().click(screen.getByRole('combobox', { name: 'Select sales channel' }));
+    await waitFor(() => {
+      expect(screen.getByRole('listbox').textContent).toBe('Failed to load channels.');
     });
   });
 
@@ -180,16 +256,27 @@ describe('ProductPicker — rules, alreadyAddedIds, onPickProduct', () => {
   };
 
   const ROWS = [
-    { id: 'p-group', sku: 'GRP-1', slug: 'grp', name: { 'en-US': 'Grouped set' }, status: 'active', type: 'grouped' },
-    { id: 'p-draft', sku: 'DRF-1', slug: 'drf', name: { 'en-US': 'Draft widget' }, status: 'draft', type: 'simple' },
-    { id: 'p-added', sku: 'ADD-1', slug: 'add', name: { 'en-US': 'Added widget' }, status: 'active', type: 'simple' },
-    { id: 'p-ok', sku: 'OK-1', slug: 'ok', name: { 'en-US': 'Plain widget', 'pl-PL': 'Zwykły widżet' }, status: 'active', type: 'simple' },
+    { id: 'p-group', sku: 'GRP-1', slug: 'grp', name: 'Grouped set', status: 'active', type: 'grouped' },
+    { id: 'p-off', sku: 'OFF-1', slug: 'off', name: 'Paused widget', status: 'inactive', type: 'simple' },
+    // Feature 163 (FR-019) — archived whatever its status: refused for being archived.
+    {
+      id: 'p-archived',
+      sku: 'ARC-1',
+      slug: 'arc',
+      name: 'Retired widget',
+      status: 'active',
+      type: 'simple',
+      archivedAt: '2026-10-20T00:00:00.000Z',
+    },
+    { id: 'p-added', sku: 'ADD-1', slug: 'add', name: 'Added widget', status: 'active', type: 'simple' },
+    { id: 'p-ok', sku: 'OK-1', slug: 'ok', name: 'Plain widget', status: 'active', type: 'simple' },
   ];
 
   const ORDER_RULES = {
     initialStatus: 'active' as const,
     blockedTypes: ['grouped', 'bundle'] as const,
-    blockedStatuses: ['draft', 'inactive'] as const,
+    blockedStatuses: ['inactive'] as const,
+    blockArchived: true,
   };
 
   function withSession(ui: ReactElement, permissions: readonly string[]): ReactElement {
@@ -223,9 +310,12 @@ describe('ProductPicker — rules, alreadyAddedIds, onPickProduct', () => {
     const group = screen.getByRole('option', { name: /Grouped set/ });
     expect(group.getAttribute('aria-disabled')).toBe('true');
     expect(group.textContent).toContain('Product group — pick its individual products');
-    const draft = screen.getByRole('option', { name: /Draft widget/ });
-    expect(draft.getAttribute('aria-disabled')).toBe('true');
-    expect(draft.textContent).toContain('Not active — cannot be added');
+    const off = screen.getByRole('option', { name: /Paused widget/ });
+    expect(off.getAttribute('aria-disabled')).toBe('true');
+    expect(off.textContent).toContain('Not active — cannot be added');
+    const archived = screen.getByRole('option', { name: /Retired widget/ });
+    expect(archived.getAttribute('aria-disabled')).toBe('true');
+    expect(archived.textContent).toContain('Archived — cannot be added');
     const added = screen.getByRole('option', { name: /Added widget/ });
     expect(added.getAttribute('aria-disabled')).toBe('true');
     expect(added.textContent).toContain('Already added');
@@ -240,10 +330,27 @@ describe('ProductPicker — rules, alreadyAddedIds, onPickProduct', () => {
       id: 'p-ok',
       sku: 'OK-1',
       slug: 'ok',
-      name: { 'en-US': 'Plain widget', 'pl-PL': 'Zwykły widżet' },
+      name: 'Plain widget',
       status: 'active',
       type: 'simple',
     });
+  });
+
+  it('a host that does not refuse archived products sees them selectable, labelled Archived beside the status', async () => {
+    getSpy.mockResolvedValue({ data: ROWS });
+    const user = userEvent.setup();
+    renderWithI18n(
+      withSession(
+        <ProductPicker mode="select" value={null} onChange={vi.fn()} rules={{ initialStatus: 'all' }} />,
+        ['catalog:read'],
+      ),
+      CORE,
+    );
+    await user.click(screen.getByRole('combobox'));
+    const archived = await screen.findByRole('option', { name: /Retired widget/ });
+    expect(archived.getAttribute('aria-disabled')).toBeNull();
+    expect(archived.textContent).toContain('ARC-1 · Archived');
+    expect(screen.getByRole('option', { name: /Paused widget/ }).textContent).toContain('OFF-1 · Inactive');
   });
 
   it('with rules and without catalog:read it is disabled with the hint', () => {
@@ -275,7 +382,7 @@ describe('ProductPicker — rules, alreadyAddedIds, onPickProduct', () => {
     for (const option of screen.getAllByRole('option')) {
       expect(option.getAttribute('aria-disabled')).toBeNull();
     }
-    expect(screen.getByRole('option', { name: /Draft widget/ }).textContent).toContain('DRF-1 · draft');
+    expect(screen.getByRole('option', { name: /Paused widget/ }).textContent).toContain('OFF-1 · inactive');
     expect(getSpy.mock.calls.at(-1)?.[0]).toBe('/api/v1/admin/catalog/products?page=0&pageSize=20');
   });
 
@@ -302,7 +409,7 @@ describe('ProductPicker — preselected value under StrictMode', () => {
     id: 'p-kept',
     sku: 'KEPT-1',
     slug: 'kept',
-    name: { 'en-US': 'Kept widget' },
+    name: 'Kept widget',
     status: 'active',
     type: 'simple',
   };

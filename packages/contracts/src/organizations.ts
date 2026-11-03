@@ -6,6 +6,7 @@ import {
   uuidSchema,
 } from './common.js';
 import { fulfilmentStrategySchema, type FulfilmentStrategy } from './inventory.js';
+import { SalesChannelOptionSchema } from './sales-channels.js';
 import { foldDiacritics } from './text-normalization.js';
 
 /**
@@ -924,3 +925,75 @@ export interface OrganizationTaxProfilePort {
     country: string | null;
   } | null>;
 }
+
+// --- Sales-channel assignment and admin creation (feature 154) ------------
+
+/**
+ * A set of sales-channel ids an Organization is assigned to: at least one (an
+ * Organization with no channel may shop nowhere), at most 100, no repeats.
+ */
+const organizationSalesChannelIdsSchema = z
+  .array(uuidSchema)
+  .min(1)
+  .max(100)
+  .refine((ids) => new Set(ids).size === ids.length, {
+    message: 'Each sales channel may be listed once.',
+  });
+
+/**
+ * `GET`/`PUT /api/v1/admin/organizations/:id/sales-channels` — the channels an
+ * Organization's members may sign in and shop on
+ * (`specs/154-sales-channel-access/contracts/admin-api-and-ui.md` §2).
+ *
+ * `options` is every channel the Organization may be assigned to, inactive ones
+ * included and flagged, so the panel needs no `sales_channels:read`.
+ */
+export const OrganizationSalesChannelOptionSchema = SalesChannelOptionSchema.extend({
+  systemDefault: z.boolean(),
+});
+export type OrganizationSalesChannelOption = z.infer<typeof OrganizationSalesChannelOptionSchema>;
+
+export const OrganizationSalesChannelsResponseSchema = z.object({
+  data: z.object({
+    organizationId: uuidSchema,
+    assignedSalesChannelIds: z.array(uuidSchema),
+    options: z.array(OrganizationSalesChannelOptionSchema),
+  }),
+});
+export type OrganizationSalesChannelsResponse = z.infer<
+  typeof OrganizationSalesChannelsResponseSchema
+>;
+
+/** `PUT /api/v1/admin/organizations/:id/sales-channels` — replaces the whole set. */
+export const OrganizationSalesChannelsUpdateBodySchema = z.object({
+  salesChannelIds: organizationSalesChannelIdsSchema,
+});
+export type OrganizationSalesChannelsUpdateBody = z.infer<
+  typeof OrganizationSalesChannelsUpdateBodySchema
+>;
+
+/**
+ * `POST /api/v1/admin/organizations` — an operator creates a customer
+ * Organization and chooses its sales channels (§3). The organization fields are
+ * self-registration's own, so the two creation paths cannot drift apart; the
+ * status is one an operator may start from, and the channels are bound in the
+ * creating transaction.
+ */
+export const AdminOrganizationCreateBodySchema = registerOrganizationRequestSchema.shape.organization
+  .extend({
+    status: z.enum(['active', 'pending_verification']).default('active'),
+    salesChannelIds: organizationSalesChannelIdsSchema,
+  });
+export type AdminOrganizationCreateBody = z.infer<typeof AdminOrganizationCreateBodySchema>;
+export type AdminOrganizationCreateRequest = z.input<typeof AdminOrganizationCreateBodySchema>;
+
+/**
+ * `GET /api/v1/admin/organizations/sales-channel-options` — what the *New
+ * organization* form chooses from, before there is an Organization to ask about.
+ */
+export const OrganizationSalesChannelOptionsResponseSchema = z.object({
+  data: z.array(OrganizationSalesChannelOptionSchema),
+});
+export type OrganizationSalesChannelOptionsResponse = z.infer<
+  typeof OrganizationSalesChannelOptionsResponseSchema
+>;

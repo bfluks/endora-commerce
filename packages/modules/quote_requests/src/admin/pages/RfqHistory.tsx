@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   QUOTE_REQUEST_HISTORY_EVENT_WINDOW,
+  customFieldCarrySkipReasonSchema,
   type QuoteRequestHistory,
   type QuoteRequestHistoryActor,
   type QuoteRequestHistoryChange,
@@ -9,6 +10,7 @@ import {
 } from '@endora-commerce/contracts';
 import { apiClient } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Button } from '@endora-commerce/admin-kit/ui';
+import { resolveCustomFieldLabel } from '@endora-commerce/admin-kit/components';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { adminNumberLocale, rfqNumberFormat } from '../number-format.js';
 
@@ -25,6 +27,13 @@ import { adminNumberLocale, rfqNumberFormat } from '../number-format.js';
  * Every key is `rfq.detail.history.*` in the `core` bundle, the one the host
  * screen reads; `history-bundle-coverage.test.ts` holds that every entry and
  * change kind has one in both languages.
+ *
+ * Feature 162 adds one entry whose sentences are this module's own bundle's
+ * (`history.*` in `quote_requests`): custom-field values a Sales Opportunity
+ * could not carry into the request. Its title is `core`'s, as every kind's is;
+ * under it the Opportunity's number, then a field and a reason per line — the
+ * field named by the label stored with the skip, in the reader's language
+ * (owner ruling V3, 2026-10-21), its key for an entry recorded before.
  */
 
 type T = (key: string, params?: Record<string, string | number>) => string;
@@ -38,15 +47,28 @@ const ROLE_KEYS: Record<string, string> = {
   Administrator: 'administrator',
 };
 
+/** A field name shown to an operator is cut here. */
+const SHOWN_KEY_LIMIT = 64;
+const SKIP_REASONS: ReadonlySet<string> = new Set(customFieldCarrySkipReasonSchema.options);
+
 interface Formatters {
   t: T;
+  /** This module's own bundle (feature 162). */
+  q: T;
   amount: (n: number | null) => string;
+  /** A unit price: its significant places, up to four (owner ruling of 2026-10-25). */
+  unitAmount: (n: number | null) => string;
   dateTime: (iso: string) => string;
+  /** The name a carry-skip line gives its field: stored label (reader's language, then default), else the key. */
+  fieldName: (skip: CarrySkip) => string;
 }
+
+type CarrySkip = NonNullable<QuoteRequestHistoryEntry['customFieldCarry']>['skipped'][number];
 
 /** Built once per language and translator, not on every render (review fix N6). */
 function useFormatters(): Formatters {
   const t = useTranslation('core');
+  const q = useTranslation('quote_requests');
   const { language } = useTranslationContext();
   return useMemo(() => {
     const locale = adminNumberLocale(language);
@@ -55,13 +77,19 @@ function useFormatters(): Formatters {
     const h: T = (key, params) => t(`rfq.detail.history.${key}`, params);
     return {
       t: h,
+      q,
       amount: (n) => (n === null ? h('none') : numbers.amount(n)),
+      unitAmount: (n) => (n === null ? h('none') : numbers.unitAmount(n)),
       dateTime: (iso) => {
         const d = new Date(iso);
         return Number.isNaN(d.getTime()) ? iso : dates.format(d);
       },
+      fieldName: (skip) => {
+        const name = skip.label ? resolveCustomFieldLabel(skip.label.labels, skip.label.labelDefault, language) : '';
+        return shownKey(name === '' ? skip.key : name);
+      },
     };
-  }, [language, t]);
+  }, [language, t, q]);
 }
 
 /**
@@ -99,9 +127,13 @@ function actorLabel(t: T, actor: QuoteRequestHistoryActor): string {
 }
 
 function lineLabel(t: T, line: QuoteRequestHistoryLineRef): string {
-  return line.variantLabel === null
-    ? line.productName
-    : t('lineWithVariant', { product: line.productName, variant: line.variantLabel });
+  const label =
+    line.variantLabel === null
+      ? line.productName
+      : t('lineWithVariant', { product: line.productName, variant: line.variantLabel });
+  // Feature 159 (research N-32) — a product on several lines: which one.
+  if (line.groupName === undefined) return label;
+  return t('lineInGroup', { line: label, group: line.groupName ?? t('ungrouped') });
 }
 
 function changeSentence(f: Formatters, change: QuoteRequestHistoryChange): string {
@@ -117,7 +149,7 @@ function changeSentence(f: Formatters, change: QuoteRequestHistoryChange): strin
         price:
           change.agreedUnitPrice === null
             ? t('none')
-            : t('money', { amount: f.amount(change.agreedUnitPrice), currency: change.currency }),
+            : t('money', { amount: f.unitAmount(change.agreedUnitPrice), currency: change.currency }),
       });
     case 'line_removed':
       return t('change.line_removed', { line: lineLabel(t, change.line) });
@@ -131,8 +163,8 @@ function changeSentence(f: Formatters, change: QuoteRequestHistoryChange): strin
     case 'line_proposed_unit_price':
       return t(`change.${change.kind}`, {
         line: lineLabel(t, change.line),
-        before: f.amount(change.before),
-        after: f.amount(change.after),
+        before: f.unitAmount(change.before),
+        after: f.unitAmount(change.after),
         currency: change.currency,
       });
     case 'line_note':
@@ -146,12 +178,32 @@ function changeSentence(f: Formatters, change: QuoteRequestHistoryChange): strin
       if (change.before === null) return t('change.validity_set', { after: f.dateTime(change.after!) });
       if (change.after === null) return t('change.validity_removed', { before: f.dateTime(change.before) });
       return t('change.validity', { before: f.dateTime(change.before), after: f.dateTime(change.after) });
+    // Feature 159 — the grouping. Group names are operator content, shown as
+    // recorded; `null` is the ungrouped section.
+    case 'group_added':
+    case 'group_removed':
+      return t(`change.${change.kind}`, { name: change.group.name });
+    case 'group_renamed':
+      return t('change.group_renamed', { before: change.before, after: change.after });
+    case 'line_group':
+      return t('change.line_group', {
+        line: lineLabel(t, change.line),
+        before: change.before ?? t('ungrouped'),
+        after: change.after ?? t('ungrouped'),
+      });
+    case 'line_order':
+      return t('change.line_order');
   }
 }
 
+function shownKey(key: string): string {
+  return key.length > SHOWN_KEY_LIMIT ? `${key.slice(0, SHOWN_KEY_LIMIT)}…` : key;
+}
+
 function HistoryEntry({ entry, f }: { entry: QuoteRequestHistoryEntry; f: Formatters }): ReactNode {
-  const { t } = f;
+  const { t, q, fieldName } = f;
   const keys = entry.changes === null ? [] : changeKeys(entry.changes);
+  const carry = entry.customFieldCarry ?? null;
   return (
     <li className="rounded-md border p-3 text-sm">
       <div className="mb-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
@@ -160,6 +212,26 @@ function HistoryEntry({ entry, f }: { entry: QuoteRequestHistoryEntry; f: Format
         {entry.revisionNumber !== null ? <span>{t('revision', { number: entry.revisionNumber })}</span> : null}
       </div>
       <p className="font-medium">{t(`entry.${entry.kind}`)}</p>
+      {carry !== null ? (
+        <p className="mt-1 break-words text-muted-foreground">
+          {q('history.carrySource', { reference: carry.source.reference })}
+        </p>
+      ) : null}
+      {carry !== null ? (
+        <ul className="mt-1 list-disc space-y-0.5 pl-5">
+          {carry.skipped.map((skip) => (
+            <li key={skip.key} className="break-words">
+              {q('history.carryLine', {
+                field: fieldName(skip),
+                // A reason this screen does not know yet reads as the generic sentence, never as its code.
+                reason: SKIP_REASONS.has(skip.reason)
+                  ? q(`history.carryReason.${skip.reason}`)
+                  : q('history.carryReasonUnknown'),
+              })}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {entry.reason !== null ? (
         <p className="mt-1 whitespace-pre-wrap break-words">{t('reason', { text: entry.reason })}</p>
       ) : null}

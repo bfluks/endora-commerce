@@ -92,6 +92,15 @@ const SANCTIONED_AUDIENCE_SOURCES: ReadonlyMap<string, string> = new Map([
     'the saved-list add, scoped by the `CustomerContext` that owns the list',
   ],
   [
+    // Feature 163: the buyer type-ahead's availability condition. The port has
+    // no request; its caller (`quick_order`'s route) took the organisation off
+    // the buyer's session, and the port's contract says it answers for a
+    // signed-in buyer only.
+    'packages/modules/catalog/src/backend/services/catalog-quick-search.service.ts',
+    '`catalogQuickSearchPort` — answers for the signed-in buyer whose organisation the route took ' +
+      'off the session (`CatalogQuickSearchParams.organizationId`, no anonymous spelling)',
+  ],
+  [
     // Feature 145: the admin order preview. The request's actor is the
     // operator, so `productAudienceOf` would answer for the wrong party.
     'packages/modules/orders/src/backend/services/preview-line-availability.ts',

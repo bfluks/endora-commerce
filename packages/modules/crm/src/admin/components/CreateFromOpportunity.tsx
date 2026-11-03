@@ -5,6 +5,7 @@ import type { OpportunityDetail, OpportunityDocumentKind } from '@endora-commerc
 import { useAuth, useModulePresence } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Button } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { useReturnHere } from '../lib/return-here.js';
 
 /**
  * Creating an Order or a Quote Request from within an Opportunity (User Story
@@ -149,6 +150,7 @@ export function CreatedDocumentNotice(props: CreatedDocumentNoticeProps): ReactN
   const t = useTranslation('crm');
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  const returnHere = useReturnHere();
   const [attempt, setAttempt] = useState(0);
   const target = TARGETS[kind];
   const words = wording(kind, t);
@@ -190,7 +192,7 @@ export function CreatedDocumentNotice(props: CreatedDocumentNoticeProps): ReactN
       <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
         <span>{words.notLinked()}</span>
         <Button asChild variant="outline" size="sm" className="min-h-11 sm:min-h-9">
-          <Link to={`${target.documentPath}/${createdId}`}>{words.open()}</Link>
+          <Link to={returnHere(`${target.documentPath}/${createdId}`)}>{words.open()}</Link>
         </Button>
       </AlertDescription>
     </Alert>

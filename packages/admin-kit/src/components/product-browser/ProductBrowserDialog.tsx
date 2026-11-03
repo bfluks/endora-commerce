@@ -26,6 +26,7 @@ import {
 import { productDisplayName } from './product-line.js';
 import {
   NO_PRODUCT_IDS,
+  isProductArchived,
   productSelectability,
   productSelectabilityReasonKey,
   type ProductBrowserRules,
@@ -81,21 +82,21 @@ export function ProductBrowserDialog(props: ProductBrowserDialogProps): ReactNod
 
 const SEARCH_DEBOUNCE_MS = 250;
 const TYPES: readonly ProductBrowserType[] = productTypeSchema.options;
-const STATUS_TABS: readonly ProductBrowserStatusFilter[] = ['all', 'active', 'draft', 'inactive'];
+// The Products list's tabs: three over products that
+// are not archived, then Archived on its own axis.
+const STATUS_TABS: readonly ProductBrowserStatusFilter[] = ['all', 'active', 'inactive', 'archived'];
 
 const TAB_LABEL_KEY: Record<ProductBrowserStatusFilter, string> = {
   all: 'productBrowser.tab.all',
   active: 'productBrowser.tab.active',
-  draft: 'productBrowser.tab.draft',
   inactive: 'productBrowser.tab.inactive',
+  archived: 'productBrowser.tab.archived',
 };
 const STATUS_LABEL_KEY: Record<ProductBrowserStatus, string> = {
-  draft: 'productBrowser.status.draft',
   active: 'productBrowser.status.active',
   inactive: 'productBrowser.status.inactive',
 };
 const STATUS_BADGE_VARIANT: Record<ProductBrowserStatus, BadgeProps['variant']> = {
-  draft: 'secondary',
   active: 'success',
   inactive: 'outline',
 };
@@ -106,11 +107,6 @@ const TYPE_LABEL_KEY: Record<ProductBrowserType, string> = {
   bundle: 'productBrowser.type.bundle',
   virtual: 'productBrowser.type.virtual',
 };
-
-function secondaryName(item: ProductBrowserItem): string | null {
-  const pl = item.name['pl-PL'];
-  return pl !== undefined && pl !== productDisplayName(item) ? pl : null;
-}
 
 type ConfirmState =
   | { kind: 'idle' }
@@ -142,9 +138,15 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
   const [counts, setCounts] = useState<ProductBrowserCounts>({
     all: 0,
     active: 0,
-    draft: 0,
     inactive: 0,
+    archived: 0,
   });
+  // A host that refuses archived products is not offered a tab of rows it cannot
+  // tick (Hick's law); every other host can browse them.
+  const tabs = useMemo(
+    () => (rules.blockArchived ? STATUS_TABS.filter((tab) => tab !== 'archived') : STATUS_TABS),
+    [rules.blockArchived],
+  );
   const [load, setLoad] = useState<'loading' | 'ready' | 'error'>('loading');
   const [reloadToken, setReloadToken] = useState(0);
   const [confirm, setConfirm] = useState<ConfirmState>({ kind: 'idle' });
@@ -345,17 +347,11 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
       render: (row): ReactNode => {
         const verdict = selectabilityOf(row);
         const name = productDisplayName(row);
-        const second = secondaryName(row);
         return (
           <div className="min-w-0 max-w-[22rem]">
             <div className="truncate font-medium" title={name}>
               {name}
             </div>
-            {second !== null ? (
-              <div className="truncate text-xs text-muted-foreground" title={second}>
-                {second}
-              </div>
-            ) : null}
             {verdict.selectable ? null : (
               <div id={`${baseId}-reason-${row.id}`} className="text-xs text-muted-foreground">
                 {t(productSelectabilityReasonKey(verdict.reason, rules))}
@@ -373,9 +369,23 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
     {
       id: 'status',
       header: t('productBrowser.column.status'),
-      render: (row): ReactNode => (
-        <Badge variant={STATUS_BADGE_VARIANT[row.status]}>{t(STATUS_LABEL_KEY[row.status])}</Badge>
-      ),
+      // Archived is shown beside the status, never instead of it: the two are
+      // independent. While archived the status drops to a neutral outline so the
+      // Archived pill — the catalogue's own `b2b-badge--warn` look — is the one
+      // coloured mark, as on the Products list and the editor.
+      render: (row): ReactNode => {
+        const archived = isProductArchived(row);
+        return (
+          <span className="inline-flex flex-wrap gap-1">
+            <Badge variant={archived ? 'outline' : STATUS_BADGE_VARIANT[row.status]}>
+              {t(STATUS_LABEL_KEY[row.status])}
+            </Badge>
+            {archived ? (
+              <span className="b2b-badge b2b-badge--warn">{t('productBrowser.status.archived')}</span>
+            ) : null}
+          </span>
+        );
+      },
     },
     {
       id: 'type',
@@ -417,7 +427,7 @@ function ProductBrowserSession(props: ProductBrowserDialogProps): ReactNode {
           <div style={{ padding: '4px 12px 0', overflow: 'hidden' }}>
             <div className="b2b-tabs-scroll">
               <div className="b2b-tabs" role="tablist">
-                {STATUS_TABS.map((tab) => (
+                {tabs.map((tab) => (
                   <button
                     key={tab}
                     type="button"

@@ -8,6 +8,8 @@ import type {
 } from '@endora-commerce/contracts';
 import { ComparisonApiError, getSharedComparison } from '../lib/api/comparisons';
 import { tForLocale } from '../lib/i18n/messages';
+import { localisedValue } from './ComparisonTable';
+import { LocalizedAnchor } from '../lib/i18n/localized-link';
 
 /**
  * `<SharedComparisonTable>` — feature 007 / US2 / T043.
@@ -32,11 +34,17 @@ import { tForLocale } from '../lib/i18n/messages';
  * difference a reader has to discover is one they will mistake for the
  * sender's numbers.
  */
-export function SharedComparisonTable(props: { token: string; locale: string }): ReactNode {
+export function SharedComparisonTable(props: {
+  token: string;
+  locale: string;
+  /** The active sales channel, sent on the browser-side read. Supplied by the page. */
+  salesChannelCode: string | undefined;
+}): ReactNode {
   const t = tForLocale(props.locale);
+  const localised = (value: Record<string, string>): string => localisedValue(value, props.locale);
   const [state, setState] = useState<
     | { kind: 'loading' }
-    | { kind: 'error'; message: string }
+    | { kind: 'error'; message: string | null }
     | { kind: 'gone' }
     | { kind: 'ready'; view: ComparisonSharedView; viewerIsOwner: boolean }
   >({ kind: 'loading' });
@@ -49,7 +57,7 @@ export function SharedComparisonTable(props: { token: string; locale: string }):
 
   useEffect(() => {
     let cancelled = false;
-    getSharedComparison(props.token)
+    getSharedComparison(props.token, props.salesChannelCode)
       .then((res) => {
         if (cancelled) return;
         if (!res) {
@@ -62,13 +70,13 @@ export function SharedComparisonTable(props: { token: string; locale: string }):
         if (cancelled) return;
         setState({
           kind: 'error',
-          message: err instanceof ComparisonApiError ? err.message : 'Nie udało się załadować porównania.',
+          message: err instanceof ComparisonApiError ? err.message : null,
         });
       });
     return () => {
       cancelled = true;
     };
-  }, [props.token]);
+  }, [props.token, props.salesChannelCode]);
 
   const activeMode: ComparisonDisplayMode =
     state.kind === 'ready' ? (localMode ?? state.view.displayMode) : 'all';
@@ -82,14 +90,14 @@ export function SharedComparisonTable(props: { token: string; locale: string }):
     return rows;
   }, [state, activeMode, hideEmpty]);
 
-  if (state.kind === 'loading') return <p className="muted">Ładowanie…</p>;
-  if (state.kind === 'error') return <div className="alert alert--error">{state.message}</div>;
+  if (state.kind === 'loading') return <p className="muted">{t('commerce.common.loading')}</p>;
+  if (state.kind === 'error') {
+    return <div className="alert alert--error">{state.message ?? t('commerce.compare.shared.loadFailed')}</div>;
+  }
   if (state.kind === 'gone') {
     return (
       <div className="industria-compare-page">
-        <p className="muted">
-          Ta porównywarka już nie istnieje — autor mógł ją usunąć.
-        </p>
+        <p className="muted">{t('commerce.compare.shared.gone')}</p>
       </div>
     );
   }
@@ -103,7 +111,7 @@ export function SharedComparisonTable(props: { token: string; locale: string }):
             ? // Every product in the sender's set is one this reader may not
               // see. "Empty" would be a lie about the sender's comparison.
               t('compare.shared.hiddenProducts')
-            : 'Porównywarka jest pusta.'}
+            : t('commerce.compare.shared.empty')}
         </p>
       </div>
     );
@@ -118,17 +126,17 @@ export function SharedComparisonTable(props: { token: string; locale: string }):
           <Switch
             checked={showOnlyDifferences}
             onChange={(next): void => setLocalMode(next ? 'differences' : 'all')}
-            label="Pokaż tylko różnice"
+            label={t('commerce.compare.showOnlyDifferences')}
           />
           <Switch
             checked={hideEmpty}
             onChange={setHideEmpty}
-            label="Ukryj puste"
+            label={t('commerce.compare.hideEmpty')}
           />
         </div>
         <div className="industria-compare-toolbar__right">
           <span className="industria-compare-toolbar__readonly" role="status">
-            Widok udostępniony · tylko do odczytu
+            {t('commerce.compare.shared.readOnly')}
           </span>
         </div>
       </div>
@@ -154,15 +162,15 @@ export function SharedComparisonTable(props: { token: string; locale: string }):
                   <div className="industria-cmp-card">
                     <div className="industria-cmp-card__media">
                       {p.primaryAssetUrl ? (
-                        <img src={p.primaryAssetUrl} alt={localised(p.name)} loading="lazy" />
+                        <img src={p.primaryAssetUrl} alt={p.name} loading="lazy" />
                       ) : (
                         <PlaceholderGlyph />
                       )}
                     </div>
                     <div className="industria-cmp-card__sku">{p.sku}</div>
-                    <a href={`/p/${p.slug}`} className="industria-cmp-card__name">
-                      {localised(p.name)}
-                    </a>
+                    <LocalizedAnchor href={`/p/${p.slug}`} className="industria-cmp-card__name">
+                      {p.name}
+                    </LocalizedAnchor>
                     <div className="industria-cmp-card__price">
                       {p.price ? `${p.price.amount} ${p.price.currency}` : '—'}
                     </div>
@@ -175,9 +183,7 @@ export function SharedComparisonTable(props: { token: string; locale: string }):
             {visibleRows.length === 0 ? (
               <tr>
                 <td colSpan={view.products.length + 1} className="muted">
-                  {hideEmpty
-                    ? 'Wszystkie wiersze są puste dla wybranych produktów — wyłącz „Ukryj puste”, aby zobaczyć atrybuty z brakującymi wartościami.'
-                    : 'Brak atrybutów spełniających aktualne filtry.'}
+                  {hideEmpty ? t('commerce.compare.allRowsEmpty') : t('commerce.compare.noRows')}
                 </td>
               </tr>
             ) : (
@@ -191,13 +197,13 @@ export function SharedComparisonTable(props: { token: string; locale: string }):
               ))
             )}
             <tr className="industria-compare-table__action-row">
-              <th scope="row">Akcja</th>
+              <th scope="row">{t('commerce.compare.actionRow')}</th>
               {view.products.map((p) => (
                 <td key={p.id}>
                   <div className="industria-compare-table__actions">
-                    <a href={`/p/${p.slug}`} className="btn btn--outline btn--sm">
-                      Karta produktu
-                    </a>
+                    <LocalizedAnchor href={`/p/${p.slug}`} className="btn btn--outline btn--sm">
+                      {t('commerce.compare.productPage')}
+                    </LocalizedAnchor>
                   </div>
                 </td>
               ))}
@@ -240,16 +246,7 @@ function filterRowsByMode(
   return rows;
 }
 
-function localised(value: Record<string, string>): string {
-  return (
-    value['pl-PL'] ??
-    value['pl'] ??
-    value['en-US'] ??
-    value['en'] ??
-    Object.values(value)[0] ??
-    ''
-  );
-}
+
 
 function PlaceholderGlyph(): ReactNode {
   return (

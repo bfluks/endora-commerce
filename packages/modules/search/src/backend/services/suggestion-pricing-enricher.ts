@@ -1,9 +1,7 @@
 import type {
   CatalogProductReadPort,
-  CatalogProductRecord,
-  DisplayMode,
+  ListingPriceDetailPort,
   OrganizationDetailsPort,
-  OrganizationRecord,
   ProductSummary,
   SearchSuggestItem,
 } from '@endora-commerce/contracts';
@@ -15,38 +13,25 @@ import type { SuggestionPricingEnricher } from '../routes.public.js';
  * attach the per-customer price-list resolution to each typeahead hit.
  *
  * The search module stays isolated from the price-lists module's concrete
- * service: it depends only on the narrow {@link SuggestionPriceResolverPort}
- * structural port below, which the container's `pricingService` satisfies with
- * the price-lists `PricingService`. (Constitution I — modules talk through
- * ports.) Its two row parameters are the published contract records, so the
- * declaration names no file in `catalog`'s or `organizations`' directory.
+ * service: it depends only on the published `ListingPriceDetailPort` slice,
+ * which the container's `pricingService` satisfies with the price-lists
+ * `PricingService`. (Constitution I — modules talk through ports.)
  *
- * Pricing is resolved per hit in parallel, capped by the suggest `limit`
- * (default 8), and the resolver caches per-tuple for 60s, so the popup adds
- * at most one bounded fan-out. A resolver *refusal* degrades that hit to the
- * plain summary — the popup never fails over a pricing hiccup — but the
+ * D-287 P0 — the hits are priced in **one** batched call. This used to be one
+ * `resolveEngine` per hit in parallel — about seven statements each on a cache
+ * miss, the popup's whole limit at once (`specs/pricing/read-paths-and-performance.md`
+ * §4). The batch is the catalogue listing's own resolution, so a suggestion
+ * and the card it leads to quote one figure: the base price is the base
+ * partition's, else the Product's own price exactly as the card's, and the
+ * customer's own group applies. A resolver *refusal* degrades the popup to the
+ * plain summaries — the popup never fails over a pricing hiccup — but the
  * module-presence answer is not a hiccup and is re-thrown (issue #84): a
  * suggest popup with every price missing reads to a buyer as a catalogue
  * without prices, not as `price_lists` being switched off.
  */
 
-export interface SuggestionPriceResolverPort {
-  resolveEngine(input: {
-    product: CatalogProductRecord;
-    variantId?: string | null;
-    context: {
-      quantity: number;
-      organization?: OrganizationRecord | null;
-      salesChannel: { id: string; defaultCurrency: string };
-      currencyCode?: string;
-    };
-  }): Promise<{
-    base: { bracket: { amount: string } | null };
-    sale: { bracket: { amount: string } } | null;
-    displayMode: DisplayMode;
-    currencyCode: string;
-  }>;
-}
+/** The slice of `pricingService` the popup resolves. */
+export type SuggestionPriceResolverPort = ListingPriceDetailPort;
 
 export function createSuggestionPricingEnricher(deps: {
   /**
@@ -73,32 +58,36 @@ export function createSuggestionPricingEnricher(deps: {
       : null;
 
     const products = await catalogProducts.findByIds(items.map((i) => i.id));
-    const byId = new Map(products.map((p) => [p.id, p]));
+    if (products.length === 0) return items.map((item) => ({ ...item }));
 
-    return Promise.all(
-      items.map(async (item): Promise<SearchSuggestItem> => {
-        const product = byId.get(item.id);
-        if (!product) return { ...item };
-        try {
-          const out = await pricingService.resolveEngine({
-            product,
-            context: { quantity: 1, organization, salesChannel: channel },
-          });
-          return {
-            ...item,
-            basePrice: out.base.bracket
-              ? { amount: out.base.bracket.amount, currency: out.currencyCode }
-              : null,
-            salePrice: out.sale
-              ? { amount: out.sale.bracket.amount, currency: out.currencyCode }
-              : null,
-            priceDisplayMode: out.displayMode,
-          };
-        } catch (error) {
-          rethrowIfModuleDisabled(error);
-          return { ...item };
-        }
-      }),
-    );
+    let details: Awaited<ReturnType<SuggestionPriceResolverPort['resolveListingPriceDetails']>>;
+    try {
+      details = await pricingService.resolveListingPriceDetails({
+        products,
+        context: {
+          organization: organization ? { id: organization.id, customerGroupId: organization.customerGroupId } : null,
+          ...(organization && ctx.customerAccountId ? { customerAccountId: ctx.customerAccountId } : {}),
+          salesChannel: channel,
+          // Feature 160 — the request's currency, as the result cards are priced.
+          ...(ctx.currencyCode ? { currencyCode: ctx.currencyCode } : {}),
+        },
+      });
+    } catch (error) {
+      rethrowIfModuleDisabled(error);
+      return items.map((item) => ({ ...item }));
+    }
+
+    return items.map((item): SearchSuggestItem => {
+      const detail = details.get(item.id);
+      if (!detail) return { ...item };
+      return {
+        ...item,
+        basePrice: detail.basePrice,
+        salePrice: detail.salePrice,
+        priceDisplayMode: detail.displayMode,
+        // Feature 161 (G19) — the list price beside a lower buyer price, as on the result cards.
+        ...(detail.listPrice ? { listPrice: { amount: detail.listPrice.amount, currency: detail.listPrice.currency } } : {}),
+      };
+    });
   };
 }

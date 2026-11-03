@@ -50,6 +50,7 @@ describe('Megamenu tree depth (T078)', () => {
     const items = ids.map((id, idx) => ({
       id,
       parentId: idx === 0 ? null : ids[idx - 1],
+      ...(idx === 0 ? { presentation: 'mega' as const } : {}),
       position: 0,
       kind: 'external-link' as const,
       labels: { 'en-US': `L${idx + 1}` },

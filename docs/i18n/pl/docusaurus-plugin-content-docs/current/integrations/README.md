@@ -58,7 +58,9 @@ synchronizacji katalogu, ceny hurtowe i idempotentne składanie zamówień opisu
 ### Zakresy
 
 Klucz dostaje jeden lub więcej zakresów z typowanego katalogu: `catalog:read`, `catalog:write`
-(tylko klucze niepowiązane), `orders:read`, `orders:write` (tylko klucze powiązane). Gdy żądanie
+(tylko klucze niepowiązane), `orders:read`, `orders:write` (tylko klucze powiązane) oraz
+`platform.api_description.read`, który pozwala integracji odczytać opis API pod
+`GET /api/v1/_openapi.json`. Gdy żądanie
 trafia na trasę chronioną przez `requireApiKey('catalog:write')`, platforma:
 
 1. Odnajduje wiersz `ApiKey` dla tokenu bearer według skrótu SHA-256.

@@ -13,7 +13,7 @@ import type { Redis } from 'ioredis';
 import { buildServer, type ModulePlugin } from '@endora-commerce/platform/composition';
 import type { ApiInterceptorRegistry } from '@endora-commerce/platform/composition';
 import { publishStateChanged, registryCache } from '@endora-commerce/platform/composition';
-import { effectiveState } from '@endora-commerce/platform/kernel';
+import { effectiveState, getResolvedChannel } from '@endora-commerce/platform/kernel';
 import { type TenantContext } from '@endora-commerce/platform/tenancy';
 // Feature 072 — the generated module list, composed in one pass exactly as
 // `src/composition.ts` composes it (D-45). Issue #52 — and contributed into
@@ -119,6 +119,9 @@ import type {
 import type { EmailCradle } from '../../../packages/modules/email/src/backend/index.js';
 import type { AdminUsersCradle } from '@endora-commerce/mod-admin-users/backend';
 import type { ShoppingListService } from '../../../packages/modules/shopping_lists/src/backend/services/shopping-list-service.js';
+// Feature 155 — the shopping-list bridge's skipped → droppedLines mapping, the
+// same function `composition.ts` calls.
+import { toCartDroppedLines } from '@endora-commerce/contracts';
 // `dist`, not `src`, and it is the type that matches the object (feature 080,
 // T040b, batch four). The container holds the **composed** cradle, which the
 // platform built out of `@endora-commerce/mod-invoices/backend` — i.e. out of
@@ -189,7 +192,7 @@ import { DefaultChannelReconciler } from '@endora-commerce/platform/composition'
 import { ManifestReconciler } from '@endora-commerce/platform/composition';
 import type { CartService } from '../../../packages/modules/carts/src/backend/services/cart-service.js';
 import type { Mailer } from '../../../packages/modules/email/src/backend/services/mailer.js';
-import { seedUs1Catalog } from './seed-catalog.js';
+import { seedUs1Catalog, seedUs1CatalogSettings } from './seed-catalog.js';
 import { seedTestOrganizations, TEST_ORGANIZATION_TAX_ID } from './seed-organizations.js';
 import { seedUs2Commerce } from './seed-commerce.js';
 import { seedTestAdmins } from './seed-admins.js';
@@ -367,6 +370,25 @@ export interface BackendServerOptions {
    * nobody wrote one.
    */
   deployment?: string;
+  /**
+   * Issue #87 — resolve the anonymous actor the way the composed application
+   * resolves a request with no customer: `customerContextResolver`,
+   * `customerAccountIdResolver` and the RFQ resolver built on the first refuse
+   * with the composed resolver's 401 instead of answering the shared test
+   * customer.
+   *
+   * **Off by default, and the default is the harness's documented divergence**
+   * (see `customerResolver` at the bottom of this file): a great many route
+   * tests inject no cookie and rely on being the test customer, and turning it
+   * on everywhere would move them all at once. A test whose subject is what an
+   * anonymous request gets — a guest branch reached through the resolver
+   * throwing, as the storefront notify-when-available route's is — sets it.
+   *
+   * Only the anonymous actor changes. An admin or API-key actor reaching a
+   * customer resolver keeps the substitution, which is a separate divergence
+   * and not this option's.
+   */
+  anonymousAsComposed?: boolean;
 }
 
 export interface BackendServerHandle {
@@ -701,8 +723,6 @@ const SEEDED_TABLES = [
   'mfa_enrolments',
   'mfa_social_identities',
   'mfa_organization_policies',
-  'price_list_assignments',
-  'price_list_items',
   'price_lists',
   'customer_groups',
   'taxes',
@@ -1013,6 +1033,10 @@ async function dropStaleCaches(redis: Redis): Promise<void> {
   for (const pattern of [
     'session:*',
     'sales-channels:*',
+    // Feature 154 — an Organization's permitted channels, keyed by an
+    // Organization id the seeds reuse in every file while the channel ids
+    // behind it are new.
+    'sales-channel-access:*',
     'settings:v1:*',
     'admin-auth-throttle:*',
   ]) {
@@ -1178,7 +1202,10 @@ export async function setupBackendServer(
     resolveByEmail(
       email: string,
     ): Promise<{ id: string; organizationId: string | null; blocked: boolean } | null>;
-    autoCreate(email: string): Promise<{ id: string; organizationId: string | null } | null>;
+    autoCreate(
+      email: string,
+      context: { salesChannelId: string | null },
+    ): Promise<{ id: string; organizationId: string | null } | null>;
   } =>
     (
       container.cradle as never as {
@@ -1186,7 +1213,10 @@ export async function setupBackendServer(
           resolveByEmail(
             email: string,
           ): Promise<{ id: string; organizationId: string | null; blocked: boolean } | null>;
-          autoCreate(email: string): Promise<{ id: string; organizationId: string | null } | null>;
+          autoCreate(
+            email: string,
+            context: { salesChannelId: string | null },
+          ): Promise<{ id: string; organizationId: string | null } | null>;
         };
       }
     ).customerSocialLoginPort;
@@ -1778,6 +1808,11 @@ export async function setupBackendServer(
         // channel-scoped stock read at all. Registering it only in production is
         // what let the missing registration survive — see the note there.
         salesChannelResolutionPort: salesChannels.resolver,
+        // Feature 154 — mirrors `compose-app.ts`: the access rule for the
+        // sign-in paths and the access read, and the permitted-channel cache a
+        // channel delete drops.
+        salesChannelAccessPort: salesChannels.accessPolicy,
+        salesChannelAccessCache: salesChannels.accessCache,
       });
 
       // Feature 014 — CMS module. Reconcile seeded Hooks once; the storefront
@@ -1949,7 +1984,8 @@ export async function setupBackendServer(
         // had configured), and one fixed password hash for every account it made.
         mfaSocialAccountResolvers: {
           resolveCustomerByEmail: (email: string) => customerSocialLogin().resolveByEmail(email),
-          autoCreateCustomer: (email: string) => customerSocialLogin().autoCreate(email),
+          autoCreateCustomer: (email: string, context: { salesChannelId: string }) =>
+            customerSocialLogin().autoCreate(email, context),
           resolveAdminByEmail: async (email: string) => {
             // T052 — the same port production reads, rather than a second copy of
             // the read. The comment that stood here argued for the copy on the
@@ -2105,13 +2141,17 @@ export async function setupBackendServer(
         // each resolved actor onto both properties, which is why the surviving
         // implementation answers correctly here without reading `testActor`.
         // Feature 072 (wave 2) — mirrors `composition.ts`.
-        customerContextResolver: customerResolver,
+        customerContextResolver: (req: FastifyRequest) => customerResolver(req, options),
         // Feature 072 (wave 3) — how this composition names the calling customer as
         // an id. The four payment gateways read it; before their conversion this
         // harness composed none of them, which `harness-parity` recorded as an
         // accepted divergence.
-        customerAccountIdResolver: (req: FastifyRequest) =>
-          req.testActor?.kind === 'customer' ? req.testActor.customerAccountId : TEST_CUSTOMER_ID,
+        customerAccountIdResolver: (req: FastifyRequest) => {
+          refuseAnonymousAsComposed(req, options);
+          return req.testActor?.kind === 'customer'
+            ? req.testActor.customerAccountId
+            : TEST_CUSTOMER_ID;
+        },
         // Feature 072 (wave 2) — mirrors `composition.ts`, reading this harness's
         // own actor property. The ad modules resolve one name instead of each
         // taking its own identically-shaped `resolveAuditContext` option.
@@ -2240,7 +2280,9 @@ export async function setupBackendServer(
       composedModules.contribute({
         transactionalEmailAssetUrl: async (assetId: string): Promise<string | null> => {
           try {
-            return (await assetsLibrary.handle.service.resolveUrl(assetId)).url;
+            // The embed form (specs/156-asset-stable-url/ R-8): an e-mail is a cached
+            // copy the platform never sees again, so the logo carries its marker.
+            return await assetsLibrary.handle.service.resolveEmbedUrl(assetId);
           } catch {
             return null;
           }
@@ -2331,15 +2373,13 @@ export async function setupBackendServer(
               },
               input.shoppingListId,
               undefined,
+              input.salesChannelId,
             );
             return {
               cartId: '',
               appendedLineCount: res.added,
-              droppedLines: res.skipped.map((it) => ({
-                productId: it.productId,
-                productName: it.productId,
-                reason: 'not_purchasable',
-              })),
+              // Feature 155 — the shared mapping, as `composition.ts`.
+              droppedLines: toCartDroppedLines(res.skipped),
             };
           },
         } satisfies CartShoppingListBridge,
@@ -2424,7 +2464,7 @@ export async function setupBackendServer(
       // rolls up over.
       composedModules.contribute({
         rfqCustomerContextResolver: async (request: FastifyRequest) => {
-          const ctx = customerResolver(request);
+          const ctx = customerResolver(request, options);
           const account = await identityPorts().customerAccountReadPort.findById(
             ctx.customerAccountId,
           );
@@ -2492,6 +2532,8 @@ export async function setupBackendServer(
             ).cartService.mergeAnonymousIntoCustomer(loginCtx.anonymousCartToken, {
               customerAccountId: loginCtx.customerAccountId,
               organizationId: loginCtx.organizationId,
+              // Mirrors composition.ts: the sign-in request's channel.
+              salesChannelId: getResolvedChannel().id,
             });
             result = { cartMerge };
           }
@@ -2738,6 +2780,11 @@ export async function setupBackendServer(
       await new ManifestReconciler(em()).apply(
         settingsManifestCollectionPort().collect(deploymentShippedEntries(resolvedRegistry)),
       );
+      // Issue #492 — the seeded VIP channel's guest display mode, which needs
+      // the setting row the reconcile above has just written.
+      if ((options.seed ?? 'us1-catalog') === 'us1-catalog') {
+        await seedUs1CatalogSettings(em());
+      }
     },
     afterReady: async () => {
       // `_i18n` reconciles from its `ctx.routes` callback, so the bundles are on
@@ -2914,11 +2961,30 @@ export async function setupBackendServer(
   };
 }
 
-function customerResolver(request: FastifyRequest): {
+/**
+ * Issue #87 — the composed resolver's refusal, for the anonymous actor of a
+ * harness built with {@link BackendServerOptions.anonymousAsComposed}. The
+ * status, code and message are `compose-app.ts`' own, so a test asserting the
+ * refusal asserts what production answers.
+ */
+function refuseAnonymousAsComposed(
+  request: FastifyRequest,
+  options: Pick<BackendServerOptions, 'anonymousAsComposed'>,
+): void {
+  if (options.anonymousAsComposed === true && request.testActor?.kind === 'anonymous') {
+    throw new HttpError(401, ERROR_CODES.UNAUTHORIZED, 'Customer session required.');
+  }
+}
+
+function customerResolver(
+  request: FastifyRequest,
+  options: Pick<BackendServerOptions, 'anonymousAsComposed'>,
+): {
   customerAccountId: string;
   organizationId: string;
   impersonatorAdminUserId?: string | null;
 } {
+  refuseAnonymousAsComposed(request, options);
   if (request.testActor?.kind !== 'customer') {
     return { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID };
   }

@@ -1,6 +1,6 @@
 /**
  * `cms`' admin surface — eleven routes and four sidebar entries (feature 091,
- * Phase 4 batch 16).
+ * Phase 4 batch 16), and since feature 163 the brand screen's route and row.
  *
  * **The heaviest owner in the table, and the last to move.** With `blog` beside
  * it these eighteen routes and seven nav entries are the last module-owned
@@ -140,6 +140,15 @@ export const contributions: AdminContributions = {
       component: () => import('./pages/HooksPage.js'),
       requiredPermission: READ_PERMISSION,
     },
+    {
+      // Feature 163 — the brand screen. Opened with the read code, as the
+      // descriptor the canvas is styled with is; saving needs `cms.brand`,
+      // which the screen checks and `PUT /api/v1/admin/cms/brand-tokens`
+      // enforces. Without it the screen is read-only.
+      path: '/cms/brand',
+      component: () => import('./pages/BrandPage.js'),
+      requiredPermission: READ_PERMISSION,
+    },
   ],
   nav: [
     {
@@ -180,6 +189,17 @@ export const contributions: AdminContributions = {
       icon: 'Webhook',
       section: 'content',
       weight: 400,
+      requiredPermission: READ_PERMISSION,
+    },
+    {
+      // Feature 163. Last of `cms`' rows and still before `megamenu`'s 500.
+      // `KnownIconNameSchema` carries no palette glyph; `Layers` reads as the
+      // one set laid over every page, and the palette action names the same.
+      to: '/cms/brand',
+      labelKey: 'nav.cmsBrand.label',
+      icon: 'Layers',
+      section: 'content',
+      weight: 450,
       requiredPermission: READ_PERMISSION,
     },
   ],

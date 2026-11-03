@@ -42,8 +42,15 @@ const DETAIL: AssetDetail = {
   updatedAt: '2026-09-09T10:00:00.000Z',
   deletedAt: null,
   pendingCleanup: false,
+  fileUrl: '/media/hero.png',
+  permalink: null,
+  permalinkUrl: null,
+  contentVersion: 'a1b2c3d4e5f6',
   altText: null,
   references: [],
+  previousVersion: null,
+  retentionDays: 30,
+  replaceable: true,
 };
 
 function resolverOver(getAsset: AssetsLibraryPort['getAsset']) {

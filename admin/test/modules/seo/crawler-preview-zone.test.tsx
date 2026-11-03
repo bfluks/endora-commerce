@@ -183,7 +183,10 @@ describe('seo declares its contributions beside its settings', () => {
   });
 
   it('every contribution is narrowed to one setting: none renders beside a setting of another module', () => {
-    for (const entry of seo.contributions.zones ?? []) {
+    // Only the Settings screen's zone: the product editor's SEO link (feature 163) is not a setting row.
+    const settingRows = (seo.contributions.zones ?? []).filter((entry) => entry.zone === 'settings.setting.after');
+    expect(settingRows.length).toBeGreaterThan(0);
+    for (const entry of settingRows) {
       expect(typeof entry.match?.['settingCode']).toBe('string');
     }
   });

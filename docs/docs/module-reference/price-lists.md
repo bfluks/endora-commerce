@@ -40,20 +40,24 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 
 | Code | Label | Also needs |
 | --- | --- | --- |
-| `price_lists:read` | View price lists and pricing rules | — |
-| `price_lists:write` | Edit price lists, brackets and display modes | — |
+| `price_lists:read` | View price books and display modes | — |
+| `price_lists:write` | Edit price books, base prices and display modes | `catalog:read` |
 
 ## Command palette
 
 | Action | Opens | Permission |
 | --- | --- | --- |
+| `new-price-book` | `/price-lists/new` | `price_lists:write` |
+| `open-price-explainer` | `/price-lists/explain` | `price_lists:read` |
 | `open-price-lists` | `/price-lists` | `price_lists:read` |
+| `open-pricing-settings` | `/price-lists/display-modes` | `price_lists:read` |
 
 ## Settings
 
 | Code | Name | Type |
 | --- | --- | --- |
 | `pricing.default_display_mode` | Default price display mode | `string` |
+| `pricing.show_list_price` | Show list price beside the buyer price | `boolean` |
 | `pricing.unauthenticated_display_mode` | Unauthenticated price display mode | `string` |
 
 ## Translations

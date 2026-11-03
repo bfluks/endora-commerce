@@ -5,6 +5,7 @@ import {
   CatalogAttributeIntegrityError,
   CatalogAttributeReadService,
 } from '../../../../packages/modules/catalog/src/backend/services/catalog-attribute-read.service.js';
+import type { CustomFieldDefinitionReadPort } from '@endora-commerce/contracts';
 import type { ProductAttributeRow } from '../../helpers/package-entities.js';
 import type {
   CachedDefinition,
@@ -51,8 +52,7 @@ interface StubExt {
   isPriceRule?: boolean;
   filterPosition?: number;
   isVisibleOnProductPage?: boolean;
-  channelScoped?: boolean;
-  languageScoped?: boolean;
+  scopable?: boolean;
   massEditable?: boolean;
 }
 
@@ -70,6 +70,7 @@ function makeDefinition(def: StubDef): CachedDefinition {
       required: def.required,
       sortOrder: def.sortOrder,
       config: {},
+      listFilter: false,
       createdAt: NOW,
       updatedAt: NOW,
     },
@@ -103,8 +104,7 @@ function makeExtension(ext: StubExt): ProductAttributeRow {
     isPriceRule: ext.isPriceRule ?? false,
     filterPosition: ext.filterPosition ?? 0,
     isVisibleOnProductPage: ext.isVisibleOnProductPage ?? false,
-    channelScoped: ext.channelScoped ?? false,
-    languageScoped: ext.languageScoped ?? false,
+    scopable: ext.scopable ?? false,
     massEditable: ext.massEditable ?? false,
     createdAt: NOW,
     updatedAt: NOW,
@@ -130,7 +130,11 @@ function makeService(defs: StubDef[], exts: StubExt[]): CatalogAttributeReadServ
     getById: async (id: string) =>
       defs.filter((d) => d.id === id).map(makeDefinition)[0] ?? null,
   };
-  return new CatalogAttributeReadService(() => fakeEm, definitions);
+  // The stub answers the cache's entity shape; the port publishes records.
+  return new CatalogAttributeReadService(
+    () => fakeEm,
+    definitions as unknown as CustomFieldDefinitionReadPort,
+  );
 }
 
 /**
@@ -156,7 +160,11 @@ function makeHealingService(input: {
     getById: async (id: string) =>
       input.fresh.filter((d) => d.id === id).map(makeDefinition)[0] ?? null,
   };
-  return new CatalogAttributeReadService(() => fakeEm, definitions);
+  // The stub answers the cache's entity shape; the port publishes records.
+  return new CatalogAttributeReadService(
+    () => fakeEm,
+    definitions as unknown as CustomFieldDefinitionReadPort,
+  );
 }
 
 describe('CatalogAttributeReadService (feature 061, T014)', () => {

@@ -1,36 +1,55 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { FastifyRequest } from 'fastify';
 import type {
+  ChannelMemberEntityType,
   BuyerLinePricePort,
   CatalogAttributeReadPort,
   CatalogCategoryReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   CustomerGroupReadPort,
   OrganizationDetailsPort,
-  PriceListAdminPort,
+  PriceBookWritePort,
   PriceListReadPort,
   ProductDisplayModePort,
   DictionaryReferenceRegistryPort,
   SalesRepAssignmentPort,
 } from '@endora-commerce/contracts';
+import type { SalesChannelMembershipPort, SettingsReadPort } from '@endora-commerce/platform/kernel';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
-import type { AuditReferenceRegistryPort } from '@endora-commerce/contracts';
+import { PRICING_SETTING_CODES, type AuditReferenceRegistryPort, type SettingsAdminPort } from '@endora-commerce/contracts';
 import { lazyPort } from '@endora-commerce/platform/kernel';
 import { registerPriceListAuditReferences } from './services/audit-references.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import { priceListsModule, type PriceListsModuleOptions } from './plugin.js';
 import { DEFAULT_PRICING_CACHE_TTL_MS } from './services/pricing-cache.js';
-import { PriceListReadService, toPriceListRecord } from './services/price-list-read-port.js';
+import type { Redis } from 'ioredis';
+import {
+  createPriceSurfaceProducer,
+  startPriceSurfaceWorker,
+  type PriceSurfaceProducer,
+} from './workers/price-surface-worker.js';
+import type {
+  PricingGenerationPublisher,
+  PricingGenerationSubscriber,
+} from './services/pricing-generation.js';
+import type { SurfaceChange } from './services/surface-change.js';
+import { PriceListReadService } from './services/price-list-read-port.js';
+import { createPriceBookWritePort } from './services/price-book-write-port.js';
 import type { PricingServiceContract } from './services/pricing-service.interface.js';
 import { registerPriceListCurrencyReferences } from './services/price-list-currency-reference.js';
 import { PriceDisplayModeOverride } from './entities/price-display-mode-override.entity.js';
 import { PriceListMatrixEntry } from './entities/price-list-matrix-entry.entity.js';
-import { PriceListPriceBracket } from './entities/price-list-price-bracket.entity.js';
-import { PriceListProduct } from './entities/price-list-product.entity.js';
+import { PriceListProductLine } from './entities/price-list-product-line.entity.js';
 import { PriceList } from './entities/price-list.entity.js';
+import { PriceListAudienceMember } from './entities/price-list-audience-member.entity.js';
+import { PriceListPrecedence } from './entities/price-list-precedence.entity.js';
+import { PriceProfile } from './entities/price-profile.entity.js';
+import { PriceProfilePrice } from './entities/price-profile-price.entity.js';
+import { PriceProfileStaleProduct } from './entities/price-profile-stale-product.entity.js';
 
 /**
  * `price_lists` — the decoration proof target (feature 072, wave 3, T127).
@@ -77,6 +96,18 @@ import { PriceList } from './entities/price-list.entity.js';
 /** What `price_lists` resolves from the container, and the names it owns. */
 export interface PriceListsCradle {
   readonly emFactory: () => EntityManager;
+  /**
+   * Feature 160 — the platform's channel-bridge registry, resolved by
+   * container name (as `catalog` does): the shape is the narrow one this
+   * module needs, and the registry is published on no barrel.
+   */
+  readonly salesChannelBridgeRegistry: {
+    register(bridge: { entityType: ChannelMemberEntityType; table: string; entityIdColumn: string }): void;
+  };
+  /** D-287 P0 — publishes the pricing generation bump to every process. */
+  readonly redis: PricingGenerationPublisher;
+  /** The composition's one shared subscriber connection (see `custom_fields`). */
+  readonly redisSubscriber: PricingGenerationSubscriber;
   readonly auditLogService: AuditPort;
   readonly commandBus: CommandBus;
   readonly requireAdmin: RequireAdminFactory;
@@ -104,6 +135,11 @@ export interface PriceListsCradle {
     PriceListsModuleOptions['resolveAdminAuditContext']
   >;
   readonly priceLists: ReturnType<typeof priceListsModule>;
+  /** Feature 160 — the composition's queue connection, when it has one. */
+  readonly moduleQueueRedis: Redis | undefined;
+  /** Feature 160 — whether this process consumes queues (the API may not). */
+  readonly processRunsWorkers: boolean;
+  readonly priceListsSurfaceProducer: PriceSurfaceProducer;
   readonly pricingService: PricingServiceContract;
   readonly priceListService: ReturnType<typeof priceListsModule>['handle']['priceListService'];
 }
@@ -120,21 +156,29 @@ export function registerModule(ctx: ModuleContext): void {
       .asFunction((): number => DEFAULT_PRICING_CACHE_TTL_MS)
       .singleton(),
 
+    priceListsSurfaceProducer: ctx
+      .asFunction(({ moduleQueueRedis }: PriceListsCradle) => createPriceSurfaceProducer(moduleQueueRedis))
+      .singleton(),
+
     priceLists: ctx
       .asFunction(
         ({
           emFactory,
-          auditLogService,
+          redis,
           commandBus,
           priceListsEnableStatusSweeper,
           priceListsPricingCacheTtlMs,
+          priceListsSurfaceProducer,
         }: PriceListsCradle) =>
           priceListsModule({
+            requestSurfaceRebuild: async () => {
+              await priceListsSurfaceProducer.enqueue();
+            },
             emFactory,
-            auditLogService,
             commandBus,
             enableStatusSweeper: priceListsEnableStatusSweeper,
             pricingCacheTtlMs: priceListsPricingCacheTtlMs,
+            pricingGenerationPublisher: redis,
             requireAdmin: (permission) => async (req, reply) =>
               ctx.cradle<PriceListsCradle>().requireAdmin(permission)(req, reply),
             resolveAdminAuditContext: (req: FastifyRequest) =>
@@ -165,6 +209,10 @@ export function registerModule(ctx: ModuleContext): void {
                 'catalogAttributeReadPort',
               ),
             },
+            // Feature 163 — the storefront price probes answer only about a
+            // product available at the request's (channel, language); the
+            // owner, `catalog`, is a declared dependency.
+            catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
             // Feature 076 (D-79) — the admin resolved-price probe's customer
             // read, which was the one entry in this module's ledger shard. It
             // fails closed, deliberately: refusing the probe is better than
@@ -174,6 +222,15 @@ export function registerModule(ctx: ModuleContext): void {
             // non-platform admin only about organizations they may see.
             // `organizations` is already a declared dependency.
             salesRepScope: lazyPort<SalesRepAssignmentPort>(ctx, 'organizationSalesRepScopePort'),
+            // Feature 160 — a price book's channel set is the registered
+            // `price-list` bridge; the kernel's accessor reads and writes it.
+            salesChannelMembership: lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+            // Feature 160 (G8, G9) — `pricing.show_list_price`, this module's own
+            // setting: read through the kernel's cached getter, written by the
+            // settings module's admin port (a declared dependency) inside one
+            // audited command.
+            settingsRead: lazyPort<SettingsReadPort>(ctx, 'settingsReadPort'),
+            settingsAdmin: lazyPort<SettingsAdminPort>(ctx, 'settingsAdminService'),
           }),
       )
       .singleton(),
@@ -201,9 +258,6 @@ export function registerModule(ctx: ModuleContext): void {
   // `customerGroupReadPort` used to be published here as well. It left with the
   // entity in feature 076 (D-79) — a customer group describes the customer, so
   // `customer_accounts` owns it and this module resolves it.
-  //
-  // `priceListAdminPort` narrows `PriceListService` to the five methods
-  // `pim_ergonode` measurably calls during an import run.
   //
   // `PricingServiceContract` used to be pinned to
   // `services/pricing-service.interface.ts` because it was the feature-057
@@ -259,27 +313,158 @@ export function registerModule(ctx: ModuleContext): void {
     ctx.asFunction(({ emFactory }: PriceListsCradle) => new PriceListReadService(emFactory)).singleton(),
   );
 
-  ctx.di.providePort<PriceListAdminPort>(
-    'priceListAdminPort',
+  // Feature 160, FR-049 (owner ruling 2026-10-22) — the PIM price import's
+  // seam, replacing `priceListAdminPort`. Both writes are the admin base-price
+  // command (`contracts/price-book-write-port.md`); `providePort` makes it fail
+  // closed while this module is absent.
+  ctx.di.providePort<PriceBookWritePort>(
+    'priceBookWritePort',
     ctx
-      .asFunction((): PriceListAdminPort => {
-        const service = (): PriceListsCradle['priceListService'] =>
-          ctx.cradle<PriceListsCradle>().priceLists.handle.priceListService;
-        return {
-          getById: async (id) => toPriceListRecord(await service().getById(id)),
-          listProducts: (priceListId) => service().listProducts(priceListId),
-          addProduct: (priceListId, productId) => service().addProduct(priceListId, productId),
-          replaceBrackets: (priceListId, productId, bracketsByCurrency) =>
-            service().replaceBrackets(priceListId, productId, bracketsByCurrency),
-          summarizeBracketsForProduct: (productId) =>
-            service().summarizeBracketsForProduct(productId),
-        };
-      })
+      .asFunction(({ priceLists }: PriceListsCradle) =>
+        createPriceBookWritePort({
+          priceBookService: priceLists.handle.priceBookService,
+          reads: priceLists.handle.priceBookReads,
+        }),
+      )
       .singleton(),
   );
 
   ctx.routes(async (app) => {
     await ctx.cradle<PriceListsCradle>().priceLists.plugin(app);
+  });
+
+  /**
+   * Feature 160 — the price-surface worker (`price_lists.surface`), attached with
+   * `ctx.worker` so it stops with the module, and built only where the host says
+   * this process consumes queues. The shared test server says neither: there a
+   * the harness runs the worker's pass itself (`backend/test/helpers/price-surface.ts`).
+   */
+  ctx.routes(async (app) => {
+    const cradle = ctx.cradle<PriceListsCradle>();
+    app.addHook('onClose', () => cradle.priceListsSurfaceProducer.close());
+    startPriceSurfaceWorker({
+      processRunsWorkers: cradle.processRunsWorkers,
+      moduleQueueRedis: cradle.moduleQueueRedis,
+      rebuildStale: () => cradle.priceLists.handle.pricingEngine.priceSurface.rebuildStale(),
+      log: ctx.log,
+      attach: (worker) => ctx.worker(worker, { logger: app.log }),
+    });
+  });
+
+  /**
+   * Feature 160 (research R9) — catalogue facts and channel currencies decide
+   * prices (category assignments, attribute values and flags, variants, a
+   * channel's currencies), so their events bump the pricing generation, which
+   * clears every process's cached prices, and mark on the price surface what
+   * they concern (`contracts/price-surface.md` §4, owner ruling 2026-10-23): a
+   * product event that product, a category event the products of its subtree,
+   * an attribute event the products the rows on that attribute select, a
+   * channel event every profile of the channel. `ctx.subscribe`, so nothing
+   * runs while the module is off. A product's category assignment change is a
+   * `product.updated.v1` (`changedFields: ['categoryIds']`), so no new
+   * catalogue event is needed (T080 verified). A payload that does not name
+   * what it concerns marks every profile — the safe direction.
+   */
+  const text = (value: unknown): string | null => (typeof value === 'string' && value.length > 0 ? value : null);
+  type Payload = Record<string, unknown>;
+  const product = (p: Payload): SurfaceChange => {
+    const id = text(p['productId']);
+    return id ? { kind: 'products', productIds: [id] } : { kind: 'all' };
+  };
+  const channel = (p: Payload): SurfaceChange => {
+    const code = text(p['channelCode']);
+    // `invalidateAll` is a change of more than one channel (a delete rebinding
+    // orphans, the default flag moving): every profile.
+    return code && p['invalidateAll'] !== true ? { kind: 'channels', channelCodes: [code] } : { kind: 'all' };
+  };
+  const surfaceSubscriptions = [
+    ['product.created.v1', product],
+    ['product.updated.v1', product],
+    ['product.archived.v1', product],
+    ['product.deleted.v1', product],
+    [
+      'category.updated.v1',
+      (p: Payload): SurfaceChange => {
+        const id = text(p['categoryId']);
+        return id ? { kind: 'categories', categoryIds: [id] } : { kind: 'all' };
+      },
+    ],
+    [
+      'attribute.updated.v1',
+      (p: Payload): SurfaceChange => {
+        const key = text(p['attributeKey']);
+        return key ? { kind: 'attributes', attributeKeys: [key] } : { kind: 'all' };
+      },
+    ],
+    ['sales_channels.identity_changed', channel],
+    ['sales_channels.lifecycle_changed', channel],
+  ] as const;
+  for (const [event, changeOf] of surfaceSubscriptions) {
+    ctx.subscribe(event, async (payload) => {
+      const change = changeOf((payload ?? {}) as unknown as Payload);
+      await ctx.cradle<PriceListsCradle>().priceLists.handle.pricingGeneration.bump(change);
+    });
+  }
+
+  /**
+   * Feature 161 (G15) — a catalogue variant delete cascades its price rows
+   * away and can leave a book's product line holding none; the catalogue says
+   * so with `product.updated.v1` (`changedFields: ['variants']`), and the line
+   * is dropped here. `price_list_product_lines` is this module's own table.
+   */
+  ctx.subscribe('product.updated.v1', async (payload) => {
+    const event = payload as { productId?: unknown; changedFields?: unknown };
+    if (typeof event.productId !== 'string') return;
+    if (Array.isArray(event.changedFields) && !event.changedFields.includes('variants')) return;
+    await ctx.cradle<PriceListsCradle>().priceLists.handle.priceBookService.reconcileProductLines(event.productId);
+  });
+
+  /**
+   * Feature 160 (D-287 P1, research R3) — a price book's channel set is the
+   * `sales_channel_price_lists` bridge, which this module's migration creates,
+   * so this module says where it is. Read and written only through
+   * `SalesChannelMembershipService` (Principle XII); the kernel's channel-delete
+   * path clears it like every other bridge.
+   *
+   * A **contribution** hook and deliberately unprobed (D-62/D-68), as for
+   * `catalog`'s bridges: a registration is an inert statement about the schema,
+   * and the rows outlive the module's operator switch.
+   */
+  ctx.onBoot(() => {
+    const { salesChannelBridgeRegistry } = ctx.cradle<PriceListsCradle>();
+    for (const bridge of salesChannelBridges) salesChannelBridgeRegistry.register(bridge);
+  });
+
+  /**
+   * D-287 P0 — every process clears its pricing LRU when any process bumps the
+   * pricing generation (a price write after commit, a status sweep that flipped
+   * a list). The subscriber is the composition's one shared connection, as for
+   * `custom_fields`' definition cache: ioredis puts a connection in subscriber
+   * mode, so a per-module one would cost a socket per module. `start` is
+   * idempotent and only adds a listener for this module's channel.
+   *
+   * Armed whatever the activation state: the module is `nonDeactivatable`, and
+   * a stale cache in a process that missed a bump is worse than a listener
+   * that clears an empty one.
+   */
+  ctx.onBoot(async () => {
+    const { priceLists, redisSubscriber } = ctx.cradle<PriceListsCradle>();
+    await priceLists.handle.pricingGeneration.start(redisSubscriber);
+  });
+
+  /**
+   * Review 2, finding 4 (release 0.108.0) — the engine memoises the viewer's
+   * tail of the display-mode chain under the pricing generation, and the tail
+   * reads the two `pricing.*` display-mode settings. The settings admin API is
+   * `settings`' write, so it reaches this module as `settings.value_changed`:
+   * either key bumps the generation. A display mode is not on the price surface,
+   * so nothing there is marked (`{ kind: 'none' }`).
+   */
+  const displayModeSettings: ReadonlySet<string> = new Set(Object.values(PRICING_SETTING_CODES));
+  ctx.subscribe('settings.value_changed', async (payload) => {
+    const code = (payload as { settingCode?: unknown } | null)?.settingCode;
+    if (typeof code !== 'string' || !displayModeSettings.has(code)) return;
+    await ctx.cradle<PriceListsCradle>().priceLists.handle.pricingGeneration.bump({ kind: 'none' });
   });
 
   /**
@@ -345,32 +530,56 @@ export function registerModule(ctx: ModuleContext): void {
 export const entities = [
   PriceDisplayModeOverride,
   PriceListMatrixEntry,
-  PriceListPriceBracket,
-  PriceListProduct,
   PriceList,
+  // Feature 160 (D-287 P1) — price books.
+  PriceListAudienceMember,
+  PriceListPrecedence,
+  PriceProfile,
+  PriceProfilePrice,
+  // Feature 161 (G15) — a book's product lines.
+  PriceListProductLine,
+  // Feature 160 (owner ruling 2026-10-23) — the surface's (profile, product) marks.
+  PriceProfileStaleProduct,
 ];
 
 /**
- * The one-off migrator that creates this module's system price list and fills
- * it from the catalog, published **by name** on `./backend`.
+ * The sales-channel bridges this module owns (feature 160): a price book's
+ * channel set. Published by name, as every bridge owner publishes its own, so a
+ * harness that composes no platform declares it from here rather than holding a
+ * copy of the table name (`backend/test/helpers/channel-bridges.ts`).
  *
- * The host's demo composition runs it, and a host program is composed
- * against this package's `dist` while the ORM is registered from the same
- * `entities` array above — so a filesystem path into this file's source would
- * evaluate `price-list.entity.ts` a second time and the migrator would
- * `em.create` a `PriceList` class the ORM has never heard of (D-160.6.1).
- * D-168 bars an entity class from leaving by this door; a service is not an
- * entity, and `pim_ergonode`'s `ErgonodeRequestError` is the precedent for
- * publishing the binding a caller genuinely needs to hold the same copy of.
+ * The default convention: a book bound to no channel is offered in **no**
+ * channel (data-model §2). The base books are channel-independent by D-287 and
+ * are never bound, which the resolver knows; nothing reads them through this.
  */
-export { DefaultPriceListMigrator, DEFAULT_PRICE_LIST_ID } from './services/default-price-list-migration.js';
+export const salesChannelBridges: ReadonlyArray<{
+  readonly entityType: ChannelMemberEntityType;
+  readonly table: string;
+  readonly entityIdColumn: string;
+}> = [{ entityType: 'price-list', table: 'sales_channel_price_lists', entityIdColumn: 'price_list_id' }];
 
 /**
- * The price-list write service, published **by name** for the same reason as
- * the migrator above: two integration tests construct it directly over their
- * own `EntityManager`, in a process that already holds this package's published
- * artefact, and a second copy would `em.create` a `PriceList` the ORM never
+ * Feature 160 (FR-044) — the demo's prices, published **by name** on
+ * `./backend` for `@endora-commerce/demo-composition`'s price-book step: base
+ * prices for every demo product and the E1–E3 books. A composition step
+ * because every row names another module's (feature 113 §5.1); the functions
+ * write only this module's tables, over the `EntityManager` the demo runner
+ * hands the composition, and use the entity classes this package's `entities`
+ * array registered: a host program is composed against this package's `dist`
+ * while the ORM is registered from that array, so a filesystem path into this
+ * source would evaluate the entities a second time and `em.create` a class the
+ * ORM has never heard of (D-160.6.1). D-168 bars an entity class from leaving
+ * by this door; a function is not an entity.
+ */
+export { seedDemoPriceBooks, withdrawDemoPriceBooks, type DemoPriceBookRefs } from './demo/seed.js';
+export { DEMO_PRICE_BOOKS, DEMO_VECTOR_SKUS, demoBasePrice } from './demo/rows.js';
+
+/**
+ * The display-mode service, published **by name** for the same reason as the
+ * demo functions above: host-side tests construct it directly over their own
+ * `EntityManager`, in a process that already holds this package's published
+ * artefact, and a second copy would `em.create` an entity the ORM never
  * registered (D-160.6.1). The container name `priceListService` stays the
- * production seam; this export exists so a host-side test holds the same class.
+ * production seam.
  */
 export { PriceListService } from './services/price-list-service.js';

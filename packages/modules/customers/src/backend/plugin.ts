@@ -1,3 +1,4 @@
+import type { ChannelUrlFacts } from '@endora-commerce/contracts';
 import type { FastifyInstance } from 'fastify';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
@@ -181,6 +182,8 @@ export interface CustomersModuleOptions {
   cartQueryPort: CartQueryPort;
   /** Base URL for the storefront set-password link in reset emails. */
   storefrontBaseUrl: string;
+  /** Feature 167 — the channel admin-sent storefront links are composed for (system default). */
+  linkChannel?: () => Promise<ChannelUrlFacts | null>;
   /** Reads `customers.deletion_retention_days`. */
   resolveDeletionRetentionDays: () => Promise<number>;
   /** Reads `customers.presence_freshness_minutes`. */
@@ -307,6 +310,7 @@ export function customersModule(options: CustomersModuleOptions): {
       mailer: options.mailer,
       auditLogService: options.auditLogService,
       storefrontBaseUrl: options.storefrontBaseUrl,
+      ...(options.linkChannel ? { linkChannel: options.linkChannel } : {}),
       ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
     });
   };

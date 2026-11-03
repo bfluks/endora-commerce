@@ -37,8 +37,8 @@ function productRecord(id: string): CatalogProductRecord {
     slug: `slug-${id}`,
     type: 'simple',
     status: 'active',
-    name: { 'en-US': `Product ${id}` },
-    description: {},
+    name: `Product ${id}`,
+    description: null,
     stockMode: null,
     visibility: 'public',
     attributeValues: {},
@@ -56,6 +56,8 @@ function productRecord(id: string): CatalogProductRecord {
     lowStockThresholdMode: 'cumulative',
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: null,
+    returnable: false,
   };
 }
 
@@ -104,6 +106,7 @@ function ports(recorder: Recorder, product: CatalogProductRecord | null): {
   products: CatalogProductReadPort;
   categories: CatalogCategoryReadPort;
   channelMembership: SalesChannelMembershipPort;
+  availability: { describeChannelAvailability: () => Promise<Map<string, never>> };
 } {
   const assignment = (productId: string): CatalogCategoryAssignmentRecord => ({
     productId,
@@ -133,6 +136,8 @@ function ports(recorder: Recorder, product: CatalogProductRecord | null): {
       },
       listEntityIdsForChannel: async () => ({ entityIds: [], total: 0 }),
     } as unknown as SalesChannelMembershipPort,
+    // Feature 163 — no channel is linked here, so it is never asked.
+    availability: { describeChannelAvailability: async () => new Map<string, never>() },
   };
 }
 

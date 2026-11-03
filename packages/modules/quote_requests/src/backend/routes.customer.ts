@@ -11,11 +11,13 @@ import {
   rejectRevisionSchema,
   resubmitQuoteRequestSchema,
   ERROR_CODES,
+  firstLanguageTag,
   OrganizationCannotTransactError,
   type Actor,
 } from '@endora-commerce/contracts';
 import type { RfqService, CustomerContext } from './services/rfq-service.js';
 import { HttpError } from '@endora-commerce/platform/http';
+import { getResolvedChannel } from '@endora-commerce/platform/kernel';
 
 /**
  * Draft edits per quote request per minute (research R16).
@@ -153,7 +155,12 @@ export async function registerQuoteRequestsCustomerRoutes(
       const ctx = await resolveCustomerContext(request);
       await guardCanTransact(ctx.organizationId);
       const body = createQuoteRequestSchema.parse(request.body);
-      const rfq = await rfqService.createForCustomer(ctx, body);
+      // Feature 163 — the channel this request resolved, named explicitly.
+      const rfq = await rfqService.createForCustomer(ctx, body, {
+        language: await request.responseLanguage(),
+        ...scopeLanguageTagOf(request),
+        salesChannelId: getResolvedChannel(request).id,
+      });
       setEtag(reply, rfq.version);
       reply.code(201);
       return { data: rfq };
@@ -177,7 +184,11 @@ export async function registerQuoteRequestsCustomerRoutes(
       const ctx = await resolveCustomerContext(request);
       const body = patchQuoteRequestSchema.parse(request.body);
       const expectedVersion = parseIfMatch(request);
-      const rfq = await rfqService.patchDraft(request.params.id, ctx, body, expectedVersion);
+      const rfq = await rfqService.patchDraft(request.params.id, ctx, body, expectedVersion, {
+        language: await request.responseLanguage(),
+        ...scopeLanguageTagOf(request),
+        salesChannelId: getResolvedChannel(request).id,
+      });
       setEtag(reply, rfq.version);
       return { data: rfq };
     },
@@ -224,7 +235,13 @@ export async function registerQuoteRequestsCustomerRoutes(
     { preHandler: requireCustomer },
     async (request, reply) => {
       const ctx = await resolveCustomerContext(request);
-      const result = await rfqService.convertToOrder(request.params.id, ctx);
+      // Into the basket of the storefront the buyer converts on
+      // (`specs/154-sales-channel-access/`): a customer holds one per channel.
+      const result = await rfqService.convertToOrder(
+        request.params.id,
+        ctx,
+        getResolvedChannel(request).id,
+      );
       reply.code(200);
       return { data: result };
     },
@@ -237,10 +254,25 @@ export async function registerQuoteRequestsCustomerRoutes(
     async (request, reply) => {
       const ctx = await resolveCustomerContext(request);
       const body = resubmitQuoteRequestSchema.parse(request.body ?? {});
-      const rfq = await rfqService.resubmit(request.params.id, ctx, body);
+      const rfq = await rfqService.resubmit(request.params.id, ctx, body, {
+        language: await request.responseLanguage(),
+        ...scopeLanguageTagOf(request),
+        salesChannelId: getResolvedChannel(request).id,
+      });
       setEtag(reply, rfq.version);
       reply.code(201);
       return { data: rfq };
     },
   );
+}
+
+/**
+ * Feature 163 — the request's first `Accept-Language` tag, as `{ languageTag }`
+ * when present: the lines' scope language is it resolved against the channel,
+ * as the basket's is. Never `responseLanguage()`, which falls back to a bundle
+ * language (T155 finding §1.5b).
+ */
+function scopeLanguageTagOf(request: FastifyRequest): { languageTag?: string } {
+  const tag = firstLanguageTag(request.headers['accept-language']);
+  return tag ? { languageTag: tag } : {};
 }

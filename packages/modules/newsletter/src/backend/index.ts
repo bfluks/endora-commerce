@@ -1,3 +1,4 @@
+import type { ChannelUrlFacts } from '@endora-commerce/contracts';
 import type { EmailBlockRendererRegistryPort } from '@endora-commerce/contracts';
 import type { EmailBlockRenderer } from '@endora-commerce/email-components/render/block-renderers';
 import { randomUUID } from 'node:crypto';
@@ -105,6 +106,7 @@ export interface NewsletterCradle {
   readonly eventBus: EventBus;
   readonly salesChannelResolutionPort: {
     getSystemDefault(): Promise<{ id: string }>;
+    getById(id: string): Promise<ChannelUrlFacts | null>;
   };
   readonly salesChannelCodeIdPort: { idByCode(code: string): Promise<string | null> };
   /** Contribution point: absent means campaign email renders with the neutral fallback. */
@@ -175,6 +177,7 @@ export function registerModule(ctx: ModuleContext): void {
           resolveDefaultChannelId: async () =>
             (await cradle().salesChannelResolutionPort.getSystemDefault()).id,
           resolveChannelIdByCode: (code) => cradle().salesChannelCodeIdPort.idByCode(code),
+          resolveChannelUrlFacts: (id) => cradle().salesChannelResolutionPort.getById(id),
           resolveCustomerAccountId: (req) => cradle().customerAccountIdResolver(req),
           loadCustomerEmail: async (customerAccountId) =>
             (await lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort').findById(

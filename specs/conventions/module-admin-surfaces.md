@@ -102,7 +102,7 @@ Every module with an admin surface **must** be discoverable under ⌘K / CTRL+K.
 is not enough.
 
 1. **`manifest.ts`** — `actions: [{ id, labelKey, descriptionKey, icon, targetRoute,
-   requiredPermission, keywords, weight }]` for the module's landing surface plus its few
+   requiredPermission, keywords, keywordsKey, weight }]` for the module's landing surface plus its few
    highest-value operator actions. Curate — this is a discovery surface, not a route dump.
 2. **`requiredPermission`** — the code gating the target surface, so the palette never
    advertises a 403.
@@ -110,7 +110,13 @@ is not enough.
    (`actions.openX.label`, not `<module>.actions.openX.label`) and live in the module's own
    `i18n/en.json` + `pl.json`. Those files must be a **flat** `{"a.b.c": "text"}` map — a
    nested object fails `TranslationBundleEntriesSchema`, the boot reconciler only logs and
-   skips it, and the palette silently renders raw keys.
+   skips it, and the palette silently renders raw keys. `keywords` are **English** and match
+   in every language; a search word in another language goes in the bundle under the
+   action's `keywordsKey` (same relative form, value a comma-separated list, an entry in
+   **both** `en.json` and `pl.json`), never inline in the manifest (issue #560). A manifest
+   keyword word that no registered `en.json` uses fails
+   `backend/test/unit/_i18n/registered-bundles-shape.test.ts` (issue #573): move it to the
+   bundle, or — if it is English or a technical token — add it to that test's allowlist.
 4. **`icon`** — must be in `KnownIconNameSchema` (`packages/contracts/src/admin-actions.ts`);
    adding a name there requires the matching entry in
    `admin/src/lib/admin-actions/icon-map.ts` in the same MR.
@@ -123,4 +129,51 @@ is not enough.
    `targetRoute` and not merely a code enforced somewhere. The permission inventory's two
    directions cannot see that — both codes in issue #232 were real, declared and enforced —
    so a valid code on the wrong route was invisible until this check existed.
+7. **Coverage** — `pnpm --filter admin exec vitest run test/unit/palette-coverage.test.ts`
+   holds every admin destination a module contributes to the palette (issue #510, which found
+   `taxes`, `blog`, `carts` and `mfa` short of it). A *destination* is a static path the module
+   declares as a route (`src/admin/index.ts` `routes`) or as a sidebar entry's `to`; a path with
+   a `:param` or `*` segment is a detail screen, which no action can target, and is never one.
+   It is *covered* when some manifest action — any module's — names it as its `targetRoute`.
+   Three classes, three treatments:
+   - the **landing** route (`index: true`) must be covered, with no exception;
+   - a **sidebar** destination must be covered, with no exception — a sidebar entry is
+     top-level by definition. The gaps that predated the rule were held in a shrink-only debt
+     ledger until issue #516 paid the last of them and removed it with its code path;
+   - **any other** static route — a create form its list opens, a tab of another screen, a
+     legacy address kept for bookmarks — is covered **or** listed in the test's
+     `PALETTE_EXEMPTIONS` under its module, with a reason. That ledger is the escape hatch, and
+     it is two-way: an entry whose route gained an action or stopped being contributed fails
+     as stale.
 
+   And one rule per **module** rather than per destination (issue #82): a module contributing
+   an admin page — any route, parameterised or not, or a sidebar entry — declares at least one
+   action **of its own**, with no exception (`module-without-action`). Coverage alone cannot see
+   a module whose screens only another module's actions advertise, or whose pages are all detail
+   screens. A module contributing only zones (`payments`' order-detail tab) has no page and is
+   not asked. It landed with every module compliant, so it has no ledger, on the sidebar rule's
+   precedent.
+
+   Curating (item 1) therefore means choosing which non-sidebar routes to exempt, in writing,
+   rather than leaving a screen out silently. Which code the covering action carries stays
+   item 2's question and `check:action-route-permissions`'; this test does not ask it again.
+   Its population is `admin/src/modules.generated.ts`, reconciled against the manifests of the
+   admin's module dependencies, and it prints what it read (`[palette-coverage] read: …`).
+   Overlay modules discovered at runtime are outside it.
+
+
+## The generated admin registry conflicts, and is regenerated rather than merged
+
+`admin/src/modules.generated.ts` is a tracked artefact `composer:generate` writes, with one import
+and one entry for every module package that ships an `./admin` layer; its sibling
+`admin/src/tailwind.generated.css`, written by the same command, gains a line per module the same
+way. Two branches that each add
+or remove an admin surface therefore **always** conflict in it, at the same few lines, and that
+conflict is expected, not a sign that either branch is wrong (issue #92). **Never resolve it by
+picking a side or by merging the hunks by hand**: the registry is the admin's only list of module
+screens, and an entry lost in a hand merge drops that module's routes, sidebar entries and zones
+without an error anywhere. Merge the base branch, discard both sides of the generated file (and of
+its CSS sibling if it conflicted too), run `pnpm --filter backend run composer:generate` on the
+merged tree, and commit what it writes as the resolution.
+`pnpm --filter backend run composer:check` then confirms that every committed artefact matches
+the tree.

@@ -3,6 +3,7 @@ import { renderToString } from 'react-dom/server';
 import { CmsProductCardView } from './CmsProductCard.js';
 import { BlockRenderEnvironmentProvider } from '@endora-commerce/page-builder-core/contributions';
 import type { CmsProductSummary } from '../schema/catalog-types.js';
+import { CmsRenderProvider } from './render-context.js';
 
 /**
  * Issue #249 (2) — a CMS product card formats its price in the locale of the
@@ -65,5 +66,35 @@ describe('CmsProductCardView — the price locale', () => {
 
   it('falls back to the environment default (en), not pl-PL, where no host set one', () => {
     expect(text(renderCard(undefined))).toContain(text(formatted('en')));
+  });
+});
+
+describe('CmsProductCardView — a sub-cent price (§10.18)', () => {
+  it('shows a unit price with its significant places, up to four', () => {
+    const html = renderToString(
+      <BlockRenderEnvironmentProvider value={{ language: 'pl-PL', preview: false }}>
+        <CmsProductCardView product={{ ...product, price: { amount: 0.0125, currency: 'PLN' } } as CmsProductSummary} />
+      </BlockRenderEnvironmentProvider>,
+    );
+    expect(text(html)).toContain('0,0125 zł');
+  });
+});
+
+/** Feature 167 (FR-020) — the card's product links take the page language's prefix. */
+describe('CmsProductCardView — the product link', () => {
+  const localizePath = (path: string): string => `/en${path}`;
+
+  it.each(['default', 'showcase'] as const)('localizes the %s card through the render context', (variant) => {
+    const html = renderToString(
+      <CmsRenderProvider embeds={{ blocks: {}, templates: {} }} localizePath={localizePath}>
+        <CmsProductCardView product={product} variant={variant} />
+      </CmsRenderProvider>,
+    );
+    expect(html).toContain('href="/en/p/demo-product"');
+    expect(html).not.toContain('href="/p/demo-product"');
+  });
+
+  it('renders the logical path without a provider (the editor)', () => {
+    expect(renderToString(<CmsProductCardView product={product} />)).toContain('href="/p/demo-product"');
   });
 });
