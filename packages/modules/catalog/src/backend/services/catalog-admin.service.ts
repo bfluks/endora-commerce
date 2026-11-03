@@ -125,7 +125,9 @@ import {
 } from '../commands/attribute-commands.js';
 import { requireLinkableAsset, type LinkableAssetReader } from './linkable-asset.js';
 import {
+  attributeSetExists,
   findSkuHolder,
+  missingCategoryIds,
   missingRequiredAttributeKeys,
   PRODUCT_SKU_MAX,
   reconcileProductCategories,
@@ -634,6 +636,23 @@ export class CatalogAdminService {
     }
     // Feature 155 (FR-001, D5) — refused before anything on the row changes.
     assertOrderMinimumAllowed(product.type, req.minOrderQuantity);
+    // Feature 170 (C2/C3 code review 1) — the existence rules the scoped save holds for the same
+    // Global-only fields (`product-global-field-rules.ts`), checked before anything is written:
+    // an unknown attribute set or an unknown or deleted category used to reach the foreign key
+    // (a 500), and a deleted category was linked silently.
+    if (
+      req.attributeSetId !== undefined &&
+      req.attributeSetId !== product.attributeSetId &&
+      !(await attributeSetExists(em, req.attributeSetId))
+    ) {
+      throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, 'unknown_attribute_set');
+    }
+    if (req.categoryIds !== undefined) {
+      const missing = await missingCategoryIds(em, req.categoryIds);
+      if (missing.length > 0) {
+        throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, `unknown_category_ids: ${missing.join(', ')}`);
+      }
+    }
     // Feature 170 (R7, contract §6) — a product-row write is Save-overwritable: it moves the
     // editor's version, and a `version` the caller sends is compared first (stale → 409).
     await bumpScopeVersion(em, id, req.version);
