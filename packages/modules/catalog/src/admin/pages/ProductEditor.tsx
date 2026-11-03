@@ -73,6 +73,7 @@ import {
 import { getEditorPreference, getScopedValues, putEditorPreference, saveScopedValues } from '../lib/scoped-values-api.js';
 import {
   channelName,
+  languageName,
   parentScope,
   sameScope,
   scopeFromSearch,
@@ -129,7 +130,7 @@ type FormError =
   | { kind: 'seo' }
   | { kind: 'message'; text: string };
 
-type Guard = { kind: 'switch' | 'url'; target: ScopeRef; note?: string; field?: string } | { kind: 'leave' };
+type Guard = { kind: 'switch' | 'url'; target: ScopeRef; note?: string; field?: string; tab?: string } | { kind: 'leave' };
 
 export function ProductEditor(): ReactNode {
   const params = useParams<{ id: string }>();
@@ -155,6 +156,11 @@ function errorOf(err: unknown): { status: number; code: string; message: string;
   if (!(err instanceof ApiError)) return null;
   const e = err.envelope.error as { code: string; message: string; details?: Record<string, unknown> };
   return { status: err.status, code: e.code, message: e.message, ...(e.details ? { details: e.details } : {}) };
+}
+
+/** The tab a field lives on; a scope-map link without a field opens Details. */
+function tabOfField(field: string | undefined): TabId {
+  return field?.startsWith('attribute:') ? 'attributes' : 'details';
 }
 
 function familyOfPath(path: string): ImmediateFamily | null {
@@ -388,13 +394,14 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
   }, [state.staged.size]);
 
   const go = useCallback(
-    (next: ScopeRef, note?: string, field?: string): void => {
+    (next: ScopeRef, note?: string, field?: string, tab?: string): void => {
       pendingNoteRef.current = note ?? null;
       skipGuardRef.current = true;
       setSearchParams((prev) => {
         const sp = searchWithScope(prev, next);
         sp.delete('field');
         if (field) sp.set('field', field);
+        if (tab) sp.set('tab', tab);
         return sp;
       });
     },
@@ -402,15 +409,26 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
   );
 
   const requestScope = useCallback(
-    (next: ScopeRef, note?: string, field?: string): void => {
-      if (sameScope(next, stateRef.current.scope)) return;
-      if (stateRef.current.staged.size > 0) {
-        setGuard({ kind: 'switch', target: next, ...(note ? { note } : {}), ...(field ? { field } : {}) });
+    (next: ScopeRef, note?: string, field?: string, tab?: string): void => {
+      if (sameScope(next, stateRef.current.scope)) {
+        if (tab) {
+          setSearchParams((prev) => {
+            const sp = new URLSearchParams(prev);
+            sp.set('tab', tab);
+            sp.delete('field');
+            return sp;
+          });
+        }
+        if (field) setTimeout(() => document.getElementById(fieldDomId(field))?.focus(), 0);
         return;
       }
-      go(next, note, field);
+      if (stateRef.current.staged.size > 0) {
+        setGuard({ kind: 'switch', target: next, ...(note ? { note } : {}), ...(field ? { field } : {}), ...(tab ? { tab } : {}) });
+        return;
+      }
+      go(next, note, field, tab);
     },
-    [go],
+    [go, setSearchParams],
   );
 
   const refreshFamily = useCallback(
@@ -576,7 +594,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
       void load(g.target, { field: searchParams.get('field') });
       return;
     }
-    go(g.target, g.note, g.field);
+    go(g.target, g.note, g.field, g.tab);
   };
   const stay = (g: Guard): void => {
     setGuard(null);
@@ -690,6 +708,101 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
     },
     [state.data, state.scope, t, adminLanguage],
   );
+
+  // --- Completeness summary (§9, FR-097), from saved values -------------------------------
+  const fieldLabel = (path: string): string => {
+    if (path === 'name') return t('productEditor.field.name');
+    if (path === 'urlKey') return t('productEditor.field.urlKey');
+    const key = path.replace(/^attribute:/, '');
+    const attr = state.data?.attributes.find((a) => a.key === key);
+    const label = attr ? (Object.entries(attr.label).find(([code]) => code.split('-')[0] === adminLanguage)?.[1] ?? Object.values(attr.label)[0]) : undefined;
+    return label ?? key;
+  };
+  const fieldHref = (path: string): string => {
+    const sp = new URLSearchParams(searchParams);
+    sp.set('tab', path.startsWith('attribute:') ? 'attributes' : 'details');
+    sp.set('field', path);
+    return `?${sp.toString()}`;
+  };
+  const openField = (path: string): void => {
+    const tab: TabId = path.startsWith('attribute:') ? 'attributes' : 'details';
+    selectTab(tab);
+    setTimeout(() => document.getElementById(fieldDomId(path))?.focus(), 0);
+  };
+  const completenessNode = ((): ReactNode => {
+    const c = state.data?.completeness;
+    if (!c || !state.data) return null;
+    const linkClass = 'text-primary underline underline-offset-2 max-lg:inline-flex max-lg:min-h-11 max-lg:items-center';
+    const fieldLink = (path: string, text: string): ReactNode => (
+      <a
+        key={path}
+        href={fieldHref(path)}
+        data-own-unsaved-guard=""
+        className={linkClass}
+        onClick={(e): void => {
+          e.preventDefault();
+          openField(path);
+        }}
+      >
+        {text}
+      </a>
+    );
+    const joined = (items: ReactNode[]): ReactNode[] => items.flatMap((item, i) => (i === 0 ? [item] : [', ', item]));
+    let body: ReactNode = null;
+    if (c.level === 'channel_language' && c.missing.length > 0) {
+      body = (
+        <>
+          {t('productEditor.completeness.here')} {joined(c.missing.map((m) => fieldLink(m, fieldLabel(m))))}
+        </>
+      );
+    } else if (c.level === 'channel' && c.missing.length > 0) {
+      const channelId = state.scope.level === 'global' ? null : state.scope.channelId;
+      body = (
+        <>
+          {t('productEditor.completeness.channel')}{' '}
+          {joined(
+            c.missing.map((m) =>
+              fieldLink(
+                m.field,
+                t('productEditor.completeness.fieldLanguages', {
+                  field: fieldLabel(m.field),
+                  languages: m.languages.map((code) => languageName(state.data!.validScopes, channelId, code, adminLanguage)).join(', '),
+                }),
+              ),
+            ),
+          )}
+        </>
+      );
+    } else if (c.level === 'global' && c.incompleteScopes > 0) {
+      body = (
+        <>
+          {plural('productEditor.completeness.global', c.incompleteScopes)} —{' '}
+          <a
+            href={`?${(() => {
+              const sp = new URLSearchParams(searchParams);
+              sp.set('tab', 'scopes');
+              return sp.toString();
+            })()}`}
+            className={linkClass}
+            data-own-unsaved-guard=""
+            onClick={(e): void => {
+              e.preventDefault();
+              selectTab('scopes');
+            }}
+          >
+            {t('productEditor.scope.scopeMap')}
+          </a>
+        </>
+      );
+    }
+    if (!body) return null;
+    return (
+      <p className="m-0 inline-flex flex-wrap items-center gap-x-1 text-destructive" data-testid="completeness-summary">
+        <span className="sr-only">{t('productEditor.completeness.region')}: </span>
+        {body}
+      </p>
+    );
+  })();
 
   const contextValue = useMemo<ProductEditorContextValue>(
     () => ({
@@ -863,7 +976,22 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
           </div>
         );
       case 'scopes':
-        return <ProductScopeOverview productId={productId} />;
+        return (
+          <ProductScopeOverview
+            productId={productId}
+            links={{
+              href: (scope, field): string => {
+                const sp = searchWithScope(searchParams, scope);
+                sp.set('tab', tabOfField(field));
+                sp.delete('field');
+                if (field) sp.set('field', field);
+                return `?${sp.toString()}`;
+              },
+              open: (scope, field): void => requestScope(scope, undefined, field, tabOfField(field)),
+              words: (scope): string => scopeShortWords(scope, valid, t, adminLanguage),
+            }}
+          />
+        );
       case 'seo':
         return (
           <AdminZone
@@ -984,6 +1112,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
           adminLanguage={adminLanguage}
           onRequestScope={(next, note): void => requestScope(next, note)}
           onOpenScopeMap={(): void => selectTab('scopes')}
+          completeness={completenessNode}
         />
 
         <p role="status" className="sr-only" data-testid="editor-announcer">
