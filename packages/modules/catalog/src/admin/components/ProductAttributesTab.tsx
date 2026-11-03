@@ -1,8 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useState, type ReactNode } from 'react';
 import { apiClient } from '@endora-commerce/admin-kit/lib';
 import { MultiSelect } from '@endora-commerce/admin-kit/ui';
 import { ScopedFieldGrid, type ScopedFieldControlProps } from '@endora-commerce/admin-kit/components';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { AppLanguageContext, useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { AdminZone } from '@endora-commerce/admin-kit/zones';
 import { EditorField, useProductEditor } from './editor/editor-context.js';
 import { BooleanControl, NumberControl, SelectControl, TextControl, type SelectOption } from './editor/scoped-controls.js';
@@ -35,8 +35,11 @@ interface AttributeOption {
 
 const OPTION_TYPES = new Set(['enum', 'select', 'multiselect']);
 
-function pickLabel(label: Record<string, string>, fallback: string): string {
-  return label['en-US'] ?? Object.values(label)[0] ?? fallback;
+/** A label in the admin's language (`pl` reads `pl-PL`), then English, then any. */
+function pickLabel(label: Record<string, string>, fallback: string, language = 'en'): string {
+  const entries = Object.entries(label);
+  const own = entries.find(([code]) => code === language || code.split('-')[0] === language)?.[1];
+  return own ?? label['en-US'] ?? entries[0]?.[1] ?? fallback;
 }
 
 /** A value read as text, whatever it is; an object is never stringified into the field. */
@@ -49,6 +52,7 @@ function asText(value: unknown): string | null {
 
 export function ProductAttributesTab(): ReactNode {
   const t = useTranslation('catalog');
+  const adminLanguage = useContext(AppLanguageContext)?.language ?? 'en';
   const ctx = useProductEditor();
   const data = ctx.state.data;
   const setId = data?.product.attributeSetId ?? '';
@@ -73,7 +77,7 @@ export function ProductAttributesTab(): ReactNode {
               );
               const list = [...(res.data.items ?? [])]
                 .sort((x, y) => x.sortOrder - y.sortOrder)
-                .map((o) => ({ value: o.value, label: pickLabel(o.label, o.labelDefault) }));
+                .map((o) => ({ value: o.value, label: pickLabel(o.label, o.labelDefault, adminLanguage) }));
               return [a.key, list] as const;
             }),
         );
@@ -99,7 +103,7 @@ export function ProductAttributesTab(): ReactNode {
       </p>
       <ScopedFieldGrid>
         {data.attributes.map((attr) => {
-          const label = pickLabel(attr.label, attr.key);
+          const label = pickLabel(attr.label, attr.key, adminLanguage);
           const opts = options[attr.key] ?? [];
           const render = (p: ScopedFieldControlProps<unknown>): ReactNode => {
             switch (attr.valueType) {
